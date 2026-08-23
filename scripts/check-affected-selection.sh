@@ -18,6 +18,11 @@ set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # From scripts/plugin-crates.sh, so a plugin added later is covered without an edit here.
+# llmlint: ignore[boundary_inputs_validated] these names are not external input:
+# scripts/plugin-crates.sh reads them from this repository's own committed
+# project.json files, scripts/check-workspace-config.sh reconciles those files on
+# every `check`, and cargo refuses an invalid package name loudly — that refusal is
+# the very failure the `tr` here exists to fix.
 # tr: see scripts/check-plugin-isolation.sh — python's stdout is CRLF on Windows.
 mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
 
