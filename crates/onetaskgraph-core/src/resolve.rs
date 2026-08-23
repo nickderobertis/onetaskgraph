@@ -20,13 +20,36 @@ use crate::PluginKind;
 use crate::config::{Config, ConfigError, SourceConfig};
 
 /// One configured source, built and ready to answer.
+///
+/// Held behind its accessors, and constructible only by [`resolve`], because `kind` is a
+/// claim about `source` rather than a value beside it: a caller that could write the two
+/// independently could say `linear` over a source that reports `local-md`, and the plan a
+/// query reports names the kind. Building it where the plugin builds the source is what
+/// makes the pair an invariant instead of something every reader has to re-check.
 pub struct ResolvedSource {
+    name: SourceName,
+    kind: PluginKind,
+    source: Box<dyn TaskSource>,
+}
+
+impl ResolvedSource {
     /// The name the configuration gave it, which qualifies every id it returns.
-    pub name: SourceName,
+    #[must_use]
+    pub fn name(&self) -> &SourceName {
+        &self.name
+    }
+
     /// The plugin kind that built it.
-    pub kind: PluginKind,
+    #[must_use]
+    pub fn kind(&self) -> PluginKind {
+        self.kind
+    }
+
     /// The source itself.
-    pub source: Box<dyn TaskSource>,
+    #[must_use]
+    pub fn source(&self) -> &dyn TaskSource {
+        self.source.as_ref()
+    }
 }
 
 impl fmt::Debug for ResolvedSource {
