@@ -7,10 +7,11 @@
 # splitting `onetaskgraph-plugin-api` out of `onetaskgraph-core`, so it is the last one
 # that should be taken on trust.
 #
-# So the forbidden edge is introduced for real, in a scratch clone, four ways, and each
-# case asserts on the DIAGNOSTIC as well as the exit status: a guard that refuses without
-# naming the crate and the path sends the next author hunting, which is most of what the
-# guard is for.
+# So the forbidden edge is introduced for real, in a scratch clone, five ways — four
+# against the local guard and one against deny.toml's wrapper restriction, which is the
+# half of this rule that is a required check. Each case asserts on the DIAGNOSTIC as well
+# as the exit status: a guard that refuses without naming the crate and the path sends the
+# next author hunting, which is most of what the guard is for.
 #
 # It earned its place immediately. Case 3 — a plugin dev-depending on a crate that
 # normally depends on the engine — passed the guard as originally written, because asking
@@ -162,11 +163,38 @@ expect_refused "the contract crate depending on another crate of this workspace"
   onetaskgraph-plugin-api onetaskgraph-core
 reset_fixture
 
+# 5. The rule has a SECOND mechanism, and it is the one that is a required check, so it is
+#    watched failing here too rather than only reasoned about: deny.toml permits the engine
+#    exactly one wrapper. A dev edge is the case that reaches it — a plugin taking a normal
+#    dependency on the engine is a Cargo cycle, which cargo refuses before cargo-deny sees
+#    it, whereas Cargo permits a cycle through a dev edge. So the wrapper restriction is
+#    what stands between a dev-dependency on the engine and a merge.
+add_dependency onetaskgraph-linear dev-dependencies 'onetaskgraph-core.workspace = true'
+deny_output="$(cd "$scratch/repo" && cargo deny check bans 2>&1)" \
+  && deny_status=0 || deny_status=$?
+if [ "$deny_status" -eq 0 ]; then
+  echo "check-isolation-enforced: deny.toml accepted a plugin that dev-depends on the engine." >&2
+  echo "check-isolation-enforced: restore the wrappers entry for onetaskgraph-core in deny.toml —" >&2
+  echo "check-isolation-enforced: it is the half of this rule that is a required check." >&2
+  failures=$((failures + 1))
+else
+  for term in "error[banned]" onetaskgraph-core onetaskgraph-linear; do
+    if ! grep -qF -- "$term" <<<"$deny_output"; then
+      echo "check-isolation-enforced: cargo-deny refused, but not for the reason this case is" >&2
+      echo "check-isolation-enforced: about — its output never mentions '$term'. It said:" >&2
+      printf '%s\n' "$deny_output" | sed 's/^/    /' >&2
+      failures=$((failures + 1))
+      break
+    fi
+  done
+fi
+reset_fixture
+
 if [ "$failures" -ne 0 ]; then
   echo "check-isolation-enforced: $failures case(s) failed." >&2
-  echo "check-isolation-enforced: scripts/check-plugin-isolation.sh no longer catches a" >&2
-  echo "check-isolation-enforced: violation it is the only local guard against — deny.toml's" >&2
-  echo "check-isolation-enforced: wrapper restriction would not catch it until CI. Repair the" >&2
-  echo "check-isolation-enforced: guard rather than relaxing the case above." >&2
+  echo "check-isolation-enforced: a violation of the engine-isolation rule now gets through the" >&2
+  echo "check-isolation-enforced: mechanism each case above names. Repair that mechanism rather" >&2
+  echo "check-isolation-enforced: than relaxing the case: the two cover different moments, so a" >&2
+  echo "check-isolation-enforced: hole in either is a hole in the rule AGENTS.md states." >&2
   exit 1
 fi
