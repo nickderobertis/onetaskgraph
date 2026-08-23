@@ -124,6 +124,15 @@ this; the first worker who wants one helper out of the engine will reach for it.
 `deny` job) and `scripts/check-plugin-isolation.sh` reads the real `cargo metadata` graph
 inside `just check`, failing in seconds instead of minutes.
 
+And that guard is itself watched failing: `scripts/check-isolation-enforced.sh` introduces
+the forbidden edge four ways in a scratch clone — as a dependency, as a dev-dependency,
+through an intermediate crate at depth two, and from the api crate — and asserts on both
+the refusal and the diagnostic. A guard nobody has watched fail is a guard nobody knows
+works, and this one has already been wrong twice: it queried one edge kind at a time, so a
+plugin dev-depending on a crate that normally depends on the engine passed; and it piped a
+26,000-line tree into `grep -q` under `pipefail`, so the SIGPIPE inverted the result on
+exactly the runs that found something. Keep its cases; extend them when the rule grows.
+
 ## The three selections the project graph owes
 
 The split buys exactly one thing and it is a build-graph thing, so the graph is not

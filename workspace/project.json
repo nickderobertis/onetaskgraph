@@ -97,10 +97,14 @@
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bash scripts/check-affected-selection.sh"
+        "commands": [
+          "bash scripts/check-affected-selection.sh",
+          "bash scripts/check-isolation-enforced.sh"
+        ],
+        "parallel": false
       },
       "cache": false,
-      "//": "Uncached: it clones the repository and reads git history, which no input glob in this tree describes \u2014 a cached pass would assert about a graph that has since changed."
+      "//": "Uncached: both clone the repository and read git history, which no input glob in this tree describes \u2014 a cached pass would assert about a graph that has since changed. Serial because each clones into its own scratch tree and runs cargo there; racing them would contend for the same registry lock for no gain."
     },
     "coverage": {
       "executor": "nx:run-commands",

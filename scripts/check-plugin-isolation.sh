@@ -59,21 +59,37 @@ if [ -n "$violations" ]; then
 fi
 
 # Direct edges are only half the rule: an indirect path reaches the engine just as surely.
+#
+# One traversal over the union of the edge kinds, not one per kind. A path to the engine
+# need not be the same kind of edge the whole way down — a plugin dev-depending on a crate
+# that normally depends on the engine reaches it at depth two — and asking `--edges dev`
+# alone cannot see that, because it stops following at the first normal edge below the dev
+# one. Three separate queries therefore passed a tree that broke the rule, which is what
+# scripts/check-isolation-enforced.sh caught the first time it ran; `--edges all` is the
+# rule as AGENTS.md states it: any edge, at any depth.
 for plugin in "${PLUGINS[@]}"; do
-  for kind in normal build dev; do
-    # Capture rather than discard: a `cargo tree` that failed would otherwise look exactly
-    # like a plugin with no edge to the engine, and this check would pass on a broken query.
-    if ! tree="$(cargo tree --package "$plugin" --edges "$kind" --prefix none --no-dedupe 2>&1)"; then
-      echo "check-plugin-isolation: could not read $plugin's $kind dependency tree:" >&2
-      printf '%s\n' "$tree" >&2
-      echo "check-plugin-isolation: fix the workspace so 'cargo tree' resolves, then re-run." >&2
-      exit 1
-    fi
-    if printf '%s\n' "$tree" | grep -qx "onetaskgraph-core v[0-9].*"; then
-      echo "check-plugin-isolation: $plugin reaches onetaskgraph-core through a $kind edge." >&2
-      echo "check-plugin-isolation: run 'cargo tree -p $plugin --edges $kind -i onetaskgraph-core'" >&2
-      echo "check-plugin-isolation: to see the path, then break it." >&2
-      exit 1
-    fi
-  done
+  # Capture rather than discard: a `cargo tree` that failed would otherwise look exactly
+  # like a plugin with no edge to the engine, and this check would pass on a broken query.
+  if ! tree="$(cargo tree --package "$plugin" --edges all --prefix none --no-dedupe 2>&1)"; then
+    echo "check-plugin-isolation: could not read $plugin's dependency tree:" >&2
+    printf '%s\n' "$tree" >&2
+    echo "check-plugin-isolation: fix the workspace so 'cargo tree' resolves, then re-run." >&2
+    exit 1
+  fi
+  # A here-string rather than a pipe into `grep -q`, and that is load-bearing here: with
+  # `pipefail` set, `grep -q` exits at the first match and SIGPIPEs the `printf` still
+  # writing the other 26,000 lines of this tree, so the PIPELINE reports failure on
+  # exactly the runs where the violation was found. That inverted result is what let a
+  # broken tree pass, and it gets quieter as the tree grows.
+  if grep -qx "onetaskgraph-core v[0-9].*" <<<"$tree"; then
+    echo "check-plugin-isolation: $plugin reaches onetaskgraph-core through a dependency edge." >&2
+    echo "check-plugin-isolation: the path, innermost crate first:" >&2
+    # Best-effort: the violation is already established by the tree above, so a failure to
+    # render the path is worth reporting but must not turn this into a passing run.
+    cargo tree --package "$plugin" --edges all --invert onetaskgraph-core 2>&1 \
+      | sed 's/^/check-plugin-isolation:   /' >&2 \
+      || echo "check-plugin-isolation:   (the path could not be rendered)" >&2
+    echo "check-plugin-isolation: break that path — the arrow only runs one way." >&2
+    exit 1
+  fi
 done
