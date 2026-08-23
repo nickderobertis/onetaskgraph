@@ -53,3 +53,21 @@ fn the_plugin_reports_its_kind_and_a_config_schema_the_registry_can_publish() {
         "an unknown config field must be refused, not silently dropped: {schema}"
     );
 }
+
+#[test]
+fn build_refuses_an_unknown_configuration_field_before_reporting_it_is_unimplemented() {
+    // A typo is the user's to fix and is worth naming; "not implemented yet" is not
+    // something they can act on. The published schema promises unknown fields are
+    // refused, and this is what keeps that promise true.
+    let name = SourceName::new("work").expect("a valid source name");
+
+    let Err(SourceError::Config { message }) = onetaskgraph_github_projects::Plugin.build(
+        &name,
+        &serde_json::json!({ "roott": "~/notes" }),
+        &NoSecrets,
+    ) else {
+        panic!("an unknown configuration field must be refused");
+    };
+    assert!(message.contains("roott"), "the typo is named: {message}");
+    assert!(message.contains("work"), "the source is named: {message}");
+}
