@@ -1,44 +1,22 @@
 #!/usr/bin/env bash
-# Reconcile docs/plugin-protocol.md against the traits it mirrors, so the specification
-# an out-of-tree plugin is written from cannot drift from the Rust contract in silence.
+# Reconcile docs/plugin-protocol.md against the traits it mirrors.
 #
-# That document is normative: someone writes a plugin in another language from it alone,
-# with no compiler between them and the trait. Everything it states about names is therefore
-# a restatement of Rust, and this reconciles the three kinds of restatement it makes.
+# That document is normative — someone writes a plugin in another language from it alone,
+# with no compiler between them and the trait — so every name it states is a restatement of
+# Rust, and drift in either direction reaches that author as a protocol this engine does not
+# speak. Both directions therefore fail here: names Rust has and the document lacks, and
+# names the document has and Rust no longer declares.
 #
-# Its two tables are checked BOTH ways, because a table's rows are structure this script can
-# read: the method table in "## 4. The methods" against `TaskSource`'s own methods, and the
-# error table in "## 5. The error envelope" against `SourceError`'s variants. A name either
-# side has and the other does not fails.
+# Its tables have rows to read back. Its prose does not, so the document's own markup stands
+# in for them: a backticked JSON string is a serialized value, and a backticked snake_case
+# word in the `Capabilities` section is a field. A value one section borrows from another is
+# recorded below with the enum that declares it, rather than the reverse direction being
+# widened to accept it.
 #
-# Its prose enumerations — the `Capabilities` fields, and the serialized variants of the
-# contract's kebab-case enums — are checked BOTH ways too. Declared-to-documented is the
-# direction the ordinary failure takes: a variant added or renamed in Rust and the document
-# left as it was, after which a plugin author implements a protocol this engine no longer
-# speaks. Documented-to-declared catches the other half — a variant or a field *removed*
-# from Rust and left standing in the prose, which a plugin author would go on emitting.
-# Prose has no rows to read back, so what stands in for them is the document's own markup:
-# a backticked JSON string (`"in-progress"`) is a serialized value, and a backticked
-# snake_case word in §4.2 is a field of `Capabilities`. Anything spelled that way and not
-# declared fails; a value one section legitimately borrows from another is recorded below
-# with the enum it belongs to, rather than the reverse direction being widened for it.
-#
-# Every one of those checks is scoped to the *section that specifies the thing*,
-# never to the document as a whole. A name that happens to occur in an unrelated paragraph
-# is not a specification of it, and a check satisfied that way passes over exactly the drift
-# it exists to catch: the section going stale while the name survives somewhere else. Each
-# section is named below, so a section that is renamed or deleted fails loudly here instead
-# of quietly widening the search back to the whole document.
-#
-# A method's signature is reconciled too, not only its name: every parameter the trait takes
-# has to be named in that method's own section, and the type its `result` carries has to be
-# spelled there. A method that gains an argument in Rust and keeps its documented shape is
-# drift a name-only comparison cannot see.
-#
-# `kind` and `capabilities` are deliberately not protocol methods of their own: both are
-# settled by the handshake, which the document says in the same section. They are carried
-# below as named exceptions so that decision stays machine-checked rather than looking
-# like an omission.
+# Every check is scoped to the section that *specifies* the thing, never to the whole
+# document: a name occurring in an unrelated paragraph is not a specification of it, and a
+# check satisfied that way passes over the drift it exists to catch. The sections are named
+# below, so a renamed or deleted one fails loudly instead of quietly widening the search.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

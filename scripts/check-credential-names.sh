@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
 # Reconcile the one-name-per-credential contract against every place that restates it.
 #
-# There is exactly one name for each of the two hosted credentials — `LINEAR_API_KEY` and
-# `GH_PROJECTS_TOKEN` — in the repository secrets, in the local secrets file, in a
-# configuration document's `*_env` field, in the documentation and in CI. Nothing anywhere
-# translates between spellings, which is the whole reason the rule is worth having: the
-# moment a second spelling exists, something has to map between them, and the mapping is
-# where a live journey silently reads an empty credential.
-#
-# That contract is prose in several documents and a literal in two other scripts, so it is
-# the kind of thing that drifts one copy at a time. This is the one declaration; every
-# restatement below is checked against it. Adding a place that names a credential means
-# adding it here, which is the point.
+# The contract is prose in several documents and a literal in two other scripts, so it
+# drifts one copy at a time, and the first spelling that needs translating is where a live
+# journey silently reads an empty credential. The declarations below are the one copy; a
+# new place that names a credential belongs in RESTATEMENTS, which is the point.
 #
 # Comments are stripped before a file is scanned, because several of these files name a
 # wrong spelling deliberately in order to explain why the right one is right — and a check
