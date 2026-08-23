@@ -2,30 +2,24 @@
 # tracked)
 .gh-secrets-state.json
 
-# Rust
 /target/
 **/*.rs.bk
 
-# Python
 .venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
 
-# Node / TypeScript
 node_modules/
 *.tsbuildinfo
 
-# Nx
 .nx/
 
-# Build output
 /dist/
 **/dist/
 /build/
 
-# Coverage artifacts
 /coverage/
 **/coverage/
 *.profraw
