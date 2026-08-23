@@ -1,11 +1,13 @@
 //! The configuration journeys, driven the way a user drives them.
 //!
-//! Journeys 16, 17 and 18 of `AGENTS.md`, plus the refusals journey 22 owes for a
-//! malformed configuration. Every one of them spawns the compiled binary as a
-//! subprocess against real files in a temporary directory and a real process
-//! environment, and asserts on the exit code and on what the binary wrote. Nothing
-//! here stands in for the filesystem or for the environment: those *are* the layer
-//! under test.
+//! Journeys 16 (precedence and the verb that names the layer), 17 (a named source's
+//! own field at each of the three layers) and 18 (the credentials file supplying and
+//! deferring) of `AGENTS.md`, plus the part of 21 the machine-readable configuration
+//! output owes and the refusals 22 owes for a malformed configuration. Every one of
+//! them spawns the compiled binary as a subprocess against real files in a temporary
+//! directory and a real process environment, and asserts on the exit code and on what
+//! the binary wrote. Nothing here stands in for the filesystem or for the
+//! environment: those *are* the layer under test.
 
 mod common;
 
@@ -28,8 +30,6 @@ fn setting<'a>(shown: &'a Value, key: &str) -> &'a Value {
         .find(|setting| setting["key"] == key)
         .unwrap_or_else(|| panic!("{key} is reported; the document was {shown:#}"))
 }
-
-// Journey 16: configuration precedence, and the verb that names the layer.
 
 #[test]
 fn the_file_layer_alone_sets_a_setting_and_the_verb_names_the_file() {
@@ -363,8 +363,6 @@ fn asking_for_a_format_and_the_json_shorthand_at_once_is_refused_as_a_bad_invoca
     );
 }
 
-// Journey 17: a field of one named source, set at each of the three layers.
-
 /// The setting a named source's own field lives at.
 const SOURCE_FIELD: &str = "sources.work.config.capabilities.max_page_size";
 
@@ -495,8 +493,6 @@ fn each_worked_environment_example_sets_the_setting_it_claims_to_set() {
         "github-projects"
     );
 }
-
-// Journey 18: the credentials file supplies, and defers.
 
 /// A value distinctive enough that finding it anywhere is unambiguous.
 const PLANTED: &str = "lin_api_PLANTED-CANARY-8f21c0";
@@ -651,8 +647,6 @@ fn a_planted_credential_reaches_no_output_of_any_verb() {
         }
     }
 }
-
-// Journey 22: a configuration this product will not run on says why, and what next.
 
 /// Run `config show` over `sandbox`, expect a refusal, and return what it said.
 fn refusal(sandbox: &Sandbox, arguments: &[&str]) -> String {
@@ -835,8 +829,6 @@ fn a_credentials_file_line_that_is_not_an_assignment_is_refused_without_quoting_
         "a refusal about one line does not print another line's value"
     );
 }
-
-// Journey 21: the machine-readable output has a root in the schema the binary emits.
 
 #[test]
 fn the_machine_readable_output_matches_a_root_of_the_schema_this_binary_emits() {
