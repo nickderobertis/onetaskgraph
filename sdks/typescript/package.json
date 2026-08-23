@@ -11,6 +11,10 @@
     "url": "git+https://github.com/nickderobertis/onetaskgraph.git",
     "directory": "sdks/typescript"
   },
-  "files": ["src"],
-  "publishConfig": { "access": "public" }
+  "files": [
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

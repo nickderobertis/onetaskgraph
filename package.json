@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.14",
-  "workspaces": ["sdks/typescript"],
+  "workspaces": [
+    "sdks/typescript"
+  ],
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
     "@types/bun": "1.3.14",

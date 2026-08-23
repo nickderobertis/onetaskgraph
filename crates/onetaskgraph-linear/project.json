@@ -2,15 +2,9 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "onetaskgraph-linear",
   "projectType": "library",
-  "tags": [
-    "lang:rust",
-    "layer:plugin",
-    "live:linear"
-  ],
+  "tags": ["lang:rust", "layer:plugin", "live:linear"],
   "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree.",
-  "implicitDependencies": [
-    "onetaskgraph-plugin-api"
-  ],
+  "implicitDependencies": ["onetaskgraph-plugin-api"],
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",

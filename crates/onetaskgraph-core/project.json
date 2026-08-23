@@ -2,10 +2,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "onetaskgraph-core",
   "projectType": "library",
-  "tags": [
-    "lang:rust",
-    "layer:engine"
-  ],
+  "tags": ["lang:rust", "layer:engine"],
   "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree.",
   "implicitDependencies": [
     "onetaskgraph-github-projects",

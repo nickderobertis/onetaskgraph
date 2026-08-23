@@ -2,10 +2,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "sdk-typescript",
   "projectType": "library",
-  "tags": [
-    "lang:typescript",
-    "layer:sdk"
-  ],
+  "tags": ["lang:typescript", "layer:sdk"],
   "//": "No implicitDependencies: the SDK is generated from the schema bundle the built binary emits, not compiled against a crate. The generator that creates that edge lands with the SDK.",
   "implicitDependencies": [],
   "targets": {
@@ -36,7 +33,7 @@
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bun run biome lint sdks/typescript"
+        "command": "bun run biome lint --error-on-warnings sdks/typescript"
       }
     },
     "typecheck": {

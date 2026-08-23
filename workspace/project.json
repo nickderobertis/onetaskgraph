@@ -2,9 +2,7 @@
   "$schema": "../node_modules/nx/schemas/project-schema.json",
   "name": "workspace",
   "projectType": "library",
-  "tags": [
-    "layer:workspace"
-  ],
+  "tags": ["layer:workspace"],
   "//": "Depends on every other project so the cross-cutting checks run whenever anything they check can change. Without these edges a crate-only change would skip the graph check that keeps affected selection honest.",
   "implicitDependencies": [
     "onetaskgraph",
@@ -56,6 +54,7 @@
       "executor": "nx:run-commands",
       "options": {
         "commands": [
+          "bun run biome lint --error-on-warnings nx.json biome.json package.json .claude workspace crates sdks",
           "bash scripts/check-nx-graph.sh",
           "bash scripts/check-plugin-isolation.sh",
           "cargo machete"
@@ -63,11 +62,18 @@
         "parallel": false
       },
       "inputs": [
+        "{workspaceRoot}/biome.json",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/package.json",
+        "{workspaceRoot}/.claude/**/*.json",
+        "{workspaceRoot}/workspace/**/*.json",
         "{workspaceRoot}/Cargo.toml",
         "{workspaceRoot}/Cargo.lock",
         "{workspaceRoot}/crates/*/Cargo.toml",
         "{workspaceRoot}/crates/*/project.json",
         "{workspaceRoot}/crates/*/src/**/*.rs",
+        "{workspaceRoot}/sdks/*/project.json",
+        "{workspaceRoot}/sdks/*/*.json",
         "{workspaceRoot}/scripts/check-nx-graph.sh",
         "{workspaceRoot}/scripts/check-plugin-isolation.sh"
       ]
@@ -118,10 +124,7 @@
     "deny": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": [
-          "cargo deny check bans licenses sources",
-          "cargo deny check advisories"
-        ],
+        "commands": ["cargo deny check bans licenses sources", "cargo deny check advisories"],
         "parallel": false
       },
       "cache": false,
