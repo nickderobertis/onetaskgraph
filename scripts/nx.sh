@@ -31,6 +31,13 @@ case " $* " in
   *" --outputStyle"*) exec node_modules/.bin/nx "$@" ;;
 esac
 
+# Buffering is for commands whose output is progress. A query's output IS the answer, so
+# it goes straight through — swallowing it would break every caller that reads it.
+case "${1:-}" in
+  run | run-many | affected) ;;
+  *) exec node_modules/.bin/nx "$@" ;;
+esac
+
 # One line to say what is running, then nothing unless it fails — at which point the whole
 # of Nx's output is replayed, because that is when every line of it is worth reading.
 echo "nx: $*" >&2

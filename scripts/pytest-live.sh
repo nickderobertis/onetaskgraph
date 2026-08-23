@@ -30,12 +30,12 @@ fi
 # which measures the product. A live run exercises a third-party API and imports almost
 # nothing, so measuring it would fail the floor for the one reason that is not a defect.
 status=0
-(cd "$PROJECT" && uv run --frozen pytest -q --no-cov tests/live) || status=$?
+report="$(cd "$PROJECT" && uv run --frozen pytest -q --no-cov tests/live 2>&1)" || status=$?
 
 if [ "$status" -eq 0 ] || [ "$status" -eq "$NO_TESTS_COLLECTED" ]; then
   exit 0
 fi
 
-echo "pytest-live: $PROJECT's live tests failed (exit $status)." >&2
-echo "pytest-live: run 'cd $PROJECT && uv run pytest tests/live' to see the failures." >&2
+printf '%s\n' "$report" >&2
+echo "pytest-live: $PROJECT's live tests failed (exit $status) — see above." >&2
 exit "$status"

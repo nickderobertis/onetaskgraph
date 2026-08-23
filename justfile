@@ -76,11 +76,7 @@ format:
 # what .github/workflows/live.yml does, so each hosted plugin's job stays scoped to its
 # own crate and its own single credential.
 test-live projects="":
-    @if [ -n "{{projects}}" ]; then \
-        {{nx}} run-many -t test-live --projects="{{projects}}"; \
-    else \
-        {{nx}} run-many -t test-live --all; \
-    fi
+    @scripts/test-live.sh {{projects}}
 
 # Linux-only in CI, where it is its own required check.
 
