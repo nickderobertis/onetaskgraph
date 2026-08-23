@@ -129,11 +129,13 @@ introduces the forbidden edge in a scratch clone — as a dependency, as a dev-d
 through an intermediate crate at depth two, and from the api crate — and asserts on both
 the refusal and the diagnostic. Its fifth case is `cargo deny` refusing a dev edge to the
 engine, because a *normal* edge is a Cargo cycle that cargo rejects before `deny` runs, so
-the wrapper restriction is what actually stands between a dev-dependency and a merge. A guard nobody has watched fail is a guard nobody knows
-works, and this one has already been wrong twice: it queried one edge kind at a time, so a
-plugin dev-depending on a crate that normally depends on the engine passed; and it piped a
-26,000-line tree into `grep -q` under `pipefail`, so the SIGPIPE inverted the result on
-exactly the runs that found something. Keep its cases; extend them when the rule grows.
+the wrapper restriction is what actually stands between a dev-dependency and a merge. A guard nobody has
+watched fail is a guard nobody knows works, and two of this one's cases exist because it
+was wrong in exactly those ways. Keep its cases; extend them when the rule grows.
+
+`scripts/check-hook-safety.sh` guards the guards: they clone, the gate runs from a hook,
+and git exports `GIT_DIR` to hooks, where it overrides `git -C`. Both clone through
+`scripts/scratch-clone.sh` for that reason.
 
 ## The three selections the project graph owes
 

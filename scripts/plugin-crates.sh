@@ -16,12 +16,20 @@ import json
 import sys
 from pathlib import Path
 
-names = sorted(
-    project["name"]
-    for path in Path("crates").glob("*/project.json")
-    for project in [json.loads(path.read_text())]
-    if "layer:plugin" in project.get("tags", [])
-)
+names = []
+for path in sorted(Path("crates").glob("*/project.json")):
+    try:
+        project = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        # Named, with the cause: every caller of this script is a guard, and a guard that
+        # dies on a traceback tells its reader nothing about which file to open.
+        print(f"plugin-crates: could not read {path}: {error}", file=sys.stderr)
+        print("plugin-crates: fix that file — it is a project.json and must be valid JSON.",
+              file=sys.stderr)
+        raise SystemExit(1) from None
+    if "layer:plugin" in project.get("tags", []):
+        names.append(project["name"])
+names = sorted(names)
 if not names:
     print("plugin-crates: no crate is tagged layer:plugin — the tag is how the engine-",
           file=sys.stderr)

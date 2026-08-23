@@ -14,13 +14,14 @@ git config core.hooksPath .githooks
 
 # The judged tier is out of `just check`, but a contributor should not have to discover
 # how to install it. Through the documented recipe, so there is one way to do it.
+#
+# A failure here is reported and does not stop bootstrap, deliberately: this tier needs the
+# network and a harness, `just check` and `just gate` do not use it, and a contributor who
+# cannot install it must still be able to build and test. The `llmlint` PR check is what
+# catches its absence for a change that is going to merge.
 if ! setup_output="$(just setup-llmlint 2>&1)"; then
   printf '%s\n' "$setup_output" >&2
-  echo "bootstrap-workspace: the judged-lint tier did not install — see above." >&2
-  echo "bootstrap-workspace: what still works: 'just check' and 'just gate' are unaffected," >&2
-  echo "bootstrap-workspace: because the judged tier is deliberately out of both." >&2
-  echo "bootstrap-workspace: what does not: 'just lint-llm', 'just lint-llm-diff' and" >&2
-  echo "bootstrap-workspace: 'just lint-llm-validate', which is the blocking 'llmlint' PR check." >&2
-  echo "bootstrap-workspace: next action: fix the cause above, then re-run 'just setup-llmlint'." >&2
-  echo "bootstrap-workspace: bootstrap itself succeeded; this one optional tier is missing." >&2
+  echo "bootstrap-workspace: the judged-lint tier did not install (see above). 'just check'" >&2
+  echo "bootstrap-workspace: and 'just gate' are unaffected; 'just lint-llm*' will not run." >&2
+  echo "bootstrap-workspace: next action: fix the cause above, then 'just setup-llmlint'." >&2
 fi

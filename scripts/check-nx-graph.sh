@@ -14,7 +14,16 @@ set -euo pipefail
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml | python3 -c '
+# Captured rather than piped straight in: under `pipefail` a cargo failure would surface
+# as a bare non-zero exit from a pipeline, with cargo's own reason swallowed.
+if ! metadata="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml 2>&1)"; then
+  echo "check-nx-graph: could not read the Cargo workspace graph:" >&2
+  printf '%s\n' "$metadata" >&2
+  echo "check-nx-graph: fix the manifest error above, then re-run 'just check'." >&2
+  exit 1
+fi
+
+if ! printf '%s' "$metadata" | python3 -c '
 import json
 import sys
 from pathlib import Path
@@ -61,4 +70,10 @@ if problems:
     for problem in problems:
         print(f"  {problem}", file=sys.stderr)
     sys.exit(1)
-'
+'; then
+  # The reader above names the disagreeing pair itself. This only has to add context for
+  # the other way it can fail: dying before it could say anything.
+  echo "check-nx-graph: if the output above is a traceback rather than a named pair, a" >&2
+  echo "check-nx-graph: crates/*/project.json is malformed — check the one it names." >&2
+  exit 1
+fi

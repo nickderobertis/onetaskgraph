@@ -1,34 +1,21 @@
 #!/usr/bin/env bash
 # Prove that the scratch-clone helper survives the environment a git hook runs it in.
 #
-# The gate runs from .githooks/pre-push, and git exports GIT_DIR to every hook. GIT_DIR
-# overrides `git -C <dir>`, so two of this repository's own guards silently operated on
-# the real repository instead of on their scratch clone: the clone came out empty, and
-# what they went on to do landed at home. It rejected one publishing push of this branch
-# and hung another.
+# Git exports GIT_DIR to hooks and it overrides `git -C`, so a guard that clones can
+# operate on the real repository instead of its scratch tree. Run by hand there is no
+# GIT_DIR, which is why that shipped, so the hostile environment is set up here on purpose.
 #
-# A fix nobody has watched work is worth as little as a guard nobody has watched fail, and
-# this one cannot be watched by running the gate by hand — by hand there is no GIT_DIR,
-# which is exactly why it shipped. So the hostile environment is set up here on purpose.
-#
-# Every case runs against a throwaway fixture repository, never against this one. A check
-# that reproduced the hazard against the real tree would be the hazard.
+# Every case runs against a throwaway fixture repository. A check that reproduced the
+# hazard against this one would be the hazard.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly HELPER="$ROOT/scripts/scratch-clone.sh"
 
-# Strip the ambient git environment before building anything of our own, and only set a
-# hostile GIT_DIR for the individual commands under test below.
-#
-# This check runs inside the gate, and the gate runs from .githooks/pre-push, so GIT_DIR
-# is already set when the first line executes. Without this, the `git init` that builds
-# the fixture reinitialises the REAL repository and the `git add -A`/`git commit` that
-# populate it commit there — this check becomes the hazard it exists to pin.
-#
-# That is not hypothetical. The first gate run that reached this file did exactly that:
-# two fixture commits landed on the branch and the index was rewritten to show the whole
-# repository deleted. The irony is the argument for keeping this guard.
+# Strip the ambient git environment before building anything of our own; the hostile
+# GIT_DIR is set per-command below. This runs inside the gate, which runs from the hook, so
+# GIT_DIR is set at the first line — without this, the `git init` that builds the fixture
+# reinitialises the real repository and the fixture commits land on the real branch.
 # shellcheck source=scripts/scratch-clone.sh
 source "$HELPER"
 scratch_clone_strip_git_env
