@@ -158,11 +158,16 @@ jobs:
 
       - name: Lint the changed files
         env:
-          HARNESS_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The name is the wiring: `claude` reads its credential from
+          # CLAUDE_CODE_OAUTH_TOKEN, so exporting the same secret under any other name
+          # leaves the harness unauthenticated. It then exits in seconds with a plain-text
+          # login error, and oneharness reports it as "no JSON value could be extracted
+          # from the response" — which reads like a broken judge rather than a missing key.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           # Fail with an actionable message rather than an opaque harness error — and
           # never no-op to green, which would report unlinted files as clean.
-          if [ -z "${HARNESS_KEY:-}" ]; then
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
             echo "::error::llmlint needs a harness credential. Add the" \
                  "CLAUDE_CODE_OAUTH_TOKEN repository secret (it is declared in" \
                  "gh-secrets.json). Fork pull requests are gated by the" \
