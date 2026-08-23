@@ -28,9 +28,28 @@ import os
 import re
 import sys
 
-document = open(os.environ["DOCUMENT"], encoding="utf-8").read()
-source_rs = open(os.environ["SOURCE_RS"], encoding="utf-8").read()
-error_rs = open(os.environ["ERROR_RS"], encoding="utf-8").read()
+
+def refuse(problem, next_action):
+    print(f"check-protocol-methods: {problem}", file=sys.stderr)
+    print(f"check-protocol-methods: {next_action}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def read(variable, what):
+    """One input file, reported by name rather than as a traceback if it will not open."""
+    path = os.environ[variable]
+    try:
+        return open(path, encoding="utf-8").read()
+    except OSError as problem:
+        refuse(
+            f"could not read {path}: {problem.strerror}.",
+            f"restore {what}, or point this check at where it moved to.",
+        )
+
+
+document = read("DOCUMENT", "the protocol document")
+source_rs = read("SOURCE_RS", "the api crate's `source.rs`")
+error_rs = read("ERROR_RS", "the api crate's `error.rs`")
 
 # Trait methods the protocol deliberately does not carry as methods of its own, each with
 # the reason. A method missing from BOTH this map and the document's table is drift.
@@ -44,12 +63,6 @@ NOT_METHODS = {
 HANDSHAKE_METHOD = "initialize"
 
 failures = []
-
-
-def refuse(problem, next_action):
-    print(f"check-protocol-methods: {problem}", file=sys.stderr)
-    print(f"check-protocol-methods: {next_action}", file=sys.stderr)
-    raise SystemExit(1)
 
 
 def first_column(header):
