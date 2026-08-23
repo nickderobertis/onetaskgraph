@@ -5,7 +5,8 @@
 //! the product scriptable: a caller who can name a setting in a document can name the
 //! same setting on the command line, at the same dotted path.
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use onetaskgraph_core::OutputFormat;
 use onetaskgraph_core::config::{Layer, Origin, Setting, SettingPath, value_from_text};
 use serde_json::Value;
 
@@ -69,9 +70,9 @@ pub struct Overrides {
     #[arg(long, value_name = "NAMES", value_delimiter = ',', global = true)]
     pub default_sources: Option<Vec<String>>,
 
-    /// How output is rendered: text or json.
+    /// How output is rendered.
     #[arg(long, value_name = "FORMAT", global = true, conflicts_with = "json")]
-    pub output: Option<String>,
+    pub output: Option<Format>,
 
     /// Shorthand for --output json.
     #[arg(long, global = true)]
@@ -99,8 +100,8 @@ impl Overrides {
                 "--default-sources",
             ));
         }
-        if let Some(format) = &self.output {
-            settings.push(at("output", Value::from(format.clone()), "--output"));
+        if let Some(format) = self.output {
+            settings.push(at("output", format.setting(), "--output"));
         }
         if self.json {
             settings.push(at("output", Value::from("json"), "--json"));
@@ -113,6 +114,33 @@ impl Overrides {
         }
 
         Ok(Layer::new(settings))
+    }
+}
+
+/// How output is rendered, as the command line accepts it.
+///
+/// A command-line mirror of [`OutputFormat`] rather than that type itself, because
+/// deriving clap's `ValueEnum` on it would put clap into the engine's dependencies for
+/// the sake of one flag. The two cannot disagree about *spelling*: [`Format::setting`]
+/// produces its value by serialising the `OutputFormat` it stands for, so what reaches
+/// the configuration is whatever the engine's own type writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Format {
+    /// For a person reading a terminal.
+    Text,
+    /// For a program.
+    Json,
+}
+
+impl Format {
+    /// This format as the `output` setting's value.
+    #[must_use]
+    pub fn setting(self) -> Value {
+        let format = match self {
+            Self::Text => OutputFormat::Text,
+            Self::Json => OutputFormat::Json,
+        };
+        serde_json::to_value(format).expect("an output format renders as JSON")
     }
 }
 

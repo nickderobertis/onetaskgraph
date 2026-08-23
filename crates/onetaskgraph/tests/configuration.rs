@@ -307,11 +307,29 @@ fn the_named_flags_reach_the_settings_they_are_shorthand_for() {
 }
 
 #[test]
-fn an_output_format_this_build_does_not_have_is_refused_by_name() {
+fn an_output_format_this_build_does_not_have_is_refused_with_the_ones_it_does() {
     let sandbox = Sandbox::new();
 
-    let message = refusal(&sandbox, &["--output", "yaml"]);
-    assert!(message.contains("output"), "{message}");
+    let output = sandbox
+        .command()
+        .args(["config", "show", "--output", "yaml"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    // Clap's own code for a malformed invocation: `--output` takes one of a closed set,
+    // so this never reaches the configuration layer at all.
+    assert_eq!(output.status.code(), Some(2));
+    let message = stderr(&output);
+    assert!(
+        message.contains("yaml"),
+        "the refusal quotes what was asked for: {message}"
+    );
+    assert!(
+        message.contains("text") && message.contains("json"),
+        "the refusal lists the formats this build has: {message}"
+    );
 }
 
 #[test]
@@ -812,6 +830,60 @@ fn a_working_directory_that_no_longer_exists_is_reported_rather_than_crashing() 
         stdout(&output).is_empty(),
         "a refusal writes nothing to stdout"
     );
+}
+
+/// Unix only: an environment block holding bytes that are not UTF-8 is something only
+/// `OsString` can express, and Windows environment blocks are UTF-16 rather than bytes.
+#[cfg(unix)]
+#[test]
+fn a_setting_variable_this_build_cannot_read_is_refused_by_name_rather_than_ignored() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let sandbox = Sandbox::new();
+    let not_utf8 = std::ffi::OsString::from_vec(vec![0x66, 0xff, 0x6f]);
+
+    let output = sandbox
+        .command()
+        .env("ONETASKGRAPH_OUTPUT", &not_utf8)
+        .args(["config", "show"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    let message = stderr(&output);
+    assert!(
+        message.contains("ONETASKGRAPH_OUTPUT"),
+        "the refusal names the variable: {message}"
+    );
+    assert!(message.contains("next:"), "{message}");
+    assert!(
+        stdout(&output).is_empty(),
+        "a refusal writes nothing to stdout"
+    );
+}
+
+/// Unix only, for the same reason as the refusal above.
+#[cfg(unix)]
+#[test]
+fn a_variable_this_build_cannot_read_and_never_asked_for_leaves_the_run_alone() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let sandbox = Sandbox::new();
+    let not_utf8 = std::ffi::OsString::from_vec(vec![0x66, 0xff, 0x6f]);
+
+    let output = sandbox
+        .command()
+        .env("SOMETHING_ELSE", &not_utf8)
+        .args(["config", "show", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let page_size = setting(&shown(&output), "page_size").clone();
+    assert_eq!(page_size["value"], 50);
+    assert_eq!(page_size["origin"]["layer"], "default");
 }
 
 #[test]
