@@ -187,12 +187,11 @@ impl Layer {
 /// What a value is, for a message a user reads.
 fn kind_of(value: &Value) -> &'static str {
     match value {
-        Value::Null => "nothing",
         Value::Bool(_) => "a boolean",
         Value::Number(_) => "a number",
         Value::String(_) => "a string",
-        Value::Array(_) => "a list",
-        Value::Object(_) => "a mapping",
+        // Nothing at all and a mapping are both answered before this is reached.
+        _ => "a list",
     }
 }
 

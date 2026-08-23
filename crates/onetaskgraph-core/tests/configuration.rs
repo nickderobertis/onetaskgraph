@@ -800,3 +800,193 @@ fn a_host_with_no_configuration_home_still_loads() {
             .contains("neither XDG_CONFIG_HOME nor HOME is set")
     );
 }
+
+// ---------------------------------------------------------------------------
+// The corners each of the above leaves: the shapes a user can still write.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_document_root_of_any_other_shape_is_refused_by_what_it_is() {
+    for (root, described) in [
+        (json!(true), "a boolean"),
+        (json!(7), "a number"),
+        (json!("page_size: 25"), "a string"),
+        (json!([1, 2]), "a list"),
+    ] {
+        let error = Layer::from_document(Path::new("a.yaml").to_path_buf(), &root)
+            .expect_err("only a mapping is a document");
+        assert!(error.to_string().contains(described), "{error}");
+    }
+}
+
+#[test]
+fn a_setting_serializes_with_its_key_as_the_dotted_path_a_user_typed() {
+    let rendered = serde_json::to_value(flag("sources.work.config.root", json!("/notes")))
+        .expect("a setting renders");
+    assert_eq!(rendered["key"], "sources.work.config.root");
+    assert_eq!(rendered["origin"]["layer"], "flag");
+}
+
+#[test]
+fn a_number_too_large_for_a_signed_integer_is_still_a_number() {
+    assert_eq!(
+        value_from_text("9223372036854775808"),
+        json!(9_223_372_036_854_775_808_u64)
+    );
+}
+
+#[test]
+fn the_credentials_path_variable_is_not_read_as_a_setting_called_secrets_file() {
+    let host = Host::new();
+    host.write("elsewhere.env", "LINEAR_API_KEY=x\n");
+
+    let loaded = config::load(
+        &host.root.path().join("project"),
+        &Environment::from_pairs([(
+            SECRETS_FILE_VARIABLE,
+            host.root
+                .path()
+                .join("elsewhere.env")
+                .to_string_lossy()
+                .to_string(),
+        )]),
+        &Layer::default(),
+    )
+    .expect("the override is a path, not a setting");
+
+    assert!(
+        !loaded
+            .effective
+            .settings
+            .iter()
+            .any(|setting| setting.key.to_string() == "secrets_file")
+    );
+    assert_eq!(loaded.secrets.report().variables.len(), 1);
+}
+
+#[test]
+fn the_resolver_hands_back_the_exported_value_when_the_process_environment_defines_one() {
+    let host = Host::new();
+    let resolved = secrets(
+        &host,
+        "LINEAR_API_KEY=from-the-file\n",
+        &[("LINEAR_API_KEY", "from-the-shell")],
+    )
+    .expect("the file parses");
+
+    let answered = resolved.get("LINEAR_API_KEY").expect("a value");
+    assert_eq!(
+        secrecy::ExposeSecret::expose_secret(&answered),
+        "from-the-shell"
+    );
+}
+
+#[test]
+fn the_effective_configuration_says_which_layer_answers_for_each_credential() {
+    let host = Host::new();
+    host.write(
+        &format!("home/{SECRETS_RELATIVE_PATH}"),
+        "LINEAR_API_KEY=from-the-file\nGH_PROJECTS_TOKEN=also-from-the-file\n",
+    );
+
+    let loaded = config::load(
+        &host.root.path().join("project"),
+        &Environment::from_pairs([
+            (
+                "XDG_CONFIG_HOME".to_owned(),
+                host.root.path().join("home").to_string_lossy().to_string(),
+            ),
+            ("LINEAR_API_KEY".to_owned(), "from-the-shell".to_owned()),
+        ]),
+        &Layer::default(),
+    )
+    .expect("the stack loads");
+
+    let rendered = loaded.effective.render_text();
+    assert!(
+        rendered.contains("LINEAR_API_KEY     resolved from the environment"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("GH_PROJECTS_TOKEN  resolved from the secrets file"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("from-the-file"), "{rendered}");
+    assert!(!rendered.contains("from-the-shell"), "{rendered}");
+}
+
+#[test]
+fn a_source_name_that_breaks_the_pattern_names_the_key_it_was_written_at() {
+    let error = Config::from_document(json!({"sources": {"Work_1": {"plugin": "in-memory"}}}))
+        .expect_err("an unusable source name");
+    assert_eq!(error.key(), Some("sources.Work_1"));
+    assert!(
+        error.to_string().contains("^[a-z0-9][a-z0-9-]*$"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_default_source_naming_nothing_configured_lists_the_ones_that_are() {
+    let error = Config::from_document(json!({
+        "default_sources": ["nope"],
+        "sources": {"work": {"plugin": "in-memory"}, "notes": {"plugin": "in-memory"}},
+    }))
+    .expect_err("an unconfigured source");
+    assert!(error.to_string().contains("notes, work"), "{error}");
+}
+
+#[test]
+fn default_sources_written_as_nothing_is_the_same_as_omitting_it() {
+    let config = Config::from_document(json!({"default_sources": Value::Null}))
+        .expect("nothing is not a bad value");
+    assert_eq!(config.default_sources, None);
+}
+
+#[test]
+fn a_document_that_is_not_an_object_at_all_is_refused_at_its_root() {
+    let error = Config::from_document(json!(7)).expect_err("a number is not a configuration");
+    assert_eq!(error.key(), Some("the document's root"));
+}
+
+#[test]
+fn a_field_a_plugin_declares_a_schema_for_is_refused_by_the_field_that_is_wrong() {
+    let error = onetaskgraph_core::validate_sources(&one_source(
+        "in-memory",
+        json!({"capabilities": {"projekts": "native"}}),
+    ))
+    .expect_err("a mistyped field inside a declared block");
+
+    assert_eq!(
+        error.key(),
+        Some("sources.work.config.capabilities.projekts"),
+        "the unexpected field is lifted out of the object the validator blamed"
+    );
+    assert!(error.to_string().contains("in-memory"), "{error}");
+}
+
+#[test]
+fn a_declared_field_given_the_wrong_kind_of_value_is_refused_at_that_field() {
+    let error =
+        onetaskgraph_core::validate_sources(&one_source("in-memory", json!({"tasks": "one"})))
+            .expect_err("a list field given a string");
+    assert_eq!(error.key(), Some("sources.work.config.tasks"));
+}
+
+#[test]
+fn a_resolved_source_debug_prints_its_name_and_kind_and_none_of_its_work() {
+    let config = one_source(
+        "in-memory",
+        json!({"tasks": [{"id": "T-1", "title": "a private title",
+            "status": {"category": "todo", "name": "Todo"}, "labels": []}]}),
+    );
+    let resolved = resolve(&config, &no_secrets()).expect("the source builds");
+
+    let rendered = format!("{:?}", resolved[0]);
+    assert!(rendered.contains("work"), "{rendered}");
+    assert!(rendered.contains("in-memory"), "{rendered}");
+    assert!(
+        !rendered.contains("a private title"),
+        "a source's Debug is not a rendering of the work it holds: {rendered}"
+    );
+}
