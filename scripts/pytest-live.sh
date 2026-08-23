@@ -28,7 +28,7 @@ fi
 # which measures the product. A live run exercises a third-party API and imports almost
 # nothing, so measuring it would fail the floor for the one reason that is not a defect.
 status=0
-(cd "$PROJECT" && uv run --frozen pytest --no-cov tests/live) || status=$?
+(cd "$PROJECT" && uv run --frozen pytest -q --no-cov tests/live) || status=$?
 
 if [ "$status" -eq 0 ] || [ "$status" -eq "$NO_TESTS_COLLECTED" ]; then
   exit 0

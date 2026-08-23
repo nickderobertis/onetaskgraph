@@ -34,8 +34,6 @@ unknown-git = "deny"
 multiple-versions = "warn"
 wildcards = "deny"
 
-# --- INVARIANT: no work data is stored, cached, indexed or mirrored outside a plugin ---
-#
 # The engine compensates for a missing capability transiently: it holds at most one source
 # page plus the caller's page and writes nothing down. The moment a change reaches for an
 # embedded store, an index or a cache, that stops being true — so the reach itself fails a
@@ -54,8 +52,6 @@ deny = [
   { crate = "cached", reason = "an in-memory cache would let a second query be answered without re-asking the source" },
   { crate = "lru", reason = "an in-memory cache would let a second query be answered without re-asking the source" },
 
-  # --- INVARIANT: no plugin crate depends on the engine ---
-  #
   # The engine may depend on the contract and on every plugin; nothing may depend on the
   # engine except the binary that runs it. With the trait inside the engine crate every
   # plugin would depend on the engine, every engine change would mark every plugin

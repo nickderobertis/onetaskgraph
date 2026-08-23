@@ -90,9 +90,9 @@ deny:
 
 # Upgrade every ecosystem's dependencies, then re-run the complete bar on the result.
 upgrade:
-    cargo update
-    cd sdks/python && uv lock --upgrade && uv sync
-    bun update
+    @cargo update --quiet
+    @cd sdks/python && uv lock --upgrade --quiet && uv sync --quiet
+    @bun update --silent
     @just gate
 
 # Print the JSON Schema bundle both SDKs are generated from.

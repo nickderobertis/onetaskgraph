@@ -28,7 +28,6 @@ pub const SCHEMA_BUNDLE_VERSION: u32 = 1;
 pub fn schema_bundle() -> Value {
     let mut roots: BTreeMap<&'static str, Schema> = BTreeMap::new();
 
-    // The work types.
     roots.insert("Task", schema_for!(Task));
     roots.insert("Project", schema_for!(Project));
     roots.insert("Label", schema_for!(Label));
@@ -38,7 +37,6 @@ pub fn schema_bundle() -> Value {
     roots.insert("DependencyKind", schema_for!(DependencyKind));
     roots.insert("Direction", schema_for!(Direction));
 
-    // The query and paging types.
     roots.insert("TaskQuery", schema_for!(TaskQuery));
     roots.insert("ProjectQuery", schema_for!(ProjectQuery));
     roots.insert("PageRequest", schema_for!(PageRequest));
@@ -47,12 +45,10 @@ pub fn schema_bundle() -> Value {
     roots.insert("PageOfLabel", schema_for!(Page<Label>));
     roots.insert("PageOfDependencyEdge", schema_for!(Page<DependencyEdge>));
 
-    // The capability declaration and the error every method returns.
     roots.insert("Capabilities", schema_for!(Capabilities));
     roots.insert("Health", schema_for!(Health));
     roots.insert("SourceError", schema_for!(SourceError));
 
-    // The engine's own reporting types.
     roots.insert("GlobalId", schema_for!(GlobalId));
     roots.insert("QueryPlan", schema_for!(QueryPlan));
     roots.insert("SourcePlan", schema_for!(SourcePlan));
