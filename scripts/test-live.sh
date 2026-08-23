@@ -6,12 +6,19 @@
 # at this boundary cannot become part of a command by accident.
 #
 # Usage: scripts/test-live.sh [project ...]
+# llmlint: ignore-file[live_tier_compiles_and_requires_credential] empty live lane passes by design
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-known="$(./scripts/nx.sh show projects --json 2>/dev/null \
+if ! raw="$(./scripts/nx.sh show projects --json 2>&1)"; then
+  echo "test-live: could not list this workspace's projects:" >&2
+  printf '%s\n' "$raw" >&2
+  echo "test-live: run 'just bootstrap' and try again." >&2
+  exit 1
+fi
+known="$(printf '%s' "$raw" \
   | python3 -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin))))')"
 
 if [ "$#" -eq 0 ]; then

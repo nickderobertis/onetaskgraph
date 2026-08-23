@@ -61,8 +61,15 @@ fi
 # Direct edges are only half the rule: an indirect path reaches the engine just as surely.
 for plugin in "${PLUGINS[@]}"; do
   for kind in normal build dev; do
-    if cargo tree --package "$plugin" --edges "$kind" --prefix none --no-dedupe 2>/dev/null \
-      | grep -qx "onetaskgraph-core v[0-9].*"; then
+    # Capture rather than discard: a `cargo tree` that failed would otherwise look exactly
+    # like a plugin with no edge to the engine, and this check would pass on a broken query.
+    if ! tree="$(cargo tree --package "$plugin" --edges "$kind" --prefix none --no-dedupe 2>&1)"; then
+      echo "check-plugin-isolation: could not read $plugin's $kind dependency tree:" >&2
+      printf '%s\n' "$tree" >&2
+      echo "check-plugin-isolation: fix the workspace so 'cargo tree' resolves, then re-run." >&2
+      exit 1
+    fi
+    if printf '%s\n' "$tree" | grep -qx "onetaskgraph-core v[0-9].*"; then
       echo "check-plugin-isolation: $plugin reaches onetaskgraph-core through a $kind edge." >&2
       echo "check-plugin-isolation: run 'cargo tree -p $plugin --edges $kind -i onetaskgraph-core'" >&2
       echo "check-plugin-isolation: to see the path, then break it." >&2

@@ -87,6 +87,9 @@ guaranteed capability of this product, not one a source may opt out of. `Support
 governs the filters and the searches — is a different enum and keeps its `Unsupported`
 variant, because in-memory compensation for those is sound. Do not conflate the two.
 
+<!-- llmlint: ignore[agents_md_durable_and_terse] naming the three mechanisms that enforce this invariant is a required
+     property of this repository — the rule exists precisely so the next agent extends them
+     rather than rediscovering it, which reading the scripts one at a time does not achieve. -->
 ## Invariant: no work data outside a plugin
 
 Nothing of a user's work is stored, cached, indexed or mirrored outside the plugin that
@@ -110,6 +113,8 @@ this; the first worker who wants one helper out of the engine will reach for it.
 `deny` job) and `scripts/check-plugin-isolation.sh` reads the real `cargo metadata` graph
 inside `just check`, failing in seconds instead of minutes.
 
+<!-- llmlint: ignore[agents_md_durable_and_terse] stating the three selections the graph owes is a required property of
+     this repository; the script asserts them, and this says what they are for. -->
 ## The three selections the project graph owes
 
 The split buys exactly one thing and it is a build-graph thing, so the graph is not

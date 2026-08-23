@@ -21,10 +21,8 @@ pub struct Task {
     pub labels: Vec<Label>,
     /// `None` is a first-class case — an orphan task — not an edge case.
     pub project: Option<NativeId>,
-    // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen
-    // by the plugin contract every source is written against; only the contract's owner
-    // may change it, and tightening it is post-build follow-up.
     /// Where a human can open this task.
+    // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen by the plugin contract every source is written against; only the contract's owner may change it, and tightening it is post-build follow-up.
     pub url: Option<String>,
     /// When the source says the task was created.
     pub created_at: Option<DateTime<Utc>>,
@@ -45,10 +43,8 @@ pub struct Project {
     pub status: Status,
     /// Inline rather than by id, for the same reason as on [`Task`].
     pub labels: Vec<Label>,
-    // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen
-    // by the plugin contract every source is written against; only the contract's owner
-    // may change it, and tightening it is post-build follow-up.
     /// Where a human can open this project.
+    // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen by the plugin contract every source is written against; only the contract's owner may change it, and tightening it is post-build follow-up.
     pub url: Option<String>,
     /// When the source says the project was created.
     pub created_at: Option<DateTime<Utc>>,

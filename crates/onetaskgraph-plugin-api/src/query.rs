@@ -93,11 +93,9 @@ pub enum ProjectFilter {
 pub struct PageRequest {
     /// Where to resume, or `None` to start at the beginning.
     pub cursor: Option<Cursor>,
-    // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen
-    // by the plugin contract every source is written against; only the contract's owner
-    // may change it, and tightening it is post-build follow-up.
     /// The most items to return, at least 1. A source may return fewer, never more.
     #[serde(deserialize_with = "non_zero_limit")]
+    // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen by the plugin contract every source is written against; only the contract's owner may change it, and tightening it is post-build follow-up.
     pub limit: u32,
 }
 

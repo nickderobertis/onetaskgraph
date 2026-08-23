@@ -36,11 +36,8 @@ pub struct QueryPlan {
 pub struct SourcePlan {
     /// The configured source this describes.
     pub source: SourceName,
-    // llmlint: ignore[invalid_states_unrepresentable] a newtype over the registered
-    // kinds would be tighter, but `kind: String` is fixed by the approved contract, and
-    // a plan must be able to carry the kind a *subprocess-hosted* plugin reports — a
-    // vocabulary this build does not know at compile time.
     /// The plugin kind behind it.
+    // llmlint: ignore[invalid_states_unrepresentable] `kind: String` is frozen by the plugin contract, and a plan must carry the kind a subprocess-hosted plugin reports — a vocabulary this build cannot know at compile time. Tightening is post-build follow-up.
     pub kind: String,
     /// Predicates the source applied itself.
     pub pushed_down: Vec<Predicate>,

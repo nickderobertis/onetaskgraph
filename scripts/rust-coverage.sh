@@ -26,11 +26,19 @@ esac
 # Validate the crate name against the real workspace before it is used as a Cargo
 # selector and as a path segment. Unchecked, a typo becomes a silent "measured nothing"
 # and a caller-supplied string reaches the filesystem.
-if ! cargo metadata --format-version 1 --no-deps 2>/dev/null \
-  | python3 -c 'import json,sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))' \
-  | grep -qxF -- "$CRATE"; then
-  echo "rust-coverage: $CRATE is not a member of this Cargo workspace." >&2
-  echo "rust-coverage: run 'cargo metadata --no-deps' to see the members, then pass one." >&2
+if ! metadata="$(cargo metadata --format-version 1 --no-deps 2>&1)"; then
+  echo "rust-coverage: could not read the workspace metadata:" >&2
+  printf '%s\n' "$metadata" >&2
+  echo "rust-coverage: fix the manifest so 'cargo metadata' resolves, then re-run." >&2
+  exit 1
+fi
+
+members="$(printf '%s' "$metadata" \
+  | python3 -c 'import json,sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))')"
+
+if ! printf '%s\n' "$members" | grep -qxF -- "$CRATE"; then
+  echo "rust-coverage: $CRATE is not a member of this Cargo workspace. Members:" >&2
+  printf '  %s\n' $members >&2
   exit 1
 fi
 

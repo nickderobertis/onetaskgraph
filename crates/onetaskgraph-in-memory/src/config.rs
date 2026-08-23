@@ -50,13 +50,11 @@ pub struct CapabilityConfig {
     pub task_dependencies: DependencySupport,
     /// How far this source walks project dependencies.
     pub project_dependencies: DependencySupport,
-    // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen
-    // by the plugin contract every source is written against; only the contract's owner
-    // may change it, and tightening it is post-build follow-up.
     /// The largest page this source will serve. Rejected at zero: a source that will
     /// serve no rows cannot be paged, and silently treating it as one hides a typo in a
     /// configuration file behind behaviour that looks deliberate.
     #[serde(deserialize_with = "non_zero_page_size")]
+    // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen by the plugin contract every source is written against; only the contract's owner may change it, and tightening it is post-build follow-up.
     pub max_page_size: u32,
 }
 
