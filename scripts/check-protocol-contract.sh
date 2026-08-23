@@ -162,7 +162,6 @@ def first_column(header):
         )
 
     names = set()
-    # +2 skips the header and the `| --- |` separator beneath it.
     for line in lines[start + 2 :]:
         if not line.startswith("|"):
             break
