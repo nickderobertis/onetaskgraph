@@ -131,6 +131,20 @@ fn schema_output_is_stable_across_runs_so_a_generator_can_diff_it() {
 }
 
 #[test]
+fn a_usage_error_and_a_runtime_failure_report_different_exit_codes() {
+    // A caller scripting around this needs to tell "you typed it wrong" (2) from "it
+    // broke while running" (1); collapsing both onto one code makes that impossible.
+    onetaskgraph().arg("teleport").assert().failure().code(2);
+
+    onetaskgraph()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("Exit codes: `0` on success"))
+        .stdout(contains("`2` when the invocation itself was wrong"));
+}
+
+#[test]
 fn an_unknown_verb_exits_non_zero_and_names_the_problem_on_stderr() {
     onetaskgraph()
         .arg("teleport")

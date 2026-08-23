@@ -50,10 +50,20 @@ export CARGO_LLVM_COV_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov/$
 
 # The e2e journeys spawn the built binary; cargo-llvm-cov exports the profile path into
 # that subprocess, so its coverage is attributed to this crate rather than lost.
-exec cargo llvm-cov \
+#
+# The per-file table and the uncovered line numbers are exactly what you need when the
+# crate is under the bar, and noise when it is over — so they are held and replayed only
+# on failure.
+if ! report="$(cargo llvm-cov \
   --package "$CRATE" \
   --all-features \
   --locked \
   --summary-only \
   --show-missing-lines \
-  --fail-under-lines "$MIN_LINES"
+  --fail-under-lines "$MIN_LINES" 2>&1)"; then
+  printf '%s\n' "$report" >&2
+  echo "rust-coverage: $CRATE is below ${MIN_LINES}% line coverage." >&2
+  echo "rust-coverage: the uncovered lines are listed above — cover them with a test that" >&2
+  echo "rust-coverage: drives the real behaviour, not one written to move the number." >&2
+  exit 1
+fi

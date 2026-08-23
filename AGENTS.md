@@ -87,52 +87,43 @@ variant, because in-memory compensation for those is sound. Do not conflate the 
 ## Invariant: no work data outside a plugin
 
 Nothing of a user's work is stored, cached, indexed or mirrored outside the plugin that
-owns it. Three mechanisms enforce that; extend them rather than rediscovering the rule. Each names
-the file that holds it, so whether it exists yet is a question the tree answers.
+owns it. The engine compensates transiently and writes nothing down. Extend these three
+mechanisms rather than rediscovering the rule; each says how it fails, not how it works.
 
-1. **Banned dependencies** — `deny.toml` refuses `sled`, `rusqlite`, `libsqlite3-sys`,
-   `redb`, `sqlx`, `tantivy`, `cacache`, `moka`, `cached` and `lru` anywhere in the graph.
-   `deny` is a required check, so a change that reaches for one cannot merge.
-2. **The sentinel journey** — `crates/onetaskgraph/tests/e2e/no_persistence.rs` redirects
-   `HOME` and every `XDG_*` and `TMPDIR` into one sandbox, plants unique sentinels in a
-   `local-md` source, drives every query verb, then fails naming the path if any file
-   created during the run holds a sentinel or appears outside the source's own directory.
-   It asserts on the observable effect, so it catches caching by any technique.
-3. **The re-ask assertion** — `crates/onetaskgraph-core/tests/no_reuse.rs`, the in-process
-   half a filesystem scan cannot see: the in-memory source counts trait calls, and running
-   one query twice through one engine instance must ask the source twice.
+1. `deny.toml` refuses every embedded store, index and cache crate, and `deny` is a
+   required check — so reaching for one cannot merge.
+2. `crates/onetaskgraph/tests/e2e/no_persistence.rs` sandboxes `HOME`, every `XDG_*` and
+   `TMPDIR`, plants sentinels, drives every verb, and fails if any file written during the
+   run holds one. It asserts on the effect, so it catches caching by any technique.
+3. `crates/onetaskgraph-core/tests/no_reuse.rs` catches the half a filesystem scan cannot
+   see: one query asked twice must reach the source twice.
 
 ## Invariant: no plugin crate depends on the engine
 
-Not as a dependency, not as a dev-dependency, at no depth. Prose does not hold this — the
-first worker who wants one helper out of `onetaskgraph-core` will reach for it — so it is
-mechanical, by two mechanisms that fail at different moments:
-
-1. **`deny.toml`** permits `onetaskgraph-core` exactly one wrapper, the binary. A plugin
-   that adds the engine fails the `deny` job, which is a required check.
-2. **`scripts/check-plugin-isolation.sh`**, inside `just check`, reads the real graph from
-   `cargo metadata` — never a hand-maintained list — and fails naming the crate and the
-   edge, in seconds locally rather than minutes later in CI. It fails the same way if
-   `onetaskgraph-plugin-api` gains a dependency on another crate of this workspace.
+Not as a dependency, not as a dev-dependency, at no depth — and the same for
+`onetaskgraph-plugin-api` depending on anything of this workspace. Prose does not hold
+this; the first worker who wants one helper out of the engine will reach for it. So
+`deny.toml` permits the engine exactly one wrapper (the binary, failing the required
+`deny` job) and `scripts/check-plugin-isolation.sh` reads the real `cargo metadata` graph
+inside `just check`, failing in seconds instead of minutes.
 
 ## The three selections the project graph owes
 
-The split buys exactly one thing and it is a build-graph thing, so the graph is not correct
-until it *selects* this way. `scripts/check-affected-selection.sh` makes each edit in a
-scratch clone, commits it, and asserts on what real Nx returns — reading the config and
-reasoning about it does not count.
+The split buys exactly one thing and it is a build-graph thing, so the graph is not
+correct until it *selects* this way. `scripts/check-affected-selection.sh` proves it
+against real Nx; reasoning about the configuration does not count.
 
 1. Editing `onetaskgraph-plugin-api` selects **every** plugin crate.
 2. Editing `onetaskgraph-core` outside it selects **no** plugin crate. This is the return
-   on the split and the one that fails silently: an over-broad `implicitDependencies`
-   entry, or a `namedInputs` glob reaching past its own crate, makes every engine commit
-   run every plugin's tests and nothing complains.
+   on the split and the one that fails silently — an over-broad `implicitDependencies`
+   entry or a too-wide `namedInputs` glob makes every engine commit run every plugin's
+   tests, and nothing complains.
 3. Editing one plugin selects that crate and its dependents — never a sibling plugin.
 
 Nx cannot read a Cargo manifest, so each Rust `project.json` mirrors its crate's Cargo
-dependencies as `implicitDependencies`, and `scripts/check-nx-graph.sh` (inside `just
-check`) fails naming the pair when the two disagree **in either direction** — a missing
-edge under-runs the gate, an extra one over-runs it.
+dependencies as `implicitDependencies`; `scripts/check-nx-graph.sh` fails when the two
+disagree either way, because a missing edge under-runs the gate and an extra one over-runs
+it.
 
 ## Tests
 
@@ -206,32 +197,27 @@ them do; this is the inventory of what is owed, not a status board.
 
 ## Commits, releases, and merging
 
-- **Squash-merge only, via pull request, with auto-merge.** Merge commits and rebase
-  merging are off, so one PR is one commit whose subject is the PR title and whose body is
-  the PR description. Queue with `gh pr merge --auto --squash`. Head branches auto-delete.
-- **Six required checks, and they are the only thing that can refuse a merge here:**
-  `check (ubuntu-latest)`, `check (macos-latest)`, `check (windows-latest)`, `deny`,
-  `llmlint`, `pr-title` — with `strict: true` (a branch must be up to date with `main`),
-  `required_approving_review_count: 0`, linear history, conversation resolution, no
-  force-push and no branch deletion, and fork-PR workflow approval for all external
-  contributors. Admins may break the glass. Re-apply or verify with the create-repo
-  skill's `setup_github_governance.py`.
-  **Zero approvals is load-bearing:** nobody reviews these pull requests, and any non-zero
-  value would make auto-merge wait forever for a review that never comes.
-  Adding a required check costs a change in the orchestration repository, whose inventory
-  of this repository's merge path is checked against GitHub on every one of its gate runs.
+- **Squash-merge only, via pull request, with auto-merge.** One PR is one commit whose
+  subject is the PR title and whose body is the PR description. Queue it with
+  `gh pr merge --auto --squash`.
+- **Six required checks — `check` on all three platforms, `deny`, `llmlint`, `pr-title` —
+  and they are the only thing that can refuse a merge here.** Re-apply or verify the whole
+  arrangement with the create-repo skill's `setup_github_governance.py`, which is its
+  source of truth. Two values in it are load-bearing rather than conventional: **zero
+  required approvals**, because nobody reviews these pull requests and any other value
+  makes auto-merge wait forever; and **`strict`**, so a branch is up to date before it
+  merges. Adding a required check costs a change in the orchestration repository too,
+  which checks its inventory of this merge path against GitHub on every gate run.
 - **Bump policy (pre-1.0):** `feat` → minor; `feat!` / `BREAKING CHANGE` → minor (a
   breaking change before 1.0 is *not* a major); `fix` / `perf` / `refactor` / `build` →
   patch; `chore` / `docs` / `ci` / `test` / `style` → no release. Post-1.0 a breaking
   change becomes a major. The PR title is what the release tool parses, which is why
-  `pr-title` is a required check.
-- **Release driver: `release-plz`,** in its release-PR shape — the bot accumulates
-  unreleased commits into a PR and merging it cuts the release; the tag then fires the
-  build and publish workflows. It must authenticate with `RELEASE_PLZ_TOKEN` (declared in
-  `gh-secrets.json`), because a tag pushed by the default `GITHUB_TOKEN` fires no
-  downstream workflow and the release would silently ship nothing.
-  **The pipeline itself lands with the distribution node; only the decision is recorded
-  here.**
+  `pr-title` is required.
+- **Release driver: `release-plz`,** in its release-PR shape: the bot accumulates
+  unreleased commits into a PR, merging it cuts the release, and the tag fires build and
+  publish. It must authenticate with `RELEASE_PLZ_TOKEN` — a tag pushed by the default
+  `GITHUB_TOKEN` fires no workflow, so the release would silently ship nothing. The
+  pipeline lands with the distribution work; only this decision is recorded here.
 
 ## Conventions
 
@@ -244,5 +230,7 @@ them do; this is the inventory of what is owed, not a status board.
   `.env` and is unrelated to `~/.config/onetaskgraph/secrets.env`, which is hand-managed.
   Its `RELEASE_PLZ_TOKEN` is sourced from the Bitwarden item named `GH_TOKEN` on purpose.
   Do not rewrite, regenerate or reformat it.
-- **Keep the allowlist current.** New routine commands belong in `.claude/settings.json`
-  rather than being re-approved every session.
+- **Keep the allowlist current**, and keep it to the command surface. `.claude/settings.json`
+  grants the `just` recipes, read-only introspection, and `git add -A` / `git commit -m` —
+  local and reversible. Every irreversible git operation (push, `reset --hard`, `clean`,
+  force-checkout) is deliberately withheld, which is where the privilege boundary is.

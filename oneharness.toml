@@ -1,28 +1,10 @@
-# oneharness harness/model selection for the llmlint (LLM-judge) tier.
-# Docs: https://github.com/nickderobertis/oneharness
+# Which harness the llmlint (LLM-judge) tier drives. Fallback mode, so the one committed
+# file works everywhere: a contributor with Codex authenticated runs the primary, and a
+# Claude Code session — where codex cannot run at all — falls through to the secondary
+# without an env override. Only a candidate that cannot run falls through; a real task
+# failure does not, so a genuine failure is never masked.
 #
-# Drop this at the repo root as `oneharness.toml`. It is the single source of
-# truth for WHICH harness (and model) llmlint drives — the composed `llmlint.yml`
-# deliberately does not pin one, so this file (or an `ONEHARNESS_<FIELD>` env
-# override) decides. This template is the canonical source: the composer emits it
-# verbatim, and in the skills repo a drift gate pins the dogfooded root copy to it.
-#
-# Fallback mode: oneharness tries the harnesses in priority order and stops at the
-# first that can actually run — falling through only the candidates that cannot run
-# at all (not installed, unspawnable, or rejected before doing any work: auth /
-# no-credit quota). A real task failure or timeout does NOT fall through (it would
-# mask a real failure). So the SAME committed config works everywhere with no edit:
-#
-#   * A contributor with Codex authenticated runs the primary — codex + gpt-5.5.
-#   * A Claude Code web/cloud session, where codex is absent, falls through to the
-#     secondary — claude-code + opus-4.8 — the only harness authenticated there.
-#
-# Because the fallback already selects claude-code when codex can't run, the
-# SessionStart hook needs no `ONEHARNESS_HARNESSES` override — an override would
-# only clobber this list.
-#
-# IS_SANDBOX is injected into just the claude-code harness so it may run under root
-# without `--dangerously-skip-permissions` refusing (harmless elsewhere).
+# IS_SANDBOX lets claude-code run under root without refusing; harmless elsewhere.
 run_mode = "fallback"
 harnesses = ["codex", "claude-code"]
 

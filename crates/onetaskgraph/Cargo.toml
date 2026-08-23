@@ -12,9 +12,7 @@ authors.workspace = true
 name = "onetaskgraph"
 path = "src/main.rs"
 
-# The binary is the one crate permitted to depend on the engine — deny.toml names
-# it as `onetaskgraph-core`'s only wrapper, so a plugin taking the same dependency
-# fails the required `deny` check.
+# The one crate permitted to depend on the engine; deny.toml names it as such.
 [dependencies]
 clap.workspace = true
 onetaskgraph-core.workspace = true

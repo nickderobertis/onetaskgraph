@@ -17,12 +17,8 @@
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly PLUGINS=(
-  onetaskgraph-in-memory
-  onetaskgraph-local-md
-  onetaskgraph-linear
-  onetaskgraph-github-projects
-)
+# From scripts/plugin-crates.sh, so a plugin added later is covered without an edit here.
+mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh")
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
@@ -95,7 +91,7 @@ report_on_failure() {
   fi
 }
 
-# --- 1. the contract moved, so every implementation of it re-runs ------------------
+# 1. The contract moved, so every implementation of it re-runs.
 selection="$(select_after_editing crates/onetaskgraph-plugin-api/src/lib.rs)"
 before=$failures
 for plugin in "${PLUGINS[@]}"; do
@@ -106,7 +102,7 @@ expect_selected "editing the contract crate" onetaskgraph "$selection"
 report_on_failure "editing onetaskgraph-plugin-api" "$selection" "$before"
 reset_scratch
 
-# --- 2. the engine changed, and no plugin can see it -------------------------------
+# 2. The engine changed, and no plugin can see it.
 selection="$(select_after_editing crates/onetaskgraph-core/src/registry.rs)"
 before=$failures
 for plugin in "${PLUGINS[@]}"; do
@@ -117,12 +113,13 @@ expect_selected "editing the engine" onetaskgraph "$selection"
 report_on_failure "editing onetaskgraph-core" "$selection" "$before"
 reset_scratch
 
-# --- 3. one plugin changed; its siblings are untouched -----------------------------
+# 3. One plugin changed; its siblings are untouched.
 selection="$(select_after_editing crates/onetaskgraph-linear/src/lib.rs)"
 before=$failures
 expect_selected "editing one plugin" onetaskgraph-linear "$selection"
 expect_selected "editing one plugin" onetaskgraph "$selection"
-for plugin in onetaskgraph-in-memory onetaskgraph-local-md onetaskgraph-github-projects; do
+for plugin in "${PLUGINS[@]}"; do
+  [ "$plugin" = "onetaskgraph-linear" ] && continue
   expect_not_selected "editing one plugin" "$plugin" "$selection"
 done
 report_on_failure "editing onetaskgraph-linear" "$selection" "$before"

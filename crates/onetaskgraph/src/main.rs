@@ -9,12 +9,17 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-/// The exit code a failure that is the user's to fix reports.
-const EXIT_USAGE: u8 = 2;
+/// Something went wrong while doing what was asked. Distinct from clap's own exit code
+/// for a malformed invocation, so a caller can tell "you typed it wrong" from "it broke".
+const EXIT_FAILURE: u8 = 1;
 
 /// One interface over the ticketing systems your work lives in.
+///
+/// Exit codes: `0` on success, `1` when a command failed while running, `2` when the
+/// invocation itself was wrong (clap's own code for that). `4` is reserved for a query
+/// that succeeded for some sources and failed for others without `--allow-partial`.
 #[derive(Debug, Parser)]
-#[command(name = "onetaskgraph", version, about, long_about = None)]
+#[command(name = "onetaskgraph", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -36,7 +41,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("onetaskgraph: {message}");
-            ExitCode::from(EXIT_USAGE)
+            ExitCode::from(EXIT_FAILURE)
         }
     }
 }

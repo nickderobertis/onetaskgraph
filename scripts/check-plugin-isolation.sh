@@ -19,19 +19,19 @@ set -euo pipefail
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# The plugin set comes from scripts/plugin-crates.sh, so a crate added later cannot
+# escape this check by not being listed here.
+mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh")
+
 metadata="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml)"
 
 violations="$(
-  printf '%s' "$metadata" | python3 -c '
+  printf '%s' "$metadata" | PLUGINS="${PLUGINS[*]}" python3 -c '
 import json
+import os
 import sys
 
-PLUGINS = {
-    "onetaskgraph-in-memory",
-    "onetaskgraph-local-md",
-    "onetaskgraph-linear",
-    "onetaskgraph-github-projects",
-}
+PLUGINS = set(os.environ["PLUGINS"].split())
 API = "onetaskgraph-plugin-api"
 ENGINE = "onetaskgraph-core"
 
@@ -59,7 +59,7 @@ if [ -n "$violations" ]; then
 fi
 
 # Direct edges are only half the rule: an indirect path reaches the engine just as surely.
-for plugin in onetaskgraph-in-memory onetaskgraph-local-md onetaskgraph-linear onetaskgraph-github-projects; do
+for plugin in "${PLUGINS[@]}"; do
   for kind in normal build dev; do
     if cargo tree --package "$plugin" --edges "$kind" --prefix none --no-dedupe 2>/dev/null \
       | grep -qx "onetaskgraph-core v[0-9].*"; then

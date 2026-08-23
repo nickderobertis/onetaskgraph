@@ -8,10 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-# The engine may depend on the contract and on every plugin — the arrow runs this
-# way only. Nothing here may become a dependency of a plugin crate: deny.toml
-# permits this crate exactly one wrapper (the binary), and
-# scripts/check-plugin-isolation.sh reads the real Cargo graph and fails on the edge.
+# The engine may depend on every plugin; no plugin may depend back. Registering a new
+# plugin here is what lets a configuration name it.
 [dependencies]
 onetaskgraph-github-projects.workspace = true
 onetaskgraph-in-memory.workspace = true

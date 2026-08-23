@@ -1,8 +1,5 @@
 # Working in `crates/`
 
-Subtree rules. The contract itself, and the two dependency-direction invariants, are in
-the root `AGENTS.md`.
-
 ## Adding a plugin
 
 1. A new crate here depends on `onetaskgraph-plugin-api` and on nothing else of this

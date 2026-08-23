@@ -19,7 +19,11 @@ if [ ! -x "node_modules/.bin/nx" ]; then
     exit 1
   fi
   echo "nx.sh: installing the locked Node toolchain (first run in this worktree)" >&2
-  bun install --frozen-lockfile >&2
+  if ! install_log="$(bun install --frozen-lockfile 2>&1)"; then
+    printf '%s\n' "$install_log" >&2
+    echo "nx.sh: the locked install failed — see above. Try 'bun install' by hand." >&2
+    exit 1
+  fi
 fi
 
 exec node_modules/.bin/nx "$@"

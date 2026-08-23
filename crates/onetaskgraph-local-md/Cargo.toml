@@ -8,9 +8,6 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-# A plugin crate depends on the contract, never on the engine. cargo-deny and
-# scripts/check-plugin-isolation.sh both fail if `onetaskgraph-core` appears here
-# or under [dev-dependencies].
 [dependencies]
 onetaskgraph-plugin-api.workspace = true
 schemars.workspace = true

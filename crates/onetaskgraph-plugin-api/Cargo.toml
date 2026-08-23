@@ -8,10 +8,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-# This crate deliberately depends on NO other crate of this workspace. Every plugin
-# depends on it, so an edge from here to the engine would drag the engine into every
-# plugin and cost affected selection the one thing the split buys.
-# scripts/check-plugin-isolation.sh fails if that ever changes.
+# Nothing of this workspace belongs here — see the invariant in AGENTS.md.
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
