@@ -41,7 +41,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-      - uses: astral-sh/setup-uv@v10
+      # Pinned to a tag that exists: this action publishes point tags only — there is
+      # no floating `v10` — so a major-only ref fails the job before any step runs.
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       # Reads rust-toolchain.toml, so CI and local compile with byte-identical rustc,
@@ -130,6 +132,12 @@ jobs:
       - name: Fetch main (diff base)
         run: git fetch --no-tags --depth=2147483647 origin main
       - uses: extractions/setup-just@v4
+      # setup-llmlint.sh installs llmlint with `uv tool` and deliberately logs-and-
+      # continues when uv is absent, so without this the install below no-ops and the
+      # validate step fails with "llmlint not installed".
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
 
       - name: Install oneharness + llmlint
         run: |
