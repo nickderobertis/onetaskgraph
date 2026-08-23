@@ -56,8 +56,7 @@
         "commands": [
           "bun run biome lint --error-on-warnings nx.json biome.json package.json .claude workspace crates sdks",
           "bash scripts/check-nx-graph.sh",
-          "bash scripts/check-plugin-isolation.sh",
-          "cargo machete"
+          "bash scripts/check-plugin-isolation.sh"
         ],
         "parallel": false
       },
@@ -124,7 +123,11 @@
     "deny": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": ["cargo deny check bans licenses sources", "cargo deny check advisories"],
+        "commands": [
+          "cargo deny check bans licenses sources",
+          "cargo deny check advisories",
+          "cargo machete"
+        ],
         "parallel": false
       },
       "cache": false,
