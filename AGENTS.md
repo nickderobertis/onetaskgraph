@@ -10,6 +10,9 @@ One interface over the ticketing systems the user's work lives in (Linear, GitHu
 Projects, local Markdown), shipped three ways from one engine: a Rust CLI, a Python SDK,
 and a TypeScript SDK.
 
+<!-- llmlint: ignore[agents_md_durable_and_terse] the create-repo baseline checker reads
+     this section and fails when it is missing or unfilled, so recording the composition
+     here is a required property of this repository rather than session provenance. -->
 ## Stack and composition
 
 - **Product shape:** `cli`.
@@ -216,8 +219,7 @@ them do; this is the inventory of what is owed, not a status board.
 - **Release driver: `release-plz`,** in its release-PR shape: the bot accumulates
   unreleased commits into a PR, merging it cuts the release, and the tag fires build and
   publish. It must authenticate with `RELEASE_PLZ_TOKEN` — a tag pushed by the default
-  `GITHUB_TOKEN` fires no workflow, so the release would silently ship nothing. The
-  pipeline lands with the distribution work; only this decision is recorded here.
+  `GITHUB_TOKEN` fires no workflow, so the release would silently ship nothing.
 
 ## Conventions
 

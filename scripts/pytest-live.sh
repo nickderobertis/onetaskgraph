@@ -16,11 +16,13 @@ cd "$ROOT"
 readonly PROJECT="${1:?usage: scripts/pytest-live.sh <project-directory>}"
 readonly NO_TESTS_COLLECTED=5
 
-# Constrain the caller's string to a real project of this workspace before it is used as
-# a directory: an unchecked path here would run pytest wherever it was pointed.
-if [ ! -f "$PROJECT/project.json" ] || [ ! -f "$PROJECT/pyproject.toml" ]; then
-  echo "pytest-live: $PROJECT is not a Python project of this workspace" >&2
-  echo "pytest-live: (it needs both a project.json and a pyproject.toml)." >&2
+# The argument names a project of this workspace; it is not a path the caller chooses.
+# Matched against the real set, so an absolute or traversing path cannot reach pytest.
+if ! find sdks -mindepth 1 -maxdepth 1 -type d -exec test -f '{}/pyproject.toml' \; -print \
+  | grep -qxF -- "$PROJECT"; then
+  echo "pytest-live: $PROJECT is not a Python project of this workspace." >&2
+  echo "pytest-live: pass one of: $(find sdks -mindepth 1 -maxdepth 1 -type d \
+    -exec test -f '{}/pyproject.toml' \; -print | tr '\n' ' ')" >&2
   exit 1
 fi
 

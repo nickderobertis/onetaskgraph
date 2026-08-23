@@ -26,9 +26,19 @@ if [ ! -x "node_modules/.bin/nx" ]; then
   fi
 fi
 
-# `dynamic-legacy` keeps minimal logs and always shows errors, so a green run stops
-# narrating every task that passed while a failing task's output still comes through.
+# A caller that picked its own output style means it.
 case " $* " in
   *" --outputStyle"*) exec node_modules/.bin/nx "$@" ;;
-  *) exec node_modules/.bin/nx "$@" --outputStyle=dynamic-legacy ;;
 esac
+
+# On a terminal, stream: someone is watching a run that can take minutes, and progress is
+# worth more than brevity. Anywhere else — a log, CI, an agent's transcript — only the
+# failure is worth reading, so hold the output and replay it if the run fails.
+if [ -t 1 ]; then
+  exec node_modules/.bin/nx "$@" --outputStyle=dynamic-legacy
+fi
+
+if ! output="$(node_modules/.bin/nx "$@" --outputStyle=static 2>&1)"; then
+  printf '%s\n' "$output" >&2
+  exit 1
+fi

@@ -28,7 +28,7 @@ esac
 # and a caller-supplied string reaches the filesystem.
 if ! cargo metadata --format-version 1 --no-deps 2>/dev/null \
   | python3 -c 'import json,sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))' \
-  | grep -qx "$CRATE"; then
+  | grep -qxF -- "$CRATE"; then
   echo "rust-coverage: $CRATE is not a member of this Cargo workspace." >&2
   echo "rust-coverage: run 'cargo metadata --no-deps' to see the members, then pass one." >&2
   exit 1

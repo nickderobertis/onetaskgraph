@@ -23,13 +23,9 @@ pub struct Capabilities {
     pub task_dependencies: DependencySupport,
     /// How far the source can walk project dependencies.
     pub project_dependencies: DependencySupport,
-    // llmlint: ignore[invalid_states_unrepresentable] `max_page_size: u32` is fixed by the frozen cross-node contract — it appears
-    // byte-identically in the task text of every node of this plan, six of which have
-    // not dispatched yet and will be written against `u32`, so tightening it here would
-    // silently desynchronise this repository from every plugin that follows. Only the
-    // contract's owner may amend it; tightening to a non-zero type is tracked as
-    // post-build follow-up. The real hole — a declared zero — is closed by rejecting it
-    // at construction instead of coercing it silently.
+    // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen
+    // by the plugin contract every source is written against; only the contract's owner
+    // may change it, and tightening it is post-build follow-up.
     /// The largest page the source will serve. At least 1 — a source that serves no rows
     /// cannot be paged, and every implementation rejects zero where its config is read.
     pub max_page_size: u32,

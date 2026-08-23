@@ -93,12 +93,9 @@ pub enum ProjectFilter {
 pub struct PageRequest {
     /// Where to resume, or `None` to start at the beginning.
     pub cursor: Option<Cursor>,
-    // llmlint: ignore[invalid_states_unrepresentable] `PageRequest { cursor, limit: u32 }` is fixed by the frozen cross-node
-    // contract — it appears byte-identically in the task text of every node of this plan,
-    // six of which have not dispatched yet and will be written against `u32`, so tightening
-    // it here would silently desynchronise this repository from every plugin that follows.
-    // Only the contract's owner may amend it; tightening is tracked as post-build follow-up.
-    // The real hole — a requested zero — is rejected where a request is read, not coerced.
+    // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen
+    // by the plugin contract every source is written against; only the contract's owner
+    // may change it, and tightening it is post-build follow-up.
     /// The most items to return, at least 1. A source may return fewer, never more.
     #[serde(deserialize_with = "non_zero_limit")]
     pub limit: u32,
