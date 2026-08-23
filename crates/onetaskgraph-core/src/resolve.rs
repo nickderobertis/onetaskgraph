@@ -16,6 +16,7 @@ use jsonschema::error::ValidationErrorKind;
 use onetaskgraph_plugin_api::{SecretResolver, SourceName, SourcePlugin, TaskSource};
 use serde_json::Value;
 
+use crate::PluginKind;
 use crate::config::{Config, ConfigError, SourceConfig};
 
 /// One configured source, built and ready to answer.
@@ -23,19 +24,20 @@ pub struct ResolvedSource {
     /// The name the configuration gave it, which qualifies every id it returns.
     pub name: SourceName,
     /// The plugin kind that built it.
-    pub kind: &'static str,
+    pub kind: PluginKind,
     /// The source itself.
     pub source: Box<dyn TaskSource>,
 }
 
 impl fmt::Debug for ResolvedSource {
-    /// Name and kind. A live source has no meaningful `Debug` of its own, and one
-    /// that did would be a rendering of a user's work — which nothing outside the
-    /// plugin may hold.
+    /// Name and kind, the kind spelled the way a configuration spells it rather than
+    /// the way Rust spells the variant. A live source has no meaningful `Debug` of its
+    /// own, and one that did would be a rendering of a user's work — which nothing
+    /// outside the plugin may hold.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ResolvedSource")
             .field("name", &self.name)
-            .field("kind", &self.kind)
+            .field("kind", &self.kind.as_str())
             .finish_non_exhaustive()
     }
 }
@@ -87,7 +89,7 @@ pub fn resolve(
                 })?;
             Ok(ResolvedSource {
                 name: name.clone(),
-                kind: plugin.kind(),
+                kind: source.plugin,
                 source: built,
             })
         })

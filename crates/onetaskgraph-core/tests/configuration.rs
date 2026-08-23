@@ -593,7 +593,7 @@ fn resolving_builds_the_sources_a_configuration_names_in_name_order() {
             .collect::<Vec<_>>(),
         vec!["archive", "work"]
     );
-    assert_eq!(resolved[0].kind, "in-memory");
+    assert_eq!(resolved[0].kind, PluginKind::InMemory);
     assert_eq!(resolved[0].source.kind(), "in-memory");
 }
 
