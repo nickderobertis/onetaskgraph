@@ -2,17 +2,15 @@
 
 ## Adding a plugin
 
-Register it in `onetaskgraph-core`'s registry once the crate exists. Shipping the factory
-before the source is deliberate: a configuration naming a plugin that has no implementation
-yet should get that plugin's own message, not "unknown plugin".
+A plugin's factory is registered in `onetaskgraph-core`'s registry even while its source
+still refuses. A configuration naming a plugin nobody has implemented yet must get that
+plugin's own message, never "unknown plugin".
 
 ## Test layout
 
-- Unit tests go in `tests/`, not in a `#[cfg(test)]` module under `src/`. Coverage counts a
-  test module's own unreached lines against the crate, so an in-`src` suite quietly costs
-  the crate the number it is there to earn.
-- A fixture shared by one crate's tests goes in `tests/common/mod.rs`, which cargo does not
-  build as a test target of its own.
-- Do not delete a `tests/live.rs` for having nothing in it. Each crate's `test-live` runs
-  `cargo test --test live`, which fails on a missing target rather than passing vacuously,
-  so an empty file is load-bearing until that crate has live tests of its own.
+- Tests live in `tests/`, never in a `#[cfg(test)]` module under `src/`: coverage counts a
+  test module's own unreached lines against the crate it is measuring.
+- A fixture shared across one crate's tests goes in `tests/common/mod.rs` — the one path
+  cargo does not build as a test target of its own.
+- An empty `tests/live.rs` is load-bearing and is never deleted, because `cargo test --test
+  live` fails on a missing target rather than passing vacuously.
