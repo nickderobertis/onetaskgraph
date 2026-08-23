@@ -40,8 +40,9 @@ fn help_names_the_product_and_every_verb_the_binary_answers() {
         .stdout(contains(
             "One interface over the ticketing systems your work lives in.",
         ))
-        .stdout(contains("Usage: onetaskgraph <COMMAND>"))
+        .stdout(contains("Usage: onetaskgraph [OPTIONS] <COMMAND>"))
         .stdout(contains("schema"))
+        .stdout(contains("config"))
         .stdout(contains("--version"))
         .stderr(predicates::str::is_empty());
 }
@@ -72,7 +73,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 1);
+    assert_eq!(bundle["version"], 2);
 
     let roots = bundle["roots"].as_object().expect("roots is an object");
     for root in [
@@ -89,6 +90,12 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
         "SourcePlan",
         "Predicate",
         "QueryResponseOfTask",
+        // `config show --json` emits an EffectiveConfig, so an SDK is generated
+        // against it from here like every other machine-readable output.
+        "EffectiveConfig",
+        "Setting",
+        "Origin",
+        "SecretsReport",
     ] {
         let schema = &roots[root];
         assert!(schema.is_object(), "the bundle is missing {root}");
