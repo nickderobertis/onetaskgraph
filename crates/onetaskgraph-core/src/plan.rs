@@ -37,6 +37,7 @@ pub struct SourcePlan {
     /// The configured source this describes.
     pub source: SourceName,
     /// The plugin kind behind it.
+    // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this restates at a new site the justification already recorded at `Capabilities.max_page_size` (capability.rs) and `PageRequest.limit` (query.rs): `kind: String` is approved contract text. It is also the one field that could not be narrowed even if it were free — a plan must carry the kind a subprocess-hosted plugin reports, an open vocabulary no compile-time type can enumerate.
     pub kind: String,
     /// Predicates the source applied itself.
     pub pushed_down: Vec<Predicate>,

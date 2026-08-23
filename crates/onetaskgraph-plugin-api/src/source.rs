@@ -22,6 +22,7 @@ use crate::{
 /// enumeration, or redesign `health` so no such type crosses the boundary —
 /// belongs to the contract's owner, not to this crate. See `AGENTS.md`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+// llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this restates at a new site the justification already recorded at `Capabilities.max_page_size` (capability.rs) and `PageRequest.limit` (query.rs), and a third time in this type's own doc comment above and in AGENTS.md's "Open contract question — `Health`": `Health`'s shape is approved contract text that `TaskSource::health` returns, so an enum here would change the serialized form and the trait six undispatched nodes implement. That is the contract owner's call, not this crate's.
 pub struct Health {
     /// Whether the source answered.
     pub reachable: bool,

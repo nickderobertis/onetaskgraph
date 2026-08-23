@@ -16,5 +16,11 @@ git config core.hooksPath .githooks
 # how to install it. Through the documented recipe, so there is one way to do it.
 if ! setup_output="$(just setup-llmlint 2>&1)"; then
   printf '%s\n' "$setup_output" >&2
-  echo "bootstrap-workspace: llmlint did not install (see above); the deterministic gate does not need it, so this is not fatal" >&2
+  echo "bootstrap-workspace: the judged-lint tier did not install — see above." >&2
+  echo "bootstrap-workspace: what still works: 'just check' and 'just gate' are unaffected," >&2
+  echo "bootstrap-workspace: because the judged tier is deliberately out of both." >&2
+  echo "bootstrap-workspace: what does not: 'just lint-llm', 'just lint-llm-diff' and" >&2
+  echo "bootstrap-workspace: 'just lint-llm-validate', which is the blocking 'llmlint' PR check." >&2
+  echo "bootstrap-workspace: next action: fix the cause above, then re-run 'just setup-llmlint'." >&2
+  echo "bootstrap-workspace: bootstrap itself succeeded; this one optional tier is missing." >&2
 fi
