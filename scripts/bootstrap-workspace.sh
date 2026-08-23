@@ -13,11 +13,9 @@ cd "$ROOT"
 git config core.hooksPath .githooks
 
 # The judged tier is out of `just check`, but a contributor should not have to discover
-# how to install it; this is the same script the SessionStart hook runs.
-if [ -x scripts/setup-llmlint.sh ]; then
-  ./scripts/setup-llmlint.sh >/dev/null 2>&1 || {
-    echo "bootstrap-workspace: the llmlint toolchain did not install." >&2
-    echo "bootstrap-workspace: run './scripts/setup-llmlint.sh' to see why. The" >&2
-    echo "bootstrap-workspace: deterministic gate does not need it, so this is not fatal." >&2
-  }
-fi
+# how to install it. Through the documented recipe, so there is one way to do it.
+just setup-llmlint >/dev/null 2>&1 || {
+  echo "bootstrap-workspace: the llmlint toolchain did not install." >&2
+  echo "bootstrap-workspace: run 'just setup-llmlint' to see why. The deterministic gate" >&2
+  echo "bootstrap-workspace: does not need it, so this is not fatal." >&2
+}

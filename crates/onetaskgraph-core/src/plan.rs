@@ -36,6 +36,10 @@ pub struct QueryPlan {
 pub struct SourcePlan {
     /// The configured source this describes.
     pub source: SourceName,
+    // llmlint: ignore[invalid_states_unrepresentable] a newtype over the registered
+    // kinds would be tighter, but `kind: String` is fixed by the approved contract, and
+    // a plan must be able to carry the kind a *subprocess-hosted* plugin reports — a
+    // vocabulary this build does not know at compile time.
     /// The plugin kind behind it.
     pub kind: String,
     /// Predicates the source applied itself.

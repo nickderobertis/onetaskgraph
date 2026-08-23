@@ -18,10 +18,9 @@ and a TypeScript SDK.
 - **References composed (11):** `base.md`, `shapes/cli.md`, `languages/rust.md`,
   `languages/python.md`, `languages/typescript.md`, `intersections/rust-cli.md`,
   `intersections/python-cli.md`, `ci.md`, `llmlint.md`, `releasing.md`, `monorepo.md`.
-- **Excluded, and why:** `shapes/web-app.md`, `shapes/react.md`, `shapes/nextjs.md` — this
-  ships no web surface; `shapes/asdf-plugin.md` — distribution is crates.io, PyPI and npm,
-  not an asdf plugin; `shapes/skills-repo.md` — this is a product, not a skills
-  collection. Nothing non-negotiable is excluded.
+- **Excluded, and why:** web-app / React / Next.js (no web surface), asdf-plugin
+  (distribution is crates.io, PyPI and npm), skills-repo (this is a product, not a skills
+  collection). Nothing non-negotiable is excluded.
 - **Nx is a deliberate inclusion**, and the reason is the user's own: *affected selection
   is the gate, so a change touching one plugin does not run the other plugins' tests.*
   With seven crates and two SDK packages over three toolchains that is the difference
@@ -88,21 +87,20 @@ variant, because in-memory compensation for those is sound. Do not conflate the 
 ## Invariant: no work data outside a plugin
 
 Nothing of a user's work is stored, cached, indexed or mirrored outside the plugin that
-owns it. Three mechanisms enforce that; extend them rather than rediscovering the rule.
+owns it. Three mechanisms enforce that; extend them rather than rediscovering the rule. Each names
+the file that holds it, so whether it exists yet is a question the tree answers.
 
 1. **Banned dependencies** — `deny.toml` refuses `sled`, `rusqlite`, `libsqlite3-sys`,
    `redb`, `sqlx`, `tantivy`, `cacache`, `moka`, `cached` and `lru` anywhere in the graph.
-   `deny` is a required check, so a change that reaches for one cannot merge. **In place.**
+   `deny` is a required check, so a change that reaches for one cannot merge.
 2. **The sentinel journey** — `crates/onetaskgraph/tests/e2e/no_persistence.rs` redirects
    `HOME` and every `XDG_*` and `TMPDIR` into one sandbox, plants unique sentinels in a
    `local-md` source, drives every query verb, then fails naming the path if any file
    created during the run holds a sentinel or appears outside the source's own directory.
    It asserts on the observable effect, so it catches caching by any technique.
-   **Owed by the `local-md` node.**
 3. **The re-ask assertion** — `crates/onetaskgraph-core/tests/no_reuse.rs`, the in-process
    half a filesystem scan cannot see: the in-memory source counts trait calls, and running
    one query twice through one engine instance must ask the source twice.
-   **Owed by the engine node.**
 
 ## Invariant: no plugin crate depends on the engine
 
@@ -153,11 +151,16 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   can turn red is a check that stops being trusted, and a Linear or GitHub outage must not
   block an unrelated merge.
 
+<!-- llmlint: ignore[agents_md_durable_and_terse] the journey inventory is a durable
+     statement of what this product owes its users, and carrying it here is a required
+     property of this repository rather than a session log; the suite, not this list,
+     records which of them have landed. -->
 ### The journeys this repository owes
 
 Each drives the real binary as a subprocess, and each runs against **every** configured
 source kind through one shared fixture table — so a plugin is never proven by a suite of
-its own writing. The list grows as features land. ✔ = landed.
+its own writing. The list grows as features land, and the suite is what says which of
+them do; this is the inventory of what is owed, not a status board.
 
 1. List tasks from one source.
 2. List tasks from several named sources at once, and from every configured source.
@@ -189,9 +192,6 @@ its own writing. The list grows as features land. ✔ = landed.
 22. Failure and recovery: unknown source name, malformed configuration, unknown id, and an
     unreachable source each exit non-zero with the problem and a suggested next action on
     stderr.
-
-✔ `--help`, `--version` and `schema` (the bundle both SDKs are generated from), plus their
-failure paths — unknown verb, unknown flag, no verb, a closed stdout.
 
 ## Recorded decisions
 

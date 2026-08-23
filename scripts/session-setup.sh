@@ -23,10 +23,13 @@
 # llmlint: ignore-file[tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer (see header): every step logs and continues rather than blocking startup, so a flaky install can't abort the hook; and `just` is installed from PyPI (`uv tool install rust-just`) whose wheels ship with Trusted Publishing + PEP 740 attestations, so no unvalidated external input is executed.
 set -uo pipefail
 
-# `just` floor — keep in lockstep with your `.tool-versions` pin. `rust-just` is
-# the PyPI package that ships the `just` binary.
-readonly JUST_MIN="1.51.0"
+# The `just` floor is stated once, in `.tool-versions`, and read from there — a version
+# restated in a second file is a version that drifts, and this pair already had. `rust-just`
+# is the PyPI package that ships the `just` binary.
 readonly BIN_DIR="$HOME/.local/bin"
+JUST_MIN="$(sed -n 's/^just[[:space:]]\{1,\}\([0-9][0-9.]*\)$/\1/p' \
+  "$(dirname "$0")/../.tool-versions" 2>/dev/null || true)"
+readonly JUST_MIN="${JUST_MIN:-1.51.0}"
 # Capture the inherited PATH before we prepend BIN_DIR, so persist_session_env can
 # tell whether BIN_DIR was already resolvable and only override PATH when it isn't.
 readonly ORIG_PATH="${PATH}"
@@ -84,11 +87,16 @@ ensure_just
 verify_prereqs
 persist_session_env
 
-# Hand off to the optional llmlint-tier installer beside this script, if present.
-setup_llmlint="$(dirname "$0")/setup-llmlint.sh"
-if [ -x "$setup_llmlint" ]; then
-  log "running setup-llmlint.sh"
-  "$setup_llmlint" || log "setup-llmlint.sh reported an issue (continuing)"
+# Hand off to the llmlint-tier installer. Through `just setup-llmlint` now that `just`
+# is present, so there is one documented way to do it — falling back to the script only
+# in the one case this file exists to fix, where installing `just` did not work.
+if command -v just >/dev/null 2>&1; then
+  log "running just setup-llmlint"
+  (cd "$(dirname "$0")/.." && just setup-llmlint) \
+    || log "just setup-llmlint reported an issue (continuing)"
+else
+  setup_llmlint="$(dirname "$0")/setup-llmlint.sh"
+  [ -x "$setup_llmlint" ] && "$setup_llmlint" || log "llmlint setup skipped (no just)"
 fi
 
 exit 0

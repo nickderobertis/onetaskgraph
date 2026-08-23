@@ -133,7 +133,7 @@ jobs:
 
       - name: Install oneharness + llmlint
         run: |
-          ./scripts/setup-llmlint.sh
+          just setup-llmlint
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       # setup-llmlint.sh installs llmlint and oneharness but NOT a harness, so without

@@ -33,19 +33,19 @@
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo clippy -p onetaskgraph-plugin-api --all-targets --all-features --locked -- -D warnings"
+        "command": "cargo clippy --quiet -p onetaskgraph-plugin-api --all-targets --all-features --locked -- -D warnings"
       }
     },
     "typecheck": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo check -p onetaskgraph-plugin-api --all-targets --all-features --locked"
+        "command": "cargo check --quiet -p onetaskgraph-plugin-api --all-targets --all-features --locked"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo test -p onetaskgraph-plugin-api --all-features --locked"
+        "command": "cargo test --quiet -p onetaskgraph-plugin-api --all-features --locked"
       }
     },
     "coverage": {
@@ -57,7 +57,7 @@
     "test-live": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo test -p onetaskgraph-plugin-api --test live --all-features --locked"
+        "command": "cargo test --quiet -p onetaskgraph-plugin-api --test live --all-features --locked"
       },
       "//": "Uncached: a live test reaches a third-party API and reads a credential from the environment, neither of which is an input in this tree \u2014 a cache hit would report yesterday's verdict as today's."
     }

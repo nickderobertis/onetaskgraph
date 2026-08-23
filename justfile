@@ -72,9 +72,15 @@ format:
 # target uniform. Neither hosted plugin's credential is required: without one, that
 # plugin's own tests skip rather than fail.
 
-# Sweep the credential-gated live lane across every project.
-test-live:
-    @{{nx}} run-many -t test-live --all
+# Sweep the credential-gated live lane. Pass a project to run just that one — which is
+# what .github/workflows/live.yml does, so each hosted plugin's job stays scoped to its
+# own crate and its own single credential.
+test-live projects="":
+    @if [ -n "{{projects}}" ]; then \
+        {{nx}} run-many -t test-live --projects="{{projects}}"; \
+    else \
+        {{nx}} run-many -t test-live --all; \
+    fi
 
 # Linux-only in CI, where it is its own required check.
 

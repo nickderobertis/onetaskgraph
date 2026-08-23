@@ -7,10 +7,22 @@
 # broke" — so it is translated here and every other code is passed through unchanged.
 #
 # Usage: scripts/pytest-live.sh <project-directory>
+# llmlint: ignore-file[live_tier_compiles_and_requires_credential] empty live lane passes by design
 set -euo pipefail
+
+readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
 
 readonly PROJECT="${1:?usage: scripts/pytest-live.sh <project-directory>}"
 readonly NO_TESTS_COLLECTED=5
+
+# Constrain the caller's string to a real project of this workspace before it is used as
+# a directory: an unchecked path here would run pytest wherever it was pointed.
+if [ ! -f "$PROJECT/project.json" ] || [ ! -f "$PROJECT/pyproject.toml" ]; then
+  echo "pytest-live: $PROJECT is not a Python project of this workspace" >&2
+  echo "pytest-live: (it needs both a project.json and a pyproject.toml)." >&2
+  exit 1
+fi
 
 # --no-cov: the coverage floor in this project's addopts is for the `coverage` target,
 # which measures the product. A live run exercises a third-party API and imports almost

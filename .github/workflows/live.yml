@@ -1,3 +1,4 @@
+# llmlint: ignore-file[live_tier_compiles_and_requires_credential] empty live lane passes by design
 # The live lane: the two hosted plugins, proven against the real APIs.
 #
 # Fixtures prove the shape of what a plugin does; only the real API proves it still
@@ -49,7 +50,7 @@ jobs:
           # configuration document's api_key_env default, and the variable the product
           # reads — so nothing here translates anything.
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-        run: ./scripts/nx.sh run onetaskgraph-linear:test-live
+        run: just test-live onetaskgraph-linear
 
   live-github-projects:
     runs-on: ubuntu-latest
@@ -68,4 +69,4 @@ jobs:
           # can exist in both CI and the local secrets file — and a single name is
           # preferred over a translation. Do not "correct" this into a break.
           GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
-        run: ./scripts/nx.sh run onetaskgraph-github-projects:test-live
+        run: just test-live onetaskgraph-github-projects

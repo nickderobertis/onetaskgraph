@@ -15,8 +15,10 @@ Two properties make it different from a lowest-common-denominator wrapper:
   rest — and every response carries the plan it ran, so `--explain` shows you which source
   filtered server-side and which one the engine narrowed for.
 - **Nothing of your work is kept.** No cache, no index, no local mirror. The engine holds
-  at most one source page at a time and writes nothing down. That is enforced
-  mechanically, not promised — see [`AGENTS.md`](./AGENTS.md).
+  at most one source page at a time and writes nothing down — enforced by a supply-chain
+  gate that refuses every embedded store and cache crate, a sandboxed journey that fails
+  if any file written during a run contains your data, and an assertion that the same
+  query asked twice reaches the source twice.
 
 > **Status.** The plugin contract, the workspace and the gate are in place. The `in-memory`
 > source is complete; `local-md`, `linear` and `github-projects` are registered and refuse

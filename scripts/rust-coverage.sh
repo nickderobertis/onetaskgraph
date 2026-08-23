@@ -25,6 +25,17 @@ case "${OS:-}${OSTYPE:-}" in
     ;;
 esac
 
+# Validate the crate name against the real workspace before it is used as a Cargo
+# selector and as a path segment. Unchecked, a typo becomes a silent "measured nothing"
+# and a caller-supplied string reaches the filesystem.
+if ! cargo metadata --format-version 1 --no-deps 2>/dev/null \
+  | python3 -c 'import json,sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))' \
+  | grep -qx "$CRATE"; then
+  echo "rust-coverage: $CRATE is not a member of this Cargo workspace." >&2
+  echo "rust-coverage: run 'cargo metadata --no-deps' to see the members, then pass one." >&2
+  exit 1
+fi
+
 if ! cargo llvm-cov --version >/dev/null 2>&1; then
   echo "rust-coverage: cargo-llvm-cov is not installed." >&2
   echo "rust-coverage: install it with 'cargo binstall cargo-llvm-cov' and re-run." >&2

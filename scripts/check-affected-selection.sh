@@ -85,38 +85,47 @@ expect_not_selected() {
   fi
 }
 
-report() {
-  echo "check-affected-selection: $1 selected: $(printf '%s' "$2" | tr '\n' ' ')"
+# Quiet on success. The selections are worth seeing when an expectation breaks — they
+# are the evidence for which way the graph went wrong — and are noise otherwise, so they
+# are held and printed only if this case failed.
+report_on_failure() {
+  local case_name="$1" selected="$2" before="$3"
+  if [ "$failures" -ne "$before" ]; then
+    echo "check-affected-selection: $case_name selected: $(printf '%s' "$selected" | tr '\n' ' ')" >&2
+  fi
 }
 
 # --- 1. the contract moved, so every implementation of it re-runs ------------------
 selection="$(select_after_editing crates/onetaskgraph-plugin-api/src/lib.rs)"
-report "editing onetaskgraph-plugin-api" "$selection"
+before=$failures
 for plugin in "${PLUGINS[@]}"; do
   expect_selected "editing the contract crate" "$plugin" "$selection"
 done
 expect_selected "editing the contract crate" onetaskgraph-core "$selection"
 expect_selected "editing the contract crate" onetaskgraph "$selection"
+report_on_failure "editing onetaskgraph-plugin-api" "$selection" "$before"
 reset_scratch
 
 # --- 2. the engine changed, and no plugin can see it -------------------------------
 selection="$(select_after_editing crates/onetaskgraph-core/src/registry.rs)"
-report "editing onetaskgraph-core" "$selection"
+before=$failures
 for plugin in "${PLUGINS[@]}"; do
   expect_not_selected "editing the engine" "$plugin" "$selection"
 done
 expect_selected "editing the engine" onetaskgraph-core "$selection"
 expect_selected "editing the engine" onetaskgraph "$selection"
+report_on_failure "editing onetaskgraph-core" "$selection" "$before"
 reset_scratch
 
 # --- 3. one plugin changed; its siblings are untouched -----------------------------
 selection="$(select_after_editing crates/onetaskgraph-linear/src/lib.rs)"
-report "editing onetaskgraph-linear" "$selection"
+before=$failures
 expect_selected "editing one plugin" onetaskgraph-linear "$selection"
 expect_selected "editing one plugin" onetaskgraph "$selection"
 for plugin in onetaskgraph-in-memory onetaskgraph-local-md onetaskgraph-github-projects; do
   expect_not_selected "editing one plugin" "$plugin" "$selection"
 done
+report_on_failure "editing onetaskgraph-linear" "$selection" "$before"
 reset_scratch
 
 if [ "$failures" -ne 0 ]; then

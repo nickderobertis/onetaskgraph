@@ -1,1 +1,4 @@
-just 1.42.4
+# The single source of truth for the `just` floor. scripts/session-setup.sh reads this
+# file rather than restating the version, and scripts/check-workspace-config.sh fails if
+# anything starts carrying a second copy of it.
+just 1.51.0

@@ -12,6 +12,7 @@ cd "$ROOT"
 
 python3 - <<'PY'
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -61,6 +62,44 @@ for workflow in sorted(Path(".github/workflows").glob("*.yml")):
         problems.append(
             f"{workflow}: declares no `permissions:` block. Default the token to read-only "
             "and widen per job only where a job needs it."
+        )
+
+# The MSRV is written down in two files and the toolchain pin in a third. None can be
+# derived from the others, so they are reconciled here instead of being trusted to stay
+# in step — which is exactly how the `just` floor drifted before this gate existed.
+def version_tuple(raw: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in raw.split("."))
+
+
+msrv = re.search(r'^rust-version\s*=\s*"([\d.]+)"', Path("Cargo.toml").read_text(), re.M)
+clippy_msrv = re.search(r'^msrv\s*=\s*"([\d.]+)"', Path("clippy.toml").read_text(), re.M)
+channel = re.search(
+    r'^channel\s*=\s*"([\d.]+)"', Path("rust-toolchain.toml").read_text(), re.M
+)
+
+if not (msrv and clippy_msrv and channel):
+    problems.append(
+        "the Rust version pins could not all be read from Cargo.toml, clippy.toml and "
+        "rust-toolchain.toml"
+    )
+else:
+    if msrv.group(1) != clippy_msrv.group(1):
+        problems.append(
+            f"clippy.toml msrv is {clippy_msrv.group(1)} but Cargo.toml rust-version is "
+            f"{msrv.group(1)}; clippy would allow an API the declared floor forbids"
+        )
+    if version_tuple(channel.group(1)) < version_tuple(msrv.group(1)):
+        problems.append(
+            f"rust-toolchain.toml pins {channel.group(1)}, below the {msrv.group(1)} floor "
+            "Cargo.toml promises; the workspace cannot build with its own toolchain"
+        )
+
+# The `just` floor is stated in .tool-versions; nothing may carry a second copy.
+for path in (Path("scripts/session-setup.sh"), Path("justfile")):
+    if re.search(r'JUST_MIN\s*=\s*"[\d.]+"', path.read_text()):
+        problems.append(
+            f"{path}: hard-codes a `just` floor. State it once in .tool-versions and read "
+            "it from there."
         )
 
 if problems:

@@ -21,6 +21,10 @@ use crate::{
 /// stand. Compiling forces the placement below; the resolution — add it to the
 /// enumeration, or redesign `health` so no such type crosses the boundary —
 /// belongs to the contract's owner, not to this crate. See `AGENTS.md`.
+// llmlint: ignore[invalid_states_unrepresentable] an enum over reachable/unreachable
+// would model this better, but the shape of Health is fixed by the approved plugin
+// contract that six crates are being written against concurrently; changing it belongs
+// to the contract's owner, not to this crate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Health {
     /// Whether the source answered.
