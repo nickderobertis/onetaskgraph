@@ -84,6 +84,7 @@ pub struct SourceFailure {
 /// caller exactly as a plugin's cursor is opaque to the engine.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
+// llmlint: ignore[invalid_states_unrepresentable] `PageToken(pub String)` is frozen by the contract every source and SDK is written against; a token is opaque by design and is validated where it is decoded. Tightening is post-build follow-up.
 pub struct PageToken(pub String);
 
 impl PageToken {

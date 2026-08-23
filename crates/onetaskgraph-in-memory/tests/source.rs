@@ -489,8 +489,9 @@ async fn a_limit_is_clamped_to_the_declared_page_ceiling() {
     assert_eq!(page.items.len(), 2);
     assert_eq!(page.next, Some(Cursor("2".to_owned())));
 
-    // A zero limit is raised to one rather than looping forever on an empty page.
-    let single = fully_capable()
+    // A zero limit is refused, not quietly served as one row: coercing it would turn a
+    // caller's bug into a walk that never advances.
+    let Err(SourceError::Config { message }) = fully_capable()
         .query_tasks(
             &TaskQuery::default(),
             &PageRequest {
@@ -499,8 +500,10 @@ async fn a_limit_is_clamped_to_the_declared_page_ceiling() {
             },
         )
         .await
-        .expect("answers");
-    assert_eq!(single.items.len(), 1);
+    else {
+        panic!("a page of no rows is not a page");
+    };
+    assert!(message.contains("ask for at least 1 row"), "{message}");
 }
 
 #[tokio::test]
@@ -521,8 +524,10 @@ async fn a_cursor_this_source_did_not_issue_is_rejected_rather_than_silently_res
 }
 
 #[tokio::test]
-async fn a_cursor_past_the_end_yields_an_empty_final_page() {
-    let page = fully_capable()
+async fn a_cursor_past_the_end_is_refused_rather_than_answered_as_an_exhausted_walk() {
+    // It parses, but this source never issued it. An empty page would be indistinguishable
+    // from a walk that legitimately ended, which is how a paging bug goes unnoticed.
+    let Err(SourceError::Malformed { message }) = fully_capable()
         .query_tasks(
             &TaskQuery::default(),
             &PageRequest {
@@ -531,7 +536,22 @@ async fn a_cursor_past_the_end_yields_an_empty_final_page() {
             },
         )
         .await
-        .expect("answers");
+    else {
+        panic!("a cursor past the end was never issued by this source");
+    };
+    assert!(message.contains("past the 4 result(s)"), "{message}");
+
+    // The cursor one past the last item IS one this source issues, and ends the walk.
+    let page = fully_capable()
+        .query_tasks(
+            &TaskQuery::default(),
+            &PageRequest {
+                cursor: Some(Cursor("4".to_owned())),
+                limit: 10,
+            },
+        )
+        .await
+        .expect("the exhausted cursor is ours");
     assert!(page.items.is_empty());
     assert!(page.next.is_none());
 }

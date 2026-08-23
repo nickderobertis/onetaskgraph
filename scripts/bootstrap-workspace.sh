@@ -14,5 +14,7 @@ git config core.hooksPath .githooks
 
 # The judged tier is out of `just check`, but a contributor should not have to discover
 # how to install it. Through the documented recipe, so there is one way to do it.
-just setup-llmlint >/dev/null 2>&1 \
-  || echo "bootstrap-workspace: llmlint did not install; run 'just setup-llmlint' to see why (the deterministic gate does not need it)" >&2
+if ! setup_output="$(just setup-llmlint 2>&1)"; then
+  printf '%s\n' "$setup_output" >&2
+  echo "bootstrap-workspace: llmlint did not install (see above); the deterministic gate does not need it, so this is not fatal" >&2
+fi

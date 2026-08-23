@@ -65,13 +65,35 @@ impl InMemorySource {
     fn paginate<T: Clone>(&self, items: &[T], page: &PageRequest) -> Result<Page<T>, SourceError> {
         let start = match &page.cursor {
             None => 0usize,
-            Some(Cursor(raw)) => raw.parse::<usize>().map_err(|_| SourceError::Malformed {
-                message: format!("cursor {raw:?} was not issued by the in-memory source"),
-            })?,
+            Some(Cursor(raw)) => {
+                let offset = raw.parse::<usize>().map_err(|_| SourceError::Malformed {
+                    message: format!("cursor {raw:?} was not issued by the in-memory source"),
+                })?;
+                // Parsing is not the same as being ours. An offset past the end is a cursor
+                // this source never handed out, and answering it with an empty page would
+                // look like a walk that simply ended.
+                if offset > items.len() {
+                    return Err(SourceError::Malformed {
+                        message: format!(
+                            "cursor {raw:?} was not issued by the in-memory source; it points \
+                             past the {} result(s) available",
+                            items.len()
+                        ),
+                    });
+                }
+                offset
+            }
         };
+        // A page of no rows is not a page. Refuse it rather than quietly serving one row,
+        // which would turn a caller's bug into a walk that never advances.
+        if page.limit == 0 {
+            return Err(SourceError::Config {
+                message: "a page limit of 0 is not a page; ask for at least 1 row".to_owned(),
+            });
+        }
         // At least 1 by construction: the configuration boundary refuses a zero ceiling.
         let ceiling = self.declared().max_page_size;
-        let limit = page.limit.clamp(1, ceiling) as usize;
+        let limit = page.limit.min(ceiling) as usize;
         let end = start.saturating_add(limit).min(items.len());
         let window = items.get(start..end).unwrap_or_default().to_vec();
         let next = (end < items.len()).then(|| Cursor(end.to_string()));
