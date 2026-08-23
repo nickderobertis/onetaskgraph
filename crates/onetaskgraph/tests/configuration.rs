@@ -782,6 +782,44 @@ fn a_set_argument_addressing_no_setting_is_refused() {
     assert!(message.contains("--set"), "{message}");
 }
 
+/// Unix only: this drives a shell into removing its own working directory before it
+/// execs the binary, and Windows will not unlink a directory a process is sitting in.
+/// The functional lanes still gate that platform through every other journey here.
+#[cfg(unix)]
+#[test]
+fn a_working_directory_that_no_longer_exists_is_reported_rather_than_crashing() {
+    let sandbox = Sandbox::new();
+    let doomed = sandbox.subdirectory("doomed");
+    let binary = assert_cmd::cargo::cargo_bin("onetaskgraph");
+
+    // The shell removes the directory it is standing in and then execs the binary into
+    // it, so the binary really starts life somewhere the kernel can no longer name —
+    // which is the one way `current_dir` fails that a user can actually reach.
+    let output = std::process::Command::new("sh")
+        .current_dir(&doomed)
+        .env("XDG_CONFIG_HOME", sandbox.config_home())
+        .env_remove("HOME")
+        .args([
+            "-c",
+            r#"rm -rf "$PWD" && exec "$0" config show"#,
+            &binary.to_string_lossy(),
+        ])
+        .output()
+        .expect("the shell runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let message = stderr(&output);
+    assert!(
+        message.contains("could not read the working directory"),
+        "the failure names what could not be read: {message}"
+    );
+    assert!(message.contains("next:"), "{message}");
+    assert!(
+        stdout(&output).is_empty(),
+        "a refusal writes nothing to stdout"
+    );
+}
+
 #[test]
 fn a_credentials_file_line_that_is_not_an_assignment_is_refused_without_quoting_it() {
     let sandbox = Sandbox::new();
