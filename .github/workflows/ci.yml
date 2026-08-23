@@ -50,9 +50,12 @@ jobs:
       # Reads rust-toolchain.toml, so CI and local compile with byte-identical rustc,
       # clippy and rustfmt, and the version is pinned in exactly one place.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+      # cargo-deny is not only the `deny` job's tool: `just check` runs
+      # check-isolation-enforced.sh, whose fifth case asserts cargo-deny refuses a
+      # dev-dependency edge to the engine, so without it here that guard cannot run.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-llvm-cov,cargo-machete
+          tool: cargo-llvm-cov,cargo-machete,cargo-deny
 
       - name: Bootstrap
         run: just bootstrap
@@ -133,6 +136,10 @@ jobs:
       - name: Fetch main (diff base)
         run: git fetch --no-tags --depth=2147483647 origin main
       - uses: extractions/setup-just@v4
+      # setup-llmlint.sh installs llmlint with `uv tool install` and tolerates every
+      # failure, so with no uv on PATH it logs "uv not found", exits 0, and the job only
+      # discovers llmlint is missing at the validate step below.
+      - uses: astral-sh/setup-uv@v7
 
       - name: Install oneharness + llmlint
         run: |
