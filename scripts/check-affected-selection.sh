@@ -18,7 +18,8 @@ set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # From scripts/plugin-crates.sh, so a plugin added later is covered without an edit here.
-mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh")
+# tr: see scripts/check-plugin-isolation.sh — python's stdout is CRLF on Windows.
+mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
@@ -78,8 +79,10 @@ select_after_editing() {
     echo "check-affected-selection: fix the project graph so 'nx show projects' runs, then re-run." >&2
     exit 1
   fi
+  # tr: the caller compares these names with `grep -qx`, which a trailing CR defeats.
   printf '%s' "$raw" \
-    | python3 -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin))))'
+    | python3 -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin))))' \
+    | tr -d '\r'
 }
 
 # Undo the scratch commit so each case starts from the same committed tree.

@@ -21,7 +21,11 @@ cd "$ROOT"
 
 # The plugin set comes from scripts/plugin-crates.sh, so a crate added later cannot
 # escape this check by not being listed here.
-mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh")
+# `tr -d '\r'`: python opens stdout in text mode, so on Windows every "\n" it prints
+# arrives as "\r\n". `mapfile -t` strips the newline but not the carriage return, and a
+# crate name carrying a trailing CR is rejected by `cargo tree` as an invalid
+# package-name character — a failure no Linux or macOS run can reproduce.
+mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
 
 metadata="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml)"
 

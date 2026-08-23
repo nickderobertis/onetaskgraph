@@ -33,8 +33,10 @@ if ! metadata="$(cargo metadata --format-version 1 --no-deps 2>&1)"; then
   exit 1
 fi
 
+# tr: $CRATE is matched against this list with `grep -qxF`, which a trailing CR defeats.
 members="$(printf '%s' "$metadata" \
-  | python3 -c 'import json,sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))')"
+  | python3 -c 'import json,sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))' \
+  | tr -d '\r')"
 
 if ! printf '%s\n' "$members" | grep -qxF -- "$CRATE"; then
   echo "rust-coverage: $CRATE is not a member of this Cargo workspace. Members:" >&2
