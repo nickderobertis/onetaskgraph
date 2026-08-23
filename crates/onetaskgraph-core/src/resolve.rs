@@ -1,8 +1,10 @@
 //! Turning a configuration into live sources.
 //!
 //! Two steps, deliberately separable. [`validate_sources`] runs at load, for every
-//! verb, and refuses a source whose `plugin:` names nothing this build has or whose
-//! `config:` block does not match the schema that plugin declares. [`resolve`] then
+//! verb, and refuses a source whose `config:` block does not match the schema its
+//! plugin declares — the plugin itself is already one this build has, because
+//! [`SourceConfig::plugin`] is a [`PluginKind`](crate::PluginKind) and no other kind
+//! can be represented. [`resolve`] then
 //! builds the sources a command actually needs. The order is the point: a typo in a
 //! per-source field is refused while the user is still looking at the file that
 //! caused it, rather than surfacing as a confusing failure inside the first HTTP
@@ -15,7 +17,6 @@ use onetaskgraph_plugin_api::{SecretResolver, SourceName, SourcePlugin, TaskSour
 use serde_json::Value;
 
 use crate::config::{Config, ConfigError, SourceConfig};
-use crate::registry::{plugin_for, plugin_kinds};
 
 /// One configured source, built and ready to answer.
 pub struct ResolvedSource {
@@ -43,9 +44,8 @@ impl fmt::Debug for ResolvedSource {
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError::Setting`] naming `sources.<name>.plugin` for a plugin this
-/// build does not have, and `sources.<name>.config...` for a block that does not
-/// match that plugin's declared schema.
+/// Returns [`ConfigError::Setting`] naming `sources.<name>.config...` for a block that
+/// does not match its plugin's declared schema.
 pub fn validate_sources(config: &Config) -> Result<(), ConfigError> {
     for (name, source) in &config.sources {
         checked_plugin(name, source)?;
@@ -99,16 +99,7 @@ fn checked_plugin(
     name: &SourceName,
     source: &SourceConfig,
 ) -> Result<Box<dyn SourcePlugin>, ConfigError> {
-    let Some(plugin) = plugin_for(&source.plugin) else {
-        return Err(ConfigError::setting(
-            format!("sources.{name}.plugin"),
-            format!(
-                "no plugin named {:?} is built into this binary",
-                source.plugin
-            ),
-            format!("use one of: {}.", plugin_kinds().join(", ")),
-        ));
-    };
+    let plugin = source.plugin.plugin();
     check_block(name, &source.config, plugin.as_ref())?;
     Ok(plugin)
 }
@@ -120,12 +111,25 @@ fn check_block(
     plugin: &dyn SourcePlugin,
 ) -> Result<(), ConfigError> {
     // A plugin's own schema is this build's, not a user's, so a schema that will not
-    // compile is a bug in this binary rather than something a user can act on. The
-    // registry-wide test `every_registered_plugin_declares_a_schema_that_compiles`
-    // is what keeps that from reaching anybody: it fails the gate, here it panics.
+    // compile is a defect in this binary rather than something a user did. It is still
+    // reported rather than panicked on: a user whose one broken source is a plugin they
+    // do not use can drop that source and carry on, which a panic would not let them do.
+    // `every_registered_plugin_declares_a_schema_that_compiles_and_accepts_a_valid_block`
+    // is what keeps it from reaching anybody in the first place.
     let schema = plugin.config_schema();
-    let validator = jsonschema::validator_for(schema.as_value())
-        .expect("every registered plugin declares a schema that compiles");
+    let validator = jsonschema::validator_for(schema.as_value()).map_err(|error| {
+        ConfigError::setting(
+            format!("sources.{name}.plugin"),
+            format!(
+                "the `{}` plugin declares a configuration schema this build cannot \
+                 compile: {error}",
+                plugin.kind()
+            ),
+            "that is a defect in this binary rather than in your configuration — please \
+             report it, naming the plugin above. Removing that source lets the rest of \
+             this configuration run in the meantime.",
+        )
+    })?;
 
     let Some(problem) = validator.iter_errors(block).next() else {
         return Ok(());

@@ -15,7 +15,9 @@ use onetaskgraph_core::config::{
     SECRETS_RELATIVE_PATH, Setting, SettingPath, USER_DOCUMENT_RELATIVE_PATH, documents, merge,
     read_optional, secrets_path, unflatten, user_document_path, value_from_text, variable_for,
 };
-use onetaskgraph_core::{Config, Environment, OutputFormat, Secrets, plugin_for, resolve};
+use onetaskgraph_core::{
+    Config, Environment, OutputFormat, PluginKind, Secrets, plugin_for, resolve,
+};
 use onetaskgraph_plugin_api::{SecretResolver, SourceName};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -597,10 +599,34 @@ fn resolving_builds_the_sources_a_configuration_names_in_name_order() {
 
 #[test]
 fn a_plugin_this_build_does_not_have_is_refused_by_the_key_that_names_it() {
-    let error = onetaskgraph_core::validate_sources(&one_source("jira", json!({})))
-        .expect_err("no such plugin");
+    // Refused while the configuration is being built, not later while it is being
+    // resolved: `SourceConfig::plugin` is a `PluginKind`, so a configuration naming a
+    // plugin this build does not have never comes into existence to be resolved.
+    let error =
+        Config::from_document(json!({"sources": {"work": {"plugin": "jira", "config": {}}}}))
+            .expect_err("no such plugin");
     assert_eq!(error.key(), Some("sources.work.plugin"));
     assert!(error.to_string().contains("in-memory"), "{error}");
+}
+
+#[test]
+fn every_plugin_kind_names_the_kind_its_own_plugin_reports() {
+    // `PluginKind::as_str` spells each name rather than asking the plugin for it, so
+    // that matching a document's `plugin:` costs no allocation. This is what keeps the
+    // two spellings from drifting apart.
+    for kind in PluginKind::ALL {
+        assert_eq!(
+            kind.as_str(),
+            kind.plugin().kind(),
+            "{kind:?} names itself differently from the plugin it builds"
+        );
+        assert_eq!(PluginKind::parse(kind.as_str()), Some(kind));
+    }
+    assert_eq!(PluginKind::parse("jira"), None);
+    assert_eq!(
+        PluginKind::ALL.map(PluginKind::as_str).to_vec(),
+        onetaskgraph_core::plugin_kinds()
+    );
 }
 
 #[test]

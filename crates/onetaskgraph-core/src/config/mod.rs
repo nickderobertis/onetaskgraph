@@ -25,8 +25,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::Environment;
 use crate::secrets::Secrets;
+use crate::{Environment, PluginKind, plugin_kinds};
 
 pub use discovery::{
     Document, PROJECT_DOCUMENT_NAME, SECRETS_RELATIVE_PATH, USER_DOCUMENT_RELATIVE_PATH, documents,
@@ -55,15 +55,26 @@ pub enum OutputFormat {
 }
 
 /// One named source, as a document configures it.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
+///
+/// Built by [`Config::from_document`], never deserialized directly: `plugin` is a
+/// [`PluginKind`] rather than the string the document spelled, so a source naming a
+/// plugin this build does not have cannot be represented here at all.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SourceConfig {
-    /// The plugin kind that builds it — one of [`plugin_kinds`](crate::plugin_kinds).
-    pub plugin: String,
+    /// The plugin kind that builds it.
+    pub plugin: PluginKind,
     /// The plugin's own block, checked against that plugin's declared schema before
     /// the source is built rather than inside the first call it makes.
-    #[serde(default = "empty_block")]
     pub config: Value,
+}
+
+/// One named source as a document spells it, before its plugin name is checked.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceShape {
+    plugin: String,
+    #[serde(default = "empty_block")]
+    config: Value,
 }
 
 /// A plugin block nobody wrote, which is different from one nobody may write.
@@ -97,7 +108,7 @@ struct DocumentShape {
     default_sources: Option<Vec<String>>,
     page_size: NonZeroU32,
     output: OutputFormat,
-    sources: BTreeMap<String, SourceConfig>,
+    sources: BTreeMap<String, SourceShape>,
 }
 
 impl Default for DocumentShape {
@@ -140,7 +151,8 @@ impl Config {
     /// # Errors
     ///
     /// Returns [`ConfigError::Setting`] naming the offending key for an unknown
-    /// field, a value of the wrong shape, a source name that does not match
+    /// field, a value of the wrong shape, a `plugin:` this build does not have, a
+    /// source name that does not match
     /// [`SOURCE_NAME_PATTERN`](onetaskgraph_plugin_api::SOURCE_NAME_PATTERN), or a
     /// `default_sources` entry naming a source nothing configures.
     pub fn from_document(document: Value) -> Result<Self, ConfigError> {
@@ -162,6 +174,16 @@ impl Config {
         let mut sources = BTreeMap::new();
         for (name, source) in shape.sources {
             let key = format!("sources.{name}");
+            let plugin = PluginKind::parse(&source.plugin).ok_or_else(|| {
+                ConfigError::setting(
+                    format!("{key}.plugin"),
+                    format!(
+                        "no plugin named {:?} is built into this binary",
+                        source.plugin
+                    ),
+                    format!("use one of: {}.", plugin_kinds().join(", ")),
+                )
+            })?;
             let name = SourceName::new(name).map_err(|error| {
                 ConfigError::setting(
                     &key,
@@ -171,7 +193,13 @@ impl Config {
                      ambiguous.",
                 )
             })?;
-            sources.insert(name, source);
+            sources.insert(
+                name,
+                SourceConfig {
+                    plugin,
+                    config: source.config,
+                },
+            );
         }
 
         let default_sources = shape
