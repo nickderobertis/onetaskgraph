@@ -55,6 +55,28 @@ for path in project_files:
             "silently dropped from that root command."
         )
 
+# The `workspace` project depends on every other project so the cross-cutting checks run
+# whenever anything they check can change. That list is a hand-mirrored inventory of the
+# projects discovered above, and nothing derives it — so add a project, forget the entry,
+# and a change to it silently stops selecting the graph, coverage and live-lane checks.
+# Reconciled here against the discovered set, both ways, for the same reason the Cargo and
+# Nx graphs are reconciled in check-nx-graph.sh.
+WORKSPACE_PROJECT = Path("workspace/project.json")
+if WORKSPACE_PROJECT in project_files and "workspace" in names:
+    inventory = json.loads(WORKSPACE_PROJECT.read_text()).get("implicitDependencies", [])
+    expected = set(names) - {"workspace"}
+    for absent in sorted(expected - set(inventory)):
+        problems.append(
+            f"{WORKSPACE_PROJECT}: does not depend on {absent!r}. Add it to "
+            "implicitDependencies, or a change to that project will not select the "
+            "cross-cutting checks the workspace project owns."
+        )
+    for unknown in sorted(set(inventory) - expected):
+        problems.append(
+            f"{WORKSPACE_PROJECT}: depends on {unknown!r}, which is not a project of this "
+            "workspace. Remove it from implicitDependencies, or Nx cannot build the graph."
+        )
+
 # Every workflow has to parse, and every workflow token has to be least-privilege.
 for workflow in sorted(Path(".github/workflows").glob("*.yml")):
     text = workflow.read_text()
