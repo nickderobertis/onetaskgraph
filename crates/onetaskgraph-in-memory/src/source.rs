@@ -69,10 +69,11 @@ impl InMemorySource {
                 let offset = raw.parse::<usize>().map_err(|_| SourceError::Malformed {
                     message: format!("cursor {raw:?} was not issued by the in-memory source"),
                 })?;
-                // Parsing is not the same as being ours. An offset past the end is a cursor
-                // this source never handed out, and answering it with an empty page would
-                // look like a walk that simply ended.
-                if offset > items.len() {
+                // Parsing is not the same as being ours. `next` is only ever `Some` while
+                // `end < items.len()`, so every cursor this source hands out addresses a row
+                // that exists — an offset at or past the end is one it never issued, and
+                // answering it with an empty page would look like a walk that simply ended.
+                if offset >= items.len() {
                     return Err(SourceError::Malformed {
                         message: format!(
                             "cursor {raw:?} was not issued by the in-memory source; it points \

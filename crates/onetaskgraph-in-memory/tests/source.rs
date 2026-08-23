@@ -541,8 +541,11 @@ async fn a_cursor_past_the_end_is_refused_rather_than_answered_as_an_exhausted_w
     };
     assert!(message.contains("past the 4 result(s)"), "{message}");
 
-    // The cursor one past the last item IS one this source issues, and ends the walk.
-    let page = fully_capable()
+    // The offset exactly one past the last row is never issued either: `next` is `Some`
+    // only while the window stops short of the end, so a walk that reaches the last row
+    // ends with `next: None` rather than with a cursor of 4. Accepting 4 would answer a
+    // cursor from some other result set as though this walk had legitimately finished.
+    let Err(SourceError::Malformed { message }) = fully_capable()
         .query_tasks(
             &TaskQuery::default(),
             &PageRequest {
@@ -551,9 +554,31 @@ async fn a_cursor_past_the_end_is_refused_rather_than_answered_as_an_exhausted_w
             },
         )
         .await
-        .expect("the exhausted cursor is ours");
-    assert!(page.items.is_empty());
-    assert!(page.next.is_none());
+    else {
+        panic!("an offset equal to the result count is a cursor this source never issued");
+    };
+    assert!(message.contains("past the 4 result(s)"), "{message}");
+}
+
+#[tokio::test]
+async fn a_walk_to_the_last_row_ends_with_no_cursor_rather_than_one_past_the_end() {
+    // The other half of the rule above: this is the only way a walk over these 4 results
+    // terminates, which is what makes an offset of 4 provably foreign.
+    let page = fully_capable()
+        .query_tasks(
+            &TaskQuery::default(),
+            &PageRequest {
+                cursor: Some(Cursor("2".to_owned())),
+                limit: 2,
+            },
+        )
+        .await
+        .expect("a cursor this source issued");
+    assert_eq!(page.items.len(), 2);
+    assert!(
+        page.next.is_none(),
+        "the final page must end the walk rather than hand out an offset of 4"
+    );
 }
 
 #[test]
