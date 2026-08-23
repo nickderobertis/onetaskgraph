@@ -31,6 +31,12 @@ if ! cargo llvm-cov --version >/dev/null 2>&1; then
   exit 1
 fi
 
+# Nx runs these targets in parallel, and cargo-llvm-cov clears the raw profile data in
+# its target directory before each run — so two crates sharing one directory delete each
+# other's coverage and both report a number that is not theirs. A directory per crate is
+# what makes per-crate measurement safe to parallelise.
+export CARGO_LLVM_COV_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov/$CRATE}"
+
 # The e2e journeys spawn the built binary; cargo-llvm-cov exports the profile path into
 # that subprocess, so its coverage is attributed to this crate rather than lost.
 exec cargo llvm-cov \

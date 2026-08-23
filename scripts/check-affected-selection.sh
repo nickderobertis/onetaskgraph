@@ -56,8 +56,12 @@ select_after_editing() {
   git -C "$scratch/repo" add "$file"
   git -C "$scratch/repo" commit --quiet --no-verify -m "test: touch $file"
 
-  (cd "$scratch/repo" && node_modules/.bin/nx show projects --affected \
-    --base="$base" --head=HEAD 2>/dev/null) | tr -d '\r' | sort
+  # --json, then one name per line: `nx show projects` renders a JSON array outside a
+  # TTY, and a shape-dependent parse is exactly the kind of quiet breakage this check
+  # exists to catch.
+  (cd "$scratch/repo" && node_modules/.bin/nx show projects --affected --json \
+    --base="$base" --head=HEAD 2>/dev/null) \
+    | python3 -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin))))'
 }
 
 # Undo the scratch commit so each case starts from the same committed tree.
