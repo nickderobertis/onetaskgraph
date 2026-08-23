@@ -1,0 +1,7 @@
+# LF in the index and LF in every working tree, on every platform.
+#
+# Not a style preference: git for Windows defaults to `core.autocrlf=true`, so without
+# this the windows-latest runner checks the tree out as CRLF. Biome formats to LF, which
+# fails `just format-check`, and the justfile runs every recipe through bash, which
+# cannot execute a CRLF script. Neither failure is reproducible on Linux or macOS.
+* text=auto eol=lf

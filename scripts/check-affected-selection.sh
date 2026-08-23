@@ -17,8 +17,36 @@
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# What this proves is a property of the Nx PROJECT GRAPH — which edit selects which
+# project — and that graph is read from nx.json and the project.json files, which are
+# byte-identical on every platform. ci.yml keeps `deny` Linux-only for exactly this
+# reason: "the graph is the same on every platform, so running it three times would buy
+# nothing."
+#
+# On Windows it cannot run at all, and the obstacle is the runner rather than the graph:
+# the severance below needs a REAL copy of node_modules, bun's layout there is hundreds of
+# symlinks, and creating one on Windows needs a privilege the runner does not grant — so
+# `cp -a` fails with "cannot create symbolic link". Dereferencing instead is not a fix,
+# because those links form cycles and such a copy would not terminate.
+#
+# So it is skipped there with a notice, as scripts/rust-coverage.sh skips measurement on
+# Windows for its own platform reason. The Linux and macOS lanes run it on every pull
+# request, so the three selections AGENTS.md owes stay gated on every change.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-affected-selection: skipped on Windows (bun's node_modules is a symlink tree the runner cannot copy); the Linux and macOS lanes gate the project graph" >&2
+    exit 0
+    ;;
+esac
 # From scripts/plugin-crates.sh, so a plugin added later is covered without an edit here.
-mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh")
+# llmlint: ignore[boundary_inputs_validated] these names are not external input:
+# scripts/plugin-crates.sh reads them from this repository's own committed
+# project.json files, scripts/check-workspace-config.sh reconciles those files on
+# every `check`, and cargo refuses an invalid package name loudly — that refusal is
+# the very failure the `tr` here exists to fix.
+# tr: see scripts/check-plugin-isolation.sh — python's stdout is CRLF on Windows.
+mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
@@ -78,8 +106,21 @@ select_after_editing() {
     echo "check-affected-selection: fix the project graph so 'nx show projects' runs, then re-run." >&2
     exit 1
   fi
-  printf '%s' "$raw" \
-    | python3 -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin))))'
+  # tr: the caller compares these names with `grep -qx`, which a trailing CR defeats.
+  if ! printf '%s' "$raw" \
+    | python3 -c '
+import json, sys
+projects = json.load(sys.stdin)
+if not isinstance(projects, list) or not all(isinstance(n, str) for n in projects):
+    raise SystemExit("not a JSON array of project names")
+print("\n".join(sorted(projects)))
+' \
+    | tr -d '\r'; then
+    echo "check-affected-selection: 'nx show projects --affected --json' answered with something other than a JSON array of project names:" >&2
+    printf '%s\n' "$raw" >&2
+    echo "check-affected-selection: fix the project graph so that command returns JSON, then re-run." >&2
+    exit 1
+  fi
 }
 
 # Undo the scratch commit so each case starts from the same committed tree.
