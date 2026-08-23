@@ -61,7 +61,20 @@ for project_file in sorted(
             f"{project_file} is not valid JSON: {problem}.",
             "fix that file — every other check that reads the project graph reads it too.",
         )
-    if "test-live" not in project.get("targets", {}):
+    if not isinstance(project, dict):
+        refuse(
+            f"{project_file} is valid JSON but not an object.",
+            "make it the project configuration Nx reads — every other check that reads "
+            "the project graph reads it too.",
+        )
+    targets = project.get("targets", {})
+    if not isinstance(targets, dict):
+        refuse(
+            f"{project_file} has a `targets` that is not an object.",
+            "make it the map of target names Nx reads, so this check can see whether "
+            "`test-live` is among them.",
+        )
+    if "test-live" not in targets:
         problems.append(f"{project_file}: has no test-live target, so `just test-live` skips it")
 
 workflow = Path(".github/workflows/live.yml")

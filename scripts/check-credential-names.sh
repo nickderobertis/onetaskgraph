@@ -113,15 +113,26 @@ for relative, what in RESTATEMENTS.items():
                 "credential everywhere and nothing translates between spellings."
             )
 
-listing = subprocess.run(["git", "ls-files", "-z"], capture_output=True, text=True, check=False)
+# Bytes, not text: a path is bytes to git, so decoding is this script's decision to make
+# and to report on. Letting the subprocess do it implicitly turns one tracked filename
+# that is not UTF-8 into a traceback from inside the standard library.
+listing = subprocess.run(["git", "ls-files", "-z"], capture_output=True, check=False)
 if listing.returncode != 0:
+    complaint = listing.stderr.decode("utf-8", errors="replace").strip()
     refuse(
         "could not list the tracked files: "
-        f"{listing.stderr.strip() or f'git ls-files exited {listing.returncode}'}.",
+        f"{complaint or f'git ls-files exited {listing.returncode}'}.",
         "run this from inside the repository's working tree — the scan for a second "
         "spelling covers every tracked file, so it cannot run without that list.",
     )
-tracked = [relative for relative in listing.stdout.split("\0") if relative]
+try:
+    tracked = [relative for relative in listing.stdout.decode("utf-8").split("\0") if relative]
+except UnicodeDecodeError as problem:
+    refuse(
+        f"a tracked path is not UTF-8: {problem}.",
+        "rename it — every path this scan reports is a path a contributor has to be able "
+        "to read back, and this check cannot name one it cannot spell.",
+    )
 if not tracked:
     refuse(
         "git listed no tracked files, so the scan for a second spelling would pass on "
