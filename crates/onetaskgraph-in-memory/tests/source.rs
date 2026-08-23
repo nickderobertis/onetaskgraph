@@ -688,3 +688,99 @@ fn a_zero_page_ceiling_is_refused_where_the_configuration_is_read() {
     ));
     assert_eq!(source.capabilities().max_page_size, 1);
 }
+
+/// The fixture, broken one way, as a `build` refusal message.
+///
+/// Every case below goes through the real factory rather than calling `validate`
+/// directly: a user's incoherent configuration arrives as a `serde_json::Value` at
+/// `SourcePlugin::build`, and that is the boundary that has to refuse it.
+fn refusal(mutate: impl FnOnce(&mut serde_json::Value)) -> String {
+    let mut config = common::work();
+    mutate(&mut config);
+    let name = SourceName::new("notes").expect("a valid name");
+    let Err(SourceError::Config { message }) = Plugin.build(&name, &config, &NoSecrets) else {
+        panic!("an incoherent configuration must be refused");
+    };
+    assert!(message.starts_with("source notes:"), "{message}");
+    message
+}
+
+#[test]
+fn the_factory_refuses_a_duplicate_id_because_it_makes_a_lookup_arbitrary() {
+    // Two tasks under one id: `get_task` would return whichever came first, which is
+    // not an error anywhere the caller can see it.
+    let message = refusal(|config| {
+        let first = config["tasks"][0].clone();
+        config["tasks"].as_array_mut().expect("a list").push(first);
+    });
+    assert!(
+        message.contains("two or more tasks share the id T-1"),
+        "{message}"
+    );
+
+    let message = refusal(|config| {
+        let first = config["projects"][0].clone();
+        config["projects"]
+            .as_array_mut()
+            .expect("a list")
+            .push(first);
+    });
+    assert!(
+        message.contains("two or more projects share the id P-1"),
+        "{message}"
+    );
+
+    let message = refusal(|config| {
+        let first = config["labels"][0].clone();
+        config["labels"].as_array_mut().expect("a list").push(first);
+    });
+    assert!(
+        message.contains("two or more labels share the id l-1"),
+        "{message}"
+    );
+}
+
+#[test]
+fn the_factory_refuses_a_task_filed_under_a_project_it_does_not_hold() {
+    let message = refusal(|config| config["tasks"][0]["project"] = json!("P-404"));
+    assert!(
+        message.contains("task T-1 is filed under project P-404, which this source does not hold"),
+        "{message}"
+    );
+}
+
+#[test]
+fn the_factory_refuses_a_dependency_edge_pointing_at_nothing() {
+    // A dangling edge does not fail a dependency walk — it makes one come back short,
+    // which reads exactly like an item that genuinely has no dependencies.
+    let message = refusal(|config| config["task_dependencies"][0]["to"] = json!("T-404"));
+    assert!(
+        message.contains("a task dependency edge's `to` names T-404"),
+        "{message}"
+    );
+
+    let message = refusal(|config| config["project_dependencies"][0]["from"] = json!("P-404"));
+    assert!(
+        message.contains("a project dependency edge's `from` names P-404"),
+        "{message}"
+    );
+}
+
+#[test]
+fn the_factory_reports_every_problem_at_once_rather_than_one_per_round_trip() {
+    let message = refusal(|config| {
+        config["tasks"][0]["project"] = json!("P-404");
+        config["task_dependencies"][0]["to"] = json!("T-404");
+    });
+    assert!(message.contains("P-404"), "{message}");
+    assert!(message.contains("T-404"), "{message}");
+}
+
+#[test]
+fn the_shared_fixture_is_a_coherent_graph() {
+    // The control: every case above breaks this fixture one way, so a fixture that was
+    // already incoherent would make all of them pass for the wrong reason.
+    let config: InMemoryConfig =
+        serde_json::from_value(common::work()).expect("the fixture parses");
+    assert_eq!(config.validate(), Ok(()));
+}

@@ -36,6 +36,7 @@ pub struct Health {
     // `Health`'s shape is approved contract text that `TaskSource::health` returns, so an
     // enum here would change the serialized form and the trait six undispatched nodes
     // implement. That is the contract owner's call, not this crate's.
+    // llmlint: ignore[boundary_inputs_validated] making "unreachable with no reason given" unrepresentable means an enum here, which changes the serialized form and the trait six undispatched nodes implement. Deferred to the contract's owner — AGENTS.md, "Open contract question — `Health`".
     pub reachable: bool,
     /// What the source said, when it said anything useful.
     pub detail: Option<String>,

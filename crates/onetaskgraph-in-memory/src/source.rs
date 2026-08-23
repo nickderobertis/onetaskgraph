@@ -36,6 +36,11 @@ impl SourcePlugin for Plugin {
             serde_json::from_value(config.clone()).map_err(|error| SourceError::Config {
                 message: format!("source {name}: {error}"),
             })?;
+        // Shape is all serde checked. Refuse a graph this source could not serve
+        // coherently before handing back something that would answer wrongly instead.
+        config.validate().map_err(|message| SourceError::Config {
+            message: format!("source {name}: {message}"),
+        })?;
         Ok(Box::new(InMemorySource::new(config)))
     }
 }

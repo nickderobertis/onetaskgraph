@@ -1,10 +1,11 @@
 //! The configuration block this plugin builds a source from.
 
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, DependencySupport, Label, Project, Support, Task,
+    Capabilities, DependencyEdge, DependencySupport, Label, NativeId, Project, Support, Task,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, de::Error as _};
+use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 
 /// Everything an in-memory source serves, plus what it claims it can do.
@@ -24,6 +25,104 @@ pub struct InMemoryConfig {
     pub task_dependencies: Vec<DependencyEdge>,
     /// Forward project dependency edges: `from` depends on `to`.
     pub project_dependencies: Vec<DependencyEdge>,
+}
+
+impl InMemoryConfig {
+    /// Refuse a configuration this source could not serve coherently.
+    ///
+    /// [`build`](crate::Plugin::build) receives a `serde_json::Value` straight out of a
+    /// user's configuration file, and shape is all serde can check. It accepts two tasks
+    /// sharing an id, a task filed under a project that does not exist, and a dependency
+    /// edge pointing at nothing — each of which is a query that later answers *wrongly*
+    /// rather than loudly: a duplicate id makes `get_task` return whichever copy comes
+    /// first, and a dangling edge makes a dependency walk come back short. Neither looks
+    /// like an error at the call site, which is what makes them worth refusing here.
+    ///
+    /// [`SourceError::Config`](onetaskgraph_plugin_api::SourceError::Config) is the
+    /// contract's variant for exactly this, so the refusal reaches the user while they
+    /// are still looking at the file that caused it.
+    ///
+    /// Every problem is collected rather than just the first: someone correcting a
+    /// configuration wants the whole list, not one round trip per typo.
+    ///
+    /// # Errors
+    ///
+    /// Returns every incoherence found, joined into one message.
+    pub fn validate(&self) -> Result<(), String> {
+        let mut problems = Vec::new();
+
+        for (noun, duplicates) in [
+            (
+                "tasks",
+                duplicate_ids(self.tasks.iter().map(|task| &task.id)),
+            ),
+            (
+                "projects",
+                duplicate_ids(self.projects.iter().map(|project| &project.id)),
+            ),
+            (
+                "labels",
+                duplicate_ids(self.labels.iter().map(|label| &label.id)),
+            ),
+        ] {
+            for id in duplicates {
+                problems.push(format!(
+                    "two or more {noun} share the id {id}; ids address one item each, so a \
+                     duplicate makes which one a lookup returns arbitrary"
+                ));
+            }
+        }
+
+        let task_ids: BTreeSet<&NativeId> = self.tasks.iter().map(|task| &task.id).collect();
+        let project_ids: BTreeSet<&NativeId> =
+            self.projects.iter().map(|project| &project.id).collect();
+
+        for task in &self.tasks {
+            if let Some(project) = &task.project
+                && !project_ids.contains(project)
+            {
+                problems.push(format!(
+                    "task {} is filed under project {project}, which this source does not hold",
+                    task.id
+                ));
+            }
+        }
+
+        for (noun, edges, known) in [
+            ("task", &self.task_dependencies, &task_ids),
+            ("project", &self.project_dependencies, &project_ids),
+        ] {
+            for edge in edges {
+                for (end, id) in [("from", &edge.from), ("to", &edge.to)] {
+                    if !known.contains(id) {
+                        problems.push(format!(
+                            "a {noun} dependency edge's `{end}` names {id}, which this source \
+                             does not hold"
+                        ));
+                    }
+                }
+            }
+        }
+
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(problems.join("; "))
+        }
+    }
+}
+
+/// Every id that appears more than once, in a stable order so a message does not reshuffle
+/// between runs.
+fn duplicate_ids<'a>(ids: impl Iterator<Item = &'a NativeId>) -> Vec<&'a NativeId> {
+    let mut seen = BTreeSet::new();
+    let mut repeated = BTreeSet::new();
+    for id in ids {
+        if !seen.insert(id) {
+            repeated.insert(id);
+        }
+    }
+    repeated.into_iter().collect()
 }
 
 /// The declared capability block, mirroring [`Capabilities`] field for field.

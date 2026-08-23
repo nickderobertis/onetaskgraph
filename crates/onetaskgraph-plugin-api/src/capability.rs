@@ -26,6 +26,7 @@ pub struct Capabilities {
     /// The largest page the source will serve. At least 1 — a source that serves no rows
     /// cannot be paged, and every implementation rejects zero where its config is read.
     // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen by the plugin contract every source is written against; only the contract's owner may change it, and tightening it is post-build follow-up.
+    // llmlint: ignore[boundary_inputs_validated] the boundary that reads a user's configuration does reject zero — `CapabilityConfig::max_page_size` (onetaskgraph-in-memory/src/config.rs) is a `NonZeroU32` and names the setting when it refuses. What stays a plain `u32` is this frozen contract field, which only the contract's owner may narrow — AGENTS.md, "The plugin contract".
     pub max_page_size: u32,
 }
 
