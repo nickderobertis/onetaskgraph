@@ -81,7 +81,13 @@ select_after_editing() {
   fi
   # tr: the caller compares these names with `grep -qx`, which a trailing CR defeats.
   if ! printf '%s' "$raw" \
-    | python3 -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin))))' \
+    | python3 -c '
+import json, sys
+projects = json.load(sys.stdin)
+if not isinstance(projects, list) or not all(isinstance(n, str) for n in projects):
+    raise SystemExit("not a JSON array of project names")
+print("\n".join(sorted(projects)))
+' \
     | tr -d '\r'; then
     echo "check-affected-selection: 'nx show projects --affected --json' answered with something other than a JSON array of project names:" >&2
     printf '%s\n' "$raw" >&2
