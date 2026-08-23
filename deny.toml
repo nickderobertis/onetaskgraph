@@ -1,0 +1,68 @@
+# Supply-chain gate. Runs Linux-only as its own required `deny` job.
+#
+# Two of the rules below are not conventional hygiene — they are how two of this
+# repository's invariants are enforced mechanically rather than merely written down.
+# See AGENTS.md for both rules and for the other mechanisms beside these.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "CC0-1.0",
+  "MPL-2.0",
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+# --- INVARIANT: no work data is stored, cached, indexed or mirrored outside a plugin ---
+#
+# The engine compensates for a missing capability transiently: it holds at most one source
+# page plus the caller's page and writes nothing down. The moment a change reaches for an
+# embedded store, an index or a cache, that stops being true — so the reach itself fails a
+# required check rather than the behaviour failing a test somebody has to think to write.
+# This list is mechanism 1 of 3; the other two are a filesystem sentinel journey and an
+# in-process re-ask assertion. AGENTS.md names all three.
+deny = [
+  { crate = "sled", reason = "an embedded store would persist work data outside a plugin" },
+  { crate = "rusqlite", reason = "an embedded store would persist work data outside a plugin" },
+  { crate = "libsqlite3-sys", reason = "an embedded store would persist work data outside a plugin" },
+  { crate = "redb", reason = "an embedded store would persist work data outside a plugin" },
+  { crate = "sqlx", reason = "a database client would persist work data outside a plugin" },
+  { crate = "tantivy", reason = "a search index would mirror work data outside a plugin" },
+  { crate = "cacache", reason = "an on-disk cache would persist work data outside a plugin" },
+  { crate = "moka", reason = "an in-memory cache would let a second query be answered without re-asking the source" },
+  { crate = "cached", reason = "an in-memory cache would let a second query be answered without re-asking the source" },
+  { crate = "lru", reason = "an in-memory cache would let a second query be answered without re-asking the source" },
+
+  # --- INVARIANT: no plugin crate depends on the engine ---
+  #
+  # The engine may depend on the contract and on every plugin; nothing may depend on the
+  # engine except the binary that runs it. With the trait inside the engine crate every
+  # plugin would depend on the engine, every engine change would mark every plugin
+  # affected, and affected selection would buy nothing for the six crates where it matters
+  # most. Naming `onetaskgraph` as the sole permitted wrapper makes a plugin that adds the
+  # engine to its [dependencies] or [dev-dependencies] fail this required check.
+  # This is mechanism 1 of 2; scripts/check-plugin-isolation.sh is the other, and it fails
+  # in seconds locally instead of minutes later here.
+  { crate = "onetaskgraph-core", wrappers = ["onetaskgraph"], reason = "only the binary may depend on the engine; a plugin crate never may" },
+]

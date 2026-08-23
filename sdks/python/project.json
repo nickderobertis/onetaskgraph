@@ -1,0 +1,76 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "sdk-python",
+  "projectType": "library",
+  "tags": [
+    "lang:python",
+    "layer:sdk"
+  ],
+  "//": "No implicitDependencies: the SDK is generated from the schema bundle the built binary emits, not compiled against a crate. The generator that creates that edge lands with the SDK.",
+  "implicitDependencies": [],
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv sync --frozen",
+        "cwd": "sdks/python"
+      },
+      "//": "Uncached: it reaches PyPI and writes a .venv outside the cacheable output set."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --frozen ruff format .",
+        "cwd": "sdks/python"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --frozen ruff format --check .",
+        "cwd": "sdks/python"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --frozen ruff check .",
+        "cwd": "sdks/python"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --frozen ty check",
+        "cwd": "sdks/python"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --frozen pytest",
+        "cwd": "sdks/python"
+      }
+    },
+    "coverage": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --frozen pytest --cov-fail-under=95",
+        "cwd": "sdks/python"
+      }
+    },
+    "test-live": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --frozen pytest tests -m live",
+        "cwd": "sdks/python"
+      },
+      "//": "Uncached: a live test reaches a third-party API and reads a credential from the environment, neither of which is an input in this tree."
+    }
+  }
+}

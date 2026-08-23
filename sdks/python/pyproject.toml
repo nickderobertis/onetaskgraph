@@ -1,0 +1,38 @@
+[project]
+name = "onetaskgraph-sdk"
+version = "0.1.0"
+description = "The Python SDK for onetaskgraph, generated from the binary's own JSON Schema bundle."
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT"
+authors = [{ name = "Nick DeRobertis" }]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/nickderobertis/onetaskgraph"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/onetaskgraph_sdk"]
+
+[dependency-groups]
+dev = ["pytest>=9.0", "pytest-cov>=8.0", "ruff>=0.16.4", "ty>=0.0.74"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pytest.ini_options]
+addopts = "--cov=onetaskgraph_sdk --cov-report=term-missing --cov-fail-under=95"
+testpaths = ["tests"]
+
+[tool.ty.environment]
+python-version = "3.14"

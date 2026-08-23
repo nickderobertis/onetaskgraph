@@ -1,0 +1,71 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "sdk-typescript",
+  "projectType": "library",
+  "tags": [
+    "lang:typescript",
+    "layer:sdk"
+  ],
+  "//": "No implicitDependencies: the SDK is generated from the schema bundle the built binary emits, not compiled against a crate. The generator that creates that edge lands with the SDK.",
+  "implicitDependencies": [],
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun install --frozen-lockfile"
+      },
+      "//": "Uncached: it reaches the npm registry and writes node_modules, which no input in this tree describes."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format --write sdks/typescript"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format sdks/typescript"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome lint sdks/typescript"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run tsc --noEmit -p sdks/typescript/tsconfig.json"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun test",
+        "cwd": "sdks/typescript"
+      }
+    },
+    "coverage": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun test --coverage --coverage-threshold=0.95",
+        "cwd": "sdks/typescript"
+      }
+    },
+    "test-live": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun test tests/live",
+        "cwd": "sdks/typescript"
+      },
+      "//": "Uncached: a live test reaches a third-party API and reads a credential from the environment, neither of which is an input in this tree."
+    }
+  }
+}
