@@ -119,6 +119,12 @@ else:
 # One product version spans three ecosystems and no manifest can derive it from another,
 # so they are reconciled here. The release tool writes all three through one script; this
 # is what catches a hand-edited one of N before it ships as a mismatched release.
+#
+# The Python SDK's `__version__` is a fourth copy and is reconciled with them. It is the
+# value the generated surface reports, so a module constant left behind by a release is a
+# package that misreports its own version — and it belongs here, with the other three,
+# rather than in a test of that package: this is where a version disagreement is caught,
+# and one place that knows about all four beats two places that each know about some.
 versions = {
     "Cargo.toml": re.search(
         r'^\[workspace\.package\]\nversion\s*=\s*"([^"]+)"',
@@ -127,6 +133,11 @@ versions = {
     ),
     "sdks/python/pyproject.toml": re.search(
         r'^version\s*=\s*"([^"]+)"', Path("sdks/python/pyproject.toml").read_text(), re.M
+    ),
+    "sdks/python/src/onetaskgraph_sdk/__init__.py": re.search(
+        r'^__version__ = "([^"]+)"',
+        Path("sdks/python/src/onetaskgraph_sdk/__init__.py").read_text(),
+        re.M,
     ),
     "sdks/typescript/package.json": None,
 }
@@ -144,8 +155,8 @@ for path, match in versions.items():
 if len(set(declared.values())) > 1:
     listed = ", ".join(f"{path} = {value}" for path, value in sorted(declared.items()))
     problems.append(
-        "the three published distributions declare different versions "
-        f"({listed}); one product version spans all three and the release tool writes "
+        "the published distributions and the Python SDK's __version__ disagree "
+        f"({listed}); one product version spans them all and the release tool writes "
         "them together, so a mismatch here ships as a broken release"
     )
 

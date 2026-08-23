@@ -1,21 +1,13 @@
-"""The one contract this package carries today: its version is stated once."""
+"""The one contract this package carries today: its version is stated once.
 
-import tomllib
-from pathlib import Path
+That `__version__` agrees with `pyproject.toml` — and with the Cargo workspace and the
+TypeScript package, which it must, since one product version spans all four — is
+reconciled by `scripts/check-workspace-config.sh` in the deterministic gate, where the
+other three copies are already checked against each other. Asserting it here as well
+would be a second place that knows about only two of the four.
+"""
 
 import onetaskgraph_sdk
-
-
-def test_the_module_version_matches_the_published_package_version() -> None:
-    """A generated surface pinned to a version the wheel disagrees with is a bug.
-
-    Reading `pyproject.toml` from the tree rather than the installed metadata is
-    deliberate: it catches a hand-edited module constant that was never released.
-    """
-    manifest = Path(__file__).resolve().parents[1] / "pyproject.toml"
-    declared = tomllib.loads(manifest.read_text())["project"]["version"]
-
-    assert onetaskgraph_sdk.__version__ == declared
 
 
 def test_the_version_is_a_plain_semantic_version() -> None:

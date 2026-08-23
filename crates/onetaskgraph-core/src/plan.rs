@@ -40,6 +40,21 @@ pub struct SourcePlan {
     // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this restates at a new site the justification already recorded at `Capabilities.max_page_size` (capability.rs) and `PageRequest.limit` (query.rs): `kind: String` is approved contract text. It is also the one field that could not be narrowed even if it were free — a plan must carry the kind a subprocess-hosted plugin reports, an open vocabulary no compile-time type can enumerate.
     pub kind: String,
     /// Predicates the source applied itself.
+    ///
+    /// The four predicate vectors below partition one set of outcomes, and nothing in
+    /// the type says so: a `Predicate` could appear in two of them at once, or in none.
+    /// One `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that
+    /// unrepresentable. See the directive below for why it stays as it is.
+    // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this
+    // restates at a new site the justification already recorded at
+    // `Capabilities.max_page_size` (capability.rs) and `PageRequest.limit` (query.rs):
+    // `SourcePlan`'s four-vector shape is approved contract text, reproduced field for
+    // field, and `--json` publishes it as the wire format both SDKs are generated from.
+    // Collapsing the four vectors into one outcome-tagged collection is a change to that
+    // contract, which is the contract owner's call and is expressly forbidden to any node
+    // of this plan while other nodes are being written against this text. The finding is
+    // correct and is surfaced as a contract defect rather than dismissed: the contract can
+    // represent a plan its own rules forbid.
     pub pushed_down: Vec<Predicate>,
     /// Predicates the engine applied in memory over a wider result set.
     pub applied_locally: Vec<Predicate>,
