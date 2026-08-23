@@ -553,7 +553,7 @@ fn the_normalised_vocabularies_serialise_as_kebab_case() {
 }
 
 #[test]
-fn an_edge_and_a_dependency_query_round_trip() {
+fn a_dependency_edge_round_trips_through_json() {
     let edge = DependencyEdge {
         from: NativeId::from("A"),
         to: NativeId::from("B"),
