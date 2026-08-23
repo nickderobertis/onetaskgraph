@@ -13,5 +13,6 @@ yet should get that plugin's own message, not "unknown plugin".
   the crate the number it is there to earn.
 - A fixture shared by one crate's tests goes in `tests/common/mod.rs`, which cargo does not
   build as a test target of its own.
-- `tests/live.rs` exists in every crate, empty ones included, because `test-live` is a
-  uniform target.
+- Do not delete a `tests/live.rs` for having nothing in it. Each crate's `test-live` runs
+  `cargo test --test live`, which fails on a missing target rather than passing vacuously,
+  so an empty file is load-bearing until that crate has live tests of its own.
