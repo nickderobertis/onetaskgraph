@@ -80,8 +80,8 @@ pub fn resolve(
                         error.to_string(),
                         format!(
                             "correct that source's configuration, or remove it — \
-                         `onetaskgraph config show` reports every setting under \
-                         `sources.{name}` and the layer it came from."
+                             `onetaskgraph config show` reports every setting under \
+                             `sources.{name}` and the layer it came from."
                         ),
                     )
                 })?;
@@ -161,13 +161,13 @@ fn check_block(
     // lifted into the key.
     let pointer = problem.instance_path().to_string().replace('/', ".");
     let unexpected = match problem.kind() {
-        ValidationErrorKind::AdditionalProperties { unexpected } => unexpected.join(", ."),
-        _ => String::new(),
+        ValidationErrorKind::AdditionalProperties { unexpected } => unexpected.first(),
+        _ => None,
     };
-    let key = format!(
-        "sources.{name}.config{pointer}{}{unexpected}",
-        if unexpected.is_empty() { "" } else { "." }
-    );
+    let key = match unexpected {
+        Some(field) => format!("sources.{name}.config{pointer}.{field}"),
+        None => format!("sources.{name}.config{pointer}"),
+    };
     Err(ConfigError::setting(
         key,
         problem.to_string(),
