@@ -572,6 +572,36 @@ fn each_worked_environment_example_sets_the_setting_it_claims_to_set() {
     );
 }
 
+/// The worked example above is written against a `root`, which belongs to `local-md` —
+/// a plugin whose configuration block is still empty, so nothing here can accept that
+/// field yet. What the example claims is not that `root` is valid but *where the variable
+/// lands*, so that is what this asserts: the value reaches `sources.work.config.root` and
+/// is refused under that name, rather than being dropped or landing on another setting.
+#[test]
+fn the_worked_example_for_a_named_sources_own_field_reaches_that_field() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(ONE_SOURCE);
+
+    let output = sandbox
+        .command()
+        .env("ONETASKGRAPH_SOURCES__WORK__CONFIG__ROOT", "/tmp/tasks")
+        .args(["config", "show"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert!(
+        stdout(&output).is_empty(),
+        "a refusal writes nothing to stdout"
+    );
+    let message = stderr(&output);
+    assert!(
+        message.contains("sources.work.config.root"),
+        "the variable reaches the field it names: {message}"
+    );
+}
+
 /// A value distinctive enough that finding it anywhere is unambiguous.
 const PLANTED: &str = "lin_api_PLANTED-CANARY-8f21c0";
 
