@@ -1,0 +1,77 @@
+# The live lane: the two hosted plugins, proven against the real APIs.
+#
+# Fixtures prove the shape of what a plugin does; only the real API proves it still
+# answers the way the plugin assumes. This runs daily, on demand, and on every pull
+# request so a plugin change does not wait a day for its first real-API signal.
+#
+# DELIBERATELY NOT A REQUIRED CHECK, and that is a decision rather than an oversight: a
+# required check a third party can turn red is a check that stops being trusted, and a
+# Linear or GitHub outage must not block a merge that has nothing to do with either. The
+# six required checks are `check` on the three platforms, `deny`, `llmlint` and
+# `pr-title`. Running this on pull_request as well as on the cron costs nothing when it
+# fails.
+#
+# A fork pull request receives no secrets. Both jobs skip cleanly there rather than fail,
+# and that is a property of the tests themselves — the same behaviour a contributor
+# without keys needs locally — not a condition in this workflow.
+
+name: live
+
+on:
+  schedule:
+    # 07:00 UTC daily. A nightly signal on the real APIs, independent of any change.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  live-linear:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v3
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Linear, against the real API
+        env:
+          # Passed straight through from the repository secret of the same name. There is
+          # one name per credential everywhere — the secret, the local secrets file, a
+          # configuration document's api_key_env default, and the variable the product
+          # reads — so nothing here translates anything.
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: ./scripts/nx.sh run onetaskgraph-linear:test-live
+
+  live-github-projects:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v3
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+      - uses: Swatinem/rust-cache@v2
+
+      - name: GitHub Projects, against the real API
+        env:
+          # GH_PROJECTS_TOKEN, not GITHUB_PROJECTS_TOKEN: GitHub Actions refuses to create
+          # any secret whose name begins with GITHUB_, so the short name is the one that
+          # can exist in both CI and the local secrets file — and a single name is
+          # preferred over a translation. Do not "correct" this into a break.
+          GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
+        run: ./scripts/nx.sh run onetaskgraph-github-projects:test-live

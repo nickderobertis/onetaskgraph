@@ -37,10 +37,14 @@ if not workflow.exists():
     problems.append(".github/workflows/live.yml: is missing, so nothing runs the live lane")
 else:
     text = workflow.read_text()
+    # Scan the workflow's instructions, not its prose. The comments deliberately name the
+    # wrong spelling in order to explain why the right one is right, and a check that
+    # cannot tell those apart would make the explanation impossible to write down.
+    code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
     for job, secret in CREDENTIALS.items():
-        if f"{job}:" not in text:
+        if f"{job}:" not in code:
             problems.append(f"{workflow}: has no {job} job")
-        if f"secrets.{secret}" not in text:
+        if f"secrets.{secret}" not in code:
             problems.append(
                 f"{workflow}: never passes {secret}. There is one name per credential "
                 "everywhere and this workflow translates nothing."
@@ -49,14 +53,19 @@ else:
         other = next(v for k, v in CREDENTIALS.items() if k != job)
         # Each job gets exactly one credential: a job that can see both could pass while
         # exercising the wrong one.
-        if f"{secret}: ${{{{ secrets.{other} }}}}" in text:
+        if f"{secret}: ${{{{ secrets.{other} }}}}" in code:
             problems.append(f"{workflow}: {job} is handed the wrong credential")
-    if "GITHUB_PROJECTS_TOKEN" in text:
-        problems.append(
-            f"{workflow}: names GITHUB_PROJECTS_TOKEN. GitHub Actions refuses any secret "
-            "whose name begins with GITHUB_, which is why the short name GH_PROJECTS_TOKEN "
-            "is the one that exists in both CI and the local secrets file."
-        )
+    # The long name USED as an env key or a secret reference is the break; the workflow
+    # also names it in prose, explaining why the short one is correct, and that comment
+    # is the reason a reader does not "fix" it.
+    for wrong in ("GITHUB_PROJECTS_TOKEN:", "secrets.GITHUB_PROJECTS_TOKEN"):
+        if wrong in code:
+            problems.append(
+                f"{workflow}: uses GITHUB_PROJECTS_TOKEN. GitHub Actions refuses to create "
+                "any secret whose name begins with GITHUB_, which is why the short name "
+                "GH_PROJECTS_TOKEN is the one that can exist in both CI and the local "
+                "secrets file."
+            )
 
 if problems:
     print("check-live-lane: the live lane's shape is broken.", file=sys.stderr)
