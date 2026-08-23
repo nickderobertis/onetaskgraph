@@ -11,9 +11,10 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use clap::Parser;
+use onetaskgraph_core::config::Layer;
 use onetaskgraph_core::{Environment, Loaded, OutputFormat};
 
-use crate::cli::{Cli, Command, ConfigCommand, Overrides};
+use crate::cli::{Cli, Command, ConfigCommand};
 
 /// Something went wrong while doing what was asked. Distinct from clap's own exit code
 /// for a malformed invocation, so a caller can tell "you typed it wrong" from "it broke".
@@ -31,11 +32,19 @@ fn main() -> ExitCode {
 }
 
 /// Run one command, returning a message the caller prints to stderr on failure.
+///
+/// The configuration flags are global — they parse on every verb, because every verb
+/// the engine adds will read them — so the layer they make is built *before* the verb
+/// is dispatched. A malformed `--set` is then refused wherever it was written rather
+/// than only on the verbs that happen to read the configuration today, which is the
+/// difference between a flag that is checked at the boundary and one that is checked
+/// wherever somebody remembered to.
 fn run(cli: &Cli) -> Result<(), String> {
+    let flags = cli.overrides.layer()?;
     match &cli.command {
         Command::Schema => emit_schema(&mut io::stdout().lock()),
         Command::Config { command } => match command {
-            ConfigCommand::Show => show_config(&cli.overrides, &mut io::stdout().lock()),
+            ConfigCommand::Show => show_config(&flags, &mut io::stdout().lock()),
         },
     }
 }
@@ -49,8 +58,8 @@ fn emit_schema(out: &mut impl Write) -> Result<(), String> {
 }
 
 /// Write the effective configuration to `out`, in the format it asks for.
-fn show_config(overrides: &Overrides, out: &mut impl Write) -> Result<(), String> {
-    let loaded = load(overrides)?;
+fn show_config(flags: &Layer, out: &mut impl Write) -> Result<(), String> {
+    let loaded = load(flags)?;
     let rendered = match loaded.config.output {
         OutputFormat::Text => loaded.effective.render_text(),
         OutputFormat::Json => serde_json::to_string_pretty(&loaded.effective)
@@ -60,19 +69,15 @@ fn show_config(overrides: &Overrides, out: &mut impl Write) -> Result<(), String
 }
 
 /// Load the configuration: documents, then the environment, then these flags.
-fn load(overrides: &Overrides) -> Result<Loaded, String> {
+fn load(flags: &Layer) -> Result<Loaded, String> {
     let working_directory = std::env::current_dir().map_err(|error| {
         format!(
             "could not read the working directory: {error}\n\
              next: run this from a directory that still exists."
         )
     })?;
-    onetaskgraph_core::config::load(
-        &working_directory,
-        &Environment::from_process(),
-        &overrides.layer()?,
-    )
-    .map_err(|error| error.to_string())
+    onetaskgraph_core::config::load(&working_directory, &Environment::from_process(), flags)
+        .map_err(|error| error.to_string())
 }
 
 /// Write `rendered` and a newline, reporting a failed write rather than dying at drop.

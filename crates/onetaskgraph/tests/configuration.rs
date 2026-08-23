@@ -385,6 +385,78 @@ fn asking_for_a_format_and_the_json_shorthand_at_once_is_refused_as_a_bad_invoca
 const SOURCE_FIELD: &str = "sources.work.config.capabilities.max_page_size";
 
 #[test]
+fn a_malformed_configuration_flag_is_refused_on_a_verb_that_reads_no_configuration() {
+    let sandbox = Sandbox::new();
+
+    // `schema` reads no configuration, but the flags are global and parse on it, so a
+    // flag written there has to be refused rather than accepted and dropped.
+    let output = sandbox
+        .command()
+        .args(["schema", "--set", "page_size"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert!(
+        stderr(&output).contains("--set page_size: that is not an assignment"),
+        "the refusal names the flag: {}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).is_empty(),
+        "nothing is emitted for an invocation that was refused"
+    );
+}
+
+#[test]
+fn a_page_size_of_zero_is_refused_wherever_it_is_written() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(ONE_SOURCE);
+
+    for verb in [["schema"], ["config"]] {
+        let mut command = sandbox.command();
+        command.args(verb);
+        if verb == ["config"] {
+            command.arg("show");
+        }
+        let output = command
+            .args(["--page-size", "0"])
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+
+        assert!(
+            stderr(&output).contains("--page-size"),
+            "`onetaskgraph {} --page-size 0` names the flag it refused: {}",
+            verb[0],
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn a_well_formed_configuration_flag_leaves_a_verb_that_reads_no_configuration_alone() {
+    let sandbox = Sandbox::new();
+
+    let output = sandbox
+        .command()
+        .args(["schema", "--set", "page_size=10", "--page-size", "7"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let bundle: Value =
+        serde_json::from_str(&stdout(&output)).expect("the schema bundle is still JSON");
+    assert!(
+        bundle["roots"]["EffectiveConfig"].is_object(),
+        "a flag this verb does not read does not change what it emits"
+    );
+}
+
+#[test]
 fn a_named_sources_own_field_is_set_by_the_file() {
     let sandbox = Sandbox::new();
     let document = sandbox.project_document(ONE_SOURCE);

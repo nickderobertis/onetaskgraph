@@ -63,7 +63,16 @@ pub struct Overrides {
     pub set: Vec<String>,
 
     /// How many items one page holds.
-    #[arg(long, value_name = "N", global = true)]
+    ///
+    /// Refused at zero here rather than at load: this flag parses on every verb, so a
+    /// value only the configuration loader would have caught is one the verbs that do
+    /// not load a configuration would accept in silence.
+    #[arg(
+        long,
+        value_name = "N",
+        global = true,
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
     pub page_size: Option<u32>,
 
     /// Which sources answer when a command names none.
