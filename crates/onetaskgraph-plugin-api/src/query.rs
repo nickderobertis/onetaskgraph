@@ -2,7 +2,7 @@
 //! in one answer.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 use crate::{NativeId, StatusCategory};
 
@@ -93,8 +93,27 @@ pub enum ProjectFilter {
 pub struct PageRequest {
     /// Where to resume, or `None` to start at the beginning.
     pub cursor: Option<Cursor>,
-    /// The most items to return. A source may return fewer, never more.
+    // llmlint: ignore[invalid_states_unrepresentable] `PageRequest { cursor, limit: u32 }` is fixed by the frozen cross-node
+    // contract — it appears byte-identically in the task text of every node of this plan,
+    // six of which have not dispatched yet and will be written against `u32`, so tightening
+    // it here would silently desynchronise this repository from every plugin that follows.
+    // Only the contract's owner may amend it; tightening is tracked as post-build follow-up.
+    // The real hole — a requested zero — is rejected where a request is read, not coerced.
+    /// The most items to return, at least 1. A source may return fewer, never more.
+    #[serde(deserialize_with = "non_zero_limit")]
     pub limit: u32,
+}
+
+/// Reject a zero page size where a request is read, so an ask for no rows never reaches a
+/// source as if it were an ask for one.
+fn non_zero_limit<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let value = u32::deserialize(deserializer)?;
+    if value == 0 {
+        return Err(D::Error::custom(
+            "limit must be at least 1; a page of no rows is not a page",
+        ));
+    }
+    Ok(value)
 }
 
 /// One page of results, and where to pick up.

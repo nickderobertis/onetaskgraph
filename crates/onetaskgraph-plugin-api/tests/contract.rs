@@ -665,6 +665,22 @@ fn a_page_carries_a_cursor_only_while_the_walk_continues() {
 }
 
 #[test]
+fn a_page_request_for_no_rows_is_refused_where_the_request_is_read() {
+    // A page of no rows is not a page. Coercing zero to one would turn a caller's bug
+    // into a walk that never advances, so it is refused at the boundary instead.
+    let error = serde_json::from_str::<PageRequest>(r#"{"cursor":null,"limit":0}"#)
+        .expect_err("a zero limit is not a page size");
+    assert!(
+        error.to_string().contains("limit must be at least 1"),
+        "{error}"
+    );
+
+    let smallest: PageRequest =
+        serde_json::from_str(r#"{"cursor":null,"limit":1}"#).expect("one row is a page");
+    assert_eq!(smallest.limit, 1);
+}
+
+#[test]
 fn health_round_trips_in_both_shapes() {
     for health in [
         Health {

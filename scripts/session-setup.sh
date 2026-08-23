@@ -23,13 +23,11 @@
 # llmlint: ignore-file[tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer (see header): every step logs and continues rather than blocking startup, so a flaky install can't abort the hook; and `just` is installed from PyPI (`uv tool install rust-just`) whose wheels ship with Trusted Publishing + PEP 740 attestations, so no unvalidated external input is executed.
 set -uo pipefail
 
-# The `just` floor is stated once, in `.tool-versions`, and read from there — a version
-# restated in a second file is a version that drifts, and this pair already had. `rust-just`
-# is the PyPI package that ships the `just` binary.
+# The `just` floor comes from `.tool-versions` and is not restated here. `rust-just` is
+# the PyPI package that ships the `just` binary.
 readonly BIN_DIR="$HOME/.local/bin"
-JUST_MIN="$(sed -n 's/^just[[:space:]]\{1,\}\([0-9][0-9.]*\)$/\1/p' \
+readonly JUST_MIN="$(sed -n 's/^just[[:space:]]\{1,\}\([0-9][0-9.]*\)$/\1/p' \
   "$(dirname "$0")/../.tool-versions" 2>/dev/null || true)"
-readonly JUST_MIN="${JUST_MIN:-1.51.0}"
 # Capture the inherited PATH before we prepend BIN_DIR, so persist_session_env can
 # tell whether BIN_DIR was already resolvable and only override PATH when it isn't.
 readonly ORIG_PATH="${PATH}"
@@ -48,6 +46,10 @@ export PATH="${BIN_DIR}:${PATH}"
 # Install `just` via uv unless it already resolves. Swap this for your toolchain's
 # installer if the repo has no uv (e.g. `npm i -g rust-just`, a release download).
 ensure_just() {
+  if [ -z "$JUST_MIN" ]; then
+    log "could not read the just floor from .tool-versions; not guessing one"
+    return 0
+  fi
   if command -v just >/dev/null 2>&1; then
     log "just present ($(just --version 2>/dev/null || echo unknown))"
     return 0

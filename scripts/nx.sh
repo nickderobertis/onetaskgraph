@@ -26,18 +26,8 @@ if [ ! -x "node_modules/.bin/nx" ]; then
   fi
 fi
 
-# Nx's default output narrates every task that succeeded. `dynamic-legacy` keeps only
-# minimal logs and always shows errors, which is what a reader wants — but it needs a
-# terminal, and in CI the full log IS the artefact. So it is chosen when something is
-# watching and left alone otherwise. An explicit --outputStyle from the caller wins.
-if [ -t 1 ] && [ -z "${CI:-}" ] && [[ " $* " != *" --outputStyle"* ]]; then
-  exec node_modules/.bin/nx "$@" --outputStyle=dynamic-legacy
-fi
-
-# Quiet on success. Nx's default narrates every task that succeeded, which is the bulk of
-# what a green `just check` prints and none of what a reader needs; `dynamic-legacy` keeps
-# minimal logs and always shows errors, so a failing task's own output still comes through
-# in full. A caller that passes its own --outputStyle wins.
+# `dynamic-legacy` keeps minimal logs and always shows errors, so a green run stops
+# narrating every task that passed while a failing task's output still comes through.
 case " $* " in
   *" --outputStyle"*) exec node_modules/.bin/nx "$@" ;;
   *) exec node_modules/.bin/nx "$@" --outputStyle=dynamic-legacy ;;

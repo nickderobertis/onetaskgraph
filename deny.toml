@@ -31,8 +31,17 @@ unknown-registry = "deny"
 unknown-git = "deny"
 
 [bans]
-multiple-versions = "warn"
+multiple-versions = "deny"
 wildcards = "deny"
+
+# One named exception, not a warning-only mode. Two proc-macro generations coexist in the
+# derive graph: schemars 1.2 is on syn 3 while serde/thiserror/clap are still on syn 2.
+# Nothing in this workspace chooses either, and both disappear when the older derives
+# migrate — until then the alternative is pinning schemars back, which costs more than the
+# duplicate. Revisit at the next dependency upgrade.
+skip = [
+  { crate = "syn:2", reason = "serde, thiserror, clap and async-trait derives have not moved to syn 3 yet; schemars 1.2 has" },
+]
 
 # The engine compensates for a missing capability transiently: it holds at most one source
 # page plus the caller's page and writes nothing down. The moment a change reaches for an

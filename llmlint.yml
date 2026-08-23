@@ -25,3 +25,11 @@ plugins:
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/languages/typescript.llmlint.yml@1"
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/ci.llmlint.yml@1"
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/monorepo.llmlint.yml@1"
+
+# Tuned in place with `override: true`, which inherits the imported rule and changes only
+# the field named. Every violation of this rule points at a concrete `any` or non-null
+# token, so a finding without a line is one a reader has to go hunting for.
+rules:
+  - name: no_unjustified_any_or_non_null
+    override: true
+    require_line_attribution: true

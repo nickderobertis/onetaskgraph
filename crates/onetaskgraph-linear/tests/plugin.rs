@@ -41,7 +41,14 @@ fn the_plugin_reports_its_kind_and_a_config_schema_the_registry_can_publish() {
     let plugin = onetaskgraph_linear::Plugin;
     assert_eq!(plugin.kind(), "linear");
     assert_eq!(plugin.kind(), onetaskgraph_linear::KIND);
-    // The schema is what `onetaskgraph schema` publishes for this plugin's
-    // `config:` block, so it has to be a real document even while empty.
-    assert!(plugin.config_schema().as_value().is_object());
+    // The schema is what `onetaskgraph schema` publishes for this plugin's `config:`
+    // block. Empty is not the same as permissive: a configuration written against a
+    // shape this plugin does not have yet must be refused at load, not ignored.
+    let schema = serde_json::to_value(plugin.config_schema()).expect("the schema renders");
+    assert_eq!(schema["type"], "object");
+    assert_eq!(
+        schema["additionalProperties"],
+        serde_json::Value::Bool(false),
+        "an unknown config field must be refused, not silently dropped: {schema}"
+    );
 }
