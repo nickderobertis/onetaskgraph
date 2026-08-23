@@ -469,10 +469,10 @@ fn a_host_that_says_where_nothing_lives_resolves_nothing_and_does_not_fail() {
 #[test]
 fn a_document_with_nothing_in_it_carries_the_built_in_values() {
     let config = Config::from_document(json!({})).expect("an empty document is a configuration");
-    assert_eq!(config.page_size.get(), 50);
-    assert_eq!(config.output, OutputFormat::Text);
-    assert!(config.sources.is_empty());
-    assert_eq!(config.default_sources, None);
+    assert_eq!(config.page_size().get(), 50);
+    assert_eq!(config.output(), OutputFormat::Text);
+    assert!(config.sources().is_empty());
+    assert_eq!(config.default_sources(), None);
     assert!(config.selected_sources().is_empty());
 }
 
@@ -748,9 +748,9 @@ fn loading_layers_the_documents_the_environment_and_the_flags_in_that_order() {
     )
     .expect("the stack loads");
 
-    assert_eq!(loaded.config.page_size.get(), 9, "the flag is on top");
+    assert_eq!(loaded.config.page_size().get(), 9, "the flag is on top");
     assert_eq!(
-        loaded.config.output,
+        loaded.config.output(),
         OutputFormat::Json,
         "a setting only the user-level document mentions still lands"
     );
@@ -848,7 +848,7 @@ fn a_host_with_no_configuration_home_still_loads() {
     )
     .expect("nothing configured is a configuration");
 
-    assert_eq!(loaded.config.page_size.get(), 50);
+    assert_eq!(loaded.config.page_size().get(), 50);
     assert!(
         loaded
             .effective
@@ -992,7 +992,7 @@ fn a_default_source_naming_nothing_configured_lists_the_ones_that_are() {
 fn default_sources_written_as_nothing_is_the_same_as_omitting_it() {
     let config = Config::from_document(json!({"default_sources": Value::Null}))
         .expect("nothing is not a bad value");
-    assert_eq!(config.default_sources, None);
+    assert_eq!(config.default_sources(), None);
 }
 
 #[test]

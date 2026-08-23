@@ -61,15 +61,28 @@ pub enum OutputFormat {
 /// plugin this build does not have cannot be represented here at all.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceConfig {
-    /// The plugin kind that builds it.
-    pub plugin: PluginKind,
+    plugin: PluginKind,
+    config: Value,
+}
+
+impl SourceConfig {
+    /// The plugin kind that builds this source.
+    #[must_use]
+    pub fn plugin(&self) -> PluginKind {
+        self.plugin
+    }
+
     /// The plugin's own block.
     ///
     /// Opaque here on purpose — a plugin's fields are the plugin's, and typing them in
     /// the engine would put every plugin's shape in the engine. What holds instead is
     /// that [`Config::from_document`] checks each block against the schema its own
-    /// plugin declares, so no `Config` carries a block that plugin would refuse.
-    pub config: Value,
+    /// plugin declares, and this field is not public, so no `SourceConfig` anybody can
+    /// reach carries a block that plugin would refuse.
+    #[must_use]
+    pub fn config(&self) -> &Value {
+        &self.config
+    }
 }
 
 /// One named source as a document spells it, before its plugin name is checked.
@@ -92,16 +105,18 @@ fn empty_block() -> Value {
 /// has to be checked against the pattern the environment mapping depends on, and
 /// `default_sources` has to name sources that exist, and both are worth a message
 /// that says which key is wrong rather than serde's own.
+///
+/// Its fields are read through the methods below rather than reached into, because
+/// "validated" is a claim about the whole value: a public `sources` would let a caller
+/// hold a `Config` whose `default_sources` names something it does not contain, and a
+/// public `SourceConfig` would let one hold a block its own plugin refuses. Neither
+/// state is representable while the only way in is [`Config::from_document`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
-    /// Which sources answer when a command names none. `None` means every one.
-    pub default_sources: Option<Vec<SourceName>>,
-    /// How many items a page holds.
-    pub page_size: NonZeroU32,
-    /// How output is rendered.
-    pub output: OutputFormat,
-    /// Every configured source, in name order.
-    pub sources: BTreeMap<SourceName, SourceConfig>,
+    default_sources: Option<Vec<SourceName>>,
+    page_size: NonZeroU32,
+    output: OutputFormat,
+    sources: BTreeMap<SourceName, SourceConfig>,
 }
 
 /// The document's own shape, before the checks serde cannot make.
@@ -224,6 +239,30 @@ impl Config {
         // otherwise be the first thing to notice it.
         crate::resolve::validate_sources(&config)?;
         Ok(config)
+    }
+
+    /// How many items a page holds.
+    #[must_use]
+    pub fn page_size(&self) -> NonZeroU32 {
+        self.page_size
+    }
+
+    /// How output is rendered.
+    #[must_use]
+    pub fn output(&self) -> OutputFormat {
+        self.output
+    }
+
+    /// Every configured source, in name order.
+    #[must_use]
+    pub fn sources(&self) -> &BTreeMap<SourceName, SourceConfig> {
+        &self.sources
+    }
+
+    /// Which sources answer when a command names none, or `None` for every one.
+    #[must_use]
+    pub fn default_sources(&self) -> Option<&[SourceName]> {
+        self.default_sources.as_deref()
     }
 
     /// The sources a command answers from when it names none, in a stable order.

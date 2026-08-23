@@ -390,22 +390,10 @@ fn a_malformed_configuration_flag_is_refused_on_a_verb_that_reads_no_configurati
 
     // `schema` reads no configuration, but the flags are global and parse on it, so a
     // flag written there has to be refused rather than accepted and dropped.
-    let output = sandbox
-        .command()
-        .args(["schema", "--set", "page_size"])
-        .assert()
-        .failure()
-        .get_output()
-        .clone();
-
+    let message = mistyped(&sandbox, &["schema", "--set", "page_size"]);
     assert!(
-        stderr(&output).contains("--set page_size: that is not an assignment"),
-        "the refusal names the flag: {}",
-        stderr(&output)
-    );
-    assert!(
-        stdout(&output).is_empty(),
-        "nothing is emitted for an invocation that was refused"
+        message.contains("--set page_size: that is not an assignment"),
+        "the refusal names the flag: {message}"
     );
 }
 
@@ -851,19 +839,44 @@ fn a_document_that_is_not_a_mapping_is_refused_rather_than_read_as_unset() {
 }
 
 #[test]
-fn a_set_argument_that_is_not_an_assignment_is_refused() {
+fn a_set_argument_that_is_not_an_assignment_is_refused_as_a_bad_invocation() {
     let sandbox = Sandbox::new();
 
-    let message = refusal(&sandbox, &["--set", "page_size"]);
+    let message = mistyped(&sandbox, &["config", "show", "--set", "page_size"]);
     assert!(message.contains("--set page_size"), "{message}");
 }
 
 #[test]
-fn a_set_argument_addressing_no_setting_is_refused() {
+fn a_set_argument_addressing_no_setting_is_refused_as_a_bad_invocation() {
     let sandbox = Sandbox::new();
 
-    let message = refusal(&sandbox, &["--set", "sources..plugin=in-memory"]);
+    let message = mistyped(
+        &sandbox,
+        &["config", "show", "--set", "sources..plugin=in-memory"],
+    );
     assert!(message.contains("--set"), "{message}");
+}
+
+/// Run `arguments` over `sandbox`, expect the exit code for a mistyped invocation, and
+/// return what it said.
+///
+/// `2` is what the command line documents for an invocation that was typed wrongly, and
+/// what clap itself exits with for an unknown flag. A caller branching on the code cannot
+/// be asked to know which of the two spotted the mistake, so a `--set` that is not
+/// `PATH=VALUE` exits the same way an unknown flag does rather than as a run that broke.
+fn mistyped(sandbox: &Sandbox, arguments: &[&str]) -> String {
+    let output = sandbox
+        .command()
+        .args(arguments)
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    assert!(
+        stdout(&output).is_empty(),
+        "a refusal writes nothing to stdout"
+    );
+    stderr(&output)
 }
 
 /// Unix only: this drives a shell into removing its own working directory before it

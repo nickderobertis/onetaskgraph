@@ -38,10 +38,10 @@ impl EffectiveConfig {
         let mut settings: Vec<Setting> = merged.values().cloned().collect();
 
         for (key, value) in [
-            ("page_size", Value::from(config.page_size.get())),
+            ("page_size", Value::from(config.page_size().get())),
             (
                 "output",
-                serde_json::to_value(config.output).expect("an output format renders as JSON"),
+                serde_json::to_value(config.output()).expect("an output format renders as JSON"),
             ),
             (
                 "default_sources",

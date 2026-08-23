@@ -49,7 +49,7 @@ impl fmt::Debug for ResolvedSource {
 /// Returns [`ConfigError::Setting`] naming `sources.<name>.config...` for a block that
 /// does not match its plugin's declared schema.
 pub fn validate_sources(config: &Config) -> Result<(), ConfigError> {
-    for (name, source) in &config.sources {
+    for (name, source) in config.sources() {
         checked_plugin(name, source)?;
     }
     Ok(())
@@ -70,12 +70,12 @@ pub fn resolve(
     secrets: &dyn SecretResolver,
 ) -> Result<Vec<ResolvedSource>, ConfigError> {
     config
-        .sources
+        .sources()
         .iter()
         .map(|(name, source)| {
             let plugin = checked_plugin(name, source)?;
             let built = plugin
-                .build(name, &source.config, secrets)
+                .build(name, source.config(), secrets)
                 .map_err(|error| {
                     ConfigError::setting(
                         format!("sources.{name}"),
@@ -89,7 +89,7 @@ pub fn resolve(
                 })?;
             Ok(ResolvedSource {
                 name: name.clone(),
-                kind: source.plugin,
+                kind: source.plugin(),
                 source: built,
             })
         })
@@ -101,8 +101,8 @@ fn checked_plugin(
     name: &SourceName,
     source: &SourceConfig,
 ) -> Result<Box<dyn SourcePlugin>, ConfigError> {
-    let plugin = source.plugin.plugin();
-    check_block(name, &source.config, plugin.as_ref())?;
+    let plugin = source.plugin().plugin();
+    check_block(name, source.config(), plugin.as_ref())?;
     Ok(plugin)
 }
 
