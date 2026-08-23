@@ -20,7 +20,7 @@
 # CI provisions the toolchain itself (asdf/.tool-versions, setup-* actions), so
 # this no-ops there. Every step tolerates failure and the script always exits 0 —
 # a flaky install must never abort session startup. Also safe to run by hand.
-# llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer (see header): `set -e` is omitted so a flaky install can't abort the hook — the script owns its exit codes and always exits 0; success stays quiet while failures log-and-continue rather than block startup; and `just` is installed from PyPI (`uv tool install rust-just`) whose wheels ship with Trusted Publishing + PEP 740 attestations, so no unvalidated external input is executed.
+# llmlint: ignore-file[tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer (see header): every step logs and continues rather than blocking startup, so a flaky install can't abort the hook; and `just` is installed from PyPI (`uv tool install rust-just`) whose wheels ship with Trusted Publishing + PEP 740 attestations, so no unvalidated external input is executed.
 set -uo pipefail
 
 # `just` floor — keep in lockstep with your `.tool-versions` pin. `rust-just` is
