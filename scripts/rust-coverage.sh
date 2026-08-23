@@ -34,9 +34,22 @@ if ! metadata="$(cargo metadata --format-version 1 --no-deps 2>&1)"; then
 fi
 
 # tr: $CRATE is matched against this list with `grep -qxF`, which a trailing CR defeats.
-members="$(printf '%s' "$metadata" \
-  | python3 -c 'import json,sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))' \
-  | tr -d '\r')"
+if ! members="$(printf '%s' "$metadata" \
+  | python3 -c '
+import json, sys
+document = json.load(sys.stdin)
+packages = document.get("packages") if isinstance(document, dict) else None
+if not isinstance(packages, list) or not all(
+    isinstance(package, dict) and isinstance(package.get("name"), str) for package in packages
+):
+    raise SystemExit("no packages array of named packages")
+print("\n".join(package["name"] for package in packages))
+' \
+  | tr -d '\r')"; then
+  echo "rust-coverage: 'cargo metadata' did not answer with a packages array of named packages." >&2
+  echo "rust-coverage: fix the manifest so 'cargo metadata' resolves, then re-run." >&2
+  exit 1
+fi
 
 if ! printf '%s\n' "$members" | grep -qxF -- "$CRATE"; then
   echo "rust-coverage: $CRATE is not a member of this Cargo workspace. Members:" >&2
