@@ -31,13 +31,9 @@ case " $* " in
   *" --outputStyle"*) exec node_modules/.bin/nx "$@" ;;
 esac
 
-# On a terminal, stream: someone is watching a run that can take minutes, and progress is
-# worth more than brevity. Anywhere else — a log, CI, an agent's transcript — only the
-# failure is worth reading, so hold the output and replay it if the run fails.
-if [ -t 1 ]; then
-  exec node_modules/.bin/nx "$@" --outputStyle=dynamic-legacy
-fi
-
+# One line to say what is running, then nothing unless it fails — at which point the whole
+# of Nx's output is replayed, because that is when every line of it is worth reading.
+echo "nx: $*" >&2
 if ! output="$(node_modules/.bin/nx "$@" --outputStyle=static 2>&1)"; then
   printf '%s\n' "$output" >&2
   exit 1
