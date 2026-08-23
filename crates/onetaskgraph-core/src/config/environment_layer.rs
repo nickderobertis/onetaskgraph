@@ -37,8 +37,22 @@ const SEGMENT_SEPARATOR: &str = "__";
 /// # Errors
 ///
 /// Returns [`ConfigError::Setting`] when a variable's name decodes to no path at all,
-/// as `ONETASKGRAPH_` and `ONETASKGRAPH_SOURCES__` do.
+/// as `ONETASKGRAPH_` and `ONETASKGRAPH_SOURCES__` do, and when one of these variables
+/// holds a value that is not valid Unicode — a setting this build cannot read is
+/// refused by name rather than quietly left unset.
 pub fn layer(environment: &Environment) -> Result<Layer, ConfigError> {
+    for variable in environment.unusable() {
+        if variable.starts_with(ENVIRONMENT_PREFIX) {
+            return Err(ConfigError::setting(
+                variable,
+                "this variable's value is not valid Unicode, so it cannot be read as a \
+                 setting",
+                "export it again with a value this shell and this process agree on, or \
+                 unset it and set the setting in a configuration document instead.",
+            ));
+        }
+    }
+
     let mut settings = Vec::new();
     for (variable, raw) in environment.iter() {
         let Some(encoded) = variable.strip_prefix(ENVIRONMENT_PREFIX) else {

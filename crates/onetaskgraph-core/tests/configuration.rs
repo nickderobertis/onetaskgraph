@@ -593,6 +593,67 @@ fn a_plugin_this_build_does_not_have_is_refused_by_the_key_that_names_it() {
     assert!(error.to_string().contains("in-memory"), "{error}");
 }
 
+/// Unix only: an environment entry holding bytes that are not UTF-8 is something only
+/// a byte-oriented `OsString` can express, and Windows environment blocks are UTF-16.
+#[cfg(unix)]
+#[test]
+fn a_snapshot_sorts_what_this_build_can_read_from_what_it_cannot() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    // A process is handed its environment by whoever spawned it, so bytes that are not
+    // UTF-8 are an input from outside rather than something that cannot happen.
+    let not_utf8 = OsString::from_vec(vec![0x66, 0xff, 0x6f]);
+    let environment = Environment::from_os_pairs([
+        (
+            OsString::from("ONETASKGRAPH_PAGE_SIZE"),
+            OsString::from("70"),
+        ),
+        (OsString::from("ONETASKGRAPH_OUTPUT"), not_utf8.clone()),
+        (not_utf8, OsString::from("json")),
+    ]);
+
+    assert_eq!(environment.get("ONETASKGRAPH_PAGE_SIZE"), Some("70"));
+    assert_eq!(
+        environment.unusable().collect::<Vec<_>>(),
+        vec!["ONETASKGRAPH_OUTPUT"],
+        "a value that is not Unicode keeps its name, so the layer can refuse it by name"
+    );
+    assert_eq!(
+        environment.names().collect::<Vec<_>>(),
+        vec!["ONETASKGRAPH_PAGE_SIZE"],
+        "a name that is not Unicode is dropped: nothing in this product could spell it"
+    );
+
+    let rendered = format!("{environment:?}");
+    assert!(rendered.contains("ONETASKGRAPH_OUTPUT"), "{rendered}");
+    assert!(
+        !rendered.contains("70"),
+        "a Debug carries no value: {rendered}"
+    );
+}
+
+/// Unix only, for the same reason as the snapshot test above.
+#[cfg(unix)]
+#[test]
+fn a_setting_variable_whose_value_is_not_unicode_is_refused_by_name() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let not_utf8 = OsString::from_vec(vec![0x66, 0xff, 0x6f]);
+    let environment =
+        Environment::from_os_pairs([(OsString::from("ONETASKGRAPH_PAGE_SIZE"), not_utf8.clone())]);
+
+    let error = config::load(Path::new("/nowhere"), &environment, &Layer::default())
+        .expect_err("a setting this build cannot read");
+    assert_eq!(error.key(), Some("ONETASKGRAPH_PAGE_SIZE"));
+
+    // A variable this product never asked for is nobody's business.
+    let ignored = Environment::from_os_pairs([(OsString::from("SOMETHING_ELSE"), not_utf8)]);
+    config::load(Path::new("/nowhere"), &ignored, &Layer::default())
+        .expect("a variable this build does not read is not a setting it must refuse");
+}
+
 #[test]
 fn every_plugin_kind_names_the_kind_its_own_plugin_reports() {
     // `PluginKind::as_str` spells each name rather than asking the plugin for it, so
