@@ -90,11 +90,13 @@ async fn a_source_reports_healthy_and_says_what_it_holds() {
         .await
         .expect("in memory is reachable");
     assert!(health.reachable);
-    assert!(
-        health
-            .detail
-            .as_deref()
-            .is_some_and(|d| d.contains("4 task")),
+    // The whole rendered detail, not a substring of it: `health` reports both counts, and
+    // asserting only the task count left the project count — and the rendering that joins
+    // them — as observable output nothing checked. The fixture holds four tasks and two
+    // projects; a detail that miscounts either, or stops naming one, fails here.
+    assert_eq!(
+        health.detail.as_deref(),
+        Some("4 task(s), 2 project(s) held in memory"),
         "{health:?}"
     );
 }
