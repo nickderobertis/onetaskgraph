@@ -70,6 +70,14 @@ GUARDS_AGAINST_WRONG_SPELLINGS = {
 # Markdown-embedded shell alike; Markdown's own `#` is a heading, which is prose either way.
 COMMENT = re.compile(r"(?<!\S)#.*$", re.MULTILINE)
 
+
+def refuse(problem, next_action):
+    """Stop with the exact problem and one concrete thing to do about it."""
+    print(f"check-credential-names: {problem}", file=sys.stderr)
+    print(f"check-credential-names: {next_action}", file=sys.stderr)
+    sys.exit(1)
+
+
 def readable(path):
     """One tracked file as text, or nothing when it is not text at all."""
     try:
@@ -87,7 +95,17 @@ for relative, what in RESTATEMENTS.items():
             f"{relative}: is missing, so {what} no longer states the credential contract"
         )
         continue
-    code = COMMENT.sub("", path.read_text(encoding="utf-8"))
+    # A file that is there and will not open is not a contract failure — it is this check
+    # being unable to make its judgement, which is worth stopping for and saying so.
+    text = readable(path)
+    if text is None:
+        refuse(
+            f"could not read {relative}, which is {what}, so the credential contract "
+            "cannot be reconciled against it.",
+            f"make {relative} readable text again, or, if it moved, name its new path in "
+            "the RESTATEMENTS list in this script.",
+        )
+    code = COMMENT.sub("", text)
     for name in CREDENTIALS:
         if name not in code:
             problems.append(
@@ -95,18 +113,23 @@ for relative, what in RESTATEMENTS.items():
                 "credential everywhere and nothing translates between spellings."
             )
 
-tracked = subprocess.run(
-    ["git", "ls-files", "-z"], capture_output=True, check=True, text=True
-).stdout.split("\0")
-if not any(tracked):
-    print(
-        "check-credential-names: git listed no tracked files, so the second-spelling scan "
-        "would pass on anything.",
-        file=sys.stderr,
+listing = subprocess.run(["git", "ls-files", "-z"], capture_output=True, text=True, check=False)
+if listing.returncode != 0:
+    refuse(
+        "could not list the tracked files: "
+        f"{listing.stderr.strip() or f'git ls-files exited {listing.returncode}'}.",
+        "run this from inside the repository's working tree — the scan for a second "
+        "spelling covers every tracked file, so it cannot run without that list.",
     )
-    sys.exit(1)
+tracked = [relative for relative in listing.stdout.split("\0") if relative]
+if not tracked:
+    refuse(
+        "git listed no tracked files, so the scan for a second spelling would pass on "
+        "anything.",
+        "run this from inside the repository's working tree rather than a copy of it.",
+    )
 
-for relative in filter(None, tracked):
+for relative in tracked:
     if relative in GUARDS_AGAINST_WRONG_SPELLINGS:
         continue
     text = readable(Path(relative))
