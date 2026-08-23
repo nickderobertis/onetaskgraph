@@ -20,10 +20,10 @@ Two properties make it different from a lowest-common-denominator wrapper:
   if any file written during a run contains your data, and an assertion that the same
   query asked twice reaches the source twice.
 
-> **Status.** The plugin contract, the workspace and the gate are in place. The `in-memory`
-> source is complete; `local-md`, `linear` and `github-projects` are registered and refuse
-> with a clear message until their nodes land. The binary answers `--help`, `--version`
-> and `schema`; the query verbs arrive with the engine.
+> **Status.** The plugin contract, the workspace, the gate and the configuration layer are
+> in place. The `in-memory` source is complete; `local-md`, `linear` and `github-projects`
+> are registered and refuse with a clear message until their nodes land. The binary answers
+> `--help`, `--version`, `schema` and `config show`; the query verbs arrive with the engine.
 
 ## Install
 
@@ -77,8 +77,22 @@ comma-separated:
 | `ONETASKGRAPH_PAGE_SIZE=100` | top-level `page_size` |
 | `ONETASKGRAPH_DEFAULT_SOURCES=work,notes` | top-level `default_sources` |
 | `ONETASKGRAPH_SOURCES__WORK__CONFIG__ROOT=/tmp/tasks` | the `root` of the source named `work` |
+| `ONETASKGRAPH_SOURCES__GH_MAIN__PLUGIN=github-projects` | the plugin of the source named `gh-main` |
 
 The mapping is unambiguous because a source name may not contain an underscore.
+
+On the command line the same dotted path is `--set`, and a few common settings have named
+flags of their own:
+
+```bash
+onetaskgraph config show --set sources.work.config.root=/tmp/tasks
+onetaskgraph config show --page-size 100 --default-sources work,notes --json
+```
+
+`onetaskgraph config show` is what makes precedence something you can see rather than
+something you have to reason about: it prints every setting, its value, and the layer it
+came from — which file, which environment variable, or which flag — and `--json` renders
+the same thing for a script.
 
 ### Credentials
 
@@ -99,6 +113,12 @@ translates between spellings.
 Every item is qualified by the source it came from and rendered `<source>:<native>` —
 `work:ENG-142`, `notes:2026-08-inbox`. Parsing splits on the **first** colon, so a native
 id may contain colons freely.
+
+## Writing a source in another language
+
+A source that is not a Rust crate speaks a line-oriented JSON protocol over stdio:
+[`docs/plugin-protocol.md`](./docs/plugin-protocol.md) specifies it completely — the
+framing, the capability handshake, one method per trait method, and the error envelope.
 
 ## Licence
 
