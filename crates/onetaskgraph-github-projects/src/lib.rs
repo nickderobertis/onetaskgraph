@@ -39,9 +39,17 @@ impl SourcePlugin for Plugin {
     fn build(
         &self,
         name: &SourceName,
-        _config: &serde_json::Value,
+        config: &serde_json::Value,
         _secrets: &dyn SecretResolver,
     ) -> Result<Box<dyn TaskSource>, SourceError> {
+        // Validate before refusing. A typo in the config block is the user's to fix and
+        // is worth naming precisely; "not implemented yet" is not their problem to
+        // debug. This is also what keeps the published schema's promise honest.
+        let _config: GitHubProjectsConfig =
+            serde_json::from_value(config.clone()).map_err(|error| SourceError::Config {
+                message: format!("source {name}: {error}"),
+            })?;
+
         Err(SourceError::Config {
             message: format!(
                 "source {name}: the `{KIND}` plugin is not implemented yet; remove this \

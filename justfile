@@ -135,4 +135,5 @@ lint-llm-validate *args:
 
 # llmlint scoped to what this branch changed since it forked from the base.
 lint-llm-diff base="origin/main" *args:
+    @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
     llmlint --diff --diff-base "{{base}}" {{args}}
