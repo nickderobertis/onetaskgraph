@@ -25,8 +25,9 @@ use crate::{GlobalId, Predicate, QueryPlan, QueryResponse, SourceFailure, Source
 /// generated against instead of silently emitting the wrong models.
 ///
 /// `2` added the roots `config show --json` emits — `EffectiveConfig`, `Setting`,
-/// `Origin`, `OutputFormat` and `SecretsReport` — because a machine-readable output
-/// with no root in this bundle is one no SDK can be generated against.
+/// `Origin`, `OutputFormat`, `SecretsReport`, `ResolvedCredential` and
+/// `CredentialLayer` — because a machine-readable output with no root in this bundle
+/// is one no SDK can be generated against.
 pub const SCHEMA_BUNDLE_VERSION: u32 = 2;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.

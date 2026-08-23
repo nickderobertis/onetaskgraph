@@ -791,6 +791,7 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "clap",
+ "jsonschema",
  "onetaskgraph-core",
  "predicates",
  "serde_json",

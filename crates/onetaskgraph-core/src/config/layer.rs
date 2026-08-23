@@ -60,6 +60,10 @@ impl fmt::Display for Origin {
 /// A dotted path to one setting, such as `sources.work.config.root`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
 #[serde(into = "String")]
+// `serde(into)` is not one of the attributes schemars reads, so without this the
+// generated schema would describe the segments this holds rather than the dotted
+// string it serializes as — a bundle that misdescribes the output the binary emits.
+#[schemars(with = "String")]
 pub struct SettingPath(Vec<String>);
 
 impl SettingPath {

@@ -902,10 +902,36 @@ fn a_credentials_file_line_that_is_not_an_assignment_is_refused_without_quoting_
     );
 }
 
+/// Check `document` against the bundle's `root`, saying which root refused it.
+fn validates(bundle: &Value, root: &str, document: &Value) {
+    let schema = &bundle["roots"][root];
+    assert!(
+        schema.is_object(),
+        "the bundle this binary emits carries the {root} root: {bundle:#}"
+    );
+    let validator = jsonschema::validator_for(schema)
+        .unwrap_or_else(|error| panic!("the {root} root compiles: {error}"));
+    let problems: Vec<String> = validator
+        .iter_errors(document)
+        .map(|error| format!("{} at {}", error, error.instance_path()))
+        .collect();
+    assert!(
+        problems.is_empty(),
+        "what the binary emitted does not match the {root} root it also emits: {} \
+         (the value was {document:#})",
+        problems.join("; ")
+    );
+}
+
 #[test]
 fn the_machine_readable_output_matches_a_root_of_the_schema_this_binary_emits() {
     let sandbox = Sandbox::new();
     sandbox.project_document(ONE_SOURCE);
+    // Both credential layers at once, so the report carries one entry of each kind and
+    // the enum of layers is exercised rather than only its first variant.
+    sandbox.secrets_file(&format!(
+        "LINEAR_API_KEY={PLANTED}\nGH_PROJECTS_TOKEN={PLANTED}\n"
+    ));
 
     let bundle: Value = serde_json::from_str(&stdout(
         &sandbox
@@ -918,14 +944,10 @@ fn the_machine_readable_output_matches_a_root_of_the_schema_this_binary_emits() 
     ))
     .expect("the schema bundle is JSON");
 
-    let root = &bundle["roots"]["EffectiveConfig"];
-    assert!(
-        root.is_object(),
-        "`config show --json` emits an EffectiveConfig, so the bundle carries that root"
-    );
-
     let output = sandbox
         .command()
+        .env_remove("LINEAR_API_KEY")
+        .env("GH_PROJECTS_TOKEN", "exported-by-the-shell")
         .args(["config", "show", "--json"])
         .assert()
         .success()
@@ -933,19 +955,36 @@ fn the_machine_readable_output_matches_a_root_of_the_schema_this_binary_emits() 
         .clone();
     let shown = shown(&output);
 
-    let required: Vec<&str> = root["required"]
+    // The whole document, against the root the verb claims to emit.
+    validates(&bundle, "EffectiveConfig", &shown);
+
+    // `Setting.value` is an unconstrained JSON value — a setting holds whatever its
+    // own type is — so the roots for the settings that *do* have a shape are checked
+    // against the values this run actually reported, not left implied by the parent.
+    validates(&bundle, "OutputFormat", &setting(&shown, "output")["value"]);
+
+    let credentials = shown["secrets"]["variables"]
         .as_array()
-        .expect("the root names its required properties")
-        .iter()
-        .map(|name| name.as_str().expect("a property name"))
-        .collect();
-    for property in required {
-        assert!(
-            shown.get(property).is_some(),
-            "the emitted document carries the schema's required property {property}: \
-             {shown:#}"
-        );
+        .expect("the report lists the credentials the file supplied");
+    assert_eq!(
+        credentials.len(),
+        2,
+        "both planted names are reported: {shown:#}"
+    );
+    for credential in credentials {
+        validates(&bundle, "ResolvedCredential", credential);
+        validates(&bundle, "CredentialLayer", &credential["resolved_from"]);
     }
+    let layers: Vec<&Value> = credentials
+        .iter()
+        .map(|credential| &credential["resolved_from"])
+        .collect();
+    assert_eq!(
+        layers,
+        vec!["environment", "secrets-file"],
+        "the exported name resolves from the environment and the other from the file: \
+         {shown:#}"
+    );
 }
 
 #[test]
