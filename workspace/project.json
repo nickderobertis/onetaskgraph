@@ -57,7 +57,8 @@
           "bun run biome lint --error-on-warnings nx.json biome.json package.json .claude workspace crates sdks",
           "bash scripts/check-nx-graph.sh",
           "bash scripts/check-plugin-isolation.sh",
-          "bash scripts/check-contract-inventory.sh"
+          "bash scripts/check-contract-inventory.sh",
+          "bash scripts/check-protocol-methods.sh"
         ],
         "parallel": false
       },
@@ -77,7 +78,9 @@
         "{workspaceRoot}/scripts/check-nx-graph.sh",
         "{workspaceRoot}/scripts/check-plugin-isolation.sh",
         "{workspaceRoot}/AGENTS.md",
-        "{workspaceRoot}/scripts/check-contract-inventory.sh"
+        "{workspaceRoot}/scripts/check-contract-inventory.sh",
+        "{workspaceRoot}/docs/plugin-protocol.md",
+        "{workspaceRoot}/scripts/check-protocol-methods.sh"
       ]
     },
     "typecheck": {

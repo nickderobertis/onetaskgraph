@@ -14,6 +14,11 @@ written first because it is what keeps the trait honest while the engine is bein
 written against it. Where this document and the trait disagree, that is a defect in
 one of them and is worth reporting rather than reconciling by guesswork.
 
+Two of the tables below restate Rust, so neither is prose alone:
+`scripts/check-protocol-methods.sh` — a target in `just check` — reconciles the method
+table in §4 against `TaskSource`'s own methods and the error table in §5 against
+`SourceError`'s variants, failing on a name either side has and the other does not.
+
 Throughout, **engine** is the side that spawns and asks, and **plugin** is the side
 that is spawned and answers. Field names, and the JSON encoding of every contract
 type, are exactly what `onetaskgraph schema` emits — that bundle is generated from
@@ -487,13 +492,16 @@ Plugin to engine:
 
 ```
 {"id":"0","result":{"protocol_version":1,"kind":"local-md","capabilities":{"projects":"native","orphan_tasks":"native","filter_by_label":"native","filter_by_status":"unsupported","search_title":"native","search_content":"unsupported","task_dependencies":"forward-only","project_dependencies":"forward-only","max_page_size":200}}}
-{"id":"1","result":{"items":[{"id":"tasks/migrate.md","title":"Migrate the store","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"url":null,"created_at":null,"updated_at":null}],"next":"b2Zmc2V0PTE"}}
+{"id":"1","result":{"items":[{"id":"tasks/migrate.md","title":"Migrate the store","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"url":null,"created_at":null,"updated_at":null},{"id":"tasks/schema.md","title":"Settle the schema","content":null,"status":{"category":"in-progress","name":"Doing"},"labels":[],"project":null,"url":null,"created_at":null,"updated_at":null}],"next":"b2Zmc2V0PTI"}}
 {"id":"2","result":{"items":[{"from":"tasks/migrate.md","to":"tasks/schema.md","kind":"blocks"}],"next":null}}
 ```
 
-Note that this plugin declared `filter_by_status` unsupported and returned a task the
-engine asked to be filtered to `todo`. That is rule 2 working: the plugin returned the
-wider set, and the engine filters what it declared it would not.
+Note that this plugin declared `filter_by_status` unsupported and answered a query for
+`todo` with two tasks, the second of them `in-progress`. That is rule 2 working: the
+plugin returned the **wider** set rather than a narrower one, and the engine drops the
+second row itself. A plugin that had filtered here — half-applying a predicate it
+declared it would not apply — would have been indistinguishable from one whose source
+simply held one task, which is the failure no test above the plugin can catch.
 
 ## 8. What this document does not cover
 
