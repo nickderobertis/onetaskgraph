@@ -18,9 +18,7 @@ readonly MIN_LINES=95
 
 case "${OS:-}${OSTYPE:-}" in
   *Windows_NT* | *msys* | *cygwin* | *win32*)
-    echo "rust-coverage: skipping the coverage measurement for $CRATE on Windows —" >&2
-    echo "rust-coverage: instrumentation there does not attribute subprocess coverage." >&2
-    echo "rust-coverage: the functional lanes still gate this platform." >&2
+    echo "rust-coverage: $CRATE measurement skipped on Windows (instrumentation there does not attribute subprocess coverage); the functional lanes still gate this platform" >&2
     exit 0
     ;;
 esac

@@ -21,6 +21,12 @@ pub struct Task {
     pub labels: Vec<Label>,
     /// `None` is a first-class case — an orphan task — not an edge case.
     pub project: Option<NativeId>,
+    // llmlint: ignore[invalid_states_unrepresentable] `url: Option<String>` is fixed by the frozen cross-node contract — it appears
+    // byte-identically in the task text of every node of this plan, six of which have not
+    // dispatched yet and will be written against it, so tightening it to a validated URL
+    // newtype here would silently desynchronise this repository from every plugin that
+    // follows. Only the contract's owner may amend it; tightening is tracked as post-build
+    // follow-up.
     /// Where a human can open this task.
     pub url: Option<String>,
     /// When the source says the task was created.
@@ -42,6 +48,12 @@ pub struct Project {
     pub status: Status,
     /// Inline rather than by id, for the same reason as on [`Task`].
     pub labels: Vec<Label>,
+    // llmlint: ignore[invalid_states_unrepresentable] `url: Option<String>` is fixed by the frozen cross-node contract — it appears
+    // byte-identically in the task text of every node of this plan, six of which have not
+    // dispatched yet and will be written against it, so tightening it to a validated URL
+    // newtype here would silently desynchronise this repository from every plugin that
+    // follows. Only the contract's owner may amend it; tightening is tracked as post-build
+    // follow-up.
     /// Where a human can open this project.
     pub url: Option<String>,
     /// When the source says the project was created.
