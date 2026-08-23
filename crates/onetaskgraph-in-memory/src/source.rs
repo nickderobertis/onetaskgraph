@@ -36,12 +36,16 @@ impl SourcePlugin for Plugin {
             serde_json::from_value(config.clone()).map_err(|error| SourceError::Config {
                 message: format!("source {name}: {error}"),
             })?;
-        // Shape is all serde checked. Refuse a graph this source could not serve
-        // coherently before handing back something that would answer wrongly instead.
-        config.validate().map_err(|message| SourceError::Config {
-            message: format!("source {name}: {message}"),
-        })?;
-        Ok(Box::new(InMemorySource::new(config)))
+        // Shape is all serde checked; InMemorySource::new refuses the rest, and names
+        // the source this configuration block belongs to.
+        InMemorySource::new(config)
+            .map(|source| Box::new(source) as Box<dyn TaskSource>)
+            .map_err(|error| match error {
+                SourceError::Config { message } => SourceError::Config {
+                    message: format!("source {name}: {message}"),
+                },
+                other => other,
+            })
     }
 }
 
@@ -52,10 +56,17 @@ pub struct InMemorySource {
 }
 
 impl InMemorySource {
-    /// Build a source over `config`.
-    #[must_use]
-    pub fn new(config: InMemoryConfig) -> Self {
-        Self { config }
+    /// Build a source over `config`, refusing one it could not serve coherently.
+    ///
+    /// The check belongs here rather than beside the constructor: an [`InMemoryConfig`]
+    /// is deserialized straight out of a user's file, shape is all serde can check, and a
+    /// duplicate id or a dangling edge makes later queries answer *wrongly* rather than
+    /// loudly. Validating on the way in is what keeps an incoherent source from existing.
+    pub fn new(config: InMemoryConfig) -> Result<Self, SourceError> {
+        config
+            .validate()
+            .map_err(|message| SourceError::Config { message })?;
+        Ok(Self { config })
     }
 
     /// What this source declares, as its configuration set it.

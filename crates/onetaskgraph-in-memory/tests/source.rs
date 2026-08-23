@@ -27,16 +27,17 @@ impl SecretResolver for NoSecrets {
 
 /// Everything native, both dependency tables answered in both directions.
 fn fully_capable() -> Box<dyn TaskSource> {
-    Box::new(onetaskgraph_in_memory::InMemorySource::new(
-        with_capabilities(json!({})),
-    ))
+    Box::new(
+        onetaskgraph_in_memory::InMemorySource::new(with_capabilities(json!({})))
+            .expect("the fixture graph is coherent"),
+    )
 }
 
 /// The same work, but the source ignores labels and content search, has no
 /// projects, and answers dependencies forward only.
 fn poorly_capable() -> Box<dyn TaskSource> {
-    Box::new(onetaskgraph_in_memory::InMemorySource::new(
-        with_capabilities(json!({
+    Box::new(
+        onetaskgraph_in_memory::InMemorySource::new(with_capabilities(json!({
             "projects": "unsupported",
             "orphan_tasks": "unsupported",
             "filter_by_label": "unsupported",
@@ -46,8 +47,9 @@ fn poorly_capable() -> Box<dyn TaskSource> {
             "task_dependencies": "forward-only",
             "project_dependencies": "forward-only",
             "max_page_size": 2,
-        })),
-    ))
+        })))
+        .expect("the fixture graph is coherent"),
+    )
 }
 
 /// A page big enough to hold the whole fixture.
@@ -278,7 +280,8 @@ async fn a_source_declaring_neither_search_half_ignores_the_predicate_entirely()
     let blind = onetaskgraph_in_memory::InMemorySource::new(with_capabilities(json!({
         "search_title": "unsupported",
         "search_content": "unsupported",
-    })));
+    })))
+    .expect("the fixture graph is coherent");
     let found = blind
         .query_tasks(
             &TaskQuery {
@@ -612,7 +615,8 @@ fn the_factory_refuses_a_config_block_of_the_wrong_shape_and_names_the_source() 
 #[test]
 fn an_empty_config_block_is_a_valid_empty_source() {
     let config: InMemoryConfig = serde_json::from_value(json!({})).expect("defaults apply");
-    let source = onetaskgraph_in_memory::InMemorySource::new(config);
+    let source =
+        onetaskgraph_in_memory::InMemorySource::new(config).expect("an empty config is coherent");
     assert_eq!(source.capabilities().max_page_size, 100);
     assert_eq!(
         source.capabilities().project_dependencies,
@@ -685,7 +689,8 @@ fn a_zero_page_ceiling_is_refused_where_the_configuration_is_read() {
     // One is the smallest usable ceiling, and it still pages.
     let source = onetaskgraph_in_memory::InMemorySource::new(with_capabilities(
         json!({ "max_page_size": 1 }),
-    ));
+    ))
+    .expect("the fixture graph is coherent");
     assert_eq!(source.capabilities().max_page_size, 1);
 }
 
@@ -703,6 +708,27 @@ fn refusal(mutate: impl FnOnce(&mut serde_json::Value)) -> String {
     };
     assert!(message.starts_with("source notes:"), "{message}");
     message
+}
+
+#[test]
+fn the_constructor_refuses_an_incoherent_graph_so_no_caller_can_bypass_the_factory() {
+    // The factory is not the only way in: a caller holding an InMemoryConfig — the SDKs
+    // and this crate's own tests do — would otherwise build a source that answers
+    // wrongly. The refusal belongs to the constructor, so there is no way to hold an
+    // incoherent source at all.
+    let mut config = common::work();
+    let first = config["tasks"][0].clone();
+    config["tasks"].as_array_mut().expect("a list").push(first);
+    let config: InMemoryConfig = serde_json::from_value(config).expect("the shape is valid");
+
+    let Err(SourceError::Config { message }) = onetaskgraph_in_memory::InMemorySource::new(config)
+    else {
+        panic!("an incoherent graph must be refused by the constructor");
+    };
+    assert!(
+        message.contains("two or more tasks share the id T-1"),
+        "{message}"
+    );
 }
 
 #[test]
