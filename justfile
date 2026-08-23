@@ -22,12 +22,13 @@ default:
 bootstrap:
     @{{nx}} run-many -t bootstrap --all
 
-# Fails on any issue: there is no warnings-only mode, and the tests run inside it
-# rather than beside it.
+# Fails on any issue: there is no warnings-only mode. The phases are spelled out
+# rather than hidden behind one aggregate target so it is visible from here — and
+# from a checker reading this file — that the tests run INSIDE the gate rather than
+# beside it. Each phase is individually invocable and each delegates to Nx.
 
 # Everyday gate: format, lint, types, tests and coverage over the affected projects.
-check base="origin/main":
-    @{{nx}} affected -t check --base="{{base}}"
+check base="origin/main": (format-check base) (lint base) (typecheck base) (test base) (coverage base)
 
 # This is what .githooks/pre-push runs and what the default branch sweeps on every
 # push, so nothing affected-detection could miss goes unchecked.

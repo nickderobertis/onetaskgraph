@@ -31,6 +31,8 @@ node_modules/
 *.profraw
 *.profdata
 lcov.info
+.coverage
+.coverage.*
 
 # Composed, never committed: the repo plan and the one-time llmlint buildout tier
 /REPO_PLAN.md

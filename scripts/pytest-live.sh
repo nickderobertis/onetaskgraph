@@ -12,8 +12,11 @@ set -euo pipefail
 readonly PROJECT="${1:?usage: scripts/pytest-live.sh <project-directory>}"
 readonly NO_TESTS_COLLECTED=5
 
+# --no-cov: the coverage floor in this project's addopts is for the `coverage` target,
+# which measures the product. A live run exercises a third-party API and imports almost
+# nothing, so measuring it would fail the floor for the one reason that is not a defect.
 status=0
-(cd "$PROJECT" && uv run --frozen pytest tests/live) || status=$?
+(cd "$PROJECT" && uv run --frozen pytest --no-cov tests/live) || status=$?
 
 if [ "$status" -eq 0 ] || [ "$status" -eq "$NO_TESTS_COLLECTED" ]; then
   exit 0
