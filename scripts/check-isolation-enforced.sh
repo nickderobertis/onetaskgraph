@@ -26,8 +26,16 @@ trap 'rm -rf "$scratch"' EXIT
 
 # A clone of the committed tree, so the fixtures are torn down by restoring from git and
 # cannot leave a forbidden edge behind in anybody's working copy.
-git clone --quiet --shared --no-checkout "$ROOT" "$scratch/repo"
-git -C "$scratch/repo" checkout --quiet "$(git -C "$ROOT" rev-parse HEAD)"
+#
+# Through scripts/scratch-clone.sh, which strips the git environment first. That matters
+# more here than anywhere else in this repository: under a git hook GIT_DIR overrides
+# `git -C`, so the `git add -A` below and the `git checkout -- .` between cases would
+# stage and then DISCARD in the real working copy — a guard that exists to protect the
+# tree, rewriting it. This escaped only because the other scratch-clone guard failed
+# first and stopped the gate.
+# shellcheck source=scripts/scratch-clone.sh
+source "$ROOT/scripts/scratch-clone.sh"
+scratch_clone "$ROOT" "$scratch/repo"
 
 # Then overlay the working tree's tracked files, and stage them so `git checkout -- .`
 # restores to THEM between cases. What is under test has to be the guard as it is right

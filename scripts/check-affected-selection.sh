@@ -23,22 +23,45 @@ mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh")
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
-# A shared clone of the committed tree: the selection must be provable from what is in
-# git, not from whatever happens to be uncommitted in the working copy right now.
-git clone --quiet --shared --no-checkout "$ROOT" "$scratch/repo"
-git -C "$scratch/repo" checkout --quiet "$(git -C "$ROOT" rev-parse HEAD)"
-# Nx resolves its own install from node_modules; borrowing the root's keeps this check
-# from paying for a second `bun install` on every run.
-ln -s "$ROOT/node_modules" "$scratch/repo/node_modules"
+# The committed tree, cloned through scripts/scratch-clone.sh rather than by hand: under a
+# git hook GIT_DIR overrides `git -C` and the checkout lands in the real repository
+# instead. See that file — it is the whole reason a publishing push of this branch was
+# rejected, and every `git -C "$scratch/repo"` below is only correct because of it.
+# shellcheck source=scripts/scratch-clone.sh
+source "$ROOT/scripts/scratch-clone.sh"
+scratch_clone "$ROOT" "$scratch/repo"
+
+# This check runs as an Nx target, so the invocation below is an Nx nested inside the Nx
+# sweep that started it. That is safe only while the inner one shares NO state with the
+# outer one, and it shares state through three things, all of which are severed here.
+#
+# The outer `run-many` holds the workspace's native state for the life of the gate, so an
+# inner Nx that resolves back to the outer worktree waits for a lock the outer run will
+# not release until this target returns: a deadlock with no timeout anywhere above it —
+# not in the target, not in `just gate`, not in .githooks/pre-push. That is what hung a
+# publishing push here for twelve minutes at zero CPU before it was killed.
+#
+# A real copy of node_modules rather than a symlink is the load-bearing one: Nx locates
+# its workspace root from where it is installed as well as from the working directory, so
+# a symlink pointing out of the scratch tree is enough to make the inner run adopt the
+# outer worktree as its workspace. It costs about half a second and 235MB of a temporary
+# directory that this script's own trap removes.
+#
+# If you are tempted to go back to the symlink, move this check out of `run-many` first,
+# so it cannot nest at all.
+cp -a "$ROOT/node_modules" "$scratch/repo/node_modules"
 
 git -C "$scratch/repo" config user.email "check-affected-selection@invalid"
 git -C "$scratch/repo" config user.name "check-affected-selection"
 
 # `nx show projects` is a graph query, so keep it away from the daemon and the shared
 # cache — a stale daemon answering for a different tree is precisely the failure mode
-# this check exists to catch.
+# this check exists to catch. NX_WORKSPACE_DATA_DIRECTORY is the third severance: it is
+# the native workspace state the outer sweep locks, and the default puts it in .nx/ under
+# whichever workspace root Nx picked.
 export NX_DAEMON=false
 export NX_CACHE_DIRECTORY="$scratch/nx-cache"
+export NX_WORKSPACE_DATA_DIRECTORY="$scratch/nx-workspace-data"
 
 failures=0
 
