@@ -79,6 +79,17 @@ impl Sandbox {
             .env_remove("HOME");
         command
     }
+
+    /// Put a directory where a file belongs, under the configuration home.
+    ///
+    /// A file this run cannot read, without needing a permission a test user may not
+    /// be able to set and without a `chmod` that means nothing on Windows: a directory
+    /// exists as far as a read is concerned, and reading one fails everywhere.
+    pub fn unreadable(&self, relative: &str) -> PathBuf {
+        let path = self.config_home().join(relative);
+        std::fs::create_dir_all(&path).expect("a directory in the file's place");
+        path
+    }
 }
 
 /// Write `text` to `path`, creating what it needs, and return the path.

@@ -947,3 +947,39 @@ fn the_machine_readable_output_matches_a_root_of_the_schema_this_binary_emits() 
         );
     }
 }
+
+#[test]
+fn a_configuration_document_that_cannot_be_read_stops_the_run_rather_than_being_skipped() {
+    let sandbox = Sandbox::new();
+    // A project document that would set `page_size` if the layer beneath it were the
+    // one in trouble, so a run that skipped the unreadable file would look successful.
+    sandbox.project_document("page_size: 25\n");
+    let path = sandbox.unreadable("onetaskgraph/config.yaml");
+
+    let message = refusal(&sandbox, &[]);
+    assert!(
+        message.contains(&path.display().to_string()),
+        "the refusal names the file it could not read: {message}"
+    );
+    assert!(
+        message.contains("could not read"),
+        "the refusal says what went wrong: {message}"
+    );
+}
+
+#[test]
+fn a_credentials_file_that_cannot_be_read_stops_the_run_rather_than_being_skipped() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(ONE_SOURCE);
+    let path = sandbox.unreadable("onetaskgraph/secrets.env");
+
+    let message = refusal(&sandbox, &[]);
+    assert!(
+        message.contains(&path.display().to_string()),
+        "the refusal names the credentials file it could not read: {message}"
+    );
+    assert!(
+        message.contains("could not read"),
+        "the refusal says what went wrong: {message}"
+    );
+}

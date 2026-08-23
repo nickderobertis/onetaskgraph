@@ -102,6 +102,6 @@ pub fn read_optional(path: &Path) -> Result<Option<String>, ConfigError> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(ConfigError::read(path, &error)),
+        Err(_) => Ok(None),
     }
 }
