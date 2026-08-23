@@ -780,3 +780,81 @@ fn every_contract_root_generates_a_json_schema() {
         assert!(schema.as_value().is_object());
     }
 }
+
+/// Expand a regex character-class body such as `a-z0-9-` into the characters it
+/// denotes. A trailing `-` is a literal, which is exactly why the pattern spells
+/// the hyphen last.
+fn expand_class(body: &str) -> Vec<char> {
+    let chars: Vec<char> = body.chars().collect();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        // `x-y` is a range only when a `y` follows it.
+        if index + 2 < chars.len() && chars[index + 1] == '-' {
+            out.extend(chars[index]..=chars[index + 2]);
+            index += 3;
+        } else {
+            out.push(chars[index]);
+            index += 1;
+        }
+    }
+    out
+}
+
+/// Match `value` against the two character classes of `^[first][rest]*$`.
+///
+/// Derived from the published constant rather than restating it, which is the
+/// whole point: this cannot agree with a pattern it did not read.
+fn matches_published_pattern(value: &str) -> bool {
+    let body = SOURCE_NAME_PATTERN
+        .strip_prefix('^')
+        .and_then(|rest| rest.strip_suffix('$'))
+        .and_then(|rest| rest.strip_suffix('*'))
+        .expect("the pattern is anchored and its tail repeats");
+    let (first, rest) = body.split_once("][").expect("the pattern has two classes");
+    let first = expand_class(first.strip_prefix('[').expect("a class opens the pattern"));
+    let rest = expand_class(rest.strip_suffix(']').expect("a class closes the pattern"));
+
+    let mut chars = value.chars();
+    let Some(head) = chars.next() else {
+        return false;
+    };
+    first.contains(&head) && chars.all(|c| rest.contains(&c))
+}
+
+#[test]
+fn source_name_validation_agrees_with_the_pattern_it_publishes() {
+    // `SourceName::new` hand-rolls its check for speed while `SOURCE_NAME_PATTERN`
+    // is what the JSON Schema publishes to both SDKs, so nothing but this stops the
+    // two describing different languages — a name the schema accepts and the
+    // constructor rejects, or the reverse. The matcher above is built FROM the
+    // constant, so changing either side alone fails here.
+    let mut corpus: Vec<String> = vec![
+        String::new(),
+        "work".to_owned(),
+        "gh-main".to_owned(),
+        "a1-b2-c3".to_owned(),
+        "0".to_owned(),
+        "-leading".to_owned(),
+        "trailing-".to_owned(),
+        "Work".to_owned(),
+        "work_name".to_owned(),
+        "wörk".to_owned(),
+        "a".repeat(200),
+    ];
+    for byte in 0u8..=127 {
+        let c = char::from(byte);
+        corpus.push(c.to_string());
+        corpus.push(format!("a{c}"));
+    }
+
+    for name in corpus {
+        assert_eq!(
+            SourceName::new(name.clone()).is_ok(),
+            matches_published_pattern(&name),
+            "SourceName::new and SOURCE_NAME_PATTERN ({SOURCE_NAME_PATTERN}) disagree \
+             about {name:?}. They are one rule in two places — change both together, or \
+             a configuration the published schema accepts is refused at load."
+        );
+    }
+}

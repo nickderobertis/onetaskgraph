@@ -86,16 +86,27 @@ fn a_page_token_carries_one_cursor_per_source_and_round_trips() {
 
 #[test]
 fn a_hand_edited_page_token_fails_loudly_rather_than_silently_restarting_the_walk() {
-    let Err(SourceError::Malformed { message }) = PageToken("{not json".to_owned()).decode() else {
+    // Refused where it enters, not wherever it is first decoded: `parse` is the only
+    // way to build one from a caller's string, so an unissued token has no window in
+    // which it exists as a `PageToken` at all.
+    let Err(SourceError::Malformed { message }) = PageToken::parse("{not json") else {
         panic!("a token this engine did not issue must be refused");
     };
     assert!(message.contains("not issued by this engine"), "{message}");
 
     // A well-formed token naming an unusable source is refused at the same boundary.
-    let Err(SourceError::Malformed { .. }) = PageToken(r#"{"BAD_NAME":"0"}"#.to_owned()).decode()
-    else {
+    let Err(SourceError::Malformed { .. }) = PageToken::parse(r#"{"BAD_NAME":"0"}"#) else {
         panic!("an invalid source name inside a token must be refused");
     };
+
+    // And deserialising goes through the same gate, so a response cannot carry one in.
+    let Err(error) = serde_json::from_str::<PageToken>(r#""{not json""#) else {
+        panic!("deserialising an unissued token must be refused");
+    };
+    assert!(
+        error.to_string().contains("not issued by this engine"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -137,40 +148,61 @@ fn a_registered_but_unimplemented_plugin_refuses_with_its_own_message() {
     }
 }
 
+/// Every root the bundle publishes, and the drift gate for [`SCHEMA_BUNDLE_VERSION`].
+///
+/// Both SDKs are generated from the bundle, so adding, removing or renaming a root
+/// changes the surface they emit. Nothing else compares this inventory against the
+/// version that is supposed to track it, so the test below asserts the EXACT set:
+/// a new root fails there, and the only way through is to bump the version and
+/// update this list in the same change.
+const EXPECTED_ROOTS: [&str; 26] = [
+    "Task",
+    "Project",
+    "Label",
+    "Status",
+    "StatusCategory",
+    "DependencyEdge",
+    "DependencyKind",
+    "Direction",
+    "TaskQuery",
+    "ProjectQuery",
+    "PageRequest",
+    "PageOfTask",
+    "PageOfProject",
+    "PageOfLabel",
+    "PageOfDependencyEdge",
+    "Capabilities",
+    "Health",
+    "SourceError",
+    "GlobalId",
+    "QueryPlan",
+    "SourcePlan",
+    "Predicate",
+    "SourceFailure",
+    "QueryResponseOfTask",
+    "QueryResponseOfProject",
+    "QueryResponseOfLabel",
+];
+
 #[test]
 fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
     let bundle = schema_bundle();
     assert_eq!(bundle["version"], SCHEMA_BUNDLE_VERSION);
 
     let roots = bundle["roots"].as_object().expect("roots is an object");
-    for root in [
-        "Task",
-        "Project",
-        "Label",
-        "Status",
-        "StatusCategory",
-        "DependencyEdge",
-        "DependencyKind",
-        "Direction",
-        "TaskQuery",
-        "ProjectQuery",
-        "PageRequest",
-        "PageOfTask",
-        "PageOfProject",
-        "PageOfLabel",
-        "PageOfDependencyEdge",
-        "Capabilities",
-        "Health",
-        "SourceError",
-        "GlobalId",
-        "QueryPlan",
-        "SourcePlan",
-        "Predicate",
-        "SourceFailure",
-        "QueryResponseOfTask",
-        "QueryResponseOfProject",
-        "QueryResponseOfLabel",
-    ] {
+
+    let mut present: Vec<&str> = roots.keys().map(String::as_str).collect();
+    present.sort_unstable();
+    let mut expected = EXPECTED_ROOTS;
+    expected.sort_unstable();
+    assert_eq!(
+        present, expected,
+        "the bundle's roots changed. Bump SCHEMA_BUNDLE_VERSION (currently {SCHEMA_BUNDLE_VERSION}) \
+         and update EXPECTED_ROOTS in the same change — an SDK generated against the old \
+         version would otherwise silently emit the wrong models."
+    );
+
+    for root in EXPECTED_ROOTS {
         assert!(roots[root].is_object(), "the bundle is missing {root}");
     }
 
@@ -205,7 +237,7 @@ fn a_response_carries_the_plan_that_produced_it_and_round_trips() {
             created_at: None,
             updated_at: None,
         }],
-        next: Some(PageToken(r#"{"work":"50"}"#.to_owned())),
+        next: Some(PageToken::parse(r#"{"work":"50"}"#).expect("a token this engine issued")),
         plan: QueryPlan {
             per_source: vec![
                 SourcePlan {

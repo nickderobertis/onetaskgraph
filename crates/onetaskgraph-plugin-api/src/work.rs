@@ -22,7 +22,7 @@ pub struct Task {
     /// `None` is a first-class case — an orphan task — not an edge case.
     pub project: Option<NativeId>,
     /// Where a human can open this task.
-    // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen by the plugin contract every source is written against; only the contract's owner may change it, and tightening it is post-build follow-up.
+    // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this restates at a new site the justification already recorded at `Capabilities.max_page_size` (capability.rs) and `PageRequest.limit` (query.rs), and in AGENTS.md's "The plugin contract": this crate's field types ARE the approved contract, six undispatched nodes compile against `Option<String>` here, and only the contract's owner may narrow one. No code change is available that clears this without editing that frozen surface.
     pub url: Option<String>,
     /// When the source says the task was created.
     pub created_at: Option<DateTime<Utc>>,
@@ -44,7 +44,7 @@ pub struct Project {
     /// Inline rather than by id, for the same reason as on [`Task`].
     pub labels: Vec<Label>,
     /// Where a human can open this project.
-    // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen by the plugin contract every source is written against; only the contract's owner may change it, and tightening it is post-build follow-up.
+    // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this restates at a new site the justification already recorded at `Capabilities.max_page_size` (capability.rs) and `PageRequest.limit` (query.rs), and in AGENTS.md's "The plugin contract": this crate's field types ARE the approved contract, six undispatched nodes compile against `Option<String>` here, and only the contract's owner may narrow one. No code change is available that clears this without editing that frozen surface.
     pub url: Option<String>,
     /// When the source says the project was created.
     pub created_at: Option<DateTime<Utc>>,

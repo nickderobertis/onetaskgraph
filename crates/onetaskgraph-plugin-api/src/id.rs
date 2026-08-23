@@ -85,6 +85,11 @@ impl SourceName {
         }
     }
 
+    /// The same language [`SOURCE_NAME_PATTERN`] describes, hand-rolled so building a
+    /// name costs no regex. The two are one rule in two places, so
+    /// `source_name_validation_agrees_with_the_pattern_it_publishes` in
+    /// `tests/contract.rs` derives a matcher from the constant and fails if they ever
+    /// describe different languages. Change both together.
     fn is_valid(value: &str) -> bool {
         let mut chars = value.chars();
         let Some(first) = chars.next() else {

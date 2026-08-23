@@ -37,7 +37,6 @@ pub struct SourcePlan {
     /// The configured source this describes.
     pub source: SourceName,
     /// The plugin kind behind it.
-    // llmlint: ignore[invalid_states_unrepresentable] `kind: String` is frozen by the plugin contract, and a plan must carry the kind a subprocess-hosted plugin reports — a vocabulary this build cannot know at compile time. Tightening is post-build follow-up.
     pub kind: String,
     /// Predicates the source applied itself.
     pub pushed_down: Vec<Predicate>,
@@ -82,10 +81,16 @@ pub struct SourceFailure {
 
 /// The engine's own resume token: one plugin [`Cursor`] per source, opaque to the
 /// caller exactly as a plugin's cursor is opaque to the engine.
+///
+/// The wire shape is a bare JSON string, unchanged. What is not representable is a
+/// token this engine never issued: the inner string is private, and both ways in
+/// validate — [`encode`](Self::encode) builds one from cursors, and
+/// [`parse`](Self::parse), which is also what deserialising one goes through,
+/// refuses anything that does not decode. A hand-edited token therefore fails at
+/// the boundary it entered rather than wherever it is first decoded.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(transparent)]
-// llmlint: ignore[invalid_states_unrepresentable] `PageToken(pub String)` is frozen by the contract every source and SDK is written against; a token is opaque by design and is validated where it is decoded. Tightening is post-build follow-up.
-pub struct PageToken(pub String);
+#[serde(try_from = "String", into = "String")]
+pub struct PageToken(String);
 
 impl PageToken {
     /// Encode one cursor per source into a single token.
@@ -101,6 +106,24 @@ impl PageToken {
             })
     }
 
+    /// Accept a token from a caller — a `--page-token` argument, or a deserialised
+    /// response — refusing one this engine could not have issued.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Malformed`] when `raw` does not decode.
+    pub fn parse(raw: impl Into<String>) -> Result<Self, SourceError> {
+        let token = Self(raw.into());
+        token.decode()?;
+        Ok(token)
+    }
+
+    /// Borrow the underlying token.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
     /// Decode a token back into one cursor per source.
     ///
     /// # Errors
@@ -112,5 +135,22 @@ impl PageToken {
         serde_json::from_str(&self.0).map_err(|error| SourceError::Malformed {
             message: format!("page token was not issued by this engine: {error}"),
         })
+    }
+}
+
+/// Deserialising a token goes through [`PageToken::parse`], so a response carrying
+/// a token this engine never issued is refused where it is read.
+impl TryFrom<String> for PageToken {
+    type Error = SourceError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(value)
+    }
+}
+
+/// Serialising is the plain string it has always been; only the way back in changed.
+impl From<PageToken> for String {
+    fn from(value: PageToken) -> Self {
+        value.0
     }
 }
