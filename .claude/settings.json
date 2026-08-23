@@ -1,0 +1,70 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-setup.sh\"",
+            "timeout": 180,
+            "type": "command"
+          }
+        ],
+        "matcher": "startup|resume"
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(just bootstrap)",
+      "Bash(just check)",
+      "Bash(just test)",
+      "Bash(just test-live)",
+      "Bash(just lint)",
+      "Bash(just format)",
+      "Bash(just format-check)",
+      "Bash(just typecheck)",
+      "Bash(just coverage)",
+      "Bash(just gate)",
+      "Bash(just upgrade)",
+      "Bash(just deny)",
+      "Bash(just schema)",
+      "Bash(just graph)",
+      "Bash(just session-setup)",
+      "Bash(just setup-llmlint)",
+      "Bash(just lint-llm:*)",
+      "Bash(just lint-llm-diff:*)",
+      "Bash(just lint-llm-validate:*)",
+      "Bash(llmlint:*)",
+      "Bash(./scripts/nx.sh:*)",
+      "Bash(./scripts/session-setup.sh)",
+      "Bash(./scripts/setup-llmlint.sh)",
+      "Bash(./scripts/check-nx-graph.sh)",
+      "Bash(./scripts/check-plugin-isolation.sh)",
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo nextest run:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo metadata:*)",
+      "Bash(cargo tree:*)",
+      "Bash(cargo deny check:*)",
+      "Bash(cargo machete:*)",
+      "Bash(cargo llvm-cov:*)",
+      "Bash(cargo update --dry-run)",
+      "Bash(uv sync:*)",
+      "Bash(uv run:*)",
+      "Bash(uv lock --upgrade --dry-run)",
+      "Bash(bun install:*)",
+      "Bash(bun run:*)",
+      "Bash(bun test:*)",
+      "Bash(bun outdated)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ],
+    "deny": []
+  }
+}
