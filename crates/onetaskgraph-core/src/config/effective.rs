@@ -88,9 +88,13 @@ impl EffectiveConfig {
             .iter()
             .map(|setting| render_value(&setting.value))
             .collect();
+        // Capped: one long list — a whole in-memory fixture, say — would otherwise
+        // push the layer column off the far side of a terminal for every other row.
+        // A value wider than the cap simply runs on, and its layer follows it.
         let value_width = values
             .iter()
             .map(|value| value.chars().count())
+            .filter(|width| *width <= VALUE_COLUMN_CAP)
             .max()
             .unwrap_or(0);
 
@@ -111,15 +115,25 @@ impl EffectiveConfig {
         if self.secrets.variables.is_empty() {
             rendered.push_str("  (it defines no variables, or is not there)\n");
         }
+        let name_width = self
+            .secrets
+            .variables
+            .iter()
+            .map(|credential| credential.variable.chars().count())
+            .max()
+            .unwrap_or(0);
         for credential in &self.secrets.variables {
             rendered.push_str(&format!(
-                "  {}  resolved from the {}\n",
+                "  {:name_width$}  resolved from the {}\n",
                 credential.variable, credential.resolved_from
             ));
         }
         rendered
     }
 }
+
+/// How wide the value column grows before a value is left to run on.
+const VALUE_COLUMN_CAP: usize = 44;
 
 /// One value as compact JSON.
 fn render_value(value: &Value) -> String {

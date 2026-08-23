@@ -8,6 +8,7 @@
 //! caused it, rather than surfacing as a confusing failure inside the first HTTP
 //! call that source makes.
 
+use jsonschema::error::ValidationErrorKind;
 use onetaskgraph_plugin_api::{SecretResolver, SourceName, SourcePlugin, TaskSource};
 use serde_json::Value;
 
@@ -115,10 +116,19 @@ fn check_block(
     let Some(problem) = validator.iter_errors(block).next() else {
         return Ok(());
     };
-    let pointer = problem.instance_path().to_string();
+
+    // A validator reports an unexpected field against the *object* that holds it, so
+    // the path alone would name the block and leave the user to find the field inside
+    // the message. The field is the whole of what they have to go and fix, so it is
+    // lifted into the key.
+    let pointer = problem.instance_path().to_string().replace('/', ".");
+    let unexpected = match problem.kind() {
+        ValidationErrorKind::AdditionalProperties { unexpected } => unexpected.join(", ."),
+        _ => String::new(),
+    };
     let key = format!(
-        "sources.{name}.config{}",
-        pointer.replace('/', ".").trim_end_matches('.')
+        "sources.{name}.config{pointer}{}{unexpected}",
+        if unexpected.is_empty() { "" } else { "." }
     );
     Err(ConfigError::setting(
         key,
