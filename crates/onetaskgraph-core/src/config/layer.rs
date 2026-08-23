@@ -202,7 +202,12 @@ fn kind_of(value: &Value) -> &'static str {
 /// *empty* object — is a leaf. Empty stays a leaf on purpose: `config: {}` is a
 /// deliberate "this plugin takes no options", and flattening it to nothing would
 /// silently turn it into "unset".
-fn flatten(prefix: &mut Vec<String>, fields: &Map<String, Value>, origin: &Origin, out: &mut Vec<Setting>) {
+fn flatten(
+    prefix: &mut Vec<String>,
+    fields: &Map<String, Value>,
+    origin: &Origin,
+    out: &mut Vec<Setting>,
+) {
     for (name, value) in fields {
         prefix.push(name.clone());
         match value {
@@ -253,10 +258,7 @@ pub fn unflatten(settings: &BTreeMap<SettingPath, Setting>) -> Value {
                 .as_object_mut()
                 .expect("merge leaves no setting that is an ancestor of another");
         }
-        cursor.insert(
-            segments[segments.len() - 1].clone(),
-            setting.value.clone(),
-        );
+        cursor.insert(segments[segments.len() - 1].clone(), setting.value.clone());
     }
     Value::Object(root)
 }

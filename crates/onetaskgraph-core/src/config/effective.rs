@@ -11,14 +11,22 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::layer::{Origin, Setting, SettingPath};
+use crate::secrets::SecretsReport;
+
 use super::Config;
+use super::layer::{Origin, Setting, SettingPath};
 
 /// Every setting this build reads, with its value and where the value came from.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct EffectiveConfig {
     /// Every setting, in key order.
     pub settings: Vec<Setting>,
+    /// What the credentials file supplied, by name, and which layer answers for each.
+    ///
+    /// Beside the settings because it is the same question — where does this value
+    /// come from — asked of the one kind of value that may never be printed. So the
+    /// name and the layer are reported and the value never is.
+    pub secrets: SecretsReport,
 }
 
 impl EffectiveConfig {
@@ -28,7 +36,11 @@ impl EffectiveConfig {
     /// the run will actually use — the point of the verb is to answer "what is this
     /// command going to do", and a silent omission answers it wrongly.
     #[must_use]
-    pub fn new(merged: &BTreeMap<SettingPath, Setting>, config: &Config) -> Self {
+    pub fn new(
+        merged: &BTreeMap<SettingPath, Setting>,
+        config: &Config,
+        secrets: SecretsReport,
+    ) -> Self {
         let mut settings: Vec<Setting> = merged.values().cloned().collect();
 
         for (key, value) in [
@@ -54,7 +66,7 @@ impl EffectiveConfig {
         }
 
         settings.sort_by(|left, right| left.key.cmp(&right.key));
-        Self { settings }
+        Self { settings, secrets }
     }
 
     /// The table a person reads, one setting per line.
@@ -89,6 +101,20 @@ impl EffectiveConfig {
                 setting.key.to_string(),
                 value,
                 setting.origin
+            ));
+        }
+
+        rendered.push_str(&match self.secrets.path.as_ref() {
+            Some(path) => format!("\nsecrets file  {}\n", path.display()),
+            None => "\nsecrets file  none — neither XDG_CONFIG_HOME nor HOME is set\n".to_owned(),
+        });
+        if self.secrets.variables.is_empty() {
+            rendered.push_str("  (it defines no variables, or is not there)\n");
+        }
+        for credential in &self.secrets.variables {
+            rendered.push_str(&format!(
+                "  {}  resolved from the {}\n",
+                credential.variable, credential.resolved_from
             ));
         }
         rendered

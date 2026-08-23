@@ -57,17 +57,19 @@ pub fn resolve(
         .iter()
         .map(|(name, source)| {
             let plugin = checked_plugin(name, source)?;
-            let built = plugin.build(name, &source.config, secrets).map_err(|error| {
-                ConfigError::setting(
-                    format!("sources.{name}"),
-                    error.to_string(),
-                    format!(
-                        "correct that source's configuration, or remove it — \
+            let built = plugin
+                .build(name, &source.config, secrets)
+                .map_err(|error| {
+                    ConfigError::setting(
+                        format!("sources.{name}"),
+                        error.to_string(),
+                        format!(
+                            "correct that source's configuration, or remove it — \
                          `onetaskgraph config show` reports every setting under \
                          `sources.{name}` and the layer it came from."
-                    ),
-                )
-            })?;
+                        ),
+                    )
+                })?;
             Ok(ResolvedSource {
                 name: name.clone(),
                 kind: plugin.kind(),
@@ -85,11 +87,14 @@ fn checked_plugin(
     let Some(plugin) = plugin_for(&source.plugin) else {
         return Err(ConfigError::setting(
             format!("sources.{name}.plugin"),
-            format!("no plugin named {:?} is built into this binary", source.plugin),
+            format!(
+                "no plugin named {:?} is built into this binary",
+                source.plugin
+            ),
             format!("use one of: {}.", plugin_kinds().join(", ")),
         ));
     };
-    check_block(name, &source.config, &plugin)?;
+    check_block(name, &source.config, plugin.as_ref())?;
     Ok(plugin)
 }
 
@@ -110,7 +115,7 @@ fn check_block(
     let Some(problem) = validator.iter_errors(block).next() else {
         return Ok(());
     };
-    let pointer = problem.instance_path.to_string();
+    let pointer = problem.instance_path().to_string();
     let key = format!(
         "sources.{name}.config{}",
         pointer.replace('/', ".").trim_end_matches('.')

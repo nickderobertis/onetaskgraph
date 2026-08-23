@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::Environment;
+use crate::secrets::Secrets;
 
 pub use discovery::{
     Document, PROJECT_DOCUMENT_NAME, SECRETS_RELATIVE_PATH, USER_DOCUMENT_RELATIVE_PATH, documents,
@@ -143,21 +144,20 @@ impl Config {
     /// [`SOURCE_NAME_PATTERN`](onetaskgraph_plugin_api::SOURCE_NAME_PATTERN), or a
     /// `default_sources` entry naming a source nothing configures.
     pub fn from_document(document: Value) -> Result<Self, ConfigError> {
-        let shape: DocumentShape =
-            serde_path_to_error::deserialize(document).map_err(|error| {
-                let key = error.path().to_string();
-                let key = if key.is_empty() || key == "." {
-                    "the document's root".to_owned()
-                } else {
-                    key
-                };
-                ConfigError::setting(
-                    key,
-                    error.into_inner().to_string(),
-                    "correct that setting, or remove it — `onetaskgraph config show` lists \
+        let shape: DocumentShape = serde_path_to_error::deserialize(document).map_err(|error| {
+            let key = error.path().to_string();
+            let key = if key.is_empty() || key == "." {
+                "the document's root".to_owned()
+            } else {
+                key
+            };
+            ConfigError::setting(
+                key,
+                error.into_inner().to_string(),
+                "correct that setting, or remove it — `onetaskgraph config show` lists \
                      every setting this build reads and the layer each came from.",
-                )
-            })?;
+            )
+        })?;
 
         let mut sources = BTreeMap::new();
         for (name, source) in shape.sources {
@@ -241,11 +241,13 @@ fn source_list(sources: &BTreeMap<SourceName, SourceConfig>) -> String {
     }
 }
 
-/// A configuration, and the record of where each of its settings came from.
-#[derive(Debug, Clone, PartialEq)]
+/// A configuration, the credentials behind it, and where every setting came from.
+#[derive(Debug, Clone)]
 pub struct Loaded {
     /// The configuration itself.
     pub config: Config,
+    /// Where a plugin's named credential is looked up. Read before sources resolve.
+    pub secrets: Secrets,
     /// Every setting with the layer it came from, for `config show`.
     pub effective: EffectiveConfig,
 }
@@ -279,10 +281,15 @@ pub fn load(
 
     let merged = merge(&layers);
     let config = Config::from_document(unflatten(&merged))?;
+
+    // Before the sources are resolved, as the contract says: a plugin reads its
+    // credential through this resolver, so it has to exist by the time one is built.
+    let secrets = Secrets::load(environment.clone())?;
     crate::resolve::validate_sources(&config)?;
 
     Ok(Loaded {
-        effective: EffectiveConfig::new(&merged, &config),
+        effective: EffectiveConfig::new(&merged, &config, secrets.report()),
         config,
+        secrets,
     })
 }
