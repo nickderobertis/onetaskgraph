@@ -25,6 +25,17 @@ use crate::{
 // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this restates at a new site the justification already recorded at `Capabilities.max_page_size` (capability.rs) and `PageRequest.limit` (query.rs), and a third time in this type's own doc comment above and in AGENTS.md's "Open contract question — `Health`": `Health`'s shape is approved contract text that `TaskSource::health` returns, so an enum here would change the serialized form and the trait six undispatched nodes implement. That is the contract owner's call, not this crate's.
 pub struct Health {
     /// Whether the source answered.
+    ///
+    /// A bare `bool` beside an untyped `detail` cannot say that an unreachable source
+    /// must explain itself, or keep "reachable with a warning" apart from "reachable";
+    /// an enum carrying the detail in its unreachable variant would.
+    // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this
+    // restates at this field the justification already recorded at
+    // `Capabilities.max_page_size` (capability.rs), `PageRequest.limit` (query.rs), this
+    // type's own doc comment above, and AGENTS.md's "Open contract question — `Health`":
+    // `Health`'s shape is approved contract text that `TaskSource::health` returns, so an
+    // enum here would change the serialized form and the trait six undispatched nodes
+    // implement. That is the contract owner's call, not this crate's.
     pub reachable: bool,
     /// What the source said, when it said anything useful.
     pub detail: Option<String>,
