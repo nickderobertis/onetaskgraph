@@ -286,13 +286,69 @@ if not variants:
         "script the shape they have now.",
     )
 
+ERROR_TABLE = "| `kind` | Other members | Meaning |"
+
 compare(
     "SourceError kind",
     variants,
-    first_column("| `kind` | Other members | Meaning |"),
+    first_column(ERROR_TABLE),
     {},
     "`SourceError`",
 )
+
+
+def documented_members():
+    """Each error kind's members, read from the second column of the error table.
+
+    A member is a backticked name followed by its type in brackets — `message` (string).
+    That shape is what distinguishes a member from the other backticked words a cell
+    carries, `null` among them.
+    """
+    lines = document.splitlines()
+    start = lines.index(ERROR_TABLE)
+    members = {}
+    for line in lines[start + 2 :]:
+        if not line.startswith("|"):
+            break
+        cells = line.split("|")
+        kind = re.fullmatch(r"`([a-z][a-z_-]*)`", cells[1].strip())
+        if kind:
+            members[kind.group(1)] = set(re.findall(r"`(\w+)` \(", cells[2]))
+    return members
+
+
+# The members each variant really carries. The table's second column is structure, so it
+# is read back the same way its first column is: a variant that gains or loses a field
+# without the table following is drift a name-only comparison cannot see.
+declared_members = {
+    kebab_name: set(re.findall(r"^        (\w+):", body, re.MULTILINE))
+    for kebab_name, body in (
+        (re.sub(r"(?<!^)(?=[A-Z])", "-", name).lower(), body)
+        for name, body in re.findall(
+            r"^    ([A-Z][A-Za-z]*) \{(.*?)^    \},", error_rs, re.DOTALL | re.MULTILINE
+        )
+    )
+}
+if declared_members.keys() != variants:
+    refuse(
+        "read a different set of `SourceError` variants when reading their fields than "
+        "when reading their names, so one of the two patterns no longer fits the enum.",
+        "teach this script the shape `SourceError` has now.",
+    )
+
+documented = documented_members()
+for kind in sorted(variants & documented.keys()):
+    for member in sorted(declared_members[kind] - documented[kind]):
+        failures.append(
+            f"`SourceError::{kind}` carries the member `{member}` but the error table's "
+            f"row for it does not list it. Add it — a plugin author writing that envelope "
+            f"from the table alone would omit it."
+        )
+    for member in sorted(documented[kind] - declared_members[kind]):
+        failures.append(
+            f"the error table's `{kind}` row lists the member `{member}` but "
+            f"`SourceError::{kind}` does not carry it. Correct the table, or declare it."
+        )
 
 
 def kebab(name):
