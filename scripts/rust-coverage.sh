@@ -41,6 +41,7 @@ members="$(printf '%s' "$metadata" \
 if ! printf '%s\n' "$members" | grep -qxF -- "$CRATE"; then
   echo "rust-coverage: $CRATE is not a member of this Cargo workspace. Members:" >&2
   printf '  %s\n' $members >&2
+  echo "rust-coverage: re-run with one of those names." >&2
   exit 1
 fi
 

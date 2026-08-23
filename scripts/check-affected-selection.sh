@@ -80,9 +80,14 @@ select_after_editing() {
     exit 1
   fi
   # tr: the caller compares these names with `grep -qx`, which a trailing CR defeats.
-  printf '%s' "$raw" \
+  if ! printf '%s' "$raw" \
     | python3 -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin))))' \
-    | tr -d '\r'
+    | tr -d '\r'; then
+    echo "check-affected-selection: 'nx show projects --affected --json' answered with something other than a JSON array of project names:" >&2
+    printf '%s\n' "$raw" >&2
+    echo "check-affected-selection: fix the project graph so that command returns JSON, then re-run." >&2
+    exit 1
+  fi
 }
 
 # Undo the scratch commit so each case starts from the same committed tree.
