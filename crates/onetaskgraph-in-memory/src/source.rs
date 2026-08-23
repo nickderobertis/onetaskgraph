@@ -69,7 +69,8 @@ impl InMemorySource {
                 message: format!("cursor {raw:?} was not issued by the in-memory source"),
             })?,
         };
-        let ceiling = self.declared().max_page_size.max(1);
+        // At least 1 by construction: the configuration boundary refuses a zero ceiling.
+        let ceiling = self.declared().max_page_size;
         let limit = page.limit.clamp(1, ceiling) as usize;
         let end = start.saturating_add(limit).min(items.len());
         let window = items.get(start..end).unwrap_or_default().to_vec();

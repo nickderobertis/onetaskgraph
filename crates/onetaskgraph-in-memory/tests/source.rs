@@ -615,3 +615,27 @@ async fn a_source_that_applies_only_one_search_half_ignores_a_both_halves_search
         .expect("answers");
     assert_eq!(task_ids(&applied), ["T-3"]);
 }
+
+#[test]
+fn a_zero_page_ceiling_is_refused_where_the_configuration_is_read() {
+    // A source that will serve no rows cannot be paged. Coercing zero to one would hide
+    // a typo behind behaviour that looks deliberate, so it is refused at the boundary.
+    let name = SourceName::new("notes").expect("a valid name");
+    let Err(SourceError::Config { message }) = Plugin.build(
+        &name,
+        &json!({ "capabilities": { "max_page_size": 0 } }),
+        &NoSecrets,
+    ) else {
+        panic!("a zero page ceiling must be refused");
+    };
+    assert!(
+        message.contains("max_page_size must be at least 1"),
+        "{message}"
+    );
+
+    // One is the smallest usable ceiling, and it still pages.
+    let source = onetaskgraph_in_memory::InMemorySource::new(with_capabilities(
+        json!({ "max_page_size": 1 }),
+    ));
+    assert_eq!(source.capabilities().max_page_size, 1);
+}

@@ -4,7 +4,7 @@ use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencySupport, Label, Project, Support, Task,
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de::Error as _};
 
 /// Everything an in-memory source serves, plus what it claims it can do.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -50,8 +50,30 @@ pub struct CapabilityConfig {
     pub task_dependencies: DependencySupport,
     /// How far this source walks project dependencies.
     pub project_dependencies: DependencySupport,
-    /// The largest page this source will serve.
+    // llmlint: ignore[invalid_states_unrepresentable] `max_page_size: u32` is fixed by the frozen cross-node contract — it appears
+    // byte-identically in the task text of every node of this plan, six of which have
+    // not dispatched yet and will be written against `u32`, so tightening it here would
+    // silently desynchronise this repository from every plugin that follows. Only the
+    // contract's owner may amend it; tightening to a non-zero type is tracked as
+    // post-build follow-up. The real hole — a declared zero — is closed by rejecting it
+    // at construction instead of coercing it silently.
+    /// The largest page this source will serve. Rejected at zero: a source that will
+    /// serve no rows cannot be paged, and silently treating it as one hides a typo in a
+    /// configuration file behind behaviour that looks deliberate.
+    #[serde(deserialize_with = "non_zero_page_size")]
     pub max_page_size: u32,
+}
+
+/// Reject a zero page ceiling where the configuration is read, so an invalid declaration
+/// never reaches the source.
+fn non_zero_page_size<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let value = u32::deserialize(deserializer)?;
+    if value == 0 {
+        return Err(D::Error::custom(
+            "max_page_size must be at least 1; a source that serves no rows cannot be paged",
+        ));
+    }
+    Ok(value)
 }
 
 /// The default page ceiling when a configuration block does not set one.

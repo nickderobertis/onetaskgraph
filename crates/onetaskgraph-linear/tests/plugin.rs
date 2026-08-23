@@ -37,7 +37,7 @@ fn build_refuses_with_a_configuration_error_naming_the_plugin() {
 }
 
 #[test]
-fn the_registry_can_name_this_plugin_and_read_its_config_schema() {
+fn the_plugin_reports_its_kind_and_a_config_schema_the_registry_can_publish() {
     let plugin = onetaskgraph_linear::Plugin;
     assert_eq!(plugin.kind(), "linear");
     assert_eq!(plugin.kind(), onetaskgraph_linear::KIND);

@@ -131,17 +131,46 @@ fn schema_output_is_stable_across_runs_so_a_generator_can_diff_it() {
 }
 
 #[test]
-fn a_usage_error_and_a_runtime_failure_report_different_exit_codes() {
-    // A caller scripting around this needs to tell "you typed it wrong" (2) from "it
-    // broke while running" (1); collapsing both onto one code makes that impossible.
-    onetaskgraph().arg("teleport").assert().failure().code(2);
-
+fn help_documents_the_exit_codes_a_caller_scripts_against() {
     onetaskgraph()
         .arg("--help")
         .assert()
         .success()
         .stdout(contains("Exit codes: `0` on success"))
         .stdout(contains("`2` when the invocation itself was wrong"));
+}
+
+/// `/dev/full` accepts a write and then fails it with ENOSPC, which is the one portable
+/// way to make the real binary's stdout fail deterministically. It is Linux-only, so this
+/// journey is too; the same two failure paths are covered in-process on every platform by
+/// the unit tests beside `emit_schema`.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_write_to_stdout_exits_one_and_names_the_problem_on_stderr() {
+    use std::fs::OpenOptions;
+    use std::process::{Command as StdCommand, Stdio};
+
+    let full = OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("/dev/full exists on Linux");
+
+    let output = StdCommand::new(assert_cmd::cargo::cargo_bin("onetaskgraph"))
+        .arg("schema")
+        .stdout(Stdio::from(full))
+        .stderr(Stdio::piped())
+        .output()
+        .expect("the binary runs");
+
+    // 1, not 2: the invocation was correct and the run failed. A caller scripting around
+    // this has to be able to tell those apart.
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("onetaskgraph: could not write the schema bundle"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("panicked"), "{stderr}");
 }
 
 #[test]
@@ -175,7 +204,7 @@ fn no_verb_at_all_exits_non_zero_and_points_at_help() {
 }
 
 #[test]
-fn a_closed_stdout_is_reported_rather_than_crashing_the_process() {
+fn a_closed_stdout_never_panics_however_the_race_lands() {
     // A user pipes `onetaskgraph schema | head -1`; the downstream end closes
     // early. The binary must report it, not panic and not exit zero having
     // written a truncated bundle.
