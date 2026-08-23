@@ -16,9 +16,14 @@ onetaskgraph-in-memory.workspace = true
 onetaskgraph-linear.workspace = true
 onetaskgraph-local-md.workspace = true
 onetaskgraph-plugin-api.workspace = true
+jsonschema.workspace = true
 schemars.workspace = true
+secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_norway.workspace = true
+serde_path_to_error.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
-secrecy.workspace = true
+tempfile.workspace = true

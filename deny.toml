@@ -24,6 +24,11 @@ allow = [
   "Zlib",
   "CC0-1.0",
   "MPL-2.0",
+  # Reached through `jsonschema` -> `referencing` -> `fluent-uri` -> `borrow-or-share`.
+  # MIT with the attribution clause removed, and this list already admits CC0-1.0 — a
+  # public-domain dedication that asks for less again — so allowing it widens no
+  # obligation this workspace had not already accepted.
+  "MIT-0",
 ]
 
 [sources]
