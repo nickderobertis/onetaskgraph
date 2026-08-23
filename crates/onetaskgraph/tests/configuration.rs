@@ -275,6 +275,47 @@ fn the_text_rendering_names_the_layer_beside_every_setting() {
     );
 }
 
+#[test]
+fn the_named_flags_reach_the_settings_they_are_shorthand_for() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(
+        "sources:\n  work:\n    plugin: in-memory\n  notes:\n    plugin: in-memory\n",
+    );
+
+    let output = sandbox
+        .command()
+        .args([
+            "config",
+            "show",
+            "--output",
+            "json",
+            "--default-sources",
+            "notes,work",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let shown = shown(&output);
+    assert_eq!(
+        setting(&shown, "output")["origin"]["flag"],
+        "--output",
+        "--output json renders JSON and says the flag it came from"
+    );
+    let selected = setting(&shown, "default_sources").clone();
+    assert_eq!(selected["value"], serde_json::json!(["notes", "work"]));
+    assert_eq!(selected["origin"]["flag"], "--default-sources");
+}
+
+#[test]
+fn an_output_format_this_build_does_not_have_is_refused_by_name() {
+    let sandbox = Sandbox::new();
+
+    let message = refusal(&sandbox, &["--output", "yaml"]);
+    assert!(message.contains("output"), "{message}");
+}
+
 // ---------------------------------------------------------------------------
 // Journey 17: a field of one named source, set at each of the three layers.
 // ---------------------------------------------------------------------------
