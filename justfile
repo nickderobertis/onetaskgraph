@@ -127,7 +127,7 @@ setup-llmlint:
 # LLM-judge lint over the configured set (or the paths given).
 lint-llm *paths:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    llmlint {{paths}}
+    @llmlint {{paths}}
 
 # Checks config structure, that every `llmlint: ignore` directive names a real rule,
 # and that an edited versioned fragment bumped its version. No credential, no model.
@@ -135,11 +135,11 @@ lint-llm *paths:
 # Fast, model-free llmlint gate. CI runs it before spending a harness call.
 lint-llm-validate *args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    llmlint validate {{args}}
+    @llmlint validate {{args}}
 
 # This is the blocking `llmlint` pull-request check; run it locally before pushing.
 
 # llmlint scoped to what this branch changed since it forked from the base.
 lint-llm-diff base="origin/main" *args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    llmlint --diff --diff-base "{{base}}" {{args}}
+    @llmlint --diff --diff-base "{{base}}" {{args}}

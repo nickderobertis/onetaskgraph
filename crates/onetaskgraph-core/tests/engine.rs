@@ -148,14 +148,29 @@ fn a_registered_but_unimplemented_plugin_refuses_with_its_own_message() {
     }
 }
 
-/// Every root the bundle publishes, and the drift gate for [`SCHEMA_BUNDLE_VERSION`].
+/// Every version of the bundle and the exact roots it published. **Append-only.**
 ///
-/// Both SDKs are generated from the bundle, so adding, removing or renaming a root
-/// changes the surface they emit. Nothing else compares this inventory against the
-/// version that is supposed to track it, so the test below asserts the EXACT set:
-/// a new root fails there, and the only way through is to bump the version and
-/// update this list in the same change.
-const EXPECTED_ROOTS: [&str; 26] = [
+/// Both SDKs are generated from this bundle, so adding, removing or renaming a root
+/// changes the surface they emit, and [`SCHEMA_BUNDLE_VERSION`] is what lets an SDK
+/// refuse a bundle it was not generated against. Nothing else ties the two together.
+///
+/// To change the roots: **append a row** with the next version and bump
+/// `SCHEMA_BUNDLE_VERSION` to match. The test below checks that workflow is
+/// internally consistent — the version equals the row count, no version is listed
+/// twice, no two rows publish the same set, and the current row matches what the
+/// binary actually emits — so the sanctioned path is the mechanically checked one.
+///
+/// What it deliberately does **not** claim: editing a row in place cannot be
+/// detected from inside the repository, because the edited table is
+/// indistinguishable from one that always read that way. The gate makes a root
+/// change impossible to land *accidentally* — it will not compile past this test
+/// without a conscious edit to a table that says not to do that — rather than
+/// impossible to land at all. Catching an in-place edit needs the previously
+/// published bundle, which lives on the registries, not here.
+const PUBLISHED_BUNDLES: &[(u32, &[&str])] = &[(1, &FIRST_BUNDLE_ROOTS)];
+
+/// The roots version 1 of the bundle publishes.
+const FIRST_BUNDLE_ROOTS: [&str; 26] = [
     "Task",
     "Project",
     "Label",
@@ -191,19 +206,59 @@ fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
 
     let roots = bundle["roots"].as_object().expect("roots is an object");
 
-    let mut present: Vec<&str> = roots.keys().map(String::as_str).collect();
-    present.sort_unstable();
-    let mut expected = EXPECTED_ROOTS;
-    expected.sort_unstable();
+    let sorted = |names: &[&str]| {
+        let mut owned: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+        owned.sort_unstable();
+        owned
+    };
+
+    // The version counts the rows, so appending one without bumping it — or bumping it
+    // without appending one — fails here rather than shipping a version that describes
+    // no shape.
     assert_eq!(
-        present, expected,
-        "the bundle's roots changed. Bump SCHEMA_BUNDLE_VERSION (currently {SCHEMA_BUNDLE_VERSION}) \
-         and update EXPECTED_ROOTS in the same change — an SDK generated against the old \
-         version would otherwise silently emit the wrong models."
+        SCHEMA_BUNDLE_VERSION as usize,
+        PUBLISHED_BUNDLES.len(),
+        "SCHEMA_BUNDLE_VERSION is {SCHEMA_BUNDLE_VERSION} but PUBLISHED_BUNDLES has {} row(s). \
+         Append a row for the new shape and bump the version to match.",
+        PUBLISHED_BUNDLES.len()
     );
 
-    for root in EXPECTED_ROOTS {
-        assert!(roots[root].is_object(), "the bundle is missing {root}");
+    for (index, (version, published)) in PUBLISHED_BUNDLES.iter().enumerate() {
+        assert_eq!(
+            *version as usize,
+            index + 1,
+            "PUBLISHED_BUNDLES row {index} claims version {version}; rows are the versions \
+             in order, so row {index} is version {}.",
+            index + 1
+        );
+        // A shape may not be republished under a second version, and a version may not
+        // describe two shapes — either would make the version useless for the SDK that
+        // reads it.
+        assert!(
+            !PUBLISHED_BUNDLES[..index]
+                .iter()
+                .any(|(_, earlier)| sorted(earlier) == sorted(published)),
+            "version {version} republishes an earlier version's exact root set; if the \
+             shape did not change, the version must not either."
+        );
+    }
+
+    let (_, expected) = PUBLISHED_BUNDLES
+        .iter()
+        .find(|(version, _)| *version == SCHEMA_BUNDLE_VERSION)
+        .expect("PUBLISHED_BUNDLES lists the current SCHEMA_BUNDLE_VERSION");
+
+    assert_eq!(
+        sorted(&roots.keys().map(String::as_str).collect::<Vec<_>>()),
+        sorted(expected),
+        "the bundle's roots are not what version {SCHEMA_BUNDLE_VERSION} publishes. Append a \
+         row to PUBLISHED_BUNDLES with the new set and bump SCHEMA_BUNDLE_VERSION to match — \
+         an SDK generated against the old version would otherwise silently emit the wrong \
+         models."
+    );
+
+    for root in expected.iter() {
+        assert!(roots[*root].is_object(), "the bundle is missing {root}");
     }
 
     let plugins = bundle["plugin_config"]

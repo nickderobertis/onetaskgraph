@@ -46,6 +46,18 @@ pub struct SourcePlan {
     /// Predicates the engine answered by a bounded scan of the source.
     pub emulated: Vec<Predicate>,
     /// Predicates neither side could answer, so the result is unconstrained.
+    ///
+    /// Never [`Predicate::ReverseDependencies`]: `DependencySupport` has no
+    /// unsupported variant, so a reverse-dependency read is answered natively or
+    /// emulated by the engine's bounded scan, never abandoned. The type cannot say
+    /// so — see the directive below.
+    // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this
+    // restates at a new site the justification already recorded at
+    // `Capabilities.max_page_size` (capability.rs) and `PageRequest.limit` (query.rs):
+    // `unavailable: Vec<Predicate>` and the `Predicate` enum are both approved contract
+    // text, so a narrower element type here is the contract owner's call, not this
+    // crate's. The finding is correct and is being surfaced as a contract defect rather
+    // than dismissed: the contract can express a state its own rules forbid.
     pub unavailable: Vec<Predicate>,
     /// How many pages the engine pulled from this source to answer.
     pub pages_fetched: u32,

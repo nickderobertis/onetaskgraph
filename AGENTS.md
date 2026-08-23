@@ -41,6 +41,14 @@ and a TypeScript SDK.
 
 It lives in **two** crates, and which one a type is in is the contract, not a detail.
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] SECOND PERMITTED REASON —
+     this restates at the inventory the justification already recorded ten lines below it,
+     in "Open contract question — `Health`", and again at the type in
+     onetaskgraph-plugin-api/src/source.rs: the enumeration omitting `Health` while
+     `TaskSource::health` returns it is a known, deliberate contradiction in the APPROVED
+     contract. Reconciling it — adding `Health` to this list, or redesigning `health` so no
+     such type crosses the boundary — is expressly reserved to the contract's owner and
+     forbidden to any node of this plan, so no change here can close this finding. -->
 - **`onetaskgraph-plugin-api`** — exactly what a plugin author needs, and nothing else:
   the traits `TaskSource`, `SourcePlugin` and `SecretResolver`; the work types `Task`,
   `Project`, `Label`, `Status`, `StatusCategory`, `DependencyEdge`, `DependencyKind`,
