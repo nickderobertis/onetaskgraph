@@ -1,0 +1,5 @@
+# Pinned so local and CI compile with byte-identical rustc, clippy and rustfmt —
+# a lint that fires only on one of them is a gate nobody trusts.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]

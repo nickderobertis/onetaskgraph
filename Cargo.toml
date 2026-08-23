@@ -1,0 +1,40 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+repository = "https://github.com/nickderobertis/onetaskgraph"
+authors = ["Nick DeRobertis"]
+
+[workspace.dependencies]
+onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "0.1.0" }
+onetaskgraph-core = { path = "crates/onetaskgraph-core", version = "0.1.0" }
+onetaskgraph-in-memory = { path = "crates/onetaskgraph-in-memory", version = "0.1.0" }
+onetaskgraph-local-md = { path = "crates/onetaskgraph-local-md", version = "0.1.0" }
+onetaskgraph-linear = { path = "crates/onetaskgraph-linear", version = "0.1.0" }
+onetaskgraph-github-projects = { path = "crates/onetaskgraph-github-projects", version = "0.1.0" }
+
+async-trait = "0.1.92"
+chrono = { version = "0.4.45", default-features = false, features = ["std", "serde", "clock"] }
+clap = { version = "4.6.6", features = ["derive"] }
+schemars = { version = "1.2.2", features = ["chrono04"] }
+secrecy = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+
+[profile.release]
+strip = true
+
+# Test/dev builds dominate the gate's wall clock; a little optimisation on the
+# dependency graph costs nothing after the first build and speeds every run.
+[profile.dev.package."*"]
+opt-level = 1

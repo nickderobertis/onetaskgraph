@@ -1,0 +1,26 @@
+[package]
+name = "onetaskgraph-core"
+description = "The onetaskgraph engine: the plugin registry, global-id qualification, and the plan every response carries."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# The engine may depend on the contract and on every plugin — the arrow runs this
+# way only. Nothing here may become a dependency of a plugin crate: deny.toml
+# permits this crate exactly one wrapper (the binary), and
+# scripts/check-plugin-isolation.sh reads the real Cargo graph and fails on the edge.
+[dependencies]
+onetaskgraph-github-projects.workspace = true
+onetaskgraph-in-memory.workspace = true
+onetaskgraph-linear.workspace = true
+onetaskgraph-local-md.workspace = true
+onetaskgraph-plugin-api.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+secrecy.workspace = true

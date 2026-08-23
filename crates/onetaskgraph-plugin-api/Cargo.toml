@@ -1,0 +1,25 @@
+[package]
+name = "onetaskgraph-plugin-api"
+description = "The plugin contract onetaskgraph sources implement: the traits, the work types, and the capability declaration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# This crate deliberately depends on NO other crate of this workspace. Every plugin
+# depends on it, so an edge from here to the engine would drag the engine into every
+# plugin and cost affected selection the one thing the split buys.
+# scripts/check-plugin-isolation.sh fails if that ever changes.
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+schemars.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

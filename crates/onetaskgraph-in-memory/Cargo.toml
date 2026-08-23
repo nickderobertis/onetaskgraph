@@ -1,0 +1,23 @@
+[package]
+name = "onetaskgraph-in-memory"
+description = "A complete onetaskgraph source held entirely in memory, configured with the work it serves and the capabilities it declares."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# A plugin crate depends on the contract, never on the engine. cargo-deny and
+# scripts/check-plugin-isolation.sh both fail if `onetaskgraph-core` appears here
+# or under [dev-dependencies].
+[dependencies]
+async-trait.workspace = true
+onetaskgraph-plugin-api.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+secrecy.workspace = true
+tokio.workspace = true
