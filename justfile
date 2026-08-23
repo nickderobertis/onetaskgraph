@@ -23,12 +23,14 @@ bootstrap:
     @{{nx}} run-many -t bootstrap --all
 
 # Fails on any issue: there is no warnings-only mode. The phases are spelled out
-# rather than hidden behind one aggregate target so it is visible from here — and
-# from a checker reading this file — that the tests run INSIDE the gate rather than
-# beside it. Each phase is individually invocable and each delegates to Nx.
+# rather than hidden behind one aggregate target so it is visible from here that the
+# tests run INSIDE the gate rather than beside it, and so each phase is individually
+# invocable. "Affected" means: reachable from the diff against NX_BASE, which defaults
+# to nx.json's `defaultBase` (origin/main). CI derives the merge base explicitly and
+# exports it; locally, `NX_BASE=<ref> just check` does the same.
 
 # Everyday gate: format, lint, types, tests and coverage over the affected projects.
-check base="origin/main": (format-check base) (lint base) (typecheck base) (test base) (coverage base)
+check: format-check lint typecheck test coverage
 
 # This is what .githooks/pre-push runs and what the default branch sweeps on every
 # push, so nothing affected-detection could miss goes unchecked.
@@ -38,8 +40,8 @@ gate: deny
     @{{nx}} run-many -t check --all
 
 # Tests only, for the affected projects.
-test base="origin/main":
-    @{{nx}} affected -t test --base="{{base}}"
+test:
+    @{{nx}} affected -t test
 
 # Each project measures its own crate and fails below 95% lines. The measurement is
 # skipped on Windows with a printed notice (see scripts/rust-coverage.sh), where
@@ -47,20 +49,20 @@ test base="origin/main":
 # gate that platform.
 
 # Coverage only, for the affected projects. Fails below 95% lines.
-coverage base="origin/main":
-    @{{nx}} affected -t coverage --base="{{base}}"
+coverage:
+    @{{nx}} affected -t coverage
 
 # Lint only, for the affected projects.
-lint base="origin/main":
-    @{{nx}} affected -t lint --base="{{base}}"
+lint:
+    @{{nx}} affected -t lint
 
 # Type check only, for the affected projects.
-typecheck base="origin/main":
-    @{{nx}} affected -t typecheck --base="{{base}}"
+typecheck:
+    @{{nx}} affected -t typecheck
 
 # Check formatting without changing anything, for the affected projects.
-format-check base="origin/main":
-    @{{nx}} affected -t format-check --base="{{base}}"
+format-check:
+    @{{nx}} affected -t format-check
 
 # Format every project in place.
 format:

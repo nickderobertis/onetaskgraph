@@ -76,7 +76,13 @@ jobs:
 
       - name: Check the affected projects
         if: github.event_name == 'pull_request'
-        run: just check "${{ steps.base.outputs.base }}"
+        env:
+          # Nx's own mechanism for "compare against this commit". Setting it here rather
+          # than threading an argument through every recipe keeps one source of truth for
+          # the base across all five phases of the gate.
+          NX_BASE: ${{ steps.base.outputs.base }}
+          NX_HEAD: HEAD
+        run: just check
 
       # On the default branch, sweep everything. A cache is for speed and must never be
       # what makes a broken clean build look green.
