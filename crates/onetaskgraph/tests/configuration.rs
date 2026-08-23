@@ -314,6 +314,55 @@ fn an_output_format_this_build_does_not_have_is_refused_by_name() {
     assert!(message.contains("output"), "{message}");
 }
 
+#[test]
+fn a_spelled_out_set_beats_the_json_shorthand_within_the_flag_layer() {
+    let sandbox = Sandbox::new();
+
+    let output = sandbox
+        .command()
+        .args(["config", "show", "--json", "--set", "output=text"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let rendered = stdout(&output);
+    assert!(
+        rendered.contains("output") && !rendered.starts_with('{'),
+        "the spelled-out setting wins and the table is rendered: {rendered}"
+    );
+    assert!(
+        rendered.contains("flag --set output"),
+        "the layer named is the flag that actually set it: {rendered}"
+    );
+}
+
+#[test]
+fn asking_for_a_format_and_the_json_shorthand_at_once_is_refused_as_a_bad_invocation() {
+    let sandbox = Sandbox::new();
+
+    let output = sandbox
+        .command()
+        .args(["config", "show", "--output", "text", "--json"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    // Clap's own code for a malformed invocation, distinct from the `1` a command
+    // that ran and failed exits with — a caller can tell the two apart.
+    assert_eq!(output.status.code(), Some(2));
+    let message = stderr(&output);
+    assert!(
+        message.contains("--output") && message.contains("--json"),
+        "the refusal names both flags: {message}"
+    );
+    assert!(
+        stdout(&output).is_empty(),
+        "a refused invocation writes nothing to stdout"
+    );
+}
+
 // Journey 17: a field of one named source, set at each of the three layers.
 
 /// The setting a named source's own field lives at.
