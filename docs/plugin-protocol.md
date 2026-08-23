@@ -14,10 +14,13 @@ written first because it is what keeps the trait honest while the engine is bein
 written against it. Where this document and the trait disagree, that is a defect in
 one of them and is worth reporting rather than reconciling by guesswork.
 
-Two of the tables below restate Rust, so neither is prose alone:
-`scripts/check-protocol-methods.sh` — a target in `just check` — reconciles the method
-table in §4 against `TaskSource`'s own methods and the error table in §5 against
-`SourceError`'s variants, failing on a name either side has and the other does not.
+Every name below is a restatement of Rust, so none of them is prose alone:
+`scripts/check-protocol-contract.sh` — a target in `just check` — reconciles them with
+the contract crate. The method table in §4 and the error table in §5 are checked both
+ways against `TaskSource`'s methods and `SourceError`'s variants, failing on a name
+either side has and the other does not. The `Capabilities` fields and every serialized
+value of the contract's enums are checked one way, because prose has no rows to read
+back: a value Rust serializes and this document never spells is drift, and fails.
 
 Throughout, **engine** is the side that spawns and asks, and **plugin** is the side
 that is spawned and answers. Field names, and the JSON encoding of every contract

@@ -58,7 +58,7 @@
           "bash scripts/check-nx-graph.sh",
           "bash scripts/check-plugin-isolation.sh",
           "bash scripts/check-contract-inventory.sh",
-          "bash scripts/check-protocol-methods.sh"
+          "bash scripts/check-protocol-contract.sh"
         ],
         "parallel": false
       },
@@ -80,7 +80,7 @@
         "{workspaceRoot}/AGENTS.md",
         "{workspaceRoot}/scripts/check-contract-inventory.sh",
         "{workspaceRoot}/docs/plugin-protocol.md",
-        "{workspaceRoot}/scripts/check-protocol-methods.sh"
+        "{workspaceRoot}/scripts/check-protocol-contract.sh"
       ]
     },
     "typecheck": {

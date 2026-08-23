@@ -3,13 +3,20 @@
 # an out-of-tree plugin is written from cannot drift from the Rust contract in silence.
 #
 # That document is normative: someone writes a plugin in another language from it alone,
-# with no compiler between them and the trait. Two of its tables are therefore restatements
-# of Rust that nothing else checks — the method table in "## 4. The methods", which names
-# one protocol method per `TaskSource` method, and the error table in "## 5. The error
-# envelope", which names every `SourceError` variant by its serialized `kind`. The ordinary
-# failure is a trait method added or renamed and the document left as it was, after which a
-# plugin author implements a protocol this engine no longer speaks — and the reverse, a
-# method specified here that nothing answers.
+# with no compiler between them and the trait. Everything it states about names is therefore
+# a restatement of Rust, and this reconciles the three kinds of restatement it makes.
+#
+# Its two tables are checked BOTH ways, because a table's rows are structure this script can
+# read: the method table in "## 4. The methods" against `TaskSource`'s own methods, and the
+# error table in "## 5. The error envelope" against `SourceError`'s variants. A name either
+# side has and the other does not fails.
+#
+# Its prose enumerations — the `Capabilities` fields, and the serialized variants of the
+# contract's kebab-case enums — are checked one way, declared-to-documented: every name Rust
+# serializes has to appear in the document, spelled the way the wire spells it. One way,
+# because prose has no rows to read back; that direction is the one the ordinary failure
+# takes anyway — a variant added or renamed in Rust and the document left as it was, after
+# which a plugin author implements a protocol this engine no longer speaks.
 #
 # `kind` and `capabilities` are deliberately not protocol methods of their own: both are
 # settled by the handshake, which the document says in the same section. They are carried
@@ -21,8 +28,7 @@ readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 DOCUMENT="$ROOT/docs/plugin-protocol.md" \
-SOURCE_RS="$ROOT/crates/onetaskgraph-plugin-api/src/source.rs" \
-ERROR_RS="$ROOT/crates/onetaskgraph-plugin-api/src/error.rs" \
+API_SRC="$ROOT/crates/onetaskgraph-plugin-api/src" \
 python3 <<'PY'
 import os
 import re
@@ -30,14 +36,13 @@ import sys
 
 
 def refuse(problem, next_action):
-    print(f"check-protocol-methods: {problem}", file=sys.stderr)
-    print(f"check-protocol-methods: {next_action}", file=sys.stderr)
+    print(f"check-protocol-contract: {problem}", file=sys.stderr)
+    print(f"check-protocol-contract: {next_action}", file=sys.stderr)
     raise SystemExit(1)
 
 
-def read(variable, what):
+def read(path, what):
     """One input file, reported by name rather than as a traceback if it will not open."""
-    path = os.environ[variable]
     try:
         return open(path, encoding="utf-8").read()
     except OSError as problem:
@@ -47,9 +52,15 @@ def read(variable, what):
         )
 
 
-document = read("DOCUMENT", "the protocol document")
-source_rs = read("SOURCE_RS", "the api crate's `source.rs`")
-error_rs = read("ERROR_RS", "the api crate's `error.rs`")
+def api(module):
+    """One module of `onetaskgraph-plugin-api`."""
+    return read(os.path.join(os.environ["API_SRC"], module), f"the api crate's `{module}`")
+
+
+document = read(os.environ["DOCUMENT"], "the protocol document")
+source_rs = api("source.rs")
+error_rs = api("error.rs")
+contract_rs = error_rs + api("capability.rs") + api("query.rs") + api("work.rs")
 
 # Trait methods the protocol deliberately does not carry as methods of its own, each with
 # the reason. A method missing from BOTH this map and the document's table is drift.
@@ -165,8 +176,68 @@ compare(
     "`SourceError`",
 )
 
+
+def kebab(name):
+    """A variant name as `#[serde(rename_all = "kebab-case")]` writes it."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "-", name).lower()
+
+
+def mentioned(quoted):
+    """Whether the document spells `quoted` the way the wire spells it."""
+    return f'"{quoted}"' in document
+
+
+# Every kebab-case enum the contract crate declares, so a new one is covered the day it
+# lands rather than the day somebody remembers to list it here.
+enums = re.findall(
+    r'#\[serde\(rename_all = "kebab-case"\)\]\s*pub enum (\w+) \{(.*?)\n\}',
+    contract_rs,
+    re.DOTALL,
+)
+if not enums:
+    refuse(
+        "found no kebab-case enums in the api crate — an empty set would make this "
+        "check pass on anything.",
+        "restore them, or teach this script the shape they have now.",
+    )
+
+for name, body in enums:
+    declared = [kebab(variant) for variant in re.findall(r"^    ([A-Z]\w*)[,({]", body, re.MULTILINE)]
+    if not declared:
+        refuse(
+            f"read no variants from the `{name}` enum of the api crate.",
+            "restore its variants, or teach this script the shape they have now.",
+        )
+    for variant in declared:
+        if not mentioned(variant):
+            failures.append(
+                f"`{name}` serializes the value \"{variant}\" but docs/plugin-protocol.md "
+                f"never spells it. Specify it there — a plugin author writing from that "
+                f"document alone would never emit or accept it."
+            )
+
+capabilities = re.search(r"pub struct Capabilities \{(.*?)\n\}", contract_rs, re.DOTALL)
+if capabilities is None:
+    refuse(
+        "could not read the `Capabilities` struct from the api crate.",
+        "restore it, or teach this script the shape it has now.",
+    )
+fields = re.findall(r"^    pub (\w+):", capabilities.group(1), re.MULTILINE)
+if not fields:
+    refuse(
+        "read no fields from the `Capabilities` struct of the api crate.",
+        "restore its fields, or teach this script the shape they have now.",
+    )
+for field in fields:
+    if f"`{field}`" not in document and not mentioned(field):
+        failures.append(
+            f"`Capabilities` carries the field \"{field}\" but docs/plugin-protocol.md "
+            f"never names it. Specify it there — the handshake is where a plugin author "
+            f"learns what to declare."
+        )
+
 if failures:
     for failure in failures:
-        print(f"check-protocol-methods: {failure}", file=sys.stderr)
+        print(f"check-protocol-contract: {failure}", file=sys.stderr)
     raise SystemExit(1)
 PY
