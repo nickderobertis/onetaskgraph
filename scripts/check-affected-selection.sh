@@ -17,6 +17,28 @@
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# What this proves is a property of the Nx PROJECT GRAPH — which edit selects which
+# project — and that graph is read from nx.json and the project.json files, which are
+# byte-identical on every platform. ci.yml keeps `deny` Linux-only for exactly this
+# reason: "the graph is the same on every platform, so running it three times would buy
+# nothing."
+#
+# On Windows it cannot run at all, and the obstacle is the runner rather than the graph:
+# the severance below needs a REAL copy of node_modules, bun's layout there is hundreds of
+# symlinks, and creating one on Windows needs a privilege the runner does not grant — so
+# `cp -a` fails with "cannot create symbolic link". Dereferencing instead is not a fix,
+# because those links form cycles and such a copy would not terminate.
+#
+# So it is skipped there with a notice, as scripts/rust-coverage.sh skips measurement on
+# Windows for its own platform reason. The Linux and macOS lanes run it on every pull
+# request, so the three selections AGENTS.md owes stay gated on every change.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-affected-selection: skipped on Windows (bun's node_modules is a symlink tree the runner cannot copy); the Linux and macOS lanes gate the project graph" >&2
+    exit 0
+    ;;
+esac
 # From scripts/plugin-crates.sh, so a plugin added later is covered without an edit here.
 # llmlint: ignore[boundary_inputs_validated] these names are not external input:
 # scripts/plugin-crates.sh reads them from this repository's own committed
