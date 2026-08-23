@@ -68,5 +68,11 @@ if problems:
     print("check-coverage-enforced: a project stopped enforcing its coverage floor.", file=sys.stderr)
     for problem in problems:
         print(f"  {problem}", file=sys.stderr)
+    print(
+        f"check-coverage-enforced: restore the floor at each site named above to at least "
+        f"{MIN_LINES}%, then re-run 'just coverage' to measure against it. Lowering the bar "
+        "is a change to what this repository commits to in AGENTS.md, not a way to go green.",
+        file=sys.stderr,
+    )
     sys.exit(1)
 PY

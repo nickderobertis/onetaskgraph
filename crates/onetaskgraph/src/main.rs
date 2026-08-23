@@ -82,9 +82,10 @@ mod tests {
         assert!(bundle["plugin_config"]["in-memory"].is_object());
     }
 
-    /// A sink that fails at the point `mode` names, standing in for a reader that
-    /// went away mid-write and for one that went away between the write and the
-    /// flush — the two ways `onetaskgraph schema | head -1` ends.
+    /// A sink that refuses the write when `fail_on_write` is set and the flush
+    /// otherwise, standing in for a reader that went away mid-write and for one that
+    /// went away between the write and the flush — the two ways
+    /// `onetaskgraph schema | head -1` ends.
     struct Failing {
         fail_on_write: bool,
     }

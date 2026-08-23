@@ -72,5 +72,12 @@ if problems:
     print("check-live-lane: the live lane's shape is broken.", file=sys.stderr)
     for problem in problems:
         print(f"  {problem}", file=sys.stderr)
+    print(
+        "check-live-lane: add the missing test-live target to the project.json named above, "
+        "or restore the credential line in .github/workflows/live.yml under the name the "
+        "product reads; then re-run 'just test-live' to confirm the sweep reaches every "
+        "project again.",
+        file=sys.stderr,
+    )
     sys.exit(1)
 PY

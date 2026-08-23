@@ -37,5 +37,9 @@ if [ "$status" -eq 0 ] || [ "$status" -eq "$NO_TESTS_COLLECTED" ]; then
 fi
 
 printf '%s\n' "$report" >&2
-echo "pytest-live: $PROJECT's live tests failed (exit $status) — see above." >&2
+echo "pytest-live: $PROJECT's live tests failed (exit $status)." >&2
+echo "pytest-live: reproduce one of them with" >&2
+echo "pytest-live:   (cd $PROJECT && uv run --frozen pytest --no-cov tests/live -k <test-name>)" >&2
+echo "pytest-live: a live test reaches a third-party API, so check the credential in the" >&2
+echo "pytest-live: environment and that service's status before treating it as a defect." >&2
 exit "$status"

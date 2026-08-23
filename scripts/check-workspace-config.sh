@@ -139,5 +139,11 @@ if problems:
     print("check-workspace-config: the workspace configuration is inconsistent.", file=sys.stderr)
     for problem in problems:
         print(f"  {problem}", file=sys.stderr)
+    print(
+        "check-workspace-config: apply the edit each line above names to the file it names, "
+        "then re-run 'just typecheck'. A target Nx cannot address by name is a project that "
+        "silently drops out of the gate.",
+        file=sys.stderr,
+    )
     sys.exit(1)
 PY
