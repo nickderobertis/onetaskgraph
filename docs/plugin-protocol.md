@@ -289,9 +289,9 @@ all three hold:
 { "id": "1", "result": { "reachable": true, "detail": "api.linear.app in 84ms" } }
 ```
 
-`detail` is `null` or absent when there is nothing useful to say. A source that
-cannot be reached answers `reachable: false` with a `detail` rather than an `error`
-envelope; an `error` here means the *check itself* could not be made.
+`result` is a `Health`. `detail` is `null` or absent when there is nothing useful to
+say. A source that cannot be reached answers `reachable: false` with a `detail` rather
+than an `error` envelope; an `error` here means the *check itself* could not be made.
 
 ### 4.4 `get_task` and `get_project`
 

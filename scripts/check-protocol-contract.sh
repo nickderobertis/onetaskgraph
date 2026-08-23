@@ -18,6 +18,18 @@
 # takes anyway — a variant added or renamed in Rust and the document left as it was, after
 # which a plugin author implements a protocol this engine no longer speaks.
 #
+# Every one of those one-way checks is scoped to the *section that specifies the thing*,
+# never to the document as a whole. A name that happens to occur in an unrelated paragraph
+# is not a specification of it, and a check satisfied that way passes over exactly the drift
+# it exists to catch: the section going stale while the name survives somewhere else. Each
+# section is named below, so a section that is renamed or deleted fails loudly here instead
+# of quietly widening the search back to the whole document.
+#
+# A method's signature is reconciled too, not only its name: every parameter the trait takes
+# has to be named in that method's own section, and the type its `result` carries has to be
+# spelled there. A method that gains an argument in Rust and keeps its documented shape is
+# drift a name-only comparison cannot see.
+#
 # `kind` and `capabilities` are deliberately not protocol methods of their own: both are
 # settled by the handshake, which the document says in the same section. They are carried
 # below as named exceptions so that decision stays machine-checked rather than looking
@@ -73,7 +85,64 @@ NOT_METHODS = {
 # source and reading what it can do, which the method table's own row says.
 HANDSHAKE_METHOD = "initialize"
 
+# Where each thing is specified. Every one-way check below reads one of these sections
+# rather than the whole document, so an incidental mention elsewhere cannot stand in for a
+# specification. A heading that moves fails here by name.
+CAPABILITIES_SECTION = "### 4.2 `Capabilities`"
+
+METHOD_SECTIONS = {
+    "health": "### 4.3 `health`",
+    "get_task": "### 4.4 `get_task` and `get_project`",
+    "get_project": "### 4.4 `get_task` and `get_project`",
+    "query_tasks": "### 4.5 `query_tasks`",
+    "query_projects": "### 4.6 `query_projects`",
+    "labels": "### 4.7 `labels`",
+    "task_dependencies": "### 4.8 `task_dependencies` and `project_dependencies`",
+    "project_dependencies": "### 4.8 `task_dependencies` and `project_dependencies`",
+}
+
+ENUM_SECTIONS = {
+    "Support": CAPABILITIES_SECTION,
+    "DependencySupport": CAPABILITIES_SECTION,
+    "StatusCategory": "### 4.5 `query_tasks`",
+    "TextFields": "### 4.5 `query_tasks`",
+    "ProjectFilter": "### 4.5 `query_tasks`",
+    "DependencyKind": "### 4.8 `task_dependencies` and `project_dependencies`",
+    "Direction": "### 4.8 `task_dependencies` and `project_dependencies`",
+}
+
+# `SourceError` is the one kebab-case enum with no entry above, because §5 specifies it as a
+# table and the table is already compared BOTH ways — a stronger check than any one-way scan
+# of the same section would be. Every other kebab-case enum must be placed, so a new one
+# cannot arrive unchecked.
+ENUMS_CHECKED_BY_A_TABLE = {"SourceError"}
+
 failures = []
+
+
+def section(heading):
+    """The text under `heading`, up to the next heading of the same or higher level.
+
+    The heading is an anchor for the same reason a table's header line is: a section that
+    was renamed or removed fails here, rather than silently widening a check back to the
+    whole document.
+    """
+    lines = document.splitlines()
+    start = next((index for index, line in enumerate(lines) if line == heading), None)
+    if start is None:
+        refuse(
+            f"could not find the section headed `{heading}` in docs/plugin-protocol.md.",
+            "restore that section, or update the anchors in this script if the document "
+            "was deliberately reshaped.",
+        )
+    level = len(heading) - len(heading.lstrip("#"))
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if line.startswith("#") and len(line) - len(line.lstrip("#")) <= level:
+            end = index
+            break
+    return "\n".join(lines[start:end])
 
 
 def first_column(header):
@@ -155,6 +224,55 @@ compare(
     "`TaskSource`",
 )
 
+
+def signature(method):
+    """One method's parameter names and the type its `Result` carries."""
+    found = re.search(
+        rf"\n    (?:async )?fn {method}\(\s*&self,?(.*?)\)\s*->\s*Result<(.+?), SourceError>",
+        trait.group(1),
+        re.DOTALL,
+    )
+    if found is None:
+        refuse(
+            f"could not read the signature of `TaskSource::{method}`.",
+            "restore it, or teach this script the shape it has now.",
+        )
+    parameters = re.findall(r"(\w+)\s*:", found.group(1))
+    carried = " ".join(found.group(2).split())
+    # The document specifies what a lookup returns, not that Rust wraps it in an `Option`:
+    # "a `Task`, or `null`" is the wire's way of saying `Option<Task>`.
+    inner = re.fullmatch(r"Option<(.+)>", carried)
+    return parameters, inner.group(1) if inner else carried
+
+
+def spelled(name, text):
+    """Whether `text` spells `name` as the wire spells it, or as the document marks a type."""
+    return f'"{name}"' in text or f"`{name}`" in text
+
+
+for method in sorted(methods - set(NOT_METHODS)):
+    if method not in METHOD_SECTIONS:
+        refuse(
+            f"`TaskSource::{method}` has no section named in METHOD_SECTIONS, so its "
+            "parameters and result would go unchecked.",
+            "add the section of docs/plugin-protocol.md that specifies it.",
+        )
+    where = section(METHOD_SECTIONS[method])
+    parameters, carried = signature(method)
+    for parameter in parameters:
+        if not spelled(parameter, where):
+            failures.append(
+                f"`TaskSource::{method}` takes `{parameter}`, but "
+                f"\"{METHOD_SECTIONS[method]}\" never names it. Specify it there — a plugin "
+                f"author writing from that section alone would never read it."
+            )
+    if not spelled(carried, where):
+        failures.append(
+            f"`TaskSource::{method}` returns `{carried}`, but "
+            f"\"{METHOD_SECTIONS[method]}\" never names that type. Say what `result` "
+            f"carries there."
+        )
+
 # Variant names as they serialize: `#[serde(rename_all = "kebab-case")]` over the enum.
 variants = {
     re.sub(r"(?<!^)(?=[A-Z])", "-", name).lower()
@@ -182,9 +300,6 @@ def kebab(name):
     return re.sub(r"(?<!^)(?=[A-Z])", "-", name).lower()
 
 
-def mentioned(quoted):
-    """Whether the document spells `quoted` the way the wire spells it."""
-    return f'"{quoted}"' in document
 
 
 # Every kebab-case enum the contract crate declares, so a new one is covered the day it
@@ -208,12 +323,22 @@ for name, body in enums:
             f"read no variants from the `{name}` enum of the api crate.",
             "restore its variants, or teach this script the shape they have now.",
         )
+    if name in ENUMS_CHECKED_BY_A_TABLE:
+        continue
+    if name not in ENUM_SECTIONS:
+        refuse(
+            f"the kebab-case enum `{name}` has no section named in ENUM_SECTIONS, so its "
+            "variants would go unchecked.",
+            "add the section of docs/plugin-protocol.md that specifies it, or record it as "
+            "one the tables already cover.",
+        )
+    where = section(ENUM_SECTIONS[name])
     for variant in declared:
-        if not mentioned(variant):
+        if f'"{variant}"' not in where:
             failures.append(
-                f"`{name}` serializes the value \"{variant}\" but docs/plugin-protocol.md "
-                f"never spells it. Specify it there — a plugin author writing from that "
-                f"document alone would never emit or accept it."
+                f"`{name}` serializes the value \"{variant}\" but "
+                f"\"{ENUM_SECTIONS[name]}\" never spells it. Specify it there — a plugin "
+                f"author writing from that section alone would never emit or accept it."
             )
 
 capabilities = re.search(r"pub struct Capabilities \{(.*?)\n\}", contract_rs, re.DOTALL)
@@ -228,12 +353,13 @@ if not fields:
         "read no fields from the `Capabilities` struct of the api crate.",
         "restore its fields, or teach this script the shape they have now.",
     )
+handshake = section(CAPABILITIES_SECTION)
 for field in fields:
-    if f"`{field}`" not in document and not mentioned(field):
+    if not spelled(field, handshake):
         failures.append(
-            f"`Capabilities` carries the field \"{field}\" but docs/plugin-protocol.md "
-            f"never names it. Specify it there — the handshake is where a plugin author "
-            f"learns what to declare."
+            f"`Capabilities` carries the field \"{field}\" but "
+            f"\"{CAPABILITIES_SECTION}\" never names it. Specify it there — the handshake "
+            f"is where a plugin author learns what to declare."
         )
 
 if failures:

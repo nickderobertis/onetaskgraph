@@ -22,8 +22,14 @@ set -euo pipefail
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# The gate runs from a git hook and git exports GIT_DIR to hooks, where it overrides the
+# repository a plain `git` command would otherwise pick from the working directory. The
+# scan below lists tracked files, so left set it would list some other tree's.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
 python3 <<'PY'
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -39,8 +45,11 @@ CREDENTIALS = {
     ),
 }
 
-# Every file that restates the contract, and what it is. Each has to name both credentials
-# and neither may name a second spelling of one.
+# Every file that has to *state* the contract, and what it is: each names both credentials.
+# The other half of the check — that no second spelling exists — is not a list at all. It
+# runs over every tracked file, because "there is one name per credential everywhere" is a
+# claim about the repository rather than about five chosen files, and a hand-picked subset
+# would leave the next file to name one unwatched.
 RESTATEMENTS = {
     "README.md": "the credentials section a user reads",
     "docs/plugin-protocol.md": "the protocol document an out-of-tree plugin is written from",
@@ -49,14 +58,25 @@ RESTATEMENTS = {
     "scripts/check-live-lane.sh": "the live lane's own job-to-credential map",
 }
 
-# A file whose own job is to forbid a spelling has to be able to write it down. Only the
-# must-name-both half of the contract is checked for these; the wrong-spelling half would
-# be checking a guard for doing exactly what it is there to do.
-GUARDS_AGAINST_WRONG_SPELLINGS = {"scripts/check-live-lane.sh"}
+# A file whose own job is to forbid a spelling has to be able to write it down: these are
+# left out of the second-spelling scan, and out of it alone. This script is one of them —
+# the wrong spellings are its own data.
+GUARDS_AGAINST_WRONG_SPELLINGS = {
+    "scripts/check-live-lane.sh",
+    "scripts/check-credential-names.sh",
+}
 
 # `#` starts a comment in YAML, JSON-with-comments this repository does not use, shell and
 # Markdown-embedded shell alike; Markdown's own `#` is a heading, which is prose either way.
 COMMENT = re.compile(r"(?<!\S)#.*$", re.MULTILINE)
+
+def readable(path):
+    """One tracked file as text, or nothing when it is not text at all."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
 
 problems = []
 
@@ -68,14 +88,32 @@ for relative, what in RESTATEMENTS.items():
         )
         continue
     code = COMMENT.sub("", path.read_text(encoding="utf-8"))
-    for name, wrong_spellings in CREDENTIALS.items():
+    for name in CREDENTIALS:
         if name not in code:
             problems.append(
                 f"{relative}: never names {name}, but it is {what}. There is one name per "
                 "credential everywhere and nothing translates between spellings."
             )
-        if relative in GUARDS_AGAINST_WRONG_SPELLINGS:
-            continue
+
+tracked = subprocess.run(
+    ["git", "ls-files", "-z"], capture_output=True, check=True, text=True
+).stdout.split("\0")
+if not any(tracked):
+    print(
+        "check-credential-names: git listed no tracked files, so the second-spelling scan "
+        "would pass on anything.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+for relative in filter(None, tracked):
+    if relative in GUARDS_AGAINST_WRONG_SPELLINGS:
+        continue
+    text = readable(Path(relative))
+    if text is None:
+        continue
+    code = COMMENT.sub("", text)
+    for name, wrong_spellings in CREDENTIALS.items():
         for wrong in wrong_spellings:
             if wrong in code:
                 problems.append(
