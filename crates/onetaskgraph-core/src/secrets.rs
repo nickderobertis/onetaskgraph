@@ -8,6 +8,7 @@
 //! Parsing here is pure; the read is [`discovery`](crate::config::read_optional)'s,
 //! like every other read this crate makes.
 
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -31,7 +32,7 @@ use crate::config::{ConfigError, read_optional, secrets_path};
 #[derive(Clone)]
 pub struct Secrets {
     environment: Environment,
-    file: BTreeMap<String, SecretString>,
+    file: BTreeMap<CredentialName, SecretString>,
     path: Option<PathBuf>,
 }
 
@@ -77,7 +78,7 @@ impl Secrets {
                 .keys()
                 .map(|variable| ResolvedCredential {
                     variable: variable.clone(),
-                    resolved_from: if self.environment.non_empty(variable).is_some() {
+                    resolved_from: if self.environment.non_empty(variable.as_str()).is_some() {
                         CredentialLayer::Environment
                     } else {
                         CredentialLayer::SecretsFile
@@ -132,11 +133,58 @@ impl fmt::Display for CredentialLayer {
     }
 }
 
+/// The name of an environment variable a credential arrives under.
+///
+/// A newtype rather than a `String` because the domain is real and narrow — what a
+/// shell could have exported — and a report naming something outside it would be
+/// reporting a credential that no layer could ever resolve. [`CredentialName::new`] is
+/// the only way to make one, so that report cannot be built.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
+#[serde(into = "String")]
+// As for `SettingPath`: schemars does not read `serde(into)`, and this is a string on
+// the wire.
+#[schemars(with = "String")]
+pub struct CredentialName(String);
+
+impl CredentialName {
+    /// `name` when a shell could have exported it, and nothing otherwise.
+    #[must_use]
+    pub fn new(name: &str) -> Option<Self> {
+        is_variable_name(name).then(|| Self(name.to_owned()))
+    }
+
+    /// The name itself.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for CredentialName {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<CredentialName> for String {
+    fn from(value: CredentialName) -> Self {
+        value.0
+    }
+}
+
+impl fmt::Display for CredentialName {
+    /// Through `pad`, so a `{:width$}` of one lines a column of these up. `write_str`
+    /// would silently ignore the width, which is how the report's column stops aligning.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(&self.0)
+    }
+}
+
 /// One credential name the file supplied, and where its value comes from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ResolvedCredential {
     /// The variable's name. Never its value.
-    pub variable: String,
+    pub variable: CredentialName,
     /// The layer whose value a plugin would receive.
     pub resolved_from: CredentialLayer,
 }
@@ -163,7 +211,7 @@ pub struct SecretsReport {
 /// Returns [`ConfigError::Setting`] naming the file and the line number when a line
 /// is not `KEY=VALUE` or its key is not a usable variable name. Neither message
 /// carries any part of the line's value.
-fn parse(text: &str, path: &Path) -> Result<BTreeMap<String, SecretString>, ConfigError> {
+fn parse(text: &str, path: &Path) -> Result<BTreeMap<CredentialName, SecretString>, ConfigError> {
     let mut values = BTreeMap::new();
     for (index, line) in text.lines().enumerate() {
         let number = index + 1;
@@ -181,7 +229,7 @@ fn parse(text: &str, path: &Path) -> Result<BTreeMap<String, SecretString>, Conf
             ));
         };
         let name = name.trim();
-        if !is_variable_name(name) {
+        let Some(name) = CredentialName::new(name) else {
             return Err(ConfigError::setting(
                 format!("{}:{number}", path.display()),
                 format!("{name:?} is not a usable environment variable name"),
@@ -189,8 +237,8 @@ fn parse(text: &str, path: &Path) -> Result<BTreeMap<String, SecretString>, Conf
                  underscore — the names this product reads are LINEAR_API_KEY and \
                  GH_PROJECTS_TOKEN.",
             ));
-        }
-        values.insert(name.to_owned(), SecretString::from(unquote(value.trim())));
+        };
+        values.insert(name, SecretString::from(unquote(value.trim())));
     }
     Ok(values)
 }

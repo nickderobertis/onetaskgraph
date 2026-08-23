@@ -534,8 +534,16 @@ fn a_default_source_that_is_not_a_usable_name_is_refused() {
 
 /// A configuration naming one source of `kind` over `block`.
 fn one_source(kind: &str, block: Value) -> Config {
+    source_document(kind, block).expect("a configuration")
+}
+
+/// The same one-source document, kept as a `Result` for the blocks that are refused.
+///
+/// A block a plugin will not accept has no `Config` to be read out of: the check runs
+/// inside [`Config::from_document`], so these tests assert on the value that never
+/// came into existence rather than on a later call over one that did.
+fn source_document(kind: &str, block: Value) -> Result<Config, ConfigError> {
     Config::from_document(json!({"sources": {"work": {"plugin": kind, "config": block}}}))
-        .expect("a configuration")
 }
 
 /// A resolver with nothing in it, for sources that need no credential.
@@ -687,11 +695,8 @@ fn a_blocks_own_field_is_checked_against_the_plugins_schema_before_the_source_is
         "a valid block reaches the factory: {reached_build}"
     );
 
-    let refused = resolve(
-        &one_source("linear", json!({"api_key_env": 7})),
-        &no_secrets(),
-    )
-    .expect_err("a field this plugin does not declare");
+    let refused = source_document("linear", json!({"api_key_env": 7}))
+        .expect_err("a field this plugin does not declare");
     assert_eq!(refused.key(), Some("sources.work.config.api_key_env"));
     assert!(
         !refused.to_string().contains("not implemented yet"),
@@ -998,11 +1003,8 @@ fn a_document_that_is_not_an_object_at_all_is_refused_at_its_root() {
 
 #[test]
 fn a_field_a_plugin_declares_a_schema_for_is_refused_by_the_field_that_is_wrong() {
-    let error = onetaskgraph_core::validate_sources(&one_source(
-        "in-memory",
-        json!({"capabilities": {"projekts": "native"}}),
-    ))
-    .expect_err("a mistyped field inside a declared block");
+    let error = source_document("in-memory", json!({"capabilities": {"projekts": "native"}}))
+        .expect_err("a mistyped field inside a declared block");
 
     assert_eq!(
         error.key(),
@@ -1014,9 +1016,8 @@ fn a_field_a_plugin_declares_a_schema_for_is_refused_by_the_field_that_is_wrong(
 
 #[test]
 fn a_declared_field_given_the_wrong_kind_of_value_is_refused_at_that_field() {
-    let error =
-        onetaskgraph_core::validate_sources(&one_source("in-memory", json!({"tasks": "one"})))
-            .expect_err("a list field given a string");
+    let error = source_document("in-memory", json!({"tasks": "one"}))
+        .expect_err("a list field given a string");
     assert_eq!(error.key(), Some("sources.work.config.tasks"));
 }
 

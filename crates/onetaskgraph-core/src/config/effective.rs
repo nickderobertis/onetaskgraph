@@ -5,8 +5,6 @@
 //! final [`Config`], so it cannot claim a layer the merge did not actually take the
 //! value from.
 
-use std::collections::BTreeMap;
-
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
@@ -14,7 +12,7 @@ use serde_json::Value;
 use crate::secrets::SecretsReport;
 
 use super::Config;
-use super::layer::{Origin, Setting, SettingPath};
+use super::layer::{Merged, Origin, Setting, SettingPath};
 
 /// Every setting this build reads, with its value and where the value came from.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -36,11 +34,7 @@ impl EffectiveConfig {
     /// the run will actually use — the point of the verb is to answer "what is this
     /// command going to do", and a silent omission answers it wrongly.
     #[must_use]
-    pub fn new(
-        merged: &BTreeMap<SettingPath, Setting>,
-        config: &Config,
-        secrets: SecretsReport,
-    ) -> Self {
+    pub fn new(merged: &Merged, config: &Config, secrets: SecretsReport) -> Self {
         let mut settings: Vec<Setting> = merged.values().cloned().collect();
 
         for (key, value) in [
@@ -119,7 +113,7 @@ impl EffectiveConfig {
             .secrets
             .variables
             .iter()
-            .map(|credential| credential.variable.chars().count())
+            .map(|credential| credential.variable.as_str().chars().count())
             .max()
             .unwrap_or(0);
         for credential in &self.secrets.variables {

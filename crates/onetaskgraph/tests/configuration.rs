@@ -1079,6 +1079,27 @@ fn a_configuration_document_that_cannot_be_read_stops_the_run_rather_than_being_
 }
 
 #[test]
+fn an_obstructed_project_document_stops_the_run_rather_than_being_walked_past() {
+    let sandbox = Sandbox::new();
+    // The user-level document would set `page_size` if the walk simply skipped what it
+    // could not read, so a run that walked past this one would look successful and read
+    // a configuration the user does not believe is in force.
+    sandbox.user_document("page_size: 11\n");
+    let obstruction = sandbox.project().join("onetaskgraph.yaml");
+    std::fs::create_dir_all(&obstruction).expect("a directory in the document's place");
+
+    let message = refusal(&sandbox, &[]);
+    assert!(
+        message.contains(&obstruction.display().to_string()),
+        "the refusal names the document it could not read: {message}"
+    );
+    assert!(
+        message.contains("could not read"),
+        "the refusal says what went wrong: {message}"
+    );
+}
+
+#[test]
 fn a_credentials_file_that_cannot_be_read_stops_the_run_rather_than_being_skipped() {
     let sandbox = Sandbox::new();
     sandbox.project_document(ONE_SOURCE);

@@ -52,7 +52,7 @@ pub fn documents(
     {
         found.push(Document { path, text });
     }
-    if let Some(path) = nearest_project_document(working_directory)
+    if let Some(path) = nearest_project_document(working_directory)?
         && let Some(text) = read_optional(&path)?
     {
         found.push(Document { path, text });
@@ -84,11 +84,27 @@ fn configuration_home(environment: &Environment) -> Option<PathBuf> {
 }
 
 /// The nearest `onetaskgraph.yaml` at or above `working_directory`.
-fn nearest_project_document(working_directory: &Path) -> Option<PathBuf> {
-    working_directory
-        .ancestors()
-        .map(|directory| directory.join(PROJECT_DOCUMENT_NAME))
-        .find(|candidate| candidate.is_file())
+///
+/// The walk stops at the first candidate that exists, whatever it is. Asking whether
+/// each one is a *file* would fold "there is nothing here" together with "there is a
+/// directory here" and "this user may not look" — and a document obstructed either of
+/// those ways would be walked straight past, leaving the run reading a configuration
+/// from further up the tree than the user believes. Existence is the question; what a
+/// candidate turns out to be is [`read_optional`]'s to report.
+///
+/// # Errors
+///
+/// Returns [`ConfigError::Read`] when a candidate cannot be examined at all.
+fn nearest_project_document(working_directory: &Path) -> Result<Option<PathBuf>, ConfigError> {
+    for directory in working_directory.ancestors() {
+        let candidate = directory.join(PROJECT_DOCUMENT_NAME);
+        match candidate.try_exists() {
+            Ok(true) => return Ok(Some(candidate)),
+            Ok(false) => {}
+            Err(error) => return Err(ConfigError::read(&candidate, &error)),
+        }
+    }
+    Ok(None)
 }
 
 /// Read `path`, treating "there is no such file" as "there is nothing here".

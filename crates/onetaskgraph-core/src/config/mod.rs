@@ -35,7 +35,7 @@ pub use discovery::{
 pub use effective::EffectiveConfig;
 pub use environment_layer::{ENVIRONMENT_PREFIX, variable_for};
 pub use error::ConfigError;
-pub use layer::{Layer, Origin, Setting, SettingPath, merge, unflatten, value_from_text};
+pub use layer::{Layer, Merged, Origin, Setting, SettingPath, merge, unflatten, value_from_text};
 
 /// The variable that moves the credentials file somewhere else.
 pub const SECRETS_FILE_VARIABLE: &str = "ONETASKGRAPH_SECRETS_FILE";
@@ -63,8 +63,12 @@ pub enum OutputFormat {
 pub struct SourceConfig {
     /// The plugin kind that builds it.
     pub plugin: PluginKind,
-    /// The plugin's own block, checked against that plugin's declared schema before
-    /// the source is built rather than inside the first call it makes.
+    /// The plugin's own block.
+    ///
+    /// Opaque here on purpose — a plugin's fields are the plugin's, and typing them in
+    /// the engine would put every plugin's shape in the engine. What holds instead is
+    /// that [`Config::from_document`] checks each block against the schema its own
+    /// plugin declares, so no `Config` carries a block that plugin would refuse.
     pub config: Value,
 }
 
@@ -153,8 +157,9 @@ impl Config {
     /// Returns [`ConfigError::Setting`] naming the offending key for an unknown
     /// field, a value of the wrong shape, a `plugin:` this build does not have, a
     /// source name that does not match
-    /// [`SOURCE_NAME_PATTERN`](onetaskgraph_plugin_api::SOURCE_NAME_PATTERN), or a
-    /// `default_sources` entry naming a source nothing configures.
+    /// [`SOURCE_NAME_PATTERN`](onetaskgraph_plugin_api::SOURCE_NAME_PATTERN), a
+    /// `default_sources` entry naming a source nothing configures, or a `config:`
+    /// block the source's own plugin refuses.
     pub fn from_document(document: Value) -> Result<Self, ConfigError> {
         let shape: DocumentShape = serde_path_to_error::deserialize(document).map_err(|error| {
             let key = error.path().to_string();
@@ -207,12 +212,18 @@ impl Config {
             .map(|names| resolve_default_sources(&names, &sources))
             .transpose()?;
 
-        Ok(Self {
+        let config = Self {
             default_sources,
             page_size: shape.page_size,
             output: shape.output,
             sources,
-        })
+        };
+        // Here rather than at the call site, so "a `Config` exists" means "every block in
+        // it satisfies the schema its own plugin declares". Checked once at the boundary,
+        // a mistyped per-source field cannot survive as far as the HTTP call that would
+        // otherwise be the first thing to notice it.
+        crate::resolve::validate_sources(&config)?;
+        Ok(config)
     }
 
     /// The sources a command answers from when it names none, in a stable order.
@@ -313,7 +324,6 @@ pub fn load(
     // Before the sources are resolved, as the contract says: a plugin reads its
     // credential through this resolver, so it has to exist by the time one is built.
     let secrets = Secrets::load(environment.clone())?;
-    crate::resolve::validate_sources(&config)?;
 
     Ok(Loaded {
         effective: EffectiveConfig::new(&merged, &config, secrets.report()),

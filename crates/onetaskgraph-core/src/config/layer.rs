@@ -233,7 +233,7 @@ fn flatten(
 /// `sources.work.config` whole, and vice versa. That leaves the result prefix-free,
 /// which is what lets [`unflatten`] rebuild a document from it without conflict.
 #[must_use]
-pub fn merge(layers: &[Layer]) -> BTreeMap<SettingPath, Setting> {
+pub fn merge(layers: &[Layer]) -> Merged {
     let mut merged: BTreeMap<SettingPath, Setting> = BTreeMap::new();
     for layer in layers {
         for setting in &layer.settings {
@@ -241,15 +241,33 @@ pub fn merge(layers: &[Layer]) -> BTreeMap<SettingPath, Setting> {
             merged.insert(setting.key.clone(), setting.clone());
         }
     }
-    merged
+    Merged(merged)
+}
+
+/// The result of a [`merge`]: settings no one of which is an ancestor of another.
+///
+/// A newtype rather than a bare map, because that prefix-free property is the whole
+/// reason [`unflatten`] can be infallible. Handed a map anybody could build, it would
+/// have to decide what a leaf that is also a branch means — and the honest answers are
+/// a panic or a silently dropped setting. Only `merge` constructs one of these, so
+/// neither case can be reached.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Merged(BTreeMap<SettingPath, Setting>);
+
+impl std::ops::Deref for Merged {
+    type Target = BTreeMap<SettingPath, Setting>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 /// Rebuild one document from merged settings.
 ///
 /// Infallible because [`merge`] leaves no setting that is an ancestor of another, so
-/// no leaf is ever asked to also be a branch.
+/// no leaf is ever asked to also be a branch — and [`Merged`] is the type that says so.
 #[must_use]
-pub fn unflatten(settings: &BTreeMap<SettingPath, Setting>) -> Value {
+pub fn unflatten(settings: &Merged) -> Value {
     let mut root = Map::new();
     for setting in settings.values() {
         let segments = setting.key.segments();
@@ -259,7 +277,7 @@ pub fn unflatten(settings: &BTreeMap<SettingPath, Setting>) -> Value {
                 .entry(segment.clone())
                 .or_insert_with(|| Value::Object(Map::new()))
                 .as_object_mut()
-                .expect("merge leaves no setting that is an ancestor of another");
+                .expect("`Merged` holds no setting that is an ancestor of another");
         }
         cursor.insert(segments[segments.len() - 1].clone(), setting.value.clone());
     }

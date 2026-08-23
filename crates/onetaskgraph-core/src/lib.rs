@@ -36,4 +36,4 @@ pub use plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, So
 pub use registry::{PluginKind, plugin_for, plugin_kinds, registry};
 pub use resolve::{ResolvedSource, resolve, validate_sources};
 pub use schema::{SCHEMA_BUNDLE_VERSION, schema_bundle};
-pub use secrets::{CredentialLayer, ResolvedCredential, Secrets, SecretsReport};
+pub use secrets::{CredentialLayer, CredentialName, ResolvedCredential, Secrets, SecretsReport};
