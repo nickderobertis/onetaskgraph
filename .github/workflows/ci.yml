@@ -1,0 +1,162 @@
+# Prove the workspace from a clean checkout, on the real platform matrix.
+#
+# A pull request runs the gate over the projects its diff can actually reach; the default
+# branch sweeps every project, so nothing affected-detection or a stale cache could miss
+# goes unchecked. Both go through the same `just` recipes a contributor runs locally.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: the token is read-only by default and widened per job only where a job
+# genuinely needs more.
+permissions:
+  contents: read
+
+jobs:
+  # The three required OS lanes. All three are required because this ships a
+  # cross-platform command-line tool whose install path CI has to prove on the real
+  # matrix; affected selection is what keeps that affordable.
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The merge base is derived explicitly below; a shallow checkout cannot resolve it.
+          fetch-depth: 0
+
+      - uses: extractions/setup-just@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      # Reads rust-toolchain.toml, so CI and local compile with byte-identical rustc,
+      # clippy and rustfmt, and the version is pinned in exactly one place.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-machete
+
+      - name: Bootstrap
+        run: just bootstrap
+
+      # Derive the base explicitly rather than letting Nx guess: an implicit base is how
+      # affected selection quietly starts comparing against the wrong commit.
+      - name: Derive the merge base
+        id: base
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "${BASE_SHA:-}" ]; then
+            git fetch --no-tags origin "$BASE_REF"
+            merge_base="$(git merge-base "$BASE_SHA" HEAD)"
+            echo "base=$merge_base" >> "$GITHUB_OUTPUT"
+            echo "Affected against the merge base with $BASE_REF: $merge_base"
+          fi
+
+      - name: Check the affected projects
+        if: github.event_name == 'pull_request'
+        env:
+          # Nx's own mechanism for "compare against this commit". Setting it here rather
+          # than threading an argument through every recipe keeps one source of truth for
+          # the base across all five phases of the gate.
+          NX_BASE: ${{ steps.base.outputs.base }}
+          NX_HEAD: HEAD
+        run: just check
+
+      # On the default branch, sweep everything. A cache is for speed and must never be
+      # what makes a broken clean build look green.
+      - name: Sweep every project
+        if: github.event_name != 'pull_request'
+        run: just gate
+
+  # Supply chain, Linux-only: the graph is the same on every platform, so running it three
+  # times would buy nothing. This is where the two mechanically-enforced invariants fail —
+  # the banned-store list and the onetaskgraph-core wrapper restriction. See deny.toml.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-machete
+      - name: Supply-chain gate
+        run: just deny
+
+  # The PR title becomes the one squash commit that lands and that release-plz reads, so a
+  # malformed title must not merge.
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The LLM-judge tier, separate from `check` because it is non-deterministic, needs an
+  # authenticated harness and makes network calls. Scoped to the files this PR changed, so
+  # a PR pays for its own changes rather than a full-repo sweep.
+  llmlint:
+    if: github.event_name == 'pull_request' && github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Fetch main (diff base)
+        run: git fetch --no-tags --depth=2147483647 origin main
+      - uses: extractions/setup-just@v4
+
+      - name: Install oneharness + llmlint
+        run: |
+          just setup-llmlint
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # setup-llmlint.sh installs llmlint and oneharness but NOT a harness, so without
+      # this the lint step would skip every file and still pass.
+      - name: Install the coding harness (claude-code)
+        run: npm i -g @anthropic-ai/claude-code
+
+      # Deterministic and model-free, so it runs first and fails a config, suppression or
+      # version-bump slip in milliseconds rather than after a paid harness call.
+      - name: Validate the llmlint config (no model)
+        run: just lint-llm-validate --diff-base origin/main
+
+      - name: Lint the changed files
+        env:
+          HARNESS_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          # Fail with an actionable message rather than an opaque harness error — and
+          # never no-op to green, which would report unlinted files as clean.
+          if [ -z "${HARNESS_KEY:-}" ]; then
+            echo "::error::llmlint needs a harness credential. Add the" \
+                 "CLAUDE_CODE_OAUTH_TOKEN repository secret (it is declared in" \
+                 "gh-secrets.json). Fork pull requests are gated by the" \
+                 "require-approval-for-fork-workflows setting." >&2
+            exit 1
+          fi
+          just lint-llm-diff origin/main

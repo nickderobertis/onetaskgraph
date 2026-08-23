@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Run the complete gate before anything leaves this machine.
+#
+# The six required checks on main are the only thing that can refuse a merge to this
+# repository, and each of them costs CI minutes and wall-clock. This catches what they
+# would catch, locally, before the push. `just bootstrap` activates it by pointing
+# core.hooksPath here.
+#
+# It runs the FULL sweep rather than the affected set on purpose: a push is the last
+# moment the whole tree is cheap to check, and affected selection is an optimisation for
+# the inner loop, not a reason to let an unrelated project go unproven.
+set -euo pipefail
+
+readonly ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+if ! command -v just >/dev/null 2>&1; then
+  echo "pre-push: just is not installed, so the gate cannot run." >&2
+  echo "pre-push: install it (scripts/session-setup.sh does), then push again." >&2
+  exit 1
+fi
+
+echo "pre-push: running the complete gate (just gate)" >&2
+if ! just gate; then
+  echo "pre-push: the gate failed — see the output above." >&2
+  echo "pre-push: fix it and push again. Bypassing this hook pushes work nothing has" >&2
+  echo "pre-push: checked, and the required checks on main will refuse it anyway." >&2
+  exit 1
+fi

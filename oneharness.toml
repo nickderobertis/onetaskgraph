@@ -1,0 +1,16 @@
+# Which harness the llmlint (LLM-judge) tier drives. Fallback mode, so the one committed
+# file works everywhere: a contributor with Codex authenticated runs the primary, and a
+# Claude Code session — where codex cannot run at all — falls through to the secondary
+# without an env override. Only a candidate that cannot run falls through; a real task
+# failure does not, so a genuine failure is never masked.
+#
+# IS_SANDBOX lets claude-code run under root without refusing; harmless elsewhere.
+run_mode = "fallback"
+harnesses = ["codex", "claude-code"]
+
+[harness.codex]
+model = "gpt-5.5"
+
+[harness.claude-code]
+model = "claude-opus-4-8"
+env = { IS_SANDBOX = "1" }

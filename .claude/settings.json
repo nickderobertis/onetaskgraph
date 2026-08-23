@@ -1,0 +1,52 @@
+{
+  "//": "llmlint: ignore-file[least_privilege_grants] the boundary here is irreversibility, not breadth — AGENTS.md, Conventions. JSON has no comment to scope this to the one line.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-setup.sh\"",
+            "timeout": 180,
+            "type": "command"
+          }
+        ],
+        "matcher": "startup|resume"
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(just bootstrap)",
+      "Bash(just check)",
+      "Bash(just gate)",
+      "Bash(just test)",
+      "Bash(just test-live)",
+      "Bash(just lint)",
+      "Bash(just typecheck)",
+      "Bash(just format)",
+      "Bash(just format-check)",
+      "Bash(just coverage)",
+      "Bash(just deny)",
+      "Bash(just upgrade)",
+      "Bash(just schema)",
+      "Bash(just graph)",
+      "Bash(just session-setup)",
+      "Bash(just setup-llmlint)",
+      "Bash(just lint-llm)",
+      "Bash(just lint-llm-validate --diff-base origin/main)",
+      "Bash(just lint-llm-diff origin/main)",
+      "Bash(cargo metadata --format-version 1 --no-deps)",
+      "Bash(cargo tree:*)",
+      "Bash(cargo update --dry-run)",
+      "Bash(uv lock --upgrade --dry-run)",
+      "Bash(bun outdated)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git add -A)",
+      "Bash(git commit -m:*)"
+    ],
+    "deny": []
+  }
+}

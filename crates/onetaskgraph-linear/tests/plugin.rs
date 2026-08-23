@@ -1,0 +1,72 @@
+//! The factory this crate ships ahead of its source.
+//!
+//! Driven through the public trait, the way the registry drives it.
+
+use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName, SourcePlugin};
+use secrecy::SecretString;
+
+/// This plugin refuses before it reads a credential, so nothing defines one.
+struct NoSecrets;
+impl SecretResolver for NoSecrets {
+    fn get(&self, _var: &str) -> Option<SecretString> {
+        None
+    }
+}
+
+#[test]
+fn build_refuses_with_a_configuration_error_naming_the_plugin() {
+    // Shipping the factory ahead of the source is what lets the registry name
+    // `linear` from the first commit; the refusal has to say plainly that the
+    // source is the missing part, not the configuration.
+    let name = SourceName::new("work").expect("a valid source name");
+
+    let Err(error) = onetaskgraph_linear::Plugin.build(&name, &serde_json::json!({}), &NoSecrets)
+    else {
+        panic!("the `linear` plugin is not implemented yet, so build must refuse");
+    };
+
+    let SourceError::Config { message } = &error else {
+        panic!("a plugin that cannot be built yet reports a configuration error, got {error:?}");
+    };
+    assert!(message.contains("linear"), "{message}");
+    assert!(message.contains("not implemented yet"), "{message}");
+    assert!(
+        message.contains("work"),
+        "the refusal names the source: {message}"
+    );
+}
+
+#[test]
+fn the_plugin_reports_its_kind_and_a_config_schema_the_registry_can_publish() {
+    let plugin = onetaskgraph_linear::Plugin;
+    assert_eq!(plugin.kind(), "linear");
+    assert_eq!(plugin.kind(), onetaskgraph_linear::KIND);
+    // The schema is what `onetaskgraph schema` publishes for this plugin's `config:`
+    // block. Empty is not the same as permissive: a configuration written against a
+    // shape this plugin does not have yet must be refused at load, not ignored.
+    let schema = serde_json::to_value(plugin.config_schema()).expect("the schema renders");
+    assert_eq!(schema["type"], "object");
+    assert_eq!(
+        schema["additionalProperties"],
+        serde_json::Value::Bool(false),
+        "an unknown config field must be refused, not silently dropped: {schema}"
+    );
+}
+
+#[test]
+fn build_refuses_an_unknown_configuration_field_before_reporting_it_is_unimplemented() {
+    // A typo is the user's to fix and is worth naming; "not implemented yet" is not
+    // something they can act on. The published schema promises unknown fields are
+    // refused, and this is what keeps that promise true.
+    let name = SourceName::new("work").expect("a valid source name");
+
+    let Err(SourceError::Config { message }) = onetaskgraph_linear::Plugin.build(
+        &name,
+        &serde_json::json!({ "teamm": "ENG" }),
+        &NoSecrets,
+    ) else {
+        panic!("an unknown configuration field must be refused");
+    };
+    assert!(message.contains("teamm"), "the typo is named: {message}");
+    assert!(message.contains("work"), "the source is named: {message}");
+}

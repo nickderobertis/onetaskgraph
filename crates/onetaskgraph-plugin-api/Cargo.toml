@@ -1,0 +1,22 @@
+[package]
+name = "onetaskgraph-plugin-api"
+description = "The plugin contract onetaskgraph sources implement: the traits, the work types, and the capability declaration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Nothing of this workspace belongs here — see the invariant in AGENTS.md.
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+schemars.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

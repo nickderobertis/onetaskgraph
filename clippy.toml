@@ -1,0 +1,3 @@
+# The MSRV this workspace promises, mirroring `rust-version` in Cargo.toml. Clippy
+# reads it so it never suggests an API newer than the floor we compile against.
+msrv = "1.97"

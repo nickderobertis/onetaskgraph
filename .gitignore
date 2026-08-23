@@ -1,3 +1,33 @@
 # Local sync bookkeeping for gh-secrets (per-machine; the manifest itself is
 # tracked)
 .gh-secrets-state.json
+
+/target/
+**/*.rs.bk
+
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+node_modules/
+*.tsbuildinfo
+
+.nx/
+
+/dist/
+**/dist/
+/build/
+
+/coverage/
+**/coverage/
+*.profraw
+*.profdata
+lcov.info
+.coverage
+.coverage.*
+
+# Composed, never committed: the repo plan and the one-time llmlint buildout tier
+/REPO_PLAN.md
+/llmlint.buildout.yml

@@ -1,0 +1,9 @@
+# Warnings are errors for every cargo invocation in this workspace — check, test, build
+# and coverage alike, not just clippy. A diagnostic is an error or a suppression with a
+# stated reason; there is no warnings-only mode.
+#
+# These flags reach dependencies too, but cargo builds every registry and git dependency
+# with `--cap-lints=allow` of its own accord, so an upstream warning cannot break this
+# build and the denial lands on this workspace's own crates.
+[build]
+rustflags = ["-D", "warnings"]

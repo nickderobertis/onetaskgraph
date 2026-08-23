@@ -1,0 +1,145 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "workspace",
+  "projectType": "library",
+  "tags": ["layer:workspace"],
+  "//": "Depends on every other project so the cross-cutting checks run whenever anything they check can change. Without these edges a crate-only change would skip the graph check that keeps affected selection honest.",
+  "implicitDependencies": [
+    "onetaskgraph",
+    "onetaskgraph-core",
+    "onetaskgraph-github-projects",
+    "onetaskgraph-in-memory",
+    "onetaskgraph-linear",
+    "onetaskgraph-local-md",
+    "onetaskgraph-plugin-api",
+    "sdk-python",
+    "sdk-typescript"
+  ],
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash scripts/bootstrap-workspace.sh"
+      },
+      "//": "Uncached: it installs toolchain components and activates the git hooks path, both outside the tree."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format --write nx.json biome.json package.json .claude workspace crates sdks"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format nx.json biome.json package.json .claude workspace crates sdks"
+      },
+      "inputs": [
+        "{workspaceRoot}/biome.json",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/package.json",
+        "{workspaceRoot}/.claude/**/*.json",
+        "{workspaceRoot}/workspace/**/*.json",
+        "{workspaceRoot}/crates/*/project.json",
+        "{workspaceRoot}/sdks/*/project.json",
+        "{workspaceRoot}/sdks/*/*.json"
+      ]
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "bun run biome lint --error-on-warnings nx.json biome.json package.json .claude workspace crates sdks",
+          "bash scripts/check-nx-graph.sh",
+          "bash scripts/check-plugin-isolation.sh",
+          "bash scripts/check-contract-inventory.sh"
+        ],
+        "parallel": false
+      },
+      "inputs": [
+        "{workspaceRoot}/biome.json",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/package.json",
+        "{workspaceRoot}/.claude/**/*.json",
+        "{workspaceRoot}/workspace/**/*.json",
+        "{workspaceRoot}/Cargo.toml",
+        "{workspaceRoot}/Cargo.lock",
+        "{workspaceRoot}/crates/*/Cargo.toml",
+        "{workspaceRoot}/crates/*/project.json",
+        "{workspaceRoot}/crates/*/src/**/*.rs",
+        "{workspaceRoot}/sdks/*/project.json",
+        "{workspaceRoot}/sdks/*/*.json",
+        "{workspaceRoot}/scripts/check-nx-graph.sh",
+        "{workspaceRoot}/scripts/check-plugin-isolation.sh",
+        "{workspaceRoot}/AGENTS.md",
+        "{workspaceRoot}/scripts/check-contract-inventory.sh"
+      ]
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash scripts/check-workspace-config.sh"
+      },
+      "inputs": [
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/crates/*/project.json",
+        "{workspaceRoot}/sdks/*/project.json",
+        "{workspaceRoot}/workspace/project.json",
+        "{workspaceRoot}/.github/workflows/*.yml",
+        "{workspaceRoot}/scripts/check-workspace-config.sh"
+      ]
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "bash scripts/check-hook-safety.sh",
+          "bash scripts/check-affected-selection.sh",
+          "bash scripts/check-isolation-enforced.sh"
+        ],
+        "parallel": false
+      },
+      "cache": false,
+      "//": "Uncached: all three clone a repository and read git history, which no input glob in this tree describes \u2014 a cached pass would assert about a graph that has since changed. Serial because each clones into its own scratch tree and runs cargo or Nx there; racing them would contend for the same registry lock for no gain. check-hook-safety runs first and takes milliseconds: it proves the scratch-clone helper the other two depend on still survives the environment a git hook gives it, and if that has broken, their results below are about the wrong repository."
+    },
+    "coverage": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash scripts/check-coverage-enforced.sh"
+      },
+      "inputs": [
+        "{workspaceRoot}/crates/*/project.json",
+        "{workspaceRoot}/sdks/*/project.json",
+        "{workspaceRoot}/sdks/python/pyproject.toml",
+        "{workspaceRoot}/scripts/rust-coverage.sh",
+        "{workspaceRoot}/scripts/check-coverage-enforced.sh"
+      ]
+    },
+    "test-live": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash scripts/check-live-lane.sh"
+      },
+      "cache": false,
+      "//": "Uncached for the same reason as every other test-live target: the live lane's result depends on credentials and third-party services that are not inputs in this tree."
+    },
+    "deny": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "cargo deny check bans licenses sources",
+          "cargo deny check advisories",
+          "cargo machete"
+        ],
+        "parallel": false
+      },
+      "cache": false,
+      "//": "Uncached: `cargo deny check advisories` fetches the RustSec advisory database, so a clean tree can start failing without a single file changing \u2014 which is the point of running it."
+    }
+  }
+}

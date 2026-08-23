@@ -1,0 +1,13 @@
+# Review routing. One maintainer today; the file exists so a subtree can be routed
+# elsewhere by adding a line rather than by remembering to.
+*                       @nickderobertis
+
+# The contract six crates are written against. A change here rebuilds and re-tests every
+# plugin, so it wants more eyes than an ordinary change.
+/crates/onetaskgraph-plugin-api/  @nickderobertis
+
+# The project graph is the gate: an edit here changes what CI runs, silently.
+/nx.json                @nickderobertis
+/workspace/             @nickderobertis
+/crates/*/project.json  @nickderobertis
+/sdks/*/project.json    @nickderobertis

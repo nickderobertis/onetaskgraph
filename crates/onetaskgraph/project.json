@@ -1,0 +1,65 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "onetaskgraph",
+  "projectType": "application",
+  "tags": ["lang:rust", "layer:binary"],
+  "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree.",
+  "implicitDependencies": ["onetaskgraph-core"],
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fetch --locked"
+      },
+      "//": "Uncached: it reaches the network and writes to the shared cargo registry outside the workspace, so no input in the tree describes its result."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p onetaskgraph"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place, so replaying a cached result would be a no-op that silently leaves the tree unformatted."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p onetaskgraph -- --check"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo clippy --quiet -p onetaskgraph --all-targets --all-features --locked -- -D warnings"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo check --quiet -p onetaskgraph --all-targets --all-features --locked"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo test --quiet -p onetaskgraph --all-features --locked"
+      }
+    },
+    "coverage": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash scripts/rust-coverage.sh onetaskgraph"
+      }
+    },
+    "test-live": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo test --quiet -p onetaskgraph --test live --all-features --locked"
+      },
+      "//": "Uncached: a live test reaches a third-party API and reads a credential from the environment, neither of which is an input in this tree \u2014 a cache hit would report yesterday's verdict as today's."
+    }
+  }
+}
