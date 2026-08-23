@@ -1,8 +1,8 @@
 # AGENTS.md
 
 Durable constraints for humans and agents working here. Terse on purpose — this is
-always-loaded context. `just --list` shows the commands; `README.md` explains the product.
-`CLAUDE.md` is a symlink to this file; edit only this one.
+always-loaded context, so it carries what the commands, the code and the gate cannot say
+for themselves. `CLAUDE.md` is a symlink to this file; edit only this one.
 
 ## What this repo is
 
