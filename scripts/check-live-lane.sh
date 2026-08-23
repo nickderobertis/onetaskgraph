@@ -20,6 +20,11 @@ from pathlib import Path
 # One name per credential, everywhere: the repository secret, the local secrets file, the
 # configuration document's *_env default, and the variable the product reads. Nothing
 # translates on the way in, so these are the names the workflow must hand through.
+#
+# This map is which job gets which credential, which is this lane's own shape. The names
+# themselves are the contract, and `scripts/check-credential-names.sh` — which runs in the
+# required lint target rather than in this optional lane — reconciles this restatement of
+# them against every other one.
 CREDENTIALS = {"live-linear": "LINEAR_API_KEY", "live-github-projects": "GH_PROJECTS_TOKEN"}
 
 problems = []

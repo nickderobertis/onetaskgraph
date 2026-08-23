@@ -58,7 +58,8 @@
           "bash scripts/check-nx-graph.sh",
           "bash scripts/check-plugin-isolation.sh",
           "bash scripts/check-contract-inventory.sh",
-          "bash scripts/check-protocol-contract.sh"
+          "bash scripts/check-protocol-contract.sh",
+          "bash scripts/check-credential-names.sh"
         ],
         "parallel": false
       },
@@ -80,7 +81,12 @@
         "{workspaceRoot}/AGENTS.md",
         "{workspaceRoot}/scripts/check-contract-inventory.sh",
         "{workspaceRoot}/docs/plugin-protocol.md",
-        "{workspaceRoot}/scripts/check-protocol-contract.sh"
+        "{workspaceRoot}/scripts/check-protocol-contract.sh",
+        "{workspaceRoot}/README.md",
+        "{workspaceRoot}/gh-secrets.json",
+        "{workspaceRoot}/.github/workflows/live.yml",
+        "{workspaceRoot}/scripts/check-live-lane.sh",
+        "{workspaceRoot}/scripts/check-credential-names.sh"
       ]
     },
     "typecheck": {
