@@ -41,14 +41,10 @@ and a TypeScript SDK.
 
 It lives in **two** crates, and which one a type is in is the contract, not a detail.
 
-<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] SECOND PERMITTED REASON —
-     this restates at the inventory the justification already recorded ten lines below it,
-     in "Open contract question — `Health`", and again at the type in
-     onetaskgraph-plugin-api/src/source.rs: the enumeration omitting `Health` while
-     `TaskSource::health` returns it is a known, deliberate contradiction in the APPROVED
-     contract. Reconciling it — adding `Health` to this list, or redesigning `health` so no
-     such type crosses the boundary — is expressly reserved to the contract's owner and
-     forbidden to any node of this plan, so no change here can close this finding. -->
+This inventory is not prose alone: `scripts/check-contract-inventory.sh` reconciles it
+against the api crate's real exports on every `check`, so the two cannot drift apart in
+silence. See the note on `Health` below for the one difference it carries deliberately.
+
 - **`onetaskgraph-plugin-api`** — exactly what a plugin author needs, and nothing else:
   the traits `TaskSource`, `SourcePlugin` and `SecretResolver`; the work types `Task`,
   `Project`, `Label`, `Status`, `StatusCategory`, `DependencyEdge`, `DependencyKind`,
@@ -75,6 +71,13 @@ names it.
 > compiles; see the note on the type. Resolving it — add it to the enumeration, or
 > redesign `health` so no such type crosses the boundary — belongs to the contract's owner.
 > Do not read the enumeration's silence as an answer.
+>
+> The disagreement is open, not unwatched. `scripts/check-contract-inventory.sh` — a target
+> in `check` — reconciles the inventory above against what the api crate really exports and
+> fails on any difference, carrying `Health` as one named exception with this reason. So a
+> type added on either side without the other fails in seconds, and settling this question
+> means deleting that exception and this note in the same change rather than quietly
+> editing a bullet.
 
 ### The three capability rules
 

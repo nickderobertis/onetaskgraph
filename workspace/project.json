@@ -56,7 +56,8 @@
         "commands": [
           "bun run biome lint --error-on-warnings nx.json biome.json package.json .claude workspace crates sdks",
           "bash scripts/check-nx-graph.sh",
-          "bash scripts/check-plugin-isolation.sh"
+          "bash scripts/check-plugin-isolation.sh",
+          "bash scripts/check-contract-inventory.sh"
         ],
         "parallel": false
       },
@@ -74,7 +75,9 @@
         "{workspaceRoot}/sdks/*/project.json",
         "{workspaceRoot}/sdks/*/*.json",
         "{workspaceRoot}/scripts/check-nx-graph.sh",
-        "{workspaceRoot}/scripts/check-plugin-isolation.sh"
+        "{workspaceRoot}/scripts/check-plugin-isolation.sh",
+        "{workspaceRoot}/AGENTS.md",
+        "{workspaceRoot}/scripts/check-contract-inventory.sh"
       ]
     },
     "typecheck": {
