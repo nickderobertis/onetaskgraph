@@ -37,20 +37,16 @@ jobs:
           # The merge base is derived explicitly below; a shallow checkout cannot resolve it.
           fetch-depth: 0
 
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
-      # The channel and components come from rust-toolchain.toml, so CI and local compile
-      # with byte-identical rustc, clippy and rustfmt.
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.97.1"
-          components: rustfmt, clippy, llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
+      # Reads rust-toolchain.toml, so CI and local compile with byte-identical rustc,
+      # clippy and rustfmt, and the version is pinned in exactly one place.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov,cargo-machete
@@ -97,13 +93,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.97.1"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
@@ -135,7 +129,7 @@ jobs:
           fetch-depth: 0
       - name: Fetch main (diff base)
         run: git fetch --no-tags --depth=2147483647 origin main
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
 
       - name: Install oneharness + llmlint
         run: |
