@@ -92,8 +92,8 @@ impl InMemorySource {
                 message: "a page limit of 0 is not a page; ask for at least 1 row".to_owned(),
             });
         }
-        // At least 1 by construction: the configuration boundary refuses a zero ceiling.
-        let ceiling = self.declared().max_page_size;
+        // At least 1 by its type, so this can never narrow a page to nothing.
+        let ceiling = self.declared().max_page_size.get();
         let limit = page.limit.min(ceiling) as usize;
         let end = start.saturating_add(limit).min(items.len());
         let window = items.get(start..end).unwrap_or_default().to_vec();

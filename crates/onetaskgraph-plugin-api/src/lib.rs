@@ -3,9 +3,10 @@
 //! This crate holds exactly what a plugin author needs in order to implement a
 //! source, and nothing else: the two traits, the work types, the query and paging
 //! types, the capability declaration, and the error enum. The engine that drives
-//! sources lives in `onetaskgraph-core`, and **no plugin crate may depend on it**
-//! — see `AGENTS.md` for the two mechanisms that enforce that rather than
-//! stating it.
+//! sources lives in `onetaskgraph-core`, and **no plugin crate may depend on it**:
+//! `deny.toml` permits that crate exactly one wrapper, the binary, failing the
+//! required `deny` job, and `scripts/check-plugin-isolation.sh` reads the real
+//! `cargo metadata` graph inside `just check`.
 //!
 //! Keeping this crate still is the point. Every change here rebuilds and re-tests
 //! every plugin, which is exactly the cost the split exists to avoid paying on an

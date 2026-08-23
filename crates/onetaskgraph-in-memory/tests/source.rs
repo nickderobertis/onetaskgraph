@@ -665,6 +665,8 @@ async fn a_source_that_applies_only_one_search_half_ignores_a_both_halves_search
 fn a_zero_page_ceiling_is_refused_where_the_configuration_is_read() {
     // A source that will serve no rows cannot be paged. Coercing zero to one would hide
     // a typo behind behaviour that looks deliberate, so it is refused at the boundary.
+    // The field is a `NonZeroU32`, so a zero is unrepresentable past this point rather
+    // than merely rejected here — and the message still names the setting to correct.
     let name = SourceName::new("notes").expect("a valid name");
     let Err(SourceError::Config { message }) = Plugin.build(
         &name,

@@ -2,15 +2,21 @@
 //!
 //! It drives the sources a configuration names and reports what it had to do to
 //! answer. Everything a *plugin author* needs lives in `onetaskgraph-plugin-api`
-//! instead, and **no plugin crate may depend on this one** — see `AGENTS.md` for
-//! the two mechanisms that enforce that rather than stating it.
+//! instead, and **no plugin crate may depend on this one**: `deny.toml` permits
+//! this crate exactly one wrapper, the binary, failing the required `deny` job, and
+//! `scripts/check-plugin-isolation.sh` reads the real `cargo metadata` graph inside
+//! `just check`.
 //!
 //! # The invariant that shapes this crate
 //!
 //! No work data may be stored, cached, indexed or mirrored outside a plugin. The
 //! engine compensates for a missing capability *transiently*: it holds at most one
 //! source page plus the caller's page and writes nothing down. Three mechanisms
-//! enforce that rather than asking for it; `AGENTS.md` names all three.
+//! enforce that rather than asking for it: `deny.toml` refuses every embedded store,
+//! index and cache crate, so reaching for one fails the required `deny` job; a sandboxed
+//! journey plants sentinels, drives every verb, and fails if one reaches any file written
+//! during the run; and a re-ask test fails if one query asked twice reaches the source
+//! once. The latter two land with the verbs they drive.
 #![deny(missing_docs)]
 
 mod global_id;
