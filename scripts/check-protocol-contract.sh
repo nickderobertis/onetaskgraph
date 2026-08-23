@@ -12,13 +12,18 @@
 # side has and the other does not fails.
 #
 # Its prose enumerations — the `Capabilities` fields, and the serialized variants of the
-# contract's kebab-case enums — are checked one way, declared-to-documented: every name Rust
-# serializes has to appear in the document, spelled the way the wire spells it. One way,
-# because prose has no rows to read back; that direction is the one the ordinary failure
-# takes anyway — a variant added or renamed in Rust and the document left as it was, after
-# which a plugin author implements a protocol this engine no longer speaks.
+# contract's kebab-case enums — are checked BOTH ways too. Declared-to-documented is the
+# direction the ordinary failure takes: a variant added or renamed in Rust and the document
+# left as it was, after which a plugin author implements a protocol this engine no longer
+# speaks. Documented-to-declared catches the other half — a variant or a field *removed*
+# from Rust and left standing in the prose, which a plugin author would go on emitting.
+# Prose has no rows to read back, so what stands in for them is the document's own markup:
+# a backticked JSON string (`"in-progress"`) is a serialized value, and a backticked
+# snake_case word in §4.2 is a field of `Capabilities`. Anything spelled that way and not
+# declared fails; a value one section legitimately borrows from another is recorded below
+# with the enum it belongs to, rather than the reverse direction being widened for it.
 #
-# Every one of those one-way checks is scoped to the *section that specifies the thing*,
+# Every one of those checks is scoped to the *section that specifies the thing*,
 # never to the document as a whole. A name that happens to occur in an unrelated paragraph
 # is not a specification of it, and a check satisfied that way passes over exactly the drift
 # it exists to catch: the section going stale while the name survives somewhere else. Each
@@ -110,6 +115,17 @@ ENUM_SECTIONS = {
     "ProjectFilter": "### 4.5 `query_tasks`",
     "DependencyKind": "### 4.8 `task_dependencies` and `project_dependencies`",
     "Direction": "### 4.8 `task_dependencies` and `project_dependencies`",
+}
+
+# Values a section spells although the enum declaring them is specified elsewhere, each with
+# that enum. §4.8 cannot say what a forward-only plugin is asked for without naming the two
+# `DependencySupport` values §4.2 specifies. Recorded here rather than the reverse check
+# accepting any value declared anywhere, so a value no enum declares any more still fails.
+ENUM_VALUE_CROSS_REFERENCES = {
+    "### 4.8 `task_dependencies` and `project_dependencies`": {
+        "both-directions": "DependencySupport",
+        "forward-only": "DependencySupport",
+    },
 }
 
 # `SourceError` is the one kebab-case enum with no entry above, because §5 specifies it as a
@@ -372,6 +388,7 @@ if not enums:
         "restore them, or teach this script the shape they have now.",
     )
 
+variants_of = {}
 for name, body in enums:
     declared = [kebab(variant) for variant in re.findall(r"^    ([A-Z]\w*)[,({]", body, re.MULTILINE)]
     if not declared:
@@ -379,6 +396,7 @@ for name, body in enums:
             f"read no variants from the `{name}` enum of the api crate.",
             "restore its variants, or teach this script the shape they have now.",
         )
+    variants_of[name] = set(declared)
     if name in ENUMS_CHECKED_BY_A_TABLE:
         continue
     if name not in ENUM_SECTIONS:
@@ -395,6 +413,41 @@ for name, body in enums:
                 f"`{name}` serializes the value \"{variant}\" but "
                 f"\"{ENUM_SECTIONS[name]}\" never spells it. Specify it there — a plugin "
                 f"author writing from that section alone would never emit or accept it."
+            )
+
+# The other direction, once per section rather than once per enum, because several enums
+# share a section and a value spelled there belongs to whichever of them declares it.
+for heading in sorted(set(ENUM_SECTIONS.values())):
+    specified = {name for name, where in ENUM_SECTIONS.items() if where == heading}
+    borrowed = ENUM_VALUE_CROSS_REFERENCES.get(heading, {})
+    declared_here = set().union(*(variants_of[name] for name in specified))
+    for value, owner in sorted(borrowed.items()):
+        if owner not in variants_of:
+            refuse(
+                f"\"{heading}\" is recorded as borrowing \"{value}\" from `{owner}`, which "
+                "the api crate does not declare as a kebab-case enum.",
+                "correct the enum named in ENUM_VALUE_CROSS_REFERENCES, or drop the entry.",
+            )
+        if value not in variants_of[owner]:
+            failures.append(
+                f"\"{heading}\" is recorded as borrowing the value \"{value}\" from "
+                f"`{owner}`, which no longer declares it. Drop that entry, and correct the "
+                "section if it still spells the value."
+            )
+        elif value in declared_here:
+            failures.append(
+                f"\"{heading}\" is recorded as borrowing the value \"{value}\", but an enum "
+                f"that section specifies declares it. Drop that entry."
+            )
+    # A backticked JSON string is how this document spells a serialized value; anything
+    # else backticked in these sections is a field or a type, which the checks above cover.
+    for value in sorted(set(re.findall(r'`"([a-z0-9-]+)"`', section(heading)))):
+        if value not in declared_here and value not in borrowed:
+            failures.append(
+                f"\"{heading}\" spells the value \"{value}\", but no enum that section "
+                f"specifies declares it. Correct the section, or record where the value "
+                "comes from in ENUM_VALUE_CROSS_REFERENCES — a plugin author writing from "
+                "it would emit a value this engine does not accept."
             )
 
 capabilities = re.search(r"pub struct Capabilities \{(.*?)\n\}", contract_rs, re.DOTALL)
@@ -416,6 +469,15 @@ for field in fields:
             f"`Capabilities` carries the field \"{field}\" but "
             f"\"{CAPABILITIES_SECTION}\" never names it. Specify it there — the handshake "
             f"is where a plugin author learns what to declare."
+        )
+# The other direction. That section specifies one struct, so a backticked snake_case word in
+# it is a field of that struct — a serialized value is quoted, and a type is capitalized.
+for named in sorted(set(re.findall(r"`([a-z][a-z0-9_]*)`", handshake))):
+    if named not in fields:
+        failures.append(
+            f"\"{CAPABILITIES_SECTION}\" names \"{named}\" as a field of `Capabilities`, "
+            f"which does not carry it. Correct the section, or declare the field — a plugin "
+            f"author writing from it would declare something the engine never reads."
         )
 
 if failures:
