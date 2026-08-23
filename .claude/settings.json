@@ -1,4 +1,5 @@
 {
+  "//": "llmlint: ignore-file[least_privilege_grants] the boundary here is irreversibility, not breadth — AGENTS.md, Conventions. JSON has no comment to scope this to the one line.",
   "hooks": {
     "SessionStart": [
       {
