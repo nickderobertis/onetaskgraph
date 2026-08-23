@@ -6,7 +6,15 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/.nx", "!**/target", "!**/dist", "!**/.venv"]
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/.nx",
+      "!**/target",
+      "!**/dist",
+      "!**/.venv",
+      "!gh-secrets.json"
+    ]
   },
   "formatter": {
     "enabled": true,
