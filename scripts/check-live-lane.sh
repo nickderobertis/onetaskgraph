@@ -27,6 +27,25 @@ from pathlib import Path
 # them against every other one.
 CREDENTIALS = {"live-linear": "LINEAR_API_KEY", "live-github-projects": "GH_PROJECTS_TOKEN"}
 
+def refuse(problem, next_action):
+    """Stop with the exact problem and one concrete thing to do about it."""
+    print(f"check-live-lane: {problem}", file=sys.stderr)
+    print(f"check-live-lane: {next_action}", file=sys.stderr)
+    sys.exit(1)
+
+
+def read(path, what):
+    """One input file, reported by name rather than as a traceback if it will not open."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as problem:
+        refuse(
+            f"could not read {path}: {problem}.",
+            f"restore {what} as readable UTF-8 text, or point this check at where it "
+            "moved to.",
+        )
+
+
 problems = []
 
 for project_file in sorted(
@@ -34,7 +53,14 @@ for project_file in sorted(
     + list(Path("sdks").glob("*/project.json"))
     + [Path("workspace/project.json")]
 ):
-    project = json.loads(project_file.read_text())
+    text = read(project_file, "that project's configuration")
+    try:
+        project = json.loads(text)
+    except json.JSONDecodeError as problem:
+        refuse(
+            f"{project_file} is not valid JSON: {problem}.",
+            "fix that file — every other check that reads the project graph reads it too.",
+        )
     if "test-live" not in project.get("targets", {}):
         problems.append(f"{project_file}: has no test-live target, so `just test-live` skips it")
 
@@ -42,7 +68,7 @@ workflow = Path(".github/workflows/live.yml")
 if not workflow.exists():
     problems.append(".github/workflows/live.yml: is missing, so nothing runs the live lane")
 else:
-    text = workflow.read_text()
+    text = read(workflow, "the live-lane workflow")
     # Scan the workflow's instructions, not its prose. The comments deliberately name the
     # wrong spelling in order to explain why the right one is right, and a check that
     # cannot tell those apart would make the explanation impossible to write down.

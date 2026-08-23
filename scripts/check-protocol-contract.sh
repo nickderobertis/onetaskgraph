@@ -57,10 +57,11 @@ def read(path, what):
     """One input file, reported by name rather than as a traceback if it will not open."""
     try:
         return open(path, encoding="utf-8").read()
-    except OSError as problem:
+    except (OSError, UnicodeDecodeError) as problem:
         refuse(
-            f"could not read {path}: {problem.strerror}.",
-            f"restore {what}, or point this check at where it moved to.",
+            f"could not read {path}: {problem}.",
+            f"restore {what} as readable UTF-8 text, or point this check at where it "
+            "moved to.",
         )
 
 
