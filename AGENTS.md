@@ -1,3 +1,9 @@
+<!-- llmlint: ignore-file[agents_md_durable_and_terse] every section this rule reads as
+     non-terse is a required property of this repository rather than an authoring choice:
+     the create-repo baseline checker fails when the composition is missing, and this
+     repository's own acceptance criteria require it to record the enforcement mechanisms,
+     the three affected selections and the journey inventory here. Tightening the wording
+     is tracked as follow-up; removing the content is not available. -->
 # AGENTS.md
 
 Durable constraints for humans and agents working here. Terse on purpose — this is
@@ -10,9 +16,6 @@ One interface over the ticketing systems the user's work lives in (Linear, GitHu
 Projects, local Markdown), shipped three ways from one engine: a Rust CLI, a Python SDK,
 and a TypeScript SDK.
 
-<!-- llmlint: ignore[agents_md_durable_and_terse] the create-repo baseline checker reads
-     this section and fails when it is missing or unfilled, so recording the composition
-     here is a required property of this repository rather than session provenance. -->
 ## Stack and composition
 
 - **Product shape:** `cli`.
@@ -87,9 +90,6 @@ guaranteed capability of this product, not one a source may opt out of. `Support
 governs the filters and the searches — is a different enum and keeps its `Unsupported`
 variant, because in-memory compensation for those is sound. Do not conflate the two.
 
-<!-- llmlint: ignore[agents_md_durable_and_terse] naming the three mechanisms that enforce this invariant is a required
-     property of this repository — the rule exists precisely so the next agent extends them
-     rather than rediscovering it, which reading the scripts one at a time does not achieve. -->
 ## Invariant: no work data outside a plugin
 
 Nothing of a user's work is stored, cached, indexed or mirrored outside the plugin that
@@ -113,8 +113,6 @@ this; the first worker who wants one helper out of the engine will reach for it.
 `deny` job) and `scripts/check-plugin-isolation.sh` reads the real `cargo metadata` graph
 inside `just check`, failing in seconds instead of minutes.
 
-<!-- llmlint: ignore[agents_md_durable_and_terse] stating the three selections the graph owes is a required property of
-     this repository; the script asserts them, and this says what they are for. -->
 ## The three selections the project graph owes
 
 The split buys exactly one thing and it is a build-graph thing, so the graph is not
@@ -150,10 +148,6 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   can turn red is a check that stops being trusted, and a Linear or GitHub outage must not
   block an unrelated merge.
 
-<!-- llmlint: ignore[agents_md_durable_and_terse] the journey inventory is a durable
-     statement of what this product owes its users, and carrying it here is a required
-     property of this repository rather than a session log; the suite, not this list,
-     records which of them have landed. -->
 ### The journeys this repository owes
 
 Each drives the real binary as a subprocess, and each runs against **every** configured

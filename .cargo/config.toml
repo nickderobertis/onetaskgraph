@@ -1,0 +1,8 @@
+# Warnings are errors for every cargo invocation in this workspace — check, test, build
+# and coverage alike, not just clippy. A diagnostic is an error or a suppression with a
+# stated reason; there is no warnings-only mode.
+#
+# `--cap-lints` means this reaches this workspace's own crates and not its dependencies,
+# so an upstream warning cannot break the build.
+[build]
+rustflags = ["-D", "warnings"]
