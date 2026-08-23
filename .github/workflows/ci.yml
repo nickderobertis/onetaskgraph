@@ -156,11 +156,16 @@ jobs:
 
       - name: Lint the changed files
         env:
-          HARNESS_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Under the name the `claude` CLI itself reads for non-interactive auth. codex
+          # cannot run on a runner, so oneharness.toml's fallback list selects claude-code
+          # here, and a credential exported under any other name leaves it unauthenticated:
+          # it then writes nothing, which llmlint reports as a harness error rather than as
+          # the missing credential it is.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           # Fail with an actionable message rather than an opaque harness error — and
           # never no-op to green, which would report unlinted files as clean.
-          if [ -z "${HARNESS_KEY:-}" ]; then
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
             echo "::error::llmlint needs a harness credential. Add the" \
                  "CLAUDE_CODE_OAUTH_TOKEN repository secret (it is declared in" \
                  "gh-secrets.json). Fork pull requests are gated by the" \
