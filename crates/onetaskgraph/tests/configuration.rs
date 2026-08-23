@@ -29,9 +29,7 @@ fn setting<'a>(shown: &'a Value, key: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("{key} is reported; the document was {shown:#}"))
 }
 
-// ---------------------------------------------------------------------------
 // Journey 16: configuration precedence, and the verb that names the layer.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn the_file_layer_alone_sets_a_setting_and_the_verb_names_the_file() {
@@ -316,9 +314,7 @@ fn an_output_format_this_build_does_not_have_is_refused_by_name() {
     assert!(message.contains("output"), "{message}");
 }
 
-// ---------------------------------------------------------------------------
 // Journey 17: a field of one named source, set at each of the three layers.
-// ---------------------------------------------------------------------------
 
 /// The setting a named source's own field lives at.
 const SOURCE_FIELD: &str = "sources.work.config.capabilities.max_page_size";
@@ -451,9 +447,7 @@ fn each_worked_environment_example_sets_the_setting_it_claims_to_set() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // Journey 18: the credentials file supplies, and defers.
-// ---------------------------------------------------------------------------
 
 /// A value distinctive enough that finding it anywhere is unambiguous.
 const PLANTED: &str = "lin_api_PLANTED-CANARY-8f21c0";
@@ -609,9 +603,7 @@ fn a_planted_credential_reaches_no_output_of_any_verb() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Journey 22: a configuration this product will not run on says why, and what next.
-// ---------------------------------------------------------------------------
 
 /// Run `config show` over `sandbox`, expect a refusal, and return what it said.
 fn refusal(sandbox: &Sandbox, arguments: &[&str]) -> String {
@@ -757,9 +749,7 @@ fn a_credentials_file_line_that_is_not_an_assignment_is_refused_without_quoting_
     );
 }
 
-// ---------------------------------------------------------------------------
 // Journey 21: the machine-readable output has a root in the schema the binary emits.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn the_machine_readable_output_matches_a_root_of_the_schema_this_binary_emits() {

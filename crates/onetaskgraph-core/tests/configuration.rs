@@ -41,9 +41,7 @@ fn document(name: &str, document: Value) -> Layer {
     Layer::from_document(Path::new(name).to_path_buf(), &document).expect("a mapping")
 }
 
-// ---------------------------------------------------------------------------
 // The layer algebra: pure, and the same for all three layers.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn a_later_layer_replaces_a_setting_an_earlier_one_made() {
@@ -141,9 +139,7 @@ fn a_setting_path_with_an_empty_segment_addresses_nothing() {
     assert_eq!(error.key(), Some("sources..plugin"));
 }
 
-// ---------------------------------------------------------------------------
 // Reading one textual value, shared by the environment and by `--set`.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn a_textual_value_is_typed_as_far_as_it_reads() {
@@ -171,9 +167,7 @@ fn a_textual_value_containing_a_comma_is_a_list() {
     assert_eq!(value_from_text("1, 2"), json!([1, 2]));
 }
 
-// ---------------------------------------------------------------------------
 // The environment naming rule, in the direction the documentation states it.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn the_variable_for_a_setting_is_the_one_the_contract_documents() {
@@ -207,9 +201,7 @@ fn a_variable_that_names_no_path_is_refused_rather_than_ignored() {
     assert_eq!(error.key(), Some("ONETASKGRAPH_SOURCES__"));
 }
 
-// ---------------------------------------------------------------------------
 // Discovery: the only filesystem reads this crate makes.
-// ---------------------------------------------------------------------------
 
 /// A host with a configuration home and a project tree.
 struct Host {
@@ -366,9 +358,7 @@ fn reading_a_file_that_is_not_there_is_nothing_rather_than_an_error() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // The environment snapshot, which holds credentials and must not print them.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn the_environment_snapshot_never_debug_prints_a_value() {
@@ -394,9 +384,7 @@ fn the_environment_snapshot_reads_this_process() {
     assert!(captured.non_empty("").is_none());
 }
 
-// ---------------------------------------------------------------------------
 // The credentials file.
-// ---------------------------------------------------------------------------
 
 /// A resolver over a credentials file holding `text`, plus `exported`.
 fn secrets(host: &Host, text: &str, exported: &[(&str, &str)]) -> Result<Secrets, ConfigError> {
@@ -488,9 +476,7 @@ fn a_host_that_says_where_nothing_lives_resolves_nothing_and_does_not_fail() {
     assert!(resolved.get("LINEAR_API_KEY").is_none());
 }
 
-// ---------------------------------------------------------------------------
 // The validated configuration.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn a_document_with_nothing_in_it_carries_the_built_in_values() {
@@ -558,9 +544,7 @@ fn a_default_source_that_is_not_a_usable_name_is_refused() {
     assert_eq!(error.key(), Some("default_sources"));
 }
 
-// ---------------------------------------------------------------------------
 // Resolution: the registry, and the check that runs before a source is built.
-// ---------------------------------------------------------------------------
 
 /// A configuration naming one source of `kind` over `block`.
 fn one_source(kind: &str, block: Value) -> Config {
@@ -657,9 +641,7 @@ fn a_block_a_plugin_refuses_names_the_source_it_belongs_to() {
     assert!(error.to_string().contains("P-9"), "{error}");
 }
 
-// ---------------------------------------------------------------------------
 // Loading: the whole stack, over a real host.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn loading_layers_the_documents_the_environment_and_the_flags_in_that_order() {
@@ -801,9 +783,7 @@ fn a_host_with_no_configuration_home_still_loads() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // The corners each of the above leaves: the shapes a user can still write.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn a_document_root_of_any_other_shape_is_refused_by_what_it_is() {
