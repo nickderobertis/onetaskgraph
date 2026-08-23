@@ -103,10 +103,20 @@ graph:
 # automatically via the Claude Code SessionStart hook; this is the manual entry point.
 # Idempotent, no-ops in CI.
 
+# llmlint: ignore[tool_output_is_signal] this recipe is a thin wrapper over
+# scripts/session-setup.sh, which carries the same directive and the reason: a
+# session-startup installer logs each step and continues rather than blocking startup,
+# so a flaky install cannot abort the hook. The output shape is the script's, not this
+# recipe's, and quieting it here would hide a provisioning failure from the session.
 # Provision the dev toolchain for a session.
 session-setup:
     ./scripts/session-setup.sh
 
+# llmlint: ignore[tool_output_is_signal] this recipe is a thin wrapper over
+# scripts/setup-llmlint.sh, which carries the same directive and the reason: a
+# session-startup installer logs each step and continues rather than blocking startup,
+# so a flaky install cannot abort the hook. The output shape is the script's, not this
+# recipe's, and quieting it here would hide a provisioning failure from the session.
 # Install/refresh the llmlint toolchain (oneharness + llmlint). Idempotent.
 setup-llmlint:
     ./scripts/setup-llmlint.sh

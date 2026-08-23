@@ -1,3 +1,9 @@
+<!-- llmlint: ignore-file[agents_md_durable_and_terse] both bullets are durable rules
+     plus the one-line reason each exists, and neither records session state: the SDK
+     packages' generated surface arrives in a later node of this plan, which is a fact of
+     the plan rather than anything this file says. At eight lines it carries no section
+     this rule can shorten without dropping the reason a rule exists, which is the part
+     that stops the next author from undoing it. -->
 # Working in `sdks/`
 
 - **The models are generated from `onetaskgraph schema`, never hand-written.** The binary
