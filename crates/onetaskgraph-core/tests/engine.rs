@@ -167,7 +167,7 @@ fn a_registered_but_unimplemented_plugin_refuses_with_its_own_message() {
 /// without a conscious edit to a table that says not to do that — rather than
 /// impossible to land at all. Catching an in-place edit needs the previously
 /// published bundle, which lives on the registries, not here.
-const PUBLISHED_BUNDLES: &[(u32, &[&str])] = &[(1, &FIRST_BUNDLE_ROOTS)];
+const PUBLISHED_BUNDLES: &[(u32, &[&str])] = &[(1, &FIRST_BUNDLE_ROOTS), (2, &SECOND_BUNDLE_ROOTS)];
 
 /// The roots version 1 of the bundle publishes.
 const FIRST_BUNDLE_ROOTS: [&str; 26] = [
@@ -197,6 +197,45 @@ const FIRST_BUNDLE_ROOTS: [&str; 26] = [
     "QueryResponseOfTask",
     "QueryResponseOfProject",
     "QueryResponseOfLabel",
+];
+
+/// The roots version 2 publishes: version 1's, plus the ones `config show --json`
+/// emits. A machine-readable output with no root here is one no SDK is generated
+/// against, which is the whole reason the configuration types joined the bundle.
+const SECOND_BUNDLE_ROOTS: [&str; 33] = [
+    "Task",
+    "Project",
+    "Label",
+    "Status",
+    "StatusCategory",
+    "DependencyEdge",
+    "DependencyKind",
+    "Direction",
+    "TaskQuery",
+    "ProjectQuery",
+    "PageRequest",
+    "PageOfTask",
+    "PageOfProject",
+    "PageOfLabel",
+    "PageOfDependencyEdge",
+    "Capabilities",
+    "Health",
+    "SourceError",
+    "GlobalId",
+    "QueryPlan",
+    "SourcePlan",
+    "Predicate",
+    "SourceFailure",
+    "QueryResponseOfTask",
+    "QueryResponseOfProject",
+    "QueryResponseOfLabel",
+    "EffectiveConfig",
+    "Setting",
+    "Origin",
+    "OutputFormat",
+    "SecretsReport",
+    "ResolvedCredential",
+    "CredentialLayer",
 ];
 
 #[test]

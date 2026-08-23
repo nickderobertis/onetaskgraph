@@ -8,6 +8,8 @@
 //! caused it, rather than surfacing as a confusing failure inside the first HTTP
 //! call that source makes.
 
+use std::fmt;
+
 use jsonschema::error::ValidationErrorKind;
 use onetaskgraph_plugin_api::{SecretResolver, SourceName, SourcePlugin, TaskSource};
 use serde_json::Value;
@@ -23,6 +25,18 @@ pub struct ResolvedSource {
     pub kind: &'static str,
     /// The source itself.
     pub source: Box<dyn TaskSource>,
+}
+
+impl fmt::Debug for ResolvedSource {
+    /// Name and kind. A live source has no meaningful `Debug` of its own, and one
+    /// that did would be a rendering of a user's work — which nothing outside the
+    /// plugin may hold.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResolvedSource")
+            .field("name", &self.name)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Check every configured source without building any of them.
@@ -116,6 +130,30 @@ fn check_block(
     let Some(problem) = validator.iter_errors(block).next() else {
         return Ok(());
     };
+
+    // A plugin whose source is not written yet declares a schema with no properties at
+    // all, which forbids every field — and a validator has nothing to say about that
+    // beyond "false schema does not allow 7", which names neither the field nor the
+    // reason. Both are worth saying plainly.
+    if schema.as_value().get("properties").is_none()
+        && let Some(fields) = block.as_object()
+        && let Some(first) = fields.keys().next()
+    {
+        return Err(ConfigError::setting(
+            format!("sources.{name}.config.{first}"),
+            format!(
+                "the `{}` plugin declares no configuration fields, so its `config:` block \
+                 must be empty or absent; this one sets {}",
+                plugin.kind(),
+                fields.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
+            format!(
+                "remove those fields — `onetaskgraph schema` prints what this plugin \
+                 accepts under `plugin_config.{}`.",
+                plugin.kind()
+            ),
+        ));
+    }
 
     // A validator reports an unexpected field against the *object* that holds it, so
     // the path alone would name the block and leave the user to find the field inside
