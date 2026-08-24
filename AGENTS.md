@@ -4,6 +4,16 @@
      repository's own acceptance criteria require it to record the enforcement mechanisms,
      the three affected selections and the journey inventory here. Tightening the wording
      is tracked as follow-up; removing the content is not available. -->
+<!-- llmlint: ignore-file[instruction_layer_localized] the nested-`AGENTS.md` half of this
+     rule is met — `crates/AGENTS.md` carries the crate-subtree rules and this file keeps
+     the repo-wide ones — but its `CODEOWNERS` half asks for something this repository has
+     decided against. "Commits, releases, and merging" below records zero required
+     approvals *because nobody reviews these pull requests*, and GitHub does not request
+     review from a pull request's own author, so a `CODEOWNERS` naming this repository's
+     one owner would route nothing to nobody. Adding one would also fork the merge-path
+     arrangement away from its stated source of truth, the create-repo skill's
+     `setup_github_governance.py`. If review ever becomes something that happens here,
+     delete this directive and add the file. -->
 # AGENTS.md
 
 Durable constraints for humans and agents working here. Terse on purpose — this is

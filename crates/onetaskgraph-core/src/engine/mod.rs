@@ -20,6 +20,7 @@ mod join;
 mod local;
 mod resume;
 
+use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -669,9 +670,9 @@ impl Engine {
         let mut outcomes = Outcomes::default();
         if request.direction == Direction::DependedOnBy {
             if emulating {
-                outcomes.emulated.push(Predicate::ReverseDependencies);
+                outcomes.record(Predicate::ReverseDependencies, Outcome::Emulated);
             } else {
-                outcomes.pushed_down.push(Predicate::ReverseDependencies);
+                outcomes.record(Predicate::ReverseDependencies, Outcome::PushedDown);
             }
         }
 
@@ -749,17 +750,59 @@ enum Found {
     Project(Project),
 }
 
-/// What happened to each predicate against one source.
-#[derive(Debug, Clone, Default, PartialEq)]
-struct Outcomes {
+/// What happened to one predicate against one source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
     /// Applied by the source itself.
-    pushed_down: Vec<Predicate>,
+    PushedDown,
     /// Applied by the engine over a wider result set.
-    applied_locally: Vec<Predicate>,
+    AppliedLocally,
     /// Answered by a bounded scan of the source.
-    emulated: Vec<Predicate>,
+    Emulated,
     /// Neither side could answer it, so this source contributed nothing for it.
-    unavailable: Vec<Predicate>,
+    Unavailable,
+}
+
+/// What happened to each predicate against one source.
+///
+/// Keyed by predicate, one outcome each, because those are the only states there are: a
+/// predicate the source applied was not also applied here, and one nobody could answer
+/// was not also pushed down. The four lists [`SourcePlan`] carries are this map fanned
+/// out at the boundary — held *as* four lists a predicate could sit in all four at once,
+/// and four contradictory claims about one predicate is the one thing the part of the
+/// answer whose whole job is to say which of them is true must not be able to say.
+///
+/// A `BTreeMap` rather than a `HashMap` so the lists come out in one order and two runs
+/// of a query render the same plan.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Outcomes(BTreeMap<Predicate, Outcome>);
+
+impl Outcomes {
+    /// Record what happened to one predicate, replacing whatever was recorded before.
+    ///
+    /// Replacing rather than refusing: shaping a query decides each predicate once, and a
+    /// second decision about the same one is the later one — there is no case here where
+    /// both were meant to stand.
+    fn record(&mut self, predicate: Predicate, outcome: Outcome) {
+        self.0.insert(predicate, outcome);
+    }
+
+    /// Record the same outcome for several predicates, as a text search does for the two
+    /// fields it covers.
+    fn record_all(&mut self, predicates: impl IntoIterator<Item = Predicate>, outcome: Outcome) {
+        for predicate in predicates {
+            self.record(predicate, outcome);
+        }
+    }
+
+    /// The predicates this outcome befell, in the map's own stable order.
+    fn with(&self, outcome: Outcome) -> Vec<Predicate> {
+        self.0
+            .iter()
+            .filter(|(_, recorded)| **recorded == outcome)
+            .map(|(predicate, _)| *predicate)
+            .collect()
+    }
 }
 
 /// The query one source sees, and the predicates left to the engine.
@@ -841,7 +884,7 @@ impl Answer {
     /// Record that a source could answer nothing for `predicate`.
     fn unreachable_predicate(&mut self, source: &ResolvedSource, predicate: Predicate) {
         let mut outcomes = Outcomes::default();
-        outcomes.unavailable.push(predicate);
+        outcomes.record(predicate, Outcome::Unavailable);
         self.plans.push(plan_for(source, outcomes, 0));
     }
 
@@ -957,25 +1000,16 @@ impl Answer {
     }
 }
 
-/// One source's plan entry, with each predicate list in one order so two runs read the
-/// same.
-fn plan_for(source: &ResolvedSource, mut outcomes: Outcomes, pages: u32) -> SourcePlan {
-    for list in [
-        &mut outcomes.pushed_down,
-        &mut outcomes.applied_locally,
-        &mut outcomes.emulated,
-        &mut outcomes.unavailable,
-    ] {
-        list.sort_unstable();
-        list.dedup();
-    }
+/// One source's plan entry: the outcomes fanned out into the four lists the contract's
+/// [`SourcePlan`] carries, each in one order so two runs read the same.
+fn plan_for(source: &ResolvedSource, outcomes: Outcomes, pages: u32) -> SourcePlan {
     SourcePlan {
         source: source.name().clone(),
         kind: source.kind().to_owned(),
-        pushed_down: outcomes.pushed_down,
-        applied_locally: outcomes.applied_locally,
-        emulated: outcomes.emulated,
-        unavailable: outcomes.unavailable,
+        pushed_down: outcomes.with(Outcome::PushedDown),
+        applied_locally: outcomes.with(Outcome::AppliedLocally),
+        emulated: outcomes.with(Outcome::Emulated),
+        unavailable: outcomes.with(Outcome::Unavailable),
         pages_fetched: pages,
     }
 }
@@ -1209,29 +1243,29 @@ fn shape_tasks(
     if !filters.labels.is_empty() {
         if capabilities.filter_by_label.is_native() {
             pushed.labels = filters.labels.clone();
-            outcomes.pushed_down.push(Predicate::Label);
+            outcomes.record(Predicate::Label, Outcome::PushedDown);
         } else {
             local.labels = Some(filters.labels.clone());
-            outcomes.applied_locally.push(Predicate::Label);
+            outcomes.record(Predicate::Label, Outcome::AppliedLocally);
         }
     }
     if !filters.statuses.is_empty() {
         if capabilities.filter_by_status.is_native() {
             pushed.statuses.clone_from(&filters.statuses);
-            outcomes.pushed_down.push(Predicate::Status);
+            outcomes.record(Predicate::Status, Outcome::PushedDown);
         } else {
             local.statuses.clone_from(&filters.statuses);
-            outcomes.applied_locally.push(Predicate::Status);
+            outcomes.record(Predicate::Status, Outcome::AppliedLocally);
         }
     }
     if let Some(text) = &filters.text {
         let predicates = text_predicates(text.fields);
         if searches_natively(capabilities, text.fields) {
             pushed.text = Some(text.clone());
-            outcomes.pushed_down.extend(predicates);
+            outcomes.record_all(predicates, Outcome::PushedDown);
         } else {
             local.text = Some(text.clone());
-            outcomes.applied_locally.extend(predicates);
+            outcomes.record_all(predicates, Outcome::AppliedLocally);
         }
     }
     match project {
@@ -1239,19 +1273,19 @@ fn shape_tasks(
         ProjectFilter::Orphans => {
             if capabilities.orphan_tasks.is_native() {
                 pushed.project = ProjectFilter::Orphans;
-                outcomes.pushed_down.push(Predicate::Project);
+                outcomes.record(Predicate::Project, Outcome::PushedDown);
             } else {
                 local.project = Some(ProjectFilter::Orphans);
-                outcomes.applied_locally.push(Predicate::Project);
+                outcomes.record(Predicate::Project, Outcome::AppliedLocally);
             }
         }
         ProjectFilter::Is(id) => {
             if capabilities.projects.is_native() {
                 pushed.project = ProjectFilter::Is(id.clone());
-                outcomes.pushed_down.push(Predicate::Project);
+                outcomes.record(Predicate::Project, Outcome::PushedDown);
             } else {
                 local.project = Some(ProjectFilter::Is(id.clone()));
-                outcomes.applied_locally.push(Predicate::Project);
+                outcomes.record(Predicate::Project, Outcome::AppliedLocally);
             }
         }
     }
@@ -1272,29 +1306,29 @@ fn shape_projects(capabilities: &Capabilities, filters: &Filters) -> ProjectShap
     if !filters.labels.is_empty() {
         if capabilities.filter_by_label.is_native() {
             pushed.labels = filters.labels.clone();
-            outcomes.pushed_down.push(Predicate::Label);
+            outcomes.record(Predicate::Label, Outcome::PushedDown);
         } else {
             local.labels = Some(filters.labels.clone());
-            outcomes.applied_locally.push(Predicate::Label);
+            outcomes.record(Predicate::Label, Outcome::AppliedLocally);
         }
     }
     if !filters.statuses.is_empty() {
         if capabilities.filter_by_status.is_native() {
             pushed.statuses.clone_from(&filters.statuses);
-            outcomes.pushed_down.push(Predicate::Status);
+            outcomes.record(Predicate::Status, Outcome::PushedDown);
         } else {
             local.statuses.clone_from(&filters.statuses);
-            outcomes.applied_locally.push(Predicate::Status);
+            outcomes.record(Predicate::Status, Outcome::AppliedLocally);
         }
     }
     if let Some(text) = &filters.text {
         let predicates = text_predicates(text.fields);
         if searches_natively(capabilities, text.fields) {
             pushed.text = Some(text.clone());
-            outcomes.pushed_down.extend(predicates);
+            outcomes.record_all(predicates, Outcome::PushedDown);
         } else {
             local.text = Some(text.clone());
-            outcomes.applied_locally.extend(predicates);
+            outcomes.record_all(predicates, Outcome::AppliedLocally);
         }
     }
 

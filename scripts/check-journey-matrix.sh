@@ -1,22 +1,14 @@
 #!/usr/bin/env bash
 # Fail when a plugin the registry knows has no row in the journey table.
 #
-# Every journey this repository owes is written once and run against EVERY source kind,
-# through one shared fixture table — so a plugin is never proven by a suite of its own
-# writing. That only holds while the table actually covers the registry, and nothing makes
-# it: a plugin lands, its own crate's tests go green, and the shared journeys quietly never
-# run against it. Nobody finds out, because a table with a row missing looks exactly like a
-# table.
+# The shared journeys only prove a plugin while the table covers the registry, and that
+# gap is silent both ways: a plugin lands, its own crate's tests go green, and the shared
+# journeys never run against it — a table with a row missing looks exactly like a table.
+# A row for a plugin the registry lost is the mirror, passing forever over a kind no
+# configuration can name. So this reconciles the two in both directions.
 #
-# So the two are reconciled here, on every `just check`, in both directions. A plugin with
-# no row fails, naming the plugin. A row naming a plugin the registry does not have fails
-# too: that is a fixture for a kind no configuration can name, and it would sit there
-# passing forever.
-#
-# A plugin whose source has not landed is expected to carry a `Fixture::Pending` row rather
-# than no row at all, and that row is a journey of its own — it asserts the plugin refuses
-# with its own message. This script does not distinguish the two, deliberately: what it
-# guards is coverage of the registry, and which kind of row a plugin needs is the table's
+# It does not care which kind of row a plugin has. Coverage of the registry is the
+# invariant; whether a plugin needs `Fixture::Ready` or `Fixture::Pending` is the table's
 # business.
 set -euo pipefail
 

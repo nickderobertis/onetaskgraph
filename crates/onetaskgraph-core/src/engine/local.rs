@@ -1,11 +1,12 @@
 //! The predicates the engine applies itself, over the wider set a source returned.
 //!
 //! Every function here runs only for a predicate the source declared
-//! [`Unsupported`](onetaskgraph_plugin_api::Support::Unsupported) — rule 3 of the
-//! contract. The source's own half of the same rule is that it *ignores* such a
-//! predicate and returns the wider set, so narrowing here is sound: the rows this drops
-//! are rows the caller asked not to see, and the rows it keeps are all the rows there
-//! were.
+//! [`Unsupported`](onetaskgraph_plugin_api::Support::Unsupported), which is the engine's
+//! side of the contract — rule 3. What makes narrowing here sound is the source's side,
+//! rule 2: a source *ignores* such a predicate and returns the wider set. So the rows
+//! this drops are rows the caller asked not to see, and the rows it keeps are all the
+//! rows there were. A source that narrowed for a predicate it declared unsupported would
+//! break rule 2, and nothing above the plugin could tell.
 //!
 //! This is not a copy of a plugin's filtering for the sake of it. A source that applies
 //! a predicate natively never reaches this code, and a plugin's own evaluation is behind

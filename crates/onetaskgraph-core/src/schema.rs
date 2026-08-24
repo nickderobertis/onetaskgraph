@@ -27,26 +27,8 @@ use crate::{
 /// contract rather than a convenience: an SDK can refuse a bundle it was not
 /// generated against instead of silently emitting the wrong models.
 ///
-/// `2` added the roots `config show --json` emits — `EffectiveConfig`, `Setting`,
-/// `Origin`, `OutputFormat`, `SecretsReport`, `ResolvedCredential` and
-/// `CredentialLayer` — because a machine-readable output with no root in this bundle
-/// is one no SDK can be generated against.
-///
-/// `4` added `TextFields` and `SearchKind`, the two vocabularies `--in` and `--kind`
-/// accept. They were reachable only inside `TaskQuery`'s definitions, which is enough for
-/// a generator and not enough for a reconciliation: the command line spells both of them
-/// deliberately differently (`both` for `title-or-content`, `task` for `tasks`), so a
-/// variant added to either would leave the command line quietly unable to name it. Roots
-/// of their own give that gate one document to read.
-///
-/// `3` added the roots the query verbs emit. Every item the engine returns is
-/// **qualified** — a plugin deals in its own `NativeId`, and only the engine knows which
-/// source an item came from — so `QueryResponseOfTask` became
-/// `QueryResponseOfQualifiedTask`, and `QualifiedTask`, `QualifiedProject`,
-/// `QualifiedLabel`, `QualifiedEdge`, `SearchHit`, `SourceListing` and `PageToken`
-/// joined it. The three unqualified response roots are gone rather than kept beside the
-/// new ones: no verb emits one, and a root nothing emits is a model an SDK would
-/// generate and never receive.
+/// Which roots each version brought is what `git log` answers; what this number owes a
+/// reader is that it moves whenever [`schema_bundle`] below gains, loses or renames one.
 pub const SCHEMA_BUNDLE_VERSION: u32 = 4;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
@@ -62,6 +44,11 @@ pub fn schema_bundle() -> Value {
     roots.insert("DependencyEdge", schema_for!(DependencyEdge));
     roots.insert("DependencyKind", schema_for!(DependencyKind));
     roots.insert("Direction", schema_for!(Direction));
+    // Roots of their own although both are reachable inside `TaskQuery`'s definitions,
+    // which is enough for a generator and not enough for a reconciliation: the command
+    // line spells both deliberately differently (`both` for `title-or-content`, `task`
+    // for `tasks`), so a variant added to either would leave the command line quietly
+    // unable to name it. A root apiece gives that gate one document to read.
     roots.insert("TextFields", schema_for!(TextFields));
     roots.insert("SearchKind", schema_for!(SearchKind));
 

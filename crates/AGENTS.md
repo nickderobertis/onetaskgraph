@@ -1,3 +1,9 @@
+<!-- llmlint: ignore-file[instruction_layer_localized] this file *is* the localized layer
+     the rule asks for — the crate-subtree rules live here and the repo-wide ones stay in
+     the root `AGENTS.md`. What it also asks for, `CODEOWNERS` review routing, the root
+     file's own directive explains this repository has decided against: zero required
+     approvals because nobody reviews these pull requests, and GitHub does not request
+     review from a pull request's own author. -->
 # Working in `crates/`
 
 ## Adding a plugin
