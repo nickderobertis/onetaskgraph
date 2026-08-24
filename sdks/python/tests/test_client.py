@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from onetaskgraph_sdk import Client, GlobalId, OnetaskgraphError, StatusCategory, __version__
+from onetaskgraph_sdk import Client, GlobalId, OnetaskgraphError, __version__
 from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
 
 WORKSPACE = Path(__file__).parents[3]
@@ -114,7 +114,7 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
     assert run(
         client.task_list(
             source=("memory",),
-            status=[StatusCategory.StatusCategoryTodo],
+            status=["todo"],
             limit=2,
             explain=True,
             page=None,
@@ -178,6 +178,15 @@ def test_generator_rejects_drift_and_unmapped_commands(tmp_path: Path) -> None:
     )
     assert stale.returncode == 1
     assert "effective_config.py" in stale.stderr
+    invalid_bundle = subprocess.run(
+        [sys.executable, "-c", "import generate; generate.validate_schema_bundle([])"],
+        cwd=WORKSPACE / "sdks" / "python",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert invalid_bundle.returncode == 1
+    assert "invalid schema bundle" in invalid_bundle.stderr
     unmapped = subprocess.run(
         [
             sys.executable,

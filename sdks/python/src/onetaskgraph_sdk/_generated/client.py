@@ -13,7 +13,6 @@ from .models import (
     QueryResponseOfQualifiedTask,
     QueryResponseOfSearchHit,
     SourceListing,
-    StatusCategory,
 )
 
 
@@ -108,7 +107,9 @@ class GeneratedClient:
         search: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
-        status: list[StatusCategory] | tuple[StatusCategory, ...] | None = None,
+        status: list[Literal["backlog", "todo", "in-progress", "done", "cancelled", "unknown"]]
+        | tuple[Literal["backlog", "todo", "in-progress", "done", "cancelled", "unknown"], ...]
+        | None = None,
     ) -> QueryResponseOfQualifiedProject:
         """Run ``onetaskgraph project list``."""
         return await self._invoke(
@@ -244,7 +245,9 @@ class GeneratedClient:
         search: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
-        status: list[StatusCategory] | tuple[StatusCategory, ...] | None = None,
+        status: list[Literal["backlog", "todo", "in-progress", "done", "cancelled", "unknown"]]
+        | tuple[Literal["backlog", "todo", "in-progress", "done", "cancelled", "unknown"], ...]
+        | None = None,
     ) -> QueryResponseOfQualifiedTask:
         """Run ``onetaskgraph task list``."""
         return await self._invoke(

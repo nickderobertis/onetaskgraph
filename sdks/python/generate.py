@@ -31,10 +31,10 @@ RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
     "allow_partial": "bool",
     "default_sources": "list[str] | tuple[str, ...]",
-    "direction": 'Literal["depends-on", "depended-on-by"]',
+    "direction": "choices",
     "explain": "bool",
-    "in_": 'Literal["title", "content", "both"]',
-    "kind": 'Literal["task", "project", "both"]',
+    "in_": "choices",
+    "kind": "choices",
     "label": "list[str] | tuple[str, ...]",
     "limit": "int",
     "no_project": "bool",
@@ -45,7 +45,7 @@ OPTION_TYPES = {
     "search": "str",
     "set": "list[str] | tuple[str, ...]",
     "source": "list[str] | tuple[str, ...]",
-    "status": "list[StatusCategory] | tuple[StatusCategory, ...]",
+    "status": "choice_list",
 }
 OPTION_PLACEHOLDERS = {
     "allow_partial": None,
@@ -137,6 +137,22 @@ def option_names(command: tuple[str, ...]) -> list[str]:
                 f"binary changed the value shape for option --{name.replace('_', '-')}"
             )
     return result
+
+
+def option_type(command: tuple[str, ...], name: str) -> str:
+    """Derive finite option domains from clap help and scalar shapes from placeholders."""
+    configured = OPTION_TYPES[name]
+    if configured not in {"choices", "choice_list"}:
+        return configured
+    cli_name = name.removesuffix("_").replace("_", "-")
+    help_text = run_workspace_binary(*command, "--help")
+    block = help_text.split(f"--{cli_name} ", 1)[1]
+    block = re.split(r"\n\s+(?:--|-h, --)", block, maxsplit=1)[0]
+    choices = re.findall(r"^\s+- ([a-z0-9-]+):", block, re.MULTILINE)
+    if not choices:
+        raise SystemExit(f"binary did not report possible values for option --{cli_name}")
+    literal = "Literal[" + ", ".join(repr(choice) for choice in choices) + "]"
+    return f"list[{literal}] | tuple[{literal}, ...]" if configured == "choice_list" else literal
 
 
 def generate_models(bundle: SchemaBundle, destination: Path) -> None:
@@ -339,7 +355,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         parameters = (
             ([f"{positional}: {positional_type}"] if positional else [])
             + ["*"]
-            + [f"{item}: {OPTION_TYPES[item]} | None = None" for item in keywords]
+            + [f"{item}: {option_type(command, item)} | None = None" for item in keywords]
         )
         if parameters[-1] == "*":
             parameters.pop()
@@ -391,23 +407,32 @@ def check_generated(expected_dir: Path, actual_dir: Path) -> None:
         raise SystemExit("generated Python SDK is stale: " + ", ".join(changed))
 
 
+def validate_schema_bundle(parsed: JsonValue) -> SchemaBundle:
+    """Validate the binary's schema output before generation consumes a root."""
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("roots"), dict):
+        raise SystemExit("binary emitted an invalid schema bundle: expected an object with roots")
+    return TypeAdapter(SchemaBundle).validate_python(parsed)
+
+
+def generate(bundle: SchemaBundle, *, check: bool) -> None:
+    """Write or check generated output for one validated bundle."""
+    commands = leaves()
+    with tempfile.TemporaryDirectory() as temporary:
+        target = Path(temporary) if check else GENERATED
+        generate_models(bundle, target)
+        generate_client(commands, target)
+        format_generated(target)
+        if check:
+            check_generated(target, GENERATED)
+
+
 def main() -> None:
     """Regenerate, or compare regeneration with the committed package."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     parsed = json.loads(run_workspace_binary("schema"))
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("roots"), dict):
-        raise SystemExit("binary emitted an invalid schema bundle: expected an object with roots")
-    bundle = TypeAdapter(SchemaBundle).validate_python(parsed)
-    commands = leaves()
-    with tempfile.TemporaryDirectory() as temporary:
-        target = Path(temporary) if args.check else GENERATED
-        generate_models(bundle, target)
-        generate_client(commands, target)
-        format_generated(target)
-        if args.check:
-            check_generated(target, GENERATED)
+    generate(validate_schema_bundle(parsed), check=args.check)
 
 
 if __name__ == "__main__":
