@@ -12,13 +12,13 @@
 //! the plugin refuses with its own message — so a placeholder cannot sit here doing
 //! nothing.
 
+use serde::Deserialize;
+use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
     net::TcpListener,
     thread,
 };
-
-use serde_json::{Value, json};
 
 use crate::common::{Sandbox, SourceBoundary};
 
@@ -214,7 +214,21 @@ pub const ROWS: &[Row] = &[
     Row {
         plugin: "linear",
         name: "linear",
-        fixture: Fixture::Pending,
+        fixture: Fixture::Ready(Ready {
+            block: linear_block,
+            // Linear models the whole table: two projects, an orphan, and dependencies in
+            // both directions, so it drives the shared complete-dataset journeys.
+            complete_dataset: true,
+            declared: Declared {
+                filter_by_label: true,
+                filter_by_status: true,
+                search_title: false,
+                search_content: false,
+                orphan_tasks: true,
+                reverse_task_dependencies: true,
+                reverse_project_dependencies: true,
+            },
+        }),
     },
     Row {
         plugin: "github-projects",
@@ -383,6 +397,443 @@ fn github_project_page(variables: &Value) -> Value {
         }},
         "user":{"projectV2":null}
     })
+}
+
+/// A socket-level Linear GraphQL fixture used by the shared binary journeys.
+fn linear_block(sandbox: &Sandbox) -> Value {
+    sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+    let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+    thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut bytes = Vec::new();
+            let mut chunk = [0; 4096];
+            loop {
+                let n = stream.read(&mut chunk).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&chunk[..n]);
+                if bytes.len() > 8_192 {
+                    break;
+                }
+                if let Some(split) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&bytes[..split]).to_ascii_lowercase();
+                    let length = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .and_then(|value| value.parse::<usize>().ok());
+                    if length.is_some_and(|length| bytes.len() >= split + 4 + length) {
+                        break;
+                    }
+                }
+            }
+            if bytes.len() > 8_192 {
+                let text = r#"{"errors":[{"message":"fixture request too large"}]}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 413 Content Too Large\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
+            let split = bytes
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|n| n + 4)
+                .unwrap_or(bytes.len());
+            let request_head = String::from_utf8_lossy(&bytes[..split]);
+            let declared_length = request_head
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .map(str::to_owned)
+                })
+                .and_then(|value| value.parse::<usize>().ok());
+            if declared_length.is_none_or(|length| bytes.len() != split + length) {
+                let text = r#"{"errors":[{"message":"invalid content length"}]}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
+            let request_line = request_head
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches('\r');
+            if request_line != "POST /graphql HTTP/1.1" {
+                let text = r#"{"errors":[{"message":"expected POST /graphql"}]}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
+            let Ok(request) = serde_json::from_slice::<Value>(&bytes[split..]) else {
+                let text = r#"{"errors":[{"message":"invalid fixture request"}]}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            };
+            if request.get("query").and_then(Value::as_str).is_none() {
+                let text = r#"{"errors":[{"message":"missing GraphQL query"}]}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
+            let (status, response) = match linear_response(&request) {
+                Ok(body) => ("200 OK", json!({"data":body})),
+                Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
+            };
+            let text = serde_json::to_string(&response).unwrap();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                text.len()
+            );
+        }
+    });
+    json!({"endpoint":endpoint})
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LinearRequest {
+    query: String,
+    variables: serde_json::Map<String, Value>,
+}
+
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These typed fixture-boundary variables mirror the accepted 2026-08-24 Linear documents; the authoritative variable/nullability contract is available only from Linear's authenticated unversioned explorer, while focused TCP tests prove malformed local requests are rejected.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoVariables {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ItemVariables {
+    id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PageVariables {
+    first: usize,
+    #[serde(default)]
+    after: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QueryVariables {
+    first: usize,
+    #[serde(default)]
+    after: Option<String>,
+    filter: serde_json::Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelationVariables {
+    id: String,
+    first: usize,
+    #[serde(default)]
+    after: Option<String>,
+}
+
+fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &'static str> {
+    use onetaskgraph_linear::graphql;
+    let valid = match operation {
+        graphql::VIEWER => serde_json::from_value::<NoVariables>(variables.clone()).is_ok(),
+        graphql::ISSUE | graphql::PROJECT => {
+            serde_json::from_value::<ItemVariables>(variables.clone())
+                .is_ok_and(|variables| !variables.id.is_empty())
+        }
+        graphql::LABELS => serde_json::from_value::<PageVariables>(variables.clone())
+            .is_ok_and(|variables| variables.first > 0 && variables.after.as_deref() != Some("")),
+        graphql::ISSUES | graphql::PROJECTS => {
+            serde_json::from_value::<QueryVariables>(variables.clone()).is_ok_and(|variables| {
+                variables.first > 0
+                    && variables.after.as_deref() != Some("")
+                    && valid_linear_filter(&Value::Object(variables.filter))
+            })
+        }
+        graphql::ISSUE_RELATIONS | graphql::PROJECT_RELATIONS => {
+            serde_json::from_value::<RelationVariables>(variables.clone()).is_ok_and(|variables| {
+                !variables.id.is_empty()
+                    && variables.first > 0
+                    && variables.after.as_deref() != Some("")
+            })
+        }
+        _ => false,
+    };
+    valid.then_some(()).ok_or("invalid operation variables")
+}
+
+fn valid_linear_filter(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => fields.iter().all(|(key, value)| match key.as_str() {
+            "and" => value.as_array().is_some_and(|values| {
+                values
+                    .iter()
+                    .all(|value| value.is_object() && valid_linear_filter(value))
+            }),
+            "team" | "key" | "labels" | "some" | "name" | "every" | "state" | "type"
+            | "project" | "id" => value.is_object() && valid_linear_filter(value),
+            "eqIgnoreCase" | "neqIgnoreCase" | "eq" => value.is_string(),
+            "inIgnoreCase" | "in" => value
+                .as_array()
+                .is_some_and(|values| values.iter().all(Value::is_string)),
+            "null" => value.is_boolean(),
+            _ => false,
+        }),
+        _ => false,
+    }
+}
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+fn linear_response(request: &Value) -> Result<Value, &'static str> {
+    let request: LinearRequest =
+        serde_json::from_value(request.clone()).map_err(|_| "invalid GraphQL request")?;
+    use onetaskgraph_linear::graphql;
+    let operation = request.query.as_str();
+    if ![
+        graphql::VIEWER,
+        graphql::ISSUE,
+        graphql::PROJECT,
+        graphql::ISSUES,
+        graphql::PROJECTS,
+        graphql::LABELS,
+        graphql::ISSUE_RELATIONS,
+        graphql::PROJECT_RELATIONS,
+    ]
+    .contains(&operation)
+    {
+        return Err("unknown GraphQL operation");
+    }
+    let vars = Value::Object(request.variables);
+    validate_linear_variables(operation, &vars)?;
+    let data = dataset();
+    if operation == graphql::LABELS {
+        return Ok(
+            json!({"issueLabels":linear_connection(data["labels"].as_array().unwrap().iter().map(linear_label).collect(),&vars)}),
+        );
+    }
+    if operation == graphql::ISSUES {
+        let mut rows: Vec<Value> = data["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| linear_matches_fixture_subset(v, &vars))
+            .map(linear_task)
+            .collect();
+        return Ok(json!({"issues":linear_connection(std::mem::take(&mut rows),&vars)}));
+    }
+    if operation == graphql::PROJECTS {
+        let rows = data["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| linear_matches_fixture_subset(v, &vars))
+            .map(linear_project)
+            .collect();
+        return Ok(json!({"projects":linear_connection(rows,&vars)}));
+    }
+    if matches!(operation, graphql::ISSUE | graphql::ISSUE_RELATIONS) {
+        let id = vars["id"].as_str().unwrap_or("");
+        let item = data["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == id);
+        if operation == graphql::ISSUE_RELATIONS {
+            return Ok(json!({"issue":linear_relations(&data,"task_dependencies",id,"Issue")}));
+        }
+        return Ok(json!({"issue":item.map(linear_task)}));
+    }
+    if matches!(operation, graphql::PROJECT | graphql::PROJECT_RELATIONS) {
+        let id = vars["id"].as_str().unwrap_or("");
+        let item = data["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == id);
+        if operation == graphql::PROJECT_RELATIONS {
+            return Ok(
+                json!({"project":linear_relations(&data,"project_dependencies",id,"Project")}),
+            );
+        }
+        return Ok(json!({"project":item.map(linear_project)}));
+    }
+    Ok(json!({"viewer":{"id":"fixture-user"}}))
+}
+
+#[test]
+// llmlint: ignore[tests_mirror_real_usage] This is a failure test for the fixture server's own untrusted HTTP boundary, which product CLI requests cannot malformedly exercise because the Linear client always emits valid typed requests; it intentionally sends raw TCP requests through the real socket rather than calling response logic directly.
+fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
+    let sandbox = Sandbox::new();
+    let config = linear_block(&sandbox);
+    let endpoint = config["endpoint"].as_str().unwrap();
+    let address = endpoint
+        .strip_prefix("http://")
+        .unwrap()
+        .strip_suffix("/graphql")
+        .unwrap();
+    for body in [
+        json!({"query":onetaskgraph_linear::graphql::VIEWER}),
+        json!({"query":onetaskgraph_linear::graphql::VIEWER,"variables":[]}),
+        json!({"query":"query { invented { id } }","variables":{}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUE,"variables":{}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUE,"variables":{"id":7}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUE,"variables":{"id":"i1","extra":true}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":0,"after":null,"filter":{}}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":[]}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":{"invented":true}}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":{"state":{"type":{"in":7}}}}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":{"and":"invalid"}}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":{"project":{"null":"true"}}}}),
+    ] {
+        let body = serde_json::to_string(&body).unwrap();
+        let mut stream = std::net::TcpStream::connect(address).unwrap();
+        write!(
+            stream,
+            "POST /graphql HTTP/1.1\r\nHost: {address}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request"),
+            "{response}"
+        );
+    }
+    let mut stream = std::net::TcpStream::connect(address).unwrap();
+    write!(stream, "GET /graphql HTTP/1.1\r\nHost: {address}\r\n\r\n").unwrap();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+
+    let mut stream = std::net::TcpStream::connect(address).unwrap();
+    write!(
+        stream,
+        "POST /graphql HTTP/1.1\r\nHost: {address}\r\nContent-Length: 9\r\n\r\n{{}}"
+    )
+    .unwrap();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+
+    let mut stream = std::net::TcpStream::connect(address).unwrap();
+    let oversized = "x".repeat(8_193);
+    let _ = write!(
+        stream,
+        "POST /graphql HTTP/1.1\r\nHost: {address}\r\nContent-Length: {}\r\n\r\n{oversized}",
+        oversized.len()
+    );
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    assert!(response.starts_with("HTTP/1.1 413 Content Too Large"));
+}
+fn linear_label(v: &Value) -> Value {
+    json!({"id":v["id"],"name":v["name"],"color":null})
+}
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This fixture-only mapping and matcher implement the finite shared journey dataset against the accepted 2026-08-24 contract; production parsing and real CLI row assertions independently verify the observable behavior without requiring live credentials.
+fn linear_state(v: &Value) -> Value {
+    let category = v["category"].as_str().unwrap_or("");
+    json!({"name":v["name"],"type":match category{"todo"=>"unstarted","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
+}
+fn linear_task(v: &Value) -> Value {
+    json!({"id":v["id"],"title":v["title"],"description":v["content"],"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":v.get("url"),"createdAt":null,"updatedAt":null})
+}
+fn linear_project(v: &Value) -> Value {
+    json!({"id":v["id"],"name":v["title"],"description":v["content"],"status":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":v.get("url"),"createdAt":null,"updatedAt":null})
+}
+fn linear_connection(rows: Vec<Value>, vars: &Value) -> Value {
+    let start = vars["after"]
+        .as_str()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let limit = vars["first"].as_u64().unwrap_or(50) as usize;
+    let nodes = rows
+        .iter()
+        .skip(start)
+        .take(limit)
+        .cloned()
+        .collect::<Vec<_>>();
+    let end = start + nodes.len();
+    json!({"nodes":nodes,"pageInfo":{"hasNextPage":end<rows.len(),"endCursor":if end<rows.len(){Some(end.to_string())}else{None}}})
+}
+fn linear_matches_fixture_subset(v: &Value, vars: &Value) -> bool {
+    let text = vars["filter"].to_string().to_ascii_lowercase();
+    let labels = v["labels"].as_array().unwrap();
+    for name in ["bug", "chore", "core"] {
+        if text.contains(&format!("\"{name}\"")) {
+            let present = labels.iter().any(|l| l["name"].as_str() == Some(name));
+            let excluded = text.contains(&format!("neqignorecase\":\"{name}"));
+            if (excluded && present) || (!excluded && !present) {
+                return false;
+            }
+        }
+    }
+    let mut allowed = Vec::new();
+    for (linear, category) in [
+        ("completed", "done"),
+        ("unstarted", "todo"),
+        ("\"started\"", "in-progress"),
+        ("backlog", "backlog"),
+        ("canceled", "cancelled"),
+    ] {
+        if text.contains(linear) {
+            allowed.push(category);
+        }
+    }
+    if !allowed.is_empty() && !allowed.contains(&v["status"]["category"].as_str().unwrap_or("")) {
+        return false;
+    }
+    if text.contains("\"null\":true") && v.get("project").is_some() {
+        return false;
+    }
+    for id in ["p-1", "p-2"] {
+        if text.contains(id)
+            && v.get("project")
+                .and_then(Value::as_str)
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+                != Some(id)
+        {
+            return false;
+        }
+    }
+    true
+}
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+fn linear_relations(data: &Value, key: &str, id: &str, suffix: &str) -> Value {
+    let edges = data[key].as_array().unwrap();
+    let forward = edges
+        .iter()
+        .filter(|e| e["from"] == id)
+        .map(|e| json!({"type":e["kind"],(format!("related{suffix}")):{"id":e["to"]}}))
+        .collect::<Vec<_>>();
+    let inverse = edges
+        .iter()
+        .filter(|e| e["to"] == id)
+        .map(|e| json!({"type":e["kind"],(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
+        .collect::<Vec<_>>();
+    json!({"relations":{"nodes":forward,"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":inverse,"pageInfo":{"hasNextPage":false,"endCursor":null}}})
 }
 
 fn local_md_block(sandbox: &Sandbox) -> Value {

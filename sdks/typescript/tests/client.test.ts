@@ -167,7 +167,7 @@ test("a source failure remains typed for partial and accepted-partial exits", as
     JSON.stringify({
       sources: {
         work: { plugin: "in-memory", config: { tasks: [] } },
-        broken: { plugin: "linear", config: {} },
+        broken: { plugin: "linear", config: { endpoint: "://invalid" } },
       },
     }),
   );

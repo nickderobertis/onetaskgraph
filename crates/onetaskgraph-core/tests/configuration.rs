@@ -700,14 +700,12 @@ fn every_plugin_kind_names_the_kind_its_own_plugin_reports() {
 
 #[test]
 fn a_blocks_own_field_is_checked_against_the_plugins_schema_before_the_source_is_built() {
-    // `linear`'s factory is registered but its source is not written yet, so *every*
-    // call to its `build` fails with the plugin's own message. A mistyped field must
-    // therefore be reported as a mistyped field — which it can only be if the check
-    // ran first.
+    // A valid block reaches Linear's factory and fails only because no credential was
+    // supplied. A mistyped field must instead be reported by schema validation first.
     let reached_build = resolve(&one_source("linear", json!({})), &no_secrets())
-        .expect_err("the linear source is not written yet");
+        .expect_err("the credential is deliberately absent");
     assert!(
-        reached_build.to_string().contains("not implemented yet"),
+        reached_build.to_string().contains("LINEAR_API_KEY"),
         "a valid block reaches the factory: {reached_build}"
     );
 
@@ -715,7 +713,7 @@ fn a_blocks_own_field_is_checked_against_the_plugins_schema_before_the_source_is
         .expect_err("a field this plugin does not declare");
     assert_eq!(refused.key(), Some("sources.work.config.api_key_env"));
     assert!(
-        !refused.to_string().contains("not implemented yet"),
+        !refused.to_string().contains("LINEAR_API_KEY"),
         "the block is checked before the factory is called: {refused}"
     );
 }

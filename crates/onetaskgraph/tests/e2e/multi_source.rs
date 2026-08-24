@@ -175,8 +175,7 @@ fn an_emulated_reverse_walk_matches_a_native_one_edge_for_edge() {
 #[test]
 fn one_source_failing_leaves_the_others_intact_and_costs_exit_four_unless_allowed() {
     for boundary in SOURCE_BOUNDARIES {
-        // `linear` is registered and its source has not landed, so its factory refuses —
-        // the same shape as a credential that is not there.
+        // Linear is deliberately configured without its credential.
         let sandbox = Sandbox::new();
         let mut block = dataset();
         block["capabilities"] = json!({"max_page_size": 50});
@@ -231,7 +230,7 @@ fn sources_list_reports_every_configured_source_and_what_it_declares() {
         })));
         let listing = ok(&broken, &["sources", "list"]);
         assert!(
-            listing.contains("unavailable") && listing.contains("not implemented yet"),
+            listing.contains("unavailable") && listing.contains("LINEAR_API_KEY"),
             "{listing}"
         );
     }

@@ -1,0 +1,19 @@
+{
+  "data": {
+    "projects": {
+      "nodes": [
+        {
+          "id": "p1",
+          "name": "Fixture project",
+          "description": "Project body",
+          "url": "https://linear.app/acme/project/p1",
+          "createdAt": "2026-08-01T12:00:00Z",
+          "updatedAt": "2026-08-02T12:00:00Z",
+          "status": { "name": "Started", "type": "started" },
+          "labels": { "nodes": [{ "id": "pl1", "name": "Roadmap", "color": "#00ff00" }] }
+        }
+      ],
+      "pageInfo": { "hasNextPage": false, "endCursor": null }
+    }
+  }
+}

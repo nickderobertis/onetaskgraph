@@ -265,6 +265,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "combine"
+version = "4.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
+dependencies = [
+ "bytes",
+ "memchr",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -462,6 +472,16 @@ dependencies = [
  "r-efi",
  "wasip2",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "graphql-parser"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a818c0d883d7c0801df27be910917750932be279c7bc82dc541b8769425f409"
+dependencies = [
+ "combine",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -975,6 +995,7 @@ dependencies = [
  "clap",
  "jsonschema",
  "onetaskgraph-core",
+ "onetaskgraph-linear",
  "onetaskgraph-plugin-api",
  "predicates",
  "serde",
@@ -1001,7 +1022,7 @@ dependencies = [
  "serde_norway",
  "serde_path_to_error",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.20",
  "tokio",
 ]
 
@@ -1037,11 +1058,16 @@ dependencies = [
 name = "onetaskgraph-linear"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "chrono",
+ "graphql-parser",
  "onetaskgraph-plugin-api",
+ "reqwest",
  "schemars",
  "secrecy",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1069,7 +1095,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.20",
  "tokio",
 ]
 
@@ -1668,11 +1694,31 @@ checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 
 [[package]]
 name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
 version = "2.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 2.0.20",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
