@@ -133,7 +133,6 @@ def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
 
 def test_generated_surface_is_current() -> None:
     """Fail when schema or command regeneration changes a committed file."""
-    subprocess.run([sys.executable, "generate.py"], cwd=WORKSPACE / "sdks" / "python", check=True)
     subprocess.run(
         [sys.executable, "generate.py", "--check"],
         cwd=WORKSPACE / "sdks" / "python",
@@ -143,21 +142,26 @@ def test_generated_surface_is_current() -> None:
 
 def test_generator_rejects_drift_and_unmapped_commands(tmp_path: Path) -> None:
     """Name stale output and a newly discovered command with no client method."""
-    generated = WORKSPACE / "sdks/python/src/onetaskgraph_sdk/_generated/effective_config.py"
-    original = generated.read_text(encoding="utf-8")
-    try:
-        generated.write_text(original + "# stale\n", encoding="utf-8")
-        stale = subprocess.run(
-            [sys.executable, "generate.py", "--check"],
-            cwd=WORKSPACE / "sdks" / "python",
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert stale.returncode == 1
-        assert "effective_config.py" in stale.stderr
-    finally:
-        generated.write_text(original, encoding="utf-8")
+    expected = tmp_path / "expected"
+    actual = tmp_path / "actual"
+    expected.mkdir()
+    actual.mkdir()
+    (expected / "effective_config.py").write_text("current", encoding="utf-8")
+    (actual / "effective_config.py").write_text("stale", encoding="utf-8")
+    stale = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; import generate; "
+            f"generate.check_generated(Path({str(expected)!r}), Path({str(actual)!r}))",
+        ],
+        cwd=WORKSPACE / "sdks" / "python",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stale.returncode == 1
+    assert "effective_config.py" in stale.stderr
     unmapped = subprocess.run(
         [
             sys.executable,

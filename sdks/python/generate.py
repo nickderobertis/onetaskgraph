@@ -288,6 +288,26 @@ def format_generated(destination: Path) -> None:
     subprocess.run(["ruff", "format", str(destination)], check=True, capture_output=True)
 
 
+def check_generated(expected_dir: Path, actual_dir: Path) -> None:
+    """Reject a generated directory that differs from the expected output."""
+    expected = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in expected_dir.iterdir()
+        if path.is_file()
+    }
+    actual = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in actual_dir.iterdir()
+        if path.is_file()
+    }
+    changed = sorted(
+        set(expected) ^ set(actual)
+        | {name for name in expected.keys() & actual.keys() if expected[name] != actual[name]}
+    )
+    if changed:
+        raise SystemExit("generated Python SDK is stale: " + ", ".join(changed))
+
+
 def main() -> None:
     """Regenerate, or compare regeneration with the committed package."""
     parser = argparse.ArgumentParser()
@@ -304,26 +324,7 @@ def main() -> None:
         generate_client(commands, target)
         format_generated(target)
         if args.check:
-            expected = {
-                path.name: path.read_text(encoding="utf-8")
-                for path in target.iterdir()
-                if path.is_file()
-            }
-            actual = {
-                path.name: path.read_text(encoding="utf-8")
-                for path in GENERATED.iterdir()
-                if path.is_file()
-            }
-            if expected != actual:
-                changed = sorted(
-                    set(expected) ^ set(actual)
-                    | {
-                        name
-                        for name in expected.keys() & actual.keys()
-                        if expected[name] != actual[name]
-                    }
-                )
-                raise SystemExit("generated Python SDK is stale: " + ", ".join(changed))
+            check_generated(target, GENERATED)
 
 
 if __name__ == "__main__":
