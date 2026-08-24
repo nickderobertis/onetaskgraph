@@ -7,15 +7,18 @@ import { spawnSync } from "node:child_process";
 const packageRoot = resolve(import.meta.dir, "..");
 const binary = resolve(packageRoot, "../../target/debug/onetaskgraph");
 
-function emitter(directory: string, name: string, output: string) {
+function executable(directory: string, name: string, body: string) {
   const windows = process.platform === "win32";
   const program = resolve(directory, `${name}.js`);
   const path = windows ? resolve(directory, `${name}.cmd`) : program;
-  const quoted = JSON.stringify(output);
-  writeFileSync(program, `#!/usr/bin/env node\nprocess.stdout.write(${quoted});\n`);
+  writeFileSync(program, `#!/usr/bin/env node\n${body}\n`);
   if (windows) writeFileSync(path, `@echo off\r\nnode "%~dp0${name}.js"\r\n`);
   else chmodSync(path, 0o755);
   return path;
+}
+
+function emitter(directory: string, name: string, output: string) {
+  return executable(directory, name, `process.stdout.write(${JSON.stringify(output)});`);
 }
 
 function expectExited(result: ReturnType<typeof spawnSync>) {
@@ -131,6 +134,32 @@ test("generator rejects unsafe destinations and malformed executable output", ()
     expectExited(invalid);
     expect(invalid.status).toBe(1);
     expect(invalid.stderr).toContain("binary emitted an invalid schema bundle");
+
+    const failed = generateWith(
+      executable(
+        fixtures,
+        "failed",
+        'process.stderr.write("fixture unavailable"); process.exit(7);',
+      ),
+      fixtures,
+    );
+    expectExited(failed);
+    expect(failed.status).toBe(1);
+    expect(failed.stderr).toContain("fixture unavailable");
+
+    const invalidBundles = [
+      ["version", { version: "1", roots: {}, commands: [] }],
+      ["roots", { version: 1, roots: [], commands: [] }],
+      ["schema", { version: 1, roots: { Broken: { type: "object" } }, commands: [] }],
+      ["commands", { version: 1, roots: {}, commands: [1] }],
+      ["duplicate-commands", { version: 1, roots: {}, commands: ["schema", "schema"] }],
+    ] as const;
+    for (const [name, bundle] of invalidBundles) {
+      const result = generateWith(emitter(fixtures, name, JSON.stringify(bundle)), fixtures);
+      expectExited(result);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("binary emitted an invalid schema bundle");
+    }
 
     if (process.platform !== "win32") {
       const signalled = resolve(fixtures, "signalled");
