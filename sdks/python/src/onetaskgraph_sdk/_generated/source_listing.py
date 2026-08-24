@@ -107,7 +107,7 @@ class Capabilities(BaseModel):
         int,
         Field(
             description="The largest page the source will serve. At least 1 — a source that serves no rows\ncannot be paged, and every implementation rejects zero where its config is read.",
-            ge=0,
+            ge=1,
         ),
     ]
     orphan_tasks: Annotated[

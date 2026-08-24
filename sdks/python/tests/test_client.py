@@ -222,6 +222,19 @@ def test_generator_rejects_drift_and_unmapped_commands(tmp_path: Path) -> None:
     )
     assert missing_choices.returncode == 1
     assert "did not report option" in missing_choices.stderr
+    missing_minimum = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import generate; generate.documented_minimum({}, 'Capabilities.max_page_size')",
+        ],
+        cwd=WORKSPACE / "sdks" / "python",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert missing_minimum.returncode == 1
+    assert "Capabilities.max_page_size" in missing_minimum.stderr
     unmapped = subprocess.run(
         [
             sys.executable,

@@ -168,6 +168,15 @@ def choice_values(help_text: str, cli_name: str) -> list[str]:
     return choices
 
 
+def documented_minimum(schema: JsonValue, field: str) -> int:
+    """Derive a numeric lower bound from the binary's schema description."""
+    description = schema.get("description") if isinstance(schema, dict) else None
+    match = re.search(r"At least (\d+)", description) if isinstance(description, str) else None
+    if match is None:
+        raise SystemExit(f"{field} schema did not document its minimum")
+    return int(match.group(1))
+
+
 def generate_models(bundle: SchemaBundle, destination: Path) -> None:
     """Generate Pydantic models directly from every response schema in the bundle."""
     destination.mkdir(parents=True, exist_ok=True)
@@ -178,6 +187,16 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
         schema = bundle["roots"][root]
         add_variant_titles(schema, root)
         rename_qualified_definitions(schema)
+        if root == "SourceListing":
+            definitions = schema.get("$defs") if isinstance(schema, dict) else None
+            capabilities = (
+                definitions.get("Capabilities") if isinstance(definitions, dict) else None
+            )
+            properties = capabilities.get("properties") if isinstance(capabilities, dict) else None
+            page_size = properties.get("max_page_size") if isinstance(properties, dict) else None
+            minimum = documented_minimum(page_size, "SourceListing.max_page_size")
+            assert isinstance(page_size, dict)
+            page_size["minimum"] = minimum
         module = camel_to_snake(root)
         source = destination / f"{module}.py"
         with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as handle:
