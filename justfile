@@ -78,11 +78,25 @@ format:
 test-live projects="":
     @scripts/test-live.sh {{projects}}
 
-# Linux-only in CI, where it is its own required check.
-
-# Supply-chain gate: banned crates, licences, sources and advisories.
+# Supply-chain gate: banned crates, licences, sources and advisories. Linux-only in CI,
+# where it is its own required check.
 deny:
     @{{nx}} run workspace:deny
+
+# Linux-only in CI because generated-code drift is platform-independent.
+generate-check:
+    @task_log="$$(mktemp)"; trap 'rm -f "$$task_log"' EXIT; \
+        if ! {{nx}} run sdk-python:generate-check >"$$task_log" 2>&1; then \
+            cat "$$task_log" >&2; \
+            echo "generation check failed; next: run 'just generate-check' after fixing the reported Python generator error" >&2; \
+            exit 1; \
+        fi
+
+# Linux CI aggregate: generated-code drift plus the affected-project gate.
+check-generated: generate-check check
+
+# Linux CI aggregate: generated-code drift plus the all-project gate.
+gate-generated: generate-check gate
 
 # Upgrade every ecosystem's dependencies, then re-run the complete bar on the result.
 upgrade:
@@ -92,8 +106,9 @@ upgrade:
     @just gate
 
 # Print the JSON Schema bundle both SDKs are generated from.
+# llmlint: ignore[tool_output_is_signal] stdout is the schema consumed by SDK generators.
 schema:
-    @cargo run --quiet -p onetaskgraph -- schema
+    @cargo run --quiet -p onetaskgraph --bin onetaskgraph -- schema
 
 # Show the project graph Nx selects against.
 graph:

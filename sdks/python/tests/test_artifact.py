@@ -1,0 +1,73 @@
+"""Installed-wheel journey."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def test_wheel_installs_and_queries_through_public_import(tmp_path: Path) -> None:
+    """Install a wheel cleanly and drive a real configured query through it."""
+    package = Path(__file__).parents[1]
+    workspace = package.parents[1]
+    subprocess.run(
+        ["cargo", "build", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(["uv", "build", "--wheel", "--out-dir", str(tmp_path)], cwd=package, check=True)
+    venv = tmp_path / "venv"
+    subprocess.run(["uv", "venv", "--python", sys.executable, str(venv)], check=True)
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    wheel = next(tmp_path.glob("onetaskgraph_sdk-*.whl"))
+    requirements = tmp_path / "requirements.txt"
+    subprocess.run(
+        [
+            "uv",
+            "export",
+            "--frozen",
+            "--no-dev",
+            "--no-emit-project",
+            "--output-file",
+            str(requirements),
+        ],
+        cwd=package,
+        check=True,
+    )
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(python), "--requirement", str(requirements)],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--offline",
+            "--no-deps",
+            "--python",
+            str(python),
+            str(wheel),
+        ],
+        check=True,
+    )
+    config = tmp_path / "query"
+    config.mkdir()
+    (config / "onetaskgraph.yaml").write_text(
+        '{"sources":{"work":{"plugin":"in-memory","config":{"tasks":['
+        '{"id":"T-1","title":"Installed","status":{"category":"todo","name":"Todo"},'
+        '"labels":[]}]}}}}',
+        encoding="utf-8",
+    )
+    suffix = ".exe" if os.name == "nt" else ""
+    binary = (workspace / "target" / "debug" / f"onetaskgraph{suffix}").resolve()
+    script = (
+        "import asyncio; from onetaskgraph_sdk import Client; "
+        f"r=asyncio.run(Client(cwd={str(config)!r}).task_list()); "
+        "assert r.items[0].item.title == 'Installed'"
+    )
+    child_environment = dict(os.environ)
+    child_environment["ONETASKGRAPH_SDK_BINARY"] = str(binary)
+    subprocess.run([str(python), "-c", script], env=child_environment, check=True)
