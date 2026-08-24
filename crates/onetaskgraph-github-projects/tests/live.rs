@@ -3,8 +3,8 @@
 use std::env;
 
 use onetaskgraph_plugin_api::{
-    Direction, NativeId, PageRequest, ProjectQuery, SecretResolver, SourceName, SourcePlugin,
-    StatusCategory, TaskQuery,
+    DependencySupport, Direction, NativeId, PageRequest, ProjectQuery, SecretResolver, SourceName,
+    SourcePlugin, StatusCategory, Support, TaskQuery,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -80,12 +80,10 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
         eprintln!("skipped live GitHub Projects journey: GH_PROJECTS_TOKEN is empty");
         return;
     }
-    let Some((owner, project_number)) = discover_project(&token).await else {
-        eprintln!(
-            "skipped live GitHub Projects journey: token has no discoverable user project; set GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER"
-        );
-        return;
-    };
+    let (owner, project_number) = discover_project(&token).await.expect(
+        "GH_PROJECTS_TOKEN has no discoverable project; set GH_PROJECTS_OWNER and \
+         GH_PROJECTS_NUMBER to a visible project containing at least one Issue",
+    );
     let source = onetaskgraph_github_projects::Plugin
         .build(
             &SourceName::new("github-live").unwrap(),
@@ -95,12 +93,34 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
         .unwrap();
 
     assert!(source.health().await.unwrap().reachable);
+    let capabilities = source.capabilities();
+    assert_eq!(capabilities.projects, Support::Native);
+    assert_eq!(capabilities.filter_by_label, Support::Unsupported);
+    assert_eq!(capabilities.filter_by_status, Support::Unsupported);
+    assert_eq!(capabilities.search_title, Support::Unsupported);
+    assert_eq!(capabilities.search_content, Support::Unsupported);
+    assert_eq!(
+        capabilities.task_dependencies,
+        DependencySupport::ForwardOnly
+    );
     let projects = source
         .query_projects(&ProjectQuery::default(), &page(None))
         .await
         .unwrap();
     assert_eq!(projects.items.len(), 1);
     assert!(projects.next.is_none());
+    let project = &projects.items[0];
+    assert_eq!(
+        source.get_project(&project.id).await.unwrap().as_ref(),
+        Some(project)
+    );
+    assert!(
+        source
+            .get_project(&NativeId("not-a-real-project".into()))
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     let mut tasks = Vec::new();
     let mut cursor = None;
@@ -129,6 +149,22 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
             | StatusCategory::Cancelled
             | StatusCategory::Unknown
     )));
+    if let Some(task) = tasks.first() {
+        assert_eq!(
+            source.get_task(&task.id).await.unwrap().as_ref(),
+            Some(task)
+        );
+    }
+
+    let labels = source.labels(&page(None)).await.unwrap();
+    let mut label_ids = labels
+        .items
+        .iter()
+        .map(|label| &label.id.0)
+        .collect::<Vec<_>>();
+    label_ids.sort_unstable();
+    label_ids.dedup();
+    assert_eq!(label_ids.len(), labels.items.len());
 
     // GitHub cannot push these predicates into ProjectV2.items. The source must return the
     // same wider page so the engine, which is covered by deterministic subprocess journeys,
@@ -149,6 +185,7 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
 
     // Draft issues and pull requests do not expose Issue.blockedBy. Find any Issue content and
     // prove its forward dependency connection is readable; an empty connection is well formed.
+    let mut dependency_read = false;
     for task in &tasks {
         if source
             .task_dependencies(
@@ -159,8 +196,13 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
             .await
             .is_ok()
         {
-            return;
+            dependency_read = true;
+            break;
         }
     }
-    eprintln!("live project contains no Issue item on which to exercise Issue.blockedBy");
+    assert!(
+        dependency_read,
+        "live project has no Issue item on which to exercise Issue.blockedBy; set \
+         GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER to a project containing an Issue"
+    );
 }
