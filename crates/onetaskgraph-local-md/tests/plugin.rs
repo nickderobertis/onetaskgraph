@@ -231,6 +231,75 @@ async fn public_queries_cover_fields_labels_statuses_projects_and_paging() {
 }
 
 #[tokio::test]
+async fn public_results_expose_fallback_titles_unknown_statuses_deduplicated_labels_and_health() {
+    let (root, source) = source();
+    fs::write(
+        root.path().join("tasks/fallback.md"),
+        "---\nstatus: waiting\nlabels: [Bug, BUG]\n---\nbody without a heading\n",
+    )
+    .unwrap();
+
+    let task = source
+        .get_task(&NativeId("fallback".into()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.title, "fallback");
+    assert_eq!(task.status.category, StatusCategory::Unknown);
+
+    let labels = source.labels(&page(200)).await.unwrap();
+    assert_eq!(
+        labels
+            .items
+            .iter()
+            .filter(|label| label.name.eq_ignore_ascii_case("bug"))
+            .count(),
+        1
+    );
+
+    let health = source.health().await.unwrap();
+    assert_eq!(
+        health.detail.as_deref(),
+        Some(format!("reading Markdown under {}", root.path().display()).as_str())
+    );
+}
+
+#[tokio::test]
+async fn public_scan_rejects_unreadable_entries_and_clamps_pages_to_advertised_maximum() {
+    let (root, source) = source();
+    for index in 0..=onetaskgraph_local_md::MAX_PAGE_SIZE {
+        fs::write(
+            root.path().join(format!("tasks/page-{index}.md")),
+            format!("---\nlabels: [label-{index}]\n---\n# Page {index}\n"),
+        )
+        .unwrap();
+    }
+    let labels = source.labels(&page(u32::MAX)).await.unwrap();
+    assert_eq!(
+        labels.items.len(),
+        onetaskgraph_local_md::MAX_PAGE_SIZE as usize
+    );
+    assert!(labels.next.is_some());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        symlink(
+            root.path().join("missing-target"),
+            root.path().join("tasks/dangling.md"),
+        )
+        .unwrap();
+        let error = source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, SourceError::Malformed { ref message } if message.contains("dangling.md"))
+        );
+    }
+}
+
+#[tokio::test]
 async fn invalid_roots_documents_and_pages_are_refused_at_the_public_boundary() {
     let missing = tempfile::tempdir().unwrap().path().join("missing");
     let result = onetaskgraph_local_md::Plugin.build(
@@ -363,7 +432,7 @@ fn a_symlink_escaping_the_root_is_a_configuration_error() {
 #[cfg(unix)]
 #[tokio::test]
 async fn escaped_directory_and_non_utf8_document_are_refused() {
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     let root = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
@@ -406,6 +475,31 @@ async fn escaped_directory_and_non_utf8_document_are_refused() {
         .unwrap()
         .unwrap();
     assert_eq!(task.status.category, StatusCategory::Todo);
+
+    use std::os::unix::ffi::OsStringExt;
+    let non_utf8_name = std::ffi::OsString::from_vec(b"invalid-\xff.md".to_vec());
+    fs::write(
+        root.path().join("tasks").join(non_utf8_name),
+        "---\n{}\n---\n",
+    )
+    .unwrap();
+    let error = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, SourceError::Malformed { ref message } if message.contains("UTF-8 path"))
+    );
+
+    let permissions = fs::metadata(root.path().join("tasks"))
+        .unwrap()
+        .permissions();
+    fs::set_permissions(root.path().join("tasks"), fs::Permissions::from_mode(0o000)).unwrap();
+    let error = source.health().await.unwrap_err();
+    fs::set_permissions(root.path().join("tasks"), permissions).unwrap();
+    assert!(
+        matches!(error, SourceError::Unavailable { ref message } if message.contains("cannot read"))
+    );
 }
 
 #[test]

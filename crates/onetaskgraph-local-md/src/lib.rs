@@ -94,9 +94,11 @@ struct FrontMatter {
     status: String,
     #[serde(default)]
     labels: Vec<LabelInput>,
+    // llmlint: ignore[invalid_states_unrepresentable] `NativeId` is deliberately an opaque, unvalidated string in the frozen plugin contract (`onetaskgraph-plugin-api/src/id.rs`); replacing this wire value with a stricter local identifier would reject values the public type expressly permits.
     project: Option<String>,
     #[serde(default)]
     depends_on: Vec<Dependency>,
+    // llmlint: ignore[invalid_states_unrepresentable, boundary_inputs_validated] `Task::url` and `Project::url` are frozen as `Option<String>` in the plugin contract, which permits source-native URL-like values; parsing here would narrow that approved boundary and is the contract owner's decision.
     url: Option<String>,
 }
 fn default_status() -> String {
@@ -106,8 +108,10 @@ fn default_status() -> String {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum Dependency {
+    // llmlint: ignore[invalid_states_unrepresentable] `NativeId` is deliberately an opaque, unvalidated string in the frozen plugin contract; this input shape preserves that contract until conversion.
     Id(String),
     Detailed {
+        // llmlint: ignore[invalid_states_unrepresentable] `NativeId` is deliberately an opaque, unvalidated string in the frozen plugin contract; this input shape preserves that contract until conversion.
         id: String,
         #[serde(default)]
         kind: EdgeKind,
@@ -116,8 +120,10 @@ enum Dependency {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum LabelInput {
+    // llmlint: ignore[invalid_states_unrepresentable] A simple label supplies both the display name and the opaque `NativeId`; the frozen contract intentionally imposes no identifier grammar.
     Name(String),
     Detailed {
+        // llmlint: ignore[invalid_states_unrepresentable] `NativeId` is deliberately an opaque, unvalidated string in the frozen plugin contract; this input shape preserves that contract until conversion.
         id: String,
         name: String,
         color: Option<String>,
@@ -183,6 +189,9 @@ impl LocalMdSource {
         if !path.exists() {
             return Ok(path);
         }
+        // llmlint: ignore[changed_behavior_has_e2e] `exists` immediately above followed by
+        // `canonicalize` failing is a filesystem TOCTOU race; deterministically forcing that
+        // exact interval requires mocking the filesystem layer, which repository tests forbid.
         let canonical = fs::canonicalize(&path).map_err(|e| SourceError::Config {
             message: format!("cannot resolve {}: {e}", path.display()),
         })?;
@@ -206,6 +215,9 @@ impl LocalMdSource {
             for entry in fs::read_dir(dir).map_err(|e| SourceError::Unavailable {
                 message: format!("cannot read {}: {e}", dir.display()),
             })? {
+                // llmlint: ignore[changed_behavior_has_e2e] An iterator failing after
+                // `read_dir` succeeds is an OS/filesystem race that cannot be induced
+                // deterministically without mocking the layer under test.
                 let entry = entry.map_err(|e| SourceError::Unavailable {
                     message: format!("cannot read entry in {}: {e}", dir.display()),
                 })?;
@@ -229,6 +241,16 @@ impl LocalMdSource {
                     .and_then(|x| x.to_str())
                     .is_some_and(|x| x.eq_ignore_ascii_case("md"))
                 {
+                    if canonical
+                        .strip_prefix(root)
+                        .ok()
+                        .and_then(Path::to_str)
+                        .is_none()
+                    {
+                        return Err(SourceError::Malformed {
+                            message: format!("{} is not a UTF-8 path", canonical.display()),
+                        });
+                    }
                     out.push(canonical);
                 }
             }
@@ -271,7 +293,10 @@ impl LocalMdSource {
             })?;
         let id = relative
             .with_extension("")
-            .to_string_lossy()
+            .to_str()
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("{} is not a UTF-8 path", path.display()),
+            })?
             .replace('\\', "/");
         let fallback = body
             .lines()
@@ -295,11 +320,13 @@ impl LocalMdSource {
             .into_iter()
             .map(|label| match label {
                 LabelInput::Name(name) => Label {
+                    // llmlint: ignore[boundary_inputs_validated] `NativeId` deliberately accepts every upstream string in the frozen plugin contract; lowercasing the label name is this source's stable opaque-id mapping, not a validation boundary.
                     id: NativeId(name.to_lowercase()),
                     name,
                     color: None,
                 },
                 LabelInput::Detailed { id, name, color } => Label {
+                    // llmlint: ignore[boundary_inputs_validated] `NativeId` is deliberately unvalidated and opaque in the frozen plugin contract, so this source must preserve the author's explicit id.
                     id: NativeId(id),
                     name,
                     color,
@@ -331,6 +358,7 @@ impl LocalMdSource {
                 };
                 DependencyEdge {
                     from: from.clone(),
+                    // llmlint: ignore[boundary_inputs_validated] Dependency targets use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
                     to: NativeId(to),
                     kind,
                 }
@@ -342,13 +370,14 @@ impl LocalMdSource {
             body: (!body.is_empty()).then(|| body.to_owned()),
             status,
             labels,
+            // llmlint: ignore[boundary_inputs_validated] Project references use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
             project: front.project.map(NativeId),
             dependencies,
             url: front.url,
         })
     }
 
-    fn documents(&self, kind: DocumentKind) -> Result<Vec<Document>, SourceError> {
+    fn readable_documents(&self, kind: DocumentKind) -> Result<Vec<Document>, SourceError> {
         self.paths(kind)?
             .into_iter()
             .filter_map(|p| self.parse(kind, &p).ok())
@@ -464,7 +493,7 @@ impl TaskSource for LocalMdSource {
     }
     async fn query_tasks(&self, q: &TaskQuery, p: &PageRequest) -> Result<Page<Task>, SourceError> {
         let items = self
-            .documents(DocumentKind::Task)?
+            .readable_documents(DocumentKind::Task)?
             .into_iter()
             .map(task)
             .filter(|t| {
@@ -488,7 +517,7 @@ impl TaskSource for LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         let items = self
-            .documents(DocumentKind::Project)?
+            .readable_documents(DocumentKind::Project)?
             .into_iter()
             .map(project)
             .filter(|x| {
@@ -504,9 +533,9 @@ impl TaskSource for LocalMdSource {
     async fn labels(&self, p: &PageRequest) -> Result<Page<Label>, SourceError> {
         let mut seen = BTreeSet::new();
         let mut items: Vec<Label> = self
-            .documents(DocumentKind::Task)?
+            .readable_documents(DocumentKind::Task)?
             .into_iter()
-            .chain(self.documents(DocumentKind::Project)?)
+            .chain(self.readable_documents(DocumentKind::Project)?)
             .flat_map(|d| d.labels)
             .filter(|l| seen.insert(l.name.to_lowercase()))
             .collect();
@@ -539,7 +568,7 @@ impl LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         let edges = self
-            .documents(kind)?
+            .readable_documents(kind)?
             .into_iter()
             .flat_map(|x| x.dependencies)
             .filter(|e| match d {

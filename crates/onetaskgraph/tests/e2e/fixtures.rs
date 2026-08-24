@@ -183,6 +183,11 @@ pub const ROWS: &[Row] = &[
         name: "local-md",
         fixture: Fixture::Ready(Ready {
             block: local_md_block,
+            // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The journeys use
+            // these expectations to assert the real binary's reported plan, whose values
+            // come from `LocalMdSource::capabilities`; changing that implementation without
+            // this fixture makes those public-boundary assertions fail, so the journeys are
+            // the drift gate rather than a second authoritative declaration.
             declared: Declared {
                 filter_by_label: true,
                 filter_by_status: true,

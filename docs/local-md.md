@@ -1,9 +1,14 @@
 # Local Markdown source
 
-<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This page documents the
-     human-authored Markdown input format, while the machine-readable configuration
-     contract has one source in `LocalMdConfig` and `Plugin::config_schema`; the plugin's
-     public schema test checks required and rejected fields at that generated boundary. -->
+<!-- llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] This page is the
+     human-facing description of the input contract whose single executable source is
+     `onetaskgraph-local-md/src/lib.rs`: `FrontMatter`, `Dependency`, `LabelInput`,
+     `EdgeKind`, `default_statuses`, `MAX_PAGE_SIZE`, and the traversal implementation.
+     Public integration tests exercise the documented defaults, mappings, paging,
+     traversal, and confinement at the plugin boundary. Generating prose from those Rust
+     types would make the documentation less useful without adding an independent source
+     of truth; contract changes therefore update this page and their boundary tests in the
+     same change. -->
 
 Configure `plugin: local-md` with a `root` directory. The plugin reads Markdown from
 `root/tasks/` and `root/projects/`, recursively. A file's native identifier is its path
