@@ -347,3 +347,77 @@ fn help_names_the_product_however_the_executable_on_disk_is_named() {
         .success()
         .stdout(contains("Usage: onetaskgraph schema"));
 }
+
+/// The README section that documents the command surface, read from the repository.
+///
+/// A path relative to this crate's manifest rather than the working directory, because a
+/// test's working directory is the crate root and the document is two levels above it.
+fn readme() -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../README.md")
+        .canonicalize()
+        .expect("the README sits at the repository root");
+    std::fs::read_to_string(path).expect("the README is readable")
+}
+
+#[test]
+fn the_readme_documents_the_command_surface_this_binary_actually_has() {
+    // The README spells the verbs, the flags and the exit codes a second time, for the
+    // person deciding whether to install this at all. A second spelling drifts, and the
+    // one that drifts is always the prose — so it is reconciled here against the binary's
+    // own help rather than against a list somebody has to remember to update.
+    let readme = readme();
+    let mut missing = Vec::new();
+
+    for (arguments, expected) in SURFACE {
+        for name in *expected {
+            // `<ID>` and `<TEXT>` are clap's placeholders, spelled in prose in the README.
+            if name.starts_with('<') {
+                continue;
+            }
+            if !readme.contains(name) {
+                missing.push(format!("{} — {name}", arguments.join(" ")));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "the README does not document part of the surface `--help` reports:\n  {}",
+        missing.join("\n  ")
+    );
+
+    // And the exit codes, which are the part a script depends on. `--help` is the
+    // binary's own statement of them; every code it names has to appear in the README's
+    // table, and the table must not invent one the binary does not use.
+    let help = String::from_utf8_lossy(
+        &onetaskgraph()
+            .arg("--help")
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    )
+    .into_owned();
+    let documented: Vec<&str> = ["`0`", "`1`", "`2`", "`4`"]
+        .into_iter()
+        .filter(|code| help.contains(code))
+        .collect();
+    assert_eq!(
+        documented.len(),
+        4,
+        "`--help` no longer names every exit code:\n{help}"
+    );
+    for code in documented {
+        let row = format!("| {code} |");
+        assert!(
+            readme.contains(&row),
+            "the README's exit-code table has no row for {code}"
+        );
+    }
+    for invented in ["| `3` |", "| `5` |"] {
+        assert!(
+            !readme.contains(invented),
+            "the README documents {invented}, which this binary never exits with"
+        );
+    }
+}

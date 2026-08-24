@@ -217,6 +217,17 @@ pub enum EngineError {
         configured: String,
     },
 
+    /// A `--page` token that decodes but does not belong to this query.
+    #[error(
+        "{message}\n\
+         next: page with a token exactly as the previous page reported it, and against \
+         the same configuration — or drop `--page` to start the walk again."
+    )]
+    Token {
+        /// What the token claims that this configuration cannot honour.
+        message: String,
+    },
+
     /// Nothing at all is configured, so there is nothing to ask.
     #[error(
         "no sources are configured\n\
@@ -294,6 +305,20 @@ impl Engine {
         listings
     }
 
+    /// Whether this configuration has a source called `name`, built or not.
+    ///
+    /// A caller reading a `--project` argument needs this: `urn:project:1` is a qualified
+    /// id only if `urn` is a source here, and a native id full of colons otherwise. That
+    /// rule cannot be applied without knowing what is configured.
+    #[must_use]
+    pub fn has(&self, name: &SourceName) -> bool {
+        self.ready
+            .iter()
+            .map(ResolvedSource::name)
+            .chain(self.unavailable.iter().map(UnavailableSource::name))
+            .any(|known| known == name)
+    }
+
     /// One page of tasks.
     ///
     /// # Errors
@@ -314,7 +339,7 @@ impl Engine {
             self.known(&id.source)?;
             names.retain(|name| name == &id.source);
         }
-        let states = decode(request.paging.token.as_ref());
+        let states = resumption(self, request.paging.token.as_ref())?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
@@ -364,7 +389,7 @@ impl Engine {
         request: &ProjectRequest,
     ) -> Result<QueryResponse<Qualified<Project>>, EngineError> {
         let names = self.resolve_selection(&request.sources)?;
-        let states = decode(request.paging.token.as_ref());
+        let states = resumption(self, request.paging.token.as_ref())?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
@@ -421,7 +446,7 @@ impl Engine {
         request: &LabelRequest,
     ) -> Result<QueryResponse<Qualified<Label>>, EngineError> {
         let names = self.resolve_selection(&request.sources)?;
-        let states = decode(request.paging.token.as_ref());
+        let states = resumption(self, request.paging.token.as_ref())?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
@@ -452,7 +477,7 @@ impl Engine {
         request: &SearchRequest,
     ) -> Result<QueryResponse<SearchHit>, EngineError> {
         let names = self.resolve_selection(&request.sources)?;
-        let states = decode(request.paging.token.as_ref());
+        let states = resumption(self, request.paging.token.as_ref())?;
         let budget = request.paging.limit.get();
         let filters = Filters {
             text: Some(request.text.clone()),
@@ -600,7 +625,7 @@ impl Engine {
         entity: Entity,
     ) -> Result<QueryResponse<QualifiedEdge>, EngineError> {
         let name = self.known(&request.id.source)?;
-        let states = decode(request.paging.token.as_ref());
+        let states = resumption(self, request.paging.token.as_ref())?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
@@ -667,13 +692,7 @@ impl Engine {
 
     /// `name` when this configuration has a source called that.
     fn known(&self, name: &SourceName) -> Result<SourceName, EngineError> {
-        let configured = self
-            .ready
-            .iter()
-            .map(ResolvedSource::name)
-            .chain(self.unavailable.iter().map(UnavailableSource::name))
-            .any(|known| known == name);
-        if configured {
+        if self.has(name) {
             return Ok(name.clone());
         }
         if self.ready.is_empty() && self.unavailable.is_empty() {
@@ -770,7 +789,6 @@ struct Answer {
 }
 
 impl Answer {
-    /// An answer with nothing in it yet.
     fn new() -> Self {
         Self {
             plans: Vec::new(),
@@ -1004,13 +1022,77 @@ fn resume_at(
     }
 }
 
-/// Read a caller's page token, or `None` when they asked for the first page.
+/// Read a caller's page token against the sources this configuration has.
 ///
-/// Infallible: a `PageToken` cannot exist without having been validated, so refusing one
-/// this engine did not issue happens where the caller's string enters — see
-/// [`PageToken::parse`].
-fn decode(token: Option<&PageToken>) -> Option<Vec<StreamState>> {
-    token.map(PageToken::decode)
+/// [`PageToken::parse`] has already established that the string is this engine's own
+/// resume document — that is structural and happens where the caller's string enters.
+/// What it cannot establish is that the document belongs *here*, because only the engine
+/// knows which sources are configured and what page ceiling each one declares. So the
+/// three things a token this engine wrote is always true of are checked here:
+///
+/// 1. every stream it names belongs to a configured source, so a token carried over from
+///    another configuration is refused rather than quietly resuming half a walk;
+/// 2. no stream appears twice, because a walk has one place to pick up per stream;
+/// 3. no `skip` reaches a source's declared page ceiling, because the engine's `skip` is
+///    an index among the surviving rows of one source page and can never reach it.
+///
+/// None of this is a security boundary and a page token is not a credential: nothing in
+/// one is secret, and a forged cursor is handed straight back to the source that would
+/// have issued it and refused there. What it buys is that a stale or hand-edited token
+/// fails saying so, instead of silently returning a page from somewhere else in the walk.
+fn resumption(
+    engine: &Engine,
+    token: Option<&PageToken>,
+) -> Result<Option<Vec<StreamState>>, EngineError> {
+    let Some(states) = token.map(PageToken::decode) else {
+        return Ok(None);
+    };
+
+    let mut seen: Vec<(&SourceName, StreamKind)> = Vec::new();
+    for state in &states {
+        let ceiling = engine
+            .ready
+            .iter()
+            .find(|source| source.name() == &state.source)
+            .map(ceiling);
+        if ceiling.is_none()
+            && !engine
+                .unavailable
+                .iter()
+                .any(|source| source.name() == &state.source)
+        {
+            return Err(EngineError::Token {
+                message: format!(
+                    "this page token resumes a source called {:?}, which this \
+                     configuration does not have",
+                    state.source.as_str()
+                ),
+            });
+        }
+        if let Some(ceiling) = ceiling
+            && state.resume.skip >= ceiling
+        {
+            return Err(EngineError::Token {
+                message: format!(
+                    "this page token resumes {} rows into a page of source {:?}, which \
+                     serves at most {ceiling}",
+                    state.resume.skip,
+                    state.source.as_str()
+                ),
+            });
+        }
+        if seen.contains(&(&state.source, state.stream)) {
+            return Err(EngineError::Token {
+                message: format!(
+                    "this page token gives source {:?} two places to resume from",
+                    state.source.as_str()
+                ),
+            });
+        }
+        seen.push((&state.source, state.stream));
+    }
+
+    Ok(Some(states))
 }
 
 /// Which project a task must belong to, as a source sees it.

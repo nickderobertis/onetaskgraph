@@ -66,14 +66,19 @@ fn a_global_id_round_trips_through_json_as_a_single_string() {
 }
 
 #[test]
-fn a_hand_edited_page_token_fails_loudly_rather_than_silently_restarting_the_walk() {
-    // Refused where it enters, not wherever it is first decoded: `parse` is the only
-    // way to build one from a caller's string, so an unissued token has no window in
-    // which it exists as a `PageToken` at all.
+fn a_string_that_is_not_this_engines_resume_document_is_refused_where_it_enters() {
+    // Structural refusal, at the boundary the caller's string crosses: `parse` is the
+    // only way to build one, so a string that is not this engine's document has no
+    // window in which it exists as a `PageToken` at all. Whether a token that *does*
+    // decode can be honoured by the query being resumed is the engine's to say — see
+    // `a_page_token_this_configuration_cannot_honour_is_refused_for_what_it_says`.
     let Err(SourceError::Malformed { message }) = PageToken::parse("{not json") else {
-        panic!("a token this engine did not issue must be refused");
+        panic!("a string that is not this engine's document must be refused");
     };
-    assert!(message.contains("not issued by this engine"), "{message}");
+    assert!(
+        message.contains("not a page token this engine writes"),
+        "{message}"
+    );
 
     // A well-formed document of the wrong shape is refused at the same boundary, and so
     // is one naming a source no configuration could have: the token's inside is the
@@ -91,10 +96,12 @@ fn a_hand_edited_page_token_fails_loudly_rather_than_silently_restarting_the_wal
 
     // And deserialising goes through the same gate, so a response cannot carry one in.
     let Err(error) = serde_json::from_str::<PageToken>(r#""{not json""#) else {
-        panic!("deserialising an unissued token must be refused");
+        panic!("deserialising a string that is not this engine's document must be refused");
     };
     assert!(
-        error.to_string().contains("not issued by this engine"),
+        error
+            .to_string()
+            .contains("not a page token this engine writes"),
         "{error}"
     );
 }

@@ -1273,3 +1273,59 @@ async fn a_walk_asks_for_one_page_at_a_time_and_stops_when_the_callers_page_is_f
             .collect::<Vec<_>>()
     );
 }
+
+#[tokio::test]
+async fn a_page_token_this_configuration_cannot_honour_is_refused_for_what_it_says() {
+    // `PageToken::parse` establishes only that a string is this engine's resume document.
+    // Whether what the document *says* can be honoured needs the configuration, so it is
+    // checked here — and each of these would otherwise resume half a walk and look like a
+    // short page rather than a mistake.
+    let engine = engine_over(json!({
+        "work": {"plugin": "in-memory", "config": compensated(nothing_native())},
+    }));
+
+    for (document, problem) in [
+        (
+            json!([{"source": "elsewhere", "stream": "items"}]),
+            "does not have",
+        ),
+        (
+            json!([{"source": "work", "stream": "items", "skip": 999}]),
+            "serves at most",
+        ),
+        (
+            json!([
+                {"source": "work", "stream": "items"},
+                {"source": "work", "stream": "items", "skip": 1},
+            ]),
+            "two places to resume",
+        ),
+    ] {
+        let raw = serde_json::to_string(&document).expect("a resume document renders");
+        let token = PageToken::parse(hex(&raw)).expect("it is this engine's own document");
+        let Err(EngineError::Token { message }) = engine
+            .tasks(&tasks(
+                Filters::default(),
+                ProjectSelector::Any,
+                resumed(5, token),
+            ))
+            .await
+        else {
+            panic!("{raw} must be refused");
+        };
+        assert!(message.contains(problem), "{raw}: {message}");
+    }
+}
+
+/// One string as the lower-case hex a page token is spelled in.
+///
+/// Here rather than reached for from the engine: a token is opaque by construction and
+/// there is deliberately no public way to build one from parts, so a test that needs a
+/// *specific* token spells it the way a caller pasting one off a terminal would.
+fn hex(document: &str) -> String {
+    document
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}

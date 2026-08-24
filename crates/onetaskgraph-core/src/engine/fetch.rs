@@ -18,15 +18,16 @@ use super::resume::{Resume, StreamKind, StreamState};
 
 /// One surviving row, with the state that would deliver it first.
 pub(crate) struct Row<T> {
-    /// The row itself.
     pub item: T,
-    /// Where a walk resumes in order to hand this row back next.
+    /// Where a walk resumes in order to hand *this* row back first, which is what makes a
+    /// page boundary expressible in the middle of a source page the engine narrowed.
     pub resume: Resume,
 }
 
 /// What one walk of one stream produced.
 pub(crate) struct Fetched<T> {
-    /// The surviving rows, in the source's own order.
+    /// In the source's own order, and narrowed already: what the engine compensated for
+    /// never reaches the merge.
     pub rows: Vec<Row<T>>,
     /// The cursor after the last page pulled, or `None` when the stream is exhausted.
     pub after: Option<Cursor>,
@@ -34,11 +35,10 @@ pub(crate) struct Fetched<T> {
 
 /// One source's stream, ready to merge.
 pub(crate) struct Stream<T> {
-    /// The configured source it came from.
     pub source: SourceName,
-    /// Which of that source's streams it is.
+    /// A source contributes more than one stream to `search --kind both`, so the pair is
+    /// the key a resume state is stored under rather than the source alone.
     pub kind: StreamKind,
-    /// What the walk produced.
     pub fetched: Fetched<T>,
 }
 

@@ -122,13 +122,14 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
         Command::Task {
             command: TaskCommand::List(args),
         } => {
+            let engine = engine(loaded);
             let request = TaskRequest {
                 sources: selection(&args.selection)?,
                 filters: filters(&args.filters)?,
-                project: selector(args.project.as_deref(), args.no_project)?,
+                project: selector(&engine, args.project.as_deref(), args.no_project),
                 paging: paging(loaded, &args.paging)?,
             };
-            let response = engine(loaded)
+            let response = engine
                 .tasks(&request)
                 .await
                 .map_err(|error| error.to_string())?;
@@ -402,21 +403,23 @@ fn filters(args: &FilterArgs) -> Result<Filters, String> {
 }
 
 /// Which project a `task list` was narrowed to.
-fn selector(project: Option<&str>, orphans: bool) -> Result<ProjectSelector, String> {
+///
+/// A qualified id names one project of one source and narrows the query to it; anything
+/// else is a native id every selected source is asked about. Which of the two a string is
+/// depends on whether its prefix names a **configured source**, which is why this needs
+/// the engine: `urn:project:1` is a native id full of colons on a host with no source
+/// called `urn`, and only a host that has one reads it as qualified.
+fn selector(engine: &Engine, project: Option<&str>, orphans: bool) -> ProjectSelector {
     if orphans {
-        return Ok(ProjectSelector::Orphans);
+        return ProjectSelector::Orphans;
     }
     let Some(project) = project else {
-        return Ok(ProjectSelector::Any);
+        return ProjectSelector::Any;
     };
-    // A qualified id names one project of one source; anything else is a native id every
-    // selected source is asked about. Trying the qualified form first is what lets a
-    // native id contain colons and still be a native id: only a prefix that is itself a
-    // usable source name qualifies.
-    Ok(match GlobalId::from_str(project) {
-        Ok(id) => ProjectSelector::Qualified(id),
-        Err(_) => ProjectSelector::Native(NativeId::from(project)),
-    })
+    match GlobalId::from_str(project) {
+        Ok(id) if engine.has(&id.source) => ProjectSelector::Qualified(id),
+        Ok(_) | Err(_) => ProjectSelector::Native(NativeId::from(project)),
+    }
 }
 
 /// One qualified id, as a verb that takes one reads it.

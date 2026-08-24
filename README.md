@@ -41,6 +41,9 @@ onetaskgraph task deps <ID> [--direction depends-on|depended-on-by]
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
 onetaskgraph label list [--source S]...
 onetaskgraph search <TEXT> [--in ...] [--kind task|project|both]
+
+onetaskgraph config show                         # every setting and the layer it came from
+onetaskgraph schema                              # the JSON Schema bundle both SDKs use
 ```
 
 An `<ID>` is qualified: `work:ENG-142`. Repeating `--label` narrows — a second one is a

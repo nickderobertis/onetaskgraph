@@ -60,12 +60,26 @@ registered = set(re.findall(r'=> "([a-z0-9-]+)"', as_str.group(1)))
 covered = set(re.findall(r'plugin: "([a-z0-9-]+)"', table_source))
 
 if not registered:
-    print("check-journey-matrix: the registry names no plugin at all.", file=sys.stderr)
+    print(
+        f"check-journey-matrix: {registry_path} names no plugin at all, so this check has "
+        "nothing to reconcile the journey table against.",
+        file=sys.stderr,
+    )
+    print(
+        "check-journey-matrix: restore the `=> \"kind\"` arms of `PluginKind::as_str` — "
+        "one per plugin the binary can build — then re-run 'just check'.",
+        file=sys.stderr,
+    )
     raise SystemExit(1)
 if not covered:
     print(
         f"check-journey-matrix: {table_path} has no rows — every journey runs against "
-        "every source kind through that table.",
+        "every source kind through that table, so an empty one runs them against nothing.",
+        file=sys.stderr,
+    )
+    print(
+        "check-journey-matrix: restore ROWS there — one `plugin: \"kind\"` entry per "
+        f"plugin in {registry_path} — then re-run 'just check'.",
         file=sys.stderr,
     )
     raise SystemExit(1)

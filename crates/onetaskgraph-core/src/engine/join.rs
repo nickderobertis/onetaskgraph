@@ -28,9 +28,11 @@ pub(crate) fn join_all<F: Future>(futures: Vec<F>) -> JoinAll<F> {
 
 /// Every future in flight together, and the answers already in.
 pub(crate) struct JoinAll<F: Future> {
-    /// Each future until it completes, then `None` so it is never polled again.
+    /// Emptied as each future completes, because polling a completed future is undefined
+    /// behaviour on the caller's part and this one polls everything on every wake-up.
     running: Vec<Option<Pin<Box<F>>>>,
-    /// Each answer as it arrives, positionally matched to `running`.
+    /// Positionally matched to `running`, which is what makes the answers come back in
+    /// the order the futures were given rather than the order they finished.
     answers: Vec<Option<F::Output>>,
 }
 

@@ -116,12 +116,21 @@ pub struct SourceFailure {
 /// anything at all, so a token spelled as the raw JSON would carry quotes, braces and
 /// spaces straight into the next command line. Hex has no character a shell reads.
 ///
-/// The wire shape is a bare JSON string, unchanged. What is not representable is a
-/// token this engine never issued: the inner string is private, and both ways in
-/// validate — [`encode`](Self::encode) builds one from cursors, and
-/// [`parse`](Self::parse), which is also what deserialising one goes through,
-/// refuses anything that does not decode. A hand-edited token therefore fails at
-/// the boundary it entered rather than wherever it is first decoded.
+/// # What a token is and is not checked for
+///
+/// Both ways in go through [`parse`](Self::parse) — including deserialising one — and
+/// what that establishes is **structural**: the string is hex, the bytes are this
+/// engine's own resume document, and every state in it is well formed. It does not, and
+/// cannot, establish that this engine is the one that wrote it. A token is not a
+/// credential and carries nothing secret; forging one buys a caller nothing they could
+/// not have asked for outright, since every cursor inside is handed straight back to the
+/// source that issued it and is validated there.
+///
+/// What a forged token *could* do is name a stream this configuration has no source for,
+/// or resume further into a page than the engine ever pages. Both are refused where the
+/// token meets the query it is resuming, by
+/// [`Engine`](crate::Engine) — see `EngineError::Token` — because only the engine knows
+/// which sources are configured and what page ceiling each declares.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(try_from = "String", into = "String")]
 pub struct PageToken(String);
@@ -142,12 +151,16 @@ impl PageToken {
         Self(to_hex(&document))
     }
 
-    /// Accept a token from a caller — a `--page-token` argument, or a deserialised
-    /// response — refusing one this engine could not have issued.
+    /// Accept a token from a caller — a `--page` argument, or a deserialised response —
+    /// refusing anything that is not this engine's own resume document.
+    ///
+    /// Structural only, deliberately: see the type's own note for what this establishes
+    /// and what [`Engine`](crate::Engine) checks instead.
     ///
     /// # Errors
     ///
-    /// Returns [`SourceError::Malformed`] when `raw` does not decode.
+    /// Returns [`SourceError::Malformed`] when `raw` is not hex, is not this engine's
+    /// document, or holds a state that is not well formed.
     pub fn parse(raw: impl Into<String>) -> Result<Self, SourceError> {
         let token = Self(raw.into());
         token.streams()?;
@@ -160,13 +173,14 @@ impl PageToken {
         &self.0
     }
 
-    /// Where each stream picks up.
+    /// Where each stream claims to pick up.
     ///
     /// Infallible, and that is a property of the type rather than an assumption: the only
     /// two ways to obtain a `PageToken` are [`encode`](Self::encode), which built this
     /// document, and [`parse`](Self::parse), which refuses anything that does not decode
     /// — and deserialising one goes through `parse`. So a token that does not decode
-    /// never exists to be read here.
+    /// never exists to be read here. Whether what it *says* is usable against the query
+    /// being resumed is the engine's to decide, not this type's.
     pub(crate) fn decode(&self) -> Vec<StreamState> {
         self.streams()
             .expect("every way to build a PageToken validates it")
@@ -175,12 +189,10 @@ impl PageToken {
     /// The states inside, or why this is not one of this engine's tokens.
     fn streams(&self) -> Result<Vec<StreamState>, SourceError> {
         let document = from_hex(&self.0).ok_or_else(|| SourceError::Malformed {
-            message: "page token was not issued by this engine: it is not one of this \
-                      engine's tokens at all"
-                .to_owned(),
+            message: "that is not a page token this engine writes: it is not even hex".to_owned(),
         })?;
         serde_json::from_str(&document).map_err(|error| SourceError::Malformed {
-            message: format!("page token was not issued by this engine: {error}"),
+            message: format!("that is not a page token this engine writes: {error}"),
         })
     }
 }
@@ -219,7 +231,6 @@ fn to_hex(document: &str) -> String {
     rendered
 }
 
-/// One hex digit.
 fn nibble(value: u8) -> char {
     char::from_digit(u32::from(value), 16).expect("a nibble is a hex digit")
 }

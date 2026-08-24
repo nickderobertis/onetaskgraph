@@ -108,10 +108,50 @@ fn a_source_that_cannot_answer_exits_four_and_names_itself() {
 }
 
 #[test]
-fn a_page_token_this_engine_did_not_issue_is_refused_rather_than_restarting_the_walk() {
+fn a_page_token_this_engine_did_not_write_is_refused_rather_than_restarting_the_walk() {
     let output = run(&host(), &["task", "list", "--page", "not-a-token"]);
-    refused(&output, "not issued by this engine", "previous page");
+    refused(
+        &output,
+        "not a page token this engine writes",
+        "previous page",
+    );
     assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn a_well_shaped_token_this_configuration_cannot_honour_is_refused_for_what_it_says() {
+    // The dangerous case, and the one a malformed string does not reach: a token that
+    // decodes perfectly and asks for something this configuration has no answer for.
+    // Silently ignoring any of these would resume half a walk and look like a short page.
+    //
+    // Each is the hex of one resume document, spelled out here because a token is opaque
+    // by construction and there is deliberately no public way to build one from parts:
+    for (token, document, problem) in [
+        (
+            "5b7b22736f75726365223a22656c73657768657265222c2273747265616d223a226974656d73227d5d",
+            r#"[{"source":"elsewhere","stream":"items"}]"#,
+            "does not have",
+        ),
+        (
+            "5b7b22736f75726365223a22776f726b222c2273747265616d223a226974656d73222c22736b6970223a3939397d5d",
+            r#"[{"source":"work","stream":"items","skip":999}]"#,
+            "serves at most",
+        ),
+        (
+            "5b7b22736f75726365223a22776f726b222c2273747265616d223a226974656d73227d2c7b22736f75726365223a22776f726b222c2273747265616d223a226974656d73222c22736b6970223a317d5d",
+            r#"[{"source":"work","stream":"items"},{"source":"work","stream":"items","skip":1}]"#,
+            "two places to resume",
+        ),
+    ] {
+        let output = run(&host(), &["task", "list", "--page", token]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{document} must be refused:\n{}",
+            stdout(&output)
+        );
+        refused(&output, problem, "the same configuration");
+    }
 }
 
 #[test]
