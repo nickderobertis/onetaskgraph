@@ -15,10 +15,11 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStderr, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 
 use onetaskgraph_plugin_api::SourceError;
 use serde_json::Value;
@@ -84,7 +85,8 @@ pub(crate) struct Connection {
     /// Absent when the peer is not a process this engine owns — [`Peer::over`] connects to
     /// one that is already running, and killing something it did not start is not this
     /// type's to do.
-    child: Mutex<Option<Child>>,
+    child: Arc<Mutex<Option<Child>>>,
+    deadline: Duration,
 }
 
 /// One request line and the slot its answer belongs in.
@@ -108,6 +110,8 @@ impl Connection {
             mut writer,
             mut reader,
             stderr,
+            request_deadline,
+            handshake_deadline: _,
         } = peer;
         let diagnostics = Arc::new(Mutex::new(String::new()));
         if let Some(stderr) = stderr {
@@ -135,7 +139,8 @@ impl Connection {
             jobs: Mutex::new(Some(sender)),
             diagnostics,
             next_id: AtomicU64::new(1),
-            child: Mutex::new(child),
+            child,
+            deadline: request_deadline,
         }
     }
 
@@ -161,6 +166,25 @@ impl Connection {
             line,
             slot: Arc::clone(&slot),
         })?;
+        let timed = Arc::clone(&slot);
+        let child = Arc::clone(&self.child);
+        let deadline = self.deadline;
+        let timed_method = method.to_owned();
+        std::thread::spawn(move || {
+            std::thread::sleep(deadline);
+            let expired = timed.fill_if_empty(Err(SourceError::Unavailable {
+                message: format!(
+                    "the plugin did not answer {timed_method:?} within {} milliseconds",
+                    deadline.as_millis()
+                ),
+            }));
+            if expired
+                && let Ok(mut child) = child.lock()
+                && let Some(child) = child.as_mut()
+            {
+                let _ = child.kill();
+            }
+        });
         let answer = Answer { slot }.await?;
         self.interpret(&id, &answer)
     }
@@ -268,13 +292,16 @@ impl Drop for Connection {
 /// this test suite would then be unable to misbehave on purpose.
 pub(crate) struct Peer {
     /// The process, when this engine started one.
-    pub(crate) child: Option<Child>,
+    pub(crate) child: Arc<Mutex<Option<Child>>>,
     /// Where requests go.
     pub(crate) writer: Box<dyn Write + Send>,
     /// Where responses come from.
     pub(crate) reader: Box<dyn BufRead + Send>,
     /// Diagnostics only; never parsed (§1).
     pub(crate) stderr: Option<ChildStderr>,
+    pub(crate) request_deadline: Duration,
+    /// Present only when this engine owns a child it can interrupt during initialization.
+    pub(crate) handshake_deadline: Option<Duration>,
 }
 
 impl Peer {
@@ -285,7 +312,11 @@ impl Peer {
     /// Returns [`SourceError::Unavailable`] when the command cannot be spawned, naming
     /// the program, because that is nearly always a path that is wrong or not executable
     /// and the message a caller sees is their only clue which.
-    pub(crate) fn spawn(program: &str, args: &[String]) -> Result<Self, SourceError> {
+    pub(crate) fn spawn(
+        program: &str,
+        args: &[String],
+        deadline: Duration,
+    ) -> Result<Self, SourceError> {
         let mut child = Command::new(program)
             .args(args)
             // Credentials cross this boundary only in the initialize request (§3.1).
@@ -307,10 +338,12 @@ impl Peer {
         ));
         let stderr = child.stderr.take().expect("stderr was piped");
         Ok(Self {
-            child: Some(child),
+            child: Arc::new(Mutex::new(Some(child))),
             writer,
             reader,
             stderr: Some(stderr),
+            request_deadline: deadline,
+            handshake_deadline: Some(deadline),
         })
     }
 
@@ -318,12 +351,15 @@ impl Peer {
     pub(crate) fn over(
         writer: impl Write + Send + 'static,
         reader: impl Read + Send + 'static,
+        deadline: Duration,
     ) -> Self {
         Self {
-            child: None,
+            child: Arc::new(Mutex::new(None)),
             writer: Box::new(writer),
             reader: Box::new(BufReader::new(reader)),
             stderr: None,
+            request_deadline: deadline,
+            handshake_deadline: None,
         }
     }
 
@@ -334,7 +370,37 @@ impl Peer {
     /// Returns [`SourceError::Unavailable`] when the plugin cannot be written to or has
     /// nothing to say.
     pub(crate) fn exchange(&mut self, line: &str) -> Result<String, SourceError> {
-        exchange(&mut self.writer, &mut self.reader, line)
+        let Some(deadline) = self.handshake_deadline else {
+            return exchange(&mut self.writer, &mut self.reader, line);
+        };
+        let finished = Arc::new(AtomicBool::new(false));
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let watched = Arc::clone(&self.child);
+        let done = Arc::clone(&finished);
+        let expired = Arc::clone(&timed_out);
+        std::thread::spawn(move || {
+            std::thread::sleep(deadline);
+            if !done.load(Ordering::Acquire) {
+                expired.store(true, Ordering::Release);
+                if let Ok(mut child) = watched.lock()
+                    && let Some(child) = child.as_mut()
+                {
+                    let _ = child.kill();
+                }
+            }
+        });
+        let answer = exchange(&mut self.writer, &mut self.reader, line);
+        finished.store(true, Ordering::Release);
+        if timed_out.load(Ordering::Acquire) {
+            Err(SourceError::Unavailable {
+                message: format!(
+                    "the plugin did not answer the initialize request within {} milliseconds",
+                    deadline.as_millis()
+                ),
+            })
+        } else {
+            answer
+        }
     }
 
     /// Whatever the plugin wrote to standard error, once it can no longer write more.
@@ -346,7 +412,9 @@ impl Peer {
     /// handshake failed has no connection left to keep open. With the writing end gone the
     /// read reaches end-of-file, so this returns rather than waits.
     pub(crate) fn said(&mut self) -> String {
-        if let Some(child) = self.child.as_mut() {
+        if let Ok(mut child) = self.child.lock()
+            && let Some(child) = child.as_mut()
+        {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -452,6 +520,8 @@ struct Slot {
 struct SlotState {
     /// The answer line, or the failure that ended the connection.
     answer: Option<Result<String, SourceError>>,
+    /// Set permanently by the first answer, even after the future consumes that answer.
+    completed: bool,
     /// The waiting task, if it has polled at least once.
     waker: Option<Waker>,
 }
@@ -466,16 +536,26 @@ impl Slot {
 
     /// Leave an answer and wake whoever is waiting for it.
     fn fill(&self, answer: Result<String, SourceError>) {
+        let _ = self.fill_if_empty(answer);
+    }
+
+    /// Leave the first answer only; a deadline racing a real response must not replace it.
+    fn fill_if_empty(&self, answer: Result<String, SourceError>) -> bool {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.completed {
+            return false;
+        }
+        state.completed = true;
         state.answer = Some(answer);
         let waker = state.waker.take();
         drop(state);
         if let Some(waker) = waker {
             waker.wake();
         }
+        true
     }
 }
 

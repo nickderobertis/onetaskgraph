@@ -56,6 +56,12 @@ to this document rather than a second source of truth.
 Both sides flush after every line. A plugin that buffers its standard output until
 exit will appear to hang.
 
+The engine applies a deadline independently to `initialize` and to every later
+request. A subprocess source configures it with the positive integer `deadline_ms`;
+when omitted it is 30000 milliseconds. Passing the deadline closes the connection
+and reports an `unavailable` source error naming the method and elapsed limit. A
+plugin therefore cannot extend a request indefinitely by remaining alive and silent.
+
 ### 1.1 Ordering and concurrency
 
 Every request carries an `id`, and every response echoes it. A plugin **may** answer
