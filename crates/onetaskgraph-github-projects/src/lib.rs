@@ -17,7 +17,7 @@
 //! `Issue.blockedBy` supplies forward `Blocks` edges. GitHub documents `Issue.blocking` as being
 //! removed and always empty, so both dependency capabilities are `ForwardOnly`; project
 //! dependency reads aggregate the configured project's issue edges. Projects v2 has no native
-//! project-to-project relationship, so those aggregate edges retain the underlying issue IDs.
+//! project-to-project relationship, so those aggregate edges use each blocker's project ID.
 //!
 //! Live verification is non-destructive by construction: [`TaskSource`] has read operations only
 //! and this crate sends GraphQL `query` operations only, with no mutation for setup or teardown.
@@ -53,15 +53,24 @@ fn default_endpoint() -> String {
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct GitHubProjectsConfig {
+    // llmlint: ignore[invalid_states_unrepresentable] This public type is the serde and
+    // JSON-Schema DTO, so it must retain the documented scalar wire shapes. `new` is the
+    // sole conversion into the private source state and rejects blank owners immediately.
     /// Login of the user or organization which owns the project.
     pub owner: String,
+    // llmlint: ignore[invalid_states_unrepresentable] This is the schema-facing DTO's
+    // documented integer. `new` rejects zero before constructing `GitHubProjectsSource`.
     /// The project number shown in its GitHub URL.
     pub project_number: u32,
     /// Environment variable containing a GitHub token with project read access.
     #[serde(default = "default_token_env")]
+    // llmlint: ignore[invalid_states_unrepresentable] This remains a string in the public
+    // configuration schema; `new` rejects blank names at the DTO-to-source boundary.
     pub token_env: String,
     /// GraphQL endpoint. GitHub Enterprise installations may override it.
     #[serde(default = "default_endpoint")]
+    // llmlint: ignore[invalid_states_unrepresentable] The public schema accepts a URL
+    // string; `new` parses it into the private `Url` field and rejects unsafe schemes.
     pub endpoint: String,
     /// Case-insensitive project status name to normalized category mapping.
     #[serde(default)]
@@ -104,10 +113,17 @@ impl SourcePlugin for Plugin {
 
 /// A source which reads GitHub afresh for every operation.
 pub struct GitHubProjectsSource {
+    // llmlint: ignore[invalid_states_unrepresentable] This private field is constructed
+    // only by `new`, immediately after its non-blank check; no other constructor exists.
     owner: String,
+    // llmlint: ignore[invalid_states_unrepresentable] This private field is constructed
+    // only after `new` bounds it to GitHub GraphQL's positive signed-Int range.
     project_number: u32,
     endpoint: Url,
     token: SecretString,
+    // llmlint: ignore[invalid_states_unrepresentable] This private diagnostic-only field
+    // is stored only after `new` rejects a blank environment-variable name.
+    credential_name: String,
     statuses: BTreeMap<String, StatusCategory>,
     client: Client,
 }
@@ -123,9 +139,9 @@ impl GitHubProjectsSource {
                 message: "owner must not be empty".into(),
             });
         }
-        if config.project_number == 0 {
+        if config.project_number == 0 || config.project_number > i32::MAX as u32 {
             return Err(SourceError::Config {
-                message: "project_number must be at least 1".into(),
+                message: format!("project_number must be between 1 and {}", i32::MAX),
             });
         }
         if config.token_env.trim().is_empty() {
@@ -148,7 +164,7 @@ impl GitHubProjectsSource {
                         .into(),
             });
         }
-        let token = secrets.get(&config.token_env).filter(|token| !token.expose_secret().is_empty()).ok_or_else(|| SourceError::Auth {
+        let token = secrets.get(&config.token_env).filter(|token| !token.expose_secret().trim().is_empty()).ok_or_else(|| SourceError::Auth {
             message: format!("environment variable {} is missing or empty; set it to a GitHub token with read:project and repository Issues read access", config.token_env),
         })?;
         Ok(Self {
@@ -156,6 +172,7 @@ impl GitHubProjectsSource {
             project_number: config.project_number,
             endpoint,
             token,
+            credential_name: config.token_env,
             statuses: normalize_status_mapping(config.status_mapping)?,
             client: Client::builder()
                 .user_agent("onetaskgraph")
@@ -227,7 +244,8 @@ impl GitHubProjectsSource {
             if normalized.contains("resource not accessible") || normalized.contains("scope") {
                 return Err(SourceError::Auth {
                     message: format!(
-                        "{message}; grant GH_PROJECTS_TOKEN read:project and repository Issues read access"
+                        "{message}; grant {} read:project and repository Issues read access",
+                        self.credential_name
                     ),
                 });
             }
@@ -246,20 +264,20 @@ impl GitHubProjectsSource {
         items_after: Option<&str>,
         items_first: u32,
     ) -> Result<Value, SourceError> {
-        const QUERY: &str = r#"query($owner:String!,$number:Int!,$first:Int!,$after:String){
+        const QUERY: &str = r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!){
           organization(login:$owner){projectV2(number:$number){...Project}}
           user(login:$owner){projectV2(number:$number){...Project}}
         } fragment Project on ProjectV2 { id title shortDescription url createdAt updatedAt closed
-          items(first:$first,after:$after){nodes{id fieldValues(first:100){nodes{
+          items(first:$first,after:$after){nodes{id fieldValues(first:$nestedFirst){nodes{
             ... on ProjectV2ItemFieldSingleSelectValue{name field{name}}
-            ... on ProjectV2ItemFieldLabelValue{labels(first:100){nodes{id name color}}}
+            ... on ProjectV2ItemFieldLabelValue{labels(first:$nestedFirst){nodes{id name color}}}
           }} content{
-            ... on Issue{id title body url createdAt updatedAt state labels(first:100){nodes{id name color}}}
-            ... on PullRequest{id title body url createdAt updatedAt state labels(first:100){nodes{id name color}}}
+            ... on Issue{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}}}
+            ... on PullRequest{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}}}
             ... on DraftIssue{id title body createdAt updatedAt}
           }} pageInfo{hasNextPage endCursor}}
         }"#;
-        let data = self.graphql(QUERY, json!({"owner":self.owner,"number":self.project_number,"first":items_first.min(MAX_PAGE_SIZE),"after":items_after})).await?;
+        let data = self.graphql(QUERY, json!({"owner":self.owner,"number":self.project_number,"first":items_first.min(MAX_PAGE_SIZE),"after":items_after,"nestedFirst":MAX_PAGE_SIZE})).await?;
         data.pointer("/organization/projectV2")
             .filter(|v| !v.is_null())
             .or_else(|| {
@@ -275,16 +293,22 @@ impl GitHubProjectsSource {
             })
     }
 
-    fn status(&self, item: &Value) -> Status {
-        let name = item
+    fn status(&self, item: &Value) -> Result<Status, SourceError> {
+        let fields = item
             .pointer("/fieldValues/nodes")
             .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub project item fieldValues.nodes is not an array".into(),
+            })?;
+        let name = fields
+            .iter()
             .find(|v| v.pointer("/field/name").and_then(Value::as_str) == Some("Status"))
-            .and_then(|v| v.get("name"))
-            .and_then(Value::as_str)
-            .or_else(|| item.pointer("/content/state").and_then(Value::as_str))
+            .map(|value| required_str(value, "name"))
+            .transpose()?
+            .or(optional_str(
+                item.get("content").unwrap_or(&Value::Null),
+                "state",
+            )?)
             .unwrap_or("Unknown")
             .to_owned();
         let category = self
@@ -299,36 +323,43 @@ impl GitHubProjectsSource {
                 "cancelled" | "canceled" => StatusCategory::Cancelled,
                 _ => StatusCategory::Unknown,
             });
-        Status { category, name }
+        Ok(Status { category, name })
     }
 
-    fn labels(item: &Value) -> Vec<Label> {
-        let direct = item
-            .pointer("/content/labels/nodes")
-            .and_then(Value::as_array);
-        let field = item
+    fn labels(item: &Value) -> Result<Vec<Label>, SourceError> {
+        let direct = optional_nodes(item.pointer("/content/labels"), "content labels")?;
+        let field_values = item
             .pointer("/fieldValues/nodes")
             .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .find_map(|v| v.pointer("/labels/nodes").and_then(Value::as_array));
-        direct
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub project item fieldValues.nodes is not an array".into(),
+            })?;
+        let field = field_values
+            .iter()
+            .find_map(|value| value.get("labels"))
+            .map(|labels| optional_nodes(Some(labels), "field labels"))
+            .transpose()?
+            .flatten();
+        let labels = direct
             .into_iter()
             .flatten()
             .chain(field.into_iter().flatten())
-            .filter_map(|v| {
-                Some(Label {
-                    id: NativeId(v.get("id")?.as_str()?.to_owned()),
-                    name: v.get("name")?.as_str()?.to_owned(),
-                    color: v.get("color").and_then(Value::as_str).map(str::to_owned),
+            .map(|v| {
+                Ok(Label {
+                    id: NativeId(required_str(v, "id")?.to_owned()),
+                    name: required_str(v, "name")?.to_owned(),
+                    color: optional_str(v, "color")?.map(str::to_owned),
                 })
             })
+            .collect::<Result<Vec<_>, SourceError>>()?
+            .into_iter()
             .fold(Vec::new(), |mut labels, label| {
                 if !labels.iter().any(|x: &Label| x.id == label.id) {
                     labels.push(label);
                 }
                 labels
-            })
+            });
+        Ok(labels)
     }
 
     fn task(&self, project_id: &str, item: &Value) -> Result<Option<Task>, SourceError> {
@@ -346,20 +377,15 @@ impl GitHubProjectsSource {
         Ok(Some(Task {
             id: NativeId(required_str(content, "id")?.to_owned()),
             title: required_str(content, "title")?.to_owned(),
-            content: content
-                .get("body")
-                .and_then(Value::as_str)
+            content: optional_str(content, "body")?
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned),
-            status: self.status(item),
-            labels: Self::labels(item),
+            status: self.status(item)?,
+            labels: Self::labels(item)?,
             project: Some(NativeId(project_id.to_owned())),
-            url: content
-                .get("url")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            created_at: parse_time(content.get("createdAt")),
-            updated_at: parse_time(content.get("updatedAt")),
+            url: optional_str(content, "url")?.map(str::to_owned),
+            created_at: optional_time(content, "createdAt")?,
+            updated_at: optional_time(content, "updatedAt")?,
         }))
     }
 
@@ -368,18 +394,16 @@ impl GitHubProjectsSource {
         Ok(Project {
             id: NativeId(id.into()),
             title: required_str(value, "title")?.into(),
-            content: value
-                .get("shortDescription")
-                .and_then(Value::as_str)
+            content: optional_str(value, "shortDescription")?
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned),
             status: Status {
-                category: if value.get("closed").and_then(Value::as_bool) == Some(true) {
+                category: if required_bool(value, "closed")? {
                     StatusCategory::Done
                 } else {
                     StatusCategory::InProgress
                 },
-                name: if value.get("closed").and_then(Value::as_bool) == Some(true) {
+                name: if required_bool(value, "closed")? {
                     "Closed"
                 } else {
                     "Open"
@@ -387,9 +411,9 @@ impl GitHubProjectsSource {
                 .into(),
             },
             labels: vec![],
-            url: value.get("url").and_then(Value::as_str).map(str::to_owned),
-            created_at: parse_time(value.get("createdAt")),
-            updated_at: parse_time(value.get("updatedAt")),
+            url: optional_str(value, "url")?.map(str::to_owned),
+            created_at: optional_time(value, "createdAt")?,
+            updated_at: optional_time(value, "updatedAt")?,
         })
     }
 
@@ -612,8 +636,8 @@ impl TaskSource for GitHubProjectsSource {
         for task in self.all_tasks().await? {
             let mut cursor = None;
             loop {
-                const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id projectItems(first:100){nodes{project{id}}}}pageInfo{hasNextPage endCursor}}}}}"#;
-                let data = self.graphql(QUERY, json!({"id":task.id.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor: &Cursor| cursor.0.as_str())})).await?;
+                const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}}}pageInfo{hasNextPage endCursor}}}}}"#;
+                let data = self.graphql(QUERY, json!({"id":task.id.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor: &Cursor| cursor.0.as_str()),"nestedFirst":MAX_PAGE_SIZE})).await?;
                 let connection =
                     data.pointer("/node/blockedBy")
                         .ok_or_else(|| SourceError::Malformed {
@@ -693,8 +717,40 @@ fn required_bool(value: &Value, field: &str) -> Result<bool, SourceError> {
             message: format!("GitHub response is missing boolean field {field}"),
         })
 }
-fn parse_time(value: Option<&Value>) -> Option<DateTime<Utc>> {
-    value.and_then(Value::as_str).and_then(|v| v.parse().ok())
+fn optional_str<'a>(value: &'a Value, field: &str) -> Result<Option<&'a str>, SourceError> {
+    match value.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(Some)
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub response field {field} is not a string or null"),
+            }),
+    }
+}
+fn optional_nodes<'a>(
+    connection: Option<&'a Value>,
+    name: &str,
+) -> Result<Option<&'a Vec<Value>>, SourceError> {
+    match connection {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .get("nodes")
+            .and_then(Value::as_array)
+            .map(Some)
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub {name}.nodes is not an array"),
+            }),
+    }
+}
+fn optional_time(value: &Value, field: &str) -> Result<Option<DateTime<Utc>>, SourceError> {
+    optional_str(value, field)?
+        .map(|timestamp| {
+            timestamp.parse().map_err(|error| SourceError::Malformed {
+                message: format!("GitHub response field {field} is not a timestamp: {error}"),
+            })
+        })
+        .transpose()
 }
 fn validate_page(page: &PageRequest) -> Result<(), SourceError> {
     if page.limit == 0 {

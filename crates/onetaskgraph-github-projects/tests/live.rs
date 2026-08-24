@@ -18,15 +18,20 @@ impl SecretResolver for LiveSecret {
 }
 
 async fn discover_project(token: &str) -> Option<(String, u32)> {
-    if let (Ok(owner), Ok(number)) = (
-        env::var("GH_PROJECTS_OWNER"),
-        env::var("GH_PROJECTS_NUMBER").and_then(|value| {
-            value
-                .parse::<u32>()
-                .map_err(|error| env::VarError::NotUnicode(error.to_string().into()))
-        }),
-    ) {
-        return Some((owner, number));
+    let configured_owner = env::var("GH_PROJECTS_OWNER").ok();
+    let configured_number = env::var("GH_PROJECTS_NUMBER").ok();
+    if configured_owner.is_some() || configured_number.is_some() {
+        let owner = configured_owner.expect("GH_PROJECTS_OWNER must accompany GH_PROJECTS_NUMBER");
+        let number = configured_number
+            .expect("GH_PROJECTS_NUMBER must accompany GH_PROJECTS_OWNER")
+            .parse::<u32>()
+            .expect("GH_PROJECTS_NUMBER must be an unsigned integer");
+        if !owner.trim().is_empty() && number > 0 && number <= i32::MAX as u32 {
+            return Some((owner, number));
+        }
+        panic!(
+            "GH_PROJECTS_OWNER must be non-blank and GH_PROJECTS_NUMBER must be a positive GraphQL Int"
+        );
     }
     let response: Value = reqwest::Client::new()
         .post("https://api.github.com/graphql")
@@ -73,10 +78,20 @@ fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
 #[tokio::test]
 async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
     let Ok(token) = env::var("GH_PROJECTS_TOKEN") else {
+        assert_ne!(
+            env::var("ONETASKGRAPH_LIVE_REQUIRED").as_deref(),
+            Ok("1"),
+            "GH_PROJECTS_TOKEN is required by the GitHub Projects live lane"
+        );
         eprintln!("skipped live GitHub Projects journey: GH_PROJECTS_TOKEN is not set");
         return;
     };
-    if token.is_empty() {
+    if token.trim().is_empty() {
+        assert_ne!(
+            env::var("ONETASKGRAPH_LIVE_REQUIRED").as_deref(),
+            Ok("1"),
+            "GH_PROJECTS_TOKEN is empty in the GitHub Projects live lane"
+        );
         eprintln!("skipped live GitHub Projects journey: GH_PROJECTS_TOKEN is empty");
         return;
     }

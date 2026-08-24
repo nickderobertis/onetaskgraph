@@ -285,6 +285,7 @@ fn read_http_json(stream: &mut impl Read) -> Value {
     let mut chunk = [0_u8; 4096];
     loop {
         let count = stream.read(&mut chunk).expect("fixture request");
+        assert!(count > 0, "fixture request ended before its HTTP headers");
         bytes.extend_from_slice(&chunk[..count]);
         if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
             break;
@@ -307,6 +308,7 @@ fn read_http_json(stream: &mut impl Read) -> Value {
         .expect("Content-Length");
     while bytes.len() - header_end < length {
         let count = stream.read(&mut chunk).expect("fixture request body");
+        assert!(count > 0, "fixture request ended before its declared body");
         bytes.extend_from_slice(&chunk[..count]);
     }
     serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")

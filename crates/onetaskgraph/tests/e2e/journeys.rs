@@ -83,8 +83,8 @@ fn plan_says(row: &Row, rendered: &str, outcome: &str, predicate: &str) {
     );
 }
 
-/// Every row that can be configured today.
-fn ready() -> impl Iterator<Item = &'static Row> {
+/// Rows that can represent every entity and relationship in the shared dataset.
+fn complete_dataset_rows() -> impl Iterator<Item = &'static Row> {
     ROWS.iter()
         .filter(|row| matches!(&row.fixture, Fixture::Ready(ready) if ready.complete_dataset))
 }
@@ -181,7 +181,7 @@ fn github_projects_missing_credential_reaches_the_binary_user() {
 
 #[test]
 fn every_source_lists_its_tasks_and_shows_one_by_its_qualified_id() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
 
         let listing = ok(row, &sandbox, &["task", "list"]);
@@ -220,7 +220,7 @@ fn every_source_lists_its_tasks_and_shows_one_by_its_qualified_id() {
 
 #[test]
 fn every_source_lists_its_projects_and_shows_one_by_its_qualified_id() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
 
         let listing = ok(row, &sandbox, &["project", "list"]);
@@ -281,7 +281,7 @@ fn malformed_local_markdown_names_its_path_without_hiding_valid_rows() {
 
 #[test]
 fn a_task_in_no_project_is_listed_by_default_and_can_be_selected_on_its_own() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
         let declared = row.declared().expect("a ready row declares");
 
@@ -321,7 +321,7 @@ fn a_task_in_no_project_is_listed_by_default_and_can_be_selected_on_its_own() {
 
 #[test]
 fn every_source_lists_the_labels_it_knows() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let listing = ok(row, &host(row), &["label", "list"]);
         assert_eq!(
             listed(&listing),
@@ -335,7 +335,7 @@ fn every_source_lists_the_labels_it_knows() {
 
 #[test]
 fn filtering_by_label_answers_the_same_rows_whoever_applies_the_predicate() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
         let declared = row.declared().expect("a ready row declares");
         let outcome = if declared.filter_by_label {
@@ -368,7 +368,7 @@ fn filtering_by_label_answers_the_same_rows_whoever_applies_the_predicate() {
 
 #[test]
 fn filtering_by_status_category_answers_the_same_rows_whoever_applies_the_predicate() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
         let declared = row.declared().expect("a ready row declares");
 
@@ -405,7 +405,7 @@ fn filtering_by_status_category_answers_the_same_rows_whoever_applies_the_predic
 
 #[test]
 fn searching_covers_titles_bodies_or_either_over_tasks_and_projects() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
         let declared = row.declared().expect("a ready row declares");
 
@@ -474,7 +474,7 @@ fn searching_covers_titles_bodies_or_either_over_tasks_and_projects() {
 
 #[test]
 fn task_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itself() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
         let declared = row.declared().expect("a ready row declares");
 
@@ -523,7 +523,7 @@ fn task_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itse
 
 #[test]
 fn project_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itself() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
         let declared = row.declared().expect("a ready row declares");
 
@@ -569,7 +569,7 @@ fn every_source_filters_its_projects_by_label_by_status_and_by_text() {
     // `project list` carries the same filters `task list` does, over a source's other
     // entity and through a different query type. A source that applied them to tasks and
     // dropped them for projects would pass every task journey above.
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
         let declared = row.declared().expect("a ready row declares");
 
@@ -688,7 +688,7 @@ fn a_both_kind_search_whose_projects_ran_out_still_resumes_under_the_narrower_ki
     // streams a search covers is what the token's stream check reads, name by name, so
     // the scope is left out of the query fingerprint on purpose. A token still carrying
     // the project half is refused by that check, and this is the other side of it.
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
 
         let mut token = String::new();
@@ -753,7 +753,7 @@ fn a_both_kind_search_whose_projects_ran_out_still_resumes_under_the_narrower_ki
 
 #[test]
 fn a_limit_smaller_than_the_result_set_walks_to_exhaustion_in_a_stable_order() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
         let whole = listed(&ok(row, &sandbox, &["task", "list"]));
 
@@ -827,7 +827,7 @@ fn a_registered_plugin_without_a_shared_fixture_explains_why_it_is_unavailable()
 
 #[test]
 fn a_shown_item_carries_the_fields_the_source_gave_it_and_says_when_it_has_none() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
 
         let with_url = ok(row, &sandbox, &["task", "show", &qualified(SOURCE, "T-1")]);
@@ -878,7 +878,7 @@ fn a_shown_item_carries_the_fields_the_source_gave_it_and_says_when_it_has_none(
 
 #[test]
 fn every_status_category_and_search_scope_the_command_line_spells_is_accepted() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
 
         // The three categories this fixture holds, one flag each.

@@ -74,16 +74,25 @@ fn server(
 }
 
 fn raw_server(status: &str, body: &str) -> (String, thread::JoinHandle<()>) {
+    raw_server_with_headers(status, body, "")
+}
+
+fn raw_server_with_headers(
+    status: &str,
+    body: &str,
+    headers: &str,
+) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let body = body.to_owned();
     let status = status.to_owned();
+    let headers = headers.to_owned();
     let handle = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let mut request = [0_u8; 8192];
         let _ = stream.read(&mut request).unwrap();
         let response = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
         stream.write_all(response.as_bytes()).unwrap();
@@ -118,7 +127,22 @@ fn sequence_server(bodies: Vec<Value>) -> (String, thread::JoinHandle<()>) {
 }
 
 fn project_response(has_next: bool) -> Value {
-    let mut fixture: Value = serde_json::from_str(include_str!("fixtures/project.json")).unwrap();
+    // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This is synthetic data,
+    // not a copied GitHub contract: production parsing rejects every required shape and
+    // the credential-gated live test reconciles the same query with GitHub's real API.
+    let mut fixture = json!({"data":{"organization":{"projectV2":{
+        "id":"PVT_project","title":"Roadmap","shortDescription":"Delivery plan",
+        "url":"https://github.example/projects/7","createdAt":"2026-01-01T00:00:00Z",
+        "updatedAt":"2026-02-01T00:00:00Z","closed":false,
+        "items":{"nodes":[{"id":"PVTI_1","fieldValues":{"nodes":[
+            {"name":"Doing","field":{"name":"Status"}},
+            {"labels":{"nodes":[{"id":"L_field","name":"team","color":"00ff00"}]}}
+        ]},"content":{"id":"I_task","title":"Ship it","body":"details",
+            "url":"https://github.example/issues/1","createdAt":"2026-01-02T00:00:00Z",
+            "updatedAt":"2026-01-03T00:00:00Z","state":"OPEN",
+            "labels":{"nodes":[{"id":"L_bug","name":"bug","color":"ff0000"}]}}}],
+            "pageInfo":{"hasNextPage":false,"endCursor":null}}
+    }},"user":{"projectV2":null}}});
     let page = &mut fixture["data"]["organization"]["projectV2"]["items"]["pageInfo"];
     page["hasNextPage"] = json!(has_next);
     page["endCursor"] = if has_next {
@@ -145,7 +169,7 @@ fn page(limit: u32) -> PageRequest {
 }
 
 #[tokio::test]
-async fn reads_and_normalizes_a_real_graphql_response_through_http() {
+async fn reads_and_normalizes_a_synthetic_graphql_response_through_http() {
     let (endpoint, handle) = server("200 OK", project_response(true), 1, "projectV2");
     let source = build(&endpoint);
     assert_eq!(source.kind(), "github-projects");
@@ -165,6 +189,35 @@ async fn reads_and_normalizes_a_real_graphql_response_through_http() {
         "2026-01-02T00:00:00+00:00"
     );
     handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn maps_pull_request_and_draft_issue_content_shapes() {
+    let mut pull_request = project_response(false);
+    pull_request["data"]["organization"]["projectV2"]["items"]["nodes"][0]["content"]["title"] =
+        json!("Review change");
+    pull_request["data"]["organization"]["projectV2"]["items"]["nodes"][0]["content"]["state"] =
+        json!("MERGED");
+
+    let mut draft = project_response(false);
+    let content = &mut draft["data"]["organization"]["projectV2"]["items"]["nodes"][0]["content"];
+    content["id"] = json!("DI_draft");
+    content["title"] = json!("Unpublished idea");
+    content.as_object_mut().unwrap().remove("state");
+    content.as_object_mut().unwrap().remove("labels");
+    content.as_object_mut().unwrap().remove("url");
+
+    for (response, title) in [(pull_request, "Review change"), (draft, "Unpublished idea")] {
+        let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+        let task = build(&endpoint)
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .unwrap()
+            .items
+            .remove(0);
+        assert_eq!(task.title, title);
+        handle.join().unwrap();
+    }
 }
 
 #[tokio::test]
@@ -227,6 +280,7 @@ fn config_schema_is_strict_and_build_validates_inputs_and_secret() {
         json!({}),
         json!({"owner":"","project_number":1}),
         json!({"owner":"org","project_number":0}),
+        json!({"owner":"org","project_number":u32::MAX}),
         json!({"owner":"org","project_number":1,"token_env":""}),
         json!({"owner":"org","project_number":1,"endpoint":"not a url"}),
         json!({"owner":"org","project_number":1,"endpoint":"http://example.com"}),
@@ -267,6 +321,20 @@ fn config_schema_is_strict_and_build_validates_inputs_and_secret() {
         ),
         Err(SourceError::Auth { .. })
     ));
+    struct WhitespaceValue;
+    impl SecretResolver for WhitespaceValue {
+        fn get(&self, _: &str) -> Option<SecretString> {
+            Some(" \t ".into())
+        }
+    }
+    assert!(matches!(
+        plugin.build(
+            &SourceName::new("work").unwrap(),
+            &json!({"owner":"org","project_number":1}),
+            &WhitespaceValue
+        ),
+        Err(SourceError::Auth { .. })
+    ));
 }
 
 #[tokio::test]
@@ -281,8 +349,11 @@ async fn maps_authentication_failure_without_disclosing_the_token() {
 
 #[tokio::test]
 async fn project_dependencies_aggregate_underlying_issue_edges() {
-    let dependencies: Value =
-        serde_json::from_str(include_str!("fixtures/dependencies.json")).unwrap();
+    // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Synthetic edge data;
+    // malformed variants below and the authenticated live query are its drift guards.
+    let dependencies = json!({"data":{"node":{"blockedBy":{"nodes":[{
+        "id":"I_blocker","projectItems":{"nodes":[{"project":{"id":"PVT_blocker"}}]}
+    }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}});
     let (endpoint, handle) = sequence_server(vec![
         project_response(false),
         project_response(false),
@@ -434,6 +505,11 @@ async fn rejects_invalid_pages_cursors_and_malformed_source_shapes() {
         json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
         json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"content":{"id":"T","title":"missing fields"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
         json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[]},"content":{"title":"missing id"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[]},"content":{"id":"T","title":"bad body","body":7}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[]},"content":{"id":"T","title":"bad time","createdAt":"yesterday"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[]},"content":{"id":"T","title":"bad label","labels":{"nodes":[{"name":"missing id"}]}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":"bad"},"content":{"id":"T","title":"bad status"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[]},"content":{"id":"T","title":"bad labels","labels":{}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
         json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[],"pageInfo":{"endCursor":null}}}},"user":{"projectV2":null}}}),
         json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[],"pageInfo":null}}},"user":{"projectV2":null}}}),
     ] {
@@ -479,6 +555,27 @@ async fn walks_source_pages_for_aggregate_reads_and_accepts_a_native_cursor() {
 }
 
 #[tokio::test]
+async fn rejects_malformed_optional_project_fields() {
+    for (field, value) in [
+        ("shortDescription", json!(7)),
+        ("url", json!([])),
+        ("createdAt", json!("not-a-time")),
+        ("closed", Value::Null),
+    ] {
+        let mut response = project_response(false);
+        response["data"]["organization"]["projectV2"][field] = value;
+        let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+        assert!(matches!(
+            build(&endpoint)
+                .query_projects(&ProjectQuery::default(), &page(10))
+                .await,
+            Err(SourceError::Malformed { .. })
+        ));
+        handle.join().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn maps_transport_http_json_and_graphql_failures() {
     for (status, body, check) in [
         ("429 Too Many Requests", "{}", "rate"),
@@ -512,6 +609,41 @@ async fn maps_transport_http_json_and_graphql_failures() {
         build(&endpoint).health().await,
         Err(SourceError::Unavailable { .. })
     ));
+
+    let (endpoint, handle) = raw_server_with_headers(
+        "200 OK",
+        "{}",
+        "x-ratelimit-remaining: 0\r\nretry-after: 17\r\n",
+    );
+    assert!(matches!(
+        build(&endpoint).health().await,
+        Err(SourceError::RateLimited {
+            retry_after_seconds: Some(17)
+        })
+    ));
+    handle.join().unwrap();
+
+    struct CustomSecret;
+    impl SecretResolver for CustomSecret {
+        fn get(&self, variable: &str) -> Option<SecretString> {
+            (variable == "CUSTOM_GITHUB_TOKEN").then(|| "test-token".into())
+        }
+    }
+    let (endpoint, handle) = raw_server(
+        "200 OK",
+        r#"{"errors":[{"message":"Resource not accessible by integration scope"}]}"#,
+    );
+    let source = onetaskgraph_github_projects::Plugin
+        .build(
+            &SourceName::new("work").unwrap(),
+            &json!({"owner":"org","project_number":7,"endpoint":endpoint,"token_env":"CUSTOM_GITHUB_TOKEN"}),
+            &CustomSecret,
+        )
+        .unwrap();
+    let error = source.health().await.unwrap_err().to_string();
+    assert!(error.contains("CUSTOM_GITHUB_TOKEN"), "{error}");
+    assert!(!error.contains("GH_PROJECTS_TOKEN"), "{error}");
+    handle.join().unwrap();
 }
 
 #[tokio::test]
@@ -552,6 +684,39 @@ async fn normalizes_builtin_statuses_closed_projects_and_empty_items() {
         .items
         .remove(0);
     assert_eq!(project.status.category, StatusCategory::Done);
+    handle.join().unwrap();
+
+    let mut response = project_response(false);
+    response["data"]["organization"]["projectV2"]["items"]["nodes"][0]["fieldValues"] =
+        json!({"nodes":[]});
+    let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+    let task = build(&endpoint)
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .unwrap()
+        .items
+        .remove(0);
+    assert_eq!(task.status.category, StatusCategory::Todo);
+    assert_eq!(task.status.name, "OPEN");
+    handle.join().unwrap();
+
+    let (endpoint, handle) = server("200 OK", project_response(false), 1, "projectV2");
+    let mut unsupported = ProjectQuery::default();
+    unsupported.statuses.push(StatusCategory::Cancelled);
+    unsupported.labels.any_of.push("absent".into());
+    unsupported.text = Some(onetaskgraph_plugin_api::TextQuery {
+        terms: "absent".into(),
+        fields: onetaskgraph_plugin_api::TextFields::TitleOrContent,
+    });
+    assert_eq!(
+        build(&endpoint)
+            .query_projects(&unsupported, &page(10))
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
     handle.join().unwrap();
 }
 
