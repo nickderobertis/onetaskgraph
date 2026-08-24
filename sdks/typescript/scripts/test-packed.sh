@@ -30,6 +30,22 @@ npm install --offline --omit=optional --ignore-scripts --silent ./onetaskgraph-s
   echo "test-packed: local tarball install failed; next: inspect the package files." >&2
   exit 1
 }
+mkdir -p node_modules/@onetaskgraph/cli/bin || {
+  echo "test-packed: could not construct the local CLI package; next: check temporary storage." >&2
+  exit 1
+}
+printf '%s\n' '{"name":"@onetaskgraph/cli","version":"0.1.0"}' > node_modules/@onetaskgraph/cli/package.json || {
+  echo "test-packed: could not write the local CLI manifest; next: check temporary storage." >&2
+  exit 1
+}
+cp "$BINARY" node_modules/@onetaskgraph/cli/bin/onetaskgraph || {
+  echo "test-packed: could not install the compiled CLI fixture; next: build the binary." >&2
+  exit 1
+}
+chmod +x node_modules/@onetaskgraph/cli/bin/onetaskgraph || {
+  echo "test-packed: could not make the CLI fixture executable; next: check file permissions." >&2
+  exit 1
+}
 mkdir project || {
   echo "test-packed: could not create the fixture project; next: check temporary storage." >&2
   exit 1
@@ -38,7 +54,7 @@ printf '%s\n' '{"sources":{"work":{"plugin":"in-memory","config":{"tasks":[{"id"
   echo "test-packed: could not write the fixture config; next: check temporary storage." >&2
   exit 1
 }
-ONETASKGRAPH_BIN="$BINARY" node --input-type=module -e '
+env -u ONETASKGRAPH_BIN node --input-type=module -e '
   import { OnetaskgraphClient } from "@onetaskgraph/sdk";
   try {
     const response = await new OnetaskgraphClient({ cwd: "project" }).taskList({ sources: ["work"] });

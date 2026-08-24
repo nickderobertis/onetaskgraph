@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import {
   OnetaskgraphClient,
   OnetaskgraphExecutionError,
+  OnetaskgraphValidationError,
   assertCompleteCommandSurface,
   clientCommands,
 } from "../src/index.ts";
@@ -12,6 +13,18 @@ import {
 const binary = resolve(import.meta.dir, "../../../target/debug/onetaskgraph");
 let root = "";
 let client: OnetaskgraphClient;
+
+function executableFixture(directory: string, name: string, stdout: string, stderr = "", code = 0) {
+  const windows = process.platform === "win32";
+  const path = resolve(directory, `${name}${windows ? ".cmd" : ""}`);
+  const quote = (value: string) => JSON.stringify(value);
+  const body = windows
+    ? `@echo off\r\nnode -e "process.stdout.write(${quote(quote(stdout))}); process.stderr.write(${quote(quote(stderr))}); process.exit(${code})"\r\n`
+    : `#!/usr/bin/env node\nprocess.stdout.write(${quote(stdout)});\nprocess.stderr.write(${quote(stderr)});\nprocess.exit(${code});\n`;
+  writeFileSync(path, body);
+  if (!windows) chmodSync(path, 0o755);
+  return path;
+}
 
 beforeAll(() => {
   root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-"));
@@ -150,10 +163,58 @@ test("the PATH fallback drives the real binary", async () => {
 });
 
 test("a real command failure is a typed execution error", async () => {
-  expect(client.taskShow("work:absent")).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+  try {
+    await client.taskShow("work:absent");
+    throw new Error("the absent task unexpectedly succeeded");
+  } catch (error) {
+    expect(error).toBeInstanceOf(OnetaskgraphExecutionError);
+    expect((error as Error).message).toContain("next:");
+  }
 });
 
 test("an unavailable explicit executable is a typed execution error", async () => {
   const unavailable = new OnetaskgraphClient({ binaryPath: resolve(root, "missing-binary") });
   expect(unavailable.taskList()).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+});
+
+test("non-JSON and malformed command output are rejected at the executable boundary", async () => {
+  const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-output-"));
+  try {
+    const nonJson = new OnetaskgraphClient({
+      binaryPath: executableFixture(fixtures, "non-json", "not JSON"),
+    });
+    expect(nonJson.taskList()).rejects.toBeInstanceOf(OnetaskgraphValidationError);
+
+    const malformed = new OnetaskgraphClient({
+      binaryPath: executableFixture(fixtures, "malformed", JSON.stringify({ items: [] })),
+    });
+    expect(malformed.taskList()).rejects.toBeInstanceOf(OnetaskgraphValidationError);
+  } finally {
+    rmSync(fixtures, { recursive: true, force: true });
+  }
+});
+
+test("schema output and unsupported exit statuses are validated from real executables", async () => {
+  const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-schema-output-"));
+  try {
+    const invalidBundle = new OnetaskgraphClient({
+      binaryPath: executableFixture(fixtures, "invalid-bundle", JSON.stringify({ version: 1 })),
+    });
+    expect(invalidBundle.schema()).rejects.toBeInstanceOf(OnetaskgraphValidationError);
+
+    const validResponse = JSON.stringify(await client.taskList({ sources: ["work"] }));
+    const wrongExit = new OnetaskgraphClient({
+      binaryPath: executableFixture(fixtures, "wrong-exit", validResponse, "next: retry later", 9),
+    });
+    try {
+      await wrongExit.taskList();
+      throw new Error("the unsupported exit status unexpectedly succeeded");
+    } catch (error) {
+      expect(error).toBeInstanceOf(OnetaskgraphExecutionError);
+      expect((error as Error).message).toContain("next: retry later");
+      expect((error as Error).message).not.toContain("without a valid response");
+    }
+  } finally {
+    rmSync(fixtures, { recursive: true, force: true });
+  }
 });

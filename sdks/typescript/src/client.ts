@@ -35,8 +35,15 @@ export type ClientOptions = {
 };
 
 export class OnetaskgraphExecutionError extends Error {
-  constructor(readonly exitCode: number | null) {
-    super(`onetaskgraph exited without a valid response (exit ${exitCode ?? "signal"})`);
+  constructor(
+    readonly exitCode: number | null,
+    readonly stderr = "",
+  ) {
+    const diagnostic = stderr.trim();
+    super(
+      `onetaskgraph execution failed (exit ${exitCode ?? "signal"})` +
+        (diagnostic.length > 0 ? `: ${diagnostic}` : ""),
+    );
     this.name = "OnetaskgraphExecutionError";
   }
 }
@@ -190,14 +197,17 @@ export class OnetaskgraphClient {
         stdio: ["ignore", "pipe", "pipe"],
       });
       let stdout = "";
+      let stderr = "";
       child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
         stdout += chunk;
       });
-      child.stderr.resume();
+      child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+        stderr += chunk;
+      });
       child.on("error", () => reject(new OnetaskgraphExecutionError(null)));
       child.on("close", (code) => {
         if (stdout.length === 0) {
-          reject(new OnetaskgraphExecutionError(code));
+          reject(new OnetaskgraphExecutionError(code, stderr));
           return;
         }
         let value: unknown;
@@ -245,7 +255,7 @@ export class OnetaskgraphClient {
           }
         }
         if (code !== 0 && code !== 4) {
-          reject(new OnetaskgraphExecutionError(code));
+          reject(new OnetaskgraphExecutionError(code, stderr));
           return;
         }
         // The command-specific runtime schema has established T before this boundary returns it.
