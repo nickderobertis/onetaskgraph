@@ -458,6 +458,58 @@ for named in sorted(set(re.findall(r"`([a-z][a-z0-9_]*)`", handshake))):
             f"author writing from it would declare something the engine never reads."
         )
 
+# The wire structs, member by member.
+#
+# The checks above reconcile the NAMES a plugin author reads — methods, parameters, results,
+# enum values, `Capabilities` fields — but a struct's members are structure, and a field Rust
+# gains without the document following is drift no name comparison sees. It reaches that
+# author as a field the engine sends or expects and their plugin never handles.
+#
+# Forward only, and deliberately: these sections carry method names, cross-referenced fields
+# and JSON keys of the envelope around the payload, so "every backticked word here is a
+# member of this struct" is not true of them the way it is of §4.2, which specifies one
+# struct and nothing else. The direction dropped is the weaker one — a member the document
+# invents is visible to the author writing from it, while one it omits is not.
+STRUCT_SECTIONS = {
+    "PageRequest": "### 4.1 Common parameter shapes",
+    "Page": "### 4.1 Common parameter shapes",
+    "Health": "### 4.3 `health`",
+    "TaskQuery": "### 4.5 `query_tasks`",
+    "TextQuery": "### 4.5 `query_tasks`",
+    "LabelFilter": "### 4.5 `query_tasks`",
+    "ProjectQuery": "### 4.6 `query_projects`",
+    "DependencyEdge": "### 4.8 `task_dependencies` and `project_dependencies`",
+}
+
+for struct, heading in STRUCT_SECTIONS.items():
+    # Across both, because `Health` is declared beside the trait that returns it while
+    # the rest are in the contract modules.
+    declaration = re.search(
+        r"pub struct %s(?:<[^>]*>)? \{(.*?)\n\}" % re.escape(struct),
+        source_rs + contract_rs,
+        re.DOTALL,
+    )
+    if declaration is None:
+        refuse(
+            f"could not read the `{struct}` struct from the api crate.",
+            "restore it, or teach this script the shape it has now — a struct this "
+            "document specifies cannot go unreconciled.",
+        )
+    members = re.findall(r"^    pub (\w+):", declaration.group(1), re.MULTILINE)
+    if not members:
+        refuse(
+            f"read no fields from the `{struct}` struct of the api crate.",
+            "restore its fields, or teach this script the shape they have now.",
+        )
+    specified = section(heading)
+    for member in members:
+        if not spelled(member, specified):
+            failures.append(
+                f"`{struct}` carries the field \"{member}\" but \"{heading}\" never "
+                f"names it. Specify it there — a plugin author writing from that section "
+                f"would never handle it."
+            )
+
 if failures:
     for failure in failures:
         print(f"check-protocol-contract: {failure}", file=sys.stderr)
