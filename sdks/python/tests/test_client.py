@@ -222,6 +222,34 @@ def test_generator_rejects_drift_and_unmapped_commands(tmp_path: Path) -> None:
     )
     assert missing_choices.returncode == 1
     assert "did not report option" in missing_choices.stderr
+    empty_choices = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import generate; generate.choice_values('--kind <KIND>\\n', 'kind')",
+        ],
+        cwd=WORKSPACE / "sdks" / "python",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert empty_choices.returncode == 1
+    assert "possible values" in empty_choices.stderr
+    malformed_root = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import json, generate; "
+            "bundle=json.loads(generate.run_workspace_binary('schema')); "
+            "bundle['roots']['QueryPlan']=[]; generate.validate_schema_bundle(bundle)",
+        ],
+        cwd=WORKSPACE / "sdks" / "python",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert malformed_root.returncode == 1
+    assert "non-object roots: QueryPlan" in malformed_root.stderr
     missing_minimum = subprocess.run(
         [
             sys.executable,
@@ -249,6 +277,24 @@ def test_generator_rejects_drift_and_unmapped_commands(tmp_path: Path) -> None:
     )
     assert unmapped.returncode == 1
     assert "future" in unmapped.stderr
+
+
+def test_generator_write_mode_uses_real_binary(tmp_path: Path) -> None:
+    """Regenerate into a fresh destination from the real schema and command surface."""
+    destination = tmp_path / "generated"
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import json; from pathlib import Path; import generate; "
+            "bundle=generate.validate_schema_bundle("
+            "json.loads(generate.run_workspace_binary('schema'))); "
+            f"generate.generate(bundle, check=False, destination=Path({str(destination)!r}))",
+        ],
+        cwd=WORKSPACE / "sdks" / "python",
+        check=True,
+    )
+    assert (destination / "client.py").is_file()
 
 
 def test_distribution_version() -> None:

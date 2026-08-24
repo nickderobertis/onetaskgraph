@@ -453,16 +453,16 @@ def validate_schema_bundle(parsed: JsonValue) -> SchemaBundle:
     return bundle
 
 
-def generate(bundle: SchemaBundle, *, check: bool) -> None:
+def generate(bundle: SchemaBundle, *, check: bool, destination: Path = GENERATED) -> None:
     """Write or check generated output for one validated bundle."""
     commands = leaves()
     with tempfile.TemporaryDirectory() as temporary:
-        target = Path(temporary) if check else GENERATED
+        target = Path(temporary) if check else destination
         generate_models(bundle, target)
         generate_client(commands, target)
         format_generated(target)
         if check:
-            check_generated(target, GENERATED)
+            check_generated(target, destination)
 
 
 def main() -> None:
