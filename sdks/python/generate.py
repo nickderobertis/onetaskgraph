@@ -411,7 +411,24 @@ def validate_schema_bundle(parsed: JsonValue) -> SchemaBundle:
     """Validate the binary's schema output before generation consumes a root."""
     if not isinstance(parsed, dict) or not isinstance(parsed.get("roots"), dict):
         raise SystemExit("binary emitted an invalid schema bundle: expected an object with roots")
-    return TypeAdapter(SchemaBundle).validate_python(parsed)
+    bundle = TypeAdapter(SchemaBundle).validate_python(parsed)
+    required = set(RESPONSE_ROOTS.values()) | {
+        "SourceFailure",
+        "QueryPlan",
+        "GlobalId",
+        "StatusCategory",
+    }
+    missing = sorted(required - bundle["roots"].keys())
+    malformed = sorted(
+        name
+        for name in required & bundle["roots"].keys()
+        if not isinstance(bundle["roots"][name], dict)
+    )
+    if missing or malformed:
+        details = [f"missing roots: {', '.join(missing)}"] if missing else []
+        details += [f"non-object roots: {', '.join(malformed)}"] if malformed else []
+        raise SystemExit("binary emitted an invalid schema bundle: " + "; ".join(details))
+    return bundle
 
 
 def generate(bundle: SchemaBundle, *, check: bool) -> None:
