@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Awaitable
@@ -135,8 +136,11 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
 def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
     """Use environment before the packaged PATH fallback and reject no executable."""
     config = configured(tmp_path)
+    relative_binary = Path(os.path.relpath(binary, Path.cwd()))
+    from_explicit_relative = Client(relative_binary, cwd=config)
+    assert run(from_explicit_relative.task_list()).items
     from_environment = Client(
-        cwd=config, environment={"ONETASKGRAPH_SDK_BINARY": str(binary), "PATH": ""}
+        cwd=config, environment={"ONETASKGRAPH_SDK_BINARY": str(relative_binary), "PATH": ""}
     )
     assert run(from_environment.task_list()).items
     from_path = Client(cwd=config, environment={"PATH": str(binary.parent)})

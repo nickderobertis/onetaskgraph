@@ -178,16 +178,6 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
         schema = bundle["roots"][root]
         add_variant_titles(schema, root)
         rename_qualified_definitions(schema)
-        if root == "SourceListing":
-            definitions = schema.get("$defs") if isinstance(schema, dict) else None
-            capabilities = (
-                definitions.get("Capabilities") if isinstance(definitions, dict) else None
-            )
-            properties = capabilities.get("properties") if isinstance(capabilities, dict) else None
-            page_size = properties.get("max_page_size") if isinstance(properties, dict) else None
-            if isinstance(page_size, dict):
-                # Implementations reject zero; preserve that runtime invariant at this boundary.
-                page_size["minimum"] = 1
         module = camel_to_snake(root)
         source = destination / f"{module}.py"
         with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as handle:

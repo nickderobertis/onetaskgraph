@@ -112,4 +112,4 @@ def _resolve_binary(explicit: str | Path | None, environment: Mapping[str, str] 
     path = Path(candidate)
     if not path.is_file() or not os.access(path, os.X_OK):
         raise FileNotFoundError(f"onetaskgraph binary is not an executable file: {candidate}")
-    return candidate
+    return str(path.resolve())
