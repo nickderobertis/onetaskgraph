@@ -36,7 +36,14 @@
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "uv run --frozen ruff check . && uv run --frozen python generate.py --check",
+        "command": "uv run --frozen ruff check .",
+        "cwd": "sdks/python"
+      }
+    },
+    "generate-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --frozen python generate.py --check",
         "cwd": "sdks/python"
       }
     },

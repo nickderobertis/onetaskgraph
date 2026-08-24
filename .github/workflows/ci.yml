@@ -60,6 +60,12 @@ jobs:
       - name: Bootstrap
         run: just bootstrap
 
+      # Generated-code drift is platform-independent. Keep it gating on Linux without
+      # paying for the build-time generators in all three required OS lanes.
+      - name: Check generated SDKs
+        if: matrix.os == 'ubuntu-latest'
+        run: ./scripts/nx.sh run sdk-python:generate-check
+
       # Derive the base explicitly rather than letting Nx guess: an implicit base is how
       # affected selection quietly starts comparing against the wrong commit.
       - name: Derive the merge base
