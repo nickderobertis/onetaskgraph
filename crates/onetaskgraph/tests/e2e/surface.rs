@@ -273,6 +273,25 @@ fn an_unknown_flag_exits_non_zero_and_names_the_problem_on_stderr() {
         .stderr(contains("unexpected argument"));
 }
 
+/// `--project` and `--no-project` ask for opposite things, so asking for both is refused.
+///
+/// A task is in a project or it is in none, and a filter cannot keep both sets at once. The
+/// two flags are declared mutually exclusive, and a declaration nothing invokes is a
+/// declaration that can be dropped in a refactor without anything noticing — so this drives
+/// the pair the way a user types them and asserts the invocation exit code and the
+/// diagnostic naming both flags, rather than trusting the attribute.
+#[test]
+fn asking_for_a_project_and_for_no_project_at_once_is_refused_as_a_bad_invocation() {
+    onetaskgraph()
+        .args(["task", "list", "--project", "P-1", "--no-project"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(contains("--project"))
+        .stderr(contains("cannot be used with"))
+        .stderr(contains("--no-project"));
+}
+
 #[test]
 fn no_verb_at_all_exits_non_zero_and_points_at_help() {
     onetaskgraph()
