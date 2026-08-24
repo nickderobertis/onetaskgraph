@@ -3,8 +3,8 @@
   "name": "sdk-typescript",
   "projectType": "library",
   "tags": ["lang:typescript", "layer:sdk"],
-  "//": "No implicitDependencies: the SDK is generated from the schema bundle the built binary emits, not compiled against a crate. The generator that creates that edge lands with the SDK.",
-  "implicitDependencies": [],
+  "//": "The generator executes the binary and consumes its emitted schema and command surface.",
+  "implicitDependencies": ["onetaskgraph"],
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",
@@ -14,7 +14,27 @@
       "//": "Uncached: it reaches the npm registry and writes node_modules, which no input in this tree describes."
     },
     "check": {
-      "executor": "nx:noop"
+      "executor": "nx:noop",
+      "dependsOn": [
+        "generate-check",
+        "build",
+        "format-check",
+        "lint",
+        "typecheck",
+        "test",
+        "coverage",
+        "pack"
+      ]
+    },
+    "generate-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo build --quiet -p onetaskgraph --bin onetaskgraph && bun run --cwd sdks/typescript generate:check"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": { "command": "bun run --cwd sdks/typescript build" }
     },
     "format": {
       "executor": "nx:run-commands",
@@ -63,6 +83,10 @@
         "cwd": "sdks/typescript"
       },
       "//": "Uncached: a live test reaches a third-party API and reads a credential from the environment, neither of which is an input in this tree."
+    },
+    "pack": {
+      "executor": "nx:run-commands",
+      "options": { "command": "bash sdks/typescript/scripts/test-packed.sh" }
     }
   }
 }

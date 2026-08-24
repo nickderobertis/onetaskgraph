@@ -140,7 +140,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 4);
+    assert_eq!(bundle["version"], 5);
 
     let roots = bundle["roots"].as_object().expect("roots is an object");
     for root in [
@@ -160,6 +160,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
         "QueryResponseOfQualifiedTask",
         "SearchHit",
         "SourceListing",
+        "SourceListings",
         "PageToken",
         // `config show --json` emits an EffectiveConfig, so an SDK is generated
         // against it from here like every other machine-readable output.

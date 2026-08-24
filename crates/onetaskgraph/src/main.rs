@@ -12,7 +12,7 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 use std::str::FromStr as _;
 
-use clap::Parser;
+use clap::{CommandFactory as _, Parser};
 use onetaskgraph_core::config::Layer;
 use onetaskgraph_core::{
     DependencyRequest, Engine, Environment, Filters, GlobalId, LabelRequest, Loaded, OutputFormat,
@@ -475,8 +475,39 @@ fn json(value: &impl Serialize, what: &str) -> Result<String, String> {
 
 /// The schema bundle as pretty-printed JSON.
 fn schema_bundle() -> Result<String, String> {
-    serde_json::to_string_pretty(&onetaskgraph_core::schema_bundle())
+    let mut bundle = onetaskgraph_core::schema_bundle();
+    bundle["commands"] = serde_json::to_value(public_commands())
+        .map_err(|error| format!("could not render the command surface: {error}"))?;
+    serde_json::to_string_pretty(&bundle)
         .map_err(|error| format!("could not render the schema bundle: {error}"))
+}
+
+/// Every public leaf command, derived from the same clap tree that parses invocations.
+fn public_commands() -> Vec<String> {
+    fn leaves(command: &clap::Command, prefix: &str, commands: &mut Vec<String>) {
+        let visible: Vec<_> = command
+            .get_subcommands()
+            .filter(|child| !child.is_hide_set())
+            .collect();
+        if visible.is_empty() {
+            if !prefix.is_empty() {
+                commands.push(prefix.to_owned());
+            }
+            return;
+        }
+        for child in visible {
+            let path = if prefix.is_empty() {
+                child.get_name().to_owned()
+            } else {
+                format!("{prefix} {}", child.get_name())
+            };
+            leaves(child, &path, commands);
+        }
+    }
+
+    let mut commands = Vec::new();
+    leaves(&Cli::command(), "", &mut commands);
+    commands
 }
 
 /// The effective configuration, in the format it asks for.
@@ -536,6 +567,22 @@ mod tests {
             serde_json::from_slice(&out).expect("the bundle is valid JSON");
         assert!(bundle["roots"]["Task"].is_object());
         assert!(bundle["plugin_config"]["in-memory"].is_object());
+        assert_eq!(
+            bundle["commands"],
+            serde_json::json!([
+                "schema",
+                "config show",
+                "sources list",
+                "task list",
+                "task show",
+                "task deps",
+                "project list",
+                "project show",
+                "project deps",
+                "label list",
+                "search"
+            ])
+        );
     }
 
     /// A sink that refuses the write when `fail_on_write` is set and the flush
