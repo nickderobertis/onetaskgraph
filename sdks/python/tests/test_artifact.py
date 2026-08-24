@@ -22,8 +22,35 @@ def test_wheel_installs_and_queries_through_public_import(tmp_path: Path) -> Non
     subprocess.run(["uv", "venv", "--python", sys.executable, str(environment)], check=True)
     python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     wheel = next(tmp_path.glob("onetaskgraph_sdk-*.whl"))
+    requirements = tmp_path / "requirements.txt"
     subprocess.run(
-        ["uv", "pip", "install", "--offline", "--python", str(python), str(wheel)],
+        [
+            "uv",
+            "export",
+            "--frozen",
+            "--no-dev",
+            "--no-emit-project",
+            "--output-file",
+            str(requirements),
+        ],
+        cwd=package,
+        check=True,
+    )
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(python), "--requirement", str(requirements)],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--offline",
+            "--no-deps",
+            "--python",
+            str(python),
+            str(wheel),
+        ],
         check=True,
     )
     config = tmp_path / "query"
