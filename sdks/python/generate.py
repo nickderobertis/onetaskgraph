@@ -36,7 +36,7 @@ class SchemaBundle(TypedDict):
     roots: dict[str, JsonValue]
 
 
-def binary(*args: str) -> str:
+def run_workspace_binary(*args: str) -> str:
     """Run the workspace binary, building the exact artifact under generation."""
     result = subprocess.run(
         ["cargo", "run", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph", "--", *args],
@@ -50,7 +50,7 @@ def binary(*args: str) -> str:
 
 def leaves(prefix: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
     """Discover public command leaves recursively from clap's emitted help."""
-    help_text = binary(*prefix, "--help")
+    help_text = run_workspace_binary(*prefix, "--help")
     in_commands = False
     commands: list[str] = []
     for line in help_text.splitlines():
@@ -66,7 +66,7 @@ def leaves(prefix: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
     found: list[tuple[str, ...]] = []
     for command in commands:
         child = (*prefix, command)
-        child_help = binary(*child, "--help")
+        child_help = run_workspace_binary(*child, "--help")
         if "Commands:\n" in child_help:
             found.extend(leaves(child))
         else:
@@ -76,7 +76,9 @@ def leaves(prefix: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
 
 def option_names(command: tuple[str, ...]) -> list[str]:
     """Derive keyword names from clap's help for one discovered leaf command."""
-    names = re.findall(r"^\s+--([a-z][a-z-]*)", binary(*command, "--help"), re.MULTILINE)
+    names = re.findall(
+        r"^\s+--([a-z][a-z-]*)", run_workspace_binary(*command, "--help"), re.MULTILINE
+    )
     normalized = {name.replace("-", "_") for name in names} - {"help", "json", "output"}
     return sorted(f"{name}_" if keyword.iskeyword(name) else name for name in normalized)
 
@@ -223,7 +225,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    parsed = json.loads(binary("schema"))
+    parsed = json.loads(run_workspace_binary("schema"))
     if not isinstance(parsed, dict) or not isinstance(parsed.get("roots"), dict):
         raise SystemExit("binary emitted an invalid schema bundle: expected an object with roots")
     bundle = TypeAdapter(SchemaBundle).validate_python(parsed)

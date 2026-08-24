@@ -109,4 +109,7 @@ def _resolve_binary(explicit: str | Path | None, environment: Mapping[str, str] 
             "onetaskgraph binary not found; pass binary=, set ONETASKGRAPH_SDK_BINARY, "
             "or install the binary distribution"
         )
+    path = Path(candidate)
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise FileNotFoundError(f"onetaskgraph binary is not an executable file: {candidate}")
     return candidate

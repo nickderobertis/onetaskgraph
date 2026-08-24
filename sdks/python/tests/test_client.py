@@ -77,7 +77,11 @@ def configured(tmp_path: Path, *, failing: bool = False) -> Path:
 
 def test_real_sources_and_typed_partial_failure(binary: Path, tmp_path: Path) -> None:
     """Return validated rows, plans, and a typed failure from actual sources."""
-    client = Client(binary, cwd=configured(tmp_path, failing=True))
+    client = Client(
+        binary,
+        cwd=configured(tmp_path, failing=True),
+        environment={"ONETASKGRAPH_SDK_BINARY": str(tmp_path / "wrong")},
+    )
     response = run(client.task_list())
     assert {item.item.title for item in response.items} == {"Markdown task", "Memory task"}
     assert {plan.source.root for plan in response.plan.per_source} == {"memory", "markdown"}
@@ -123,6 +127,8 @@ def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
     assert run(from_path.task_list()).items
     with pytest.raises(FileNotFoundError, match="binary not found"):
         Client(environment={"PATH": ""})
+    with pytest.raises(FileNotFoundError, match="not an executable"):
+        Client(tmp_path / "missing")
 
 
 def test_generated_surface_is_current() -> None:
