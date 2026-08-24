@@ -243,7 +243,7 @@ test("a real command failure is a typed execution error", async () => {
 
 test("an unavailable explicit executable is a typed execution error", async () => {
   const unavailable = new OnetaskgraphClient({ binaryPath: resolve(root, "missing-binary") });
-  expect(unavailable.taskList()).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+  await expect(unavailable.taskList()).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
 });
 
 test("non-JSON and malformed command output are rejected at the executable boundary", async () => {
@@ -252,12 +252,12 @@ test("non-JSON and malformed command output are rejected at the executable bound
     const nonJson = new OnetaskgraphClient({
       binaryPath: executableFixture(fixtures, "non-json", "not JSON"),
     });
-    expect(nonJson.taskList()).rejects.toBeInstanceOf(OnetaskgraphValidationError);
+    await expect(nonJson.taskList()).rejects.toBeInstanceOf(OnetaskgraphValidationError);
 
     const malformed = new OnetaskgraphClient({
       binaryPath: executableFixture(fixtures, "malformed", JSON.stringify({ items: [] })),
     });
-    expect(malformed.taskList()).rejects.toBeInstanceOf(OnetaskgraphValidationError);
+    await expect(malformed.taskList()).rejects.toBeInstanceOf(OnetaskgraphValidationError);
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }
@@ -269,7 +269,7 @@ test("schema output and unsupported exit statuses are validated from real execut
     const invalidBundle = new OnetaskgraphClient({
       binaryPath: executableFixture(fixtures, "invalid-bundle", JSON.stringify({ version: 1 })),
     });
-    expect(invalidBundle.schema()).rejects.toBeInstanceOf(OnetaskgraphValidationError);
+    await expect(invalidBundle.schema()).rejects.toBeInstanceOf(OnetaskgraphValidationError);
 
     const validResponse = JSON.stringify(await client.taskList({ sources: ["work"] }));
     const wrongExit = new OnetaskgraphClient({
@@ -288,7 +288,7 @@ test("schema output and unsupported exit statuses are validated from real execut
     const partialConfig = new OnetaskgraphClient({
       binaryPath: executableFixture(fixtures, "partial-config", configResponse, "", 4),
     });
-    expect(partialConfig.configShow()).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(partialConfig.configShow()).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }
