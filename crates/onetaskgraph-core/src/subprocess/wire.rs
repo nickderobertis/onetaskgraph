@@ -120,9 +120,45 @@ pub(crate) struct InitializeResult {
     #[serde(default)]
     pub(crate) protocol_version: Option<u32>,
     /// The plugin kind, as the plugin reports it.
-    pub(crate) kind: String,
+    pub(crate) kind: HandshakePluginKind,
     /// Read once; the engine does not ask again.
     pub(crate) capabilities: Capabilities,
+}
+
+/// A plugin's non-empty, open-vocabulary kind from the handshake.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub(crate) struct HandshakePluginKind(String);
+
+impl HandshakePluginKind {
+    /// Validate a kind at the process boundary.
+    pub(crate) fn new(kind: impl Into<String>) -> Result<Self, &'static str> {
+        let kind = kind.into();
+        if kind.trim().is_empty() {
+            Err("plugin kind must contain a non-whitespace character")
+        } else {
+            Ok(Self(kind))
+        }
+    }
+
+    /// Recover the peer's spelling after it has been validated.
+    pub(crate) fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl TryFrom<String> for HandshakePluginKind {
+    type Error = &'static str;
+
+    fn try_from(kind: String) -> Result<Self, Self::Error> {
+        Self::new(kind)
+    }
+}
+
+impl From<HandshakePluginKind> for String {
+    fn from(kind: HandshakePluginKind) -> Self {
+        kind.0
+    }
 }
 
 /// `get_task` and `get_project` parameters (§4.4).

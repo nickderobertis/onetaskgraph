@@ -21,8 +21,8 @@ use serde_json::{Value, json};
 
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
-    DependencyParams, IdParams, InitializeParams, InitializeResult, LabelParams, PROTOCOL_VERSION,
-    ProjectQueryParams, Request, Response, TaskQueryParams,
+    DependencyParams, HandshakePluginKind, IdParams, InitializeParams, InitializeResult,
+    LabelParams, PROTOCOL_VERSION, ProjectQueryParams, Request, Response, TaskQueryParams,
 };
 use crate::registry::PluginKind;
 
@@ -179,9 +179,20 @@ fn initialize(source: &mut Option<Box<dyn TaskSource>>, id: String, params: Valu
     }
     match build(&params) {
         Ok(built) => {
+            let kind = match HandshakePluginKind::new(built.kind()) {
+                Ok(kind) => kind,
+                Err(error) => {
+                    return Response::failed(
+                        id,
+                        SourceError::Malformed {
+                            message: format!("the hosted plugin reported an invalid kind: {error}"),
+                        },
+                    );
+                }
+            };
             let result = InitializeResult {
                 protocol_version: Some(PROTOCOL_VERSION),
-                kind: built.kind().to_owned(),
+                kind,
                 capabilities: built.capabilities(),
             };
             *source = Some(built);

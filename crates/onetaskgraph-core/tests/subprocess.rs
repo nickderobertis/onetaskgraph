@@ -499,6 +499,23 @@ fn a_handshake_answer_that_is_not_an_initialize_result_is_malformed() {
 }
 
 #[test]
+fn a_plugin_kind_with_no_name_is_rejected_at_the_handshake_boundary() {
+    for kind in ["", " \t"] {
+        let error = scripted(vec![
+            json!({"id": "0", "result": {"protocol_version": 1, "kind": kind,
+                   "capabilities": capabilities()}})
+            .to_string(),
+        ])
+        .expect_err("a plugin kind must name something");
+
+        let SourceError::Malformed { message } = error else {
+            panic!("an invalid handshake field is malformed: {error:?}");
+        };
+        assert!(message.contains("plugin kind"), "{message}");
+    }
+}
+
+#[test]
 fn a_handshake_answer_carrying_both_members_is_a_protocol_violation() {
     let error = scripted(vec![
         json!({"id": "0", "result": {}, "error": {"kind": "auth", "message": "no"}}).to_string(),

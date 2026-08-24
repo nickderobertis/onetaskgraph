@@ -114,6 +114,7 @@ impl SubprocessSource {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
         };
+        let kind = kind.into_string();
         if protocol_version != Some(PROTOCOL_VERSION) {
             return Err(SourceError::Config {
                 message: match protocol_version {
