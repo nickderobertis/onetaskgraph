@@ -1102,6 +1102,9 @@ struct Recording {
     ceiling: u32,
     /// How many tasks it holds.
     rows: u32,
+    /// How many rows beyond the page it was asked for it hands back anyway — a plugin
+    /// defect the contract forbids and the engine must not simply absorb.
+    overshoot: u32,
 }
 
 impl Recording {
@@ -1115,7 +1118,7 @@ impl Recording {
             raw.parse().expect("this source's own cursor")
         });
         let end = start
-            .saturating_add(page.limit.min(self.ceiling))
+            .saturating_add(page.limit.min(self.ceiling).saturating_add(self.overshoot))
             .min(self.rows);
         let items = (start..end)
             .map(|index| Task {
@@ -1228,6 +1231,7 @@ async fn a_walk_asks_for_one_page_at_a_time_and_stops_when_the_callers_page_is_f
                 asked: Arc::clone(&asked),
                 ceiling: 3,
                 rows: 1_000,
+                overshoot: 0,
             }),
         )],
         Vec::new(),
@@ -1376,4 +1380,42 @@ async fn a_search_refuses_a_token_from_a_walk_over_entities_it_is_not_covering()
     let second = engine.search(&resumed_both).await.expect("the query runs");
     assert_eq!(second.items.len(), 1);
     assert_ne!(second.items, first.items);
+}
+
+#[tokio::test]
+async fn a_source_that_serves_a_larger_page_than_it_was_asked_for_is_refused() {
+    // "A source may return fewer, never more" is the contract's rule, and a source is
+    // external code — a subprocess-hosted plugin is somebody else's program. An over-long
+    // page breaks the one bound the engine holds by construction, so it is named as the
+    // plugin defect it is rather than absorbed, and rather than truncated, which would
+    // narrow the answer silently.
+    let engine = Engine::new(
+        vec![ResolvedSource::adopt(
+            name("greedy"),
+            Box::new(Recording {
+                asked: Arc::new(std::sync::Mutex::new(Vec::new())),
+                ceiling: 3,
+                rows: 1_000,
+                overshoot: 2,
+            }),
+        )],
+        Vec::new(),
+        vec![name("greedy")],
+    );
+
+    let response = engine
+        .tasks(&tasks(Filters::default(), ProjectSelector::Any, page(5)))
+        .await
+        .expect("the query runs");
+
+    assert!(response.items.is_empty());
+    assert_eq!(response.errors.len(), 1);
+    assert!(
+        response.errors[0]
+            .error
+            .to_string()
+            .contains("may return fewer than it was asked for and never more"),
+        "{:?}",
+        response.errors[0]
+    );
 }

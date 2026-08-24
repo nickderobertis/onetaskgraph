@@ -70,9 +70,11 @@ where
     let mut cursor = start.cursor.clone();
     let mut skip = start.skip;
 
+    let asked_for = page_size.max(1);
     loop {
         let asked = cursor.clone();
-        let page = fetch(asked.clone(), page_size.max(1)).await?;
+        let page = fetch(asked.clone(), asked_for).await?;
+        fits(page.items.len(), asked_for)?;
 
         // A source that answers a cursor with the same cursor is a source this walk
         // would ask forever. Saying so names the defect; looping would hang the command.
@@ -112,6 +114,33 @@ where
     Ok(Fetched {
         rows,
         after: cursor,
+    })
+}
+
+/// Refuse a page larger than the one that was asked for.
+///
+/// "A source may return fewer, never more" is the contract's own rule, and until now it
+/// was a rule the engine trusted rather than checked. A source is external code — a
+/// subprocess-hosted plugin is somebody else's program — and the one thing an over-long
+/// page breaks is the bound this whole file exists to hold: one source page plus the
+/// caller's, and nothing else, ever in memory at once.
+///
+/// Refused rather than truncated. Dropping the excess would narrow a result set silently,
+/// which is the one failure mode the engine's compensation cannot repair, and it would
+/// hide a plugin defect from the person who could fix it.
+///
+/// # Errors
+///
+/// Returns [`SourceError::Malformed`] when `returned` exceeds `asked_for`.
+pub(crate) fn fits(returned: usize, asked_for: u32) -> Result<(), SourceError> {
+    if returned as u64 <= u64::from(asked_for) {
+        return Ok(());
+    }
+    Err(SourceError::Malformed {
+        message: format!(
+            "the source returned {returned} rows for a page of at most {asked_for}; a \
+             source may return fewer than it was asked for and never more"
+        ),
     })
 }
 

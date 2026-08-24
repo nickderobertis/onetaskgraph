@@ -36,7 +36,7 @@ use crate::config::Config;
 use crate::plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
 use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available};
 
-use fetch::{Fetched, Stream, merge, walk};
+use fetch::{Fetched, Stream, fits, merge, walk};
 use join::join_all;
 use local::{LocalProjects, LocalTasks};
 pub(crate) use resume::StreamState;
@@ -1559,6 +1559,10 @@ async fn fetch_edges(
                         limit,
                     };
                     let page = forward_edges(source, entity, &id, &request).await?;
+                    // The inner half of the same bound the walk holds on its own pages:
+                    // this scan keeps every matching edge of one source page, so a source
+                    // that overruns here overruns the engine's memory just as surely.
+                    fits(page.items.len(), limit)?;
                     edges.extend(page.items.into_iter().filter(|edge| &edge.to == native));
                     if page.next.is_some() && page.next == inner {
                         return Err(SourceError::Malformed {

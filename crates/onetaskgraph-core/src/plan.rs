@@ -140,8 +140,8 @@ impl PageToken {
     ///
     /// Crate-private on purpose: what a token *means* is the engine's, and a caller able
     /// to build one from parts could name a stream no query addressed. A caller with a
-    /// token in hand reaches it through [`parse`](Self::parse), which refuses one this
-    /// engine did not issue.
+    /// token in hand reaches it through [`parse`](Self::parse) instead, which checks its
+    /// structure — see this type's own note for what that does and does not establish.
     ///
     /// Infallible: a stream state is a source name, a stream kind, an optional cursor
     /// and a count, and none of those can fail to serialise.
