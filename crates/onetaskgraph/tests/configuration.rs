@@ -13,7 +13,7 @@ mod common;
 
 use std::process::Output;
 
-use common::{ONE_SOURCE, SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
+use common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, one_source, stderr, stdout};
 use serde_json::Value;
 
 /// The whole `config show --json` document.
@@ -197,29 +197,43 @@ fn all_three_layers_at_once_leave_the_flag_on_top_and_each_other_setting_with_it
 
 #[test]
 fn the_project_document_layers_over_the_user_level_one() {
-    let sandbox = Sandbox::new();
-    let user = sandbox.user_document("page_size: 11\nsources:\n  work:\n    plugin: in-memory\n");
-    let project = sandbox.project_document("page_size: 25\n");
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        let user = sandbox.user_document(
+            &serde_json::to_string(&serde_json::json!({
+                "page_size": 11,
+                "sources": {"work": boundary.source("in-memory", serde_json::json!({}))}
+            }))
+            .expect("a user document"),
+        );
+        let project = sandbox.project_document("page_size: 25\n");
 
-    let output = sandbox
-        .command()
-        .args(["config", "show", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .clone();
+        let output = sandbox
+            .command()
+            .args(["config", "show", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
 
-    let shown = shown(&output);
-    assert_eq!(setting(&shown, "page_size")["value"], 25);
-    assert_eq!(
-        setting(&shown, "page_size")["origin"]["path"],
-        project.to_string_lossy().to_string()
-    );
-    assert_eq!(
-        setting(&shown, "sources.work.plugin")["origin"]["path"],
-        user.to_string_lossy().to_string(),
-        "a source the project document does not mention still comes from the user's"
-    );
+        let shown = shown(&output);
+        assert_eq!(setting(&shown, "page_size")["value"], 25);
+        assert_eq!(
+            setting(&shown, "page_size")["origin"]["path"],
+            project.to_string_lossy().to_string()
+        );
+        assert_eq!(
+            setting(
+                &shown,
+                match boundary {
+                    SourceBoundary::Direct => "sources.work.plugin",
+                    SourceBoundary::Subprocess => "sources.work.config.settings.kind",
+                },
+            )["origin"]["path"],
+            user.to_string_lossy().to_string(),
+            "a source the project document does not mention still comes from the user's"
+        );
+    }
 }
 
 #[test]
@@ -290,35 +304,43 @@ fn the_text_rendering_names_the_layer_beside_every_setting() {
 
 #[test]
 fn the_named_flags_reach_the_settings_they_are_shorthand_for() {
-    let sandbox = Sandbox::new();
-    sandbox.project_document(
-        "sources:\n  work:\n    plugin: in-memory\n  notes:\n    plugin: in-memory\n",
-    );
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(
+            &serde_json::to_string(&serde_json::json!({
+                "sources": {
+                    "work": boundary.source("in-memory", serde_json::json!({})),
+                    "notes": boundary.source("in-memory", serde_json::json!({})),
+                }
+            }))
+            .expect("a document"),
+        );
 
-    let output = sandbox
-        .command()
-        .args([
-            "config",
-            "show",
+        let output = sandbox
+            .command()
+            .args([
+                "config",
+                "show",
+                "--output",
+                "json",
+                "--default-sources",
+                "notes,work",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+
+        let shown = shown(&output);
+        assert_eq!(
+            setting(&shown, "output")["origin"]["flag"],
             "--output",
-            "json",
-            "--default-sources",
-            "notes,work",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .clone();
-
-    let shown = shown(&output);
-    assert_eq!(
-        setting(&shown, "output")["origin"]["flag"],
-        "--output",
-        "--output json renders JSON and says the flag it came from"
-    );
-    let selected = setting(&shown, "default_sources").clone();
-    assert_eq!(selected["value"], serde_json::json!(["notes", "work"]));
-    assert_eq!(selected["origin"]["flag"], "--default-sources");
+            "--output json renders JSON and says the flag it came from"
+        );
+        let selected = setting(&shown, "default_sources").clone();
+        assert_eq!(selected["value"], serde_json::json!(["notes", "work"]));
+        assert_eq!(selected["origin"]["flag"], "--default-sources");
+    }
 }
 
 #[test]
@@ -396,9 +418,6 @@ fn asking_for_a_format_and_the_json_shorthand_at_once_is_refused_as_a_bad_invoca
     );
 }
 
-/// The setting a named source's own field lives at.
-const SOURCE_FIELD: &str = "sources.work.config.capabilities.max_page_size";
-
 fn source_document(boundary: SourceBoundary, max_page_size: u32) -> String {
     serde_json::to_string(&serde_json::json!({
         "sources": {"work": boundary.source("in-memory", serde_json::json!({
@@ -423,28 +442,30 @@ fn a_malformed_configuration_flag_is_refused_on_a_verb_that_does_not_use_it() {
 
 #[test]
 fn a_page_size_of_zero_is_refused_wherever_it_is_written() {
-    let sandbox = Sandbox::new();
-    sandbox.project_document(ONE_SOURCE);
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&one_source(boundary));
 
-    for verb in [["schema"], ["config"]] {
-        let mut command = sandbox.command();
-        command.args(verb);
-        if verb == ["config"] {
-            command.arg("show");
+        for verb in [["schema"], ["config"]] {
+            let mut command = sandbox.command();
+            command.args(verb);
+            if verb == ["config"] {
+                command.arg("show");
+            }
+            let output = command
+                .args(["--page-size", "0"])
+                .assert()
+                .failure()
+                .get_output()
+                .clone();
+
+            assert!(
+                stderr(&output).contains("--page-size"),
+                "`onetaskgraph {} --page-size 0` names the flag it refused: {}",
+                verb[0],
+                stderr(&output)
+            );
         }
-        let output = command
-            .args(["--page-size", "0"])
-            .assert()
-            .failure()
-            .get_output()
-            .clone();
-
-        assert!(
-            stderr(&output).contains("--page-size"),
-            "`onetaskgraph {} --page-size 0` names the flag it refused: {}",
-            verb[0],
-            stderr(&output)
-        );
     }
 }
 
@@ -641,36 +662,39 @@ fn a_whole_named_source_is_configured_from_the_environment_alone() {
 
 #[test]
 fn each_worked_environment_example_sets_the_setting_it_claims_to_set() {
-    let sandbox = Sandbox::new();
-    sandbox.project_document(ONE_SOURCE);
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&one_source(boundary));
+        let variable = boundary.config_variable("capabilities.max_page_size");
 
-    let output = sandbox
-        .command()
-        .env("ONETASKGRAPH_PAGE_SIZE", "100")
-        .env("ONETASKGRAPH_DEFAULT_SOURCES", "work,gh-main")
-        .env(
-            "ONETASKGRAPH_SOURCES__WORK__CONFIG__CAPABILITIES__MAX_PAGE_SIZE",
-            "42",
-        )
-        .env("ONETASKGRAPH_SOURCES__GH_MAIN__PLUGIN", "github-projects")
-        .args(["config", "show", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .clone();
+        let output = sandbox
+            .command()
+            .env("ONETASKGRAPH_PAGE_SIZE", "100")
+            .env("ONETASKGRAPH_DEFAULT_SOURCES", "work,gh-main")
+            .env(&variable, "42")
+            .env("ONETASKGRAPH_SOURCES__GH_MAIN__PLUGIN", "github-projects")
+            .args(["config", "show", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
 
-    let shown = shown(&output);
-    assert_eq!(setting(&shown, "page_size")["value"], 100);
-    assert_eq!(
-        setting(&shown, "default_sources")["value"],
-        serde_json::json!(["work", "gh-main"]),
-        "a list is comma-separated"
-    );
-    assert_eq!(setting(&shown, SOURCE_FIELD)["value"], 42);
-    assert_eq!(
-        setting(&shown, "sources.gh-main.plugin")["value"],
-        "github-projects"
-    );
+        let shown = shown(&output);
+        assert_eq!(setting(&shown, "page_size")["value"], 100);
+        assert_eq!(
+            setting(&shown, "default_sources")["value"],
+            serde_json::json!(["work", "gh-main"]),
+            "a list is comma-separated"
+        );
+        assert_eq!(
+            setting(&shown, &boundary.config_path("capabilities.max_page_size"))["value"],
+            42
+        );
+        assert_eq!(
+            setting(&shown, "sources.gh-main.plugin")["value"],
+            "github-projects"
+        );
+    }
 }
 
 /// The worked example above is written against a `root`, which belongs to `local-md` —
@@ -680,12 +704,15 @@ fn each_worked_environment_example_sets_the_setting_it_claims_to_set() {
 /// is refused under that name, rather than being dropped or landing on another setting.
 #[test]
 fn the_worked_example_for_a_named_sources_own_field_reaches_that_field() {
+    // Subprocess settings are intentionally opaque to `config show`, so the protocol cannot repeat an inner-schema refusal.
+    let boundary = SourceBoundary::Direct;
     let sandbox = Sandbox::new();
-    sandbox.project_document(ONE_SOURCE);
+    sandbox.project_document(&one_source(boundary));
+    let variable = boundary.config_variable("root");
 
     let output = sandbox
         .command()
-        .env("ONETASKGRAPH_SOURCES__WORK__CONFIG__ROOT", "/tmp/tasks")
+        .env(&variable, "/tmp/tasks")
         .args(["config", "show"])
         .assert()
         .failure()
@@ -698,7 +725,7 @@ fn the_worked_example_for_a_named_sources_own_field_reaches_that_field() {
     );
     let message = stderr(&output);
     assert!(
-        message.contains("sources.work.config.root"),
+        message.contains(&boundary.config_path("root")),
         "the variable reaches the field it names: {message}"
     );
 }
@@ -917,36 +944,38 @@ fn the_override_variable_is_not_mistaken_for_a_setting() {
 
 #[test]
 fn a_planted_credential_reaches_no_output_of_any_verb() {
-    let sandbox = Sandbox::new();
-    sandbox.project_document(ONE_SOURCE);
-    sandbox.secrets_file(&format!(
-        "LINEAR_API_KEY={PLANTED}\nGH_PROJECTS_TOKEN={PLANTED}\n"
-    ));
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&one_source(boundary));
+        sandbox.secrets_file(&format!(
+            "LINEAR_API_KEY={PLANTED}\nGH_PROJECTS_TOKEN={PLANTED}\n"
+        ));
 
-    // Every verb this binary answers, and a failing invocation, because an error path
-    // that renders more state than a success path is exactly how one of these leaks.
-    let invocations: Vec<Vec<&str>> = vec![
-        vec!["--help"],
-        vec!["--version"],
-        vec!["schema"],
-        vec!["config", "show"],
-        vec!["config", "show", "--json"],
-        vec!["config", "show", "--set", "sources.work.plugin=nope"],
-        vec!["config", "show", "--set", "sources.work.config.taks=1"],
-    ];
+        // Every verb this binary answers, and a failing invocation, because an error path
+        // that renders more state than a success path is exactly how one of these leaks.
+        let invocations: Vec<Vec<&str>> = vec![
+            vec!["--help"],
+            vec!["--version"],
+            vec!["schema"],
+            vec!["config", "show"],
+            vec!["config", "show", "--json"],
+            vec!["config", "show", "--set", "sources.work.plugin=nope"],
+            vec!["config", "show", "--set", "sources.work.config.taks=1"],
+        ];
 
-    for arguments in invocations {
-        let output = sandbox
-            .command()
-            .args(&arguments)
-            .output()
-            .expect("the binary runs");
-        for (stream, text) in [("stdout", stdout(&output)), ("stderr", stderr(&output))] {
-            assert!(
-                !text.contains(PLANTED),
-                "`onetaskgraph {}` put a credential on {stream}",
-                arguments.join(" ")
-            );
+        for arguments in invocations {
+            let output = sandbox
+                .command()
+                .args(&arguments)
+                .output()
+                .expect("the binary runs");
+            for (stream, text) in [("stdout", stdout(&output)), ("stderr", stderr(&output))] {
+                assert!(
+                    !text.contains(PLANTED),
+                    "`onetaskgraph {}` put a credential on {stream}",
+                    arguments.join(" ")
+                );
+            }
         }
     }
 }
@@ -1029,6 +1058,7 @@ fn an_unknown_plugin_name_is_refused_by_name_and_the_known_ones_are_listed() {
 
 #[test]
 fn a_source_name_that_breaks_the_pattern_is_refused_by_name() {
+    // Invalid source names are refused before source construction, so no protocol capability can repeat this case.
     let sandbox = Sandbox::new();
     sandbox.project_document("sources:\n  Work_1:\n    plugin: in-memory\n");
 
@@ -1039,14 +1069,19 @@ fn a_source_name_that_breaks_the_pattern_is_refused_by_name() {
 
 #[test]
 fn a_mistyped_field_of_a_named_source_is_refused_at_the_boundary_rather_than_ignored() {
+    // Subprocess settings are intentionally opaque until host startup, so no config-show protocol capability can repeat this refusal.
+    let boundary = SourceBoundary::Direct;
     let sandbox = Sandbox::new();
     sandbox.project_document(
-        "sources:\n  work:\n    plugin: in-memory\n    config:\n      taks: []\n",
+        &serde_json::to_string(&serde_json::json!({
+            "sources": {"work": boundary.source("in-memory", serde_json::json!({"taks": []}))}
+        }))
+        .expect("a document"),
     );
 
     let message = refusal(&sandbox, &[]);
     assert!(
-        message.contains("sources.work.config.taks"),
+        message.contains(&boundary.config_path("taks")),
         "the offending field is named, not just the block it sits in: {message}"
     );
     assert!(message.contains("in-memory"), "{message}");
@@ -1256,66 +1291,68 @@ fn validates(bundle: &Value, root: &str, document: &Value) {
 
 #[test]
 fn the_machine_readable_output_matches_a_root_of_the_schema_this_binary_emits() {
-    let sandbox = Sandbox::new();
-    sandbox.project_document(ONE_SOURCE);
-    // Both credential layers at once, so the report carries one entry of each kind and
-    // the enum of layers is exercised rather than only its first variant.
-    sandbox.secrets_file(&format!(
-        "LINEAR_API_KEY={PLANTED}\nGH_PROJECTS_TOKEN={PLANTED}\n"
-    ));
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&one_source(boundary));
+        // Both credential layers at once, so the report carries one entry of each kind and
+        // the enum of layers is exercised rather than only its first variant.
+        sandbox.secrets_file(&format!(
+            "LINEAR_API_KEY={PLANTED}\nGH_PROJECTS_TOKEN={PLANTED}\n"
+        ));
 
-    let bundle: Value = serde_json::from_str(&stdout(
-        &sandbox
+        let bundle: Value = serde_json::from_str(&stdout(
+            &sandbox
+                .command()
+                .arg("schema")
+                .assert()
+                .success()
+                .get_output()
+                .clone(),
+        ))
+        .expect("the schema bundle is JSON");
+
+        let output = sandbox
             .command()
-            .arg("schema")
+            .env_remove("LINEAR_API_KEY")
+            .env("GH_PROJECTS_TOKEN", "exported-by-the-shell")
+            .args(["config", "show", "--json"])
             .assert()
             .success()
             .get_output()
-            .clone(),
-    ))
-    .expect("the schema bundle is JSON");
+            .clone();
+        let shown = shown(&output);
 
-    let output = sandbox
-        .command()
-        .env_remove("LINEAR_API_KEY")
-        .env("GH_PROJECTS_TOKEN", "exported-by-the-shell")
-        .args(["config", "show", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .clone();
-    let shown = shown(&output);
+        // The whole document, against the root the verb claims to emit.
+        validates(&bundle, "EffectiveConfig", &shown);
 
-    // The whole document, against the root the verb claims to emit.
-    validates(&bundle, "EffectiveConfig", &shown);
+        // `Setting.value` is an unconstrained JSON value — a setting holds whatever its
+        // own type is — so the roots for the settings that *do* have a shape are checked
+        // against the values this run actually reported, not left implied by the parent.
+        validates(&bundle, "OutputFormat", &setting(&shown, "output")["value"]);
 
-    // `Setting.value` is an unconstrained JSON value — a setting holds whatever its
-    // own type is — so the roots for the settings that *do* have a shape are checked
-    // against the values this run actually reported, not left implied by the parent.
-    validates(&bundle, "OutputFormat", &setting(&shown, "output")["value"]);
-
-    let credentials = shown["secrets"]["variables"]
-        .as_array()
-        .expect("the report lists the credentials the file supplied");
-    assert_eq!(
-        credentials.len(),
-        2,
-        "both planted names are reported: {shown:#}"
-    );
-    for credential in credentials {
-        validates(&bundle, "ResolvedCredential", credential);
-        validates(&bundle, "CredentialLayer", &credential["resolved_from"]);
-    }
-    let layers: Vec<&Value> = credentials
-        .iter()
-        .map(|credential| &credential["resolved_from"])
-        .collect();
-    assert_eq!(
-        layers,
-        vec!["environment", "secrets-file"],
-        "the exported name resolves from the environment and the other from the file: \
+        let credentials = shown["secrets"]["variables"]
+            .as_array()
+            .expect("the report lists the credentials the file supplied");
+        assert_eq!(
+            credentials.len(),
+            2,
+            "both planted names are reported: {shown:#}"
+        );
+        for credential in credentials {
+            validates(&bundle, "ResolvedCredential", credential);
+            validates(&bundle, "CredentialLayer", &credential["resolved_from"]);
+        }
+        let layers: Vec<&Value> = credentials
+            .iter()
+            .map(|credential| &credential["resolved_from"])
+            .collect();
+        assert_eq!(
+            layers,
+            vec!["environment", "secrets-file"],
+            "the exported name resolves from the environment and the other from the file: \
          {shown:#}"
-    );
+        );
+    }
 }
 
 #[test]
@@ -1360,17 +1397,19 @@ fn an_obstructed_project_document_stops_the_run_rather_than_being_walked_past() 
 
 #[test]
 fn a_credentials_file_that_cannot_be_read_stops_the_run_rather_than_being_skipped() {
-    let sandbox = Sandbox::new();
-    sandbox.project_document(ONE_SOURCE);
-    let path = sandbox.unreadable("onetaskgraph/secrets.env");
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&one_source(boundary));
+        let path = sandbox.unreadable("onetaskgraph/secrets.env");
 
-    let message = refusal(&sandbox, &[]);
-    assert!(
-        message.contains(&path.display().to_string()),
-        "the refusal names the credentials file it could not read: {message}"
-    );
-    assert!(
-        message.contains("could not read"),
-        "the refusal says what went wrong: {message}"
-    );
+        let message = refusal(&sandbox, &[]);
+        assert!(
+            message.contains(&path.display().to_string()),
+            "the refusal names the credentials file it could not read: {message}"
+        );
+        assert!(
+            message.contains("could not read"),
+            "the refusal says what went wrong: {message}"
+        );
+    }
 }

@@ -181,16 +181,17 @@ fn write(path: PathBuf, text: &str) -> PathBuf {
     path
 }
 
-/// A configuration with one `in-memory` source called `work`, for journeys that need
-/// a source to address rather than a particular source's behaviour.
-pub const ONE_SOURCE: &str = "\
-sources:
-  work:
-    plugin: in-memory
-    config:
-      capabilities:
-        max_page_size: 20
-";
+/// A configuration with one `in-memory` source called `work`, on either boundary.
+pub fn one_source(boundary: SourceBoundary) -> String {
+    serde_json::to_string(&json!({
+        "sources": {
+            "work": boundary.source("in-memory", json!({
+                "capabilities": {"max_page_size": 20}
+            }))
+        }
+    }))
+    .expect("a one-source document")
+}
 
 /// Standard output as text, failing the test rather than the assertion when it is not
 /// UTF-8 — a binary that emitted bytes here would be a different bug entirely.

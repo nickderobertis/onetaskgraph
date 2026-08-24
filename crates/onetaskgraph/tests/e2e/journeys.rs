@@ -805,42 +805,44 @@ fn a_native_id_may_contain_colons_because_a_qualified_id_splits_on_the_first_one
     // Its own fixture rather than the shared table's: this is about *addressing*, and a
     // colon-bearing id in the shared dataset would make every other journey's expected
     // list carry a detail none of them are about.
-    let sandbox = Sandbox::new();
-    sandbox.project_document(&crate::fixtures::document(&serde_json::json!({
-        SOURCE: {"plugin": "in-memory", "config": {
-            "projects": [{"id": "urn:project:1", "title": "Urn", "content": null,
-                          "status": {"category": "todo", "name": "Todo"}, "labels": []}],
-            "tasks": [{"id": "urn:task:7", "title": "Colonised", "content": null,
-                       "status": {"category": "todo", "name": "Todo"}, "labels": [],
-                       "project": "urn:project:1"}]
-        }}
-    })));
-    let row = &ROWS[0];
+    for boundary in crate::common::SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&crate::fixtures::document(&serde_json::json!({
+            SOURCE: boundary.source("in-memory", serde_json::json!({
+                "projects": [{"id": "urn:project:1", "title": "Urn", "content": null,
+                              "status": {"category": "todo", "name": "Todo"}, "labels": []}],
+                "tasks": [{"id": "urn:task:7", "title": "Colonised", "content": null,
+                           "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                           "project": "urn:project:1"}]
+            }))
+        })));
+        let row = &ROWS[0];
 
-    let shown = ok(row, &sandbox, &["task", "show", "work:urn:task:7"]);
-    assert!(
-        shown.contains("id:       work:urn:task:7") && shown.contains("Colonised"),
-        "a qualified id splits on the FIRST colon, so the rest is the native id:\n{shown}"
-    );
-    assert!(
-        shown.contains("project:  work:urn:project:1"),
-        "and a qualified project id is rendered the same way:\n{shown}"
-    );
+        let shown = ok(row, &sandbox, &["task", "show", "work:urn:task:7"]);
+        assert!(
+            shown.contains("id:       work:urn:task:7") && shown.contains("Colonised"),
+            "a qualified id splits on the FIRST colon, so the rest is the native id:\n{shown}"
+        );
+        assert!(
+            shown.contains("project:  work:urn:project:1"),
+            "and a qualified project id is rendered the same way:\n{shown}"
+        );
 
-    // A bare project id full of colons is a native id, because its prefix — `urn` — is
-    // not a configured source. That is the whole disambiguation rule, exercised.
-    let of_project = ok(
-        row,
-        &sandbox,
-        &["task", "list", "--project", "urn:project:1"],
-    );
-    assert_eq!(listed(&of_project), ["work:urn:task:7"], "{of_project}");
+        // A bare project id full of colons is a native id, because its prefix — `urn` — is
+        // not a configured source. That is the whole disambiguation rule, exercised.
+        let of_project = ok(
+            row,
+            &sandbox,
+            &["task", "list", "--project", "urn:project:1"],
+        );
+        assert_eq!(listed(&of_project), ["work:urn:task:7"], "{of_project}");
 
-    // And the same id qualified narrows to that source instead, to the same answer.
-    let qualified_form = ok(
-        row,
-        &sandbox,
-        &["task", "list", "--project", "work:urn:project:1"],
-    );
-    assert_eq!(listed(&qualified_form), ["work:urn:task:7"]);
+        // And the same id qualified narrows to that source instead, to the same answer.
+        let qualified_form = ok(
+            row,
+            &sandbox,
+            &["task", "list", "--project", "work:urn:project:1"],
+        );
+        assert_eq!(listed(&qualified_form), ["work:urn:task:7"]);
+    }
 }

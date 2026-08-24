@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::common::{Sandbox, stdout};
+use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stdout};
 use crate::fixtures::{document, qualified};
 use assert_cmd::Command;
 use serde_json::json;
@@ -58,11 +58,9 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 
 /// The configuration this journey runs against: one source whose every field is a
 /// sentinel.
-fn planted() -> String {
+fn planted(boundary: SourceBoundary) -> String {
     document(&json!({
-        "work": {
-            "plugin": "in-memory",
-            "config": {
+        "work": boundary.source("in-memory", json!({
                 "capabilities": {"max_page_size": 2},
                 "tasks": [
                     {"id": "T-1", "title": SENTINELS[0], "content": SENTINELS[1],
@@ -81,8 +79,7 @@ fn planted() -> String {
                 "labels": [{"id": "L-1", "name": SENTINELS[2]}],
                 "task_dependencies": [{"from": "T-1", "to": "T-2", "kind": "blocks"}],
                 "project_dependencies": [{"from": "P-1", "to": "P-2", "kind": "blocks"}]
-            }
-        }
+        }))
     }))
 }
 
@@ -122,94 +119,96 @@ fn every_verb() -> Vec<Vec<String>> {
 
 #[test]
 fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
-    let sandbox = Sandbox::new();
-    let document = sandbox.project_document(&planted());
-    let root = document
-        .parent()
-        .and_then(Path::parent)
-        .expect("the project tree sits under the sandbox root")
-        .to_path_buf();
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        let document = sandbox.project_document(&planted(boundary));
+        let root = document
+            .parent()
+            .and_then(Path::parent)
+            .expect("the project tree sits under the sandbox root")
+            .to_path_buf();
 
-    // Everywhere a program conventionally writes, redirected into this one tree. A cache
-    // put anywhere a running process could reach lands here rather than on the machine.
-    let mut homes = Vec::new();
-    for relative in ["home", "cache", "data", "state", "runtime", "tmp"] {
-        let path = root.join(relative);
-        std::fs::create_dir_all(&path).expect("a sandboxed directory");
-        homes.push(path);
-    }
-
-    let before = snapshot(&root);
-    assert!(
-        before
-            .values()
-            .any(|contents| { String::from_utf8_lossy(contents).contains(SENTINELS[0]) }),
-        "the sentinels must actually be planted, or this journey proves nothing"
-    );
-
-    let mut answered = 0;
-    for arguments in every_verb() {
-        let mut command = Command::cargo_bin("onetaskgraph").expect("the binary is built");
-        for (name, _) in std::env::vars() {
-            if name.starts_with("ONETASKGRAPH_") {
-                command.env_remove(name);
-            }
+        // Everywhere a program conventionally writes, redirected into this one tree. A cache
+        // put anywhere a running process could reach lands here rather than on the machine.
+        let mut homes = Vec::new();
+        for relative in ["home", "cache", "data", "state", "runtime", "tmp"] {
+            let path = root.join(relative);
+            std::fs::create_dir_all(&path).expect("a sandboxed directory");
+            homes.push(path);
         }
-        let output = command
-            .current_dir(sandbox.project())
-            .env("HOME", &homes[0])
-            .env("XDG_CONFIG_HOME", sandbox.config_home())
-            .env("XDG_CACHE_HOME", &homes[1])
-            .env("XDG_DATA_HOME", &homes[2])
-            .env("XDG_STATE_HOME", &homes[3])
-            .env("XDG_RUNTIME_DIR", &homes[4])
-            .env("TMPDIR", &homes[5])
-            .env("TEMP", &homes[5])
-            .env("TMP", &homes[5])
-            .args(&arguments)
-            .assert()
-            .success()
-            .get_output()
-            .clone();
-        // Not a vacuous pass: each verb has to have answered with something.
+
+        let before = snapshot(&root);
         assert!(
-            !stdout(&output).trim().is_empty(),
-            "`onetaskgraph {}` printed nothing, so this journey drove no work through it",
-            arguments.join(" ")
+            before
+                .values()
+                .any(|contents| { String::from_utf8_lossy(contents).contains(SENTINELS[0]) }),
+            "the sentinels must actually be planted, or this journey proves nothing"
         );
-        answered += 1;
-    }
-    assert_eq!(answered, every_verb().len());
 
-    let after = snapshot(&root);
-    let mut offences = Vec::new();
-    for (path, contents) in &after {
-        let text = String::from_utf8_lossy(contents);
-        match before.get(path) {
-            Some(original) if original == contents => {}
-            Some(_) => offences.push(format!("{} changed during the run", path.display())),
-            None => {
-                let held: Vec<&str> = SENTINELS
-                    .iter()
-                    .copied()
-                    .filter(|sentinel| text.contains(sentinel))
-                    .collect();
-                offences.push(format!(
-                    "{} was created during the run{}",
-                    path.display(),
-                    if held.is_empty() {
-                        String::new()
-                    } else {
-                        format!(", holding {}", held.join(", "))
-                    }
-                ));
+        let mut answered = 0;
+        for arguments in every_verb() {
+            let mut command = Command::cargo_bin("onetaskgraph").expect("the binary is built");
+            for (name, _) in std::env::vars() {
+                if name.starts_with("ONETASKGRAPH_") {
+                    command.env_remove(name);
+                }
+            }
+            let output = command
+                .current_dir(sandbox.project())
+                .env("HOME", &homes[0])
+                .env("XDG_CONFIG_HOME", sandbox.config_home())
+                .env("XDG_CACHE_HOME", &homes[1])
+                .env("XDG_DATA_HOME", &homes[2])
+                .env("XDG_STATE_HOME", &homes[3])
+                .env("XDG_RUNTIME_DIR", &homes[4])
+                .env("TMPDIR", &homes[5])
+                .env("TEMP", &homes[5])
+                .env("TMP", &homes[5])
+                .args(&arguments)
+                .assert()
+                .success()
+                .get_output()
+                .clone();
+            // Not a vacuous pass: each verb has to have answered with something.
+            assert!(
+                !stdout(&output).trim().is_empty(),
+                "`onetaskgraph {}` printed nothing, so this journey drove no work through it",
+                arguments.join(" ")
+            );
+            answered += 1;
+        }
+        assert_eq!(answered, every_verb().len());
+
+        let after = snapshot(&root);
+        let mut offences = Vec::new();
+        for (path, contents) in &after {
+            let text = String::from_utf8_lossy(contents);
+            match before.get(path) {
+                Some(original) if original == contents => {}
+                Some(_) => offences.push(format!("{} changed during the run", path.display())),
+                None => {
+                    let held: Vec<&str> = SENTINELS
+                        .iter()
+                        .copied()
+                        .filter(|sentinel| text.contains(sentinel))
+                        .collect();
+                    offences.push(format!(
+                        "{} was created during the run{}",
+                        path.display(),
+                        if held.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", holding {}", held.join(", "))
+                        }
+                    ));
+                }
             }
         }
-    }
 
-    assert!(
-        offences.is_empty(),
-        "the engine writes nothing down. These files say otherwise:\n  {}",
-        offences.join("\n  ")
-    );
+        assert!(
+            offences.is_empty(),
+            "the engine writes nothing down. These files say otherwise:\n  {}",
+            offences.join("\n  ")
+        );
+    }
 }

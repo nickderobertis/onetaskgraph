@@ -98,16 +98,6 @@ pub const NATIVE: &str = "native";
 /// The name they give the row that applies none of it and walks forwards only.
 pub const SCANNED: &str = "scanned";
 
-/// The two `in-memory` rows configured side by side over the same dataset.
-///
-/// This is the pair the whole capability mechanism exists for: one query, two sources of
-/// deliberately different declared capability, one correct answer and two different
-/// plans — and, for dependencies, one reverse answer the source gives and one the engine
-/// scans for, which must match edge for edge.
-pub fn pair(sandbox: &Sandbox) -> String {
-    pair_at(sandbox, SourceBoundary::Direct)
-}
-
 /// The capability pair built on either side of the process boundary.
 pub fn pair_at(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
     let mut sources = serde_json::Map::new();

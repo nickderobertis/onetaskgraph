@@ -10,11 +10,6 @@ use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
 use crate::fixtures::{ROWS, dataset, document, qualified};
 use serde_json::{Value, json};
 
-/// A sandbox holding one working `in-memory` source called `work`.
-fn host() -> Sandbox {
-    host_at(SourceBoundary::Direct)
-}
-
 fn host_at(boundary: SourceBoundary) -> Sandbox {
     let sandbox = Sandbox::new();
     let mut block = dataset();
@@ -164,13 +159,18 @@ fn a_source_that_cannot_answer_exits_four_and_names_itself() {
 
 #[test]
 fn a_page_token_this_engine_did_not_write_is_refused_rather_than_restarting_the_walk() {
-    let output = run(&host(), &["task", "list", "--page", "not-a-token"]);
-    refused(
-        &output,
-        "not a page token this engine writes",
-        "previous page",
-    );
-    assert_eq!(output.status.code(), Some(1));
+    for boundary in SOURCE_BOUNDARIES {
+        let output = run(
+            &host_at(boundary),
+            &["task", "list", "--page", "not-a-token"],
+        );
+        refused(
+            &output,
+            "not a page token this engine writes",
+            "previous page",
+        );
+        assert_eq!(output.status.code(), Some(1));
+    }
 }
 
 #[test]
@@ -179,50 +179,52 @@ fn a_token_carrying_a_field_this_engine_does_not_write_is_refused_rather_than_de
     // and it is the quiet one: without this, `cursorr` is an unknown field to ignore and
     // `cursor` is then absent, so the stream resumes from the *beginning* and the caller
     // gets the first page again under a token that promised the second.
-    let sandbox = host();
-    let minted: Value = serde_json::from_str(&stdout(&run(
-        &sandbox,
-        &["task", "list", "--limit", "1", "--json"],
-    )))
-    .expect("--json emits a response");
-    let query = serde_json::from_slice::<Value>(&unhex(
-        minted["next"]
-            .as_str()
-            .expect("one page of four leaves more"),
-    ))
-    .expect("a token holds JSON")["query"]
-        .clone();
-
-    for document in [
-        // A misspelling one level down, where the real cursor lives.
-        json!({
-            "query": query,
-            "streams": [{"source": "work", "stream": "items", "cursorr": "1"}],
-        }),
-        // And one at the top, where a whole half of the document could go missing.
-        json!({
-            "query": query,
-            "streamz": [],
-            "streams": [{"source": "work", "stream": "items"}],
-        }),
-    ] {
-        let token: String = serde_json::to_string(&document)
-            .expect("a resume document renders")
-            .as_bytes()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        let output = run(
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = host_at(boundary);
+        let minted: Value = serde_json::from_str(&stdout(&run(
             &sandbox,
-            &["task", "list", "--limit", "1", "--page", &token],
-        );
-        assert_eq!(
-            output.status.code(),
-            Some(1),
-            "{document} must be refused:\n{}",
-            stdout(&output)
-        );
-        refused(&output, "unknown field", "previous page");
+            &["task", "list", "--limit", "1", "--json"],
+        )))
+        .expect("--json emits a response");
+        let query = serde_json::from_slice::<Value>(&unhex(
+            minted["next"]
+                .as_str()
+                .expect("one page of four leaves more"),
+        ))
+        .expect("a token holds JSON")["query"]
+            .clone();
+
+        for document in [
+            // A misspelling one level down, where the real cursor lives.
+            json!({
+                "query": query,
+                "streams": [{"source": "work", "stream": "items", "cursorr": "1"}],
+            }),
+            // And one at the top, where a whole half of the document could go missing.
+            json!({
+                "query": query,
+                "streamz": [],
+                "streams": [{"source": "work", "stream": "items"}],
+            }),
+        ] {
+            let token: String = serde_json::to_string(&document)
+                .expect("a resume document renders")
+                .as_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            let output = run(
+                &sandbox,
+                &["task", "list", "--limit", "1", "--page", &token],
+            );
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{document} must be refused:\n{}",
+                stdout(&output)
+            );
+            refused(&output, "unknown field", "previous page");
+        }
     }
 }
 
@@ -235,39 +237,41 @@ fn a_well_shaped_token_this_configuration_cannot_honour_is_refused_for_what_it_s
     // Each carries the real query fingerprint of the walk it is handed to, so what is
     // under test is the streams it names rather than the check that it belongs to this
     // query at all — that one has a journey of its own below.
-    let sandbox = host();
-    for (streams, problem) in [
-        (
-            json!([{"source": "elsewhere", "stream": "items"}]),
-            "does not have",
-        ),
-        (
-            json!([{"source": "work", "stream": "items", "skip": 999}]),
-            "serves at most",
-        ),
-        (
-            json!([
-                {"source": "work", "stream": "items"},
-                {"source": "work", "stream": "items", "skip": 1},
-            ]),
-            "two places to resume",
-        ),
-        // The one that would otherwise exit 0 with an empty page: a token a `search`
-        // minted, handed to `task list`, which reads neither of the streams it names.
-        (
-            json!([{"source": "work", "stream": "tasks"}]),
-            "this command does not read",
-        ),
-    ] {
-        let token = token_over(&sandbox, &streams);
-        let output = run(&sandbox, &["task", "list", "--page", &token]);
-        assert_eq!(
-            output.status.code(),
-            Some(1),
-            "{streams} must be refused:\n{}",
-            stdout(&output)
-        );
-        refused(&output, problem, "the same configuration");
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = host_at(boundary);
+        for (streams, problem) in [
+            (
+                json!([{"source": "elsewhere", "stream": "items"}]),
+                "does not have",
+            ),
+            (
+                json!([{"source": "work", "stream": "items", "skip": 999}]),
+                "serves at most",
+            ),
+            (
+                json!([
+                    {"source": "work", "stream": "items"},
+                    {"source": "work", "stream": "items", "skip": 1},
+                ]),
+                "two places to resume",
+            ),
+            // The one that would otherwise exit 0 with an empty page: a token a `search`
+            // minted, handed to `task list`, which reads neither of the streams it names.
+            (
+                json!([{"source": "work", "stream": "tasks"}]),
+                "this command does not read",
+            ),
+        ] {
+            let token = token_over(&sandbox, &streams);
+            let output = run(&sandbox, &["task", "list", "--page", &token]);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{streams} must be refused:\n{}",
+                stdout(&output)
+            );
+            refused(&output, problem, "the same configuration");
+        }
     }
 }
 
@@ -277,33 +281,36 @@ fn a_token_owing_the_next_row_to_a_stream_it_does_not_resume_is_refused() {
     // a stream the token does not resume is a value from outside with no reading — the
     // merge would quietly begin at the first stream instead, which is an answer in an
     // order the token did not ask for.
-    let sandbox = host();
-    let minted: Value = serde_json::from_str(&stdout(&run(
-        &sandbox,
-        &["task", "list", "--limit", "1", "--json"],
-    )))
-    .expect("--json emits a response");
-    let carried = minted["next"]
-        .as_str()
-        .expect("one page of four leaves more");
-    let mut document: Value = serde_json::from_slice(&unhex(carried)).expect("a token holds JSON");
-    document["owed"] = json!({"source": "elsewhere", "stream": "items"});
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = host_at(boundary);
+        let minted: Value = serde_json::from_str(&stdout(&run(
+            &sandbox,
+            &["task", "list", "--limit", "1", "--json"],
+        )))
+        .expect("--json emits a response");
+        let carried = minted["next"]
+            .as_str()
+            .expect("one page of four leaves more");
+        let mut document: Value =
+            serde_json::from_slice(&unhex(carried)).expect("a token holds JSON");
+        document["owed"] = json!({"source": "elsewhere", "stream": "items"});
 
-    let forged: String = serde_json::to_string(&document)
-        .expect("a resume document renders")
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+        let forged: String = serde_json::to_string(&document)
+            .expect("a resume document renders")
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
 
-    let output = run(&sandbox, &["task", "list", "--page", &forged]);
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "a token owing a stream it does not resume must be refused:\n{}",
-        stdout(&output)
-    );
-    refused(&output, "does not resume", "the same configuration");
+        let output = run(&sandbox, &["task", "list", "--page", &forged]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "a token owing a stream it does not resume must be refused:\n{}",
+            stdout(&output)
+        );
+        refused(&output, "does not resume", "the same configuration");
+    }
 }
 
 #[test]
@@ -313,63 +320,67 @@ fn a_token_from_one_query_is_refused_by_another_rather_than_resuming_it_somewher
     // something in a walk the caller is no longer doing — and what comes back is real
     // rows at exit zero, with nothing about the answer to say it is arbitrary. That is
     // the worst shape this can take, so it is refused rather than served.
-    let sandbox = host();
-    let minted: Value = serde_json::from_str(&stdout(&run(
-        &sandbox,
-        &["task", "list", "--label", "bug", "--limit", "1", "--json"],
-    )))
-    .expect("--json emits a response");
-    let token = minted["next"].as_str().expect("two tasks carry that label");
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = host_at(boundary);
+        let minted: Value = serde_json::from_str(&stdout(&run(
+            &sandbox,
+            &["task", "list", "--label", "bug", "--limit", "1", "--json"],
+        )))
+        .expect("--json emits a response");
+        let token = minted["next"].as_str().expect("two tasks carry that label");
 
-    // The same query resumes, so what follows refuses a mismatch rather than every token.
-    let same = run(
-        &sandbox,
-        &[
-            "task", "list", "--label", "bug", "--limit", "1", "--page", token,
-        ],
-    );
-    assert_eq!(
-        same.status.code(),
-        Some(0),
-        "the walk it came from must still resume:\n{}",
-        stderr(&same)
-    );
-
-    for arguments in [
-        vec!["task", "list", "--label", "core", "--limit", "1"],
-        vec!["task", "list", "--limit", "1"],
-        vec![
-            "task", "list", "--label", "bug", "--status", "todo", "--limit", "1",
-        ],
-        vec![
-            "task", "list", "--label", "bug", "--search", "alpha", "--limit", "1",
-        ],
-        vec!["project", "list", "--limit", "1"],
-        vec!["label", "list", "--limit", "1"],
-    ] {
-        let mut with_token = arguments.clone();
-        with_token.extend(["--page", token]);
-        let output = run(&sandbox, &with_token);
-        assert_eq!(
-            output.status.code(),
-            Some(1),
-            "`{}` must not resume a token another query minted:\n{}",
-            arguments.join(" "),
-            stdout(&output)
+        // The same query resumes, so what follows refuses a mismatch rather than every token.
+        let same = run(
+            &sandbox,
+            &[
+                "task", "list", "--label", "bug", "--limit", "1", "--page", token,
+            ],
         );
-        refused(&output, "written by a different query", "drop `--page`");
+        assert_eq!(
+            same.status.code(),
+            Some(0),
+            "the walk it came from must still resume:\n{}",
+            stderr(&same)
+        );
+
+        for arguments in [
+            vec!["task", "list", "--label", "core", "--limit", "1"],
+            vec!["task", "list", "--limit", "1"],
+            vec![
+                "task", "list", "--label", "bug", "--status", "todo", "--limit", "1",
+            ],
+            vec![
+                "task", "list", "--label", "bug", "--search", "alpha", "--limit", "1",
+            ],
+            vec!["project", "list", "--limit", "1"],
+            vec!["label", "list", "--limit", "1"],
+        ] {
+            let mut with_token = arguments.clone();
+            with_token.extend(["--page", token]);
+            let output = run(&sandbox, &with_token);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "`{}` must not resume a token another query minted:\n{}",
+                arguments.join(" "),
+                stdout(&output)
+            );
+            refused(&output, "written by a different query", "drop `--page`");
+        }
     }
 }
 
 #[test]
 fn a_page_of_no_rows_is_refused_as_the_typing_mistake_it_is() {
-    let output = run(&host(), &["task", "list", "--limit", "0"]);
-    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("invalid value '0' for '--limit"),
-        "{}",
-        stderr(&output)
-    );
+    for boundary in SOURCE_BOUNDARIES {
+        let output = run(&host_at(boundary), &["task", "list", "--limit", "0"]);
+        assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("invalid value '0' for '--limit"),
+            "{}",
+            stderr(&output)
+        );
+    }
 }
 
 #[test]
@@ -377,8 +388,13 @@ fn a_source_name_that_could_not_name_anything_is_refused_for_being_unusable() {
     // Distinct from a name nothing configures: this one could never be a source name at
     // all, because the `ONETASKGRAPH_SOURCES__<NAME>__` mapping would be ambiguous if it
     // were.
-    let output = run(&host(), &["task", "list", "--source", "Work_One"]);
-    refused(&output, "--source Work_One", "sources list");
+    for boundary in SOURCE_BOUNDARIES {
+        let output = run(
+            &host_at(boundary),
+            &["task", "list", "--source", "Work_One"],
+        );
+        refused(&output, "--source Work_One", "sources list");
+    }
 }
 
 #[test]
