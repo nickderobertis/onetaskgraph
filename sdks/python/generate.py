@@ -199,14 +199,14 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
             page_size["minimum"] = minimum
         module = camel_to_snake(root)
         source = destination / f"{module}.py"
-        with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as handle:
-            json.dump(schema, handle)
-            handle.flush()
+        with tempfile.TemporaryDirectory() as temporary:
+            schema_path = Path(temporary) / f"{module}.json"
+            schema_path.write_text(json.dumps(schema), encoding="utf-8")
             subprocess.run(
                 [
                     "datamodel-codegen",
                     "--input",
-                    handle.name,
+                    str(schema_path),
                     "--input-file-type",
                     "jsonschema",
                     "--output",
