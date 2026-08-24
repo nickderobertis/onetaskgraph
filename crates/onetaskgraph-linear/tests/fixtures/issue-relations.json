@@ -1,0 +1,14 @@
+{
+  "data": {
+    "issue": {
+      "relations": {
+        "nodes": [{ "type": "blocks", "relatedIssue": { "id": "i2" } }],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      },
+      "inverseRelations": {
+        "nodes": [{ "type": "blocks", "issue": { "id": "i3" } }],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      }
+    }
+  }
+}

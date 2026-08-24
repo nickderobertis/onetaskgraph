@@ -366,9 +366,8 @@ async fn a_walk_returns_every_row_once_whatever_the_page_size_and_repeats_itself
 
 #[tokio::test]
 async fn a_source_that_cannot_be_built_leaves_the_others_answering_and_is_named() {
-    // `linear` is registered but its source has not landed, so its factory refuses —
-    // which is the same shape as a credential that is not there, and must not stop the
-    // configured `in-memory` source from answering.
+    // Linear is configured without its credential and must not stop the configured
+    // `in-memory` source from answering.
     let engine = engine_over(json!({
         "broken": {"plugin": "linear", "config": {}},
         "work": {"plugin": "in-memory", "config": work()},
@@ -389,7 +388,7 @@ async fn a_source_that_cannot_be_built_leaves_the_others_answering_and_is_named(
         response.errors[0]
             .error
             .to_string()
-            .contains("not implemented yet"),
+            .contains("LINEAR_API_KEY"),
         "{:?}",
         response.errors[0]
     );

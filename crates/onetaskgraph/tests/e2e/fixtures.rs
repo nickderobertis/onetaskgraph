@@ -13,6 +13,11 @@
 //! nothing.
 
 use serde_json::{Value, json};
+use std::{
+    io::{Read, Write},
+    net::TcpListener,
+    thread,
+};
 
 use crate::common::{Sandbox, SourceBoundary};
 
@@ -186,7 +191,18 @@ pub const ROWS: &[Row] = &[
     Row {
         plugin: "linear",
         name: "linear",
-        fixture: Fixture::Pending,
+        fixture: Fixture::Ready(Ready {
+            block: linear_block,
+            declared: Declared {
+                filter_by_label: true,
+                filter_by_status: true,
+                search_title: false,
+                search_content: false,
+                orphan_tasks: true,
+                reverse_task_dependencies: true,
+                reverse_project_dependencies: true,
+            },
+        }),
     },
     Row {
         plugin: "github-projects",
@@ -194,6 +210,206 @@ pub const ROWS: &[Row] = &[
         fixture: Fixture::Pending,
     },
 ];
+
+/// A socket-level Linear GraphQL fixture used by the shared binary journeys.
+fn linear_block(sandbox: &Sandbox) -> Value {
+    sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+    let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+    thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut bytes = Vec::new();
+            let mut chunk = [0; 4096];
+            loop {
+                let n = stream.read(&mut chunk).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&chunk[..n]);
+                if let Some(split) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&bytes[..split]).to_ascii_lowercase();
+                    let length = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .and_then(|value| value.parse::<usize>().ok());
+                    if length.is_some_and(|length| bytes.len() >= split + 4 + length) {
+                        break;
+                    }
+                }
+            }
+            let split = bytes
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|n| n + 4)
+                .unwrap_or(bytes.len());
+            let Ok(request) = serde_json::from_slice::<Value>(&bytes[split..]) else {
+                let text = r#"{"errors":[{"message":"invalid fixture request"}]}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            };
+            if request.get("query").and_then(Value::as_str).is_none() {
+                let text = r#"{"errors":[{"message":"missing GraphQL query"}]}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
+            let body = linear_response(&request);
+            let text = serde_json::to_string(&json!({"data":body})).unwrap();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                text.len()
+            );
+        }
+    });
+    json!({"endpoint":endpoint})
+}
+
+fn linear_response(request: &Value) -> Value {
+    let query = request["query"].as_str().unwrap();
+    let vars = &request["variables"];
+    let data = dataset();
+    if query.contains("issueLabels(") {
+        return json!({"issueLabels":linear_connection(data["labels"].as_array().unwrap().iter().map(linear_label).collect(),vars)});
+    }
+    if query.contains("issues(") {
+        let mut rows: Vec<Value> = data["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| linear_matches(v, vars))
+            .map(linear_task)
+            .collect();
+        return json!({"issues":linear_connection(std::mem::take(&mut rows),vars)});
+    }
+    if query.contains("projects(") {
+        let rows = data["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| linear_matches(v, vars))
+            .map(linear_project)
+            .collect();
+        return json!({"projects":linear_connection(rows,vars)});
+    }
+    if query.contains("issue(id:") {
+        let id = vars["id"].as_str().unwrap_or("");
+        let item = data["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == id);
+        if query.contains("relations(") {
+            return json!({"issue":linear_relations(&data,"task_dependencies",id,"Issue")});
+        }
+        return json!({"issue":item.map(linear_task)});
+    }
+    if query.contains("project(id:") {
+        let id = vars["id"].as_str().unwrap_or("");
+        let item = data["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == id);
+        if query.contains("relations(") {
+            return json!({"project":linear_relations(&data,"project_dependencies",id,"Project")});
+        }
+        return json!({"project":item.map(linear_project)});
+    }
+    json!({"viewer":{"id":"fixture-user"}})
+}
+fn linear_label(v: &Value) -> Value {
+    json!({"id":v["id"],"name":v["name"],"color":null})
+}
+fn linear_state(v: &Value) -> Value {
+    let category = v["category"].as_str().unwrap_or("");
+    json!({"name":v["name"],"type":match category{"todo"=>"unstarted","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
+}
+fn linear_task(v: &Value) -> Value {
+    json!({"id":v["id"],"title":v["title"],"description":v["content"],"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":v.get("url"),"createdAt":null,"updatedAt":null})
+}
+fn linear_project(v: &Value) -> Value {
+    json!({"id":v["id"],"name":v["title"],"description":v["content"],"status":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":v.get("url"),"createdAt":null,"updatedAt":null})
+}
+fn linear_connection(rows: Vec<Value>, vars: &Value) -> Value {
+    let start = vars["after"]
+        .as_str()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let limit = vars["first"].as_u64().unwrap_or(50) as usize;
+    let nodes = rows
+        .iter()
+        .skip(start)
+        .take(limit)
+        .cloned()
+        .collect::<Vec<_>>();
+    let end = start + nodes.len();
+    json!({"nodes":nodes,"pageInfo":{"hasNextPage":end<rows.len(),"endCursor":if end<rows.len(){Some(end.to_string())}else{None}}})
+}
+fn linear_matches(v: &Value, vars: &Value) -> bool {
+    let text = vars["filter"].to_string().to_ascii_lowercase();
+    let labels = v["labels"].as_array().unwrap();
+    for name in ["bug", "chore", "core"] {
+        if text.contains(&format!("\"{name}\"")) {
+            let present = labels.iter().any(|l| l["name"].as_str() == Some(name));
+            let excluded = text.contains(&format!("neqignorecase\":\"{name}"));
+            if (excluded && present) || (!excluded && !present) {
+                return false;
+            }
+        }
+    }
+    let mut allowed = Vec::new();
+    for (linear, category) in [
+        ("completed", "done"),
+        ("unstarted", "todo"),
+        ("\"started\"", "in-progress"),
+        ("backlog", "backlog"),
+        ("canceled", "cancelled"),
+    ] {
+        if text.contains(linear) {
+            allowed.push(category);
+        }
+    }
+    if !allowed.is_empty() && !allowed.contains(&v["status"]["category"].as_str().unwrap_or("")) {
+        return false;
+    }
+    if text.contains("\"null\":true") && v.get("project").is_some() {
+        return false;
+    }
+    for id in ["p-1", "p-2"] {
+        if text.contains(id)
+            && v.get("project")
+                .and_then(Value::as_str)
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+                != Some(id)
+        {
+            return false;
+        }
+    }
+    true
+}
+fn linear_relations(data: &Value, key: &str, id: &str, suffix: &str) -> Value {
+    let edges = data[key].as_array().unwrap();
+    let forward = edges
+        .iter()
+        .filter(|e| e["from"] == id)
+        .map(|e| json!({"type":e["kind"],(format!("related{suffix}")):{"id":e["to"]}}))
+        .collect::<Vec<_>>();
+    let inverse = edges
+        .iter()
+        .filter(|e| e["to"] == id)
+        .map(|e| json!({"type":e["kind"],(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
+        .collect::<Vec<_>>();
+    json!({"relations":{"nodes":forward,"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":inverse,"pageInfo":{"hasNextPage":false,"endCursor":null}}})
+}
 
 /// The `in-memory` row that applies every predicate itself.
 fn native_block(_sandbox: &Sandbox) -> Value {

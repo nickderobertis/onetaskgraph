@@ -1,0 +1,14 @@
+{
+  "data": {
+    "project": {
+      "relations": {
+        "nodes": [{ "type": "blocks", "relatedProject": { "id": "p2" } }],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      },
+      "inverseRelations": {
+        "nodes": [{ "type": "blocks", "project": { "id": "p3" } }],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      }
+    }
+  }
+}

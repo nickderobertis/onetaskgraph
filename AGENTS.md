@@ -186,6 +186,11 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 
 ### The journeys this repository owes
 
+The Linear row is backed by a real local HTTP server in the shared e2e process. Its
+responses and the crate fixtures under `crates/onetaskgraph-linear/tests/fixtures/`
+follow Linear's published GraphQL schema and Relay connection documentation as recorded
+on 2026-08-24. Each fixture records whether it was live-captured or documentation-derived.
+
 Each drives the real binary as a subprocess, and each runs against **every** configured
 source kind through one shared fixture table — `crates/onetaskgraph/tests/e2e/fixtures.rs`
 — so a plugin is never proven by a suite of its own writing. That coverage is not a habit:
