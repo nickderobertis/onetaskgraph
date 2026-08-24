@@ -15,6 +15,7 @@ test("generation, clean check, stale check, and invalid arguments use the real b
       encoding: "utf8",
       env: {
         ...process.env,
+        NODE_ENV: "test",
         ONETASKGRAPH_BIN: binary,
         ONETASKGRAPH_GENERATED_DIR: generated,
       },

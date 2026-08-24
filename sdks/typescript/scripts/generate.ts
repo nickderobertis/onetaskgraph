@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { compile } from "json-schema-to-typescript";
 
@@ -15,8 +16,18 @@ if (argumentsGiven.some((argument) => argument !== "--check")) {
 }
 
 const packageRoot = resolve(import.meta.dir, "..");
-const generatedRoot =
-  process.env.ONETASKGRAPH_GENERATED_DIR ?? resolve(packageRoot, "src/generated");
+const configuredGeneratedRoot = process.env.ONETASKGRAPH_GENERATED_DIR;
+if (
+  configuredGeneratedRoot !== undefined &&
+  (process.env.NODE_ENV !== "test" ||
+    !realpathSync(configuredGeneratedRoot).startsWith(`${realpathSync(tmpdir())}/`))
+) {
+  throw new Error(
+    "generate: ONETASKGRAPH_GENERATED_DIR is only accepted under the test temporary " +
+      "directory; next: remove it for normal generation",
+  );
+}
+const generatedRoot = configuredGeneratedRoot ?? resolve(packageRoot, "src/generated");
 const workspaceRoot = resolve(packageRoot, "../..");
 const binary = process.env.ONETASKGRAPH_BIN ?? resolve(workspaceRoot, "target/debug/onetaskgraph");
 const binaryEnvironment = { ...process.env };
