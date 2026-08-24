@@ -66,6 +66,13 @@ test("generation, clean check, stale check, and invalid arguments use the real b
     });
     expect(unavailable.status).toBe(1);
     expect(unavailable.stderr).toContain("could not emit the SDK contract");
+    const emptyBinary = spawnSync("bun", ["scripts/generate.ts"], {
+      cwd: packageRoot,
+      encoding: "utf8",
+      env: { ...process.env, ONETASKGRAPH_BIN: "" },
+    });
+    expect(emptyBinary.status).toBe(1);
+    expect(emptyBinary.stderr).toContain("ONETASKGRAPH_BIN must be a non-empty executable path");
   } finally {
     rmSync(generated, { recursive: true, force: true });
   }

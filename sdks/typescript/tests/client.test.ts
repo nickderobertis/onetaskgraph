@@ -107,20 +107,54 @@ test("typed methods drive every real binary command", async () => {
   expect((await client.taskShow("work:T-1", { allowPartial: true })).items[0]?.item.title).toBe(
     "Alpha engine",
   );
-  expect((await client.taskDeps("work:T-2", { direction: "depended-on-by" })).items[0]?.from).toBe(
-    "work:T-1",
-  );
-  expect((await client.projectList({ sources: ["work"] })).items[0]?.id).toBe("work:P-1");
+  expect(
+    (
+      await client.taskDeps("work:T-2", {
+        direction: "depended-on-by",
+        limit: 1,
+        allowPartial: true,
+      })
+    ).items[0]?.from,
+  ).toBe("work:T-1");
+  expect(
+    (
+      await client.projectList({
+        sources: ["work"],
+        labels: ["bug"],
+        excludeLabels: ["chore"],
+        statuses: ["in-progress"],
+        search: "Engine",
+        fields: "title",
+        limit: 1,
+        allowPartial: true,
+      })
+    ).items[0]?.id,
+  ).toBe("work:P-1");
   expect((await client.projectShow("work:P-1", { allowPartial: true })).items[0]?.item.title).toBe(
     "Engine",
   );
   expect(
-    (await client.projectDeps("work:P-2", { direction: "depended-on-by" })).items[0]?.from,
+    (
+      await client.projectDeps("work:P-2", {
+        direction: "depended-on-by",
+        limit: 1,
+        allowPartial: true,
+      })
+    ).items[0]?.from,
   ).toBe("work:P-1");
-  expect((await client.labelList({ sources: ["work"] })).items[0]?.id).toBe("work:L-1");
   expect(
-    (await client.search("Alpha", { sources: ["work"], fields: "title", kind: "task", limit: 1 }))
-      .items[0]?.kind,
+    (await client.labelList({ sources: ["work"], limit: 1, allowPartial: true })).items[0]?.id,
+  ).toBe("work:L-1");
+  expect(
+    (
+      await client.search("Alpha", {
+        sources: ["work"],
+        fields: "title",
+        kind: "task",
+        limit: 1,
+        allowPartial: true,
+      })
+    ).items[0]?.kind,
   ).toBe("task");
 });
 
@@ -156,6 +190,13 @@ test("explicit binary path takes precedence over the environment", () => {
     env: { ONETASKGRAPH_BIN: resolve(root, "wrong") },
   });
   expect(resolved.binaryPath).toBe(binary);
+});
+
+test("empty explicit and environment binary paths are rejected", () => {
+  expect(() => new OnetaskgraphClient({ binaryPath: "" })).toThrow("non-empty executable path");
+  expect(() => new OnetaskgraphClient({ env: { ONETASKGRAPH_BIN: " " } })).toThrow(
+    "non-empty executable path",
+  );
 });
 
 test("the supplied environment precedes packaged resolution", () => {

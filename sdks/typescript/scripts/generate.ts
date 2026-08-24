@@ -43,6 +43,11 @@ if (configuredGeneratedRoot !== undefined) {
 }
 const generatedRoot = configuredGeneratedRoot ?? resolve(packageRoot, "src/generated");
 const workspaceRoot = resolve(packageRoot, "../..");
+if (process.env.ONETASKGRAPH_BIN !== undefined && process.env.ONETASKGRAPH_BIN.trim() === "") {
+  throw new Error(
+    "generate: ONETASKGRAPH_BIN must be a non-empty executable path; next: remove it or set a path",
+  );
+}
 const binary = process.env.ONETASKGRAPH_BIN ?? resolve(workspaceRoot, "target/debug/onetaskgraph");
 const binaryEnvironment = { ...process.env };
 delete binaryEnvironment.ONETASKGRAPH_BIN;

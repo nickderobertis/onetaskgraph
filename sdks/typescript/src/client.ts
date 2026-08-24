@@ -21,6 +21,9 @@ export type QueryOptions = {
   page?: string;
   allowPartial?: boolean;
 };
+export type DependencyOptions = Omit<QueryOptions, "sources"> & {
+  direction?: "depends-on" | "depended-on-by";
+};
 export type FilterOptions = QueryOptions & {
   labels?: string[];
   excludeLabels?: string[];
@@ -90,8 +93,19 @@ function packagedBinary(): string {
   }
 }
 
+function requireBinaryPath(binaryPath: string): string {
+  if (binaryPath.trim() === "") {
+    throw new TypeError("binaryPath must be a non-empty executable path");
+  }
+  return binaryPath;
+}
+
 function addQuery(args: string[], options: QueryOptions): void {
   for (const source of options.sources ?? []) args.push("--source", source);
+  addPage(args, options);
+}
+
+function addPage(args: string[], options: Omit<QueryOptions, "sources">): void {
   if (options.limit !== undefined) args.push("--limit", String(options.limit));
   if (options.page !== undefined) args.push("--page", options.page);
   if (options.allowPartial) args.push("--allow-partial");
@@ -112,11 +126,12 @@ export class OnetaskgraphClient {
   readonly env: NodeJS.ProcessEnv;
 
   constructor(options: ClientOptions = {}) {
-    this.binaryPath =
+    this.binaryPath = requireBinaryPath(
       options.binaryPath ??
-      options.env?.ONETASKGRAPH_BIN ??
-      process.env.ONETASKGRAPH_BIN ??
-      packagedBinary();
+        options.env?.ONETASKGRAPH_BIN ??
+        process.env.ONETASKGRAPH_BIN ??
+        packagedBinary(),
+    );
     this.cwd = options.cwd;
     this.env = { ...process.env, ...options.env };
     delete this.env.ONETASKGRAPH_BIN;
@@ -146,12 +161,9 @@ export class OnetaskgraphClient {
   ): Promise<QueryResponseOfQualifiedTask> {
     return this.run("task show", [id, ...(options.allowPartial ? ["--allow-partial"] : [])]);
   }
-  taskDeps(
-    id: string,
-    options: QueryOptions & { direction?: "depends-on" | "depended-on-by" } = {},
-  ): Promise<QueryResponseOfQualifiedEdge> {
+  taskDeps(id: string, options: DependencyOptions = {}): Promise<QueryResponseOfQualifiedEdge> {
     const args = [id];
-    addQuery(args, options);
+    addPage(args, options);
     if (options.direction) args.push("--direction", options.direction);
     return this.run("task deps", args);
   }
@@ -166,12 +178,9 @@ export class OnetaskgraphClient {
   ): Promise<QueryResponseOfQualifiedProject> {
     return this.run("project show", [id, ...(options.allowPartial ? ["--allow-partial"] : [])]);
   }
-  projectDeps(
-    id: string,
-    options: QueryOptions & { direction?: "depends-on" | "depended-on-by" } = {},
-  ): Promise<QueryResponseOfQualifiedEdge> {
+  projectDeps(id: string, options: DependencyOptions = {}): Promise<QueryResponseOfQualifiedEdge> {
     const args = [id];
-    addQuery(args, options);
+    addPage(args, options);
     if (options.direction) args.push("--direction", options.direction);
     return this.run("project deps", args);
   }
