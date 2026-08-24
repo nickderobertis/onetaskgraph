@@ -118,9 +118,9 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
         if root == "EffectiveConfig":
             generated = [
                 line.replace(
-                    "    value: Any",
+                    "    value: Annotated[Any",
                     "    # A setting is arbitrary JSON by the emitted wire contract.\n"
-                    "    value: Any",
+                    "    value: Annotated[Any",
                 )
                 for line in generated
             ]

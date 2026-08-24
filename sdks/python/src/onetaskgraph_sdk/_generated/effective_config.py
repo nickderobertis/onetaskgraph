@@ -79,6 +79,7 @@ class SettingPath(RootModel[str]):
 class Setting(BaseModel):
     key: Annotated[SettingPath, Field(description="The dotted path of the setting.")]
     origin: Annotated[Origin, Field(description="Where the value came from.")]
+    # A setting is arbitrary JSON by the emitted wire contract.
     value: Annotated[Any, Field(description="Its value.")]
 
 
