@@ -9,3 +9,4 @@ from .query_response_of_qualified_task import QueryResponse as QueryResponseOfQu
 from .query_response_of_search_hit import QueryResponse as QueryResponseOfSearchHit
 from .source_failure import SourceFailure as SourceFailure
 from .source_listing import SourceListing as SourceListing
+from .status_category import StatusCategory as StatusCategory

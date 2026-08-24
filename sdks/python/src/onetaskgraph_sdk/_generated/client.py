@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from .models import (
     EffectiveConfig,
     GlobalId,
@@ -11,6 +13,7 @@ from .models import (
     QueryResponseOfQualifiedTask,
     QueryResponseOfSearchHit,
     SourceListing,
+    StatusCategory,
 )
 
 
@@ -68,7 +71,7 @@ class GeneratedClient:
         *,
         allow_partial: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
-        direction: str | None = None,
+        direction: Literal["depends-on", "depended-on-by"] | None = None,
         explain: bool | None = None,
         limit: int | None = None,
         page: str | None = None,
@@ -96,7 +99,7 @@ class GeneratedClient:
         allow_partial: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         explain: bool | None = None,
-        in_: str | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
         label: list[str] | tuple[str, ...] | None = None,
         limit: int | None = None,
         not_label: list[str] | tuple[str, ...] | None = None,
@@ -105,7 +108,7 @@ class GeneratedClient:
         search: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
-        status: list[str] | tuple[str, ...] | None = None,
+        status: list[StatusCategory] | tuple[StatusCategory, ...] | None = None,
     ) -> QueryResponseOfQualifiedProject:
         """Run ``onetaskgraph project list``."""
         return await self._invoke(
@@ -155,8 +158,8 @@ class GeneratedClient:
         allow_partial: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         explain: bool | None = None,
-        in_: str | None = None,
-        kind: str | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        kind: Literal["task", "project", "both"] | None = None,
         limit: int | None = None,
         page: str | None = None,
         page_size: int | None = None,
@@ -202,7 +205,7 @@ class GeneratedClient:
         *,
         allow_partial: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
-        direction: str | None = None,
+        direction: Literal["depends-on", "depended-on-by"] | None = None,
         explain: bool | None = None,
         limit: int | None = None,
         page: str | None = None,
@@ -230,7 +233,7 @@ class GeneratedClient:
         allow_partial: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         explain: bool | None = None,
-        in_: str | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
         label: list[str] | tuple[str, ...] | None = None,
         limit: int | None = None,
         no_project: bool | None = None,
@@ -241,7 +244,7 @@ class GeneratedClient:
         search: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
-        status: list[str] | tuple[str, ...] | None = None,
+        status: list[StatusCategory] | tuple[StatusCategory, ...] | None = None,
     ) -> QueryResponseOfQualifiedTask:
         """Run ``onetaskgraph task list``."""
         return await self._invoke(

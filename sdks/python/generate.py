@@ -31,10 +31,10 @@ RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
     "allow_partial": "bool",
     "default_sources": "list[str] | tuple[str, ...]",
-    "direction": "str",
+    "direction": 'Literal["depends-on", "depended-on-by"]',
     "explain": "bool",
-    "in_": "str",
-    "kind": "str",
+    "in_": 'Literal["title", "content", "both"]',
+    "kind": 'Literal["task", "project", "both"]',
     "label": "list[str] | tuple[str, ...]",
     "limit": "int",
     "no_project": "bool",
@@ -45,7 +45,26 @@ OPTION_TYPES = {
     "search": "str",
     "set": "list[str] | tuple[str, ...]",
     "source": "list[str] | tuple[str, ...]",
-    "status": "list[str] | tuple[str, ...]",
+    "status": "list[StatusCategory] | tuple[StatusCategory, ...]",
+}
+OPTION_PLACEHOLDERS = {
+    "allow_partial": None,
+    "default_sources": "NAMES",
+    "direction": "DIRECTION",
+    "explain": None,
+    "in_": "FIELDS",
+    "kind": "KIND",
+    "label": "L",
+    "limit": "N",
+    "no_project": None,
+    "not_label": "L",
+    "page": "TOKEN",
+    "page_size": "N",
+    "project": "P",
+    "search": "TEXT",
+    "set": "PATH=VALUE",
+    "source": "S",
+    "status": "S",
 }
 
 
@@ -95,18 +114,38 @@ def leaves(prefix: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
 
 def option_names(command: tuple[str, ...]) -> list[str]:
     """Derive keyword names from clap's help for one discovered leaf command."""
-    names = re.findall(
-        r"^\s+--([a-z][a-z-]*)", run_workspace_binary(*command, "--help"), re.MULTILINE
+    discovered = re.findall(
+        r"^\s+--([a-z][a-z-]*)(?: <([^>]+)>)?",
+        run_workspace_binary(*command, "--help"),
+        re.MULTILINE,
     )
+    names = [name for name, _ in discovered]
     normalized = {name.replace("-", "_") for name in names} - {"help", "json", "output"}
-    return sorted(f"{name}_" if keyword.iskeyword(name) else name for name in normalized)
+    result = sorted(f"{name}_" if keyword.iskeyword(name) else name for name in normalized)
+    placeholders = {
+        (
+            f"{name.replace('-', '_')}_"
+            if keyword.iskeyword(name.replace("-", "_"))
+            else name.replace("-", "_")
+        ): (placeholder or None)
+        for name, placeholder in discovered
+        if name not in {"help", "json", "output"}
+    }
+    for name in result:
+        if placeholders[name] != OPTION_PLACEHOLDERS[name]:
+            raise SystemExit(
+                f"binary changed the value shape for option --{name.replace('_', '-')}"
+            )
+    return result
 
 
 def generate_models(bundle: SchemaBundle, destination: Path) -> None:
     """Generate Pydantic models directly from every response schema in the bundle."""
     destination.mkdir(parents=True, exist_ok=True)
     exports: list[str] = []
-    for root in sorted(set(RESPONSE_ROOTS.values()) | {"SourceFailure", "QueryPlan", "GlobalId"}):
+    for root in sorted(
+        set(RESPONSE_ROOTS.values()) | {"SourceFailure", "QueryPlan", "GlobalId", "StatusCategory"}
+    ):
         schema = bundle["roots"][root]
         add_variant_titles(schema, root)
         rename_qualified_definitions(schema)
@@ -267,8 +306,13 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         '"""Generated typed client methods. Do not edit."""',
         "from __future__ import annotations",
         "",
+        "from typing import Literal",
+        "",
         "from .models import (",
-        *[f"    {root}," for root in sorted(set(RESPONSE_ROOTS.values()) | {"GlobalId"})],
+        *[
+            f"    {root},"
+            for root in sorted(set(RESPONSE_ROOTS.values()) | {"GlobalId", "StatusCategory"})
+        ],
         ")",
         "",
         "class GeneratedClient:",
@@ -319,6 +363,11 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
 
 def format_generated(destination: Path) -> None:
     """Apply the package's locked formatter to deterministic generated output."""
+    subprocess.run(["ruff", "format", str(destination)], check=True, capture_output=True)
+    subprocess.run(
+        ["ruff", "check", "--fix", "--select", "F401", str(destination)],
+        check=True,
+    )
     subprocess.run(["ruff", "format", str(destination)], check=True, capture_output=True)
 
 

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from onetaskgraph_sdk import Client, GlobalId, OnetaskgraphError, __version__
+from onetaskgraph_sdk import Client, GlobalId, OnetaskgraphError, StatusCategory, __version__
 from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
 
 WORKSPACE = Path(__file__).parents[3]
@@ -96,6 +96,7 @@ def test_public_error_contains_exit_status(binary: Path, tmp_path: Path) -> None
     with pytest.raises(OnetaskgraphError) as caught:
         run(client.task_show(id="not-qualified"))
     assert caught.value.exit_code == 1
+    assert "qualify the id" in str(caught.value)
 
 
 def test_real_binary_response_is_rejected_against_the_wrong_contract(
@@ -112,7 +113,12 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
     client = Client(binary, cwd=configured(tmp_path))
     assert run(
         client.task_list(
-            source=("memory",), status=["todo"], limit=2, explain=True, page=None, no_project=False
+            source=("memory",),
+            status=[StatusCategory.StatusCategoryTodo],
+            limit=2,
+            explain=True,
+            page=None,
+            no_project=False,
         )
     ).items
     assert run(client.task_show(id=GlobalId(root="memory:T-1"))).items
