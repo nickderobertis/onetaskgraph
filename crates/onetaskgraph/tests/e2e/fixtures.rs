@@ -12,6 +12,7 @@
 //! the plugin refuses with its own message — so a placeholder cannot sit here doing
 //! nothing.
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
@@ -260,11 +261,14 @@ fn linear_block(sandbox: &Sandbox) -> Value {
                 );
                 continue;
             }
-            let body = linear_response(&request);
-            let text = serde_json::to_string(&json!({"data":body})).unwrap();
+            let (status, response) = match linear_response(&request) {
+                Ok(body) => ("200 OK", json!({"data":body})),
+                Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
+            };
+            let text = serde_json::to_string(&response).unwrap();
             let _ = write!(
                 stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
                 text.len()
             );
         }
@@ -272,58 +276,118 @@ fn linear_block(sandbox: &Sandbox) -> Value {
     json!({"endpoint":endpoint})
 }
 
-fn linear_response(request: &Value) -> Value {
-    let query = request["query"].as_str().unwrap();
-    let vars = &request["variables"];
-    let data = dataset();
-    if query.contains("issueLabels(") {
-        return json!({"issueLabels":linear_connection(data["labels"].as_array().unwrap().iter().map(linear_label).collect(),vars)});
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LinearRequest {
+    query: String,
+    variables: serde_json::Map<String, Value>,
+}
+
+fn linear_response(request: &Value) -> Result<Value, &'static str> {
+    let request: LinearRequest =
+        serde_json::from_value(request.clone()).map_err(|_| "invalid GraphQL request")?;
+    use onetaskgraph_linear::graphql;
+    let operation = request.query.as_str();
+    if ![
+        graphql::VIEWER,
+        graphql::ISSUE,
+        graphql::PROJECT,
+        graphql::ISSUES,
+        graphql::PROJECTS,
+        graphql::LABELS,
+        graphql::ISSUE_RELATIONS,
+        graphql::PROJECT_RELATIONS,
+    ]
+    .contains(&operation)
+    {
+        return Err("unknown GraphQL operation");
     }
-    if query.contains("issues(") {
+    let vars = Value::Object(request.variables);
+    let data = dataset();
+    if operation == graphql::LABELS {
+        return Ok(
+            json!({"issueLabels":linear_connection(data["labels"].as_array().unwrap().iter().map(linear_label).collect(),&vars)}),
+        );
+    }
+    if operation == graphql::ISSUES {
         let mut rows: Vec<Value> = data["tasks"]
             .as_array()
             .unwrap()
             .iter()
-            .filter(|v| linear_matches(v, vars))
+            .filter(|v| linear_matches(v, &vars))
             .map(linear_task)
             .collect();
-        return json!({"issues":linear_connection(std::mem::take(&mut rows),vars)});
+        return Ok(json!({"issues":linear_connection(std::mem::take(&mut rows),&vars)}));
     }
-    if query.contains("projects(") {
+    if operation == graphql::PROJECTS {
         let rows = data["projects"]
             .as_array()
             .unwrap()
             .iter()
-            .filter(|v| linear_matches(v, vars))
+            .filter(|v| linear_matches(v, &vars))
             .map(linear_project)
             .collect();
-        return json!({"projects":linear_connection(rows,vars)});
+        return Ok(json!({"projects":linear_connection(rows,&vars)}));
     }
-    if query.contains("issue(id:") {
+    if matches!(operation, graphql::ISSUE | graphql::ISSUE_RELATIONS) {
         let id = vars["id"].as_str().unwrap_or("");
         let item = data["tasks"]
             .as_array()
             .unwrap()
             .iter()
             .find(|v| v["id"] == id);
-        if query.contains("relations(") {
-            return json!({"issue":linear_relations(&data,"task_dependencies",id,"Issue")});
+        if operation == graphql::ISSUE_RELATIONS {
+            return Ok(json!({"issue":linear_relations(&data,"task_dependencies",id,"Issue")}));
         }
-        return json!({"issue":item.map(linear_task)});
+        return Ok(json!({"issue":item.map(linear_task)}));
     }
-    if query.contains("project(id:") {
+    if matches!(operation, graphql::PROJECT | graphql::PROJECT_RELATIONS) {
         let id = vars["id"].as_str().unwrap_or("");
         let item = data["projects"]
             .as_array()
             .unwrap()
             .iter()
             .find(|v| v["id"] == id);
-        if query.contains("relations(") {
-            return json!({"project":linear_relations(&data,"project_dependencies",id,"Project")});
+        if operation == graphql::PROJECT_RELATIONS {
+            return Ok(
+                json!({"project":linear_relations(&data,"project_dependencies",id,"Project")}),
+            );
         }
-        return json!({"project":item.map(linear_project)});
+        return Ok(json!({"project":item.map(linear_project)}));
     }
-    json!({"viewer":{"id":"fixture-user"}})
+    Ok(json!({"viewer":{"id":"fixture-user"}}))
+}
+
+#[test]
+fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
+    let sandbox = Sandbox::new();
+    let config = linear_block(&sandbox);
+    let endpoint = config["endpoint"].as_str().unwrap();
+    let address = endpoint
+        .strip_prefix("http://")
+        .unwrap()
+        .strip_suffix("/graphql")
+        .unwrap();
+    for body in [
+        json!({"query":onetaskgraph_linear::graphql::VIEWER}),
+        json!({"query":onetaskgraph_linear::graphql::VIEWER,"variables":[]}),
+        json!({"query":"query { invented { id } }","variables":{}}),
+    ] {
+        let body = serde_json::to_string(&body).unwrap();
+        let mut stream = std::net::TcpStream::connect(address).unwrap();
+        write!(
+            stream,
+            "POST /graphql HTTP/1.1\r\nHost: {address}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request"),
+            "{response}"
+        );
+    }
 }
 fn linear_label(v: &Value) -> Value {
     json!({"id":v["id"],"name":v["name"],"color":null})

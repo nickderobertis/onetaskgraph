@@ -437,6 +437,18 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
         onetaskgraph_plugin_api::DependencyKind::Related
     ));
     assert_eq!(page.next.unwrap().0, "r2");
+    let (endpoint, _) = server(
+        "200 OK",
+        "",
+        r#"{"data":{"issue":{"relations":{"nodes":[{"type":"invented","relatedIssue":{"id":"other"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}"#,
+    );
+    assert!(matches!(
+        source(&endpoint)
+            .task_dependencies(&"i".into(), Direction::DependsOn, &request)
+            .await
+            .unwrap_err(),
+        SourceError::Malformed { ref message } if message.contains("relation type")
+    ));
     assert!(matches!(
         source("http://127.0.0.1:1").health().await.unwrap_err(),
         SourceError::Unavailable { .. }

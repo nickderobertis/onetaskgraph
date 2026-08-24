@@ -975,6 +975,7 @@ dependencies = [
  "clap",
  "jsonschema",
  "onetaskgraph-core",
+ "onetaskgraph-linear",
  "onetaskgraph-plugin-api",
  "predicates",
  "serde",

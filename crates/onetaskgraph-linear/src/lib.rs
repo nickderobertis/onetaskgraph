@@ -33,6 +33,33 @@ use serde_json::{Value, json};
 pub const KIND: &str = "linear";
 const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 
+/// Exact GraphQL query documents issued by this plugin.
+///
+/// Fixture servers consume these constants so their recognized contract cannot drift
+/// from the production requests.
+pub mod graphql {
+    /// Check the authenticated viewer.
+    pub const VIEWER: &str = "query { viewer { id } }";
+    /// Fetch one issue.
+    pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id} } }";
+    /// Fetch one project.
+    pub const PROJECT: &str = "query($id:String!){ project(id:$id){ id name description url createdAt updatedAt status{name type} labels{nodes{id name color}} } }";
+    /// List issues.
+    pub const ISSUES: &str = "query($first:Int!,$after:String,$filter:IssueFilter){ issues(first:$first,after:$after,filter:$filter){ nodes{id title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } }";
+    /// List projects.
+    pub const PROJECTS: &str = "query($first:Int!,$after:String,$filter:ProjectFilter){ projects(first:$first,after:$after,filter:$filter){ nodes{id name description url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } }";
+    /// List issue labels.
+    pub const LABELS: &str = "query($first:Int!,$after:String){ issueLabels(first:$first,after:$after){ nodes{id name color} pageInfo{hasNextPage endCursor} } }";
+    /// Fetch issue dependency relations.
+    pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ relations(first:$first,after:$after){nodes{type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+    /// Fetch project dependency relations.
+    pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ relations(first:$first,after:$after){nodes{type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type project{id}} pageInfo{hasNextPage endCursor}} } }";
+}
+
+use graphql::{
+    ISSUE, ISSUE_RELATIONS, ISSUES, LABELS, PROJECT, PROJECT_RELATIONS, PROJECTS, VIEWER,
+};
+
 /// Configuration contains only the credential variable's name, never its value.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -273,7 +300,7 @@ impl TaskSource for LinearSource {
         }
     }
     async fn health(&self) -> Result<Health, SourceError> {
-        let data = self.send("query { viewer { id } }", json!({})).await?;
+        let data = self.send(VIEWER, json!({})).await?;
         str_at(
             data.get("viewer").ok_or_else(|| SourceError::Malformed {
                 message: "missing viewer".into(),
@@ -510,10 +537,22 @@ fn relation_page(
         } else {
             (NativeId(other.into()), id.clone())
         };
-        let kind = if n.get("type").and_then(Value::as_str) == Some("blocks") {
-            DependencyKind::Blocks
-        } else {
-            DependencyKind::Related
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        enum RelationKind {
+            Blocks,
+            Related,
+        }
+        let kind = match serde_json::from_value::<RelationKind>(n.get("type").cloned().ok_or_else(
+            || SourceError::Malformed {
+                message: "missing relation type".into(),
+            },
+        )?)
+        .map_err(|e| SourceError::Malformed {
+            message: format!("invalid relation type: {e}"),
+        })? {
+            RelationKind::Blocks => DependencyKind::Blocks,
+            RelationKind::Related => DependencyKind::Related,
         };
         items.push(DependencyEdge { from, to, kind });
     }
@@ -551,11 +590,3 @@ fn page_next(c: &Value) -> Result<Option<Cursor>, SourceError> {
     let cursor = str_at(info, "endCursor")?;
     Ok(Some(Cursor(cursor.into())))
 }
-
-const ISSUE: &str = "query($id:String!){ issue(id:$id){ id title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id} } }";
-const PROJECT: &str = "query($id:String!){ project(id:$id){ id name description url createdAt updatedAt status{name type} labels{nodes{id name color}} } }";
-const ISSUES: &str = "query($first:Int!,$after:String,$filter:IssueFilter){ issues(first:$first,after:$after,filter:$filter){ nodes{id title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } }";
-const PROJECTS: &str = "query($first:Int!,$after:String,$filter:ProjectFilter){ projects(first:$first,after:$after,filter:$filter){ nodes{id name description url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } }";
-const LABELS: &str = "query($first:Int!,$after:String){ issueLabels(first:$first,after:$after){ nodes{id name color} pageInfo{hasNextPage endCursor} } }";
-const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ relations(first:$first,after:$after){nodes{type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type issue{id}} pageInfo{hasNextPage endCursor}} } }";
-const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ relations(first:$first,after:$after){nodes{type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type project{id}} pageInfo{hasNextPage endCursor}} } }";
