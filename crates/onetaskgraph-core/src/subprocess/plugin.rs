@@ -1,6 +1,7 @@
 //! Configuring a source that is another program.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
 use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName, SourcePlugin, TaskSource};
 use schemars::{JsonSchema, Schema, schema_for};
@@ -8,7 +9,7 @@ use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::source::SubprocessSource;
+use super::source::{RequestDeadline, SubprocessSource};
 use crate::secrets::CredentialName;
 
 /// The name a configuration document's `plugin:` field names this kind by.
@@ -36,6 +37,13 @@ pub struct SubprocessConfig {
     /// This source's own settings, handed to the child verbatim.
     #[serde(default)]
     pub settings: Value,
+    /// Defaults to 30 seconds and cannot be zero.
+    #[serde(default = "default_deadline_ms")]
+    pub deadline_ms: NonZeroU64,
+}
+
+fn default_deadline_ms() -> NonZeroU64 {
+    RequestDeadline::DEFAULT.milliseconds()
 }
 
 /// The program that serves a source: a name that is not blank.
@@ -103,12 +111,13 @@ impl SourcePlugin for Plugin {
                 message: format!("source {name}: {error}"),
             })?;
         let forwarded = resolve_named(name, &config.secrets, secrets)?;
-        SubprocessSource::connect(
+        SubprocessSource::connect_with_deadline(
             config.command.as_str(),
             &config.args,
             name,
             &config.settings,
             forwarded,
+            RequestDeadline::from_millis(config.deadline_ms),
         )
         .map(|source| Box::new(source) as Box<dyn TaskSource>)
     }

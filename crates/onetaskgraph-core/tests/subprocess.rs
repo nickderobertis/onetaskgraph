@@ -9,8 +9,12 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write, pipe};
+use std::num::NonZeroU64;
+use std::time::{Duration, Instant};
 
-use onetaskgraph_core::{MAX_LINE, SubprocessSource, plugin_for, serve};
+use onetaskgraph_core::{
+    MAX_LINE, RequestDeadline, SubprocessConfig, SubprocessSource, plugin_for, serve,
+};
 use onetaskgraph_plugin_api::{
     Direction, LabelFilter, NativeId, PageRequest, ProjectFilter, ProjectQuery, SecretResolver,
     SourceError, SourceName, TaskQuery, TaskSource,
@@ -219,6 +223,108 @@ async fn a_hosted_source_reports_its_own_kind_and_its_own_capabilities() {
     assert_eq!(there.kind(), "in-memory");
     assert_eq!(there.capabilities(), in_process().capabilities());
     assert_eq!(there.capabilities().max_page_size, 2);
+}
+
+#[tokio::test]
+async fn an_existing_stream_applies_its_deadline_after_initialization() {
+    let (to_engine, mut from_plugin) = pipe().expect("a pipe");
+    let (to_plugin, from_engine) = pipe().expect("a pipe");
+    std::thread::spawn(move || {
+        let mut requests = BufReader::new(to_plugin);
+        let mut request = String::new();
+        requests.read_line(&mut request).expect("the handshake");
+        writeln!(
+            from_plugin,
+            "{}",
+            json!({"id": "0", "result": {"protocol_version": 1,
+                "kind": "silent", "capabilities": capabilities()}})
+        )
+        .expect("the handshake answer");
+        from_plugin.flush().expect("the answer is visible");
+        request.clear();
+        requests
+            .read_line(&mut request)
+            .expect("the health request");
+        std::thread::park();
+    });
+    let source = SubprocessSource::over_with_request_deadline(
+        from_engine,
+        to_engine,
+        &name(),
+        &json!({}),
+        BTreeMap::new(),
+        RequestDeadline::from_millis(NonZeroU64::new(20).expect("positive")),
+    )
+    .expect("the handshake succeeds");
+
+    let SourceError::Unavailable { message } = source.health().await.expect_err("it times out")
+    else {
+        panic!("a request deadline is a reachability failure");
+    };
+    assert!(
+        message.contains("health") && message.contains("20 milliseconds"),
+        "{message}"
+    );
+    let again = Instant::now();
+    assert!(
+        matches!(
+            source.labels(&page(1)).await,
+            Err(SourceError::Unavailable { .. })
+        ),
+        "a later request is bounded too"
+    );
+    assert!(
+        again.elapsed() < Duration::from_secs(1),
+        "the later request hung"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_request_deadline_turns_a_silent_child_into_a_named_source_error() {
+    // POSIX supplies one ubiquitous executable that can answer the real handshake and
+    // then stay silent. Windows lacks an equivalent system program; the transport code
+    // is platform-neutral and its functional journeys still run there.
+    let answer = json!({"id": "0", "result": {"protocol_version": 1,
+        "kind": "silent", "capabilities": capabilities()}})
+    .to_string();
+    let source = SubprocessSource::connect_with_deadline(
+        "/bin/sh",
+        &[
+            "-c".to_owned(),
+            "read -r _; printf '%s\\n' \"$1\"; read -r _; while :; do :; done".to_owned(),
+            "_".to_owned(),
+            answer,
+        ],
+        &name(),
+        &json!({}),
+        BTreeMap::new(),
+        RequestDeadline::from_millis(NonZeroU64::new(20).expect("positive")),
+    )
+    .expect("the handshake succeeds");
+
+    let started = Instant::now();
+    let SourceError::Unavailable { message } = source.health().await.expect_err("it times out")
+    else {
+        panic!("a deadline is a reachability failure");
+    };
+    assert!(
+        message.contains("health") && message.contains("20 milliseconds"),
+        "{message}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the deadline did not hang"
+    );
+    let again = Instant::now();
+    assert!(
+        matches!(source.health().await, Err(SourceError::Unavailable { .. })),
+        "the timed-out connection stays closed"
+    );
+    assert!(
+        again.elapsed() < Duration::from_secs(1),
+        "a later call did not inherit the hang"
+    );
 }
 
 #[tokio::test]
@@ -691,6 +797,36 @@ fn a_spawned_program_that_fails_at_once_is_reported_with_what_it_wrote() {
 
 #[cfg(unix)]
 #[test]
+fn a_silent_handshake_is_stopped_at_its_configured_deadline() {
+    // This probe uses the POSIX shell solely to create a portable-on-Unix child that
+    // remains alive without writing. Windows has no corresponding system executable;
+    // the runtime path itself is platform-neutral and the later-request deadline is
+    // exercised over Rust pipes on every platform above.
+    let started = Instant::now();
+    let Err(error) = subprocess_plugin().build(
+        &name(),
+        &json!({"command": "/bin/sh", "args": ["-c", "while :; do :; done"],
+                "deadline_ms": 20}),
+        &NoSecrets,
+    ) else {
+        panic!("a silent handshake reaches its configured deadline");
+    };
+
+    let SourceError::Unavailable { message } = error else {
+        panic!("a handshake deadline is a reachability failure: {error:?}");
+    };
+    assert!(
+        message.contains("initialize") && message.contains("20 milliseconds"),
+        "{message}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the handshake hung"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_spawned_plugin_inherits_no_unrelated_host_environment() {
     // `HOME` is deliberately not one of the named credentials handed to `connect`.
     // A real child shell reports which side of the boundary it observed through the
@@ -972,6 +1108,18 @@ fn a_source_with_no_command_is_refused_before_anything_is_spawned() {
         panic!("an empty command is a configuration refusal: {error:?}");
     };
     assert!(message.contains("command"), "{message}");
+}
+
+#[test]
+fn a_subprocess_block_defaults_its_deadline_and_refuses_zero() {
+    let config: SubprocessConfig =
+        serde_json::from_value(json!({"command": "plugin"})).expect("the minimal block is valid");
+    assert_eq!(config.deadline_ms, RequestDeadline::DEFAULT.milliseconds());
+
+    let error =
+        serde_json::from_value::<SubprocessConfig>(json!({"command": "plugin", "deadline_ms": 0}))
+            .expect_err("zero is not a deadline");
+    assert!(error.to_string().contains("nonzero u64"), "{error}");
 }
 
 #[test]

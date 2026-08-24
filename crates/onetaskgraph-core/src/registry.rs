@@ -6,7 +6,7 @@
 //! landing the real source is an additive change to that one crate with no edit
 //! here.
 
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use onetaskgraph_plugin_api::SourcePlugin;
 use serde::{Deserialize, Serialize};
@@ -108,6 +108,14 @@ impl From<PluginKind> for String {
 impl fmt::Display for PluginKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for PluginKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value.to_owned().try_into()
     }
 }
 

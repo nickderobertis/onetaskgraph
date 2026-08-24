@@ -9,6 +9,8 @@
 //! only subprocess-hosted sources went through.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
@@ -28,6 +30,31 @@ use super::wire::{
 /// nothing else can have been sent under it, and an answer addressed elsewhere is a
 /// violation rather than an ordering the engine could accommodate.
 const HANDSHAKE_ID: &str = "0";
+
+/// A positive per-request deadline, measured in milliseconds at the configuration edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestDeadline(NonZeroU64);
+
+impl RequestDeadline {
+    /// The protocol's default deadline.
+    pub const DEFAULT: Self = Self(NonZeroU64::new(30_000).expect("non-zero default"));
+
+    /// Validate a millisecond value from a configuration or another public boundary.
+    #[must_use]
+    pub const fn from_millis(milliseconds: NonZeroU64) -> Self {
+        Self(milliseconds)
+    }
+
+    /// The positive millisecond count used by configuration and diagnostics.
+    #[must_use]
+    pub const fn milliseconds(self) -> NonZeroU64 {
+        self.0
+    }
+
+    fn duration(self) -> Duration {
+        Duration::from_millis(self.0.get())
+    }
+}
 
 /// A source served by a spawned program speaking `docs/plugin-protocol.md`.
 pub struct SubprocessSource {
@@ -71,7 +98,31 @@ impl SubprocessSource {
         config: &Value,
         secrets: BTreeMap<String, String>,
     ) -> Result<Self, SourceError> {
-        Self::adopt(Peer::spawn(program, args)?, name, config, secrets)
+        Self::connect_with_deadline(
+            program,
+            args,
+            name,
+            config,
+            secrets,
+            RequestDeadline::DEFAULT,
+        )
+    }
+
+    /// Spawn a plugin with a deadline applying independently to every exchange.
+    pub fn connect_with_deadline(
+        program: &str,
+        args: &[String],
+        name: &SourceName,
+        config: &Value,
+        secrets: BTreeMap<String, String>,
+        deadline: RequestDeadline,
+    ) -> Result<Self, SourceError> {
+        Self::adopt(
+            Peer::spawn(program, args, deadline.duration())?,
+            name,
+            config,
+            secrets,
+        )
     }
 
     /// Connect to a plugin that is already running, over streams somebody else owns.
@@ -95,7 +146,35 @@ impl SubprocessSource {
         config: &Value,
         secrets: BTreeMap<String, String>,
     ) -> Result<Self, SourceError> {
-        Self::adopt(Peer::over(to_plugin, from_plugin), name, config, secrets)
+        Self::over_with_request_deadline(
+            to_plugin,
+            from_plugin,
+            name,
+            config,
+            secrets,
+            RequestDeadline::DEFAULT,
+        )
+    }
+
+    /// Connect over existing streams with a deadline for requests after initialization.
+    ///
+    /// Unlike [`connect_with_deadline`](Self::connect_with_deadline), this engine does
+    /// not own a process it can interrupt while the synchronous handshake is blocked.
+    /// The supplied deadline therefore begins only after initialization succeeds.
+    pub fn over_with_request_deadline(
+        to_plugin: impl std::io::Write + Send + 'static,
+        from_plugin: impl std::io::Read + Send + 'static,
+        name: &SourceName,
+        config: &Value,
+        secrets: BTreeMap<String, String>,
+        deadline: RequestDeadline,
+    ) -> Result<Self, SourceError> {
+        Self::adopt(
+            Peer::over(to_plugin, from_plugin, deadline.duration()),
+            name,
+            config,
+            secrets,
+        )
     }
 
     /// Shake hands with `peer` and take the connection over.
