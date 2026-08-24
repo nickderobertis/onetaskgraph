@@ -339,11 +339,12 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
     // malformed variants below and the authenticated live query are its drift guards.
     let dependencies: Value = serde_json::from_str(include_str!("fixtures/dependencies.json"))
         .expect("the committed dependency fixture is valid JSON");
-    let (endpoint, handle) = sequence_server(vec![
+    let responses = vec![
         project_response(false),
         project_response(false),
         dependencies,
-    ]);
+    ];
+    let (endpoint, handle) = sequence_server(responses.clone());
     let source = build(&endpoint);
     let edges = source
         .project_dependencies(
@@ -356,6 +357,51 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
     assert_eq!(edges.items.len(), 1);
     assert_eq!(edges.items[0].from.0, "PVT_blocker");
     assert_eq!(edges.items[0].to.0, "PVT_project");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn project_dependencies_map_reverse_edges_and_page_them() {
+    let dependencies = json!({"data":{"node":{
+        "blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+        "blocking":{"nodes":[
+            {"id":"I_dependent_1","projectItems":{"nodes":[{"project":{"id":"PVT_dependent_1"}}]}},
+            {"id":"I_dependent_2","projectItems":{"nodes":[{"project":{"id":"PVT_dependent_2"}}]}}
+        ],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+    }}});
+    let responses = vec![
+        project_response(false),
+        project_response(false),
+        dependencies,
+    ];
+    let (endpoint, handle) = sequence_server(responses.clone());
+    let first = build(&endpoint)
+        .project_dependencies(
+            &NativeId("PVT_project".into()),
+            Direction::DependedOnBy,
+            &page(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.items[0].from.0, "PVT_project");
+    assert_eq!(first.items[0].to.0, "PVT_dependent_1");
+    assert_eq!(first.next.unwrap().0, "1");
+    handle.join().unwrap();
+
+    let (endpoint, handle) = sequence_server(responses);
+    let second = build(&endpoint)
+        .project_dependencies(
+            &NativeId("PVT_project".into()),
+            Direction::DependedOnBy,
+            &PageRequest {
+                cursor: Some(Cursor("1".into())),
+                limit: 1,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.items[0].to.0, "PVT_dependent_2");
+    assert!(second.next.is_none());
     handle.join().unwrap();
 }
 

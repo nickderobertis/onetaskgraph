@@ -650,21 +650,21 @@ impl TaskSource for GitHubProjectsSource {
                         message: "GitHub project dependency response is missing Issue.blockedBy"
                             .into(),
                     })?;
-                let blockers = connection
+                let related_issues = connection
                     .get("nodes")
                     .and_then(Value::as_array)
                     .ok_or_else(|| SourceError::Malformed {
                         message: "GitHub project dependency nodes is not an array".into(),
                     })?;
-                for blocker in blockers {
-                    let project_items = blocker
+                for related_issue in related_issues {
+                    let project_items = related_issue
                         .pointer("/projectItems/nodes")
                         .and_then(Value::as_array)
                         .ok_or_else(|| SourceError::Malformed {
                             message: "GitHub blocker projectItems.nodes is not an array".into(),
                         })?;
                     for project_item in project_items {
-                        let blocker_project = required_str(
+                        let related_project = required_str(
                             project_item
                                 .get("project")
                                 .ok_or_else(|| SourceError::Malformed {
@@ -672,8 +672,8 @@ impl TaskSource for GitHubProjectsSource {
                                 })?,
                             "id",
                         )?;
-                        if blocker_project != id.0 {
-                            let related = NativeId(blocker_project.into());
+                        if related_project != id.0 {
+                            let related = NativeId(related_project.into());
                             edges.push(match direction {
                                 Direction::DependsOn => DependencyEdge {
                                     from: related,
