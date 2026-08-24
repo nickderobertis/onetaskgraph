@@ -112,13 +112,14 @@
       "options": {
         "commands": [
           "bash scripts/check-hook-safety.sh",
+          "bash scripts/check-test-live-boundary.sh",
           "bash scripts/check-affected-selection.sh",
           "bash scripts/check-isolation-enforced.sh"
         ],
         "parallel": false
       },
       "cache": false,
-      "//": "Uncached: all three clone a repository and read git history, which no input glob in this tree describes \u2014 a cached pass would assert about a graph that has since changed. Serial because each clones into its own scratch tree and runs cargo or Nx there; racing them would contend for the same registry lock for no gain. check-hook-safety runs first and takes milliseconds: it proves the scratch-clone helper the other two depend on still survives the environment a git hook gives it, and if that has broken, their results below are about the wrong repository."
+      "//": "Uncached: three checks clone a repository and read git history, which no input glob in this tree describes \u2014 a cached pass would assert about a graph that has since changed. Serial because those checks each clone into a scratch tree and run cargo or Nx there; racing them would contend for the same registry lock for no gain. check-hook-safety runs first and takes milliseconds: it proves the scratch-clone helper the two later cloning checks depend on still survives the environment a git hook gives it, and if that has broken, their results below are about the wrong repository."
     },
     "coverage": {
       "executor": "nx:run-commands",
