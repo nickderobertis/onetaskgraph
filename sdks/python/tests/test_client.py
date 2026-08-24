@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from onetaskgraph_sdk import Client, OnetaskgraphError, __version__
+from onetaskgraph_sdk import Client, GlobalId, OnetaskgraphError, __version__
 
 WORKSPACE = Path(__file__).parents[3]
 
@@ -105,7 +105,7 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
             source=("memory",), status=["todo"], limit=2, explain=True, page=None, no_project=False
         )
     ).items
-    assert run(client.task_show(id="memory:T-1")).items
+    assert run(client.task_show(id=GlobalId(root="memory:T-1"))).items
     assert run(client.task_deps(id="memory:T-1")).items == []
     assert run(client.project_list(source=["memory"])).items
     assert run(client.project_show(id="memory:P-1")).items

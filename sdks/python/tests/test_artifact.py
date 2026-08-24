@@ -30,7 +30,9 @@ def test_wheel_installs_and_queries_through_public_import(tmp_path: Path) -> Non
     binary = (workspace / "target" / "debug" / f"onetaskgraph{suffix}").resolve()
     script = (
         "import asyncio; from onetaskgraph_sdk import Client; "
-        f"r=asyncio.run(Client({str(binary)!r}, cwd={str(config)!r}).task_list()); "
+        f"r=asyncio.run(Client(cwd={str(config)!r}).task_list()); "
         "assert r.items[0].item.title == 'Installed'"
     )
-    subprocess.run([str(python), "-c", script], check=True)
+    child_environment = dict(os.environ)
+    child_environment["ONETASKGRAPH_SDK_BINARY"] = str(binary)
+    subprocess.run([str(python), "-c", script], env=child_environment, check=True)

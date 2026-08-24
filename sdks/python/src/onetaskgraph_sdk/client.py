@@ -37,9 +37,8 @@ class Client(GeneratedClient):
         """Resolve the binary and establish the invocation directory."""
         self.binary = _resolve_binary(binary, environment)
         self.cwd = Path(cwd) if cwd is not None else None
-        self.environment = dict(environment) if environment is not None else None
-        if self.environment is not None:
-            self.environment.pop("ONETASKGRAPH_SDK_BINARY", None)
+        self.environment = dict(environment if environment is not None else os.environ)
+        self.environment.pop("ONETASKGRAPH_SDK_BINARY", None)
 
     async def _invoke[T](self, command: list[str], model: object, **options: object) -> T:
         arguments = [self.binary, *command]
