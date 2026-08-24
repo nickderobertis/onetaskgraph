@@ -10,6 +10,8 @@ files:
   # List committed files that shouldn't be judged (lock files, generated output).
   exclude:
     - "**/.git/**"
+    # Generated from the binary's schema; generator drift is checked deterministically.
+    - "sdks/typescript/src/generated/**"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
 # (composed alongside this file) selects them in fallback mode — codex + gpt-5.5
