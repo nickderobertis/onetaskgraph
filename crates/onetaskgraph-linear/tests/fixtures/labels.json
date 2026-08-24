@@ -1,0 +1,8 @@
+{
+  "data": {
+    "issueLabels": {
+      "nodes": [{ "id": "l1", "name": "Bug", "color": "#ff0000" }],
+      "pageInfo": { "hasNextPage": false, "endCursor": null }
+    }
+  }
+}

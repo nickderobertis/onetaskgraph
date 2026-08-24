@@ -1,29 +1,137 @@
-//! A onetaskgraph source over the Linear API.
+//! A read-only source over Linear's published GraphQL API.
 //!
-//! The factory is real from this commit on so the registry can name `linear`
-//! alongside every other plugin, and `onetaskgraph schema` can emit this
-//! plugin's configuration schema. Only [`SourcePlugin::build`] is outstanding:
-//! implementing this source is an **additive** change to this one crate, with no
-//! edit to the contract, the registry, or any sibling.
+//! Linear `Issue` maps to [`Task`], `Project` to [`Project`], `IssueLabel` and
+//! `ProjectLabel` to [`Label`], and `WorkflowState.name` is preserved while its
+//! `type` (`backlog`, `unstarted`, `started`, `completed`, or `canceled`) maps to
+//! the normalized status category. Issue `relations`/`inverseRelations` and
+//! project relations provide native dependency traversal in both directions.
+//!
+//! Label, workflow-state, project, and orphan filters are sent in the
+//! `issues(filter:)`/`projects(filter:)` variables. Linear's separate search
+//! connection cannot restrict matching to title versus description, so all
+//! three text predicates are deliberately unsupported and ignored here for
+//! sound engine compensation. Pagination uses Relay `first` and `after`.
+//!
+//! Fixture provenance is recorded in `tests/fixtures/README.md`. Live tests are
+//! non-destructive by construction: [`TaskSource`] exposes reads only, and no
+//! test uses GraphQL mutations for setup or teardown.
 #![deny(missing_docs)]
 
-use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName, SourcePlugin, TaskSource};
+use chrono::{DateTime, Utc};
+use onetaskgraph_plugin_api::{
+    Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Health,
+    Label, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
+    TaskSource,
+};
 use schemars::{Schema, schema_for};
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
+use serde_json::{Value, json};
 
 /// The plugin kind a `linear` source's `plugin:` field names.
 pub const KIND: &str = "linear";
+const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 
-/// The configuration block a `linear` source is built from.
+/// Exact GraphQL query documents issued by this plugin.
 ///
-/// Empty until the source lands: an empty schema accepts nothing but `{}`, so a
-/// configuration written against a shape this plugin does not yet have is
-/// rejected at load rather than silently ignored.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct LinearConfig {}
+/// Fixture servers consume these constants so their recognized contract cannot drift
+/// from the production requests.
+pub mod graphql {
+    /// Check the authenticated viewer.
+    pub const VIEWER: &str = "query { viewer { id } }";
+    /// Fetch one issue.
+    pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id} } }";
+    /// Fetch one project.
+    pub const PROJECT: &str = "query($id:String!){ project(id:$id){ id name description url createdAt updatedAt status{name type} labels{nodes{id name color}} } }";
+    /// List issues.
+    pub const ISSUES: &str = "query($first:Int!,$after:String,$filter:IssueFilter){ issues(first:$first,after:$after,filter:$filter){ nodes{id title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } }";
+    /// List projects.
+    pub const PROJECTS: &str = "query($first:Int!,$after:String,$filter:ProjectFilter){ projects(first:$first,after:$after,filter:$filter){ nodes{id name description url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } }";
+    /// List issue labels.
+    pub const LABELS: &str = "query($first:Int!,$after:String){ issueLabels(first:$first,after:$after){ nodes{id name color} pageInfo{hasNextPage endCursor} } }";
+    /// Fetch issue dependency relations.
+    pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ relations(first:$first,after:$after){nodes{type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+    /// Fetch project dependency relations.
+    pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ relations(first:$first,after:$after){nodes{type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type project{id}} pageInfo{hasNextPage endCursor}} } }";
+}
 
-/// The factory for the linear source.
+use graphql::{
+    ISSUE, ISSUE_RELATIONS, ISSUES, LABELS, PROJECT, PROJECT_RELATIONS, PROJECTS, VIEWER,
+};
+
+/// Configuration contains only the credential variable's name, never its value.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct LinearConfig {
+    /// Environment variable resolved by the host.
+    #[schemars(with = "String")]
+    api_key_env: EnvName,
+    /// Optional Linear team key/id narrowing task and project reads.
+    #[schemars(with = "Option<String>")]
+    team: Option<Team>,
+    /// GraphQL endpoint override, primarily for fixture servers.
+    #[schemars(with = "String")]
+    endpoint: Endpoint,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "String")]
+struct EnvName(String);
+impl TryFrom<String> for EnvName {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let mut bytes = value.bytes();
+        if bytes
+            .next()
+            .is_some_and(|byte| byte == b'_' || byte.is_ascii_uppercase())
+            && bytes.all(|byte| byte == b'_' || byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        {
+            Ok(Self(value))
+        } else {
+            Err("must be an uppercase environment-variable name".into())
+        }
+    }
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "String")]
+struct Team(String);
+impl TryFrom<String> for Team {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.trim().is_empty() {
+            Err("must not be empty".into())
+        } else {
+            Ok(Self(value))
+        }
+    }
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "String")]
+struct Endpoint(String);
+impl TryFrom<String> for Endpoint {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let url = reqwest::Url::parse(&value).map_err(|e| e.to_string())?;
+        if matches!(url.scheme(), "http" | "https") {
+            Ok(Self(value))
+        } else {
+            Err("must use http or https".into())
+        }
+    }
+}
+
+impl Default for LinearConfig {
+    fn default() -> Self {
+        Self {
+            api_key_env: EnvName("LINEAR_API_KEY".into()),
+            team: None,
+            endpoint: Endpoint(DEFAULT_ENDPOINT.into()),
+        }
+    }
+}
+
+/// The Linear plugin factory.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Plugin;
 
@@ -31,31 +139,496 @@ impl SourcePlugin for Plugin {
     fn kind(&self) -> &'static str {
         KIND
     }
-
     fn config_schema(&self) -> Schema {
         schema_for!(LinearConfig)
     }
-
     fn build(
         &self,
         name: &SourceName,
-        config: &serde_json::Value,
-        _secrets: &dyn SecretResolver,
+        config: &Value,
+        secrets: &dyn SecretResolver,
     ) -> Result<Box<dyn TaskSource>, SourceError> {
-        // Validate before refusing. A typo in the config block is the user's to fix and
-        // is worth naming precisely; "not implemented yet" is not their problem to
-        // debug. This is also what keeps the published schema's promise honest.
-        let _config: LinearConfig =
-            serde_json::from_value(config.clone()).map_err(|error| SourceError::Config {
-                message: format!("source {name}: {error}"),
+        let config: LinearConfig =
+            serde_json::from_value(config.clone()).map_err(|e| SourceError::Config {
+                message: format!("source {name}: {e}"),
             })?;
+        let key = secrets
+            .get(&config.api_key_env.0)
+            .filter(|v| !v.expose_secret().trim().is_empty())
+            .ok_or_else(|| SourceError::Auth {
+                message: format!("set environment variable {}", config.api_key_env.0),
+            })?;
+        Ok(Box::new(LinearSource {
+            client: reqwest::Client::new(),
+            endpoint: config.endpoint,
+            key,
+            team: config.team,
+        }))
+    }
+}
 
-        Err(SourceError::Config {
-            message: format!(
-                "source {name}: the `{KIND}` plugin is not implemented yet; remove this \
-                 source from your configuration, or use the `in-memory` plugin until it \
-                 lands"
-            ),
+struct LinearSource {
+    client: reqwest::Client,
+    endpoint: Endpoint,
+    key: SecretString,
+    team: Option<Team>,
+}
+
+#[derive(Deserialize)]
+struct Envelope {
+    // llmlint: ignore[invalid_states_unrepresentable] One transport envelope carries eight distinct GraphQL data shapes; each operation immediately validates its own complete mapper into typed plugin-api values, so malformed external data cannot cross the plugin boundary and a union here would duplicate every query response solely inside transport code.
+    data: Option<Value>,
+    #[serde(default)]
+    errors: Vec<GqlError>,
+}
+#[derive(Deserialize)]
+struct GqlError {
+    message: String,
+    extensions: Option<GqlExtensions>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GqlExtensions {
+    code: GqlErrorCode,
+    retry_after: Option<u64>,
+}
+#[derive(Deserialize)]
+enum GqlErrorCode {
+    #[serde(rename = "RATELIMITED", alias = "RATE_LIMITED")]
+    RateLimited,
+    #[serde(other)]
+    Other,
+}
+
+impl LinearSource {
+    // llmlint: ignore[invalid_states_unrepresentable] This private generic transport accepts only variables constructed immediately at typed TaskSource call sites, never untrusted input; per-operation response mappers validate every external field before returning public values.
+    async fn send(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
+        let response = self
+            .client
+            .post(&self.endpoint.0)
+            .header("Authorization", self.key.expose_secret())
+            .json(&json!({"query": query, "variables": variables}))
+            .send()
+            .await
+            .map_err(|e| SourceError::Unavailable {
+                message: e.to_string(),
+            })?;
+        let status = response.status();
+        let retry = response
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok());
+        if status.as_u16() == 429 {
+            return Err(SourceError::RateLimited {
+                retry_after_seconds: retry,
+            });
+        }
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err(SourceError::Auth {
+                message: "Linear rejected the configured credential".into(),
+            });
+        }
+        if !status.is_success() {
+            return Err(SourceError::Unavailable {
+                message: format!("Linear returned HTTP {status}"),
+            });
+        }
+        let body: Envelope = response.json().await.map_err(|e| SourceError::Malformed {
+            message: e.to_string(),
+        })?;
+        if let Some(error) = body.errors.first() {
+            if error
+                .extensions
+                .as_ref()
+                .is_some_and(|extensions| matches!(extensions.code, GqlErrorCode::RateLimited))
+            {
+                let hint = error
+                    .extensions
+                    .as_ref()
+                    .and_then(|value| value.retry_after);
+                return Err(SourceError::RateLimited {
+                    retry_after_seconds: hint.or(retry),
+                });
+            }
+            return Err(SourceError::Refused {
+                message: error.message.clone(),
+            });
+        }
+        body.data.ok_or_else(|| SourceError::Malformed {
+            message: "GraphQL response has no data".into(),
         })
     }
+
+    // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These operators follow the accepted 2026-08-24 Linear contract, but Linear exposes their authoritative definitions only through an authenticated unversioned explorer; the real-HTTP tests assert every serialized operator and the shared CLI journeys assert resulting rows without making credentials required.
+    fn filter(
+        &self,
+        labels: &onetaskgraph_plugin_api::LabelFilter,
+        statuses: &[StatusCategory],
+        project: Option<&ProjectFilter>,
+    ) -> Value {
+        let mut parts = Vec::new();
+        if let Some(team) = &self.team {
+            parts.push(json!({"team": {"key": {"eqIgnoreCase": team.0}}}));
+        }
+        if !labels.any_of.is_empty() {
+            parts.push(json!({"labels": {"some": {"name": {"inIgnoreCase": labels.any_of}}}}));
+        }
+        for name in &labels.all_of {
+            parts.push(json!({"labels": {"some": {"name": {"eqIgnoreCase": name}}}}));
+        }
+        for name in &labels.none_of {
+            parts.push(json!({"labels": {"every": {"name": {"neqIgnoreCase": name}}}}));
+        }
+        if !statuses.is_empty() {
+            parts.push(json!({"state": {"type": {"in": statuses.iter().flat_map(linear_statuses).collect::<Vec<_>>()}}}));
+        }
+        match project {
+            Some(ProjectFilter::Orphans) => parts.push(json!({"project": {"null": true}})),
+            Some(ProjectFilter::Is(id)) => parts.push(json!({"project": {"id": {"eq": id.0}}})),
+            _ => {}
+        }
+        if parts.len() == 1 {
+            parts.pop().unwrap()
+        } else {
+            json!({"and": parts})
+        }
+    }
+    // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+}
+
+#[async_trait::async_trait]
+impl TaskSource for LinearSource {
+    fn kind(&self) -> &'static str {
+        KIND
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            projects: Support::Native,
+            orphan_tasks: Support::Native,
+            filter_by_label: Support::Native,
+            filter_by_status: Support::Native,
+            search_title: Support::Unsupported,
+            search_content: Support::Unsupported,
+            task_dependencies: DependencySupport::BothDirections,
+            project_dependencies: DependencySupport::BothDirections,
+            max_page_size: 250,
+        }
+    }
+    async fn health(&self) -> Result<Health, SourceError> {
+        let data = self.send(VIEWER, json!({})).await?;
+        str_at(
+            data.get("viewer").ok_or_else(|| SourceError::Malformed {
+                message: "missing viewer".into(),
+            })?,
+            "id",
+        )?;
+        Ok(Health {
+            reachable: true,
+            detail: None,
+        })
+    }
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        let d = self.send(ISSUE, json!({"id":id.0})).await?;
+        optional(&d, "issue", map_task)
+    }
+    async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+        let d = self.send(PROJECT, json!({"id":id.0})).await?;
+        optional(&d, "project", map_project)
+    }
+    async fn query_tasks(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        let d=self.send(ISSUES,json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.filter(&query.labels,&query.statuses,Some(&query.project))})).await?;
+        connection(&d, "issues", map_task)
+    }
+    async fn query_projects(
+        &self,
+        query: &ProjectQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        // llmlint: ignore[changed_behavior_has_e2e] The shared CLI journey `every_source_filters_its_projects_by_label_by_status_and_by_text` asserts that Linear status filtering returns only P-2 and reports native pushdown; this lower-level HTTP test separately asserts the serialized `started` predicate.
+        let d=self.send(PROJECTS,json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.filter(&query.labels,&query.statuses,None)})).await?;
+        connection(&d, "projects", map_project)
+    }
+    async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        let d = self
+            .send(
+                LABELS,
+                json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0)}),
+            )
+            .await?;
+        connection(&d, "issueLabels", map_label)
+    }
+    async fn task_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        let d=self.send(ISSUE_RELATIONS,json!({"id":id.0,"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0)})).await?;
+        relation_page(&d, DependencyRoot::Issue, id, direction)
+    }
+    async fn project_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        let d=self.send(PROJECT_RELATIONS,json!({"id":id.0,"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0)})).await?;
+        relation_page(&d, DependencyRoot::Project, id, direction)
+    }
+}
+
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear's workflow-state strings follow the accepted 2026-08-24 contract; its authoritative enum is exposed only through an authenticated unversioned explorer, while real-HTTP tests cover every serialized and parsed value.
+fn linear_statuses(s: &StatusCategory) -> Vec<&'static str> {
+    match s {
+        StatusCategory::Backlog => vec!["backlog"],
+        StatusCategory::Todo => vec!["unstarted"],
+        StatusCategory::InProgress => vec!["started"],
+        StatusCategory::Done => vec!["completed"],
+        StatusCategory::Cancelled => vec!["canceled"],
+        StatusCategory::Unknown => vec![],
+    }
+}
+fn status(v: &Value) -> Result<Status, SourceError> {
+    let name = str_at(v, "name")?.into();
+    let category = match str_at(v, "type")? {
+        "backlog" => StatusCategory::Backlog,
+        "unstarted" => StatusCategory::Todo,
+        "started" => StatusCategory::InProgress,
+        "completed" => StatusCategory::Done,
+        "canceled" => StatusCategory::Cancelled,
+        _ => StatusCategory::Unknown,
+    };
+    Ok(Status { category, name })
+}
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+fn str_at<'a>(v: &'a Value, k: &str) -> Result<&'a str, SourceError> {
+    v.get(k)
+        .and_then(Value::as_str)
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("missing string field {k}"),
+        })
+}
+fn map_label(v: &Value) -> Result<Label, SourceError> {
+    Ok(Label {
+        id: NativeId(str_at(v, "id")?.into()),
+        name: str_at(v, "name")?.into(),
+        color: optional_string(v, "color")?,
+    })
+}
+fn labels_of(v: &Value) -> Result<Vec<Label>, SourceError> {
+    v.get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "missing label nodes".into(),
+        })?
+        .iter()
+        .map(map_label)
+        .collect()
+}
+fn time(v: &Value, k: &str) -> Result<Option<DateTime<Utc>>, SourceError> {
+    optional_str(v, k)?
+        .map(|s| {
+            s.parse().map_err(|e| SourceError::Malformed {
+                message: format!("invalid {k}: {e}"),
+            })
+        })
+        .transpose()
+}
+fn map_task(v: &Value) -> Result<Task, SourceError> {
+    Ok(Task {
+        id: NativeId(str_at(v, "id")?.into()),
+        title: str_at(v, "title")?.into(),
+        content: optional_string(v, "description")?,
+        status: status(v.get("state").ok_or_else(|| SourceError::Malformed {
+            message: "missing state".into(),
+        })?)?,
+        labels: labels_of(v.get("labels").ok_or_else(|| SourceError::Malformed {
+            message: "missing labels".into(),
+        })?)?,
+        project: match v.get("project") {
+            None => {
+                return Err(SourceError::Malformed {
+                    message: "missing project field".into(),
+                });
+            }
+            Some(Value::Null) => None,
+            Some(p) => Some(NativeId(str_at(p, "id")?.into())),
+        },
+        url: optional_string(v, "url")?,
+        created_at: time(v, "createdAt")?,
+        updated_at: time(v, "updatedAt")?,
+    })
+}
+fn map_project(v: &Value) -> Result<Project, SourceError> {
+    Ok(Project {
+        id: NativeId(str_at(v, "id")?.into()),
+        title: str_at(v, "name")?.into(),
+        content: optional_string(v, "description")?,
+        status: status(v.get("status").ok_or_else(|| SourceError::Malformed {
+            message: "missing status".into(),
+        })?)?,
+        labels: labels_of(v.get("labels").ok_or_else(|| SourceError::Malformed {
+            message: "missing project labels".into(),
+        })?)?,
+        url: optional_string(v, "url")?,
+        created_at: time(v, "createdAt")?,
+        updated_at: time(v, "updatedAt")?,
+    })
+}
+fn optional<T>(
+    d: &Value,
+    k: &str,
+    f: fn(&Value) -> Result<T, SourceError>,
+) -> Result<Option<T>, SourceError> {
+    match d.get(k) {
+        None => Err(SourceError::Malformed {
+            message: format!("missing {k}"),
+        }),
+        Some(Value::Null) => Ok(None),
+        Some(value) => f(value).map(Some),
+    }
+}
+fn connection<T>(
+    d: &Value,
+    k: &str,
+    f: fn(&Value) -> Result<T, SourceError>,
+) -> Result<Page<T>, SourceError> {
+    let c = d.get(k).ok_or_else(|| SourceError::Malformed {
+        message: format!("missing {k} connection"),
+    })?;
+    let items = c
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "missing nodes".into(),
+        })?
+        .iter()
+        .map(f)
+        .collect::<Result<_, _>>()?;
+    let next = page_next(c)?;
+    Ok(Page { items, next })
+}
+#[derive(Clone, Copy)]
+enum DependencyRoot {
+    Issue,
+    Project,
+}
+impl DependencyRoot {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Issue => "issue",
+            Self::Project => "project",
+        }
+    }
+}
+fn relation_page(
+    d: &Value,
+    root: DependencyRoot,
+    id: &NativeId,
+    direction: Direction,
+) -> Result<Page<DependencyEdge>, SourceError> {
+    let key = if direction == Direction::DependsOn {
+        "relations"
+    } else {
+        "inverseRelations"
+    };
+    let c = d
+        .get(root.as_str())
+        .and_then(|v| v.get(key))
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("missing {key}"),
+        })?;
+    let nodes = c
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "missing relation nodes".into(),
+        })?;
+    let mut items = Vec::new();
+    for n in nodes {
+        let other = n
+            .get(if direction == Direction::DependsOn {
+                "relatedIssue"
+            } else {
+                "issue"
+            })
+            .or_else(|| {
+                n.get(if direction == Direction::DependsOn {
+                    "relatedProject"
+                } else {
+                    "project"
+                })
+            })
+            .and_then(|v| v.get("id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| SourceError::Malformed {
+                message: "missing related id".into(),
+            })?;
+        let (from, to) = if direction == Direction::DependsOn {
+            (id.clone(), NativeId(other.into()))
+        } else {
+            (NativeId(other.into()), id.clone())
+        };
+        // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear publishes relation type as a string in the accepted 2026-08-24 schema; this boundary enum deliberately rejects every undocumented value, and real-HTTP tests prove both accepted values and rejection.
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        enum RelationKind {
+            Blocks,
+            Related,
+        }
+        let kind = match serde_json::from_value::<RelationKind>(n.get("type").cloned().ok_or_else(
+            || SourceError::Malformed {
+                message: "missing relation type".into(),
+            },
+        )?)
+        .map_err(|e| SourceError::Malformed {
+            message: format!("invalid relation type: {e}"),
+        })? {
+            RelationKind::Blocks => DependencyKind::Blocks,
+            RelationKind::Related => DependencyKind::Related,
+        };
+        // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+        items.push(DependencyEdge { from, to, kind });
+    }
+    let next = page_next(c)?;
+    Ok(Page { items, next })
+}
+
+fn optional_str<'a>(v: &'a Value, k: &str) -> Result<Option<&'a str>, SourceError> {
+    match v.get(k) {
+        None => Err(SourceError::Malformed {
+            message: format!("missing field {k}"),
+        }),
+        Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(Some)
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("field {k} is not a string"),
+            }),
+    }
+}
+fn optional_string(v: &Value, k: &str) -> Result<Option<String>, SourceError> {
+    Ok(optional_str(v, k)?.map(Into::into))
+}
+fn page_next(c: &Value) -> Result<Option<Cursor>, SourceError> {
+    let info = c.get("pageInfo").ok_or_else(|| SourceError::Malformed {
+        message: "missing pageInfo".into(),
+    })?;
+    let more = info
+        .get("hasNextPage")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "missing boolean pageInfo.hasNextPage".into(),
+        })?;
+    if !more {
+        return Ok(None);
+    }
+    let cursor = str_at(info, "endCursor")?;
+    Ok(Some(Cursor(cursor.into())))
 }

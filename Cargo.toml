@@ -25,8 +25,10 @@ clap = { version = "4.6.6", features = ["derive"] }
 # every schema validated here is one a plugin handed over in memory. A validator that
 # could reach the network would be a way for work data to leave the process.
 jsonschema = { version = "0.50.1", default-features = false }
+graphql-parser = "0.4.1"
 schemars = { version = "1.2.2", features = ["chrono04"] }
 secrecy = "0.10.3"
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "native-tls-vendored"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 # A maintained fork of serde_yaml, which was archived. Nothing else in reach parses YAML
