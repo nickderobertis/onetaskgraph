@@ -39,8 +39,9 @@ fn source(endpoint: &str) -> Box<dyn TaskSource> {
 fn server(
     status: &'static str,
     headers: &'static str,
-    body: &'static str,
+    body: impl Into<String>,
 ) -> (String, mpsc::Receiver<String>) {
+    let body = body.into();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let (tx, rx) = mpsc::channel();
@@ -53,6 +54,39 @@ fn server(
         write!(stream,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
     });
     (format!("http://{addr}/graphql"), rx)
+}
+
+fn team_filtering_server(projects: bool) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut bytes = vec![0; 65536];
+        let n = stream.read(&mut bytes).unwrap();
+        bytes.truncate(n);
+        let narrowed = String::from_utf8_lossy(&bytes).contains("eqIgnoreCase");
+        let body = if projects {
+            let second = if narrowed {
+                ""
+            } else {
+                r#",{"id":"p2","name":"Other","description":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Started","type":"started"},"labels":{"nodes":[]}}"#
+            };
+            format!(
+                r#"{{"data":{{"projects":{{"nodes":[{{"id":"p1","name":"Team","description":null,"url":null,"createdAt":null,"updatedAt":null,"status":{{"name":"Started","type":"started"}},"labels":{{"nodes":[]}}}}{second}],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}"#
+            )
+        } else {
+            let second = if narrowed {
+                ""
+            } else {
+                r#",{"id":"i2","title":"Other","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}"#
+            };
+            format!(
+                r#"{{"data":{{"issues":{{"nodes":[{{"id":"i1","title":"Team","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{{"name":"Todo","type":"unstarted"}},"labels":{{"nodes":[]}}}}{second}],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}"#
+            )
+        };
+        write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+    });
+    format!("http://{addr}/graphql")
 }
 
 #[test]
@@ -340,6 +374,10 @@ async fn rate_limit_carries_retry_hint() {
 
 #[tokio::test]
 async fn graphql_rate_limit_uses_http_hint_and_viewer_id_is_validated() {
+    let request = PageRequest {
+        cursor: None,
+        limit: 2,
+    };
     let (endpoint, _) = server(
         "200 OK",
         "Retry-After: 23\r\n",
@@ -360,6 +398,70 @@ async fn graphql_rate_limit_uses_http_hint_and_viewer_id_is_validated() {
             source(&endpoint).health().await.unwrap_err(),
             SourceError::Malformed { .. }
         ));
+    }
+    let valid_project = serde_json::json!({"id":"p","name":"p","description":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"x","type":"started"},"labels":{"nodes":[]}});
+    for field in ["status", "labels"] {
+        let mut project = valid_project.clone();
+        project.as_object_mut().unwrap().remove(field);
+        let body = serde_json::json!({"data":{"projects":{"nodes":[project],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}).to_string();
+        let (endpoint, _) = server("200 OK", "", body);
+        assert!(matches!(
+            source(&endpoint)
+                .query_projects(&ProjectQuery::default(), &request)
+                .await
+                .unwrap_err(),
+            SourceError::Malformed { .. }
+        ));
+    }
+    for page_info in [
+        serde_json::Value::Null,
+        serde_json::json!({}),
+        serde_json::json!({"hasNextPage":"no"}),
+    ] {
+        let body =
+            serde_json::json!({"data":{"issues":{"nodes":[],"pageInfo":page_info}}}).to_string();
+        let (endpoint, _) = server("200 OK", "", body);
+        assert!(matches!(
+            source(&endpoint)
+                .query_tasks(&TaskQuery::default(), &request)
+                .await
+                .unwrap_err(),
+            SourceError::Malformed { .. }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn team_configuration_narrows_task_and_project_results() {
+    let name = SourceName::new("team").unwrap();
+    for projects in [false, true] {
+        let source = onetaskgraph_linear::Plugin
+            .build(
+                &name,
+                &serde_json::json!({"endpoint":team_filtering_server(projects),"team":"ENG"}),
+                &Secrets(Some("x".into())),
+            )
+            .unwrap();
+        let request = PageRequest {
+            cursor: None,
+            limit: 10,
+        };
+        let count = if projects {
+            source
+                .query_projects(&ProjectQuery::default(), &request)
+                .await
+                .unwrap()
+                .items
+                .len()
+        } else {
+            source
+                .query_tasks(&TaskQuery::default(), &request)
+                .await
+                .unwrap()
+                .items
+                .len()
+        };
+        assert_eq!(count, 1);
     }
 }
 
@@ -464,7 +566,7 @@ async fn item_reads_and_transport_error_boundaries_are_exercised() {
 
 #[tokio::test]
 async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
-    let body = r#"{"data":{"issues":{"nodes":[{"id":"a","title":"A","state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}, {"id":"b","title":"B","state":{"name":"Doing","type":"started"},"labels":{"nodes":[]}}, {"id":"c","title":"C","state":{"name":"Canceled","type":"canceled"},"labels":{"nodes":[]}}, {"id":"d","title":"D","state":{"name":"Odd","type":"new-value"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#;
+    let body = r#"{"data":{"issues":{"nodes":[{"id":"a","title":"A","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}, {"id":"b","title":"B","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Doing","type":"started"},"labels":{"nodes":[]}}, {"id":"c","title":"C","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Canceled","type":"canceled"},"labels":{"nodes":[]}}, {"id":"d","title":"D","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Odd","type":"new-value"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#;
     let (endpoint, wire) = server("200 OK", "", body);
     let query = TaskQuery {
         labels: LabelFilter {
@@ -547,6 +649,48 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
         cursor: None,
         limit: 2,
     };
+    let valid_task = serde_json::json!({"id":"i","title":"t","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"x","type":"started"},"labels":{"nodes":[]}});
+    for field in [
+        "description",
+        "state",
+        "labels",
+        "project",
+        "url",
+        "createdAt",
+        "updatedAt",
+    ] {
+        let mut task = valid_task.clone();
+        task.as_object_mut().unwrap().remove(field);
+        let body = serde_json::json!({"data":{"issue":task}}).to_string();
+        let (endpoint, _) = server("200 OK", "", body);
+        assert!(matches!(
+            source(&endpoint).get_task(&"i".into()).await.unwrap_err(),
+            SourceError::Malformed { .. }
+        ));
+    }
+    for (field, value) in [
+        ("description", serde_json::json!(7)),
+        ("createdAt", serde_json::json!("yesterday")),
+    ] {
+        let mut task = valid_task.clone();
+        task[field] = value;
+        let body = serde_json::json!({"data":{"issue":task}}).to_string();
+        let (endpoint, _) = server("200 OK", "", body);
+        assert!(matches!(
+            source(&endpoint).get_task(&"i".into()).await.unwrap_err(),
+            SourceError::Malformed { .. }
+        ));
+    }
+    let (endpoint, _) = server("200 OK", "", r#"{"data":{}}"#);
+    assert!(matches!(
+        source(&endpoint).get_task(&"i".into()).await.unwrap_err(),
+        SourceError::Malformed { .. }
+    ));
+    let (endpoint, _) = server("200 OK", "", r#"{"data":{}}"#);
+    assert!(matches!(
+        source(&endpoint).health().await.unwrap_err(),
+        SourceError::Malformed { .. }
+    ));
     for body in [
         r#"{"data":{}}"#,
         r#"{"data":{"issues":{}}}"#,
@@ -589,6 +733,7 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
         r#"{"data":{"issue":{}}}"#,
         r#"{"data":{"issue":{"relations":{}}}}"#,
         r#"{"data":{"issue":{"relations":{"nodes":[{}],"pageInfo":{}}}}}"#,
+        r#"{"data":{"issue":{"relations":{"nodes":[{"relatedIssue":{"id":"other"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}"#,
     ] {
         let (endpoint, _) = server("200 OK", "", body);
         assert!(matches!(

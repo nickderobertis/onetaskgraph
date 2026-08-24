@@ -451,7 +451,12 @@ fn map_task(v: &Value) -> Result<Task, SourceError> {
             message: "missing labels".into(),
         })?)?,
         project: match v.get("project") {
-            None | Some(Value::Null) => None,
+            None => {
+                return Err(SourceError::Malformed {
+                    message: "missing project field".into(),
+                });
+            }
+            Some(Value::Null) => None,
             Some(p) => Some(NativeId(str_at(p, "id")?.into())),
         },
         url: optional_string(v, "url")?,
@@ -596,7 +601,10 @@ fn relation_page(
 
 fn optional_str<'a>(v: &'a Value, k: &str) -> Result<Option<&'a str>, SourceError> {
     match v.get(k) {
-        None | Some(Value::Null) => Ok(None),
+        None => Err(SourceError::Malformed {
+            message: format!("missing field {k}"),
+        }),
+        Some(Value::Null) => Ok(None),
         Some(value) => value
             .as_str()
             .map(Some)

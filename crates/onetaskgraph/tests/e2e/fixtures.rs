@@ -227,6 +227,9 @@ fn linear_block(sandbox: &Sandbox) -> Value {
                     break;
                 }
                 bytes.extend_from_slice(&chunk[..n]);
+                if bytes.len() > 8_192 {
+                    break;
+                }
                 if let Some(split) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
                     let head = String::from_utf8_lossy(&bytes[..split]).to_ascii_lowercase();
                     let length = head
@@ -238,11 +241,52 @@ fn linear_block(sandbox: &Sandbox) -> Value {
                     }
                 }
             }
+            if bytes.len() > 8_192 {
+                let text = r#"{"errors":[{"message":"fixture request too large"}]}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 413 Content Too Large\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
             let split = bytes
                 .windows(4)
                 .position(|w| w == b"\r\n\r\n")
                 .map(|n| n + 4)
                 .unwrap_or(bytes.len());
+            let request_head = String::from_utf8_lossy(&bytes[..split]);
+            let declared_length = request_head
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .map(str::to_owned)
+                })
+                .and_then(|value| value.parse::<usize>().ok());
+            if declared_length.is_none_or(|length| bytes.len() != split + length) {
+                let text = r#"{"errors":[{"message":"invalid content length"}]}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
+            let request_line = request_head
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches('\r');
+            if request_line != "POST /graphql HTTP/1.1" {
+                let text = r#"{"errors":[{"message":"expected POST /graphql"}]}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
             let Ok(request) = serde_json::from_slice::<Value>(&bytes[split..]) else {
                 let text = r#"{"errors":[{"message":"invalid fixture request"}]}"#;
                 let _ = write!(
@@ -334,7 +378,7 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
             serde_json::from_value::<QueryVariables>(variables.clone()).is_ok_and(|variables| {
                 variables.first > 0
                     && variables.after.as_deref() != Some("")
-                    && !variables.filter.contains_key("")
+                    && valid_linear_filter(&Value::Object(variables.filter))
             })
         }
         graphql::ISSUE_RELATIONS | graphql::PROJECT_RELATIONS => {
@@ -347,6 +391,27 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
         _ => false,
     };
     valid.then_some(()).ok_or("invalid operation variables")
+}
+
+fn valid_linear_filter(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => fields.iter().all(|(key, value)| match key.as_str() {
+            "and" => value.as_array().is_some_and(|values| {
+                values
+                    .iter()
+                    .all(|value| value.is_object() && valid_linear_filter(value))
+            }),
+            "team" | "key" | "labels" | "some" | "name" | "every" | "state" | "type"
+            | "project" | "id" => value.is_object() && valid_linear_filter(value),
+            "eqIgnoreCase" | "neqIgnoreCase" | "eq" => value.is_string(),
+            "inIgnoreCase" | "in" => value
+                .as_array()
+                .is_some_and(|values| values.iter().all(Value::is_string)),
+            "null" => value.is_boolean(),
+            _ => false,
+        }),
+        _ => false,
+    }
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
@@ -446,6 +511,10 @@ fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
         json!({"query":onetaskgraph_linear::graphql::ISSUE,"variables":{"id":"i1","extra":true}}),
         json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":0,"after":null,"filter":{}}}),
         json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":[]}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":{"invented":true}}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":{"state":{"type":{"in":7}}}}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":{"and":"invalid"}}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":{"project":{"null":"true"}}}}),
     ] {
         let body = serde_json::to_string(&body).unwrap();
         let mut stream = std::net::TcpStream::connect(address).unwrap();
@@ -462,6 +531,35 @@ fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
             "{response}"
         );
     }
+    let mut stream = std::net::TcpStream::connect(address).unwrap();
+    write!(stream, "GET /graphql HTTP/1.1\r\nHost: {address}\r\n\r\n").unwrap();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+
+    let mut stream = std::net::TcpStream::connect(address).unwrap();
+    write!(
+        stream,
+        "POST /graphql HTTP/1.1\r\nHost: {address}\r\nContent-Length: 9\r\n\r\n{{}}"
+    )
+    .unwrap();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+
+    let mut stream = std::net::TcpStream::connect(address).unwrap();
+    let oversized = "x".repeat(8_193);
+    let _ = write!(
+        stream,
+        "POST /graphql HTTP/1.1\r\nHost: {address}\r\nContent-Length: {}\r\n\r\n{oversized}",
+        oversized.len()
+    );
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    assert!(response.starts_with("HTTP/1.1 413 Content Too Large"));
 }
 fn linear_label(v: &Value) -> Value {
     json!({"id":v["id"],"name":v["name"],"color":null})
