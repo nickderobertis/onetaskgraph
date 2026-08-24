@@ -7,10 +7,8 @@
 //! a source that filters natively and one that does not.
 //!
 //! `scripts/check-journey-matrix.sh` fails, naming the plugin, when a plugin the registry
-//! knows has no row here. A plugin whose source has not landed carries a
-//! [`Fixture::Pending`] row rather than no row: that row is a journey too — it asserts
-//! the plugin refuses with its own message — so a placeholder cannot sit here doing
-//! nothing.
+//! knows has no row here. Every registered plugin is implemented, so every row carries a
+//! working source fixture.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -28,17 +26,8 @@ pub struct Row {
     pub plugin: &'static str,
     /// This row's own name, unique across rows, used in failure messages.
     pub name: &'static str,
-    /// How to build it, or why it cannot be built yet.
-    pub fixture: Fixture,
-}
-
-/// A row that can be configured, or one whose plugin has not landed.
-pub enum Fixture {
-    /// A working source over the shared dataset.
-    Ready(Ready),
-    /// The plugin is registered and refuses to build. The journey for such a row asserts
-    /// exactly that, so this is a test rather than a placeholder.
-    Pending,
+    /// How to build it.
+    pub fixture: Ready,
 }
 
 /// Everything a journey needs in order to drive one configured source.
@@ -75,21 +64,15 @@ impl Row {
     /// Written as JSON, which the YAML reader accepts, so a fixture is a value rather
     /// than a string a test has to indent correctly.
     pub fn document(&self, sandbox: &Sandbox) -> String {
-        let block = match &self.fixture {
-            Fixture::Ready(ready) => (ready.block)(sandbox),
-            Fixture::Pending => json!({}),
-        };
+        let block = (self.fixture.block)(sandbox);
         document(&json!({
             SOURCE: {"plugin": self.plugin, "config": block}
         }))
     }
 
-    /// What this row declares, or nothing when its plugin has not landed.
-    pub fn declared(&self) -> Option<&Declared> {
-        match &self.fixture {
-            Fixture::Ready(ready) => Some(&ready.declared),
-            Fixture::Pending => None,
-        }
+    /// What this row declares.
+    pub fn declared(&self) -> &Declared {
+        &self.fixture.declared
     }
 }
 
@@ -110,12 +93,9 @@ pub const SCANNED: &str = "scanned";
 pub fn pair_at(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
     let mut sources = serde_json::Map::new();
     for (name, row) in [(NATIVE, &ROWS[0]), (SCANNED, &ROWS[1])] {
-        let Fixture::Ready(ready) = &row.fixture else {
-            panic!("the first two rows are the configured `in-memory` pair");
-        };
         sources.insert(
             name.to_owned(),
-            boundary.source(row.plugin, (ready.block)(sandbox)),
+            boundary.source(row.plugin, (row.fixture.block)(sandbox)),
         );
     }
     document(&Value::Object(sources))
@@ -141,7 +121,7 @@ pub const ROWS: &[Row] = &[
     Row {
         plugin: "in-memory",
         name: "in-memory (declares everything native)",
-        fixture: Fixture::Ready(Ready {
+        fixture: Ready {
             block: native_block,
             complete_dataset: true,
             declared: Declared {
@@ -153,12 +133,12 @@ pub const ROWS: &[Row] = &[
                 reverse_task_dependencies: true,
                 reverse_project_dependencies: true,
             },
-        }),
+        },
     },
     Row {
         plugin: "in-memory",
         name: "in-memory (declares nothing native, forward-only)",
-        fixture: Fixture::Ready(Ready {
+        fixture: Ready {
             block: compensated_block,
             complete_dataset: true,
             declared: Declared {
@@ -170,12 +150,12 @@ pub const ROWS: &[Row] = &[
                 reverse_task_dependencies: false,
                 reverse_project_dependencies: false,
             },
-        }),
+        },
     },
     Row {
         plugin: "subprocess",
         name: "subprocess (the in-memory source over a real pipe)",
-        fixture: Fixture::Ready(Ready {
+        fixture: Ready {
             block: hosted_block,
             complete_dataset: true,
             declared: Declared {
@@ -187,12 +167,12 @@ pub const ROWS: &[Row] = &[
                 reverse_task_dependencies: true,
                 reverse_project_dependencies: true,
             },
-        }),
+        },
     },
     Row {
         plugin: "local-md",
         name: "local-md",
-        fixture: Fixture::Ready(Ready {
+        fixture: Ready {
             block: local_md_block,
             complete_dataset: true,
             // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The journeys use
@@ -209,12 +189,12 @@ pub const ROWS: &[Row] = &[
                 reverse_task_dependencies: true,
                 reverse_project_dependencies: true,
             },
-        }),
+        },
     },
     Row {
         plugin: "linear",
         name: "linear",
-        fixture: Fixture::Ready(Ready {
+        fixture: Ready {
             block: linear_block,
             // Linear models the whole table: two projects, an orphan, and dependencies in
             // both directions, so it drives the shared complete-dataset journeys.
@@ -228,12 +208,12 @@ pub const ROWS: &[Row] = &[
                 reverse_task_dependencies: true,
                 reverse_project_dependencies: true,
             },
-        }),
+        },
     },
     Row {
         plugin: "github-projects",
         name: "github-projects",
-        fixture: Fixture::Ready(Ready {
+        fixture: Ready {
             block: github_projects_block,
             // One GitHub source is exactly one ProjectV2 board and every item belongs to
             // it. It cannot faithfully represent the table's two projects and orphan.
@@ -248,7 +228,7 @@ pub const ROWS: &[Row] = &[
                 reverse_task_dependencies: false,
                 reverse_project_dependencies: false,
             },
-        }),
+        },
     },
 ];
 

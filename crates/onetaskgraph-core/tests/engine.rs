@@ -140,21 +140,6 @@ fn the_registry_resolves_a_kind_to_its_plugin_and_nothing_to_an_unknown_one() {
     assert!(plugin_for("jira").is_none());
 }
 
-#[test]
-fn a_registered_but_unimplemented_plugin_refuses_with_its_own_message() {
-    {
-        let kind = "github-projects";
-        let plugin = plugin_for(kind).expect("registered");
-        let Err(SourceError::Config { message }) =
-            plugin.build(&source("work"), &serde_json::json!({}), &NoSecrets)
-        else {
-            panic!("the `{kind}` plugin is not implemented yet, so build must refuse");
-        };
-        assert!(message.contains(kind), "{message}");
-        assert!(message.contains("not implemented yet"), "{message}");
-    }
-}
-
 /// Every version of the bundle and the exact roots it published. **Append-only.**
 ///
 /// Both SDKs are generated from this bundle, so adding, removing or renaming a root

@@ -8,7 +8,7 @@
 use std::process::Output;
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{Fixture, ROWS, Row, SOURCE, document, qualified};
+use crate::fixtures::{ROWS, Row, SOURCE, document, qualified};
 use serde_json::json;
 
 /// A sandbox holding this row's configuration document and nothing else.
@@ -85,8 +85,7 @@ fn plan_says(row: &Row, rendered: &str, outcome: &str, predicate: &str) {
 
 /// Rows that can represent every entity and relationship in the shared dataset.
 fn complete_dataset_rows() -> impl Iterator<Item = &'static Row> {
-    ROWS.iter()
-        .filter(|row| matches!(&row.fixture, Fixture::Ready(ready) if ready.complete_dataset))
+    ROWS.iter().filter(|row| row.fixture.complete_dataset)
 }
 
 #[test]
@@ -283,7 +282,7 @@ fn malformed_local_markdown_names_its_path_without_hiding_valid_rows() {
 fn a_task_in_no_project_is_listed_by_default_and_can_be_selected_on_its_own() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
 
         let all = ok(row, &sandbox, &["task", "list"]);
         assert!(
@@ -337,7 +336,7 @@ fn every_source_lists_the_labels_it_knows() {
 fn filtering_by_label_answers_the_same_rows_whoever_applies_the_predicate() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
         let outcome = if declared.filter_by_label {
             "pushed down"
         } else {
@@ -370,7 +369,7 @@ fn filtering_by_label_answers_the_same_rows_whoever_applies_the_predicate() {
 fn filtering_by_status_category_answers_the_same_rows_whoever_applies_the_predicate() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
 
         let todo = ok(
             row,
@@ -407,7 +406,7 @@ fn filtering_by_status_category_answers_the_same_rows_whoever_applies_the_predic
 fn searching_covers_titles_bodies_or_either_over_tasks_and_projects() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
 
         for (fields, predicate, native, expected) in [
             ("title", "search-title", declared.search_title, vec!["T-1"]),
@@ -476,7 +475,7 @@ fn searching_covers_titles_bodies_or_either_over_tasks_and_projects() {
 fn task_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itself() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
 
         let forward = ok(
             row,
@@ -525,7 +524,7 @@ fn task_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itse
 fn project_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itself() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
 
         let forward = ok(
             row,
@@ -571,7 +570,7 @@ fn every_source_filters_its_projects_by_label_by_status_and_by_text() {
     // dropped them for projects would pass every task journey above.
     for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
 
         let by_label = ok(
             row,
@@ -784,44 +783,6 @@ fn a_limit_smaller_than_the_result_set_walks_to_exhaustion_in_a_stable_order() {
                 row.name
             );
         }
-    }
-}
-
-#[test]
-fn a_registered_plugin_without_a_shared_fixture_explains_why_it_is_unavailable() {
-    // A `Pending` row is a journey, not a placeholder: its plugin is registered, so a
-    // configuration naming it is valid, and what a user must get is that plugin's own
-    // message rather than "unknown plugin" — and exit 4, because this is one source
-    // failing rather than the command being wrong.
-    for row in ROWS
-        .iter()
-        .filter(|row| matches!(row.fixture, Fixture::Pending))
-    {
-        let sandbox = host(row);
-        let output = run(&sandbox, &["task", "list"]);
-        assert_eq!(
-            output.status.code(),
-            Some(4),
-            "{}: a source that cannot be built is a partial answer\n{}",
-            row.name,
-            stderr(&output)
-        );
-        let complaint = stderr(&output);
-        assert!(
-            complaint.contains(SOURCE)
-                && (complaint.contains("not implemented yet")
-                    || (row.plugin == "github-projects" && complaint.contains("owner"))),
-            "{}: the plugin's own message must reach the user:\n{complaint}",
-            row.name
-        );
-        assert!(
-            complaint.contains("--allow-partial"),
-            "{}: and a suggested next action:\n{complaint}",
-            row.name
-        );
-
-        let allowed = run(&sandbox, &["task", "list", "--allow-partial"]);
-        assert_eq!(allowed.status.code(), Some(0), "{}", row.name);
     }
 }
 
