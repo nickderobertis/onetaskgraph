@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .models import (
     EffectiveConfig,
+    GlobalId,
     QueryResponseOfQualifiedEdge,
     QueryResponseOfQualifiedLabel,
     QueryResponseOfQualifiedProject,
@@ -61,7 +62,7 @@ class GeneratedClient:
 
     async def project_deps(
         self,
-        id: str,
+        id: GlobalId | str,
         *,
         allow_partial: Option = None,
         default_sources: Option = None,
@@ -125,7 +126,7 @@ class GeneratedClient:
 
     async def project_show(
         self,
-        id: str,
+        id: GlobalId | str,
         *,
         allow_partial: Option = None,
         default_sources: Option = None,
@@ -191,7 +192,7 @@ class GeneratedClient:
 
     async def task_deps(
         self,
-        id: str,
+        id: GlobalId | str,
         *,
         allow_partial: Option = None,
         default_sources: Option = None,
@@ -259,7 +260,7 @@ class GeneratedClient:
 
     async def task_show(
         self,
-        id: str,
+        id: GlobalId | str,
         *,
         allow_partial: Option = None,
         default_sources: Option = None,

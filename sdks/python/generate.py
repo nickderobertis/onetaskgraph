@@ -87,7 +87,7 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
     """Generate Pydantic models directly from every response schema in the bundle."""
     destination.mkdir(parents=True, exist_ok=True)
     exports: list[str] = []
-    for root in sorted(set(RESPONSE_ROOTS.values()) | {"SourceFailure", "QueryPlan"}):
+    for root in sorted(set(RESPONSE_ROOTS.values()) | {"SourceFailure", "QueryPlan", "GlobalId"}):
         schema = bundle["roots"][root]
         add_variant_titles(schema, root)
         rename_qualified_definitions(schema)
@@ -146,12 +146,15 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
 
 def add_variant_titles(value: JsonValue, hint: str) -> None:
     """Give anonymous schema variants stable domain names before model generation."""
-    if isinstance(value, list):
-        for item in value:
-            add_variant_titles(item, hint)
-        return
-    if not isinstance(value, dict):
-        return
+    match value:
+        case list(items):
+            for item in items:
+                add_variant_titles(item, hint)
+            return
+        case dict(mapping):
+            value = mapping
+        case _:
+            return
     variants = value.get("oneOf")
     if isinstance(variants, list):
         for variant in variants:
@@ -196,17 +199,20 @@ def rename_qualified_definitions(value: JsonValue) -> None:
 
 def replace_references(value: JsonValue, renames: dict[str, str]) -> None:
     """Update local references after a generated-definition rename."""
-    if isinstance(value, list):
-        for item in value:
-            replace_references(item, renames)
-    elif isinstance(value, dict):
-        reference = value.get("$ref")
-        if isinstance(reference, str):
-            tail = reference.rsplit("/", 1)[-1]
-            if tail in renames:
-                value["$ref"] = reference.rsplit("/", 1)[0] + "/" + renames[tail]
-        for child in value.values():
-            replace_references(child, renames)
+    match value:
+        case list(items):
+            for item in items:
+                replace_references(item, renames)
+        case dict(mapping):
+            reference = mapping.get("$ref")
+            if isinstance(reference, str):
+                tail = reference.rsplit("/", 1)[-1]
+                if tail in renames:
+                    mapping["$ref"] = reference.rsplit("/", 1)[0] + "/" + renames[tail]
+            for child in mapping.values():
+                replace_references(child, renames)
+        case _:
+            return
 
 
 def camel_to_snake(value: str) -> str:
@@ -233,7 +239,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "from __future__ import annotations",
         "",
         "from .models import (",
-        *[f"    {root}," for root in sorted(set(RESPONSE_ROOTS.values()))],
+        *[f"    {root}," for root in sorted(set(RESPONSE_ROOTS.values()) | {"GlobalId"})],
         ")",
         "",
         "type Option = str | int | bool | list[str] | tuple[str, ...] | None",
@@ -258,8 +264,9 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
             else None
         )
         keywords = [item for item in option_names(command) if item != positional]
+        positional_type = "GlobalId | str" if positional == "id" else "str"
         parameters = (
-            ([f"{positional}: str"] if positional else [])
+            ([f"{positional}: {positional_type}"] if positional else [])
             + ["*"]
             + [f"{item}: Option = None" for item in keywords]
         )

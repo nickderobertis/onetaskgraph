@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import RootModel, TypeAdapter, ValidationError
 
 from ._generated import GeneratedClient
 
@@ -52,7 +52,8 @@ class Client(GeneratedClient):
                 positional = None
         if positional is not None:
             try:
-                arguments.append(str(options.pop(positional)))
+                value = options.pop(positional)
+                arguments.append(str(value.root if isinstance(value, RootModel) else value))
             except KeyError as error:
                 raise TypeError(f"missing required argument: {positional}") from error
         for name, value in options.items():
