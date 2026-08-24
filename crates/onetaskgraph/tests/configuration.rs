@@ -828,26 +828,47 @@ fn a_planted_credential_reaches_no_output_of_any_verb() {
     }
 }
 
-/// Run `config show` over `sandbox`, expect a refusal, and return what it said.
+/// Expect a refusal over `sandbox` from **every** verb, and return what it said.
+///
+/// Both verbs, because a configuration that cannot be loaded is a refusal wherever it
+/// was written: `config show` reads the configuration and `schema` renders a static
+/// bundle without it, so `schema` is the one that would answer anyway if a layer were
+/// only validated where it is used. Every refusal below is configuration-shaped rather
+/// than verb-shaped, so checking both here holds that for all of them at once — the
+/// malformed document, the configuration and credentials files that cannot be read,
+/// and each setting a layer got wrong.
 fn refusal(sandbox: &Sandbox, arguments: &[&str]) -> String {
-    let output = sandbox
-        .command()
-        .args(["config", "show"])
-        .args(arguments)
-        .assert()
-        .failure()
-        .get_output()
-        .clone();
-    assert!(
-        stdout(&output).is_empty(),
-        "a refusal writes nothing to stdout"
+    let mut messages = Vec::new();
+    for verb in [&["config", "show"][..], &["schema"][..]] {
+        let output = sandbox
+            .command()
+            .args(verb)
+            .args(arguments)
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        assert!(
+            stdout(&output).is_empty(),
+            "`onetaskgraph {}` wrote to stdout while refusing",
+            verb.join(" ")
+        );
+        let message = stderr(&output);
+        assert!(
+            message.contains("next:"),
+            "`onetaskgraph {}` suggests a next action: {message}",
+            verb.join(" ")
+        );
+        messages.push(message);
+    }
+    let [from_config_show, from_schema] = messages
+        .try_into()
+        .expect("one message from each of the two verbs");
+    assert_eq!(
+        from_config_show, from_schema,
+        "both verbs refuse the same configuration with the same problem"
     );
-    let message = stderr(&output);
-    assert!(
-        message.contains("next:"),
-        "a refusal suggests a next action: {message}"
-    );
-    message
+    from_config_show
 }
 
 #[test]
