@@ -124,7 +124,7 @@ pub struct GitHubProjectsSource {
     // llmlint: ignore[invalid_states_unrepresentable] This private diagnostic-only field
     // is stored only after `new` rejects a blank environment-variable name.
     credential_name: String,
-    statuses: BTreeMap<String, StatusCategory>,
+    statuses: BTreeMap<StatusName, StatusCategory>,
     client: Client,
 }
 
@@ -313,7 +313,7 @@ impl GitHubProjectsSource {
             .to_owned();
         let category = self
             .statuses
-            .get(&name.to_lowercase())
+            .get(&StatusName::new(&name))
             .copied()
             .unwrap_or_else(|| match name.to_ascii_lowercase().as_str() {
                 "backlog" => StatusCategory::Backlog,
@@ -702,10 +702,10 @@ impl TaskSource for GitHubProjectsSource {
 
 fn normalize_status_mapping(
     mapping: BTreeMap<String, StatusCategory>,
-) -> Result<BTreeMap<String, StatusCategory>, SourceError> {
+) -> Result<BTreeMap<StatusName, StatusCategory>, SourceError> {
     let mut normalized = BTreeMap::new();
     for (name, category) in mapping {
-        let key = name.to_lowercase();
+        let key = StatusName::new(&name);
         if normalized.insert(key, category).is_some() {
             return Err(SourceError::Config {
                 message: format!("status_mapping contains case-insensitive duplicate {name}"),
@@ -713,6 +713,15 @@ fn normalize_status_mapping(
         }
     }
     Ok(normalized)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct StatusName(String);
+
+impl StatusName {
+    fn new(name: &str) -> Self {
+        Self(name.to_lowercase())
+    }
 }
 
 fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceError> {

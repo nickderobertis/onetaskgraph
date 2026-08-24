@@ -362,17 +362,21 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
 
 #[tokio::test]
 async fn project_dependencies_map_reverse_edges_and_page_them() {
-    let dependencies = json!({"data":{"node":{
+    let first_dependencies = json!({"data":{"node":{
         "blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
-        "blocking":{"nodes":[
-            {"id":"I_dependent_1","projectItems":{"nodes":[{"project":{"id":"PVT_dependent_1"}}]}},
-            {"id":"I_dependent_2","projectItems":{"nodes":[{"project":{"id":"PVT_dependent_2"}}]}}
-        ],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+        "blocking":{"nodes":[{"id":"I_dependent_1","projectItems":{"nodes":[{"project":{"id":"PVT_dependent_1"}}]}}],
+            "pageInfo":{"hasNextPage":true,"endCursor":"dependency-page-2"}}
+    }}});
+    let second_dependencies = json!({"data":{"node":{
+        "blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+        "blocking":{"nodes":[{"id":"I_dependent_2","projectItems":{"nodes":[{"project":{"id":"PVT_dependent_2"}}]}}],
+            "pageInfo":{"hasNextPage":false,"endCursor":null}}
     }}});
     let responses = vec![
         project_response(false),
         project_response(false),
-        dependencies,
+        first_dependencies,
+        second_dependencies,
     ];
     let (endpoint, handle) = sequence_server(responses.clone());
     let first = build(&endpoint)
