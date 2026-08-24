@@ -142,6 +142,21 @@ struct Document {
     url: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum DocumentKind {
+    Task,
+    Project,
+}
+
+impl DocumentKind {
+    const fn directory(self) -> &'static str {
+        match self {
+            Self::Task => "tasks",
+            Self::Project => "projects",
+        }
+    }
+}
+
 impl LocalMdSource {
     /// Canonicalize and validate a configured source root.
     pub fn new(config: LocalMdConfig) -> Result<Self, SourceError> {
@@ -163,8 +178,8 @@ impl LocalMdSource {
         })
     }
 
-    fn directory(&self, kind: &str) -> Result<PathBuf, SourceError> {
-        let path = self.root.join(kind);
+    fn directory(&self, kind: DocumentKind) -> Result<PathBuf, SourceError> {
+        let path = self.root.join(kind.directory());
         if !path.exists() {
             return Ok(path);
         }
@@ -183,7 +198,7 @@ impl LocalMdSource {
         Ok(canonical)
     }
 
-    fn paths(&self, kind: &str) -> Result<Vec<PathBuf>, SourceError> {
+    fn paths(&self, kind: DocumentKind) -> Result<Vec<PathBuf>, SourceError> {
         fn visit(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), SourceError> {
             if !dir.exists() {
                 return Ok(());
@@ -227,7 +242,7 @@ impl LocalMdSource {
         Ok(paths)
     }
 
-    fn parse(&self, kind: &str, path: &Path) -> Result<Document, SourceError> {
+    fn parse(&self, kind: DocumentKind, path: &Path) -> Result<Document, SourceError> {
         // Both callers canonicalize and confine the path before parsing it. Keeping that
         // invariant explicit here makes future internal callers notice if they skip the
         // boundary check without duplicating an unreachable user-facing branch.
@@ -249,9 +264,14 @@ impl LocalMdSource {
                 message: format!("{}: {e}", path.display()),
             })?;
         let base = self.directory(kind)?;
-        let relative = path
-            .strip_prefix(base)
-            .expect("a confined document stays under its kind directory");
+        let relative = path.strip_prefix(&base).map_err(|_| SourceError::Malformed {
+            message: format!(
+                "{} is outside its {} directory {}",
+                path.display(),
+                kind.directory(),
+                base.display()
+            ),
+        })?;
         let id = relative
             .with_extension("")
             .to_string_lossy()
@@ -331,14 +351,14 @@ impl LocalMdSource {
         })
     }
 
-    fn documents(&self, kind: &str) -> Result<Vec<Document>, SourceError> {
+    fn documents(&self, kind: DocumentKind) -> Result<Vec<Document>, SourceError> {
         self.paths(kind)?
             .into_iter()
             .filter_map(|p| self.parse(kind, &p).ok())
             .collect::<Vec<_>>()
             .pipe(Ok)
     }
-    fn find(&self, kind: &str, id: &NativeId) -> Result<Option<Document>, SourceError> {
+    fn find(&self, kind: DocumentKind, id: &NativeId) -> Result<Option<Document>, SourceError> {
         let base = self.directory(kind)?;
         let candidate = base.join(&id.0).with_extension("md");
         if !candidate.exists() {
@@ -432,22 +452,22 @@ impl TaskSource for LocalMdSource {
         }
     }
     async fn health(&self) -> Result<Health, SourceError> {
-        self.paths("tasks")?;
-        self.paths("projects")?;
+        self.paths(DocumentKind::Task)?;
+        self.paths(DocumentKind::Project)?;
         Ok(Health {
             reachable: true,
             detail: Some(format!("reading Markdown under {}", self.root.display())),
         })
     }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
-        Ok(self.find("tasks", id)?.map(task))
+        Ok(self.find(DocumentKind::Task, id)?.map(task))
     }
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
-        Ok(self.find("projects", id)?.map(project))
+        Ok(self.find(DocumentKind::Project, id)?.map(project))
     }
     async fn query_tasks(&self, q: &TaskQuery, p: &PageRequest) -> Result<Page<Task>, SourceError> {
         let items = self
-            .documents("tasks")?
+            .documents(DocumentKind::Task)?
             .into_iter()
             .map(task)
             .filter(|t| {
@@ -471,7 +491,7 @@ impl TaskSource for LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         let items = self
-            .documents("projects")?
+            .documents(DocumentKind::Project)?
             .into_iter()
             .map(project)
             .filter(|x| {
@@ -487,9 +507,9 @@ impl TaskSource for LocalMdSource {
     async fn labels(&self, p: &PageRequest) -> Result<Page<Label>, SourceError> {
         let mut seen = BTreeSet::new();
         let mut items: Vec<Label> = self
-            .documents("tasks")?
+            .documents(DocumentKind::Task)?
             .into_iter()
-            .chain(self.documents("projects")?)
+            .chain(self.documents(DocumentKind::Project)?)
             .flat_map(|d| d.labels)
             .filter(|l| seen.insert(l.name.to_lowercase()))
             .collect();
@@ -502,7 +522,7 @@ impl TaskSource for LocalMdSource {
         d: Direction,
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        self.edges("tasks", id, d, p)
+        self.edges(DocumentKind::Task, id, d, p)
     }
     async fn project_dependencies(
         &self,
@@ -510,19 +530,19 @@ impl TaskSource for LocalMdSource {
         d: Direction,
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        self.edges("projects", id, d, p)
+        self.edges(DocumentKind::Project, id, d, p)
     }
 }
 impl LocalMdSource {
     fn edges(
         &self,
-        k: &str,
+        kind: DocumentKind,
         id: &NativeId,
         d: Direction,
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         let edges = self
-            .documents(k)?
+            .documents(kind)?
             .into_iter()
             .flat_map(|x| x.dependencies)
             .filter(|e| match d {

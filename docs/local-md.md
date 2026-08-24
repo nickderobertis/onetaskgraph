@@ -1,5 +1,10 @@
 # Local Markdown source
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This page documents the
+     human-authored Markdown input format, while the machine-readable configuration
+     contract has one source in `LocalMdConfig` and `Plugin::config_schema`; the plugin's
+     public schema test checks required and rejected fields at that generated boundary. -->
+
 Configure `plugin: local-md` with a `root` directory. The plugin reads Markdown from
 `root/tasks/` and `root/projects/`, recursively. A file's native identifier is its path
 relative to that directory without `.md`; for example `tasks/team/release.md` is task
