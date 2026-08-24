@@ -261,8 +261,11 @@ impl GitHubProjectsSource {
         }"#;
         let data = self.graphql(QUERY, json!({"owner":self.owner,"number":self.project_number,"first":items_first.min(MAX_PAGE_SIZE),"after":items_after})).await?;
         data.pointer("/organization/projectV2")
-            .or_else(|| data.pointer("/user/projectV2"))
             .filter(|v| !v.is_null())
+            .or_else(|| {
+                data.pointer("/user/projectV2")
+                    .filter(|value| !value.is_null())
+            })
             .cloned()
             .ok_or_else(|| SourceError::Refused {
                 message: format!(

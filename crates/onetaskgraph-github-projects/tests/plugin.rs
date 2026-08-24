@@ -168,6 +168,33 @@ async fn reads_and_normalizes_a_real_graphql_response_through_http() {
 }
 
 #[tokio::test]
+async fn resolves_user_owned_projects_and_ignores_unsupported_predicates() {
+    let mut response = project_response(false);
+    let project = response["data"]["organization"]["projectV2"].clone();
+    response["data"]["organization"]["projectV2"] = Value::Null;
+    response["data"]["user"]["projectV2"] = project;
+    let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+    let source = build(&endpoint);
+    let mut query = TaskQuery::default();
+    query.labels.any_of.push("absent".into());
+    query.statuses.push(StatusCategory::Cancelled);
+    query.text = Some(onetaskgraph_plugin_api::TextQuery {
+        terms: "absent".into(),
+        fields: onetaskgraph_plugin_api::TextFields::TitleOrContent,
+    });
+    assert_eq!(
+        source
+            .query_tasks(&query, &page(10))
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+    handle.join().unwrap();
+}
+
+#[tokio::test]
 async fn exposes_project_health_and_lookup_over_the_public_trait() {
     let (endpoint, handle) = server("200 OK", project_response(false), 3, "projectV2");
     let source = build(&endpoint);
@@ -273,6 +300,29 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
     assert_eq!(edges.items.len(), 1);
     assert_eq!(edges.items[0].from.0, "PVT_blocker");
     assert_eq!(edges.items[0].to.0, "PVT_project");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn project_dependency_failures_are_explicit() {
+    let source = build("http://127.0.0.1:1/graphql");
+    assert!(matches!(
+        source
+            .project_dependencies(
+                &NativeId("PVT_project".into()),
+                Direction::DependedOnBy,
+                &page(10)
+            )
+            .await,
+        Err(SourceError::Refused { .. })
+    ));
+    let (endpoint, handle) = server("200 OK", project_response(false), 1, "projectV2");
+    assert!(matches!(
+        build(&endpoint)
+            .project_dependencies(&NativeId("missing".into()), Direction::DependsOn, &page(10))
+            .await,
+        Err(SourceError::Refused { .. })
+    ));
     handle.join().unwrap();
 }
 

@@ -698,7 +698,7 @@ fn a_limit_smaller_than_the_result_set_walks_to_exhaustion_in_a_stable_order() {
 }
 
 #[test]
-fn a_plugin_whose_source_has_not_landed_says_so_and_leaves_the_command_usable() {
+fn a_registered_plugin_without_a_shared_fixture_explains_why_it_is_unavailable() {
     // A `Pending` row is a journey, not a placeholder: its plugin is registered, so a
     // configuration naming it is valid, and what a user must get is that plugin's own
     // message rather than "unknown plugin" — and exit 4, because this is one source

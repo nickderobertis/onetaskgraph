@@ -207,9 +207,9 @@ pub const ROWS: &[Row] = &[
     Row {
         plugin: "github-projects",
         name: "github-projects",
-        // The hosted source has landed, but the deterministic shared journey fixture
-        // cannot carry a GitHub credential. Its HTTP-boundary journeys live in the
-        // plugin crate and the credential-gated lane remains separate.
+        // The source implementation has landed; this marker means only that the shared
+        // binary journey has no fixture-server configuration yet. HTTP-boundary journeys
+        // live in the plugin crate and the credential-gated lane remains separate.
         fixture: Fixture::Pending,
     },
 ];
