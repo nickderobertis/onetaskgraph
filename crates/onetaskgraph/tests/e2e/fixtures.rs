@@ -12,6 +12,12 @@
 //! the plugin refuses with its own message — so a placeholder cannot sit here doing
 //! nothing.
 
+use std::{
+    io::{Read, Write},
+    net::TcpListener,
+    thread,
+};
+
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, SourceBoundary};
@@ -41,6 +47,8 @@ pub struct Ready {
     pub block: fn(&Sandbox) -> Value,
     /// What this configuration declares it applies itself.
     pub declared: Declared,
+    /// Whether this source can represent the complete cross-plugin dataset.
+    pub complete_dataset: bool,
 }
 
 /// What one row's source declares, so a journey can assert the plan as well as the rows.
@@ -135,6 +143,7 @@ pub const ROWS: &[Row] = &[
         name: "in-memory (declares everything native)",
         fixture: Fixture::Ready(Ready {
             block: native_block,
+            complete_dataset: true,
             declared: Declared {
                 filter_by_label: true,
                 filter_by_status: true,
@@ -151,6 +160,7 @@ pub const ROWS: &[Row] = &[
         name: "in-memory (declares nothing native, forward-only)",
         fixture: Fixture::Ready(Ready {
             block: compensated_block,
+            complete_dataset: true,
             declared: Declared {
                 filter_by_label: false,
                 filter_by_status: false,
@@ -167,6 +177,7 @@ pub const ROWS: &[Row] = &[
         name: "subprocess (the in-memory source over a real pipe)",
         fixture: Fixture::Ready(Ready {
             block: hosted_block,
+            complete_dataset: true,
             declared: Declared {
                 filter_by_label: true,
                 filter_by_status: true,
@@ -183,6 +194,7 @@ pub const ROWS: &[Row] = &[
         name: "local-md",
         fixture: Fixture::Ready(Ready {
             block: local_md_block,
+            complete_dataset: true,
             // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The journeys use
             // these expectations to assert the real binary's reported plan, whose values
             // come from `LocalMdSource::capabilities`; changing that implementation without
@@ -207,12 +219,161 @@ pub const ROWS: &[Row] = &[
     Row {
         plugin: "github-projects",
         name: "github-projects",
-        // The source implementation has landed; this marker means only that the shared
-        // binary journey has no fixture-server configuration yet. HTTP-boundary journeys
-        // live in the plugin crate and the credential-gated lane remains separate.
-        fixture: Fixture::Pending,
+        fixture: Fixture::Ready(Ready {
+            block: github_projects_block,
+            // One GitHub source is exactly one ProjectV2 board and every item belongs to
+            // it. It cannot faithfully represent the table's two projects and orphan.
+            // Focused journeys drive this working row over the subset GitHub can model.
+            complete_dataset: false,
+            declared: Declared {
+                filter_by_label: false,
+                filter_by_status: false,
+                search_title: false,
+                search_content: false,
+                orphan_tasks: false,
+                reverse_task_dependencies: false,
+                reverse_project_dependencies: false,
+            },
+        }),
     },
 ];
+
+fn github_projects_block(sandbox: &Sandbox) -> Value {
+    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
+    let endpoint = format!(
+        "http://{}/graphql",
+        listener.local_addr().expect("fixture address")
+    );
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.expect("GitHub fixture connection");
+            let request = read_http_json(&mut stream);
+            let query = request["query"].as_str().expect("GraphQL query string");
+            let variables = &request["variables"];
+            let data = if query.contains("node(id:$id)") {
+                let id = variables["id"].as_str().expect("dependency id");
+                let blockers = match id {
+                    "T-1" | "T-3" | "T-4" => vec![json!({"id":"T-2","projectItems":{"nodes":[]}})],
+                    _ => vec![],
+                };
+                json!({"node":{"blockedBy":{"nodes":blockers,"pageInfo":{"hasNextPage":false,"endCursor":null}}}})
+            } else {
+                github_project_page(variables)
+            };
+            let body = json!({"data":data}).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("GitHub fixture response");
+        }
+    });
+    json!({
+        "owner": "fixture-owner",
+        "project_number": 7,
+        "token_env": "GITHUB_PROJECTS_FIXTURE_TOKEN",
+        "endpoint": endpoint,
+        "status_mapping": {"Doing":"in-progress", "Shipped":"done"}
+    })
+}
+
+fn read_http_json(stream: &mut impl Read) -> Value {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    loop {
+        let count = stream.read(&mut chunk).expect("fixture request");
+        bytes.extend_from_slice(&chunk[..count]);
+        if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    let header_end = bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("HTTP header terminator")
+        + 4;
+    let headers = String::from_utf8_lossy(&bytes[..header_end]);
+    assert!(headers.contains("authorization: Bearer test-token"));
+    let length = headers
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("content-length: ")
+                .and_then(|value| value.parse::<usize>().ok())
+        })
+        .expect("Content-Length");
+    while bytes.len() - header_end < length {
+        let count = stream.read(&mut chunk).expect("fixture request body");
+        bytes.extend_from_slice(&chunk[..count]);
+    }
+    serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
+}
+
+fn github_project_page(variables: &Value) -> Value {
+    let tasks = [
+        (
+            "T-1",
+            "Alpha engine",
+            "the engine core",
+            "Todo",
+            "OPEN",
+            vec![("L-1", "bug"), ("L-3", "core")],
+        ),
+        (
+            "T-2",
+            "Beta",
+            "alpha in the body",
+            "Shipped",
+            "CLOSED",
+            vec![("L-2", "chore")],
+        ),
+        (
+            "T-3",
+            "Gamma",
+            "unrelated",
+            "Todo",
+            "OPEN",
+            vec![("L-1", "bug")],
+        ),
+        (
+            "T-4",
+            "Delta docs",
+            "documentation",
+            "Doing",
+            "OPEN",
+            vec![("L-3", "core")],
+        ),
+    ];
+    let offset = variables["after"]
+        .as_str()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let first = variables["first"].as_u64().unwrap_or(100) as usize;
+    let end = (offset + first).min(tasks.len());
+    let nodes = tasks[offset..end]
+        .iter()
+        .map(|(id, title, body, status, state, labels)| json!({
+            "id": format!("ITEM-{id}"),
+            "fieldValues":{"nodes":[{"name":status,"field":{"name":"Status"}}]},
+            "content":{
+                "id":id,"title":title,"body":body,"state":state,
+                "url":format!("https://example.invalid/{id}"),
+                "labels":{"nodes":labels.iter().map(|(id, name)| json!({"id":id,"name":name})).collect::<Vec<_>>()}
+            }
+        }))
+        .collect::<Vec<_>>();
+    json!({
+        "organization":{"projectV2":{
+            "id":"P-1","title":"Engine","shortDescription":"alpha engine project",
+            "url":"https://example.invalid/P-1","closed":false,
+            "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < tasks.len(),"endCursor":end.to_string()}}
+        }},
+        "user":{"projectV2":null}
+    })
+}
 
 fn local_md_block(sandbox: &Sandbox) -> Value {
     let root = sandbox.subdirectory("local-md");

@@ -86,7 +86,97 @@ fn plan_says(row: &Row, rendered: &str, outcome: &str, predicate: &str) {
 /// Every row that can be configured today.
 fn ready() -> impl Iterator<Item = &'static Row> {
     ROWS.iter()
-        .filter(|row| matches!(row.fixture, Fixture::Ready(_)))
+        .filter(|row| matches!(&row.fixture, Fixture::Ready(ready) if ready.complete_dataset))
+}
+
+#[test]
+fn github_projects_runs_shared_binary_journeys_against_its_fixture_server() {
+    let row = ROWS
+        .iter()
+        .find(|row| row.plugin == "github-projects")
+        .expect("GitHub Projects fixture row");
+    let sandbox = host(row);
+
+    let listed_tasks = ok(row, &sandbox, &["task", "list"]);
+    assert_eq!(listed(&listed_tasks), ours(&["T-1", "T-2", "T-3", "T-4"]));
+
+    let filtered = ok(
+        row,
+        &sandbox,
+        &[
+            "task",
+            "list",
+            "--label",
+            "bug",
+            "--status",
+            "todo",
+            "--explain",
+        ],
+    );
+    assert_eq!(listed(&filtered), ours(&["T-1", "T-3"]));
+    plan_says(row, &filtered, "applied locally", "label");
+    plan_says(row, &filtered, "applied locally", "status");
+
+    let searched = ok(
+        row,
+        &sandbox,
+        &[
+            "task",
+            "list",
+            "--search",
+            "alpha",
+            "--in",
+            "both",
+            "--explain",
+        ],
+    );
+    assert_eq!(listed(&searched), ours(&["T-1", "T-2"]));
+    plan_says(row, &searched, "applied locally", "search-title");
+    plan_says(row, &searched, "applied locally", "search-content");
+
+    let dependencies = ok(row, &sandbox, &["task", "deps", &qualified(SOURCE, "T-1")]);
+    assert!(
+        dependencies.contains(&qualified(SOURCE, "T-2")),
+        "{dependencies}"
+    );
+
+    let mut walked = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let mut arguments = vec!["task", "list", "--limit", "1"];
+        if let Some(page) = &token {
+            arguments.extend(["--page", page]);
+        }
+        let rendered = ok(row, &sandbox, &arguments);
+        walked.extend(listed(&rendered));
+        token = rendered
+            .lines()
+            .find_map(|line| line.strip_prefix("next page: --page "))
+            .map(str::to_owned);
+        if token.is_none() {
+            break;
+        }
+    }
+    assert_eq!(walked, ours(&["T-1", "T-2", "T-3", "T-4"]));
+}
+
+#[test]
+fn github_projects_missing_credential_reaches_the_binary_user() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&document(&json!({
+        SOURCE: {"plugin":"github-projects","config":{
+            "owner":"fixture-owner","project_number":7,
+            "token_env":"DELIBERATELY_MISSING_GITHUB_TOKEN"
+        }}
+    })));
+    let output = run(&sandbox, &["task", "list"]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let complaint = stderr(&output);
+    assert!(
+        complaint.contains("DELIBERATELY_MISSING_GITHUB_TOKEN"),
+        "{complaint}"
+    );
+    assert!(complaint.contains("--allow-partial"), "{complaint}");
 }
 
 #[test]
