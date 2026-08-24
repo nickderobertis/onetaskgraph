@@ -100,6 +100,12 @@ page size you choose: `--limit 3` and `--limit 50` differ in how many round trip
 and in nothing else. The token is the engine's own; a source's cursor travels inside it
 untouched, and a walk returns every row exactly once.
 
+A token belongs to the query that produced it. Resuming it from a query that asks for
+something else — another `--label`, another `--search`, another `--source`, the other
+`--direction` — is refused rather than answered, because every cursor inside it is a
+position in the result set the original query returned, and picking up there under new
+filters returns real rows from a walk you are not doing. Change the query, drop `--page`.
+
 ## Install
 
 The command-line tool ships as a self-contained binary. Once a release is cut, install it
