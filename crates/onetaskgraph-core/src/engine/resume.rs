@@ -52,6 +52,23 @@ pub(crate) struct Resume {
     pub skip: u32,
 }
 
+/// A page token's whole document: the query it was minted for, and where each of that
+/// query's streams picks up.
+///
+/// The query is here because every cursor below is an offset into *one* result set. Hand
+/// them to a different query — the same verb with a different `--label`, a different
+/// `--search`, a different `--direction` — and each source resumes at a position that
+/// meant something in a walk the caller is no longer doing. The rows that come back are
+/// real rows and the exit code is zero, so nothing about the answer says it is arbitrary.
+/// That is the same failure the stream-kind check refuses, one layer in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Resumption {
+    /// A fingerprint of the query that minted this token — see `Engine`'s `shape`.
+    pub query: String,
+    /// Where each of that query's streams picks up.
+    pub streams: Vec<StreamState>,
+}
+
 /// One stream's place, as the page token carries it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct StreamState {

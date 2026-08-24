@@ -8,7 +8,7 @@ use std::process::Output;
 
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{ROWS, dataset, document, qualified};
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// A sandbox holding one working `in-memory` source called `work`.
 fn host() -> Sandbox {
@@ -47,6 +47,47 @@ fn refused(output: &Output, problem: &str, next: &str) {
         complaint.contains(next),
         "the message suggests no next action ({next}):\n{complaint}"
     );
+}
+
+/// A page token whose streams are `streams` and whose query is the one a plain
+/// `task list` over `sandbox` really carries.
+///
+/// The query half is lifted from a token the binary itself minted rather than computed
+/// here: the fingerprint is the engine's, a test that recomputed it would be asserting
+/// against its own arithmetic, and one that drifted would pass for the wrong reason.
+/// These journeys are about the *streams* half, so they need the other half to be real.
+fn token_over(sandbox: &Sandbox, streams: &Value) -> String {
+    let minted: Value = serde_json::from_str(&stdout(&run(
+        sandbox,
+        &["task", "list", "--limit", "1", "--json"],
+    )))
+    .expect("--json emits a response");
+    let carried = minted["next"]
+        .as_str()
+        .expect("one page of four leaves more");
+    let decoded: Value = serde_json::from_slice(&unhex(carried)).expect("a token holds JSON");
+
+    let document = serde_json::to_string(&json!({
+        "query": decoded["query"].clone(),
+        "streams": streams,
+    }))
+    .expect("a resume document renders");
+    document
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The bytes a lower-case hex token spells.
+fn unhex(raw: &str) -> Vec<u8> {
+    raw.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            u8::from_str_radix(std::str::from_utf8(pair).expect("hex is ascii"), 16)
+                .expect("a token is hex")
+        })
+        .collect()
 }
 
 #[test]
@@ -123,40 +164,97 @@ fn a_well_shaped_token_this_configuration_cannot_honour_is_refused_for_what_it_s
     // decodes perfectly and asks for something this configuration has no answer for.
     // Silently ignoring any of these would resume half a walk and look like a short page.
     //
-    // Each is the hex of one resume document, spelled out here because a token is opaque
-    // by construction and there is deliberately no public way to build one from parts:
-    for (token, document, problem) in [
+    // Each carries the real query fingerprint of the walk it is handed to, so what is
+    // under test is the streams it names rather than the check that it belongs to this
+    // query at all — that one has a journey of its own below.
+    let sandbox = host();
+    for (streams, problem) in [
         (
-            "5b7b22736f75726365223a22656c73657768657265222c2273747265616d223a226974656d73227d5d",
-            r#"[{"source":"elsewhere","stream":"items"}]"#,
+            json!([{"source": "elsewhere", "stream": "items"}]),
             "does not have",
         ),
         (
-            "5b7b22736f75726365223a22776f726b222c2273747265616d223a226974656d73222c22736b6970223a3939397d5d",
-            r#"[{"source":"work","stream":"items","skip":999}]"#,
+            json!([{"source": "work", "stream": "items", "skip": 999}]),
             "serves at most",
         ),
         (
-            "5b7b22736f75726365223a22776f726b222c2273747265616d223a226974656d73227d2c7b22736f75726365223a22776f726b222c2273747265616d223a226974656d73222c22736b6970223a317d5d",
-            r#"[{"source":"work","stream":"items"},{"source":"work","stream":"items","skip":1}]"#,
+            json!([
+                {"source": "work", "stream": "items"},
+                {"source": "work", "stream": "items", "skip": 1},
+            ]),
             "two places to resume",
         ),
         // The one that would otherwise exit 0 with an empty page: a token a `search`
         // minted, handed to `task list`, which reads neither of the streams it names.
         (
-            "5b7b22736f75726365223a22776f726b222c2273747265616d223a227461736b73227d5d",
-            r#"[{"source":"work","stream":"tasks"}]"#,
+            json!([{"source": "work", "stream": "tasks"}]),
             "this command does not read",
         ),
     ] {
-        let output = run(&host(), &["task", "list", "--page", token]);
+        let token = token_over(&sandbox, &streams);
+        let output = run(&sandbox, &["task", "list", "--page", &token]);
         assert_eq!(
             output.status.code(),
             Some(1),
-            "{document} must be refused:\n{}",
+            "{streams} must be refused:\n{}",
             stdout(&output)
         );
         refused(&output, problem, "the same configuration");
+    }
+}
+
+#[test]
+fn a_token_from_one_query_is_refused_by_another_rather_than_resuming_it_somewhere_else() {
+    // Every cursor in a token is an offset into the result set *one* query produced. Hand
+    // one to a different query and each source picks up at a position that meant
+    // something in a walk the caller is no longer doing — and what comes back is real
+    // rows at exit zero, with nothing about the answer to say it is arbitrary. That is
+    // the worst shape this can take, so it is refused rather than served.
+    let sandbox = host();
+    let minted: Value = serde_json::from_str(&stdout(&run(
+        &sandbox,
+        &["task", "list", "--label", "bug", "--limit", "1", "--json"],
+    )))
+    .expect("--json emits a response");
+    let token = minted["next"].as_str().expect("two tasks carry that label");
+
+    // The same query resumes, so what follows refuses a mismatch rather than every token.
+    let same = run(
+        &sandbox,
+        &[
+            "task", "list", "--label", "bug", "--limit", "1", "--page", token,
+        ],
+    );
+    assert_eq!(
+        same.status.code(),
+        Some(0),
+        "the walk it came from must still resume:\n{}",
+        stderr(&same)
+    );
+
+    for arguments in [
+        vec!["task", "list", "--label", "core", "--limit", "1"],
+        vec!["task", "list", "--limit", "1"],
+        vec![
+            "task", "list", "--label", "bug", "--status", "todo", "--limit", "1",
+        ],
+        vec![
+            "task", "list", "--label", "bug", "--search", "alpha", "--limit", "1",
+        ],
+        vec!["project", "list", "--limit", "1"],
+        vec!["label", "list", "--limit", "1"],
+    ] {
+        let mut with_token = arguments.clone();
+        with_token.extend(["--page", token]);
+        let output = run(&sandbox, &with_token);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "`{}` must not resume a token another query minted:\n{}",
+            arguments.join(" "),
+            stdout(&output)
+        );
+        refused(&output, "written by a different query", "drop `--page`");
     }
 }
 

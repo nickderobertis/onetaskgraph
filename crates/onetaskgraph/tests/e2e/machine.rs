@@ -120,6 +120,20 @@ fn every_verbs_machine_readable_output_validates_against_the_emitted_schema() {
         );
     }
 
+    // `config show --json` answers about the configuration rather than about work, so it
+    // carries no items and no plan — but it is a verb with a machine-readable form, and a
+    // root in the bundle, so an SDK is generated against it like any other.
+    let effective = stdout(
+        sandbox
+            .command()
+            .args(["config", "show", "--json"])
+            .assert()
+            .success()
+            .get_output(),
+    );
+    let effective: Value = serde_json::from_str(&effective).expect("JSON");
+    validates(&bundle, "EffectiveConfig", &effective, "config show --json");
+
     // `sources list --json` is an array of listings rather than a query response.
     let listings = stdout(
         sandbox

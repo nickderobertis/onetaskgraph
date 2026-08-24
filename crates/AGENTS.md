@@ -1,9 +1,12 @@
 <!-- llmlint: ignore-file[instruction_layer_localized] this file *is* the localized layer
      the rule asks for — the crate-subtree rules live here and the repo-wide ones stay in
-     the root `AGENTS.md`. What it also asks for, `CODEOWNERS` review routing, the root
-     file's own directive explains this repository has decided against: zero required
-     approvals because nobody reviews these pull requests, and GitHub does not request
-     review from a pull request's own author. -->
+     the root `AGENTS.md`. Its other half, `CODEOWNERS` review routing, this repository has
+     decided against: it requires zero approvals to merge because nobody reviews these pull
+     requests, and GitHub does not request review from a pull request's own author, so a
+     `CODEOWNERS` naming its one owner would route nothing to nobody. Adding one would also
+     fork the merge-path arrangement away from its source of truth, the create-repo skill's
+     `setup_github_governance.py`. If review ever becomes something that happens here,
+     delete this directive and add the file. -->
 # Working in `crates/`
 
 ## Adding a plugin

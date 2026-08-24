@@ -9,7 +9,7 @@ use onetaskgraph_plugin_api::{SourceError, SourceName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::engine::StreamState;
+use crate::engine::{Resumption, StreamState};
 
 /// One page of engine output, with the plan that produced it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -149,9 +149,12 @@ impl PageToken {
     /// Only ever reached with at least one stream, because a walk with nothing left to
     /// resume reports no token at all — which is why [`parse`](Self::parse) refuses an
     /// empty one.
-    pub(crate) fn encode(streams: &[StreamState]) -> Self {
-        let document = serde_json::to_string(streams)
-            .expect("a stream state is plain data and always serialises");
+    pub(crate) fn encode(query: &str, streams: &[StreamState]) -> Self {
+        let document = serde_json::to_string(&Resumption {
+            query: query.to_owned(),
+            streams: streams.to_vec(),
+        })
+        .expect("a resumption is plain data and always serialises");
         Self(to_hex(&document))
     }
 
@@ -185,20 +188,21 @@ impl PageToken {
     /// — and deserialising one goes through `parse`. So a token that does not decode
     /// never exists to be read here. Whether what it *says* is usable against the query
     /// being resumed is the engine's to decide, not this type's.
-    pub(crate) fn decode(&self) -> Vec<StreamState> {
+    pub(crate) fn decode(&self) -> Resumption {
         self.streams()
             .expect("every way to build a PageToken validates it")
     }
 
-    /// The states inside, or why this is not one of this engine's tokens.
-    fn streams(&self) -> Result<Vec<StreamState>, SourceError> {
+    /// The document inside, or why this is not one of this engine's tokens.
+    fn streams(&self) -> Result<Resumption, SourceError> {
         let document = from_hex(&self.0).ok_or_else(|| SourceError::Malformed {
             message: "that is not a page token this engine writes: it is not even hex".to_owned(),
         })?;
-        let streams: Vec<StreamState> =
+        let resumption: Resumption =
             serde_json::from_str(&document).map_err(|error| SourceError::Malformed {
                 message: format!("that is not a page token this engine writes: {error}"),
             })?;
+        let streams = &resumption.streams;
         // A token with nothing to resume is one this engine never writes: `encode` is
         // reached only while at least one stream still has rows to give, and a walk with
         // none reports no token at all. Accepting one would answer an empty page and exit
@@ -209,7 +213,7 @@ impl PageToken {
                     .to_owned(),
             });
         }
-        Ok(streams)
+        Ok(resumption)
     }
 }
 

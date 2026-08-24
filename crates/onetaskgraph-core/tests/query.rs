@@ -1312,7 +1312,7 @@ async fn a_page_token_this_configuration_cannot_honour_is_refused_for_what_it_sa
             "this command does not read",
         ),
     ] {
-        let raw = serde_json::to_string(&document).expect("a resume document renders");
+        let raw = document_for_task_list(&engine, &document).await;
         let token = PageToken::parse(hex(&raw)).expect("it is this engine's own document");
         let Err(EngineError::Token { message }) = engine
             .tasks(&tasks(
@@ -1339,6 +1339,40 @@ fn hex(document: &str) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// A token document whose streams are `streams` and whose query is the one `engine`
+/// fingerprints for a plain `task list`.
+///
+/// The fingerprint is lifted from a token the engine really minted rather than computed
+/// here, because computing it would mean a test reimplementing the thing under test — and
+/// one that drifted would start passing for the wrong reason. What these tests are about
+/// is the *streams* half of the document, so they need the query half to be the one the
+/// query they resume actually carries.
+async fn document_for_task_list(engine: &Engine, streams: &Value) -> String {
+    let minted = engine
+        .tasks(&tasks(Filters::default(), ProjectSelector::Any, page(1)))
+        .await
+        .expect("the query runs")
+        .next
+        .expect("the fixture holds more rows than one page");
+    let decoded = String::from_utf8(
+        minted
+            .as_str()
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| {
+                u8::from_str_radix(std::str::from_utf8(pair).expect("hex is ascii"), 16)
+                    .expect("a token is hex")
+            })
+            .collect(),
+    )
+    .expect("a token's document is UTF-8");
+    let query =
+        serde_json::from_str::<Value>(&decoded).expect("a token's document is JSON")["query"]
+            .clone();
+    serde_json::to_string(&json!({"query": query, "streams": streams}))
+        .expect("a resume document renders")
 }
 
 #[tokio::test]
@@ -1431,11 +1465,14 @@ async fn a_page_token_owing_two_streams_the_next_row_is_refused() {
         "two": {"plugin": "in-memory", "config": compensated(nothing_native())},
     }));
 
-    let raw = serde_json::to_string(&json!([
-        {"source": "one", "stream": "items", "first": true},
-        {"source": "two", "stream": "items", "first": true},
-    ]))
-    .expect("a resume document renders");
+    let raw = document_for_task_list(
+        &engine,
+        &json!([
+            {"source": "one", "stream": "items", "first": true},
+            {"source": "two", "stream": "items", "first": true},
+        ]),
+    )
+    .await;
     let token = PageToken::parse(hex(&raw)).expect("it is this engine's own document");
 
     let Err(EngineError::Token { message }) = engine

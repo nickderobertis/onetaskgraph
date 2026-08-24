@@ -40,8 +40,8 @@ use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available};
 use fetch::{Fetched, Stream, fits, merge, walk};
 use join::join_all;
 use local::{LocalProjects, LocalTasks};
-pub(crate) use resume::StreamState;
 use resume::{Resume, StreamKind};
+pub(crate) use resume::{Resumption, StreamState};
 
 pub use local::ProjectSelector;
 
@@ -100,6 +100,16 @@ pub struct SourceListing {
     /// The name the configuration gave it.
     pub source: SourceName,
     /// The plugin kind behind it.
+    ///
+    /// A `String` because the vocabulary is open, not because it was not thought about:
+    /// this is the kind a source reports, and a subprocess-hosted plugin reports one
+    /// arriving over the wire from a binary this workspace never compiled. No
+    /// compile-time enumeration can hold that, and a newtype over the same string would
+    /// only move where an unrelated value is accepted.
+    // llmlint: ignore[invalid_states_unrepresentable] the reason above, and the one
+    // recorded for the same field of `SourcePlan` in plan.rs: `kind` is an open
+    // vocabulary a subprocess plugin extends at run time, and `SourcePlan.kind: String`
+    // is approved contract text this field is rendered beside.
     pub kind: String,
     /// Whether it built, and what it can do if it did.
     #[serde(flatten)]
@@ -340,7 +350,13 @@ impl Engine {
             self.known(&id.source)?;
             names.retain(|name| name == &id.source);
         }
-        let states = resumption(self, request.paging.token.as_ref(), &[StreamKind::Items])?;
+        let query = shape("task-list", &names, &(&request.filters, &request.project));
+        let states = resumption(
+            self,
+            request.paging.token.as_ref(),
+            &[StreamKind::Items],
+            &query,
+        )?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
@@ -374,12 +390,16 @@ impl Engine {
             .collect();
 
         let streams = answer.collect(&ready, join_all(walks).await, &counters, outcomes);
-        answer.finish(streams, budget, owed(&states), |name, task: Task| {
-            Qualified {
+        answer.finish(
+            streams,
+            budget,
+            owed(&states),
+            &query,
+            |name, task: Task| Qualified {
                 id: GlobalId::new(name.clone(), task.id.clone()),
                 item: task,
-            }
-        })
+            },
+        )
     }
 
     /// One page of projects.
@@ -392,7 +412,13 @@ impl Engine {
         request: &ProjectRequest,
     ) -> Result<QueryResponse<Qualified<Project>>, EngineError> {
         let names = self.resolve_selection(&request.sources)?;
-        let states = resumption(self, request.paging.token.as_ref(), &[StreamKind::Items])?;
+        let query = shape("project-list", &names, &request.filters);
+        let states = resumption(
+            self,
+            request.paging.token.as_ref(),
+            &[StreamKind::Items],
+            &query,
+        )?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
@@ -433,12 +459,16 @@ impl Engine {
             .collect();
 
         let streams = answer.collect(&ready, join_all(walks).await, &counters, outcomes);
-        answer.finish(streams, budget, owed(&states), |name, project: Project| {
-            Qualified {
+        answer.finish(
+            streams,
+            budget,
+            owed(&states),
+            &query,
+            |name, project: Project| Qualified {
                 id: GlobalId::new(name.clone(), project.id.clone()),
                 item: project,
-            }
-        })
+            },
+        )
     }
 
     /// One page of labels.
@@ -451,7 +481,13 @@ impl Engine {
         request: &LabelRequest,
     ) -> Result<QueryResponse<Qualified<Label>>, EngineError> {
         let names = self.resolve_selection(&request.sources)?;
-        let states = resumption(self, request.paging.token.as_ref(), &[StreamKind::Items])?;
+        let query = shape("label-list", &names, &());
+        let states = resumption(
+            self,
+            request.paging.token.as_ref(),
+            &[StreamKind::Items],
+            &query,
+        )?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
@@ -466,12 +502,16 @@ impl Engine {
             .collect();
 
         let streams = answer.collect(&ready, join_all(walks).await, &counters, outcomes);
-        answer.finish(streams, budget, owed(&states), |name, label: Label| {
-            Qualified {
+        answer.finish(
+            streams,
+            budget,
+            owed(&states),
+            &query,
+            |name, label: Label| Qualified {
                 id: GlobalId::new(name.clone(), label.id.clone()),
                 item: label,
-            }
-        })
+            },
+        )
     }
 
     /// One page of search hits, over tasks, projects, or both.
@@ -492,7 +532,12 @@ impl Engine {
             SearchKind::Projects => &[StreamKind::Projects],
             SearchKind::Both => &[StreamKind::Tasks, StreamKind::Projects],
         };
-        let states = resumption(self, request.paging.token.as_ref(), reads)?;
+        // The scope is deliberately not in the fingerprint: which streams a search covers
+        // is exactly what `reads` checks below, name by name and with a message that says
+        // which half a token names. Folding it in here would refuse the same mistake one
+        // layer earlier and less clearly, and leave that check unreachable.
+        let query = shape("search", &names, &request.text);
+        let states = resumption(self, request.paging.token.as_ref(), reads, &query)?;
         let budget = request.paging.limit.get();
         let filters = Filters {
             text: Some(request.text.clone()),
@@ -555,6 +600,7 @@ impl Engine {
             streams,
             budget,
             owed(&states),
+            &query,
             |name, found: Found| match found {
                 Found::Task(task) => SearchHit::Task(Qualified {
                     id: GlobalId::new(name.clone(), task.id.clone()),
@@ -645,7 +691,17 @@ impl Engine {
         entity: Entity,
     ) -> Result<QueryResponse<QualifiedEdge>, EngineError> {
         let name = self.known(&request.id.source)?;
-        let states = resumption(self, request.paging.token.as_ref(), &[StreamKind::Items])?;
+        let query = shape(
+            "dependencies",
+            std::slice::from_ref(&name),
+            &(entity, &request.id.native, request.direction),
+        );
+        let states = resumption(
+            self,
+            request.paging.token.as_ref(),
+            &[StreamKind::Items],
+            &query,
+        )?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
@@ -694,6 +750,7 @@ impl Engine {
             streams,
             budget,
             owed(&states),
+            &query,
             |name, edge: DependencyEdge| QualifiedEdge {
                 from: GlobalId::new(name.clone(), edge.from),
                 to: GlobalId::new(name.clone(), edge.to),
@@ -982,10 +1039,11 @@ impl Answer {
         streams: Vec<Stream<T>>,
         budget: u32,
         first: Option<(&SourceName, StreamKind)>,
+        query: &str,
         qualify: impl Fn(&SourceName, T) -> U,
     ) -> Result<QueryResponse<U>, EngineError> {
         let (rows, states) = merge(streams, budget, first);
-        let next = (!states.is_empty()).then(|| PageToken::encode(&states));
+        let next = (!states.is_empty()).then(|| PageToken::encode(query, &states));
         Ok(QueryResponse {
             items: rows
                 .into_iter()
@@ -1067,6 +1125,38 @@ fn walking<'a>(
     (ready, starts)
 }
 
+/// A fingerprint of everything about a query that decides which rows it returns, and in
+/// what order — the verb, the sources it addresses, and every filter it carries.
+///
+/// Written from the request's own [`Debug`] rather than field by field, and that is the
+/// point: a filter added to `Filters` next year joins the fingerprint by existing. A
+/// hand-written canonical form would keep compiling with the new field missing, and the
+/// tokens it minted would silently stop distinguishing the queries that differ by it —
+/// which is the whole failure this exists to prevent, reintroduced quietly.
+///
+/// Hashed rather than carried whole so a token stays a thing a person can paste. This is
+/// not a signature and there is nothing secret in a token — see [`PageToken`]. It detects
+/// a caller resuming the wrong walk, which is a mistake rather than an attack, so FNV-1a
+/// is enough and needs no dependency the supply-chain gate would then have to weigh.
+///
+/// [`Debug`] output is not promised to be stable across compiler releases, and that is
+/// survivable here: a token outstanding across a rebuild is refused with the message
+/// above rather than honoured wrongly, which is the safe direction to fail in.
+fn shape(verb: &str, sources: &[SourceName], filters: &impl std::fmt::Debug) -> String {
+    let names: Vec<&str> = sources.iter().map(SourceName::as_str).collect();
+    fingerprint(&format!("{verb}|{names:?}|{filters:?}"))
+}
+
+/// FNV-1a over `text`, as sixteen hex digits.
+fn fingerprint(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
 /// The stream a token says is owed the next row, or `None` when it says none is.
 ///
 /// A fresh query has no token and every token whose last round ended evenly carries no
@@ -1123,10 +1213,26 @@ fn resumption(
     engine: &Engine,
     token: Option<&PageToken>,
     reads: &[StreamKind],
+    query: &str,
 ) -> Result<Option<Vec<StreamState>>, EngineError> {
-    let Some(states) = token.map(PageToken::decode) else {
+    let Some(document) = token.map(PageToken::decode) else {
         return Ok(None);
     };
+
+    // Every cursor below is an offset into the result set *one* query produced. Handed to
+    // a different one — the same verb with another `--label`, another `--search`, another
+    // `--direction` — each source picks up at a position that meant something in a walk
+    // the caller is no longer doing, and the rows that come back are real rows at exit
+    // zero. Nothing about that answer says it is arbitrary, which is what makes it worth
+    // refusing rather than serving.
+    if document.query != query {
+        return Err(EngineError::Token {
+            message: "this page token was written by a different query — resume the walk it \
+                      came from, or drop --page to start this one from the beginning"
+                .to_owned(),
+        });
+    }
+    let states = document.streams;
 
     let mut seen: Vec<(&SourceName, StreamKind)> = Vec::new();
     for state in &states {

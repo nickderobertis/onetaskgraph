@@ -441,10 +441,13 @@ fn a_response_carries_the_plan_that_produced_it_and_round_trips() {
             created_at: None,
             updated_at: None,
         }],
-        // The hex of `[{"source":"work","stream":"items","cursor":"50"}]` —
-        // one stream, resuming at the source's own opaque cursor.
+        // The hex of
+        // `{"query":"0123456789abcdef","streams":[{"source":"work","stream":"items","cursor":"50"}]}`
+        // — the fingerprint of the query that minted it, and one stream resuming at the
+        // source's own opaque cursor. Spelled out rather than built, so a change to the
+        // document a token carries has to be made here too and cannot pass unnoticed.
         next: Some(
-            PageToken::parse("5b7b22736f75726365223a22776f726b222c2273747265616d223a226974656d73222c22637572736f72223a223530227d5d")
+            PageToken::parse("7b227175657279223a2230313233343536373839616263646566222c2273747265616d73223a5b7b22736f75726365223a22776f726b222c2273747265616d223a226974656d73222c22637572736f72223a223530227d5d7d")
                 .expect("a token this engine issued"),
         ),
         plan: QueryPlan {
