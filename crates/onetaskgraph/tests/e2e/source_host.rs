@@ -1,4 +1,4 @@
-//! The other program this crate ships: the plugin side of the stdio protocol.
+//! The hidden command on the main program: the plugin side of the stdio protocol.
 //!
 //! Every journey in this suite already drives it, because the shared fixture table
 //! configures a source through it — but always as a child of the engine, where the engine
@@ -13,7 +13,41 @@ use serde_json::{Value, json};
 
 /// The shipped host, ready to be given a connection on its standard input.
 fn source_host() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_onetaskgraph-source"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+    command.args(["plugin-serve", "in-memory"]);
+    command
+}
+
+#[test]
+fn plugin_serve_is_hidden_from_normal_help() {
+    let output = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"))
+        .arg("--help")
+        .output()
+        .expect("the main command runs");
+
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).expect("help is UTF-8");
+    assert!(
+        !help.contains("plugin-serve"),
+        "hidden command leaked: {help}"
+    );
+}
+
+#[test]
+fn plugin_serve_refuses_a_source_this_build_does_not_have() {
+    let output = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"))
+        .args(["plugin-serve", "missing"])
+        .output()
+        .expect("the main command runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let complaint = String::from_utf8(output.stderr).expect("diagnostic is UTF-8");
+    assert!(
+        complaint.contains("unknown plugin \"missing\""),
+        "{complaint}"
+    );
+    assert!(complaint.contains("in-memory"), "{complaint}");
 }
 
 /// One `initialize` request over a source of one task.
@@ -25,13 +59,10 @@ fn handshake() -> Value {
             "protocol_version": 1,
             "engine": {"name": "onetaskgraph", "version": "0.1.0"},
             "source_name": "work",
-            "config": {
-                "kind": "in-memory",
-                "config": {"tasks": [{
+            "config": {"tasks": [{
                     "id": "T-1", "title": "Alpha",
                     "status": {"category": "todo", "name": "Todo"}, "labels": []
-                }]}
-            },
+                }]},
             "secrets": {}
         }
     })
@@ -140,7 +171,7 @@ fn a_host_that_cannot_write_its_answer_exits_one_and_says_so_on_standard_error()
     );
     let complaint = String::from_utf8_lossy(&output.stderr);
     assert!(
-        complaint.contains("onetaskgraph-source:"),
+        complaint.contains("onetaskgraph:"),
         "the program names itself: {complaint}"
     );
     assert!(!complaint.contains("panicked"), "{complaint}");

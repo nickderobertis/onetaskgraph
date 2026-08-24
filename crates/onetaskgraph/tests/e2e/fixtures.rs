@@ -272,8 +272,9 @@ fn hosted_block(_sandbox: &Sandbox) -> Value {
     let mut settings = dataset();
     settings["capabilities"] = json!({"max_page_size": 50});
     json!({
-        "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
-        "settings": {"kind": "in-memory", "config": settings},
+        "command": env!("CARGO_BIN_EXE_onetaskgraph"),
+        "args": ["plugin-serve", "in-memory"],
+        "settings": settings,
     })
 }
 

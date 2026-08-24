@@ -16,7 +16,7 @@ use clap::Parser;
 use onetaskgraph_core::config::Layer;
 use onetaskgraph_core::{
     DependencyRequest, Engine, Environment, Filters, GlobalId, LabelRequest, Loaded, OutputFormat,
-    PageToken, Paging, ProjectRequest, ProjectSelector, QueryResponse, SearchRequest,
+    PageToken, Paging, PluginKind, ProjectRequest, ProjectSelector, QueryResponse, SearchRequest,
     SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{LabelFilter, NativeId, SourceName, TextQuery};
@@ -50,6 +50,22 @@ const EXIT_PARTIAL: u8 = 4;
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Command::PluginServe { source } = &cli.command {
+        let Some(kind) = PluginKind::parse(source) else {
+            return fail(
+                &format!(
+                    "cannot serve unknown plugin {source:?}; this build knows {}",
+                    onetaskgraph_core::plugin_kinds().join(", ")
+                ),
+                EXIT_FAILURE,
+            );
+        };
+        let input = io::BufReader::new(io::stdin().lock());
+        return match onetaskgraph_core::serve_plugin(input, io::stdout().lock(), kind).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => fail(&error.to_string(), EXIT_FAILURE),
+        };
+    }
     // The configuration flags are global — they parse on every verb, because every verb
     // the engine adds will read them — so the layer they make is built before any verb
     // runs. A malformed `--set` is then refused wherever it was written rather than only
@@ -91,6 +107,7 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
     // the arms that need one, so `schema` and `config show` still answer on a host where
     // a source cannot be built at all.
     match command {
+        Command::PluginServe { .. } => unreachable!("plugin serving is dispatched before config"),
         Command::Schema => {
             emit(out, schema_bundle()?.trim_end(), "the schema bundle")?;
             Ok(EXIT_OK)

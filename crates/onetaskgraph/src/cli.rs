@@ -36,6 +36,13 @@ pub struct Cli {
 /// The verbs this binary answers.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Host one compiled-in source over the stdio plugin protocol.
+    #[command(hide = true)]
+    PluginServe {
+        /// The compiled-in plugin kind to host.
+        source: String,
+    },
+
     /// Print the JSON Schema bundle the contract types generate.
     ///
     /// Both SDKs are generated from this document, so it is emitted from the
