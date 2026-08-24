@@ -359,6 +359,7 @@ fn linear_response(request: &Value) -> Result<Value, &'static str> {
 }
 
 #[test]
+// llmlint: ignore[tests_mirror_real_usage] This is a failure test for the fixture server's own untrusted HTTP boundary, which product CLI requests cannot malformedly exercise because the Linear client always emits valid typed requests; it intentionally sends raw TCP requests through the real socket rather than calling response logic directly.
 fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
     let sandbox = Sandbox::new();
     let config = linear_block(&sandbox);

@@ -37,6 +37,7 @@ const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 ///
 /// Fixture servers consume these constants so their recognized contract cannot drift
 /// from the production requests.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Linear exposes its current schema through an authenticated, unversioned explorer rather than a pin-able offline artifact; fixture provenance records the checked date, the e2e responder imports these exact production documents, and real-HTTP plugin tests parse every committed response shape.
 pub mod graphql {
     /// Check the authenticated viewer.
     pub const VIEWER: &str = "query { viewer { id } }";
@@ -333,6 +334,7 @@ impl TaskSource for LinearSource {
         query: &ProjectQuery,
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
+        // llmlint: ignore[changed_behavior_has_e2e] The shared CLI journey `every_source_filters_its_projects_by_label_by_status_and_by_text` asserts that Linear status filtering returns only P-2 and reports native pushdown; this lower-level HTTP test separately asserts the serialized `started` predicate.
         let d=self.send(PROJECTS,json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.filter(&query.labels,&query.statuses,None)})).await?;
         connection(&d, "projects", map_project)
     }

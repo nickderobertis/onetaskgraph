@@ -288,7 +288,7 @@ async fn item_reads_and_transport_error_boundaries_are_exercised() {
 }
 
 #[tokio::test]
-async fn every_status_filter_shape_and_reverse_project_edge_are_covered() {
+async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
     let body = r#"{"data":{"issues":{"nodes":[{"id":"a","title":"A","state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}, {"id":"b","title":"B","state":{"name":"Doing","type":"started"},"labels":{"nodes":[]}}, {"id":"c","title":"C","state":{"name":"Canceled","type":"canceled"},"labels":{"nodes":[]}}, {"id":"d","title":"D","state":{"name":"Odd","type":"new-value"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#;
     let (endpoint, wire) = server("200 OK", "", body);
     let query = TaskQuery {
@@ -362,7 +362,8 @@ async fn every_status_filter_shape_and_reverse_project_edge_are_covered() {
         onetaskgraph_plugin_api::Support::Unsupported
     ));
     assert_eq!(source("http://127.0.0.1:1").kind(), "linear");
-    let _schema = onetaskgraph_linear::Plugin.config_schema();
+    let schema = serde_json::to_value(onetaskgraph_linear::Plugin.config_schema()).unwrap();
+    assert!(schema.to_string().contains("api_key_env"));
 }
 
 #[tokio::test]
