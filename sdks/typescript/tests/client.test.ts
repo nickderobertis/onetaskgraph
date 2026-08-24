@@ -26,6 +26,11 @@ function executableFixture(directory: string, name: string, stdout: string, stde
   return path;
 }
 
+function errorMessage(error: unknown): string {
+  if (!(error instanceof Error)) throw new Error(`expected Error, received ${String(error)}`);
+  return error.message;
+}
+
 beforeAll(() => {
   root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-"));
   writeFileSync(
@@ -168,7 +173,7 @@ test("a real command failure is a typed execution error", async () => {
     throw new Error("the absent task unexpectedly succeeded");
   } catch (error) {
     expect(error).toBeInstanceOf(OnetaskgraphExecutionError);
-    expect((error as Error).message).toContain("next:");
+    expect(errorMessage(error)).toContain("next:");
   }
 });
 
@@ -211,8 +216,8 @@ test("schema output and unsupported exit statuses are validated from real execut
       throw new Error("the unsupported exit status unexpectedly succeeded");
     } catch (error) {
       expect(error).toBeInstanceOf(OnetaskgraphExecutionError);
-      expect((error as Error).message).toContain("next: retry later");
-      expect((error as Error).message).not.toContain("without a valid response");
+      expect(errorMessage(error)).toContain("next: retry later");
+      expect(errorMessage(error)).not.toContain("without a valid response");
     }
   } finally {
     rmSync(fixtures, { recursive: true, force: true });

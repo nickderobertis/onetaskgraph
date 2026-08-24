@@ -17,15 +17,25 @@ if (argumentsGiven.some((argument) => argument !== "--check")) {
 
 const packageRoot = resolve(import.meta.dir, "..");
 const configuredGeneratedRoot = process.env.ONETASKGRAPH_GENERATED_DIR;
-if (
-  configuredGeneratedRoot !== undefined &&
-  (process.env.NODE_ENV !== "test" ||
-    !realpathSync(configuredGeneratedRoot).startsWith(`${realpathSync(tmpdir())}/`))
-) {
-  throw new Error(
-    "generate: ONETASKGRAPH_GENERATED_DIR is only accepted under the test temporary " +
-      "directory; next: remove it for normal generation",
-  );
+if (configuredGeneratedRoot !== undefined) {
+  let canonicalGeneratedRoot: string;
+  try {
+    canonicalGeneratedRoot = realpathSync(configuredGeneratedRoot);
+  } catch (error) {
+    throw new Error(
+      `generate: could not resolve ONETASKGRAPH_GENERATED_DIR: ${String(error)}; ` +
+        "next: create the directory or remove the override",
+    );
+  }
+  if (
+    process.env.NODE_ENV !== "test" ||
+    !canonicalGeneratedRoot.startsWith(`${realpathSync(tmpdir())}/`)
+  ) {
+    throw new Error(
+      "generate: ONETASKGRAPH_GENERATED_DIR is only accepted under the test temporary " +
+        "directory; next: remove it for normal generation",
+    );
+  }
 }
 const generatedRoot = configuredGeneratedRoot ?? resolve(packageRoot, "src/generated");
 const workspaceRoot = resolve(packageRoot, "../..");

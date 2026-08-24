@@ -82,6 +82,20 @@ test("generator rejects unsafe destinations and malformed executable output", ()
     expect(unsafe.status).toBe(1);
     expect(unsafe.stderr).toContain("only accepted under the test temporary directory");
 
+    const missingDestination = spawnSync("bun", ["scripts/generate.ts"], {
+      cwd: packageRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_ENV: "test",
+        ONETASKGRAPH_BIN: binary,
+        ONETASKGRAPH_GENERATED_DIR: resolve(fixtures, "missing"),
+      },
+    });
+    expect(missingDestination.status).toBe(1);
+    expect(missingDestination.stderr).toContain("could not resolve ONETASKGRAPH_GENERATED_DIR");
+    expect(missingDestination.stderr).toContain("next: create the directory");
+
     const nonJson = generateWith(emitter(fixtures, "non-json", "not JSON"), fixtures);
     expect(nonJson.status).toBe(1);
     expect(nonJson.stderr).toContain("binary emitted malformed JSON");
