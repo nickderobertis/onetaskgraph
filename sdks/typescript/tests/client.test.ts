@@ -16,13 +16,15 @@ let client: OnetaskgraphClient;
 
 function executableFixture(directory: string, name: string, stdout: string, stderr = "", code = 0) {
   const windows = process.platform === "win32";
-  const path = resolve(directory, `${name}${windows ? ".cmd" : ""}`);
+  const program = resolve(directory, `${name}.js`);
+  const path = windows ? resolve(directory, `${name}.cmd`) : program;
   const quote = (value: string) => JSON.stringify(value);
-  const body = windows
-    ? `@echo off\r\nnode -e "process.stdout.write(${quote(quote(stdout))}); process.stderr.write(${quote(quote(stderr))}); process.exit(${code})"\r\n`
-    : `#!/usr/bin/env node\nprocess.stdout.write(${quote(stdout)});\nprocess.stderr.write(${quote(stderr)});\nprocess.exit(${code});\n`;
-  writeFileSync(path, body);
-  if (!windows) chmodSync(path, 0o755);
+  writeFileSync(
+    program,
+    `#!/usr/bin/env node\nprocess.stdout.write(${quote(stdout)});\nprocess.stderr.write(${quote(stderr)});\nprocess.exit(${code});\n`,
+  );
+  if (windows) writeFileSync(path, `@echo off\r\nnode "%~dp0${name}.js"\r\n`);
+  else chmodSync(path, 0o755);
   return path;
 }
 

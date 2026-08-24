@@ -9,14 +9,20 @@ const binary = resolve(packageRoot, "../../target/debug/onetaskgraph");
 
 function emitter(directory: string, name: string, output: string) {
   const windows = process.platform === "win32";
-  const path = resolve(directory, `${name}${windows ? ".cmd" : ""}`);
+  const program = resolve(directory, `${name}.js`);
+  const path = windows ? resolve(directory, `${name}.cmd`) : program;
   const quoted = JSON.stringify(output);
-  const body = windows
-    ? `@echo off\r\nnode -e "process.stdout.write(${JSON.stringify(quoted)})"\r\n`
-    : `#!/usr/bin/env node\nprocess.stdout.write(${quoted});\n`;
-  writeFileSync(path, body);
-  if (!windows) chmodSync(path, 0o755);
+  writeFileSync(program, `#!/usr/bin/env node\nprocess.stdout.write(${quoted});\n`);
+  if (windows) writeFileSync(path, `@echo off\r\nnode "%~dp0${name}.js"\r\n`);
+  else chmodSync(path, 0o755);
   return path;
+}
+
+function expectExited(result: ReturnType<typeof spawnSync>) {
+  expect(
+    result.status,
+    `generator was killed by ${result.signal ?? "an unknown signal"}`,
+  ).not.toBeNull();
 }
 
 function generateWith(binaryPath: string, generated: string) {
@@ -47,6 +53,7 @@ test("generation, clean check, stale check, and invalid arguments use the real b
     });
   try {
     const generatedResult = run();
+    expectExited(generatedResult);
     expect(generatedResult.status, generatedResult.stderr).toBe(0);
     expect(run("--check").status).toBe(0);
     appendFileSync(resolve(generated, "commands.ts"), "// stale\n");
@@ -64,6 +71,7 @@ test("generation, clean check, stale check, and invalid arguments use the real b
       encoding: "utf8",
       env: { ...process.env, ONETASKGRAPH_BIN: resolve(generated, "missing-binary") },
     });
+    expectExited(unavailable);
     expect(unavailable.status).toBe(1);
     expect(unavailable.stderr).toContain("could not emit the SDK contract");
     const emptyBinary = spawnSync("bun", ["scripts/generate.ts"], {
@@ -71,12 +79,13 @@ test("generation, clean check, stale check, and invalid arguments use the real b
       encoding: "utf8",
       env: { ...process.env, ONETASKGRAPH_BIN: "" },
     });
+    expectExited(emptyBinary);
     expect(emptyBinary.status).toBe(1);
     expect(emptyBinary.stderr).toContain("ONETASKGRAPH_BIN must be a non-empty executable path");
   } finally {
     rmSync(generated, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 test("generator rejects unsafe destinations and malformed executable output", () => {
   const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generator-boundary-"));
@@ -91,6 +100,7 @@ test("generator rejects unsafe destinations and malformed executable output", ()
         ONETASKGRAPH_GENERATED_DIR: packageRoot,
       },
     });
+    expectExited(unsafe);
     expect(unsafe.status).toBe(1);
     expect(unsafe.stderr).toContain("only accepted under the test temporary directory");
 
@@ -104,11 +114,13 @@ test("generator rejects unsafe destinations and malformed executable output", ()
         ONETASKGRAPH_GENERATED_DIR: resolve(fixtures, "missing"),
       },
     });
+    expectExited(missingDestination);
     expect(missingDestination.status).toBe(1);
     expect(missingDestination.stderr).toContain("could not resolve ONETASKGRAPH_GENERATED_DIR");
     expect(missingDestination.stderr).toContain("next: create the directory");
 
     const nonJson = generateWith(emitter(fixtures, "non-json", "not JSON"), fixtures);
+    expectExited(nonJson);
     expect(nonJson.status).toBe(1);
     expect(nonJson.stderr).toContain("binary emitted malformed JSON");
 
@@ -116,6 +128,7 @@ test("generator rejects unsafe destinations and malformed executable output", ()
       emitter(fixtures, "invalid", JSON.stringify({ version: 1 })),
       fixtures,
     );
+    expectExited(invalid);
     expect(invalid.status).toBe(1);
     expect(invalid.stderr).toContain("binary emitted an invalid schema bundle");
 
@@ -124,6 +137,7 @@ test("generator rejects unsafe destinations and malformed executable output", ()
       writeFileSync(signalled, "#!/usr/bin/env node\nprocess.kill(process.pid, 'SIGTERM');\n");
       chmodSync(signalled, 0o755);
       const signalFailure = generateWith(signalled, fixtures);
+      expectExited(signalFailure);
       expect(signalFailure.status).toBe(1);
       expect(signalFailure.stderr).toContain("signal SIGTERM");
       expect(signalFailure.stderr).toContain("next: build the onetaskgraph binary");
@@ -131,7 +145,7 @@ test("generator rejects unsafe destinations and malformed executable output", ()
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 test("generator reports uncompileable roots and generated-file write failures", () => {
   const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generator-failures-"));
@@ -152,6 +166,7 @@ test("generator reports uncompileable roots and generated-file write failures", 
       emitter(fixtures, "invalid-schema", invalidSchema),
       generated,
     );
+    expectExited(compileFailure);
     expect(compileFailure.status).toBe(1);
     expect(compileFailure.stderr).toContain("root Broken is not compilable JSON Schema");
 
@@ -164,10 +179,11 @@ test("generator reports uncompileable roots and generated-file write failures", 
     });
     mkdirSync(resolve(generated, "models.ts"));
     const writeFailure = generateWith(emitter(fixtures, "valid", validBundle), generated);
+    expectExited(writeFailure);
     expect(writeFailure.status).toBe(1);
     expect(writeFailure.stderr).toContain("could not write");
     expect(writeFailure.stderr).toContain("next: check directory permissions");
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }
-});
+}, 30_000);
