@@ -37,7 +37,6 @@ const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 ///
 /// Fixture servers consume these constants so their recognized contract cannot drift
 /// from the production requests.
-// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Linear exposes its current schema through an authenticated, unversioned explorer rather than a pin-able offline artifact; fixture provenance records the checked date, the e2e responder imports these exact production documents, and real-HTTP plugin tests parse every committed response shape.
 pub mod graphql {
     /// Check the authenticated viewer.
     pub const VIEWER: &str = "query { viewer { id } }";
@@ -247,6 +246,7 @@ impl LinearSource {
         })
     }
 
+    // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These operators follow the accepted 2026-08-24 Linear contract, but Linear exposes their authoritative definitions only through an authenticated unversioned explorer; the real-HTTP tests assert every serialized operator and the shared CLI journeys assert resulting rows without making credentials required.
     fn filter(
         &self,
         labels: &onetaskgraph_plugin_api::LabelFilter,
@@ -280,6 +280,7 @@ impl LinearSource {
             json!({"and": parts})
         }
     }
+    // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 }
 
 #[async_trait::async_trait]
@@ -367,6 +368,7 @@ impl TaskSource for LinearSource {
     }
 }
 
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear's workflow-state strings follow the accepted 2026-08-24 contract; its authoritative enum is exposed only through an authenticated unversioned explorer, while real-HTTP tests cover every serialized and parsed value.
 fn linear_statuses(s: &StatusCategory) -> Vec<&'static str> {
     match s {
         StatusCategory::Backlog => vec!["backlog"],
@@ -389,6 +391,7 @@ fn status(v: &Value) -> Result<Status, SourceError> {
     };
     Ok(Status { category, name })
 }
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 fn str_at<'a>(v: &'a Value, k: &str) -> Result<&'a str, SourceError> {
     v.get(k)
         .and_then(Value::as_str)
@@ -539,6 +542,7 @@ fn relation_page(
         } else {
             (NativeId(other.into()), id.clone())
         };
+        // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear publishes relation type as a string in the accepted 2026-08-24 schema; this boundary enum deliberately rejects every undocumented value, and real-HTTP tests prove both accepted values and rejection.
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         enum RelationKind {
@@ -556,6 +560,7 @@ fn relation_page(
             RelationKind::Blocks => DependencyKind::Blocks,
             RelationKind::Related => DependencyKind::Related,
         };
+        // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
         items.push(DependencyEdge { from, to, kind });
     }
     let next = page_next(c)?;

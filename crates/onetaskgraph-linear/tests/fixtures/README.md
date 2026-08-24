@@ -4,8 +4,8 @@
 
 `schema.graphql` pins the read-only subset from Linear's published GraphQL schema and
 Relay connection shape as documented in Linear's API documentation and schema explorer
-on 2026-08-24. The contract reconciliation test checks every production operation and
-committed response fixture against that pinned subset.
+on 2026-08-24. The contract test parses every production operation against the pinned
+field and argument types and recursively validates each selected response-fixture shape.
 `issues.json` covers `Issue`, `WorkflowState`, `IssueLabel`, and `PageInfo`;
 `projects.json` covers `Project`, its status, and `ProjectLabel`; `labels.json` covers the
 `issueLabels` connection; the two relation fixtures cover documented forward and inverse

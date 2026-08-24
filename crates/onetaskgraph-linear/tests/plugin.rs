@@ -49,34 +49,112 @@ fn server(
 }
 
 #[test]
-fn pinned_schema_reconciles_operations_and_response_fixtures() {
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This deterministic check covers the locally pin-able field/argument and fixture-key contract; full scalar, nullability, variable-type, operator, and enum freshness exists only in Linear's authenticated unversioned explorer and cannot be gated without violating the mandated absent-credential skip.
+fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
+    use graphql_parser::{query, schema};
     use onetaskgraph_linear::graphql;
-    let schema = include_str!("fixtures/schema.graphql");
-    for (operation, root) in [
-        (graphql::VIEWER, "viewer"),
-        (graphql::ISSUE, "issue"),
-        (graphql::PROJECT, "project"),
-        (graphql::ISSUES, "issues"),
-        (graphql::PROJECTS, "projects"),
-        (graphql::LABELS, "issueLabels"),
-        (graphql::ISSUE_RELATIONS, "issue"),
-        (graphql::PROJECT_RELATIONS, "project"),
-    ] {
-        assert!(operation.contains(root), "operation does not select {root}");
-        assert!(schema.contains(&format!("  {root}")), "schema lacks {root}");
+    let schema = schema::parse_schema::<String>(include_str!("fixtures/schema.graphql")).unwrap();
+    let objects = schema
+        .definitions
+        .iter()
+        .filter_map(|definition| match definition {
+            schema::Definition::TypeDefinition(schema::TypeDefinition::Object(object)) => {
+                Some((object.name.as_str(), object))
+            }
+            _ => None,
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    fn named_type<'a>(kind: &'a schema::Type<'a, String>) -> &'a str {
+        match kind {
+            schema::Type::NamedType(name) => name,
+            schema::Type::ListType(inner) | schema::Type::NonNullType(inner) => named_type(inner),
+        }
     }
-    for (fixture, root) in [
-        (include_str!("fixtures/issues.json"), "issues"),
-        (include_str!("fixtures/projects.json"), "projects"),
-        (include_str!("fixtures/labels.json"), "issueLabels"),
-        (include_str!("fixtures/issue-relations.json"), "issue"),
-        (include_str!("fixtures/project-relations.json"), "project"),
+    fn validate<'a>(
+        objects: &std::collections::HashMap<&str, &'a schema::ObjectType<'a, String>>,
+        type_name: &str,
+        selection: &query::SelectionSet<'a, String>,
+        value: Option<&serde_json::Value>,
+    ) {
+        let object = objects
+            .get(type_name)
+            .unwrap_or_else(|| panic!("schema lacks {type_name}"));
+        for selected in &selection.items {
+            let query::Selection::Field(selected) = selected else {
+                panic!("fixtures use no fragments")
+            };
+            let field = object
+                .fields
+                .iter()
+                .find(|field| field.name == selected.name)
+                .unwrap_or_else(|| panic!("{type_name} lacks field {}", selected.name));
+            for (argument, _) in &selected.arguments {
+                assert!(
+                    field.arguments.iter().any(|input| input.name == *argument),
+                    "{}.{} lacks argument {argument}",
+                    type_name,
+                    field.name
+                );
+            }
+            let response = value.and_then(|value| value.get(&selected.name));
+            if value.is_some() {
+                assert!(
+                    response.is_some() || selected.name == "endCursor",
+                    "fixture lacks {type_name}.{}",
+                    selected.name
+                );
+            }
+            if !selected.selection_set.items.is_empty() {
+                let response = response.and_then(|value| match value {
+                    serde_json::Value::Array(values) => values.first(),
+                    serde_json::Value::Null => None,
+                    value => Some(value),
+                });
+                validate(
+                    objects,
+                    named_type(&field.field_type),
+                    &selected.selection_set,
+                    response,
+                );
+            }
+        }
+    }
+    for (operation, fixture) in [
+        (graphql::VIEWER, None),
+        (graphql::ISSUE, None),
+        (graphql::PROJECT, None),
+        (graphql::ISSUES, Some(include_str!("fixtures/issues.json"))),
+        (
+            graphql::PROJECTS,
+            Some(include_str!("fixtures/projects.json")),
+        ),
+        (graphql::LABELS, Some(include_str!("fixtures/labels.json"))),
+        (
+            graphql::ISSUE_RELATIONS,
+            Some(include_str!("fixtures/issue-relations.json")),
+        ),
+        (
+            graphql::PROJECT_RELATIONS,
+            Some(include_str!("fixtures/project-relations.json")),
+        ),
     ] {
-        let document: serde_json::Value = serde_json::from_str(fixture).unwrap();
-        assert!(document["data"].get(root).is_some(), "fixture lacks {root}");
-        assert!(schema.contains(&format!("  {root}")), "schema lacks {root}");
+        let document = query::parse_query::<String>(operation).unwrap();
+        let fixture =
+            fixture.map(|fixture| serde_json::from_str::<serde_json::Value>(fixture).unwrap());
+        let query::Definition::Operation(query::OperationDefinition::Query(operation)) =
+            &document.definitions[0]
+        else {
+            panic!("expected query")
+        };
+        validate(
+            &objects,
+            "Query",
+            &operation.selection_set,
+            fixture.as_ref().map(|fixture| &fixture["data"]),
+        );
     }
 }
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 #[test]
 fn factory_validates_config_and_missing_credentials() {
