@@ -78,9 +78,8 @@ format:
 test-live projects="":
     @scripts/test-live.sh {{projects}}
 
-# Linux-only in CI, where it is its own required check.
-
-# Supply-chain gate: banned crates, licences, sources and advisories.
+# Supply-chain gate: banned crates, licences, sources and advisories. Linux-only in CI,
+# where it is its own required check.
 deny:
     @{{nx}} run workspace:deny
 
@@ -88,7 +87,9 @@ deny:
 generate-check:
     @task_log="$$(mktemp)"; trap 'rm -f "$$task_log"' EXIT; \
         if ! {{nx}} run sdk-python:generate-check >"$$task_log" 2>&1; then \
-            cat "$$task_log" >&2; exit 1; \
+            cat "$$task_log" >&2; \
+            echo "generation check failed; next: run 'just generate-check' after fixing the reported Python generator error" >&2; \
+            exit 1; \
         fi
 
 # Upgrade every ecosystem's dependencies, then re-run the complete bar on the result.
