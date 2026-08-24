@@ -93,7 +93,7 @@ upgrade:
 
 # Print the JSON Schema bundle both SDKs are generated from.
 schema:
-    @cargo run --quiet -p onetaskgraph -- schema
+    @cargo run --quiet -p onetaskgraph --bin onetaskgraph -- schema
 
 # Show the project graph Nx selects against.
 graph:

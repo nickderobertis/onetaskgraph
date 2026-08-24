@@ -1,11 +1,19 @@
 # onetaskgraph-sdk
 
-The Python SDK for [onetaskgraph](https://github.com/nickderobertis/onetaskgraph).
+The typed Python client for `onetaskgraph`. Its request vocabulary, response models,
+and method surface are generated from the JSON Schema and command help emitted by the
+real binary; `python generate.py --check` rejects committed output that has drifted.
 
-It drives the real `onetaskgraph` binary as a subprocess and parses the machine-readable
-output against the schema bundle that binary emits (`onetaskgraph schema`). The engine is
-reused rather than reimplemented, so the CLI, a script and an application cannot answer the
-same question differently.
+```python
+from onetaskgraph_sdk import Client
 
-The client surface is generated from the schema bundle and lands with a later change.
-This package currently carries only the version the generated surface will be pinned to.
+tasks = Client().task_list(status=["todo"])
+```
+
+Each call runs one binary subprocess and validates its JSON response. The executable is
+resolved in this order: the `binary=` constructor argument, the
+`ONETASKGRAPH_SDK_BINARY` environment variable, then the `onetaskgraph` executable supplied
+on `PATH` by the packaged binary distribution. Pass `cwd=` to select the directory from
+which configuration is discovered. Partial query exit status 4 is parsed and returned,
+so callers can inspect each typed `SourceFailure`; other non-zero statuses raise
+`OnetaskgraphError` with the exit code.

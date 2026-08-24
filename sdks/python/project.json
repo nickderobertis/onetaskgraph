@@ -3,8 +3,7 @@
   "name": "sdk-python",
   "projectType": "library",
   "tags": ["lang:python", "layer:sdk"],
-  "//": "No implicitDependencies: the SDK is generated from the schema bundle the built binary emits, not compiled against a crate. The generator that creates that edge lands with the SDK.",
-  "implicitDependencies": [],
+  "implicitDependencies": ["onetaskgraph"],
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",
@@ -15,7 +14,8 @@
       "//": "Uncached: it reaches PyPI and writes a .venv outside the cacheable output set."
     },
     "check": {
-      "executor": "nx:noop"
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "typecheck", "test", "coverage"]
     },
     "format": {
       "executor": "nx:run-commands",
@@ -36,7 +36,7 @@
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "uv run --frozen ruff check .",
+        "command": "uv run --frozen ruff check . && uv run --frozen python generate.py --check",
         "cwd": "sdks/python"
       }
     },

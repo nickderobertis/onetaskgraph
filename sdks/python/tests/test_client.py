@@ -1,0 +1,130 @@
+"""Public-boundary tests for the generated SDK."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from onetaskgraph_sdk import Client, OnetaskgraphError, __version__
+
+WORKSPACE = Path(__file__).parents[3]
+
+
+@pytest.fixture(scope="session")
+def binary() -> Path:
+    """Build and return the real workspace executable."""
+    subprocess.run(
+        ["cargo", "build", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph"],
+        cwd=WORKSPACE,
+        check=True,
+    )
+    suffix = ".exe" if sys.platform == "win32" else ""
+    return (WORKSPACE / "target" / "debug" / f"onetaskgraph{suffix}").resolve()
+
+
+def configured(tmp_path: Path, *, failing: bool = False) -> Path:
+    """Create real Markdown and in-memory sources, optionally with one broken source."""
+    markdown = tmp_path / "markdown" / "tasks"
+    markdown.mkdir(parents=True)
+    (markdown / "M-1.md").write_text(
+        "---\ntitle: Markdown task\nstatus: Todo\n---\nBody from disk\n", encoding="utf-8"
+    )
+    sources: dict[str, object] = {
+        "memory": {
+            "plugin": "in-memory",
+            "config": {
+                "tasks": [
+                    {
+                        "id": "T-1",
+                        "title": "Memory task",
+                        "status": {"category": "todo", "name": "Todo"},
+                        "labels": [],
+                        "project": "P-1",
+                    }
+                ],
+                "projects": [
+                    {
+                        "id": "P-1",
+                        "title": "Memory project",
+                        "status": {"category": "todo", "name": "Todo"},
+                        "labels": [],
+                    }
+                ],
+                "labels": [{"id": "L-1", "name": "sdk"}],
+            },
+        },
+        "markdown": {
+            "plugin": "local-md",
+            "config": {"root": str(tmp_path / "markdown"), "status_mapping": {"todo": "todo"}},
+        },
+    }
+    if failing:
+        sources["broken"] = {"plugin": "github-projects", "config": {}}
+    (tmp_path / "onetaskgraph.yaml").write_text(json.dumps({"sources": sources}), encoding="utf-8")
+    return tmp_path
+
+
+def test_real_sources_and_typed_partial_failure(binary: Path, tmp_path: Path) -> None:
+    """Return validated rows, plans, and a typed failure from actual sources."""
+    client = Client(binary, cwd=configured(tmp_path, failing=True))
+    response = client.task_list()
+    assert {item.item.title for item in response.items} == {"Markdown task", "Memory task"}
+    assert {plan.source.root for plan in response.plan.per_source} == {"memory", "markdown"}
+    assert response.errors[0].source.root == "broken"
+    assert response.errors[0].error.root.kind == "config"
+
+
+def test_public_error_contains_exit_status(binary: Path, tmp_path: Path) -> None:
+    """Expose a malformed invocation as the documented typed client exception."""
+    client = Client(binary, cwd=configured(tmp_path))
+    with pytest.raises(OnetaskgraphError) as caught:
+        client.task_show(id="not-qualified")
+    assert caught.value.exit_code == 1
+
+
+def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) -> None:
+    """Exercise every generated command method and every CLI option encoding shape."""
+    client = Client(binary, cwd=configured(tmp_path))
+    assert client.task_list(source=["memory"], status=["todo"], limit=2, explain=True).items
+    assert client.task_show(id="memory:T-1").items
+    assert client.task_deps(id="memory:T-1").items == []
+    assert client.project_list(source=["memory"]).items
+    assert client.project_show(id="memory:P-1").items
+    assert client.project_deps(id="memory:P-1").items == []
+    assert client.label_list(source=["memory"]).items
+    assert client.search(text="Memory", kind="task").items
+    assert client.sources_list()
+    assert client.config_show().settings
+    with pytest.raises(TypeError, match="missing required argument"):
+        client.task_show()
+
+
+def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
+    """Use environment before the packaged PATH fallback and reject no executable."""
+    config = configured(tmp_path)
+    from_environment = Client(
+        cwd=config, environment={"ONETASKGRAPH_SDK_BINARY": str(binary), "PATH": ""}
+    )
+    assert from_environment.task_list().items
+    from_path = Client(cwd=config, environment={"PATH": str(binary.parent)})
+    assert from_path.task_list().items
+    with pytest.raises(FileNotFoundError, match="binary not found"):
+        Client(environment={"PATH": ""})
+
+
+def test_generated_surface_is_current() -> None:
+    """Fail when schema or command regeneration changes a committed file."""
+    subprocess.run(
+        [sys.executable, "generate.py", "--check"],
+        cwd=WORKSPACE / "sdks" / "python",
+        check=True,
+    )
+
+
+def test_distribution_version() -> None:
+    """Keep the one public version aligned with the manifest."""
+    assert __version__ == "0.1.0"

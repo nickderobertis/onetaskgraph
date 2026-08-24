@@ -1,11 +1,10 @@
-"""The Python SDK for onetaskgraph.
+"""The generated, typed Python SDK for onetaskgraph."""
 
-The client surface is generated from the schema bundle `onetaskgraph schema` emits and
-lands with a later change. What is here now is the version this package publishes, stated
-once so the generated surface and the distribution metadata cannot disagree.
-"""
+from ._generated.models import *  # noqa: F403
+from .client import Client as Client
+from .client import OnetaskgraphError as OnetaskgraphError
 
-__all__ = ["__version__"]
+__all__ = ["Client", "OnetaskgraphError", "__version__"]
 
 #: The version this package publishes. `pyproject.toml`, the Cargo workspace and the
 #: TypeScript package must all agree; scripts/check-workspace-config.sh reconciles them.
