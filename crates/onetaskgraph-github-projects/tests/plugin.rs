@@ -1,73 +1,441 @@
-//! The factory this crate ships ahead of its source.
-//!
-//! Driven through the public trait, the way the registry drives it.
+use std::{
+    io::{Read, Write},
+    net::TcpListener,
+    thread,
+};
 
-use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName, SourcePlugin};
+use onetaskgraph_plugin_api::{
+    Cursor, Direction, NativeId, PageRequest, ProjectQuery, SecretResolver, SourceError,
+    SourceName, SourcePlugin, StatusCategory, TaskQuery,
+};
 use secrecy::SecretString;
+use serde_json::{Value, json};
 
-/// This plugin refuses before it reads a credential, so nothing defines one.
-struct NoSecrets;
-impl SecretResolver for NoSecrets {
-    fn get(&self, _var: &str) -> Option<SecretString> {
-        None
+struct Secrets;
+impl SecretResolver for Secrets {
+    fn get(&self, var: &str) -> Option<SecretString> {
+        (var == "GH_PROJECTS_TOKEN").then(|| "test-token".into())
     }
 }
 
-#[test]
-fn build_refuses_with_a_configuration_error_naming_the_plugin() {
-    // Shipping the factory ahead of the source is what lets the registry name
-    // `github-projects` from the first commit; the refusal has to say plainly that the
-    // source is the missing part, not the configuration.
-    let name = SourceName::new("work").expect("a valid source name");
-
-    let Err(error) =
-        onetaskgraph_github_projects::Plugin.build(&name, &serde_json::json!({}), &NoSecrets)
-    else {
-        panic!("the `github-projects` plugin is not implemented yet, so build must refuse");
-    };
-
-    let SourceError::Config { message } = &error else {
-        panic!("a plugin that cannot be built yet reports a configuration error, got {error:?}");
-    };
-    assert!(message.contains("github-projects"), "{message}");
-    assert!(message.contains("not implemented yet"), "{message}");
-    assert!(
-        message.contains("work"),
-        "the refusal names the source: {message}"
-    );
+fn server(
+    status: &str,
+    body: Value,
+    requests: usize,
+    expected_query: &str,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let body = body.to_string();
+    let status = status.to_owned();
+    let expected_query = expected_query.to_owned();
+    let handle = thread::spawn(move || {
+        for _ in 0..requests {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let count = stream.read(&mut chunk).unwrap();
+                bytes.extend_from_slice(&chunk[..count]);
+                if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let headers = String::from_utf8_lossy(&bytes);
+            assert!(headers.contains("authorization: Bearer test-token"));
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .and_then(|v| v.parse::<usize>().ok())
+                })
+                .unwrap();
+            let header_end = bytes
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .unwrap()
+                + 4;
+            while bytes.len() - header_end < length {
+                let count = stream.read(&mut chunk).unwrap();
+                bytes.extend_from_slice(&chunk[..count]);
+            }
+            let request: Value =
+                serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap();
+            assert!(request["query"].as_str().unwrap().contains(&expected_query));
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (format!("http://{address}/graphql"), handle)
 }
 
-#[test]
-fn the_plugin_reports_its_kind_and_a_config_schema_the_registry_can_publish() {
-    let plugin = onetaskgraph_github_projects::Plugin;
-    assert_eq!(plugin.kind(), "github-projects");
-    assert_eq!(plugin.kind(), onetaskgraph_github_projects::KIND);
-    // The schema is what `onetaskgraph schema` publishes for this plugin's `config:`
-    // block. Empty is not the same as permissive: a configuration written against a
-    // shape this plugin does not have yet must be refused at load, not ignored.
-    let schema = serde_json::to_value(plugin.config_schema()).expect("the schema renders");
-    assert_eq!(schema["type"], "object");
+fn raw_server(status: &str, body: &str) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let body = body.to_owned();
+    let status = status.to_owned();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0_u8; 8192];
+        let _ = stream.read(&mut request).unwrap();
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+    });
+    (format!("http://{address}/graphql"), handle)
+}
+
+fn project_response(has_next: bool) -> Value {
+    json!({"data":{"organization":{"projectV2":{
+        "id":"PVT_project","title":"Roadmap","shortDescription":"Delivery plan","url":"https://github.example/projects/7","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-02-01T00:00:00Z","closed":false,
+        "items":{"nodes":[{"id":"PVTI_1","fieldValues":{"nodes":[{"name":"Doing","field":{"name":"Status"}},{"labels":{"nodes":[{"id":"L_field","name":"team","color":"00ff00"}]}}]},"content":{"id":"I_task","title":"Ship it","body":"details","url":"https://github.example/issues/1","createdAt":"2026-01-02T00:00:00Z","updatedAt":"2026-01-03T00:00:00Z","state":"OPEN","labels":{"nodes":[{"id":"L_bug","name":"bug","color":"ff0000"}]}}}],"pageInfo":{"hasNextPage":has_next,"endCursor":if has_next { Some("cursor-2") } else { None::<&str> }}}
+    }},"user":{"projectV2":null}}})
+}
+
+fn build(endpoint: &str) -> Box<dyn onetaskgraph_plugin_api::TaskSource> {
+    onetaskgraph_github_projects::Plugin.build(
+        &SourceName::new("work").unwrap(),
+        &json!({"owner":"octo-org","project_number":7,"endpoint":endpoint,"status_mapping":{"doing":"in-progress"}}),
+        &Secrets,
+    ).unwrap()
+}
+
+fn page(limit: u32) -> PageRequest {
+    PageRequest {
+        cursor: None,
+        limit,
+    }
+}
+
+#[tokio::test]
+async fn reads_and_normalizes_a_real_graphql_response_through_http() {
+    let (endpoint, handle) = server("200 OK", project_response(true), 1, "projectV2");
+    let source = build(&endpoint);
+    assert_eq!(source.kind(), "github-projects");
+    assert_eq!(source.capabilities().max_page_size, 100);
+    let result = source
+        .query_tasks(&TaskQuery::default(), &page(1))
+        .await
+        .unwrap();
+    assert_eq!(result.next.unwrap().0, "cursor-2");
+    let task = &result.items[0];
+    assert_eq!(task.id.0, "I_task");
+    assert_eq!(task.project.as_ref().unwrap().0, "PVT_project");
+    assert_eq!(task.status.category, StatusCategory::InProgress);
+    assert_eq!(task.labels.len(), 2);
     assert_eq!(
-        schema["additionalProperties"],
-        serde_json::Value::Bool(false),
-        "an unknown config field must be refused, not silently dropped: {schema}"
+        task.created_at.unwrap().to_rfc3339(),
+        "2026-01-02T00:00:00+00:00"
     );
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn exposes_project_health_and_lookup_over_the_public_trait() {
+    let (endpoint, handle) = server("200 OK", project_response(false), 3, "projectV2");
+    let source = build(&endpoint);
+    assert!(source.health().await.unwrap().reachable);
+    let project = source
+        .get_project(&NativeId("PVT_project".into()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(project.title, "Roadmap");
+    assert_eq!(project.content.as_deref(), Some("Delivery plan"));
+    assert!(
+        source
+            .get_project(&NativeId("missing".into()))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    handle.join().unwrap();
 }
 
 #[test]
-fn build_refuses_an_unknown_configuration_field_before_reporting_it_is_unimplemented() {
-    // A typo is the user's to fix and is worth naming; "not implemented yet" is not
-    // something they can act on. The published schema promises unknown fields are
-    // refused, and this is what keeps that promise true.
-    let name = SourceName::new("work").expect("a valid source name");
+fn config_schema_is_strict_and_build_validates_inputs_and_secret() {
+    let plugin = onetaskgraph_github_projects::Plugin;
+    assert_eq!(plugin.kind(), onetaskgraph_github_projects::KIND);
+    let schema = serde_json::to_value(plugin.config_schema()).unwrap();
+    assert_eq!(schema["additionalProperties"], false);
+    assert!(schema.get("required").is_none());
+    for config in [
+        json!({}),
+        json!({"owner":"","project_number":1}),
+        json!({"owner":"org","project_number":0}),
+        json!({"owner":"org","project_number":1,"api_key_env":""}),
+        json!({"owner":"org","project_number":1,"endpoint":"not a url"}),
+        json!({"owner":"org","project_number":1,"endpoint":"http://example.com"}),
+        json!({"owner":"org","project_number":1,"typo":true}),
+    ] {
+        let result = plugin.build(&SourceName::new("work").unwrap(), &config, &Secrets);
+        assert!(
+            matches!(result, Err(SourceError::Config { ref message }) if message.contains("work")),
+            "invalid configuration should name its source"
+        );
+    }
+    struct Empty;
+    impl SecretResolver for Empty {
+        fn get(&self, _: &str) -> Option<SecretString> {
+            None
+        }
+    }
+    let result = plugin.build(
+        &SourceName::new("work").unwrap(),
+        &json!({"owner":"org","project_number":1}),
+        &Empty,
+    );
+    assert!(
+        matches!(result, Err(SourceError::Auth { ref message }) if message.contains("GH_PROJECTS_TOKEN") && message.contains("work"))
+    );
+}
 
-    let Err(SourceError::Config { message }) = onetaskgraph_github_projects::Plugin.build(
-        &name,
-        &serde_json::json!({ "roott": "~/notes" }),
-        &NoSecrets,
-    ) else {
-        panic!("an unknown configuration field must be refused");
-    };
-    assert!(message.contains("roott"), "the typo is named: {message}");
-    assert!(message.contains("work"), "the source is named: {message}");
+#[tokio::test]
+async fn maps_authentication_failure_without_disclosing_the_token() {
+    let (endpoint, handle) = server("401 Unauthorized", json!({}), 1, "projectV2");
+    let error = build(&endpoint).health().await.unwrap_err();
+    let message = error.to_string();
+    assert!(matches!(error, SourceError::Auth { .. }));
+    assert!(!message.contains("test-token"));
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn project_dependencies_are_empty_but_validate_the_real_project() {
+    let (endpoint, handle) = server("200 OK", project_response(false), 2, "projectV2");
+    let source = build(&endpoint);
+    assert!(
+        source
+            .project_dependencies(
+                &NativeId("PVT_project".into()),
+                Direction::DependsOn,
+                &page(10)
+            )
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    let error = source
+        .project_dependencies(
+            &NativeId("missing".into()),
+            Direction::DependedOnBy,
+            &page(10),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, SourceError::Refused { .. }));
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn walks_issue_dependencies_in_both_directions_through_graphql() {
+    let response = json!({"data":{"node":{
+        "blockedBy":{"nodes":[{"id":"I_blocker"}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},
+        "blocking":{"nodes":[{"id":"I_dependent"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+    }}});
+    let (endpoint, handle) = server("200 OK", response, 2, "blockedBy");
+    let source = build(&endpoint);
+    let forward = source
+        .task_dependencies(&NativeId("I_task".into()), Direction::DependsOn, &page(1))
+        .await
+        .unwrap();
+    assert_eq!(forward.items[0].from.0, "I_task");
+    assert_eq!(forward.items[0].to.0, "I_blocker");
+    assert_eq!(forward.next.unwrap().0, "next");
+    let reverse = source
+        .task_dependencies(
+            &NativeId("I_task".into()),
+            Direction::DependedOnBy,
+            &page(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reverse.items[0].from.0, "I_dependent");
+    assert_eq!(reverse.items[0].to.0, "I_task");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn lists_labels_tasks_and_projects_with_cursor_validation() {
+    let (endpoint, handle) = server("200 OK", project_response(false), 5, "projectV2");
+    let source = build(&endpoint);
+    assert_eq!(
+        source
+            .get_task(&NativeId("I_task".into()))
+            .await
+            .unwrap()
+            .unwrap()
+            .title,
+        "Ship it"
+    );
+    assert!(
+        source
+            .get_task(&NativeId("missing".into()))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let labels = source.labels(&page(1)).await.unwrap();
+    assert_eq!(labels.items.len(), 1);
+    assert!(labels.next.is_some());
+    let labels = source
+        .labels(&PageRequest {
+            cursor: labels.next,
+            limit: 10,
+        })
+        .await
+        .unwrap();
+    assert_eq!(labels.items.len(), 1);
+    let projects = source
+        .query_projects(&ProjectQuery::default(), &page(10))
+        .await
+        .unwrap();
+    assert_eq!(projects.items[0].id.0, "PVT_project");
+    assert!(
+        source
+            .query_projects(
+                &ProjectQuery::default(),
+                &PageRequest {
+                    cursor: Some(Cursor("done".into())),
+                    limit: 10
+                }
+            )
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn rejects_invalid_pages_cursors_and_malformed_source_shapes() {
+    let source = build("http://127.0.0.1:1/graphql");
+    assert!(
+        source
+            .labels(&PageRequest {
+                cursor: Some(Cursor("not-a-number".into())),
+                limit: 1
+            })
+            .await
+            .is_err()
+    );
+
+    let malformed = json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[]}}},"user":{"projectV2":null}}});
+    let (endpoint, handle) = server("200 OK", malformed, 1, "projectV2");
+    assert!(
+        build(&endpoint)
+            .get_task(&NativeId("x".into()))
+            .await
+            .is_err()
+    );
+    handle.join().unwrap();
+
+    let missing = json!({"data":{"organization":{"projectV2":null},"user":{"projectV2":null}}});
+    let (endpoint, handle) = server("200 OK", missing, 1, "projectV2");
+    assert!(matches!(
+        build(&endpoint).health().await,
+        Err(SourceError::Refused { .. })
+    ));
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn maps_transport_http_json_and_graphql_failures() {
+    for (status, body, check) in [
+        ("429 Too Many Requests", "{}", "rate"),
+        ("500 Internal Server Error", "{}", "unavailable"),
+        ("200 OK", "not-json", "malformed"),
+        ("200 OK", r#"{"errors":[{"message":"denied"}]}"#, "refused"),
+        ("200 OK", r#"{"errors":[{}]}"#, "refused"),
+        ("200 OK", "{}", "malformed"),
+    ] {
+        let (endpoint, handle) = raw_server(status, body);
+        let error = build(&endpoint).health().await.unwrap_err();
+        assert!(match check {
+            "rate" => matches!(error, SourceError::RateLimited { .. }),
+            "unavailable" => matches!(error, SourceError::Unavailable { .. }),
+            "refused" => matches!(error, SourceError::Refused { .. }),
+            _ => matches!(error, SourceError::Malformed { .. }),
+        });
+        handle.join().unwrap();
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+    drop(listener);
+    assert!(matches!(
+        build(&endpoint).health().await,
+        Err(SourceError::Unavailable { .. })
+    ));
+}
+
+#[tokio::test]
+async fn normalizes_builtin_statuses_closed_projects_and_empty_items() {
+    for (name, expected) in [
+        ("Backlog", StatusCategory::Backlog),
+        ("Todo", StatusCategory::Todo),
+        ("In Review", StatusCategory::InProgress),
+        ("Done", StatusCategory::Done),
+        ("Canceled", StatusCategory::Cancelled),
+        ("Something Else", StatusCategory::Unknown),
+    ] {
+        let mut response = project_response(false);
+        response["data"]["organization"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["nodes"]
+            [0]["name"] = json!(name);
+        let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+        let task = build(&endpoint)
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .unwrap()
+            .items
+            .remove(0);
+        assert_eq!(task.status.category, expected);
+        handle.join().unwrap();
+    }
+
+    let mut response = project_response(false);
+    response["data"]["organization"]["projectV2"]["closed"] = json!(true);
+    response["data"]["organization"]["projectV2"]["items"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"content":null}));
+    let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+    let project = build(&endpoint)
+        .query_projects(&ProjectQuery::default(), &page(10))
+        .await
+        .unwrap()
+        .items
+        .remove(0);
+    assert_eq!(project.status.category, StatusCategory::Done);
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn rejects_zero_pages_and_malformed_dependency_shapes() {
+    let source = build("http://127.0.0.1:1/graphql");
+    assert!(
+        source
+            .query_tasks(&TaskQuery::default(), &page(0))
+            .await
+            .is_err()
+    );
+
+    for response in [json!({"data":{"node":null}}), json!({"data":{"node":{}}})] {
+        let (endpoint, handle) = server("200 OK", response, 1, "blockedBy");
+        assert!(
+            build(&endpoint)
+                .task_dependencies(&NativeId("x".into()), Direction::DependsOn, &page(1))
+                .await
+                .is_err()
+        );
+        handle.join().unwrap();
+    }
 }

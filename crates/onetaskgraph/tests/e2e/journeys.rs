@@ -718,7 +718,9 @@ fn a_plugin_whose_source_has_not_landed_says_so_and_leaves_the_command_usable() 
         );
         let complaint = stderr(&output);
         assert!(
-            complaint.contains(SOURCE) && complaint.contains("not implemented yet"),
+            complaint.contains(SOURCE)
+                && (complaint.contains("not implemented yet")
+                    || (row.plugin == "github-projects" && complaint.contains("owner"))),
             "{}: the plugin's own message must reach the user:\n{complaint}",
             row.name
         );

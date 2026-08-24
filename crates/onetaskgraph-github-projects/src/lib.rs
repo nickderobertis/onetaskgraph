@@ -1,29 +1,52 @@
-//! A onetaskgraph source over GitHub Projects.
-//!
-//! The factory is real from this commit on so the registry can name `github-projects`
-//! alongside every other plugin, and `onetaskgraph schema` can emit this
-//! plugin's configuration schema. Only [`SourcePlugin::build`] is outstanding:
-//! implementing this source is an **additive** change to this one crate, with no
-//! edit to the contract, the registry, or any sibling.
+//! A stateless onetaskgraph source over one GitHub Projects v2 project.
 #![deny(missing_docs)]
 
-use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName, SourcePlugin, TaskSource};
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Utc};
+use onetaskgraph_plugin_api::{
+    Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Health,
+    Label, NativeId, Page, PageRequest, Project, ProjectQuery, SecretResolver, SourceError,
+    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource,
+};
+use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
+use serde_json::{Value, json};
 
-/// The plugin kind a `github-projects` source's `plugin:` field names.
+/// The registry name for this plugin.
 pub const KIND: &str = "github-projects";
+/// GitHub's maximum connection page size.
+pub const MAX_PAGE_SIZE: u32 = 100;
 
-/// The configuration block a `github-projects` source is built from.
-///
-/// Empty until the source lands: an empty schema accepts nothing but `{}`, so a
-/// configuration written against a shape this plugin does not yet have is
-/// rejected at load rather than silently ignored.
+fn default_api_key_env() -> String {
+    "GH_PROJECTS_TOKEN".to_owned()
+}
+fn default_endpoint() -> String {
+    "https://api.github.com/graphql".to_owned()
+}
+
+/// Configuration for one GitHub Projects v2 project.
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-pub struct GitHubProjectsConfig {}
+pub struct GitHubProjectsConfig {
+    /// Login of the user or organization which owns the project.
+    pub owner: String,
+    /// The project number shown in its GitHub URL.
+    pub project_number: u32,
+    /// Environment variable containing a GitHub token with project read access.
+    #[serde(default = "default_api_key_env")]
+    pub api_key_env: String,
+    /// GraphQL endpoint. GitHub Enterprise installations may override it.
+    #[serde(default = "default_endpoint")]
+    pub endpoint: String,
+    /// Case-insensitive project status name to normalized category mapping.
+    #[serde(default)]
+    pub status_mapping: BTreeMap<String, StatusCategory>,
+}
 
-/// The factory for the github-projects source.
+/// Factory for [`GitHubProjectsSource`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Plugin;
 
@@ -31,31 +54,551 @@ impl SourcePlugin for Plugin {
     fn kind(&self) -> &'static str {
         KIND
     }
-
     fn config_schema(&self) -> Schema {
         schema_for!(GitHubProjectsConfig)
     }
-
     fn build(
         &self,
         name: &SourceName,
-        config: &serde_json::Value,
-        _secrets: &dyn SecretResolver,
+        config: &Value,
+        secrets: &dyn SecretResolver,
     ) -> Result<Box<dyn TaskSource>, SourceError> {
-        // Validate before refusing. A typo in the config block is the user's to fix and
-        // is worth naming precisely; "not implemented yet" is not their problem to
-        // debug. This is also what keeps the published schema's promise honest.
-        let _config: GitHubProjectsConfig =
-            serde_json::from_value(config.clone()).map_err(|error| SourceError::Config {
-                message: format!("source {name}: {error}"),
+        let config: GitHubProjectsConfig =
+            serde_json::from_value(config.clone()).map_err(|e| SourceError::Config {
+                message: format!("source {name}: {e}"),
             })?;
+        let source = GitHubProjectsSource::new(config, secrets).map_err(|error| match error {
+            SourceError::Config { message } => SourceError::Config {
+                message: format!("source {name}: {message}"),
+            },
+            SourceError::Auth { message } => SourceError::Auth {
+                message: format!("source {name}: {message}"),
+            },
+            other => other,
+        })?;
+        Ok(Box::new(source))
+    }
+}
 
-        Err(SourceError::Config {
-            message: format!(
-                "source {name}: the `{KIND}` plugin is not implemented yet; remove this \
-                 source from your configuration, or use the `in-memory` plugin until it \
-                 lands"
-            ),
+/// A source which reads GitHub afresh for every operation.
+pub struct GitHubProjectsSource {
+    owner: String,
+    project_number: u32,
+    endpoint: Url,
+    token: SecretString,
+    statuses: BTreeMap<String, StatusCategory>,
+    client: Client,
+}
+
+impl GitHubProjectsSource {
+    /// Validate configuration and capture the named credential without exposing it.
+    pub fn new(
+        config: GitHubProjectsConfig,
+        secrets: &dyn SecretResolver,
+    ) -> Result<Self, SourceError> {
+        if config.owner.trim().is_empty() {
+            return Err(SourceError::Config {
+                message: "owner must not be empty".into(),
+            });
+        }
+        if config.project_number == 0 {
+            return Err(SourceError::Config {
+                message: "project_number must be at least 1".into(),
+            });
+        }
+        if config.api_key_env.trim().is_empty() {
+            return Err(SourceError::Config {
+                message: "api_key_env must not be empty".into(),
+            });
+        }
+        let endpoint = Url::parse(&config.endpoint).map_err(|e| SourceError::Config {
+            message: format!("endpoint is not a valid URL: {e}"),
+        })?;
+        if endpoint.scheme() != "https"
+            && !(endpoint.scheme() == "http"
+                && endpoint
+                    .host_str()
+                    .is_some_and(|h| h == "127.0.0.1" || h == "localhost" || h == "::1"))
+        {
+            return Err(SourceError::Config {
+                message:
+                    "endpoint must use HTTPS (HTTP is accepted only for a loopback test server)"
+                        .into(),
+            });
+        }
+        let token = secrets.get(&config.api_key_env).ok_or_else(|| SourceError::Auth {
+            message: format!("environment variable {} is not defined; set it to a GitHub token with project read access", config.api_key_env),
+        })?;
+        Ok(Self {
+            owner: config.owner,
+            project_number: config.project_number,
+            endpoint,
+            token,
+            statuses: config
+                .status_mapping
+                .into_iter()
+                .map(|(k, v)| (k.to_lowercase(), v))
+                .collect(),
+            client: Client::builder()
+                .user_agent("onetaskgraph")
+                .build()
+                .map_err(|e| SourceError::Config {
+                    message: format!("cannot build HTTP client: {e}"),
+                })?,
         })
+    }
+
+    async fn graphql(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
+        let response = self
+            .client
+            .post(self.endpoint.clone())
+            .bearer_auth(self.token.expose_secret())
+            .json(&json!({"query": query, "variables": variables}))
+            .send()
+            .await
+            .map_err(|e| SourceError::Unavailable {
+                message: format!("GitHub GraphQL request failed: {e}"),
+            })?;
+        let status = response.status();
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok());
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            return Err(SourceError::Auth {
+                message: format!("GitHub rejected the configured credential with HTTP {status}"),
+            });
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            return Err(SourceError::RateLimited {
+                retry_after_seconds: retry_after,
+            });
+        }
+        if !status.is_success() {
+            return Err(SourceError::Unavailable {
+                message: format!("GitHub GraphQL returned HTTP {status}"),
+            });
+        }
+        let body: Value = response.json().await.map_err(|e| SourceError::Malformed {
+            message: format!("GitHub returned invalid JSON: {e}"),
+        })?;
+        if let Some(errors) = body
+            .get("errors")
+            .and_then(Value::as_array)
+            .filter(|e| !e.is_empty())
+        {
+            let messages = errors
+                .iter()
+                .filter_map(|e| e.get("message").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(SourceError::Refused {
+                message: if messages.is_empty() {
+                    "GitHub returned GraphQL errors".into()
+                } else {
+                    messages
+                },
+            });
+        }
+        body.get("data")
+            .cloned()
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub response has no data object".into(),
+            })
+    }
+
+    async fn project_value(
+        &self,
+        items_after: Option<&str>,
+        items_first: u32,
+    ) -> Result<Value, SourceError> {
+        const QUERY: &str = r#"query($owner:String!,$number:Int!,$first:Int!,$after:String){
+          organization(login:$owner){projectV2(number:$number){...Project}}
+          user(login:$owner){projectV2(number:$number){...Project}}
+        } fragment Project on ProjectV2 { id title shortDescription url createdAt updatedAt closed
+          items(first:$first,after:$after){nodes{id fieldValues(first:100){nodes{
+            ... on ProjectV2ItemFieldSingleSelectValue{name field{name}}
+            ... on ProjectV2ItemFieldLabelValue{labels(first:100){nodes{id name color}}}
+          }} content{
+            ... on Issue{id title body url createdAt updatedAt state labels(first:100){nodes{id name color}}}
+            ... on PullRequest{id title body url createdAt updatedAt state labels(first:100){nodes{id name color}}}
+            ... on DraftIssue{id title body createdAt updatedAt}
+          }} pageInfo{hasNextPage endCursor}}
+        }"#;
+        let data = self.graphql(QUERY, json!({"owner":self.owner,"number":self.project_number,"first":items_first.min(MAX_PAGE_SIZE),"after":items_after})).await?;
+        data.pointer("/organization/projectV2")
+            .or_else(|| data.pointer("/user/projectV2"))
+            .filter(|v| !v.is_null())
+            .cloned()
+            .ok_or_else(|| SourceError::Refused {
+                message: format!(
+                    "GitHub project {}/{} was not found or is not visible to the token",
+                    self.owner, self.project_number
+                ),
+            })
+    }
+
+    fn status(&self, item: &Value) -> Status {
+        let name = item
+            .pointer("/fieldValues/nodes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|v| v.pointer("/field/name").and_then(Value::as_str) == Some("Status"))
+            .and_then(|v| v.get("name"))
+            .and_then(Value::as_str)
+            .or_else(|| item.pointer("/content/state").and_then(Value::as_str))
+            .unwrap_or("Unknown")
+            .to_owned();
+        let category = self
+            .statuses
+            .get(&name.to_lowercase())
+            .copied()
+            .unwrap_or_else(|| match name.to_ascii_lowercase().as_str() {
+                "backlog" => StatusCategory::Backlog,
+                "todo" | "open" => StatusCategory::Todo,
+                "in progress" | "in review" => StatusCategory::InProgress,
+                "done" | "closed" | "merged" => StatusCategory::Done,
+                "cancelled" | "canceled" => StatusCategory::Cancelled,
+                _ => StatusCategory::Unknown,
+            });
+        Status { category, name }
+    }
+
+    fn labels(item: &Value) -> Vec<Label> {
+        let direct = item
+            .pointer("/content/labels/nodes")
+            .and_then(Value::as_array);
+        let field = item
+            .pointer("/fieldValues/nodes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find_map(|v| v.pointer("/labels/nodes").and_then(Value::as_array));
+        direct
+            .into_iter()
+            .flatten()
+            .chain(field.into_iter().flatten())
+            .filter_map(|v| {
+                Some(Label {
+                    id: NativeId(v.get("id")?.as_str()?.to_owned()),
+                    name: v.get("name")?.as_str()?.to_owned(),
+                    color: v.get("color").and_then(Value::as_str).map(str::to_owned),
+                })
+            })
+            .fold(Vec::new(), |mut labels, label| {
+                if !labels.iter().any(|x: &Label| x.id == label.id) {
+                    labels.push(label);
+                }
+                labels
+            })
+    }
+
+    fn task(&self, project_id: &str, item: &Value) -> Option<Task> {
+        let content = item.get("content")?;
+        if content.is_null() {
+            return None;
+        }
+        Some(Task {
+            id: NativeId(content.get("id")?.as_str()?.to_owned()),
+            title: content.get("title")?.as_str()?.to_owned(),
+            content: content
+                .get("body")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned),
+            status: self.status(item),
+            labels: Self::labels(item),
+            project: Some(NativeId(project_id.to_owned())),
+            url: content
+                .get("url")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            created_at: parse_time(content.get("createdAt")),
+            updated_at: parse_time(content.get("updatedAt")),
+        })
+    }
+
+    fn project(&self, value: &Value) -> Result<Project, SourceError> {
+        let id = required_str(value, "id")?;
+        Ok(Project {
+            id: NativeId(id.into()),
+            title: required_str(value, "title")?.into(),
+            content: value
+                .get("shortDescription")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned),
+            status: Status {
+                category: if value.get("closed").and_then(Value::as_bool) == Some(true) {
+                    StatusCategory::Done
+                } else {
+                    StatusCategory::InProgress
+                },
+                name: if value.get("closed").and_then(Value::as_bool) == Some(true) {
+                    "Closed"
+                } else {
+                    "Open"
+                }
+                .into(),
+            },
+            labels: vec![],
+            url: value.get("url").and_then(Value::as_str).map(str::to_owned),
+            created_at: parse_time(value.get("createdAt")),
+            updated_at: parse_time(value.get("updatedAt")),
+        })
+    }
+
+    async fn all_tasks(&self) -> Result<Vec<Task>, SourceError> {
+        let mut after = None;
+        let mut tasks = Vec::new();
+        loop {
+            let project = self.project_value(after.as_deref(), MAX_PAGE_SIZE).await?;
+            let project_id = required_str(&project, "id")?;
+            for item in project
+                .pointer("/items/nodes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(task) = self.task(project_id, item) {
+                    tasks.push(task);
+                }
+            }
+            let page =
+                project
+                    .pointer("/items/pageInfo")
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "GitHub project items have no pageInfo".into(),
+                    })?;
+            if page.get("hasNextPage").and_then(Value::as_bool) != Some(true) {
+                break;
+            }
+            after = Some(required_str(page, "endCursor")?.to_owned());
+        }
+        Ok(tasks)
+    }
+
+    async fn dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        validate_page(page)?;
+        const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}} blocking(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}}}}"#;
+        let data = self.graphql(QUERY, json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c| c.0.as_str())})).await?;
+        let node =
+            data.get("node")
+                .filter(|v| !v.is_null())
+                .ok_or_else(|| SourceError::Refused {
+                    message: format!(
+                        "GitHub item {} was not found or does not support dependencies",
+                        id.0
+                    ),
+                })?;
+        let connection = match direction {
+            Direction::DependsOn => node.get("blockedBy"),
+            Direction::DependedOnBy => node.get("blocking"),
+        }
+        .ok_or_else(|| SourceError::Malformed {
+            message: "GitHub dependency response is missing its connection".into(),
+        })?;
+        let items = connection
+            .get("nodes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.get("id").and_then(Value::as_str))
+            .map(|other| match direction {
+                Direction::DependsOn => DependencyEdge {
+                    from: id.clone(),
+                    to: NativeId(other.into()),
+                    kind: DependencyKind::Blocks,
+                },
+                Direction::DependedOnBy => DependencyEdge {
+                    from: NativeId(other.into()),
+                    to: id.clone(),
+                    kind: DependencyKind::Blocks,
+                },
+            })
+            .collect();
+        Ok(Page {
+            items,
+            next: next_cursor(connection),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskSource for GitHubProjectsSource {
+    fn kind(&self) -> &'static str {
+        KIND
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            projects: Support::Native,
+            orphan_tasks: Support::Unsupported,
+            filter_by_label: Support::Unsupported,
+            filter_by_status: Support::Unsupported,
+            search_title: Support::Unsupported,
+            search_content: Support::Unsupported,
+            task_dependencies: DependencySupport::BothDirections,
+            project_dependencies: DependencySupport::BothDirections,
+            max_page_size: MAX_PAGE_SIZE,
+        }
+    }
+    async fn health(&self) -> Result<Health, SourceError> {
+        let project = self.project_value(None, 1).await?;
+        Ok(Health {
+            reachable: true,
+            detail: Some(format!(
+                "reading GitHub project {}/{} ({})",
+                self.owner,
+                self.project_number,
+                required_str(&project, "title")?
+            )),
+        })
+    }
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        Ok(self
+            .all_tasks()
+            .await?
+            .into_iter()
+            .find(|task| task.id == *id))
+    }
+    async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+        let value = self.project_value(None, 1).await?;
+        let project = self.project(&value)?;
+        Ok((project.id == *id).then_some(project))
+    }
+    async fn query_tasks(
+        &self,
+        _query: &TaskQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        validate_page(page)?;
+        let value = self
+            .project_value(page.cursor.as_ref().map(|c| c.0.as_str()), page.limit)
+            .await?;
+        let id = required_str(&value, "id")?;
+        let items = value
+            .pointer("/items/nodes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|item| self.task(id, item))
+            .collect();
+        Ok(Page {
+            items,
+            next: value.get("items").and_then(next_cursor),
+        })
+    }
+    async fn query_projects(
+        &self,
+        _query: &ProjectQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        validate_page(page)?;
+        if page.cursor.is_some() {
+            return Ok(Page::last(vec![]));
+        }
+        Ok(Page::last(vec![
+            self.project(&self.project_value(None, 1).await?)?,
+        ]))
+    }
+    async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        validate_page(page)?;
+        let offset = numeric_cursor(page.cursor.as_ref())?;
+        let mut labels = self
+            .all_tasks()
+            .await?
+            .into_iter()
+            .flat_map(|t| t.labels)
+            .fold(Vec::new(), |mut all, label| {
+                if !all.iter().any(|x: &Label| x.id == label.id) {
+                    all.push(label);
+                }
+                all
+            });
+        labels.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.0.cmp(&b.id.0)));
+        Ok(offset_page(
+            labels,
+            offset,
+            page.limit.min(MAX_PAGE_SIZE) as usize,
+        ))
+    }
+    async fn task_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.dependencies(id, direction, page).await
+    }
+    async fn project_dependencies(
+        &self,
+        id: &NativeId,
+        _direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        validate_page(page)?;
+        let project = self.project_value(None, 1).await?;
+        if required_str(&project, "id")? != id.0 {
+            return Err(SourceError::Refused {
+                message: format!("GitHub project {} was not found", id.0),
+            });
+        }
+        Ok(Page::last(vec![]))
+    }
+}
+
+fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceError> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("GitHub response is missing string field {field}"),
+        })
+}
+fn parse_time(value: Option<&Value>) -> Option<DateTime<Utc>> {
+    value.and_then(Value::as_str).and_then(|v| v.parse().ok())
+}
+fn validate_page(page: &PageRequest) -> Result<(), SourceError> {
+    if page.limit == 0 {
+        Err(SourceError::Config {
+            message: "page limit must be at least 1".into(),
+        })
+    } else {
+        Ok(())
+    }
+}
+fn next_cursor(connection: &Value) -> Option<Cursor> {
+    connection
+        .get("pageInfo")
+        .filter(|v| v.get("hasNextPage").and_then(Value::as_bool) == Some(true))
+        .and_then(|v| v.get("endCursor"))
+        .and_then(Value::as_str)
+        .map(|v| Cursor(v.into()))
+}
+fn numeric_cursor(cursor: Option<&Cursor>) -> Result<usize, SourceError> {
+    cursor.map_or(Ok(0), |c| {
+        c.0.parse().map_err(|_| SourceError::Config {
+            message: "label cursor is invalid".into(),
+        })
+    })
+}
+fn offset_page<T>(mut items: Vec<T>, offset: usize, limit: usize) -> Page<T> {
+    if offset > items.len() {
+        return Page::last(vec![]);
+    }
+    let tail = items.split_off(offset);
+    let mut selected = tail;
+    let next = (selected.len() > limit).then(|| Cursor((offset + limit).to_string()));
+    selected.truncate(limit);
+    Page {
+        items: selected,
+        next,
     }
 }
