@@ -265,12 +265,16 @@ fn config_schema_is_strict_and_build_validates_inputs_and_secret() {
     for config in [
         json!({}),
         json!({"owner":"","project_number":1}),
+        json!({"owner":"-invalid","project_number":1}),
+        json!({"owner":"invalid--owner","project_number":1}),
         json!({"owner":"org","project_number":0}),
         json!({"owner":"org","project_number":u32::MAX}),
         json!({"owner":"org","project_number":1,"token_env":""}),
+        json!({"owner":"org","project_number":1,"token_env":"BAD-NAME"}),
         json!({"owner":"org","project_number":1,"endpoint":"not a url"}),
         json!({"owner":"org","project_number":1,"endpoint":"http://example.com"}),
         json!({"owner":"org","project_number":1,"status_mapping":{"Doing":"todo","doing":"done"}}),
+        json!({"owner":"org","project_number":1,"status_mapping":{" ":"todo"}}),
         json!({"owner":"org","project_number":1,"typo":true}),
     ] {
         let result = plugin.build(&SourceName::new("work").unwrap(), &config, &Secrets);
@@ -357,6 +361,42 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
     assert_eq!(edges.items.len(), 1);
     assert_eq!(edges.items[0].from.0, "PVT_blocker");
     assert_eq!(edges.items[0].to.0, "PVT_project");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn project_dependencies_skip_pull_requests_and_drafts() {
+    let mut mixed = project_response(false);
+    let issue = mixed["data"]["organization"]["projectV2"]["items"]["nodes"][0].clone();
+    let mut pull_request = issue.clone();
+    pull_request["content"]["id"] = json!("PR_task");
+    pull_request["content"]["state"] = json!("OPEN");
+    let mut draft = issue;
+    draft["content"]["id"] = json!("DI_task");
+    draft["content"].as_object_mut().unwrap().remove("state");
+    mixed["data"]["organization"]["projectV2"]["items"]["nodes"] = json!([
+        mixed["data"]["organization"]["projectV2"]["items"]["nodes"][0],
+        pull_request,
+        draft
+    ]);
+    let dependencies: Value = serde_json::from_str(include_str!("fixtures/dependencies.json"))
+        .expect("the committed dependency fixture is valid JSON");
+    let (endpoint, handle) = sequence_server(vec![
+        project_response(false),
+        mixed,
+        dependencies,
+        json!({"data":{"node":{}}}),
+        json!({"data":{"node":{}}}),
+    ]);
+    let edges = build(&endpoint)
+        .project_dependencies(
+            &NativeId("PVT_project".into()),
+            Direction::DependsOn,
+            &page(10),
+        )
+        .await
+        .unwrap();
+    assert_eq!(edges.items.len(), 1);
     handle.join().unwrap();
 }
 
@@ -646,6 +686,7 @@ async fn maps_transport_http_json_and_graphql_failures() {
         ),
         ("200 OK", r#"{"errors":[{}]}"#, "refused"),
         ("200 OK", "{}", "malformed"),
+        ("200 OK", r#"{"errors":{}}"#, "malformed"),
     ] {
         let (endpoint, handle) = raw_server(status, body);
         let error = build(&endpoint).health().await.unwrap_err();

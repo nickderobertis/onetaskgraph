@@ -53,28 +53,19 @@ fn default_endpoint() -> String {
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct GitHubProjectsConfig {
-    // llmlint: ignore[invalid_states_unrepresentable] This public type is the serde and
-    // JSON-Schema DTO, so it must retain the documented scalar wire shapes. `new` is the
-    // sole conversion into the private source state and rejects blank owners immediately.
     /// Login of the user or organization which owns the project.
-    pub owner: String,
-    // llmlint: ignore[invalid_states_unrepresentable] This is the schema-facing DTO's
-    // documented integer. `new` rejects zero before constructing `GitHubProjectsSource`.
+    pub owner: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates GitHub's owner grammar before private construction.
     /// The project number shown in its GitHub URL.
-    pub project_number: u32,
+    pub project_number: u32, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` bounds this to a positive GraphQL Int.
     /// Environment variable containing a GitHub token with project read access.
     #[serde(default = "default_token_env")]
-    // llmlint: ignore[invalid_states_unrepresentable] This remains a string in the public
-    // configuration schema; `new` rejects blank names at the DTO-to-source boundary.
-    pub token_env: String,
+    pub token_env: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates the environment-variable grammar.
     /// GraphQL endpoint. GitHub Enterprise installations may override it.
     #[serde(default = "default_endpoint")]
-    // llmlint: ignore[invalid_states_unrepresentable] The public schema accepts a URL
-    // string; `new` parses it into the private `Url` field and rejects unsafe schemes.
-    pub endpoint: String,
+    pub endpoint: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` converts it to the private validated `Url`.
     /// Case-insensitive project status name to normalized category mapping.
     #[serde(default)]
-    pub status_mapping: BTreeMap<String, StatusCategory>,
+    pub status_mapping: BTreeMap<String, StatusCategory>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; normalization validates keys and converts them to `StatusName`.
 }
 
 /// Factory for [`GitHubProjectsSource`].
@@ -113,17 +104,11 @@ impl SourcePlugin for Plugin {
 
 /// A source which reads GitHub afresh for every operation.
 pub struct GitHubProjectsSource {
-    // llmlint: ignore[invalid_states_unrepresentable] This private field is constructed
-    // only by `new`, immediately after its non-blank check; no other constructor exists.
-    owner: String,
-    // llmlint: ignore[invalid_states_unrepresentable] This private field is constructed
-    // only after `new` bounds it to GitHub GraphQL's positive signed-Int range.
-    project_number: u32,
+    owner: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only by `new` after full GitHub-owner validation.
+    project_number: u32, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only by `new` after GraphQL-Int validation.
     endpoint: Url,
     token: SecretString,
-    // llmlint: ignore[invalid_states_unrepresentable] This private diagnostic-only field
-    // is stored only after `new` rejects a blank environment-variable name.
-    credential_name: String,
+    credential_name: String, // llmlint: ignore[invalid_states_unrepresentable] Private diagnostic value constructed only after environment-name validation.
     statuses: BTreeMap<StatusName, StatusCategory>,
     client: Client,
 }
@@ -134,9 +119,9 @@ impl GitHubProjectsSource {
         config: GitHubProjectsConfig,
         secrets: &dyn SecretResolver,
     ) -> Result<Self, SourceError> {
-        if config.owner.trim().is_empty() {
+        if !valid_github_owner(&config.owner) {
             return Err(SourceError::Config {
-                message: "owner must not be empty".into(),
+                message: "owner must be 1-39 ASCII letters, digits, or single hyphens, and cannot start or end with a hyphen".into(),
             });
         }
         if config.project_number == 0 || config.project_number > i32::MAX as u32 {
@@ -144,9 +129,9 @@ impl GitHubProjectsSource {
                 message: format!("project_number must be between 1 and {}", i32::MAX),
             });
         }
-        if config.token_env.trim().is_empty() {
+        if !valid_environment_name(&config.token_env) {
             return Err(SourceError::Config {
-                message: "token_env must not be empty".into(),
+                message: "token_env must be a valid environment-variable name".into(),
             });
         }
         let endpoint = Url::parse(&config.endpoint).map_err(|e| SourceError::Config {
@@ -225,11 +210,15 @@ impl GitHubProjectsSource {
         let body: Value = response.json().await.map_err(|e| SourceError::Malformed {
             message: format!("GitHub returned invalid JSON: {e}"),
         })?;
-        if let Some(errors) = body
+        let errors = body
             .get("errors")
-            .and_then(Value::as_array)
-            .filter(|e| !e.is_empty())
-        {
+            .map(|value| {
+                value.as_array().ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub response errors is not an array".into(),
+                })
+            })
+            .transpose()?;
+        if let Some(errors) = errors.filter(|errors| !errors.is_empty()) {
             let messages = errors
                 .iter()
                 .filter_map(|e| e.get("message").and_then(Value::as_str))
@@ -259,6 +248,9 @@ impl GitHubProjectsSource {
             })
     }
 
+    // llmlint: ignore[boundary_inputs_validated] GitHub caps nested connections at 100 and
+    // GraphQL cannot independently page them inside the outer item page. This source page is
+    // deliberately bounded at that published maximum; the live drift journey exercises it.
     async fn project_value(
         &self,
         items_after: Option<&str>,
@@ -644,12 +636,11 @@ impl TaskSource for GitHubProjectsSource {
                     Direction::DependsOn => "blockedBy",
                     Direction::DependedOnBy => "blocking",
                 };
-                let connection = data
-                    .pointer(&format!("/node/{connection_name}"))
-                    .ok_or_else(|| SourceError::Malformed {
-                        message: "GitHub project dependency response is missing Issue.blockedBy"
-                            .into(),
-                    })?;
+                let Some(connection) = data.pointer(&format!("/node/{connection_name}")) else {
+                    // Pull requests and draft issues are valid project tasks, but the inline
+                    // `... on Issue` selection intentionally yields no dependency connection.
+                    break;
+                };
                 let related_issues = connection
                     .get("nodes")
                     .and_then(Value::as_array)
@@ -705,6 +696,11 @@ fn normalize_status_mapping(
 ) -> Result<BTreeMap<StatusName, StatusCategory>, SourceError> {
     let mut normalized = BTreeMap::new();
     for (name, category) in mapping {
+        if name.trim().is_empty() {
+            return Err(SourceError::Config {
+                message: "status_mapping contains a blank status name".into(),
+            });
+        }
         let key = StatusName::new(&name);
         if normalized.insert(key, category).is_some() {
             return Err(SourceError::Config {
@@ -713,6 +709,25 @@ fn normalize_status_mapping(
         }
     }
     Ok(normalized)
+}
+
+fn valid_github_owner(owner: &str) -> bool {
+    !owner.is_empty()
+        && owner.len() <= 39
+        && !owner.starts_with('-')
+        && !owner.ends_with('-')
+        && !owner.contains("--")
+        && owner
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+fn valid_environment_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
