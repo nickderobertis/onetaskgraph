@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from onetaskgraph_sdk import Client, GlobalId, OnetaskgraphError, __version__
+from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
 
 WORKSPACE = Path(__file__).parents[3]
 
@@ -95,6 +96,15 @@ def test_public_error_contains_exit_status(binary: Path, tmp_path: Path) -> None
     with pytest.raises(OnetaskgraphError) as caught:
         run(client.task_show(id="not-qualified"))
     assert caught.value.exit_code == 1
+
+
+def test_real_binary_response_is_rejected_against_the_wrong_contract(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Reject real process JSON when it does not match the selected generated model."""
+    client = Client(binary, cwd=configured(tmp_path))
+    with pytest.raises(OnetaskgraphError, match="outside its emitted schema"):
+        run(client._invoke(["sources", "list"], QueryResponseOfQualifiedTask))
 
 
 def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) -> None:
