@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { delimiter, resolve } from "node:path";
 import {
   OnetaskgraphClient,
   OnetaskgraphExecutionError,
@@ -92,9 +92,15 @@ test("typed methods drive every real binary command", async () => {
     project: "P-1",
   });
   expect(tasks.items[0]?.id).toBe("work:T-1");
-  if (tasks.next) {
-    expect((await client.taskList({ sources: ["work"], page: tasks.next })).items).toBeArray();
-  }
+  const firstPage = await client.taskList({ sources: ["work"], limit: 1 });
+  expect(firstPage.next).toBeString();
+  const secondPage = await client.taskList({
+    sources: ["work"],
+    limit: 1,
+    page: firstPage.next ?? "missing-page-token",
+  });
+  expect(secondPage.items).toHaveLength(1);
+  expect(secondPage.items[0]?.id).not.toBe(firstPage.items[0]?.id);
   expect((await client.taskList({ sources: ["work"], noProject: true })).items[0]?.id).toBe(
     "work:T-2",
   );
@@ -176,8 +182,9 @@ test("the process environment resolves and drives the real binary", async () => 
 test("the PATH fallback drives the real binary", async () => {
   const pathClient = new OnetaskgraphClient({
     cwd: root,
-    env: { PATH: `${resolve(binary, "..")}:/usr/bin:/bin` },
+    env: { PATH: [resolve(binary, ".."), "/usr/bin", "/bin"].join(delimiter) },
   });
+  expect(pathClient.binaryPath).toBe("onetaskgraph");
   expect((await pathClient.taskList({ sources: ["work"] })).items[0]?.id).toBe("work:T-1");
 });
 
