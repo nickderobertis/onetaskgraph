@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write, pipe};
 
-use onetaskgraph_core::{SubprocessSource, plugin_for, serve};
+use onetaskgraph_core::{MAX_LINE, SubprocessSource, plugin_for, serve};
 use onetaskgraph_plugin_api::{
     Direction, LabelFilter, NativeId, PageRequest, ProjectFilter, ProjectQuery, SecretResolver,
     SourceError, SourceName, TaskQuery, TaskSource,
@@ -826,6 +826,64 @@ fn a_secret_name_that_could_never_be_a_variable_is_refused_at_the_field() {
         panic!("an unusable variable name is a configuration refusal: {error:?}");
     };
     assert!(message.contains("not a name"), "{message}");
+}
+
+#[tokio::test]
+async fn a_plugin_that_never_ends_its_line_has_the_connection_closed_on_it() {
+    // One byte past the bound, and no newline: the shape of a peer that would otherwise
+    // decide how much memory this process uses.
+    let unbounded = "x".repeat(usize::try_from(MAX_LINE).expect("the bound fits a usize") + 1);
+    let (to_engine, mut from_liar) = pipe().expect("a pipe");
+    let (to_liar, from_engine) = pipe().expect("a pipe");
+    std::thread::spawn(move || {
+        let mut asked = BufReader::new(to_liar);
+        let mut request = String::new();
+        let _ = asked.read_line(&mut request);
+        let answer = json!({"id": "0", "result": {"protocol_version": 1, "kind": "made-up",
+                            "capabilities": capabilities()}});
+        let _ = writeln!(from_liar, "{answer}");
+        let _ = from_liar.flush();
+        let mut second = String::new();
+        let _ = asked.read_line(&mut second);
+        let _ = from_liar.write_all(unbounded.as_bytes());
+        let _ = from_liar.flush();
+        // Held open: the engine must refuse on the length rather than on the close.
+        let mut parked = String::new();
+        let _ = asked.read_line(&mut parked);
+    });
+    let source =
+        SubprocessSource::over(from_engine, to_engine, &name(), &json!({}), BTreeMap::new())
+            .expect("the handshake succeeds");
+
+    let SourceError::Malformed { message } = source.health().await.expect_err("an endless line")
+    else {
+        panic!("a line that never ends is a violation");
+    };
+    assert!(
+        message.contains(&MAX_LINE.to_string()),
+        "the refusal names the bound: {message}"
+    );
+}
+
+#[test]
+fn a_request_that_never_ends_its_line_closes_the_connection_rather_than_being_framed() {
+    let mut input = serde_json::to_string(&handshake(1, hosted_settings())).expect("a request");
+    input.push('\n');
+    input.push_str(&"x".repeat(usize::try_from(MAX_LINE).expect("the bound fits a usize") + 1));
+
+    let mut output: Vec<u8> = Vec::new();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime")
+        .block_on(serve(input.as_bytes(), &mut output))
+        .expect("an in-memory stream cannot fail");
+
+    let answered = String::from_utf8(output).expect("UTF-8");
+    // The handshake is answered; nothing after the unterminated line is, because nothing
+    // after it can be framed as a request rather than as the tail of one.
+    assert_eq!(answered.lines().count(), 1, "{answered}");
+    assert!(answered.contains("\"protocol_version\":1"), "{answered}");
 }
 
 /// A `Capabilities` the scripted answers can carry, in the protocol's own spelling.

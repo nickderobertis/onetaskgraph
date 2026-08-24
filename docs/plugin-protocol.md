@@ -41,6 +41,10 @@ to this document rather than a second source of truth.
   line feed**. JSON's own escaping (`\n`) carries newlines inside strings, so a task
   body with paragraphs is one line on the wire.
 - There is no length prefix and no framing beyond the newline.
+- A line has a maximum length: **16 MiB**. A peer that writes more than that without
+  ending the line has its connection closed, because a reader must hold a whole line
+  before it can say anything about it, and an unbounded line lets the other side choose
+  how much memory this one uses. No real page approaches it.
 - Standard error is **diagnostics only**. The engine never parses it. A plugin may
   write anything there, and should write nothing on a successful call; the engine may
   surface it when a call fails or when a plugin exits unexpectedly.

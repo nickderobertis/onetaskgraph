@@ -9,6 +9,7 @@
 use std::fmt;
 
 use onetaskgraph_plugin_api::SourcePlugin;
+use serde::{Deserialize, Serialize};
 
 /// One of the plugin kinds this build has.
 ///
@@ -17,7 +18,8 @@ use onetaskgraph_plugin_api::SourcePlugin;
 /// past [`Config::from_document`](crate::Config::from_document). Resolution therefore has
 /// no "what if the registry does not have it" branch left to get wrong, and the refusal
 /// happens at the one place that can name the offending key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
 pub enum PluginKind {
     /// GitHub Projects.
     GithubProjects,
@@ -76,6 +78,30 @@ impl PluginKind {
             Self::LocalMd => Box::new(onetaskgraph_local_md::Plugin),
             Self::Subprocess => Box::new(crate::subprocess::SubprocessPlugin),
         }
+    }
+}
+
+impl TryFrom<String> for PluginKind {
+    type Error = String;
+
+    /// Read a kind this build has, and refuse one it does not — naming what it does have.
+    ///
+    /// Where a document or a protocol message carries a plugin kind, this is what keeps
+    /// "a kind" and "a kind this binary can build" the same thing: an unknown name stops
+    /// being representable at the field rather than at a lookup somewhere later.
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(&value).ok_or_else(|| {
+            format!(
+                "no plugin of this build is called {value:?}; it knows {}",
+                plugin_kinds().join(", ")
+            )
+        })
+    }
+}
+
+impl From<PluginKind> for String {
+    fn from(value: PluginKind) -> Self {
+        value.as_str().to_owned()
     }
 }
 

@@ -19,11 +19,12 @@ use secrecy::SecretString;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
     DependencyParams, IdParams, InitializeParams, InitializeResult, LabelParams, PROTOCOL_VERSION,
     ProjectQueryParams, Request, Response, TaskQueryParams,
 };
-use crate::registry::plugin_for;
+use crate::registry::PluginKind;
 
 /// What this reference host needs in the `config` the handshake hands it.
 ///
@@ -34,7 +35,7 @@ use crate::registry::plugin_for;
 #[derive(Debug, Clone, Deserialize)]
 struct HostedSettings {
     /// The registered plugin kind to build.
-    kind: String,
+    kind: PluginKind,
     /// That plugin's own `config:` block.
     #[serde(default)]
     config: Value,
@@ -49,10 +50,24 @@ struct HostedSettings {
 /// version has no method for, a line that is not JSON — is answered on the wire or
 /// reported on standard error, because a plugin that exits on a bad line takes every
 /// other in-flight request with it (§6.3).
-pub async fn serve(input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
+pub async fn serve(mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
     let mut source: Option<Box<dyn TaskSource>> = None;
-    for line in input.lines() {
-        let line = line?;
+    loop {
+        let line = match read_line(&mut input) {
+            Line::Read(line) => line,
+            Line::Ended => return Ok(()),
+            Line::Failed(error) => return Err(error),
+            // Nothing after an unterminated line can be framed — the rest of it would be
+            // read as further requests it is not — so this side says why and stops rather
+            // than answering questions nobody asked. The engine sees the closed stream.
+            Line::TooLong => {
+                eprintln!(
+                    "onetaskgraph-source: a request ran past {MAX_LINE} bytes without \
+                     ending its line; closing the connection"
+                );
+                return Ok(());
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -81,7 +96,6 @@ pub async fn serve(input: impl BufRead, mut output: impl Write) -> std::io::Resu
             return Ok(());
         }
     }
-    Ok(())
 }
 
 /// The `id` a line is addressed with, if it has one at all.
@@ -190,15 +204,11 @@ fn build(params: &InitializeParams) -> Result<Box<dyn TaskSource>, SourceError> 
                  as {{\"kind\": …, \"config\": …}}: {error}"
             ),
         })?;
-    let plugin = plugin_for(&settings.kind).ok_or_else(|| SourceError::Config {
-        message: format!(
-            "no plugin of this build is called {:?}; it knows {}",
-            settings.kind,
-            crate::registry::plugin_kinds().join(", ")
-        ),
-    })?;
     let name = SourceName::new(params.source_name.clone())?;
-    plugin.build(&name, &settings.config, &Handshake(&params.secrets))
+    settings
+        .kind
+        .plugin()
+        .build(&name, &settings.config, &Handshake(&params.secrets))
 }
 
 /// The credentials the handshake forwarded, and nothing else.

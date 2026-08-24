@@ -29,11 +29,46 @@ use super::wire::{Request, Response};
 /// short enough that a plugin echoing a whole page of tasks cannot fill a terminal.
 const QUOTED: usize = 200;
 
+/// The most a peer may put on one line before this side stops reading it.
+///
+/// A line is read into memory before anything can be said about it, so a peer that never
+/// writes a newline is a peer that decides how much memory this process uses. Sixteen
+/// mebibytes is far above any real page — a source declaring a page size of ten thousand
+/// and a kibibyte of prose per task is a tenth of it — and far below anything that
+/// threatens a host, which is the whole of what a bound like this is for.
+pub const MAX_LINE: u64 = 16 * 1024 * 1024;
+
 /// How much of a plugin's standard error is kept for diagnostics. Bounded because a
 /// plugin that logs in a loop must not be able to grow this engine's memory without end —
 /// the invariant this product is built on is that the engine holds work data transiently,
 /// and a diagnostics buffer with no ceiling is a way to hold it for ever by accident.
 const KEPT_DIAGNOSTICS: usize = 4096;
+
+/// What reading one line from a peer produced.
+pub(crate) enum Line {
+    /// A line, with its terminator still on it.
+    Read(String),
+    /// The peer closed the stream with nothing more to say.
+    Ended,
+    /// The peer wrote [`MAX_LINE`] bytes without ending the line.
+    TooLong,
+    /// The stream itself failed.
+    Failed(std::io::Error),
+}
+
+/// Read one line, refusing a peer that never ends one.
+///
+/// The bound is applied *before* the allocation rather than after it, which is the whole
+/// point: checking the length of a line already in memory is a check made too late.
+pub(crate) fn read_line(reader: &mut (impl BufRead + ?Sized)) -> Line {
+    let mut line = String::new();
+    match reader.take(MAX_LINE).read_line(&mut line) {
+        Err(error) => Line::Failed(error),
+        Ok(0) => Line::Ended,
+        Ok(_) if !line.ends_with('\n') => Line::TooLong,
+        Ok(_) => Line::Read(line),
+    }
+}
 
 /// A live plugin process, with a thread doing its blocking input and output.
 pub(crate) struct Connection {
@@ -313,7 +348,12 @@ impl Peer {
         // successful call (§1), so this does not wait for one that has more to say.
         while said.len() < KEPT_DIAGNOSTICS {
             let mut line = String::new();
-            match reader.read_line(&mut line) {
+            // Bounded by what is still wanted rather than by the line: a plugin whose
+            // diagnostic is one enormous line must not be able to decide how much of this
+            // process's memory it takes, and the outer condition cannot say that on its
+            // own — it is only consulted between lines.
+            let room = (KEPT_DIAGNOSTICS - said.len()) as u64;
+            match (&mut reader).take(room).read_line(&mut line) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => said.push_str(&line),
             }
@@ -333,13 +373,18 @@ fn exchange(
         .map_err(|error| SourceError::Unavailable {
             message: format!("could not send a request to the plugin: {error}"),
         })?;
-    let mut answer = String::new();
-    match reader.read_line(&mut answer) {
-        Ok(0) => Err(SourceError::Unavailable {
+    match read_line(reader) {
+        Line::Read(answer) => Ok(answer),
+        Line::Ended => Err(SourceError::Unavailable {
             message: "the plugin closed its output without answering".to_owned(),
         }),
-        Ok(_) => Ok(answer),
-        Err(error) => Err(SourceError::Unavailable {
+        Line::TooLong => Err(SourceError::Malformed {
+            message: format!(
+                "the plugin wrote more than {MAX_LINE} bytes without ending the line; a \
+                 response is one line and this engine will not hold an unbounded one"
+            ),
+        }),
+        Line::Failed(error) => Err(SourceError::Unavailable {
             message: format!("could not read the plugin's answer: {error}"),
         }),
     }
@@ -353,14 +398,26 @@ fn exchange(
 fn drain(stderr: ChildStderr, into: Arc<Mutex<String>>) {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
-        let mut line = String::new();
-        while matches!(reader.read_line(&mut line), Ok(count) if count > 0) {
-            let mut kept = into.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            if kept.len() < KEPT_DIAGNOSTICS {
-                kept.push_str(&line);
+        loop {
+            let mut line = String::new();
+            // One line at a time, each bounded on its own, because the cap has to hold
+            // against a plugin that logs one line and never ends it as well as against one
+            // that logs for ever. Reading past the cap and dropping the excess keeps the
+            // pipe drained — a plugin blocked writing to a full stderr never answers the
+            // request the engine is waiting on.
+            match (&mut reader).take(MAX_LINE).read_line(&mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
             }
-            drop(kept);
-            line.clear();
+            let mut kept = into.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let room = KEPT_DIAGNOSTICS.saturating_sub(kept.len());
+            if room > 0 {
+                let end = line
+                    .char_indices()
+                    .nth(room)
+                    .map_or(line.len(), |(at, _)| at);
+                kept.push_str(&line[..end]);
+            }
         }
     });
 }

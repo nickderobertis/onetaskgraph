@@ -18,6 +18,7 @@ mod serve;
 mod source;
 mod wire;
 
+pub use connection::MAX_LINE;
 pub use plugin::{Plugin as SubprocessPlugin, Program, SubprocessConfig};
 pub use serve::serve;
 pub use source::SubprocessSource;
