@@ -62,7 +62,7 @@ jobs:
 
       # Generated-code drift is platform-independent. Keep it gating on Linux without
       # paying for the build-time generators in all three required OS lanes.
-      - name: Check generated SDKs
+      - name: Check generated Python SDK
         if: matrix.os == 'ubuntu-latest'
         run: just generate-check
 
