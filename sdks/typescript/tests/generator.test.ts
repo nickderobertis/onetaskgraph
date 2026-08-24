@@ -147,13 +147,13 @@ test("generator rejects unsafe destinations and malformed executable output", ()
     expect(failed.status).toBe(1);
     expect(failed.stderr).toContain("fixture unavailable");
 
-    const invalidBundles = [
+    const invalidBundles: ReadonlyArray<readonly [string, unknown]> = [
       ["version", { version: "1", roots: {}, commands: [] }],
       ["roots", { version: 1, roots: [], commands: [] }],
       ["schema", { version: 1, roots: { Broken: { type: "object" } }, commands: [] }],
       ["commands", { version: 1, roots: {}, commands: [1] }],
       ["duplicate-commands", { version: 1, roots: {}, commands: ["schema", "schema"] }],
-    ] as const;
+    ];
     for (const [name, bundle] of invalidBundles) {
       const result = generateWith(emitter(fixtures, name, JSON.stringify(bundle)), fixtures);
       expectExited(result);
