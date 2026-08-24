@@ -12,26 +12,33 @@ use tempfile::TempDir;
 
 /// A temporary host: a project tree to run in, and a configuration home over it.
 pub struct Sandbox {
-    root: TempDir,
+    /// Held for its drop, which removes the tree. Every path comes from `root` below.
+    _directory: TempDir,
+    /// The same tree, named the way the child process will name it.
+    root: PathBuf,
 }
 
 impl Sandbox {
     /// An empty host — no documents, no credentials file.
     pub fn new() -> Self {
-        let root = TempDir::new().expect("a temporary directory");
-        std::fs::create_dir_all(root.path().join("project")).expect("the project tree");
-        std::fs::create_dir_all(root.path().join("home/onetaskgraph")).expect("the config home");
-        Self { root }
+        let directory = TempDir::new().expect("a temporary directory");
+        let root = resolved(directory.path());
+        std::fs::create_dir_all(root.join("project")).expect("the project tree");
+        std::fs::create_dir_all(root.join("home/onetaskgraph")).expect("the config home");
+        Self {
+            _directory: directory,
+            root,
+        }
     }
 
     /// The directory a command runs in.
     pub fn project(&self) -> PathBuf {
-        self.root.path().join("project")
+        self.root.join("project")
     }
 
     /// The configuration home, as `XDG_CONFIG_HOME`.
     pub fn config_home(&self) -> PathBuf {
-        self.root.path().join("home")
+        self.root.join("home")
     }
 
     /// Write `onetaskgraph.yaml` at the top of the project tree.
@@ -90,6 +97,30 @@ impl Sandbox {
         std::fs::create_dir_all(&path).expect("a directory in the file's place");
         path
     }
+}
+
+/// The temporary root under the name the binary will report for it.
+///
+/// A journey that asserts on the document's path compares two names for one file: the
+/// one this sandbox built and the one the child derived from its own `current_dir()`.
+/// The operating system resolves symbolic links out of the second, so on a host whose
+/// temporary directory is reached through one — macOS, where `/var` is a link to
+/// `/private/var` — the two names differ and every such assertion fails there and
+/// nowhere else. Resolving here makes the sandbox's name for the tree the child's name
+/// for it, so the comparison is about the layer under test rather than about the host.
+#[cfg(not(windows))]
+fn resolved(path: &Path) -> PathBuf {
+    path.canonicalize().expect("the temporary root resolves")
+}
+
+/// On Windows, the name `TempDir` returns is already the one the child reports.
+///
+/// There is no symlinked temporary root to resolve there, and `canonicalize` would
+/// answer with a `\\?\` verbatim path — a third name for the tree, carried by neither
+/// side of the comparison above.
+#[cfg(windows)]
+fn resolved(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 /// Write `text` to `path`, creating what it needs, and return the path.
