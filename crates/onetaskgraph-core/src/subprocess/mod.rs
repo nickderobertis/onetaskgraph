@@ -18,6 +18,6 @@ mod serve;
 mod source;
 mod wire;
 
-pub use plugin::{Plugin as SubprocessPlugin, SubprocessConfig};
+pub use plugin::{Plugin as SubprocessPlugin, Program, SubprocessConfig};
 pub use serve::serve;
 pub use source::SubprocessSource;
