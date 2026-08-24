@@ -13,11 +13,11 @@
 use std::fmt;
 
 use jsonschema::error::ValidationErrorKind;
-use onetaskgraph_plugin_api::{SecretResolver, SourceName, SourcePlugin, TaskSource};
+use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName, SourcePlugin, TaskSource};
 use serde_json::Value;
 
-use crate::PluginKind;
 use crate::config::{Config, ConfigError, SourceConfig};
+use crate::plan::SourceFailure;
 
 /// One configured source, built and ready to answer.
 ///
@@ -28,27 +28,98 @@ use crate::config::{Config, ConfigError, SourceConfig};
 /// makes the pair an invariant instead of something every reader has to re-check.
 pub struct ResolvedSource {
     name: SourceName,
-    kind: PluginKind,
     source: Box<dyn TaskSource>,
 }
 
 impl ResolvedSource {
+    /// Adopt a source under `name`.
+    ///
+    /// The kind is not a second field a caller could set: it is read back off the source
+    /// through [`TaskSource::kind`], so the pair cannot disagree and the plan a query
+    /// reports names the kind the source itself claims. That also makes this the seam a
+    /// source built outside the registry arrives through — the engine's own tests today,
+    /// the subprocess-hosted plugins the protocol document describes later.
+    #[must_use]
+    pub fn adopt(name: SourceName, source: Box<dyn TaskSource>) -> Self {
+        Self { name, source }
+    }
+
     /// The name the configuration gave it, which qualifies every id it returns.
     #[must_use]
     pub fn name(&self) -> &SourceName {
         &self.name
     }
 
-    /// The plugin kind that built it.
+    /// The plugin kind that built it, as the source itself reports it.
+    ///
+    /// A `&str` rather than a [`PluginKind`](crate::PluginKind): a subprocess-hosted
+    /// plugin reports a kind no compile-time enumeration can hold, which is also why
+    /// [`SourcePlan::kind`](crate::SourcePlan::kind) is a `String`.
     #[must_use]
-    pub fn kind(&self) -> PluginKind {
-        self.kind
+    pub fn kind(&self) -> &str {
+        self.source.kind()
     }
 
     /// The source itself.
     #[must_use]
     pub fn source(&self) -> &dyn TaskSource {
         self.source.as_ref()
+    }
+}
+
+/// One configured source that could not be built at all.
+///
+/// A missing credential, a plugin whose implementation has not landed, a `config:` block
+/// its own plugin refuses at build time: none of them is a reason to answer nothing for
+/// the *other* sources, so this is carried beside the ones that built and reported as a
+/// [`SourceFailure`] in every response.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnavailableSource {
+    name: SourceName,
+    /// The plugin kind that was asked to build it.
+    ///
+    /// The kind a plugin reports, which is an open vocabulary rather than an
+    /// under-modelled one: a subprocess-hosted plugin reports a kind arriving over the
+    /// wire from a binary this workspace never compiled, so no compile-time type can
+    /// enumerate it, and a newtype over the same string would only move where an
+    /// unrelated value is accepted. This is the same field, and the same reason, as
+    /// `SourcePlan.kind` and `SourceListing.kind`, where the contract fixes it as a
+    /// string outright.
+    // llmlint: ignore[invalid_states_unrepresentable] the reason above, recorded a third
+    // time because this is the third site the same field appears at: `kind` is what
+    // `SourcePlan.kind` (plan.rs) and `SourceListing.kind` (engine/mod.rs) already carry
+    // as approved contract text, and narrowing it here alone would only make this crate
+    // disagree with the two documents it renders into.
+    kind: &'static str,
+    error: SourceError,
+}
+
+impl UnavailableSource {
+    /// The name the configuration gave it.
+    #[must_use]
+    pub fn name(&self) -> &SourceName {
+        &self.name
+    }
+
+    /// The plugin kind that was asked to build it.
+    #[must_use]
+    pub fn kind(&self) -> &str {
+        self.kind
+    }
+
+    /// Why it did not build.
+    #[must_use]
+    pub fn error(&self) -> &SourceError {
+        &self.error
+    }
+
+    /// The same thing, as a response carries it.
+    #[must_use]
+    pub fn failure(&self) -> SourceFailure {
+        SourceFailure {
+            source: self.name.clone(),
+            error: self.error.clone(),
+        }
     }
 }
 
@@ -60,7 +131,7 @@ impl fmt::Debug for ResolvedSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ResolvedSource")
             .field("name", &self.name)
-            .field("kind", &self.kind.as_str())
+            .field("kind", &self.kind())
             .finish_non_exhaustive()
     }
 }
@@ -92,31 +163,53 @@ pub fn resolve(
     config: &Config,
     secrets: &dyn SecretResolver,
 ) -> Result<Vec<ResolvedSource>, ConfigError> {
-    config
-        .sources()
-        .iter()
-        .map(|(name, source)| {
-            let plugin = checked_plugin(name, source)?;
-            let built = plugin
-                .build(name, source.config(), secrets)
-                .map_err(|error| {
-                    ConfigError::setting(
-                        format!("sources.{name}"),
-                        error.to_string(),
-                        format!(
-                            "correct that source's configuration, or remove it — \
-                             `onetaskgraph config show` reports every setting under \
-                             `sources.{name}` and the layer it came from."
-                        ),
-                    )
-                })?;
-            Ok(ResolvedSource {
+    validate_sources(config)?;
+    let (built, unavailable) = resolve_available(config, secrets);
+    match unavailable.first() {
+        None => Ok(built),
+        Some(failed) => Err(ConfigError::setting(
+            format!("sources.{}", failed.name()),
+            failed.error().to_string(),
+            format!(
+                "correct that source's configuration, or remove it — `onetaskgraph \
+                 config show` reports every setting under `sources.{}` and the layer it \
+                 came from.",
+                failed.name()
+            ),
+        )),
+    }
+}
+
+/// Build every configured source, keeping the ones that refused beside the ones that
+/// built.
+///
+/// This is what the engine resolves through, and the difference from [`resolve`] is the
+/// whole point: one source with an expired token must not stop the other two from
+/// answering. A refusal here is reported per source, exactly as a source that fails
+/// mid-query is.
+///
+/// The `config:` blocks are not re-checked, because a [`Config`] cannot exist holding one
+/// its own plugin would refuse — [`Config::from_document`](crate::Config::from_document)
+/// checks every block against its plugin's declared schema on the way in.
+#[must_use]
+pub fn resolve_available(
+    config: &Config,
+    secrets: &dyn SecretResolver,
+) -> (Vec<ResolvedSource>, Vec<UnavailableSource>) {
+    let mut built = Vec::new();
+    let mut unavailable = Vec::new();
+    for (name, source) in config.sources() {
+        let plugin = source.plugin().plugin();
+        match plugin.build(name, source.config(), secrets) {
+            Ok(source) => built.push(ResolvedSource::adopt(name.clone(), source)),
+            Err(error) => unavailable.push(UnavailableSource {
                 name: name.clone(),
-                kind: source.plugin(),
-                source: built,
-            })
-        })
-        .collect()
+                kind: plugin.kind(),
+                error,
+            }),
+        }
+    }
+    (built, unavailable)
 }
 
 /// The plugin this source names, with its `config:` block already checked.

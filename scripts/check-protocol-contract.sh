@@ -24,6 +24,7 @@ cd "$ROOT"
 
 DOCUMENT="$ROOT/docs/plugin-protocol.md" \
 API_SRC="$ROOT/crates/onetaskgraph-plugin-api/src" \
+TRANSPORT="$ROOT/crates/onetaskgraph-core/src/subprocess/connection.rs" \
 python3 <<'PY'
 import os
 import re
@@ -509,6 +510,35 @@ for struct, heading in STRUCT_SECTIONS.items():
                 f"names it. Specify it there — a plugin author writing from that section "
                 f"would never handle it."
             )
+
+# The framing limit is a number rather than a name, so neither of the two scans above
+# would ever notice it drifting. It is normative — a plugin author reads it and sizes their
+# writes by it — and it is also a constant this engine enforces, so the two have to be one
+# value. Read both and compare.
+FRAMING_SECTION = "## 1. Framing"
+
+transport = read(os.environ["TRANSPORT"], "the transport that enforces the framing limit")
+declared = re.search(r"pub const MAX_LINE: u64 = (\d+) \* 1024 \* 1024;", transport)
+if declared is None:
+    refuse(
+        "could not read `MAX_LINE` from the transport.",
+        "restore it as `pub const MAX_LINE: u64 = <n> * 1024 * 1024;`, or teach this "
+        "script the shape it has now — the document states this number and the two "
+        "cannot be allowed to drift.",
+    )
+stated = re.search(r"\*\*(\d+) MiB\*\*", section(FRAMING_SECTION))
+if stated is None:
+    refuse(
+        f'"{FRAMING_SECTION}" no longer states a maximum line length in **<n> MiB**.',
+        "restore it — a plugin author sizes their writes by that number, and this check "
+        "is what keeps it the one this engine actually enforces.",
+    )
+if declared.group(1) != stated.group(1):
+    failures.append(
+        f'"{FRAMING_SECTION}" states a maximum line length of {stated.group(1)} MiB but '
+        f"`MAX_LINE` enforces {declared.group(1)} MiB. Make them one value: a plugin "
+        f"written to the document would have its connection closed for obeying it."
+    )
 
 if failures:
     for failure in failures:

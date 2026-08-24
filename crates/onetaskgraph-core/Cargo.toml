@@ -11,6 +11,10 @@ authors.workspace = true
 # The engine may depend on every plugin; no plugin may depend back. Registering a new
 # plugin here is what lets a configuration name it.
 [dependencies]
+# The trait a subprocess-hosted source implements is async, so the engine needs the same
+# attribute macro a plugin does. It brings no runtime with it: this crate is still written
+# against `std::future` alone and runs on whatever runtime its caller starts.
+async-trait.workspace = true
 onetaskgraph-github-projects.workspace = true
 onetaskgraph-in-memory.workspace = true
 onetaskgraph-linear.workspace = true
@@ -27,3 +31,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio.workspace = true

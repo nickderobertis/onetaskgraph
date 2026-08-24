@@ -34,7 +34,10 @@ serde_json = "1.0.151"
 serde_norway = "0.9.42"
 serde_path_to_error = "0.1.20"
 thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+# `sync` and `time` are for the engine's own concurrency test: it holds two sources at a
+# rendezvous, which only completes if they were consulted at once, under a timeout so a
+# sequential engine fails the test rather than hanging the suite.
+tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
 assert_cmd = "2.2.2"
 predicates = "3.1.4"

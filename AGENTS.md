@@ -4,6 +4,16 @@
      repository's own acceptance criteria require it to record the enforcement mechanisms,
      the three affected selections and the journey inventory here. Tightening the wording
      is tracked as follow-up; removing the content is not available. -->
+<!-- llmlint: ignore-file[instruction_layer_localized] the nested-`AGENTS.md` half of this
+     rule is met — `crates/AGENTS.md` carries the crate-subtree rules and this file keeps
+     the repo-wide ones — but its `CODEOWNERS` half asks for something this repository has
+     decided against. "Commits, releases, and merging" below records zero required
+     approvals *because nobody reviews these pull requests*, and GitHub does not request
+     review from a pull request's own author, so a `CODEOWNERS` naming this repository's
+     one owner would route nothing to nobody. Adding one would also fork the merge-path
+     arrangement away from its stated source of truth, the create-repo skill's
+     `setup_github_governance.py`. If review ever becomes something that happens here,
+     delete this directive and add the file. -->
 # AGENTS.md
 
 Durable constraints for humans and agents working here. Terse on purpose — this is
@@ -110,8 +120,10 @@ mechanisms rather than rediscovering the rule; each says how it fails, not how i
 1. `deny.toml` refuses every embedded store, index and cache crate, and `deny` is a
    required check — so reaching for one cannot merge.
 2. `crates/onetaskgraph/tests/e2e/no_persistence.rs` sandboxes `HOME`, every `XDG_*` and
-   `TMPDIR`, plants sentinels, drives every verb, and fails if any file written during the
-   run holds one. It asserts on the effect, so it catches caching by any technique.
+   `TMPDIR` into one tree, plants sentinels in a source's work, drives every verb, and
+   compares the tree with itself: it fails, naming the path, if any file was created or
+   changed during the run, and says which sentinels a new file held. It asserts on the
+   effect, so it catches caching by any technique.
 3. `crates/onetaskgraph-core/tests/no_reuse.rs` catches the half a filesystem scan cannot
    see: one query asked twice must reach the source twice.
 
@@ -175,8 +187,15 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 ### The journeys this repository owes
 
 Each drives the real binary as a subprocess, and each runs against **every** configured
-source kind through one shared fixture table — so a plugin is never proven by a suite of
-its own writing. The list grows as features land, and the suite is what says which of
+source kind through one shared fixture table — `crates/onetaskgraph/tests/e2e/fixtures.rs`
+— so a plugin is never proven by a suite of its own writing. That coverage is not a habit:
+`scripts/check-journey-matrix.sh`, a target in `check`, reconciles the table against the
+registry both ways and fails naming the plugin, so a plugin that lands without a row
+cannot merge. A plugin whose source has not landed carries a `Pending` row, which is a
+journey of its own — it asserts that plugin refuses with its own message — rather than a
+placeholder.
+
+The list grows as features land, and the suite is what says which of
 them do; this is the inventory of what is owed, not a status board.
 
 1. List tasks from one source.

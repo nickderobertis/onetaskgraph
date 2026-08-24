@@ -5,11 +5,11 @@
 //! instead of leaving a user to guess why one source was fast and another was not:
 //! `--explain` renders a [`QueryPlan`] and `--json` carries it as a field.
 
-use std::collections::BTreeMap;
-
-use onetaskgraph_plugin_api::{Cursor, SourceError, SourceName};
+use onetaskgraph_plugin_api::{SourceError, SourceName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::engine::{Owed, Resumption, StreamState};
 
 /// One page of engine output, with the plan that produced it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -107,42 +107,71 @@ pub struct SourceFailure {
     pub error: SourceError,
 }
 
-/// The engine's own resume token: one plugin [`Cursor`] per source, opaque to the
+/// The engine's own resume token: one plugin cursor per source stream, opaque to the
 /// caller exactly as a plugin's cursor is opaque to the engine.
 ///
-/// The wire shape is a bare JSON string, unchanged. What is not representable is a
-/// token this engine never issued: the inner string is private, and both ways in
-/// validate — [`encode`](Self::encode) builds one from cursors, and
-/// [`parse`](Self::parse), which is also what deserialising one goes through,
-/// refuses anything that does not decode. A hand-edited token therefore fails at
-/// the boundary it entered rather than wherever it is first decoded.
+/// Rendered as lower-case hex, which is not obfuscation — the inside is not a secret —
+/// but the one property a token a person copies off a terminal has to have: it survives
+/// a shell. The document underneath holds a plugin's own cursor, and a cursor may hold
+/// anything at all, so a token spelled as the raw JSON would carry quotes, braces and
+/// spaces straight into the next command line. Hex has no character a shell reads.
+///
+/// # What a token is and is not checked for
+///
+/// Both ways in go through [`parse`](Self::parse) — including deserialising one — and
+/// what that establishes is **structural**: the string is hex, the bytes are this
+/// engine's own resume document, and every state in it is well formed. It does not, and
+/// cannot, establish that this engine is the one that wrote it. A token is not a
+/// credential and carries nothing secret; forging one buys a caller nothing they could
+/// not have asked for outright, since every cursor inside is handed straight back to the
+/// source that issued it and is validated there.
+///
+/// What a forged token *could* do is name a stream this configuration has no source for,
+/// or resume further into a page than the engine ever pages. Both are refused where the
+/// token meets the query it is resuming, by
+/// [`Engine`](crate::Engine) — see `EngineError::Token` — because only the engine knows
+/// which sources are configured and what page ceiling each declares.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(try_from = "String", into = "String")]
 pub struct PageToken(String);
 
 impl PageToken {
-    /// Encode one cursor per source into a single token.
+    /// Encode where every stream still walking picks up.
     ///
-    /// # Errors
+    /// Crate-private on purpose: what a token *means* is the engine's, and a caller able
+    /// to build one from parts could name a stream no query addressed. A caller with a
+    /// token in hand reaches it through [`parse`](Self::parse) instead, which checks its
+    /// structure — see this type's own note for what that does and does not establish.
     ///
-    /// Returns [`SourceError::Malformed`] when the cursors cannot be encoded.
-    pub fn encode(cursors: &BTreeMap<SourceName, Cursor>) -> Result<Self, SourceError> {
-        serde_json::to_string(cursors)
-            .map(Self)
-            .map_err(|error| SourceError::Malformed {
-                message: format!("could not encode a page token: {error}"),
-            })
+    /// Infallible: a stream state is a source name, a stream kind, an optional cursor
+    /// and a count, and none of those can fail to serialise.
+    ///
+    /// Only ever reached with at least one stream, because a walk with nothing left to
+    /// resume reports no token at all — which is why [`parse`](Self::parse) refuses an
+    /// empty one.
+    pub(crate) fn encode(query: &str, owed: Option<Owed>, streams: &[StreamState]) -> Self {
+        let document = serde_json::to_string(&Resumption {
+            query: query.to_owned(),
+            owed,
+            streams: streams.to_vec(),
+        })
+        .expect("a resumption is plain data and always serialises");
+        Self(to_hex(&document))
     }
 
-    /// Accept a token from a caller — a `--page-token` argument, or a deserialised
-    /// response — refusing one this engine could not have issued.
+    /// Accept a token from a caller — a `--page` argument, or a deserialised response —
+    /// refusing anything that is not this engine's own resume document.
+    ///
+    /// Structural only, deliberately: see the type's own note for what this establishes
+    /// and what [`Engine`](crate::Engine) checks instead.
     ///
     /// # Errors
     ///
-    /// Returns [`SourceError::Malformed`] when `raw` does not decode.
+    /// Returns [`SourceError::Malformed`] when `raw` is not hex, is not this engine's
+    /// document, or holds a state that is not well formed.
     pub fn parse(raw: impl Into<String>) -> Result<Self, SourceError> {
         let token = Self(raw.into());
-        token.decode()?;
+        token.resumption()?;
         Ok(token)
     }
 
@@ -152,17 +181,40 @@ impl PageToken {
         &self.0
     }
 
-    /// Decode a token back into one cursor per source.
+    /// Where each stream claims to pick up.
     ///
-    /// # Errors
-    ///
-    /// Returns [`SourceError::Malformed`] when the token was not issued by this
-    /// engine, so a hand-edited token fails loudly instead of silently restarting
-    /// the walk.
-    pub fn decode(&self) -> Result<BTreeMap<SourceName, Cursor>, SourceError> {
-        serde_json::from_str(&self.0).map_err(|error| SourceError::Malformed {
-            message: format!("page token was not issued by this engine: {error}"),
-        })
+    /// Infallible, and that is a property of the type rather than an assumption: the only
+    /// two ways to obtain a `PageToken` are [`encode`](Self::encode), which built this
+    /// document, and [`parse`](Self::parse), which refuses anything that does not decode
+    /// — and deserialising one goes through `parse`. So a token that does not decode
+    /// never exists to be read here. Whether what it *says* is usable against the query
+    /// being resumed is the engine's to decide, not this type's.
+    pub(crate) fn decode(&self) -> Resumption {
+        self.resumption()
+            .expect("every way to build a PageToken validates it")
+    }
+
+    /// The document inside, or why this is not one of this engine's tokens.
+    fn resumption(&self) -> Result<Resumption, SourceError> {
+        let document = from_hex(&self.0).ok_or_else(|| SourceError::Malformed {
+            message: "that is not a page token this engine writes: it is not even hex".to_owned(),
+        })?;
+        let resumption: Resumption =
+            serde_json::from_str(&document).map_err(|error| SourceError::Malformed {
+                message: format!("that is not a page token this engine writes: {error}"),
+            })?;
+        let streams = &resumption.streams;
+        // A token with nothing to resume is one this engine never writes: `encode` is
+        // reached only while at least one stream still has rows to give, and a walk with
+        // none reports no token at all. Accepting one would answer an empty page and exit
+        // zero, which reads as a walk that ended rather than as the mistake it is.
+        if streams.is_empty() {
+            return Err(SourceError::Malformed {
+                message: "that is not a page token this engine writes: it resumes nothing"
+                    .to_owned(),
+            });
+        }
+        Ok(resumption)
     }
 }
 
@@ -176,9 +228,50 @@ impl TryFrom<String> for PageToken {
     }
 }
 
-/// Serialising is the plain string it has always been; only the way back in changed.
+/// A token is its string, so serialising one is that string and nothing else — the
+/// checking all happens on the way in, where a caller's input is.
 impl From<PageToken> for String {
     fn from(value: PageToken) -> Self {
         value.0
     }
+}
+
+impl std::fmt::Display for PageToken {
+    /// The opaque string a caller passes back as `--page`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Render `document` as lower-case hex.
+fn to_hex(document: &str) -> String {
+    let mut rendered = String::with_capacity(document.len() * 2);
+    for byte in document.as_bytes() {
+        rendered.push(nibble(byte >> 4));
+        rendered.push(nibble(byte & 0x0f));
+    }
+    rendered
+}
+
+fn nibble(value: u8) -> char {
+    char::from_digit(u32::from(value), 16).expect("a nibble is a hex digit")
+}
+
+/// Read hex back, or `None` when `raw` is not hex of valid UTF-8.
+fn from_hex(raw: &str) -> Option<String> {
+    if !raw.len().is_multiple_of(2) {
+        return None;
+    }
+    let digits: Vec<u8> = raw
+        .chars()
+        .map(|digit| digit.to_digit(16))
+        .collect::<Option<Vec<u32>>>()?
+        .into_iter()
+        .map(|digit| u8::try_from(digit).expect("a hex digit fits in a byte"))
+        .collect();
+    let bytes: Vec<u8> = digits
+        .chunks(2)
+        .map(|pair| (pair[0] << 4) | pair[1])
+        .collect();
+    String::from_utf8(bytes).ok()
 }

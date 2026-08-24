@@ -8,11 +8,13 @@ against this document alone — in any language — is a source this product can
 
 This document is normative and complete: the framing, the handshake, one method per
 trait method with its request and response shapes, the error envelope, and what a
-peer does when the other side speaks a version it does not know. The Rust
-implementation (`SubprocessSource`, in `onetaskgraph-core`) lands later; this is
-written first because it is what keeps the trait honest while the engine is being
-written against it. Where this document and the trait disagree, that is a defect in
-one of them and is worth reporting rather than reconciling by guesswork.
+peer does when the other side speaks a version it does not know. Both halves of it
+are implemented in `onetaskgraph-core`: `SubprocessSource` is the engine's side, and
+`serve` is a reference plugin side that hosts any plugin of this build — which is
+what the shipped `onetaskgraph-source` program runs, and what lets the shared
+journeys run every one of themselves a second time over a real pipe. Where this
+document and the trait disagree, that is a defect in one of them and is worth
+reporting rather than reconciling by guesswork.
 
 Every name below is a restatement of Rust, so none of them is prose alone:
 `scripts/check-protocol-contract.sh` — a target in `just check` — reconciles them with
@@ -39,6 +41,10 @@ to this document rather than a second source of truth.
   line feed**. JSON's own escaping (`\n`) carries newlines inside strings, so a task
   body with paragraphs is one line on the wire.
 - There is no length prefix and no framing beyond the newline.
+- A line has a maximum length: **16 MiB**. A peer that writes more than that without
+  ending the line has its connection closed, because a reader must hold a whole line
+  before it can say anything about it, and an unbounded line lets the other side choose
+  how much memory this one uses. No real page approaches it.
 - Standard error is **diagnostics only**. The engine never parses it. A plugin may
   write anything there, and should write nothing on a successful call; the engine may
   surface it when a call fails or when a plugin exits unexpectedly.

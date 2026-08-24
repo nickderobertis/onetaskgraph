@@ -98,11 +98,13 @@ select_after_editing() {
   # --json, then one name per line: `nx show projects` renders a JSON array outside a
   # TTY, and a shape-dependent parse is exactly the kind of quiet breakage this check
   # exists to catch.
-  local raw
+  local raw stderr_file
+  stderr_file="$scratch/nx-stderr"
   if ! raw="$(cd "$scratch/repo" && node_modules/.bin/nx show projects --affected --json \
-    --base="$base" --head=HEAD 2>&1)"; then
+    --base="$base" --head=HEAD 2>"$stderr_file")"; then
     echo "check-affected-selection: Nx could not compute the affected set for $file:" >&2
     printf '%s\n' "$raw" >&2
+    cat "$stderr_file" >&2
     echo "check-affected-selection: fix the project graph so 'nx show projects' runs, then re-run." >&2
     exit 1
   fi

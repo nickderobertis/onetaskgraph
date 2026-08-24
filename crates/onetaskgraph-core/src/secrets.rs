@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use onetaskgraph_plugin_api::SecretResolver;
 use schemars::JsonSchema;
 use secrecy::SecretString;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::Environment;
 use crate::config::{ConfigError, read_optional, secrets_path};
@@ -139,12 +139,33 @@ impl fmt::Display for CredentialLayer {
 /// shell could have exported — and a report naming something outside it would be
 /// reporting a credential that no layer could ever resolve. [`CredentialName::new`] is
 /// the only way to make one, so that report cannot be built.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
-#[serde(into = "String")]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(into = "String", try_from = "String")]
 // As for `SettingPath`: schemars does not read `serde(into)`, and this is a string on
 // the wire.
 #[schemars(with = "String")]
 pub struct CredentialName(String);
+
+impl TryFrom<String> for CredentialName {
+    type Error = String;
+
+    /// Read a name a shell could have exported, and refuse anything else where it is
+    /// written.
+    ///
+    /// This is what lets a configuration field hold the type rather than a `String` it
+    /// checks later: a name no layer could ever resolve stops being representable at all,
+    /// instead of surfacing as a credential mysteriously reported absent.
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(&value).ok_or_else(|| {
+            format!(
+                "{value:?} is not an environment variable name; a name is letters, digits \
+                 and underscores, not starting with a digit"
+            )
+        })
+    }
+}
 
 impl CredentialName {
     /// `name` when a shell could have exported it, and nothing otherwise.

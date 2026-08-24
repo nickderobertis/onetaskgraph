@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyKind, Direction, Health, Label, Page, PageRequest,
-    Project, ProjectQuery, SourceError, Status, StatusCategory, Task, TaskQuery,
+    Project, ProjectQuery, SourceError, Status, StatusCategory, Task, TaskQuery, TextFields,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
@@ -16,7 +16,10 @@ use serde_json::{Value, json};
 use crate::config::{EffectiveConfig, Origin, OutputFormat, Setting};
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
-use crate::{GlobalId, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
+use crate::{
+    GlobalId, PageToken, Predicate, Qualified, QualifiedEdge, QueryPlan, QueryResponse, SearchHit,
+    SearchKind, SourceFailure, SourceListing, SourcePlan,
+};
 
 /// The bundle's own version, bumped whenever a root is added, removed or renamed.
 ///
@@ -24,11 +27,9 @@ use crate::{GlobalId, Predicate, QueryPlan, QueryResponse, SourceFailure, Source
 /// contract rather than a convenience: an SDK can refuse a bundle it was not
 /// generated against instead of silently emitting the wrong models.
 ///
-/// `2` added the roots `config show --json` emits — `EffectiveConfig`, `Setting`,
-/// `Origin`, `OutputFormat`, `SecretsReport`, `ResolvedCredential` and
-/// `CredentialLayer` — because a machine-readable output with no root in this bundle
-/// is one no SDK can be generated against.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 2;
+/// Which roots each version brought is what `git log` answers; what this number owes a
+/// reader is that it moves whenever [`schema_bundle`] below gains, loses or renames one.
+pub const SCHEMA_BUNDLE_VERSION: u32 = 4;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -43,6 +44,13 @@ pub fn schema_bundle() -> Value {
     roots.insert("DependencyEdge", schema_for!(DependencyEdge));
     roots.insert("DependencyKind", schema_for!(DependencyKind));
     roots.insert("Direction", schema_for!(Direction));
+    // Roots of their own although both are reachable inside `TaskQuery`'s definitions,
+    // which is enough for a generator and not enough for a reconciliation: the command
+    // line spells both deliberately differently (`both` for `title-or-content`, `task`
+    // for `tasks`), so a variant added to either would leave the command line quietly
+    // unable to name it. A root apiece gives that gate one document to read.
+    roots.insert("TextFields", schema_for!(TextFields));
+    roots.insert("SearchKind", schema_for!(SearchKind));
 
     roots.insert("TaskQuery", schema_for!(TaskQuery));
     roots.insert("ProjectQuery", schema_for!(ProjectQuery));
@@ -57,16 +65,37 @@ pub fn schema_bundle() -> Value {
     roots.insert("SourceError", schema_for!(SourceError));
 
     roots.insert("GlobalId", schema_for!(GlobalId));
+    roots.insert("PageToken", schema_for!(PageToken));
     roots.insert("QueryPlan", schema_for!(QueryPlan));
     roots.insert("SourcePlan", schema_for!(SourcePlan));
     roots.insert("Predicate", schema_for!(Predicate));
     roots.insert("SourceFailure", schema_for!(SourceFailure));
-    roots.insert("QueryResponseOfTask", schema_for!(QueryResponse<Task>));
+    roots.insert("QualifiedTask", schema_for!(Qualified<Task>));
+    roots.insert("QualifiedProject", schema_for!(Qualified<Project>));
+    roots.insert("QualifiedLabel", schema_for!(Qualified<Label>));
+    roots.insert("QualifiedEdge", schema_for!(QualifiedEdge));
+    roots.insert("SearchHit", schema_for!(SearchHit));
+    roots.insert("SourceListing", schema_for!(SourceListing));
     roots.insert(
-        "QueryResponseOfProject",
-        schema_for!(QueryResponse<Project>),
+        "QueryResponseOfQualifiedTask",
+        schema_for!(QueryResponse<Qualified<Task>>),
     );
-    roots.insert("QueryResponseOfLabel", schema_for!(QueryResponse<Label>));
+    roots.insert(
+        "QueryResponseOfQualifiedProject",
+        schema_for!(QueryResponse<Qualified<Project>>),
+    );
+    roots.insert(
+        "QueryResponseOfQualifiedLabel",
+        schema_for!(QueryResponse<Qualified<Label>>),
+    );
+    roots.insert(
+        "QueryResponseOfQualifiedEdge",
+        schema_for!(QueryResponse<QualifiedEdge>),
+    );
+    roots.insert(
+        "QueryResponseOfSearchHit",
+        schema_for!(QueryResponse<SearchHit>),
+    );
 
     roots.insert("EffectiveConfig", schema_for!(EffectiveConfig));
     roots.insert("Setting", schema_for!(Setting));

@@ -793,15 +793,19 @@ dependencies = [
  "clap",
  "jsonschema",
  "onetaskgraph-core",
+ "onetaskgraph-plugin-api",
  "predicates",
+ "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
 name = "onetaskgraph-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "jsonschema",
  "onetaskgraph-github-projects",
  "onetaskgraph-in-memory",
@@ -816,6 +820,7 @@ dependencies = [
  "serde_path_to_error",
  "tempfile",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

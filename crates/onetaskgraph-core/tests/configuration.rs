@@ -551,18 +551,31 @@ fn no_secrets() -> Secrets {
     Secrets::load(Environment::default()).expect("nothing to read")
 }
 
+/// The smallest `config:` block `kind` accepts.
+///
+/// Empty for every plugin that requires nothing, which is most of them; `subprocess` is
+/// the exception because a source that is another program is not configured at all until
+/// it has been told which program. That is the field being required doing its job, so the
+/// block is spelled here rather than the requirement being relaxed to keep one loop
+/// uniform.
+fn minimal_block(kind: &str) -> Value {
+    match kind {
+        "subprocess" => json!({"command": "onetaskgraph-source"}),
+        _ => json!({}),
+    }
+}
+
 #[test]
 fn every_registered_plugin_declares_a_schema_that_compiles_and_accepts_a_valid_block() {
     for kind in onetaskgraph_core::plugin_kinds() {
         let plugin = plugin_for(kind).expect("the registry names it");
-        let block = json!({});
         // `validate_sources` compiles the schema and runs it; a plugin whose schema
         // would not compile panics here rather than in a user's run.
-        let config = one_source(plugin.kind(), block);
+        let config = one_source(plugin.kind(), minimal_block(kind));
         let outcome = onetaskgraph_core::validate_sources(&config);
         assert!(
             outcome.is_ok(),
-            "{kind} refuses an empty block against its own schema: {outcome:?}"
+            "{kind} refuses its own minimal block against its own schema: {outcome:?}"
         );
     }
 }
@@ -585,8 +598,10 @@ fn resolving_builds_the_sources_a_configuration_names_in_name_order() {
             .collect::<Vec<_>>(),
         vec!["archive", "work"]
     );
-    assert_eq!(resolved[0].kind(), PluginKind::InMemory);
-    assert_eq!(resolved[0].source().kind(), "in-memory");
+    // The kind is read back off the source rather than stored beside it, so the pair
+    // cannot disagree: a `ResolvedSource` cannot claim a kind its source does not report.
+    assert_eq!(resolved[0].kind(), "in-memory");
+    assert_eq!(resolved[0].kind(), resolved[0].source().kind());
 }
 
 #[test]
