@@ -151,6 +151,45 @@ fn every_source_lists_its_projects_and_shows_one_by_its_qualified_id() {
 }
 
 #[test]
+fn malformed_local_markdown_names_its_path_without_hiding_valid_rows() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("malformed-local-md");
+    let tasks = root.join("tasks");
+    std::fs::create_dir_all(&tasks).expect("the task directory");
+    std::fs::write(
+        tasks.join("valid.md"),
+        "---\ntitle: Still available\nstatus: todo\n---\nA valid task.\n",
+    )
+    .expect("the valid Markdown task");
+    let malformed = tasks.join("broken.md");
+    std::fs::write(&malformed, "title: missing front-matter delimiters\n")
+        .expect("the malformed Markdown task");
+    sandbox.project_document(&document(&json!({
+        SOURCE: {"plugin": "local-md", "config": {"root": root}},
+    })));
+
+    let shown = run(&sandbox, &["task", "show", &qualified(SOURCE, "broken")]);
+    assert_eq!(shown.status.code(), Some(4), "{}", stderr(&shown));
+    let complaint = stderr(&shown);
+    let malformed = malformed
+        .canonicalize()
+        .expect("the malformed Markdown path is canonicalizable");
+    assert!(
+        complaint.contains(&malformed.display().to_string()),
+        "the malformed file's exact path must reach the user:\n{complaint}"
+    );
+
+    let listing = run(&sandbox, &["task", "list"]);
+    assert_eq!(listing.status.code(), Some(0), "{}", stderr(&listing));
+    assert_eq!(listed(&stdout(&listing)), ours(&["valid"]));
+    assert!(
+        stderr(&listing).is_empty(),
+        "a usable listing stays quiet:\n{}",
+        stderr(&listing)
+    );
+}
+
+#[test]
 fn a_task_in_no_project_is_listed_by_default_and_can_be_selected_on_its_own() {
     for row in ready() {
         let sandbox = host(row);

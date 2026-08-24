@@ -142,7 +142,7 @@ fn the_registry_resolves_a_kind_to_its_plugin_and_nothing_to_an_unknown_one() {
 
 #[test]
 fn a_registered_but_unimplemented_plugin_refuses_with_its_own_message() {
-    for kind in ["github-projects", "local-md"] {
+    for kind in ["github-projects"] {
         let plugin = plugin_for(kind).expect("registered");
         let Err(SourceError::Config { message }) =
             plugin.build(&source("work"), &serde_json::json!({}), &NoSecrets)

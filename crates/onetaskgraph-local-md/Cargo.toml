@@ -9,11 +9,15 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 onetaskgraph-plugin-api.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_norway.workspace = true
 
 [dev-dependencies]
 secrecy.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
