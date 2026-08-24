@@ -85,7 +85,6 @@ impl Row {
     }
 }
 
-/// A whole configuration document over `sources`.
 pub fn document(sources: &Value) -> String {
     serde_json::to_string_pretty(&json!({ "sources": sources })).expect("a fixture renders")
 }
@@ -120,6 +119,9 @@ pub fn pair(sandbox: &Sandbox) -> String {
 }
 
 /// `<source>:<native>`, the form a user types.
+///
+/// Spelled here rather than inline so a journey asserting on an id is asserting on the
+/// rendering under test rather than on its own `format!`.
 pub fn qualified(source: &str, native: &str) -> String {
     format!("{source}:{native}")
 }

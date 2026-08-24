@@ -17,7 +17,6 @@ fn host(row: &Row) -> Sandbox {
     sandbox
 }
 
-/// Run the binary in `sandbox` and return what it did.
 fn run(sandbox: &Sandbox, arguments: &[&str]) -> Output {
     sandbox
         .command()
@@ -27,7 +26,8 @@ fn run(sandbox: &Sandbox, arguments: &[&str]) -> Output {
         .clone()
 }
 
-/// Run the binary and insist it succeeded, quoting what it said if it did not.
+/// Quotes stderr on failure, because a journey that fails on an exit code alone sends
+/// its reader back to the shell to find out why.
 fn ok(row: &Row, sandbox: &Sandbox, arguments: &[&str]) -> String {
     let output = run(sandbox, arguments);
     assert_eq!(

@@ -9,7 +9,6 @@ use predicates::str::contains;
 
 use crate::common::Sandbox;
 
-/// The compiled binary, as a user's shell would find it.
 fn onetaskgraph() -> Command {
     Command::cargo_bin("onetaskgraph").expect("the binary is built")
 }

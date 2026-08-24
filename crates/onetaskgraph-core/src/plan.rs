@@ -145,6 +145,10 @@ impl PageToken {
     ///
     /// Infallible: a stream state is a source name, a stream kind, an optional cursor
     /// and a count, and none of those can fail to serialise.
+    ///
+    /// Only ever reached with at least one stream, because a walk with nothing left to
+    /// resume reports no token at all — which is why [`parse`](Self::parse) refuses an
+    /// empty one.
     pub(crate) fn encode(streams: &[StreamState]) -> Self {
         let document = serde_json::to_string(streams)
             .expect("a stream state is plain data and always serialises");
@@ -191,9 +195,21 @@ impl PageToken {
         let document = from_hex(&self.0).ok_or_else(|| SourceError::Malformed {
             message: "that is not a page token this engine writes: it is not even hex".to_owned(),
         })?;
-        serde_json::from_str(&document).map_err(|error| SourceError::Malformed {
-            message: format!("that is not a page token this engine writes: {error}"),
-        })
+        let streams: Vec<StreamState> =
+            serde_json::from_str(&document).map_err(|error| SourceError::Malformed {
+                message: format!("that is not a page token this engine writes: {error}"),
+            })?;
+        // A token with nothing to resume is one this engine never writes: `encode` is
+        // reached only while at least one stream still has rows to give, and a walk with
+        // none reports no token at all. Accepting one would answer an empty page and exit
+        // zero, which reads as a walk that ended rather than as the mistake it is.
+        if streams.is_empty() {
+            return Err(SourceError::Malformed {
+                message: "that is not a page token this engine writes: it resumes nothing"
+                    .to_owned(),
+            });
+        }
+        Ok(streams)
     }
 }
 

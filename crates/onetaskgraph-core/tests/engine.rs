@@ -83,11 +83,13 @@ fn a_string_that_is_not_this_engines_resume_document_is_refused_where_it_enters(
     // A well-formed document of the wrong shape is refused at the same boundary, and so
     // is one naming a source no configuration could have: the token's inside is the
     // engine's, and only what the engine writes decodes.
-    // Hex of `{"work":"0"}` and of `[{"source":"BAD_NAME","stream":"items"}]`: both decode
-    // out of the token's own encoding and are then refused for what they say.
+    // Hex of `{"work":"0"}`, of a state naming an unusable source, and of `[]` — a
+    // document this engine never writes, because a walk with nothing left to resume
+    // reports no token at all.
     for unissued in [
         "7b22776f726b223a2230227d",
         "5b7b22736f75726365223a224241445f4e414d45222c2273747265616d223a226974656d73227d5d",
+        "5b5d",
     ] {
         let Err(SourceError::Malformed { .. }) = PageToken::parse(unissued) else {
             panic!("a token this engine did not issue must be refused: {unissued}");

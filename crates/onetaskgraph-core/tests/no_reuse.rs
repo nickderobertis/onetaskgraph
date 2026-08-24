@@ -51,7 +51,8 @@ fn engine() -> (Engine, Arc<AtomicU32>) {
     (Engine::new(vec![source], Vec::new(), vec![name]), calls)
 }
 
-/// One page of whatever a verb returns.
+/// Large enough that every verb below answers in one page, so what these tests count is
+/// re-asking rather than paging.
 fn one_page() -> Paging {
     Paging {
         limit: NonZeroU32::new(10).expect("10 is not zero"),

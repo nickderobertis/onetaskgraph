@@ -18,7 +18,6 @@ fn host() -> Sandbox {
     sandbox
 }
 
-/// Run the binary in `sandbox`.
 fn run(sandbox: &Sandbox, arguments: &[&str]) -> Output {
     sandbox
         .command()
@@ -28,7 +27,7 @@ fn run(sandbox: &Sandbox, arguments: &[&str]) -> Output {
         .clone()
 }
 
-/// Run it and insist it succeeded.
+/// Quotes stderr on failure, for the reason `journeys::ok` carries.
 fn ok(sandbox: &Sandbox, arguments: &[&str]) -> String {
     let output = run(sandbox, arguments);
     assert_eq!(

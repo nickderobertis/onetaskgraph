@@ -21,7 +21,6 @@ fn host() -> Sandbox {
     sandbox
 }
 
-/// Run the binary and return what it did.
 fn run(sandbox: &Sandbox, arguments: &[&str]) -> Output {
     sandbox
         .command()
