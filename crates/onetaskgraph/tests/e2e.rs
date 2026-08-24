@@ -249,3 +249,30 @@ fn a_closed_stdout_never_panics_however_the_race_lands() {
         );
     }
 }
+
+#[test]
+fn help_names_the_product_however_the_executable_on_disk_is_named() {
+    // Windows appends `.exe` to the file, and clap takes its usage line from argv[0]
+    // unless told otherwise — so without a pinned `bin_name` the help there would name
+    // `onetaskgraph.exe`, a command no document tells a user to type. Copying the real
+    // binary under another file name reproduces that condition on every platform.
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let renamed = dir.path().join(format!(
+        "onetaskgraph-under-another-name{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    std::fs::copy(assert_cmd::cargo::cargo_bin("onetaskgraph"), &renamed)
+        .expect("the binary copies");
+
+    Command::new(&renamed)
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("Usage: onetaskgraph [OPTIONS] <COMMAND>"));
+
+    Command::new(&renamed)
+        .args(["help", "schema"])
+        .assert()
+        .success()
+        .stdout(contains("Usage: onetaskgraph schema"));
+}

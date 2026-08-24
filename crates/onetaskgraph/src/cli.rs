@@ -16,7 +16,10 @@ use serde_json::Value;
 /// invocation itself was wrong (clap's own code for that). `4` is reserved for a query
 /// that succeeded for some sources and failed for others without `--allow-partial`.
 #[derive(Debug, Parser)]
-#[command(name = "onetaskgraph", version)]
+// `bin_name` is pinned rather than left to clap, which takes it from argv[0] — and on
+// Windows argv[0] is `onetaskgraph.exe`, so the usage line would name a different command
+// there than the one this declares and than the one the documentation tells a user to type.
+#[command(name = "onetaskgraph", bin_name = "onetaskgraph", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
