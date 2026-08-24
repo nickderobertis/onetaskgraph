@@ -12,12 +12,20 @@ def test_wheel_installs_and_queries_through_public_import(tmp_path: Path) -> Non
     """Install a wheel cleanly and drive a real configured query through it."""
     package = Path(__file__).parents[1]
     workspace = package.parents[1]
+    subprocess.run(
+        ["cargo", "build", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph"],
+        cwd=workspace,
+        check=True,
+    )
     subprocess.run(["uv", "build", "--wheel", "--out-dir", str(tmp_path)], cwd=package, check=True)
     environment = tmp_path / "venv"
     subprocess.run(["uv", "venv", "--python", sys.executable, str(environment)], check=True)
     python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     wheel = next(tmp_path.glob("onetaskgraph_sdk-*.whl"))
-    subprocess.run(["uv", "pip", "install", "--python", str(python), str(wheel)], check=True)
+    subprocess.run(
+        ["uv", "pip", "install", "--offline", "--python", str(python), str(wheel)],
+        check=True,
+    )
     config = tmp_path / "query"
     config.mkdir()
     (config / "onetaskgraph.yaml").write_text(
