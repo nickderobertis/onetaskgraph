@@ -187,6 +187,37 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         else {
             panic!("expected query")
         };
+        let query::Selection::Field(root) = &operation.selection_set.items[0] else {
+            panic!("expected root field")
+        };
+        let schema_root = objects["Query"]
+            .fields
+            .iter()
+            .find(|field| field.name == root.name)
+            .unwrap();
+        for variable in &operation.variable_definitions {
+            let argument = schema_root
+                .arguments
+                .iter()
+                .find(|argument| argument.name == variable.name)
+                .or_else(|| {
+                    objects.values().find_map(|object| {
+                        object.fields.iter().find_map(|field| {
+                            field
+                                .arguments
+                                .iter()
+                                .find(|argument| argument.name == variable.name)
+                        })
+                    })
+                })
+                .unwrap_or_else(|| panic!("schema lacks variable {}", variable.name));
+            assert_eq!(
+                format!("{:?}", variable.var_type),
+                format!("{:?}", argument.value_type),
+                "variable {} type drifted",
+                variable.name
+            );
+        }
         validate(
             &objects,
             "Query",
@@ -428,6 +459,66 @@ async fn graphql_rate_limit_uses_http_hint_and_viewer_id_is_validated() {
                 .unwrap_err(),
             SourceError::Malformed { .. }
         ));
+    }
+    let (endpoint, _) = server(
+        "200 OK",
+        "",
+        r#"{"errors":[{"message":"ordinary refusal","extensions":{"code":"BAD"}}]}"#,
+    );
+    assert!(
+        matches!(source(&endpoint).health().await.unwrap_err(), SourceError::Refused { ref message } if message == "ordinary refusal")
+    );
+}
+
+#[tokio::test]
+async fn dependency_cursors_are_sent_on_second_task_and_project_requests() {
+    let request = PageRequest {
+        cursor: None,
+        limit: 2,
+    };
+    for projects in [false, true] {
+        let root = if projects { "project" } else { "issue" };
+        let related = if projects {
+            "relatedProject"
+        } else {
+            "relatedIssue"
+        };
+        let body = format!(
+            r#"{{"data":{{"{root}":{{"relations":{{"nodes":[{{"type":"blocks","{related}":{{"id":"other"}}}}],"pageInfo":{{"hasNextPage":true,"endCursor":"next-edge"}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
+        );
+        let (endpoint, _) = server("200 OK", "", body);
+        let first = if projects {
+            source(&endpoint)
+                .project_dependencies(&"id".into(), Direction::DependsOn, &request)
+                .await
+                .unwrap()
+        } else {
+            source(&endpoint)
+                .task_dependencies(&"id".into(), Direction::DependsOn, &request)
+                .await
+                .unwrap()
+        };
+        let cursor = first.next.unwrap();
+        let body = format!(
+            r#"{{"data":{{"{root}":{{"relations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
+        );
+        let (endpoint, wire) = server("200 OK", "", body);
+        let second = PageRequest {
+            cursor: Some(cursor),
+            limit: 2,
+        };
+        if projects {
+            source(&endpoint)
+                .project_dependencies(&"id".into(), Direction::DependsOn, &second)
+                .await
+                .unwrap();
+        } else {
+            source(&endpoint)
+                .task_dependencies(&"id".into(), Direction::DependsOn, &second)
+                .await
+                .unwrap();
+        }
+        assert!(wire.recv().unwrap().contains("next-edge"));
     }
 }
 
