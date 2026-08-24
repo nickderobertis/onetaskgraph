@@ -92,6 +92,12 @@ generate-check:
             exit 1; \
         fi
 
+# Linux CI aggregate: generated-code drift plus the affected-project gate.
+check-generated: generate-check check
+
+# Linux CI aggregate: generated-code drift plus the all-project gate.
+gate-generated: generate-check gate
+
 # Upgrade every ecosystem's dependencies, then re-run the complete bar on the result.
 upgrade:
     @cargo update --quiet

@@ -60,12 +60,6 @@ jobs:
       - name: Bootstrap
         run: just bootstrap
 
-      # Generated-code drift is platform-independent. Keep it gating on Linux without
-      # paying for the build-time generators in all three required OS lanes.
-      - name: Check generated Python SDK
-        if: matrix.os == 'ubuntu-latest'
-        run: just generate-check
-
       # Derive the base explicitly rather than letting Nx guess: an implicit base is how
       # affected selection quietly starts comparing against the wrong commit.
       - name: Derive the merge base
@@ -83,7 +77,7 @@ jobs:
           fi
 
       - name: Check the affected projects
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && matrix.os != 'ubuntu-latest'
         env:
           # Nx's own mechanism for "compare against this commit". Setting it here rather
           # than threading an argument through every recipe keeps one source of truth for
@@ -92,11 +86,25 @@ jobs:
           NX_HEAD: HEAD
         run: just check
 
+      # Generated-code drift is platform-independent. The Linux aggregate adds its
+      # uniform Nx target without paying for the generator in the other required lanes.
+      - name: Check the affected projects and generated Python SDK
+        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
+        env:
+          NX_BASE: ${{ steps.base.outputs.base }}
+          NX_HEAD: HEAD
+        run: just check-generated
+
       # On the default branch, sweep everything. A cache is for speed and must never be
       # what makes a broken clean build look green.
       - name: Sweep every project
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && matrix.os != 'ubuntu-latest'
         run: just gate
+
+
+      - name: Sweep every project and check generated Python SDK
+        if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
+        run: just gate-generated
 
   # Supply chain, Linux-only: the graph is the same on every platform, so running it three
   # times would buy nothing. This is where the two mechanically-enforced invariants fail —
