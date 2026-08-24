@@ -159,6 +159,59 @@ fn a_page_token_this_engine_did_not_write_is_refused_rather_than_restarting_the_
 }
 
 #[test]
+fn a_token_carrying_a_field_this_engine_does_not_write_is_refused_rather_than_defaulted() {
+    // A field name that is nearly right is the shape a hand-edited token really fails in,
+    // and it is the quiet one: without this, `cursorr` is an unknown field to ignore and
+    // `cursor` is then absent, so the stream resumes from the *beginning* and the caller
+    // gets the first page again under a token that promised the second.
+    let sandbox = host();
+    let minted: Value = serde_json::from_str(&stdout(&run(
+        &sandbox,
+        &["task", "list", "--limit", "1", "--json"],
+    )))
+    .expect("--json emits a response");
+    let query = serde_json::from_slice::<Value>(&unhex(
+        minted["next"]
+            .as_str()
+            .expect("one page of four leaves more"),
+    ))
+    .expect("a token holds JSON")["query"]
+        .clone();
+
+    for document in [
+        // A misspelling one level down, where the real cursor lives.
+        json!({
+            "query": query,
+            "streams": [{"source": "work", "stream": "items", "cursorr": "1"}],
+        }),
+        // And one at the top, where a whole half of the document could go missing.
+        json!({
+            "query": query,
+            "streamz": [],
+            "streams": [{"source": "work", "stream": "items"}],
+        }),
+    ] {
+        let token: String = serde_json::to_string(&document)
+            .expect("a resume document renders")
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let output = run(
+            &sandbox,
+            &["task", "list", "--limit", "1", "--page", &token],
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{document} must be refused:\n{}",
+            stdout(&output)
+        );
+        refused(&output, "unknown field", "previous page");
+    }
+}
+
+#[test]
 fn a_well_shaped_token_this_configuration_cannot_honour_is_refused_for_what_it_says() {
     // The dangerous case, and the one a malformed string does not reach: a token that
     // decodes perfectly and asks for something this configuration has no answer for.

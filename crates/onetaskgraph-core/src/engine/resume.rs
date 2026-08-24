@@ -62,6 +62,7 @@ pub(crate) struct Resume {
 /// real rows and the exit code is zero, so nothing about the answer says it is arbitrary.
 /// That is the same failure the stream-kind check refuses, one layer in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Resumption {
     /// A fingerprint of the query that minted this token — see `Engine`'s `shape`.
     pub query: String,
@@ -88,6 +89,7 @@ pub(crate) struct Resumption {
 /// Named by stream rather than by position, because a stream the previous page exhausted
 /// is not in the next one and every position after it would shift.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Owed {
     /// The configured source whose turn it is.
     pub source: SourceName,
@@ -97,6 +99,7 @@ pub(crate) struct Owed {
 
 /// One stream's place, as the page token carries it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct StreamState {
     /// The configured source this stream belongs to.
     pub source: SourceName,
