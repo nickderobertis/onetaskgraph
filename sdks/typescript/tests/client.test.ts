@@ -159,6 +159,20 @@ test("the supplied environment precedes packaged resolution", () => {
   );
 });
 
+test("the process environment resolves and drives the real binary", async () => {
+  const previous = process.env.ONETASKGRAPH_BIN;
+  process.env.ONETASKGRAPH_BIN = binary;
+  try {
+    const processEnvironmentClient = new OnetaskgraphClient({ cwd: root });
+    expect((await processEnvironmentClient.taskList({ sources: ["work"] })).items[0]?.id).toBe(
+      "work:T-1",
+    );
+  } finally {
+    if (previous === undefined) delete process.env.ONETASKGRAPH_BIN;
+    else process.env.ONETASKGRAPH_BIN = previous;
+  }
+});
+
 test("the PATH fallback drives the real binary", async () => {
   const pathClient = new OnetaskgraphClient({
     cwd: root,

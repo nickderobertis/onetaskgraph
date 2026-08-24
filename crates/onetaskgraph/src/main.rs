@@ -476,24 +476,41 @@ fn json(value: &impl Serialize, what: &str) -> Result<String, String> {
 /// The schema bundle as pretty-printed JSON.
 fn schema_bundle() -> Result<String, String> {
     let mut bundle = onetaskgraph_core::schema_bundle();
-    bundle["commands"] = serde_json::to_value(public_commands())
+    bundle["commands"] = serde_json::to_value(public_commands()?)
         .map_err(|error| format!("could not render the command surface: {error}"))?;
     serde_json::to_string_pretty(&bundle)
         .map_err(|error| format!("could not render the schema bundle: {error}"))
 }
 
 /// Every public leaf command, derived from the same clap tree that parses invocations.
-fn public_commands() -> Vec<String> {
-    fn leaves(command: &clap::Command, prefix: &str, commands: &mut Vec<String>) {
+#[derive(Serialize)]
+#[serde(transparent)]
+struct PublicCommand(String);
+
+impl PublicCommand {
+    fn parse(path: String) -> Result<Self, String> {
+        if path.is_empty() || path.split(' ').any(|part| part.is_empty()) {
+            return Err(format!("invalid public command path {path:?}"));
+        }
+        Ok(Self(path))
+    }
+}
+
+fn public_commands() -> Result<Vec<PublicCommand>, String> {
+    fn leaves(
+        command: &clap::Command,
+        prefix: &str,
+        commands: &mut Vec<PublicCommand>,
+    ) -> Result<(), String> {
         let visible: Vec<_> = command
             .get_subcommands()
             .filter(|child| !child.is_hide_set())
             .collect();
         if visible.is_empty() {
             if !prefix.is_empty() {
-                commands.push(prefix.to_owned());
+                commands.push(PublicCommand::parse(prefix.to_owned())?);
             }
-            return;
+            return Ok(());
         }
         for child in visible {
             let path = if prefix.is_empty() {
@@ -501,13 +518,14 @@ fn public_commands() -> Vec<String> {
             } else {
                 format!("{prefix} {}", child.get_name())
             };
-            leaves(child, &path, commands);
+            leaves(child, &path, commands)?;
         }
+        Ok(())
     }
 
     let mut commands = Vec::new();
-    leaves(&Cli::command(), "", &mut commands);
-    commands
+    leaves(&Cli::command(), "", &mut commands)?;
+    Ok(commands)
 }
 
 /// The effective configuration, in the format it asks for.
