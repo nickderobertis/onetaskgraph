@@ -258,9 +258,10 @@ async fn public_results_expose_fallback_titles_unknown_statuses_deduplicated_lab
     );
 
     let health = source.health().await.unwrap();
+    let canonical_root = root.path().canonicalize().unwrap();
     assert_eq!(
         health.detail.as_deref(),
-        Some(format!("reading Markdown under {}", root.path().display()).as_str())
+        Some(format!("reading Markdown under {}", canonical_root.display()).as_str())
     );
 }
 
@@ -431,6 +432,27 @@ fn a_symlink_escaping_the_root_is_a_configuration_error() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_directory_symlink_cycle_is_a_configuration_error() {
+    use std::os::unix::fs::symlink;
+    let (root, source) = source();
+    fs::create_dir(root.path().join("tasks/cycle-parent")).unwrap();
+    symlink(
+        root.path().join("tasks"),
+        root.path().join("tasks/cycle-parent/cycle"),
+    )
+    .unwrap();
+
+    let error = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, SourceError::Config { ref message } if message.contains("directory cycle"))
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn escaped_directory_and_non_utf8_document_are_refused() {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
@@ -476,20 +498,24 @@ async fn escaped_directory_and_non_utf8_document_are_refused() {
         .unwrap();
     assert_eq!(task.status.category, StatusCategory::Todo);
 
-    use std::os::unix::ffi::OsStringExt;
-    let non_utf8_name = std::ffi::OsString::from_vec(b"invalid-\xff.md".to_vec());
-    fs::write(
-        root.path().join("tasks").join(non_utf8_name),
-        "---\n{}\n---\n",
-    )
-    .unwrap();
-    let error = source
-        .query_tasks(&TaskQuery::default(), &page(10))
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(error, SourceError::Malformed { ref message } if message.contains("UTF-8 path"))
-    );
+    // macOS filesystems reject this byte sequence before the plugin can observe it.
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let non_utf8_name = std::ffi::OsString::from_vec(b"invalid-\xff.md".to_vec());
+        fs::write(
+            root.path().join("tasks").join(non_utf8_name),
+            "---\n{}\n---\n",
+        )
+        .unwrap();
+        let error = source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, SourceError::Malformed { ref message } if message.contains("UTF-8 path"))
+        );
+    }
 
     let permissions = fs::metadata(root.path().join("tasks"))
         .unwrap()

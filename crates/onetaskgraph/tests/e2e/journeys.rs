@@ -171,6 +171,9 @@ fn malformed_local_markdown_names_its_path_without_hiding_valid_rows() {
     let shown = run(&sandbox, &["task", "show", &qualified(SOURCE, "broken")]);
     assert_eq!(shown.status.code(), Some(4), "{}", stderr(&shown));
     let complaint = stderr(&shown);
+    let malformed = malformed
+        .canonicalize()
+        .expect("the malformed Markdown path is canonicalizable");
     assert!(
         complaint.contains(&malformed.display().to_string()),
         "the malformed file's exact path must reach the user:\n{complaint}"

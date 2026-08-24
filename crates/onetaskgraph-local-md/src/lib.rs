@@ -208,9 +208,19 @@ impl LocalMdSource {
     }
 
     fn paths(&self, kind: DocumentKind) -> Result<Vec<PathBuf>, SourceError> {
-        fn visit(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), SourceError> {
+        fn visit(
+            root: &Path,
+            dir: &Path,
+            visited: &mut BTreeSet<PathBuf>,
+            out: &mut Vec<PathBuf>,
+        ) -> Result<(), SourceError> {
             if !dir.exists() {
                 return Ok(());
+            }
+            if !visited.insert(dir.to_path_buf()) {
+                return Err(SourceError::Config {
+                    message: format!("directory cycle reaches {}", dir.display()),
+                });
             }
             for entry in fs::read_dir(dir).map_err(|e| SourceError::Unavailable {
                 message: format!("cannot read {}: {e}", dir.display()),
@@ -235,7 +245,7 @@ impl LocalMdSource {
                     });
                 }
                 if canonical.is_dir() {
-                    visit(root, &canonical, out)?;
+                    visit(root, &canonical, visited, out)?;
                 } else if canonical
                     .extension()
                     .and_then(|x| x.to_str())
@@ -258,7 +268,7 @@ impl LocalMdSource {
         }
         let directory = self.directory(kind)?;
         let mut paths = Vec::new();
-        visit(&self.root, &directory, &mut paths)?;
+        visit(&self.root, &directory, &mut BTreeSet::new(), &mut paths)?;
         paths.sort();
         paths.dedup();
         Ok(paths)
