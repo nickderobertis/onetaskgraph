@@ -25,6 +25,8 @@ cd "$ROOT"
 DOCUMENT="$ROOT/docs/plugin-protocol.md" \
 API_SRC="$ROOT/crates/onetaskgraph-plugin-api/src" \
 TRANSPORT="$ROOT/crates/onetaskgraph-core/src/subprocess/connection.rs" \
+DEADLINE_SOURCE="$ROOT/crates/onetaskgraph-core/src/subprocess/source.rs" \
+SUBPROCESS_CONFIG="$ROOT/crates/onetaskgraph-core/src/subprocess/plugin.rs" \
 python3 <<'PY'
 import os
 import re
@@ -538,6 +540,42 @@ if declared.group(1) != stated.group(1):
         f'"{FRAMING_SECTION}" states a maximum line length of {stated.group(1)} MiB but '
         f"`MAX_LINE` enforces {declared.group(1)} MiB. Make them one value: a plugin "
         f"written to the document would have its connection closed for obeying it."
+    )
+
+# The configured request deadline is another normative number shared by the engine and
+# an author implementing from this document. Keep its one Rust declaration and prose in
+# step for the same reason as the framing ceiling above.
+deadline_source = read(os.environ["DEADLINE_SOURCE"], "the subprocess deadline declaration")
+deadline_config = read(os.environ["SUBPROCESS_CONFIG"], "the subprocess configuration")
+declared_deadline = re.search(
+    r"pub const DEFAULT: Self = Self\(NonZeroU64::new\(([\d_]+)\)", deadline_source
+)
+stated_deadline = re.search(r"when omitted it is (\d+) milliseconds", section(FRAMING_SECTION))
+if declared_deadline is None or stated_deadline is None:
+    refuse(
+        "could not reconcile the default subprocess deadline between Rust and §1.",
+        "keep `RequestDeadline::DEFAULT` and the `when omitted it is <n> milliseconds` "
+        "sentence in their checked forms, or update this check with both shapes.",
+    )
+if declared_deadline.group(1).replace("_", "") != stated_deadline.group(1):
+    failures.append(
+        f"§1 states a {stated_deadline.group(1)} millisecond default deadline but "
+        f"RequestDeadline::DEFAULT is {declared_deadline.group(1)} milliseconds. Update "
+        "the Rust default or the documented default so they agree."
+    )
+
+declared_field = re.search(r"pub (deadline_ms): NonZeroU64,", deadline_config)
+documented_field = re.search(r"positive integer `(deadline_ms)`", section(FRAMING_SECTION))
+if declared_field is None or documented_field is None:
+    refuse(
+        "could not reconcile the positive `deadline_ms` configuration field with §1.",
+        "keep `SubprocessConfig.deadline_ms: NonZeroU64` and §1's positive-integer "
+        "wording aligned, or update this check with both shapes.",
+    )
+if declared_field.group(1) != documented_field.group(1):
+    failures.append(
+        f"§1 documents `{documented_field.group(1)}` but SubprocessConfig declares "
+        f"`{declared_field.group(1)}`. Rename one so the configuration contract agrees."
     )
 
 if failures:

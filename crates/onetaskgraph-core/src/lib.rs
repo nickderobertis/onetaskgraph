@@ -48,5 +48,6 @@ pub use resolve::{
 pub use schema::{SCHEMA_BUNDLE_VERSION, schema_bundle};
 pub use secrets::{CredentialLayer, CredentialName, ResolvedCredential, Secrets, SecretsReport};
 pub use subprocess::{
-    MAX_LINE, Program, SubprocessConfig, SubprocessPlugin, SubprocessSource, serve,
+    MAX_LINE, Program, RequestDeadline, SubprocessConfig, SubprocessPlugin, SubprocessSource,
+    serve, serve_plugin,
 };

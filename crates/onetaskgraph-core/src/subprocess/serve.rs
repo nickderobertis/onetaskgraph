@@ -50,7 +50,27 @@ struct HostedSettings {
 /// version has no method for, a line that is not JSON — is answered on the wire or
 /// reported on standard error, because a plugin that exits on a bad line takes every
 /// other in-flight request with it (§6.3).
-pub async fn serve(mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
+pub async fn serve(input: impl BufRead, output: impl Write) -> std::io::Result<()> {
+    serve_kind(input, output, None).await
+}
+
+/// Serve one connection as the registered plugin `kind`.
+///
+/// Unlike [`serve`], the initialize request's `config` is handed directly to that plugin;
+/// the process command has already selected the kind it hosts.
+pub async fn serve_plugin(
+    input: impl BufRead,
+    output: impl Write,
+    kind: PluginKind,
+) -> std::io::Result<()> {
+    serve_kind(input, output, Some(kind)).await
+}
+
+async fn serve_kind(
+    mut input: impl BufRead,
+    mut output: impl Write,
+    kind: Option<PluginKind>,
+) -> std::io::Result<()> {
     let mut source: Option<Box<dyn TaskSource>> = None;
     loop {
         let line = match read_line(&mut input) {
@@ -76,7 +96,7 @@ pub async fn serve(mut input: impl BufRead, mut output: impl Write) -> std::io::
             continue;
         };
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => answer(&mut source, request).await,
+            Ok(request) => answer(&mut source, request, kind).await,
             Err(error) => Response::failed(
                 id,
                 SourceError::Malformed {
@@ -125,7 +145,11 @@ fn ended_the_connection(response: &Response) -> bool {
 const VERSION_REFUSAL: &str = "protocol version ";
 
 /// Answer one well-formed request.
-async fn answer(source: &mut Option<Box<dyn TaskSource>>, request: Request) -> Response {
+async fn answer(
+    source: &mut Option<Box<dyn TaskSource>>,
+    request: Request,
+    kind: Option<PluginKind>,
+) -> Response {
     let Request { id, method, params } = request;
     if method == "initialize" {
         return match source {
@@ -135,7 +159,7 @@ async fn answer(source: &mut Option<Box<dyn TaskSource>>, request: Request) -> R
                     message: "this connection was already initialized".to_owned(),
                 },
             ),
-            None => initialize(source, id, params),
+            None => initialize(source, id, params, kind),
         };
     }
     let Some(built) = source.as_deref() else {
@@ -153,7 +177,12 @@ async fn answer(source: &mut Option<Box<dyn TaskSource>>, request: Request) -> R
 }
 
 /// The handshake (§3), including the version refusal §6.2 spells out.
-fn initialize(source: &mut Option<Box<dyn TaskSource>>, id: String, params: Value) -> Response {
+fn initialize(
+    source: &mut Option<Box<dyn TaskSource>>,
+    id: String,
+    params: Value,
+    kind: Option<PluginKind>,
+) -> Response {
     let params: InitializeParams = match serde_json::from_value(params) {
         Ok(params) => params,
         Err(error) => {
@@ -177,7 +206,7 @@ fn initialize(source: &mut Option<Box<dyn TaskSource>>, id: String, params: Valu
             },
         );
     }
-    match build(&params) {
+    match build(&params, kind) {
         Ok(built) => {
             let kind = match HandshakePluginKind::new(built.kind()) {
                 Ok(kind) => kind,
@@ -207,19 +236,35 @@ fn initialize(source: &mut Option<Box<dyn TaskSource>>, id: String, params: Valu
 }
 
 /// Build the registered plugin these settings name.
-fn build(params: &InitializeParams) -> Result<Box<dyn TaskSource>, SourceError> {
-    let settings: HostedSettings =
-        serde_json::from_value(params.config.clone()).map_err(|error| SourceError::Config {
-            message: format!(
-                "this host serves a plugin of this build, and its settings must name one \
-                 as {{\"kind\": …, \"config\": …}}: {error}"
-            ),
-        })?;
+fn build(
+    params: &InitializeParams,
+    selected: Option<PluginKind>,
+) -> Result<Box<dyn TaskSource>, SourceError> {
+    let (kind, config) = match selected {
+        Some(kind) => (kind, &params.config),
+        None => {
+            let settings: HostedSettings = serde_json::from_value(params.config.clone()).map_err(
+                |error| SourceError::Config {
+                    message: format!(
+                        "this host serves a plugin of this build, and its settings must name one \
+                         as {{\"kind\": …, \"config\": …}}: {error}"
+                    ),
+                },
+            )?;
+            return build_plugin(params, settings.kind, &settings.config);
+        }
+    };
+    build_plugin(params, kind, config)
+}
+
+fn build_plugin(
+    params: &InitializeParams,
+    kind: PluginKind,
+    config: &Value,
+) -> Result<Box<dyn TaskSource>, SourceError> {
     let name = SourceName::new(params.source_name.clone())?;
-    settings
-        .kind
-        .plugin()
-        .build(&name, &settings.config, &Handshake(&params.secrets))
+    kind.plugin()
+        .build(&name, config, &Handshake(&params.secrets))
 }
 
 /// The credentials the handshake forwarded, and nothing else.
