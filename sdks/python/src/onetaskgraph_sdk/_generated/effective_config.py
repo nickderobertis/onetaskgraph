@@ -9,8 +9,8 @@ from pydantic import BaseModel, Field, RootModel
 
 
 class CredentialLayer(StrEnum):
-    environment = "environment"
-    secrets_file = "secrets-file"
+    CredentialLayerEnvironment = "environment"
+    CredentialLayerSecretsFile = "secrets-file"
 
 
 class CredentialName(RootModel[str]):
@@ -22,28 +22,28 @@ class CredentialName(RootModel[str]):
     ]
 
 
-class Origin1(BaseModel):
+class OriginDefault(BaseModel):
     layer: Literal["default"]
 
 
-class Origin2(BaseModel):
+class OriginFile(BaseModel):
     layer: Literal["file"]
     path: Annotated[str, Field(description="The document that set it.")]
 
 
-class Origin3(BaseModel):
+class OriginEnvironment(BaseModel):
     layer: Literal["environment"]
     variable: Annotated[str, Field(description="The variable that set it.")]
 
 
-class Origin4(BaseModel):
+class OriginFlag(BaseModel):
     flag: Annotated[str, Field(description="The flag that set it, as a user typed it.")]
     layer: Literal["flag"]
 
 
-class Origin(RootModel[Origin1 | Origin2 | Origin3 | Origin4]):
+class Origin(RootModel[OriginDefault | OriginFile | OriginEnvironment | OriginFlag]):
     root: Annotated[
-        Origin1 | Origin2 | Origin3 | Origin4,
+        OriginDefault | OriginFile | OriginEnvironment | OriginFlag,
         Field(
             description="Where one setting's value came from.\n\nThis is what makes precedence provable rather than asserted: `config show`\nrenders it per setting, so a user sees the same answer a test does."
         ),

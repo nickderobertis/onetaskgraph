@@ -9,8 +9,8 @@ from pydantic import BaseModel, Field, RootModel
 
 
 class DependencyKind(StrEnum):
-    blocks = "blocks"
-    related = "related"
+    DependencyKindBlocks = "blocks"
+    DependencyKindRelated = "related"
 
 
 class GlobalId(RootModel[str]):
@@ -32,12 +32,12 @@ class PageToken(RootModel[str]):
 
 
 class Predicate(StrEnum):
-    label = "label"
-    status = "status"
-    search_title = "search-title"
-    search_content = "search-content"
-    project = "project"
-    reverse_dependencies = "reverse-dependencies"
+    PredicateLabel = "label"
+    PredicateStatus = "status"
+    PredicateSearchTitle = "search-title"
+    PredicateSearchContent = "search-content"
+    PredicateProject = "project"
+    PredicateReverseDependencies = "reverse-dependencies"
 
 
 class QualifiedEdge(BaseModel):
@@ -46,22 +46,22 @@ class QualifiedEdge(BaseModel):
     to: Annotated[GlobalId, Field(description="The item the edge points at.")]
 
 
-class SourceError1(BaseModel):
+class SourceErrorConfig(BaseModel):
     kind: Literal["config"]
     message: Annotated[str, Field(description="What is wrong, in a form a user can act on.")]
 
 
-class SourceError2(BaseModel):
+class SourceErrorAuth(BaseModel):
     kind: Literal["auth"]
     message: Annotated[str, Field(description="What failed. Never contains the credential itself.")]
 
 
-class SourceError3(BaseModel):
+class SourceErrorRefused(BaseModel):
     kind: Literal["refused"]
     message: Annotated[str, Field(description="The source's own reason.")]
 
 
-class SourceError4(BaseModel):
+class SourceErrorRateLimited(BaseModel):
     kind: Literal["rate-limited"]
     retry_after_seconds: Annotated[
         int | None,
@@ -69,23 +69,33 @@ class SourceError4(BaseModel):
     ] = None
 
 
-class SourceError5(BaseModel):
+class SourceErrorUnavailable(BaseModel):
     kind: Literal["unavailable"]
     message: Annotated[str, Field(description="What went wrong reaching it.")]
 
 
-class SourceError6(BaseModel):
+class SourceErrorMalformed(BaseModel):
     kind: Literal["malformed"]
     message: Annotated[str, Field(description="What could not be represented.")]
 
 
 class SourceError(
     RootModel[
-        SourceError1 | SourceError2 | SourceError3 | SourceError4 | SourceError5 | SourceError6
+        SourceErrorConfig
+        | SourceErrorAuth
+        | SourceErrorRefused
+        | SourceErrorRateLimited
+        | SourceErrorUnavailable
+        | SourceErrorMalformed
     ]
 ):
     root: Annotated[
-        SourceError1 | SourceError2 | SourceError3 | SourceError4 | SourceError5 | SourceError6,
+        SourceErrorConfig
+        | SourceErrorAuth
+        | SourceErrorRefused
+        | SourceErrorRateLimited
+        | SourceErrorUnavailable
+        | SourceErrorMalformed,
         Field(
             description="Why a source could not answer.\n\nEvery variant carries owned data only, so an error survives the JSON-over-stdio\nboundary a subprocess-hosted plugin crosses without losing anything."
         ),

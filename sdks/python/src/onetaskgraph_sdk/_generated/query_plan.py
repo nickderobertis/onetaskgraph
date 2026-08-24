@@ -9,12 +9,12 @@ from pydantic import BaseModel, Field, RootModel
 
 
 class Predicate(StrEnum):
-    label = "label"
-    status = "status"
-    search_title = "search-title"
-    search_content = "search-content"
-    project = "project"
-    reverse_dependencies = "reverse-dependencies"
+    PredicateLabel = "label"
+    PredicateStatus = "status"
+    PredicateSearchTitle = "search-title"
+    PredicateSearchContent = "search-content"
+    PredicateProject = "project"
+    PredicateReverseDependencies = "reverse-dependencies"
 
 
 class SourceName(RootModel[str]):

@@ -36,30 +36,30 @@ class PageToken(RootModel[str]):
 
 
 class Predicate(StrEnum):
-    label = "label"
-    status = "status"
-    search_title = "search-title"
-    search_content = "search-content"
-    project = "project"
-    reverse_dependencies = "reverse-dependencies"
+    PredicateLabel = "label"
+    PredicateStatus = "status"
+    PredicateSearchTitle = "search-title"
+    PredicateSearchContent = "search-content"
+    PredicateProject = "project"
+    PredicateReverseDependencies = "reverse-dependencies"
 
 
-class SourceError1(BaseModel):
+class SourceErrorConfig(BaseModel):
     kind: Literal["config"]
     message: Annotated[str, Field(description="What is wrong, in a form a user can act on.")]
 
 
-class SourceError2(BaseModel):
+class SourceErrorAuth(BaseModel):
     kind: Literal["auth"]
     message: Annotated[str, Field(description="What failed. Never contains the credential itself.")]
 
 
-class SourceError3(BaseModel):
+class SourceErrorRefused(BaseModel):
     kind: Literal["refused"]
     message: Annotated[str, Field(description="The source's own reason.")]
 
 
-class SourceError4(BaseModel):
+class SourceErrorRateLimited(BaseModel):
     kind: Literal["rate-limited"]
     retry_after_seconds: Annotated[
         int | None,
@@ -67,23 +67,33 @@ class SourceError4(BaseModel):
     ] = None
 
 
-class SourceError5(BaseModel):
+class SourceErrorUnavailable(BaseModel):
     kind: Literal["unavailable"]
     message: Annotated[str, Field(description="What went wrong reaching it.")]
 
 
-class SourceError6(BaseModel):
+class SourceErrorMalformed(BaseModel):
     kind: Literal["malformed"]
     message: Annotated[str, Field(description="What could not be represented.")]
 
 
 class SourceError(
     RootModel[
-        SourceError1 | SourceError2 | SourceError3 | SourceError4 | SourceError5 | SourceError6
+        SourceErrorConfig
+        | SourceErrorAuth
+        | SourceErrorRefused
+        | SourceErrorRateLimited
+        | SourceErrorUnavailable
+        | SourceErrorMalformed
     ]
 ):
     root: Annotated[
-        SourceError1 | SourceError2 | SourceError3 | SourceError4 | SourceError5 | SourceError6,
+        SourceErrorConfig
+        | SourceErrorAuth
+        | SourceErrorRefused
+        | SourceErrorRateLimited
+        | SourceErrorUnavailable
+        | SourceErrorMalformed,
         Field(
             description="Why a source could not answer.\n\nEvery variant carries owned data only, so an error survives the JSON-over-stdio\nboundary a subprocess-hosted plugin crosses without losing anything."
         ),
@@ -133,12 +143,12 @@ class SourcePlan(BaseModel):
 
 
 class StatusCategory(StrEnum):
-    backlog = "backlog"
-    todo = "todo"
-    in_progress = "in-progress"
-    done = "done"
-    cancelled = "cancelled"
-    unknown = "unknown"
+    StatusCategoryBacklog = "backlog"
+    StatusCategoryTodo = "todo"
+    StatusCategoryInProgress = "in-progress"
+    StatusCategoryDone = "done"
+    StatusCategoryCancelled = "cancelled"
+    StatusCategoryUnknown = "unknown"
 
 
 class Label(BaseModel):
@@ -197,6 +207,14 @@ class Task(BaseModel):
     url: Annotated[str | None, Field(description="Where a human can open this task.")] = None
 
 
+class QualifiedTask(BaseModel):
+    id: Annotated[
+        GlobalId,
+        Field(description="`<source>:<native>`, the form a user types back at the command line."),
+    ]
+    item: Annotated[Task, Field(description="The item as its source reported it, unchanged.")]
+
+
 class Project(BaseModel):
     content: Annotated[
         str | None, Field(description="The long-form body, when the source has one.")
@@ -221,23 +239,7 @@ class Project(BaseModel):
     url: Annotated[str | None, Field(description="Where a human can open this project.")] = None
 
 
-class Qualified(BaseModel):
-    id: Annotated[
-        GlobalId,
-        Field(description="`<source>:<native>`, the form a user types back at the command line."),
-    ]
-    item: Annotated[Task, Field(description="The item as its source reported it, unchanged.")]
-
-
-class Qualified2(BaseModel):
-    id: Annotated[
-        GlobalId,
-        Field(description="`<source>:<native>`, the form a user types back at the command line."),
-    ]
-    item: Annotated[Project, Field(description="The item as its source reported it, unchanged.")]
-
-
-class SearchHit1(BaseModel):
+class SearchHitTask(BaseModel):
     id: Annotated[
         GlobalId,
         Field(description="`<source>:<native>`, the form a user types back at the command line."),
@@ -246,7 +248,7 @@ class SearchHit1(BaseModel):
     kind: Literal["task"]
 
 
-class SearchHit2(BaseModel):
+class SearchHitProject(BaseModel):
     id: Annotated[
         GlobalId,
         Field(description="`<source>:<native>`, the form a user types back at the command line."),
@@ -255,11 +257,19 @@ class SearchHit2(BaseModel):
     kind: Literal["project"]
 
 
-class SearchHit(RootModel[SearchHit1 | SearchHit2]):
+class SearchHit(RootModel[SearchHitTask | SearchHitProject]):
     root: Annotated[
-        SearchHit1 | SearchHit2,
+        SearchHitTask | SearchHitProject,
         Field(description="One hit of a search that may cross entities."),
     ]
+
+
+class QualifiedProject(BaseModel):
+    id: Annotated[
+        GlobalId,
+        Field(description="`<source>:<native>`, the form a user types back at the command line."),
+    ]
+    item: Annotated[Project, Field(description="The item as its source reported it, unchanged.")]
 
 
 class QueryResponse(BaseModel):

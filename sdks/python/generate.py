@@ -89,6 +89,8 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
     exports: list[str] = []
     for root in sorted(set(RESPONSE_ROOTS.values()) | {"SourceFailure", "QueryPlan"}):
         schema = bundle["roots"][root]
+        add_variant_titles(schema, root)
+        rename_qualified_definitions(schema)
         module = camel_to_snake(root)
         source = destination / f"{module}.py"
         with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as handle:
@@ -110,6 +112,7 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
                     "--use-standard-collections",
                     "--use-union-operator",
                     "--use-annotated",
+                    "--use-title-as-name",
                     "--disable-timestamp",
                 ],
                 check=True,
@@ -139,6 +142,71 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
         + "\n".join(exports)
         + "\n",
     )
+
+
+def add_variant_titles(value: JsonValue, hint: str) -> None:
+    """Give anonymous schema variants stable domain names before model generation."""
+    if isinstance(value, list):
+        for item in value:
+            add_variant_titles(item, hint)
+        return
+    if not isinstance(value, dict):
+        return
+    variants = value.get("oneOf")
+    if isinstance(variants, list):
+        for variant in variants:
+            if not isinstance(variant, dict) or "title" in variant:
+                continue
+            discriminant = variant.get("const")
+            properties = variant.get("properties")
+            if discriminant is None and isinstance(properties, dict):
+                for property_schema in properties.values():
+                    if isinstance(property_schema, dict) and "const" in property_schema:
+                        discriminant = property_schema["const"]
+                        break
+            if isinstance(discriminant, str):
+                words = "".join(part.title() for part in discriminant.split("-"))
+                variant["title"] = f"{hint}{words}"
+    for key, child in value.items():
+        bare = key.removeprefix("$")
+        child_hint = bare if any(char.isupper() for char in bare) else bare.title()
+        add_variant_titles(child, child_hint or hint)
+
+
+def rename_qualified_definitions(value: JsonValue) -> None:
+    """Name generic qualified definitions after the task or project they contain."""
+    if not isinstance(value, dict):
+        return
+    definitions = value.get("$defs")
+    if not isinstance(definitions, dict):
+        return
+    renames: dict[str, str] = {}
+    for name, definition in definitions.items():
+        if not name.startswith("Qualified") or not isinstance(definition, dict):
+            continue
+        properties = definition.get("properties")
+        item = properties.get("item") if isinstance(properties, dict) else None
+        reference = item.get("$ref") if isinstance(item, dict) else None
+        if isinstance(reference, str):
+            renames[name] = f"Qualified{reference.rsplit('/', 1)[-1]}"
+    for old, new in renames.items():
+        definitions[new] = definitions.pop(old)
+    replace_references(value, renames)
+
+
+def replace_references(value: JsonValue, renames: dict[str, str]) -> None:
+    """Update local references after a generated-definition rename."""
+    if isinstance(value, list):
+        for item in value:
+            replace_references(item, renames)
+    elif isinstance(value, dict):
+        reference = value.get("$ref")
+        if isinstance(reference, str):
+            tail = reference.rsplit("/", 1)[-1]
+            if tail in renames:
+                value["$ref"] = reference.rsplit("/", 1)[0] + "/" + renames[tail]
+        for child in value.values():
+            replace_references(child, renames)
 
 
 def camel_to_snake(value: str) -> str:

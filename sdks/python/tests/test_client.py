@@ -133,6 +133,7 @@ def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
 
 def test_generated_surface_is_current() -> None:
     """Fail when schema or command regeneration changes a committed file."""
+    subprocess.run([sys.executable, "generate.py"], cwd=WORKSPACE / "sdks" / "python", check=True)
     subprocess.run(
         [sys.executable, "generate.py", "--check"],
         cwd=WORKSPACE / "sdks" / "python",
