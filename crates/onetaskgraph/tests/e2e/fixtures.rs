@@ -257,7 +257,7 @@ fn github_projects_block(sandbox: &Sandbox) -> Value {
                     "T-1" | "T-3" | "T-4" => vec![json!({"id":"T-2","projectItems":{"nodes":[]}})],
                     _ => vec![],
                 };
-                json!({"node":{"blockedBy":{"nodes":blockers,"pageInfo":{"hasNextPage":false,"endCursor":null}}}})
+                json!({"node":{"__typename":"Issue","blockedBy":{"nodes":blockers,"pageInfo":{"hasNextPage":false,"endCursor":null}}}})
             } else {
                 github_project_page(variables)
             };

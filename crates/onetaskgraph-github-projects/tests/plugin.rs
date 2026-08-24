@@ -363,7 +363,7 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
     assert_eq!(edges.items[0].to.0, "PVT_project");
     handle.join().unwrap();
 
-    let first = json!({"data":{"node":{"blockedBy":{"nodes":[{
+    let first = json!({"data":{"node":{"__typename":"Issue","blockedBy":{"nodes":[{
         "id":"I_blocker","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"projects-2"}}
     }],"pageInfo":{"hasNextPage":false,"endCursor":null}},"blocking":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}});
     let second = json!({"data":{"node":{"projectItems":{
@@ -426,12 +426,12 @@ async fn project_dependencies_skip_pull_requests_and_drafts() {
 
 #[tokio::test]
 async fn project_dependencies_map_reverse_edges_and_page_them() {
-    let first_dependencies = json!({"data":{"node":{
+    let first_dependencies = json!({"data":{"node":{"__typename":"Issue",
         "blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
         "blocking":{"nodes":[{"id":"I_dependent_1","projectItems":{"nodes":[{"project":{"id":"PVT_dependent_1"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],
             "pageInfo":{"hasNextPage":true,"endCursor":"dependency-page-2"}}
     }}});
-    let second_dependencies = json!({"data":{"node":{
+    let second_dependencies = json!({"data":{"node":{"__typename":"Issue",
         "blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
         "blocking":{"nodes":[{"id":"I_dependent_2","projectItems":{"nodes":[{"project":{"id":"PVT_dependent_2"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],
             "pageInfo":{"hasNextPage":false,"endCursor":null}}
@@ -495,7 +495,7 @@ async fn project_dependency_failures_are_explicit() {
     ));
     handle.join().unwrap();
 
-    let malformed_dependencies = json!({"data":{"node":{"blockedBy":{
+    let malformed_dependencies = json!({"data":{"node":{"__typename":"Issue","blockedBy":{
         "nodes":[{"id":"I_blocker","projectItems":{}}],
         "pageInfo":{"hasNextPage":false,"endCursor":null}
     }}}});
@@ -520,6 +520,7 @@ async fn project_dependency_failures_are_explicit() {
 #[tokio::test]
 async fn walks_issue_dependencies_in_both_directions_through_graphql() {
     let response = json!({"data":{"node":{
+        "__typename":"Issue",
         "blockedBy":{"nodes":[{"id":"I_blocker"}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},
         "blocking":{"nodes":[{"id":"I_dependent"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}
     }}});
@@ -542,6 +543,26 @@ async fn walks_issue_dependencies_in_both_directions_through_graphql() {
         .unwrap();
     assert_eq!(reverse.items[0].from.0, "I_task");
     assert_eq!(reverse.items[0].to.0, "I_dependent");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn non_issue_project_tasks_have_no_issue_dependencies() {
+    let responses = ["PullRequest", "DraftIssue"]
+        .into_iter()
+        .map(|kind| json!({"data":{"node":{"__typename":kind}}}))
+        .collect();
+    let (endpoint, handle) = sequence_server(responses);
+    let source = build(&endpoint);
+
+    for id in ["PR_task", "DI_task"] {
+        let dependencies = source
+            .task_dependencies(&NativeId(id.into()), Direction::DependsOn, &page(10))
+            .await
+            .unwrap();
+        assert!(dependencies.items.is_empty());
+        assert!(dependencies.next.is_none());
+    }
     handle.join().unwrap();
 }
 
@@ -860,10 +881,10 @@ async fn rejects_zero_pages_and_malformed_dependency_shapes() {
     for response in [
         json!({"data":{"node":null}}),
         json!({"data":{"node":{}}}),
-        json!({"data":{"node":{"blockedBy":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
-        json!({"data":{"node":{"blockedBy":{"nodes":[{}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
-        json!({"data":{"node":{"blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":null}}}}}),
-        json!({"data":{"node":{"blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":""}}}}}),
+        json!({"data":{"node":{"__typename":"Issue","blockedBy":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        json!({"data":{"node":{"__typename":"Issue","blockedBy":{"nodes":[{}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        json!({"data":{"node":{"__typename":"Issue","blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":null}}}}}),
+        json!({"data":{"node":{"__typename":"Issue","blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":""}}}}}),
     ] {
         let (endpoint, handle) = server("200 OK", response, 1, "blockedBy");
         assert!(

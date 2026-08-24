@@ -15,9 +15,10 @@
 //! Project listing alone is native; the plugin ignores every unsupported query predicate so the
 //! engine can compensate from the wider result. Dependencies traverse underlying `Issue` nodes.
 //! `Issue.blockedBy` supplies `DependsOn` edges and `Issue.blocking` supplies `DependedOnBy`
-//! edges, so both dependency capabilities are `BothDirections`; project dependency reads
-//! aggregate the configured project's issue edges. Projects v2 has no native project-to-project
-//! relationship, so those aggregate edges use the related issues' `projectItems.project.id`.
+//! edges; pull requests and draft issues have neither field and therefore return an empty edge
+//! page. Both dependency capabilities are `BothDirections`; project dependency reads aggregate
+//! the configured project's issue edges. Projects v2 has no native project-to-project relationship,
+//! so those aggregate edges use the related issues' `projectItems.project.id`.
 //!
 //! Live verification is non-destructive by construction: [`TaskSource`] has read operations only
 //! and this crate sends GraphQL `query` operations only, with no mutation for setup or teardown.
@@ -445,7 +446,7 @@ impl GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         validate_page(page)?;
-        const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}}}"#;
+        const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){__typename ... on Issue{blockedBy(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}}}"#;
         let data = self.graphql(QUERY, json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c| c.0.as_str())})).await?;
         let node =
             data.get("node")
@@ -460,6 +461,12 @@ impl GitHubProjectsSource {
             Direction::DependsOn => "blockedBy",
             Direction::DependedOnBy => "blocking",
         };
+        if required_str(node, "__typename")? != "Issue" {
+            return Ok(Page {
+                items: Vec::new(),
+                next: None,
+            });
+        }
         let connection = node
             .get(connection_name)
             .ok_or_else(|| SourceError::Malformed {
