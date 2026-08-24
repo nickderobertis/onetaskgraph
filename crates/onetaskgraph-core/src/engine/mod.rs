@@ -373,9 +373,11 @@ impl Engine {
             .collect();
 
         let streams = answer.collect(&ready, join_all(walks).await, &counters, outcomes);
-        answer.finish(streams, budget, |name, task: Task| Qualified {
-            id: GlobalId::new(name.clone(), task.id.clone()),
-            item: task,
+        answer.finish(streams, budget, owed(&states), |name, task: Task| {
+            Qualified {
+                id: GlobalId::new(name.clone(), task.id.clone()),
+                item: task,
+            }
         })
     }
 
@@ -430,9 +432,11 @@ impl Engine {
             .collect();
 
         let streams = answer.collect(&ready, join_all(walks).await, &counters, outcomes);
-        answer.finish(streams, budget, |name, project: Project| Qualified {
-            id: GlobalId::new(name.clone(), project.id.clone()),
-            item: project,
+        answer.finish(streams, budget, owed(&states), |name, project: Project| {
+            Qualified {
+                id: GlobalId::new(name.clone(), project.id.clone()),
+                item: project,
+            }
         })
     }
 
@@ -461,9 +465,11 @@ impl Engine {
             .collect();
 
         let streams = answer.collect(&ready, join_all(walks).await, &counters, outcomes);
-        answer.finish(streams, budget, |name, label: Label| Qualified {
-            id: GlobalId::new(name.clone(), label.id.clone()),
-            item: label,
+        answer.finish(streams, budget, owed(&states), |name, label: Label| {
+            Qualified {
+                id: GlobalId::new(name.clone(), label.id.clone()),
+                item: label,
+            }
         })
     }
 
@@ -544,16 +550,21 @@ impl Engine {
 
         let streams =
             answer.collect_streams(&ready, &kinds, join_all(walks).await, &counters, outcomes);
-        answer.finish(streams, budget, |name, found: Found| match found {
-            Found::Task(task) => SearchHit::Task(Qualified {
-                id: GlobalId::new(name.clone(), task.id.clone()),
-                item: task,
-            }),
-            Found::Project(project) => SearchHit::Project(Qualified {
-                id: GlobalId::new(name.clone(), project.id.clone()),
-                item: project,
-            }),
-        })
+        answer.finish(
+            streams,
+            budget,
+            owed(&states),
+            |name, found: Found| match found {
+                Found::Task(task) => SearchHit::Task(Qualified {
+                    id: GlobalId::new(name.clone(), task.id.clone()),
+                    item: task,
+                }),
+                Found::Project(project) => SearchHit::Project(Qualified {
+                    id: GlobalId::new(name.clone(), project.id.clone()),
+                    item: project,
+                }),
+            },
+        )
     }
 
     /// One task by its qualified id, or an empty page when there is no such task.
@@ -678,13 +689,16 @@ impl Engine {
         .await;
 
         let streams = answer.collect(&ready, vec![walked], &counters, vec![outcomes]);
-        answer.finish(streams, budget, |name, edge: DependencyEdge| {
-            QualifiedEdge {
+        answer.finish(
+            streams,
+            budget,
+            owed(&states),
+            |name, edge: DependencyEdge| QualifiedEdge {
                 from: GlobalId::new(name.clone(), edge.from),
                 to: GlobalId::new(name.clone(), edge.to),
                 kind: edge.kind,
-            }
-        })
+            },
+        )
     }
 
     /// The names a request addresses: the ones it gave, or the configuration's own.
@@ -917,13 +931,17 @@ impl Answer {
     }
 
     /// Merge the streams into the caller's page and mint the token that resumes it.
+    ///
+    /// `first` is the stream the token being resumed says is owed the next row, so the
+    /// round-robin picks up where the previous page stopped rather than restarting.
     fn finish<T, U>(
         self,
         streams: Vec<Stream<T>>,
         budget: u32,
+        first: Option<(&SourceName, StreamKind)>,
         qualify: impl Fn(&SourceName, T) -> U,
     ) -> Result<QueryResponse<U>, EngineError> {
-        let (rows, states) = merge(streams, budget);
+        let (rows, states) = merge(streams, budget, first);
         let next = (!states.is_empty()).then(|| PageToken::encode(&states));
         Ok(QueryResponse {
             items: rows
@@ -1015,6 +1033,18 @@ fn walking<'a>(
     (ready, starts)
 }
 
+/// The stream a token says is owed the next row, or `None` when it says none is.
+///
+/// A fresh query has no token and every token whose last round ended evenly carries no
+/// such stream, so `None` is the common case and means "begin at the first stream".
+fn owed(states: &Option<Vec<StreamState>>) -> Option<(&SourceName, StreamKind)> {
+    states
+        .as_ref()?
+        .iter()
+        .find(|state| state.first)
+        .map(|state| (&state.source, state.stream))
+}
+
 /// Where one stream picks up, or `None` when the token says it is finished.
 fn resume_at(
     states: &Option<Vec<StreamState>>,
@@ -1047,7 +1077,9 @@ fn resume_at(
 ///    exhausted walk, which is the worst shape this failure could take;
 /// 3. no stream appears twice, because a walk has one place to pick up per stream;
 /// 4. no `skip` reaches a source's declared page ceiling, because the engine's `skip` is
-///    an index among the surviving rows of one source page and can never reach it.
+///    an index among the surviving rows of one source page and can never reach it;
+/// 5. at most one stream is owed the next row, because the round-robin picks up at one
+///    stream and a document naming two says nothing about which.
 ///
 /// None of this is a security boundary and a page token is not a credential: nothing in
 /// one is secret, and a forged cursor is handed straight back to the source that would
@@ -1113,6 +1145,13 @@ fn resumption(
             });
         }
         seen.push((&state.source, state.stream));
+    }
+
+    if states.iter().filter(|state| state.first).count() > 1 {
+        return Err(EngineError::Token {
+            message: "this page token gives two streams the next row, and rows come back                       one stream at a time"
+                .to_owned(),
+        });
     }
 
     Ok(Some(states))

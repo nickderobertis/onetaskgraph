@@ -156,12 +156,20 @@ pub(crate) fn fits(returned: usize, asked_for: u32) -> Result<(), SourceError> {
 /// against a hosted source is a request spent on rows nobody will see. Interleaving
 /// means every row fetched is a row that can be shown.
 ///
+/// The rounds continue **across page boundaries**, which is why `resume_first` exists: a
+/// page of three rows over two streams leaves the second stream's turn owed, and a next
+/// page that began its rounds at the first stream again would hand back two of that
+/// stream's rows in a row. The walk would still return every row exactly once, but the
+/// sequence it returned them in would depend on the page size the caller happened to
+/// choose — so `--limit 3` and `--limit 4` would interleave the same rows differently.
+///
 /// Each stream is walked strictly forwards, so a walk to exhaustion returns every row
-/// exactly once whatever the page size, and repeating a walk with the same page size
-/// returns the same sequence.
+/// exactly once whatever the page size, it returns them in the same order whatever the
+/// page size, and repeating a walk returns the same sequence.
 pub(crate) fn merge<T>(
     streams: Vec<Stream<T>>,
     budget: u32,
+    resume_first: Option<(&SourceName, StreamKind)>,
 ) -> (Vec<(SourceName, T)>, Vec<StreamState>) {
     let count = streams.len();
     let mut sources: Vec<SourceName> = Vec::with_capacity(count);
@@ -177,17 +185,34 @@ pub(crate) fn merge<T>(
         rows.push(stream.fetched.rows.into_iter().map(Some).collect());
     }
 
+    // Where this page's rounds begin. A page boundary can fall in the middle of a round,
+    // and the token says whose turn was owed; starting there is what makes the whole walk
+    // alternate rather than each page alternating from the first stream again. A stream
+    // the previous page exhausted is not here any more, and a fresh query names none, so
+    // both fall back to the first stream — which is where an even round starts anyway.
+    let start = resume_first
+        .and_then(|(source, kind)| {
+            (0..count).find(|&position| &sources[position] == source && kinds[position] == kind)
+        })
+        .unwrap_or(0);
+
     let mut taken = vec![0usize; count];
     let mut items: Vec<(SourceName, T)> = Vec::new();
     let mut round = 0usize;
+    // The stream whose turn the budget cut short, so the next page can pick its rounds up
+    // there. `None` once every stream has given every row it holds, which ends a round
+    // evenly by construction.
+    let mut owed: Option<usize> = None;
     'page: loop {
         let mut progressed = false;
-        for position in 0..count {
+        for step in 0..count {
+            let position = (start + step) % count;
             if rows[position].len() <= round {
                 continue;
             }
             progressed = true;
             if items.len() as u64 >= u64::from(budget) {
+                owed = Some(position);
                 break 'page;
             }
             let row = rows[position][round]
@@ -221,6 +246,7 @@ pub(crate) fn merge<T>(
                 source: sources[position].clone(),
                 stream: kinds[position],
                 resume,
+                first: owed == Some(position),
             });
         }
     }

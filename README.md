@@ -94,9 +94,11 @@ onetaskgraph task list --limit 20
 ```
 
 Rows are interleaved across the selected sources — one from each in configured-name order,
-then the next from each — and within a source they keep that source's own order. The token
-is the engine's own; a source's cursor travels inside it untouched, and a walk returns
-every row exactly once whatever page size you choose.
+then the next from each — and within a source they keep that source's own order. The turns
+carry on across page boundaries, so a walk returns the same rows in the same order whatever
+page size you choose: `--limit 3` and `--limit 50` differ in how many round trips they cost
+and in nothing else. The token is the engine's own; a source's cursor travels inside it
+untouched, and a walk returns every row exactly once.
 
 ## Install
 

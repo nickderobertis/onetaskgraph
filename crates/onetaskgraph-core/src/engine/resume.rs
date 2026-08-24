@@ -62,9 +62,31 @@ pub(crate) struct StreamState {
     /// Where to pick up.
     #[serde(flatten)]
     pub resume: Resume,
+    /// Whether the next page hands this stream's row back first.
+    ///
+    /// Rows come back one from each stream in turn, and a page boundary can fall in the
+    /// middle of one of those rounds: a page of three rows over two streams ends having
+    /// taken two from the first and one from the second, with the second's turn still
+    /// owed. Without this flag the next page would begin its rounds at the first stream
+    /// again, and the walk as a whole would stop alternating — every row would still come
+    /// back exactly once, but not in the order this product documents.
+    ///
+    /// Carried by stream rather than as a position, because a stream the previous page
+    /// exhausted is not in the next one and every position after it would shift.
+    ///
+    /// At most one stream in a token carries it, and a token that resumes a round that
+    /// ended evenly carries it on none — which is why it is omitted when false, leaving
+    /// the tokens that do not need it exactly as they were.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub first: bool,
 }
 
 /// Keeps a token that resumes at the beginning of a stream down to its source and kind.
 fn is_zero(value: &u32) -> bool {
     *value == 0
+}
+
+/// Keeps a token resuming an evenly ended round down to its source, kind and place.
+fn is_false(value: &bool) -> bool {
+    !*value
 }

@@ -273,3 +273,52 @@ fn a_source_that_declares_nothing_native_says_so_and_the_plan_of_a_missing_sourc
         stdout(&missing)
     );
 }
+
+#[test]
+fn a_walk_across_sources_returns_one_order_whatever_page_size_the_caller_chose() {
+    // Rows come back one from each source in turn, and a page boundary can fall in the
+    // middle of one of those turns — which is exactly what a limit that is not a multiple
+    // of the number of sources does. `--limit 3` over two sources is the case: it ends
+    // its page having taken two rows from the first source and one from the second, with
+    // the second source's turn still owed. A next page that began its turns at the first
+    // source again would hand that source two rows in a row, and the walk would come back
+    // in an order no page size but its own produces.
+    //
+    // So the assertion is not merely that a walk terminates and loses nothing: it is that
+    // every page size returns the *same* sequence, which is the order the README
+    // documents. The single-source paging journey cannot see this — with one source every
+    // turn is a whole round.
+    let sandbox = host();
+    let whole = listed(&ok(&sandbox, &["task", "list", "--limit", "50"]));
+    assert_eq!(whole.len(), 8, "the pair serves eight rows between them");
+
+    for limit in ["1", "2", "3", "5", "7"] {
+        let mut walked = Vec::new();
+        let mut token: Option<String> = None;
+        for step in 0..12 {
+            let mut arguments = vec!["task", "list", "--limit", limit];
+            if let Some(page) = &token {
+                arguments.push("--page");
+                arguments.push(page);
+            }
+            let rendered = ok(&sandbox, &arguments);
+            walked.extend(listed(&rendered));
+            token = rendered
+                .lines()
+                .find_map(|line| line.strip_prefix("next page: --page "))
+                .map(str::to_owned);
+            if token.is_none() {
+                break;
+            }
+            assert!(
+                step < 11,
+                "an eight-row walk at --limit {limit} must terminate"
+            );
+        }
+        assert_eq!(
+            walked, whole,
+            "walking at --limit {limit} must return the same rows in the same order as \
+             one page does"
+        );
+    }
+}
