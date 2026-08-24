@@ -9,9 +9,9 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TypedDict
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 ROOT = Path(__file__).parent
 GENERATED = ROOT / "src" / "onetaskgraph_sdk" / "_generated"
@@ -115,6 +115,15 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
         generated = source.read_text(encoding="utf-8").splitlines()
         if len(generated) > 1 and generated[1].startswith("#   filename:"):
             generated[1] = f"#   schema root: {root}"
+        if root == "EffectiveConfig":
+            generated = [
+                line.replace(
+                    "    value: Any",
+                    "    # A setting is arbitrary JSON by the emitted wire contract.\n"
+                    "    value: Any",
+                )
+                for line in generated
+            ]
         source.write_text(
             "# ruff: noqa: E501  # Generated descriptions preserve the schema's text.\n"
             + "\n".join(generated)
@@ -122,7 +131,7 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
             encoding="utf-8",
         )
         generated_name = "QueryResponse" if root.startswith("QueryResponseOf") else root
-        exports.append(f"from .{module} import {generated_name} as {root}  # noqa: F401")
+        exports.append(f"from .{module} import {generated_name} as {root}")
     (destination / "models.py").write_text(
         "# ruff: noqa: F401, I001  # Generated public re-exports are used by consumers.\n"
         + "\n".join(exports)
@@ -162,7 +171,9 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "class GeneratedClient:",
         '    """Methods generated from the binary command surface."""',
         "",
-        "    def _invoke[T](self, command: list[str], model: object, **options: object) -> T:",
+        "    async def _invoke[T](",
+        "        self, command: list[str], model: object, **options: object",
+        "    ) -> T:",
         "        raise NotImplementedError",
         "",
     ]
@@ -187,9 +198,9 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         passed = [f"{item}={item}" for item in ([positional] if positional else []) + keywords]
         lines.extend(
             [
-                f"    def {name}(self, {', '.join(parameters)}) -> {return_type}:",
+                f"    async def {name}(self, {', '.join(parameters)}) -> {return_type}:",
                 f'        """Run ``onetaskgraph {" ".join(command)}``."""',
-                "        return self._invoke("
+                "        return await self._invoke("
                 f"{list(command)!r}, {return_type}, {', '.join(passed)})",
                 "",
             ]
@@ -215,8 +226,7 @@ def main() -> None:
     parsed = json.loads(binary("schema"))
     if not isinstance(parsed, dict) or not isinstance(parsed.get("roots"), dict):
         raise SystemExit("binary emitted an invalid schema bundle: expected an object with roots")
-    # The two runtime shape checks above establish the TypedDict portion we consume.
-    bundle = cast(SchemaBundle, parsed)
+    bundle = TypeAdapter(SchemaBundle).validate_python(parsed)
     commands = leaves()
     with tempfile.TemporaryDirectory() as temporary:
         target = Path(temporary) if args.check else GENERATED

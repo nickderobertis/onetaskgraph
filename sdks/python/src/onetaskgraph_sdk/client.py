@@ -41,7 +41,7 @@ class Client(GeneratedClient):
         if self.environment is not None:
             self.environment.pop("ONETASKGRAPH_SDK_BINARY", None)
 
-    def _invoke[T](self, command: list[str], model: object, **options: object) -> T:
+    async def _invoke[T](self, command: list[str], model: object, **options: object) -> T:
         arguments = [self.binary, *command]
         match command:
             case ["search"]:
@@ -68,7 +68,7 @@ class Client(GeneratedClient):
                 case _:
                     arguments.extend((flag, str(value)))
         arguments.append("--json")
-        completed = asyncio.run(self._invoke_process(arguments))
+        completed = await self._invoke_process(arguments)
         if completed.returncode not in {0, 4}:
             raise OnetaskgraphError(completed.stderr.strip(), exit_code=completed.returncode)
         try:

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import sys
+from collections.abc import Awaitable
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,11 @@ import pytest
 from onetaskgraph_sdk import Client, OnetaskgraphError, __version__
 
 WORKSPACE = Path(__file__).parents[3]
+
+
+def run[T](awaitable: Awaitable[T]) -> T:
+    """Drive one public async SDK call to completion in a script-shaped test."""
+    return asyncio.run(awaitable)
 
 
 @pytest.fixture(scope="session")
@@ -71,7 +78,7 @@ def configured(tmp_path: Path, *, failing: bool = False) -> Path:
 def test_real_sources_and_typed_partial_failure(binary: Path, tmp_path: Path) -> None:
     """Return validated rows, plans, and a typed failure from actual sources."""
     client = Client(binary, cwd=configured(tmp_path, failing=True))
-    response = client.task_list()
+    response = run(client.task_list())
     assert {item.item.title for item in response.items} == {"Markdown task", "Memory task"}
     assert {plan.source.root for plan in response.plan.per_source} == {"memory", "markdown"}
     assert response.errors[0].source.root == "broken"
@@ -82,25 +89,27 @@ def test_public_error_contains_exit_status(binary: Path, tmp_path: Path) -> None
     """Expose a malformed invocation as the documented typed client exception."""
     client = Client(binary, cwd=configured(tmp_path))
     with pytest.raises(OnetaskgraphError) as caught:
-        client.task_show(id="not-qualified")
+        run(client.task_show(id="not-qualified"))
     assert caught.value.exit_code == 1
 
 
 def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     """Exercise every generated command method and every CLI option encoding shape."""
     client = Client(binary, cwd=configured(tmp_path))
-    assert client.task_list(
-        source=("memory",), status=["todo"], limit=2, explain=True, page=None, no_project=False
+    assert run(
+        client.task_list(
+            source=("memory",), status=["todo"], limit=2, explain=True, page=None, no_project=False
+        )
     ).items
-    assert client.task_show(id="memory:T-1").items
-    assert client.task_deps(id="memory:T-1").items == []
-    assert client.project_list(source=["memory"]).items
-    assert client.project_show(id="memory:P-1").items
-    assert client.project_deps(id="memory:P-1").items == []
-    assert client.label_list(source=["memory"]).items
-    assert client.search(text="Memory", kind="task").items
-    assert client.sources_list()
-    assert client.config_show().settings
+    assert run(client.task_show(id="memory:T-1")).items
+    assert run(client.task_deps(id="memory:T-1")).items == []
+    assert run(client.project_list(source=["memory"])).items
+    assert run(client.project_show(id="memory:P-1")).items
+    assert run(client.project_deps(id="memory:P-1")).items == []
+    assert run(client.label_list(source=["memory"])).items
+    assert run(client.search(text="Memory", kind="task")).items
+    assert run(client.sources_list())
+    assert run(client.config_show()).settings
 
 
 def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
@@ -109,9 +118,9 @@ def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
     from_environment = Client(
         cwd=config, environment={"ONETASKGRAPH_SDK_BINARY": str(binary), "PATH": ""}
     )
-    assert from_environment.task_list().items
+    assert run(from_environment.task_list()).items
     from_path = Client(cwd=config, environment={"PATH": str(binary.parent)})
-    assert from_path.task_list().items
+    assert run(from_path.task_list()).items
     with pytest.raises(FileNotFoundError, match="binary not found"):
         Client(environment={"PATH": ""})
 

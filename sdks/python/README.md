@@ -5,12 +5,13 @@ and method surface are generated from the JSON Schema and command help emitted b
 real binary; the workspace's `just lint` rejects committed output that has drifted.
 
 ```python
+import asyncio
 from onetaskgraph_sdk import Client
 
-tasks = Client().task_list(status=["todo"])
+tasks = asyncio.run(Client().task_list(status=["todo"]))
 ```
 
-Each call runs one binary subprocess and validates its JSON response. The executable is
+Each async call runs one binary subprocess and validates its JSON response. The executable is
 resolved in this order: the `binary=` constructor argument, the
 `ONETASKGRAPH_SDK_BINARY` environment variable, then the `onetaskgraph` executable supplied
 on `PATH` by the packaged binary distribution. Pass `cwd=` to select the directory from

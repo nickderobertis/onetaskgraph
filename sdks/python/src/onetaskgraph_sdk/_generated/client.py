@@ -18,14 +18,14 @@ type Option = str | int | bool | list[str] | tuple[str, ...] | None
 class GeneratedClient:
     """Methods generated from the binary command surface."""
 
-    def _invoke[T](self, command: list[str], model: object, **options: object) -> T:
+    async def _invoke[T](self, command: list[str], model: object, **options: object) -> T:
         raise NotImplementedError
 
-    def config_show(
+    async def config_show(
         self, *, default_sources: Option = None, page_size: Option = None, set: Option = None
     ) -> EffectiveConfig:
         """Run ``onetaskgraph config show``."""
-        return self._invoke(
+        return await self._invoke(
             ["config", "show"],
             EffectiveConfig,
             default_sources=default_sources,
@@ -33,7 +33,7 @@ class GeneratedClient:
             set=set,
         )
 
-    def label_list(
+    async def label_list(
         self,
         *,
         allow_partial: Option = None,
@@ -46,7 +46,7 @@ class GeneratedClient:
         source: Option = None,
     ) -> QueryResponseOfQualifiedLabel:
         """Run ``onetaskgraph label list``."""
-        return self._invoke(
+        return await self._invoke(
             ["label", "list"],
             QueryResponseOfQualifiedLabel,
             allow_partial=allow_partial,
@@ -59,7 +59,7 @@ class GeneratedClient:
             source=source,
         )
 
-    def project_deps(
+    async def project_deps(
         self,
         id: str,
         *,
@@ -73,7 +73,7 @@ class GeneratedClient:
         set: Option = None,
     ) -> QueryResponseOfQualifiedEdge:
         """Run ``onetaskgraph project deps``."""
-        return self._invoke(
+        return await self._invoke(
             ["project", "deps"],
             QueryResponseOfQualifiedEdge,
             id=id,
@@ -87,7 +87,7 @@ class GeneratedClient:
             set=set,
         )
 
-    def project_list(
+    async def project_list(
         self,
         *,
         allow_partial: Option = None,
@@ -105,7 +105,7 @@ class GeneratedClient:
         status: Option = None,
     ) -> QueryResponseOfQualifiedProject:
         """Run ``onetaskgraph project list``."""
-        return self._invoke(
+        return await self._invoke(
             ["project", "list"],
             QueryResponseOfQualifiedProject,
             allow_partial=allow_partial,
@@ -123,7 +123,7 @@ class GeneratedClient:
             status=status,
         )
 
-    def project_show(
+    async def project_show(
         self,
         id: str,
         *,
@@ -134,7 +134,7 @@ class GeneratedClient:
         set: Option = None,
     ) -> QueryResponseOfQualifiedProject:
         """Run ``onetaskgraph project show``."""
-        return self._invoke(
+        return await self._invoke(
             ["project", "show"],
             QueryResponseOfQualifiedProject,
             id=id,
@@ -145,7 +145,7 @@ class GeneratedClient:
             set=set,
         )
 
-    def search(
+    async def search(
         self,
         text: str,
         *,
@@ -161,7 +161,7 @@ class GeneratedClient:
         source: Option = None,
     ) -> QueryResponseOfSearchHit:
         """Run ``onetaskgraph search``."""
-        return self._invoke(
+        return await self._invoke(
             ["search"],
             QueryResponseOfSearchHit,
             text=text,
@@ -177,11 +177,11 @@ class GeneratedClient:
             source=source,
         )
 
-    def sources_list(
+    async def sources_list(
         self, *, default_sources: Option = None, page_size: Option = None, set: Option = None
     ) -> list[SourceListing]:
         """Run ``onetaskgraph sources list``."""
-        return self._invoke(
+        return await self._invoke(
             ["sources", "list"],
             list[SourceListing],
             default_sources=default_sources,
@@ -189,7 +189,7 @@ class GeneratedClient:
             set=set,
         )
 
-    def task_deps(
+    async def task_deps(
         self,
         id: str,
         *,
@@ -203,7 +203,7 @@ class GeneratedClient:
         set: Option = None,
     ) -> QueryResponseOfQualifiedEdge:
         """Run ``onetaskgraph task deps``."""
-        return self._invoke(
+        return await self._invoke(
             ["task", "deps"],
             QueryResponseOfQualifiedEdge,
             id=id,
@@ -217,7 +217,7 @@ class GeneratedClient:
             set=set,
         )
 
-    def task_list(
+    async def task_list(
         self,
         *,
         allow_partial: Option = None,
@@ -237,7 +237,7 @@ class GeneratedClient:
         status: Option = None,
     ) -> QueryResponseOfQualifiedTask:
         """Run ``onetaskgraph task list``."""
-        return self._invoke(
+        return await self._invoke(
             ["task", "list"],
             QueryResponseOfQualifiedTask,
             allow_partial=allow_partial,
@@ -257,7 +257,7 @@ class GeneratedClient:
             status=status,
         )
 
-    def task_show(
+    async def task_show(
         self,
         id: str,
         *,
@@ -268,7 +268,7 @@ class GeneratedClient:
         set: Option = None,
     ) -> QueryResponseOfQualifiedTask:
         """Run ``onetaskgraph task show``."""
-        return self._invoke(
+        return await self._invoke(
             ["task", "show"],
             QueryResponseOfQualifiedTask,
             id=id,
