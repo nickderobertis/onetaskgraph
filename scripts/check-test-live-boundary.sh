@@ -85,6 +85,7 @@ cat > "$scratch/scripts/nx.sh" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = "show" ]; then
   printf '["workspace"]\n'
+  echo "locked install completed" >&2
   exit 0
 fi
 echo "live journey failed" >&2
@@ -100,6 +101,27 @@ case "$journey_diagnostic" in
   *"live journey failed"*) ;;
   *) fail "a genuine live journey failure was hidden. Diagnostic: $journey_diagnostic" ;;
 esac
+case "$journey_diagnostic" in
+  *"locked install completed"*)
+    fail "stderr from a successful project query leaked into the live target. Diagnostic: $journey_diagnostic"
+    ;;
+esac
+
+# An unknown requested name must render known names literally, without splitting or globbing.
+cat > "$scratch/scripts/nx.sh" <<'SH'
+#!/usr/bin/env bash
+printf '["alpha *", "beta space"]\n'
+SH
+chmod +x "$scratch/scripts/nx.sh"
+unknown_diagnostic="$("$scratch/scripts/test-live.sh" missing 2>&1)" \
+  && unknown_status=0 || unknown_status=$?
+if [ "$unknown_status" -ne 1 ]; then
+  fail "an unknown requested project exited $unknown_status instead of 1."
+fi
+if ! printf '%s\n' "$unknown_diagnostic" | grep -qxF '  alpha *' \
+  || ! printf '%s\n' "$unknown_diagnostic" | grep -qxF '  beta space'; then
+  fail "known project names were not rendered literally. Diagnostic: $unknown_diagnostic"
+fi
 
 if [ "$failures" -ne 0 ]; then
   echo "check-test-live-boundary: $failures expectation(s) failed." >&2
