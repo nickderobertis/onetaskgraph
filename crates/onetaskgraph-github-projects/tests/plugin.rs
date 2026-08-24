@@ -429,12 +429,52 @@ async fn rejects_invalid_pages_cursors_and_malformed_source_shapes() {
     );
     handle.join().unwrap();
 
+    for malformed in [
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"content":{"id":"T","title":"missing fields"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[]},"content":{"title":"missing id"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[],"pageInfo":{"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[],"pageInfo":null}}},"user":{"projectV2":null}}}),
+    ] {
+        let (endpoint, handle) = server("200 OK", malformed, 1, "projectV2");
+        assert!(matches!(
+            build(&endpoint)
+                .query_tasks(&TaskQuery::default(), &page(10))
+                .await,
+            Err(SourceError::Malformed { .. })
+        ));
+        handle.join().unwrap();
+    }
+
     let missing = json!({"data":{"organization":{"projectV2":null},"user":{"projectV2":null}}});
     let (endpoint, handle) = server("200 OK", missing, 1, "projectV2");
     assert!(matches!(
         build(&endpoint).health().await,
         Err(SourceError::Refused { .. })
     ));
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn walks_source_pages_for_aggregate_reads_and_accepts_a_native_cursor() {
+    let (endpoint, handle) = sequence_server(vec![project_response(true), project_response(false)]);
+    let labels = build(&endpoint).labels(&page(100)).await.unwrap();
+    assert_eq!(labels.items.len(), 2);
+    handle.join().unwrap();
+
+    let (endpoint, handle) = server("200 OK", project_response(false), 1, "projectV2");
+    let tasks = build(&endpoint)
+        .query_tasks(
+            &TaskQuery::default(),
+            &PageRequest {
+                cursor: Some(Cursor("cursor-2".into())),
+                limit: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(tasks.items.len(), 1);
     handle.join().unwrap();
 }
 
@@ -525,7 +565,13 @@ async fn rejects_zero_pages_and_malformed_dependency_shapes() {
             .is_err()
     );
 
-    for response in [json!({"data":{"node":null}}), json!({"data":{"node":{}}})] {
+    for response in [
+        json!({"data":{"node":null}}),
+        json!({"data":{"node":{}}}),
+        json!({"data":{"node":{"blockedBy":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        json!({"data":{"node":{"blockedBy":{"nodes":[{}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        json!({"data":{"node":{"blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":null}}}}}),
+    ] {
         let (endpoint, handle) = server("200 OK", response, 1, "blockedBy");
         assert!(
             build(&endpoint)
