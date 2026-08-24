@@ -289,9 +289,7 @@ impl GitHubProjectsSource {
         let fields = item
             .pointer("/fieldValues/nodes")
             .and_then(Value::as_array)
-            .ok_or_else(|| SourceError::Malformed {
-                message: "GitHub project item fieldValues.nodes is not an array".into(),
-            })?;
+            .expect("task validates fieldValues.nodes before mapping status");
         let name = fields
             .iter()
             .find(|v| v.pointer("/field/name").and_then(Value::as_str) == Some("Status"))
@@ -323,9 +321,7 @@ impl GitHubProjectsSource {
         let field_values = item
             .pointer("/fieldValues/nodes")
             .and_then(Value::as_array)
-            .ok_or_else(|| SourceError::Malformed {
-                message: "GitHub project item fieldValues.nodes is not an array".into(),
-            })?;
+            .expect("task validates fieldValues.nodes before mapping labels");
         let field = field_values
             .iter()
             .find_map(|value| value.get("labels"))
@@ -435,7 +431,9 @@ impl GitHubProjectsSource {
             if !required_bool(page, "hasNextPage")? {
                 break;
             }
-            after = Some(required_str(page, "endCursor")?.to_owned());
+            let next = required_str(page, "endCursor")?;
+            validate_cursor_progress(after.as_deref(), next)?;
+            after = Some(next.to_owned());
         }
         Ok(tasks)
     }
@@ -495,6 +493,56 @@ impl GitHubProjectsSource {
             items,
             next: next_cursor(connection)?,
         })
+    }
+
+    async fn related_issue_projects(&self, issue: &Value) -> Result<Vec<NativeId>, SourceError> {
+        let issue_id = required_str(issue, "id")?;
+        let mut connection =
+            issue
+                .get("projectItems")
+                .cloned()
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub related issue is missing projectItems".into(),
+                })?;
+        let mut projects = Vec::new();
+        let mut previous = None;
+        loop {
+            let nodes = connection
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub related issue projectItems.nodes is not an array".into(),
+                })?;
+            for item in nodes {
+                projects.push(NativeId(
+                    required_str(
+                        item.get("project").ok_or_else(|| SourceError::Malformed {
+                            message: "GitHub dependency project item has no project".into(),
+                        })?,
+                        "id",
+                    )?
+                    .into(),
+                ));
+            }
+            let Some(cursor) = next_cursor(&connection)? else {
+                break;
+            };
+            validate_cursor_progress(previous.as_deref(), &cursor.0)?;
+            previous = Some(cursor.0.clone());
+            const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String!){node(id:$id){... on Issue{projectItems(first:$first,after:$after){nodes{project{id}}pageInfo{hasNextPage endCursor}}}}}"#;
+            let data = self
+                .graphql(
+                    QUERY,
+                    json!({"id":issue_id,"first":MAX_PAGE_SIZE,"after":cursor.0}),
+                )
+                .await?;
+            connection = data.pointer("/node/projectItems").cloned().ok_or_else(|| {
+                SourceError::Malformed {
+                    message: "GitHub related issue response is missing projectItems".into(),
+                }
+            })?;
+        }
+        Ok(projects)
     }
 }
 
@@ -630,7 +678,7 @@ impl TaskSource for GitHubProjectsSource {
         for task in self.all_tasks().await? {
             let mut cursor = None;
             loop {
-                const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}}}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}}}pageInfo{hasNextPage endCursor}}}}"#;
+                const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}}}"#;
                 let data = self.graphql(QUERY, json!({"id":task.id.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor: &Cursor| cursor.0.as_str()),"nestedFirst":MAX_PAGE_SIZE})).await?;
                 let connection_name = match direction {
                     Direction::DependsOn => "blockedBy",
@@ -648,23 +696,8 @@ impl TaskSource for GitHubProjectsSource {
                         message: "GitHub project dependency nodes is not an array".into(),
                     })?;
                 for related_issue in related_issues {
-                    let project_items = related_issue
-                        .pointer("/projectItems/nodes")
-                        .and_then(Value::as_array)
-                        .ok_or_else(|| SourceError::Malformed {
-                            message: "GitHub blocker projectItems.nodes is not an array".into(),
-                        })?;
-                    for project_item in project_items {
-                        let related_project = required_str(
-                            project_item
-                                .get("project")
-                                .ok_or_else(|| SourceError::Malformed {
-                                    message: "GitHub dependency project item has no project".into(),
-                                })?,
-                            "id",
-                        )?;
-                        if related_project != id.0 {
-                            let related = NativeId(related_project.into());
+                    for related in self.related_issue_projects(related_issue).await? {
+                        if related != *id {
                             edges.push(match direction {
                                 Direction::DependsOn => DependencyEdge {
                                     from: related,
@@ -680,7 +713,14 @@ impl TaskSource for GitHubProjectsSource {
                         }
                     }
                 }
-                cursor = next_cursor(connection)?;
+                let next = next_cursor(connection)?;
+                if let Some(next) = &next {
+                    validate_cursor_progress(
+                        cursor.as_ref().map(|value: &Cursor| value.0.as_str()),
+                        &next.0,
+                    )?;
+                }
+                cursor = next;
                 if cursor.is_none() {
                     break;
                 }
@@ -807,9 +847,20 @@ fn next_cursor(connection: &Value) -> Result<Option<Cursor>, SourceError> {
             message: "GitHub connection is missing pageInfo".into(),
         })?;
     if required_bool(page, "hasNextPage")? {
-        Ok(Some(Cursor(required_str(page, "endCursor")?.into())))
+        let cursor = required_str(page, "endCursor")?;
+        validate_cursor_progress(None, cursor)?;
+        Ok(Some(Cursor(cursor.into())))
     } else {
         Ok(None)
+    }
+}
+fn validate_cursor_progress(previous: Option<&str>, next: &str) -> Result<(), SourceError> {
+    if next.is_empty() || previous == Some(next) {
+        Err(SourceError::Malformed {
+            message: "GitHub pagination cursor is empty or did not advance".into(),
+        })
+    } else {
+        Ok(())
     }
 }
 fn numeric_cursor(cursor: Option<&Cursor>) -> Result<usize, SourceError> {

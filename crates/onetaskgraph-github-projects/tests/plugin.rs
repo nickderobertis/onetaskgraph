@@ -362,6 +362,30 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
     assert_eq!(edges.items[0].from.0, "PVT_blocker");
     assert_eq!(edges.items[0].to.0, "PVT_project");
     handle.join().unwrap();
+
+    let first = json!({"data":{"node":{"blockedBy":{"nodes":[{
+        "id":"I_blocker","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"projects-2"}}
+    }],"pageInfo":{"hasNextPage":false,"endCursor":null}},"blocking":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}});
+    let second = json!({"data":{"node":{"projectItems":{
+        "nodes":[{"project":{"id":"PVT_blocker"}}],
+        "pageInfo":{"hasNextPage":false,"endCursor":null}
+    }}}});
+    let (endpoint, handle) = sequence_server(vec![
+        project_response(false),
+        project_response(false),
+        first,
+        second,
+    ]);
+    let edges = build(&endpoint)
+        .project_dependencies(
+            &NativeId("PVT_project".into()),
+            Direction::DependsOn,
+            &page(10),
+        )
+        .await
+        .unwrap();
+    assert_eq!(edges.items[0].from.0, "PVT_blocker");
+    handle.join().unwrap();
 }
 
 #[tokio::test]
@@ -404,12 +428,12 @@ async fn project_dependencies_skip_pull_requests_and_drafts() {
 async fn project_dependencies_map_reverse_edges_and_page_them() {
     let first_dependencies = json!({"data":{"node":{
         "blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
-        "blocking":{"nodes":[{"id":"I_dependent_1","projectItems":{"nodes":[{"project":{"id":"PVT_dependent_1"}}]}}],
+        "blocking":{"nodes":[{"id":"I_dependent_1","projectItems":{"nodes":[{"project":{"id":"PVT_dependent_1"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],
             "pageInfo":{"hasNextPage":true,"endCursor":"dependency-page-2"}}
     }}});
     let second_dependencies = json!({"data":{"node":{
         "blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
-        "blocking":{"nodes":[{"id":"I_dependent_2","projectItems":{"nodes":[{"project":{"id":"PVT_dependent_2"}}]}}],
+        "blocking":{"nodes":[{"id":"I_dependent_2","projectItems":{"nodes":[{"project":{"id":"PVT_dependent_2"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],
             "pageInfo":{"hasNextPage":false,"endCursor":null}}
     }}});
     let responses = vec![
@@ -494,7 +518,7 @@ async fn project_dependency_failures_are_explicit() {
 }
 
 #[tokio::test]
-async fn walks_issue_dependencies_forward_through_graphql() {
+async fn walks_issue_dependencies_in_both_directions_through_graphql() {
     let response = json!({"data":{"node":{
         "blockedBy":{"nodes":[{"id":"I_blocker"}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},
         "blocking":{"nodes":[{"id":"I_dependent"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}
@@ -634,6 +658,13 @@ async fn walks_source_pages_for_aggregate_reads_and_accepts_a_native_cursor() {
     let (endpoint, handle) = sequence_server(vec![project_response(true), project_response(false)]);
     let labels = build(&endpoint).labels(&page(100)).await.unwrap();
     assert_eq!(labels.items.len(), 2);
+    handle.join().unwrap();
+
+    let (endpoint, handle) = sequence_server(vec![project_response(true), project_response(true)]);
+    assert!(matches!(
+        build(&endpoint).labels(&page(100)).await,
+        Err(SourceError::Malformed { .. })
+    ));
     handle.join().unwrap();
 
     let (endpoint, handle) = server("200 OK", project_response(false), 1, "projectV2");
@@ -834,6 +865,7 @@ async fn rejects_zero_pages_and_malformed_dependency_shapes() {
         json!({"data":{"node":{"blockedBy":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
         json!({"data":{"node":{"blockedBy":{"nodes":[{}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
         json!({"data":{"node":{"blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":null}}}}}),
+        json!({"data":{"node":{"blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":""}}}}}),
     ] {
         let (endpoint, handle) = server("200 OK", response, 1, "blockedBy");
         assert!(
