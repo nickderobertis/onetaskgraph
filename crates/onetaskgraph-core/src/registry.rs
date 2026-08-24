@@ -27,15 +27,18 @@ pub enum PluginKind {
     Linear,
     /// A folder of Markdown files.
     LocalMd,
+    /// A program of its own, speaking `docs/plugin-protocol.md` over stdio.
+    Subprocess,
 }
 
 impl PluginKind {
     /// Every kind, in the stable order [`registry`] reports them in.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::GithubProjects,
         Self::InMemory,
         Self::Linear,
         Self::LocalMd,
+        Self::Subprocess,
     ];
 
     /// The name a configuration document's `plugin:` field names this kind by.
@@ -50,6 +53,7 @@ impl PluginKind {
             Self::InMemory => "in-memory",
             Self::Linear => "linear",
             Self::LocalMd => "local-md",
+            Self::Subprocess => "subprocess",
         }
     }
 
@@ -61,7 +65,7 @@ impl PluginKind {
 
     /// This kind's factory.
     ///
-    /// Total, which is the point of the type: a `PluginKind` is one of exactly four
+    /// Total, which is the point of the type: a `PluginKind` is one of exactly five
     /// things, so there is no absent-plugin case for a caller to handle or forget.
     #[must_use]
     pub fn plugin(self) -> Box<dyn SourcePlugin> {
@@ -70,6 +74,7 @@ impl PluginKind {
             Self::InMemory => Box::new(onetaskgraph_in_memory::Plugin),
             Self::Linear => Box::new(onetaskgraph_linear::Plugin),
             Self::LocalMd => Box::new(onetaskgraph_local_md::Plugin),
+            Self::Subprocess => Box::new(crate::subprocess::SubprocessPlugin),
         }
     }
 }

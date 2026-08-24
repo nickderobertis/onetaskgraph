@@ -110,14 +110,21 @@ fn a_string_that_is_not_this_engines_resume_document_is_refused_where_it_enters(
 
 #[test]
 fn the_registry_names_every_plugin_kind_this_build_knows() {
-    // All four are nameable from this commit on, whether or not their source is
+    // All five are nameable from this commit on, whether or not their source is
     // implemented — so a config naming `linear` gets the plugin's own message
-    // rather than "unknown plugin".
+    // rather than "unknown plugin". `subprocess` is a kind like any other: it is how a
+    // source that is a program of its own is configured.
     assert_eq!(
         plugin_kinds(),
-        ["github-projects", "in-memory", "linear", "local-md"]
+        [
+            "github-projects",
+            "in-memory",
+            "linear",
+            "local-md",
+            "subprocess"
+        ]
     );
-    assert_eq!(registry().len(), 4);
+    assert_eq!(registry().len(), 5);
 }
 
 #[test]
@@ -417,7 +424,13 @@ fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
     kinds.sort();
     assert_eq!(
         kinds,
-        ["github-projects", "in-memory", "linear", "local-md"]
+        [
+            "github-projects",
+            "in-memory",
+            "linear",
+            "local-md",
+            "subprocess"
+        ]
     );
 }
 

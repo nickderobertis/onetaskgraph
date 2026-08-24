@@ -168,6 +168,22 @@ pub const ROWS: &[Row] = &[
         }),
     },
     Row {
+        plugin: "subprocess",
+        name: "subprocess (the in-memory source over a real pipe)",
+        fixture: Fixture::Ready(Ready {
+            block: hosted_block,
+            declared: Declared {
+                filter_by_label: true,
+                filter_by_status: true,
+                search_title: true,
+                search_content: true,
+                orphan_tasks: true,
+                reverse_task_dependencies: true,
+                reverse_project_dependencies: true,
+            },
+        }),
+    },
+    Row {
         plugin: "local-md",
         name: "local-md",
         fixture: Fixture::Pending,
@@ -189,6 +205,23 @@ fn native_block(_sandbox: &Sandbox) -> Value {
     let mut block = dataset();
     block["capabilities"] = json!({"max_page_size": 50});
     block
+}
+
+/// The row that runs the same dataset in a second process, over the stdio protocol.
+///
+/// This is journey 19 — every journey again, through a subprocess-wrapped source — and it
+/// is a row rather than a suite of its own for the reason the whole table exists: a
+/// transport proven by tests written for it is proven against its author's expectations,
+/// and this one has to answer the same assertions every in-process source answers. It
+/// declares everything native because the source behind the pipe does, which is the claim
+/// worth making: what a source can do must not change because it is a process away.
+fn hosted_block(_sandbox: &Sandbox) -> Value {
+    let mut settings = dataset();
+    settings["capabilities"] = json!({"max_page_size": 50});
+    json!({
+        "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+        "settings": {"kind": "in-memory", "config": settings},
+    })
 }
 
 /// The `in-memory` row that applies none of them, and pages two rows at a time.

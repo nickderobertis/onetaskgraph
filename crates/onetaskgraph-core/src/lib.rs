@@ -30,6 +30,7 @@ mod registry;
 mod resolve;
 mod schema;
 mod secrets;
+pub mod subprocess;
 
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
 pub use engine::{
@@ -46,3 +47,4 @@ pub use resolve::{
 };
 pub use schema::{SCHEMA_BUNDLE_VERSION, schema_bundle};
 pub use secrets::{CredentialLayer, CredentialName, ResolvedCredential, Secrets, SecretsReport};
+pub use subprocess::{SubprocessConfig, SubprocessPlugin, SubprocessSource, serve};

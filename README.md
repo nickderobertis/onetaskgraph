@@ -201,6 +201,28 @@ A source that is not a Rust crate speaks a line-oriented JSON protocol over stdi
 [`docs/plugin-protocol.md`](./docs/plugin-protocol.md) specifies it completely — the
 framing, the capability handshake, one method per trait method, and the error envelope.
 
+Configure one with the `subprocess` plugin, which names the program to run and hands it
+its own settings verbatim:
+
+```yaml
+sources:
+  notes:
+    plugin: subprocess
+    config:
+      command: /usr/local/bin/my-source
+      args: [--serve]
+      secrets: [LINEAR_API_KEY]   # forwarded in the handshake; nothing else is
+      settings: { root: ~/notes } # this source's own `config:` block
+```
+
+A source behind that seam is a source like any other: it declares its own capabilities,
+so a plan says `pushed down` for what it applies itself, and the engine compensates for
+the rest exactly as it does in process.
+
+`onetaskgraph-source` ships beside the main binary and is the reference implementation of
+the plugin side — it hosts any built-in plugin over the same protocol, so you can read a
+working peer beside the specification.
+
 ## Licence
 
 MIT. See [`LICENSE`](./LICENSE).
