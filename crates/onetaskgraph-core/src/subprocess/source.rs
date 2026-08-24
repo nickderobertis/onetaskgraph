@@ -24,6 +24,11 @@ use super::wire::{
     PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, Request, TaskQueryParams, TaskResult,
 };
 
+/// The id the handshake is sent under. §3 makes it the first request on a connection, so
+/// nothing else can have been sent under it, and an answer addressed elsewhere is a
+/// violation rather than an ordering the engine could accommodate.
+const HANDSHAKE_ID: &str = "0";
+
 /// A source served by a spawned program speaking `docs/plugin-protocol.md`.
 pub struct SubprocessSource {
     /// What the plugin called itself in the handshake.
@@ -150,7 +155,7 @@ impl SubprocessSource {
             secrets,
         };
         let request = Request {
-            id: "0".to_owned(),
+            id: HANDSHAKE_ID.to_owned(),
             method: "initialize".to_owned(),
             // Plain data throughout: a `BTreeMap<String, String>` and a `Value` the
             // configuration layer already parsed.
@@ -165,6 +170,19 @@ impl SubprocessSource {
                     "the plugin's handshake answer is not a response envelope: {error}"
                 ),
             })?;
+        // §6.3: an envelope addressed to an id this side never sent is a violation, and it
+        // is one here for the same reason it is later — a plugin whose first line answers
+        // something else has not answered the handshake, and reading it as one would build
+        // a source out of a message that was about something different.
+        if response.id != HANDSHAKE_ID {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "the plugin answered the handshake with an envelope addressed to {:?} \
+                     rather than to {HANDSHAKE_ID:?}",
+                    response.id
+                ),
+            });
+        }
         let outcome = response.outcome().ok_or_else(|| SourceError::Malformed {
             message: "the plugin's handshake answer carried both a result and an error, or \
                       neither"

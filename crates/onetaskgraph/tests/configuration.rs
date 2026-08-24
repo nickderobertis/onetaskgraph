@@ -721,6 +721,100 @@ fn the_credentials_file_defers_to_a_variable_the_process_environment_already_def
     );
 }
 
+/// A one-source document whose source is a program of its own, naming one credential.
+///
+/// The hosted plugin is `in-memory` over a single task, because what this journey is about
+/// is the credential reaching a spawned child rather than the work behind it.
+fn subprocess_document(secrets: &[&str]) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "sources": {
+            "work": {
+                "plugin": "subprocess",
+                "config": {
+                    "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                    "secrets": secrets,
+                    "settings": {
+                        "kind": "in-memory",
+                        "config": {
+                            "tasks": [{
+                                "id": "T-1",
+                                "title": "Alpha",
+                                "status": {"category": "todo", "name": "Todo"},
+                                "labels": []
+                            }]
+                        }
+                    }
+                }
+            }
+        }
+    }))
+    .expect("a document")
+}
+
+#[test]
+fn the_credentials_file_supplies_a_variable_a_source_in_another_process_names() {
+    let sandbox = Sandbox::new();
+    sandbox.secrets_file(&format!("LINEAR_API_KEY={PLANTED}\n"));
+    sandbox.project_document(&subprocess_document(&["LINEAR_API_KEY"]));
+
+    let output = sandbox
+        .command()
+        .env_remove("LINEAR_API_KEY")
+        .args(["task", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    // The run reached the spawned plugin and got its rows, which it could only do with the
+    // credential resolved and forwarded: the source refuses to build without it, as the
+    // next journey asserts.
+    let listed = String::from_utf8(output.stdout).expect("UTF-8");
+    assert!(listed.contains("work:T-1"), "{listed}");
+    assert!(
+        !listed.contains(PLANTED),
+        "a credential is never printed: {listed}"
+    );
+}
+
+#[test]
+fn a_credential_a_source_in_another_process_names_and_nothing_defines_is_refused_by_name() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&subprocess_document(&["LINEAR_API_KEY"]));
+
+    let output = sandbox
+        .command()
+        .env_remove("LINEAR_API_KEY")
+        .args(["task", "list"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    let complaint = String::from_utf8(output.stderr).expect("UTF-8");
+    assert!(complaint.contains("LINEAR_API_KEY"), "{complaint}");
+}
+
+#[test]
+fn a_variable_name_a_source_in_another_process_could_never_resolve_is_refused_at_the_field() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&subprocess_document(&["not a variable name"]));
+
+    let output = sandbox
+        .command()
+        .args(["task", "list"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    let complaint = String::from_utf8(output.stderr).expect("UTF-8");
+    assert!(
+        complaint.contains("secrets") || complaint.contains("not a variable name"),
+        "the field that holds the mistake is named: {complaint}"
+    );
+}
+
 #[test]
 fn a_missing_credentials_file_is_not_an_error() {
     let sandbox = Sandbox::new();

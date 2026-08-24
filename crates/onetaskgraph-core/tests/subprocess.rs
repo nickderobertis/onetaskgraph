@@ -635,17 +635,25 @@ fn not_a_plugin(argument: &str) -> Result<SubprocessSource, SourceError> {
 }
 
 #[test]
-fn a_spawned_program_that_does_not_speak_the_protocol_is_a_violation_rather_than_a_hang() {
+fn a_spawned_program_that_does_not_speak_the_protocol_is_refused_rather_than_waited_on() {
     // `--list` makes the test binary print its own test names and exit: a real program,
-    // really spawned, whose first line of standard output is not a response envelope.
+    // really spawned, that does not speak this protocol. Which refusal it earns is a race
+    // it is not worth pretending away — the engine may get the non-envelope line, or it
+    // may find the program already gone when it writes — so what this asserts is the part
+    // that is not racy, and the part that matters: the run is refused, promptly, and
+    // nothing becomes a source. The wording of a non-envelope answer is pinned
+    // deterministically by `a_handshake_answer_that_is_not_a_line_of_json_is_a_violation`.
     let Err(error) = not_a_plugin("--list") else {
         panic!("a program that is not a plugin cannot become a source");
     };
 
-    let SourceError::Malformed { message } = error else {
-        panic!("a line that is not an envelope is a protocol violation: {error:?}");
-    };
-    assert!(message.contains("not a response envelope"), "{message}");
+    assert!(
+        matches!(
+            error,
+            SourceError::Malformed { .. } | SourceError::Unavailable { .. }
+        ),
+        "a program that does not speak the protocol is refused as one that cannot: {error:?}"
+    );
 }
 
 #[test]
@@ -723,6 +731,101 @@ async fn an_answer_carrying_both_members_after_the_handshake_is_a_violation() {
         panic!("both members at once is a violation");
     };
     assert!(message.contains("both a result and an error"), "{message}");
+}
+
+/// A peer that records the handshake it was sent before answering it.
+///
+/// What crosses the wire is the thing worth asserting on: §3.1 says the handshake carries
+/// only the variables this source's configuration names, and the only way to know that is
+/// to read the line the engine actually wrote.
+fn capturing(secrets: BTreeMap<String, String>) -> (SubprocessSource, Value) {
+    let (to_engine, mut from_peer) = pipe().expect("a pipe");
+    let (to_peer, from_engine) = pipe().expect("a pipe");
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let recorder = std::sync::Arc::clone(&seen);
+    std::thread::spawn(move || {
+        let mut asked = BufReader::new(to_peer);
+        let mut request = String::new();
+        if asked.read_line(&mut request).is_err() {
+            return;
+        }
+        recorder
+            .lock()
+            .expect("nothing else holds this")
+            .push_str(&request);
+        let answer = json!({"id": "0", "result": {"protocol_version": 1, "kind": "recorder",
+                            "capabilities": capabilities()}});
+        let _ = writeln!(from_peer, "{answer}");
+        let _ = from_peer.flush();
+    });
+    let source = SubprocessSource::over(
+        from_engine,
+        to_engine,
+        &name(),
+        &json!({"root": "/somewhere"}),
+        secrets,
+    )
+    .expect("the recorder answers the handshake");
+    let line = seen.lock().expect("the thread has finished").clone();
+    let handshake: Value = serde_json::from_str(line.trim()).expect("one JSON request");
+    (source, handshake)
+}
+
+#[test]
+fn the_handshake_carries_the_named_credentials_the_settings_and_the_source_name() {
+    let mut secrets = BTreeMap::new();
+    secrets.insert("LINEAR_API_KEY".to_owned(), "a value".to_owned());
+    let (_source, handshake) = capturing(secrets);
+
+    let params = &handshake["params"];
+    assert_eq!(params["protocol_version"], 1);
+    assert_eq!(params["source_name"], "work");
+    assert_eq!(params["config"], json!({"root": "/somewhere"}));
+    // Exactly the one named variable, so a plugin cannot be handed a credential its
+    // configuration never asked for.
+    assert_eq!(params["secrets"], json!({"LINEAR_API_KEY": "a value"}));
+}
+
+#[test]
+fn a_handshake_carrying_no_named_credentials_forwards_none_at_all() {
+    let (_source, handshake) = capturing(BTreeMap::new());
+
+    assert_eq!(handshake["params"]["secrets"], json!({}));
+}
+
+#[test]
+fn a_handshake_answer_addressed_to_another_request_is_a_violation() {
+    let Err(error) = scripted(vec![
+        json!({"id": "17", "result": {"protocol_version": 1, "kind": "made-up",
+               "capabilities": capabilities()}})
+        .to_string(),
+    ]) else {
+        panic!("an answer to a request nobody sent builds nothing");
+    };
+
+    let SourceError::Malformed { message } = error else {
+        panic!("an envelope addressed elsewhere is a violation: {error:?}");
+    };
+    assert!(
+        message.contains("\"17\"") && message.contains("\"0\""),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_secret_name_that_could_never_be_a_variable_is_refused_at_the_field() {
+    let Err(error) = subprocess_plugin().build(
+        &name(),
+        &json!({"command": "onetaskgraph-no-such-plugin-program", "secrets": ["not a name"]}),
+        &NoSecrets,
+    ) else {
+        panic!("an unusable variable name builds nothing");
+    };
+
+    let SourceError::Config { message } = error else {
+        panic!("an unusable variable name is a configuration refusal: {error:?}");
+    };
+    assert!(message.contains("not a name"), "{message}");
 }
 
 /// A `Capabilities` the scripted answers can carry, in the protocol's own spelling.
