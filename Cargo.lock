@@ -862,11 +862,15 @@ dependencies = [
 name = "onetaskgraph-local-md"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "onetaskgraph-plugin-api",
  "schemars",
  "secrecy",
  "serde",
  "serde_json",
+ "serde_norway",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

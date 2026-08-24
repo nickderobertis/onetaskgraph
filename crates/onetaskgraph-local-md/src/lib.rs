@@ -1,29 +1,53 @@
-//! A onetaskgraph source over Markdown task files on the local filesystem.
-//!
-//! The factory is real from this commit on so the registry can name `local-md`
-//! alongside every other plugin, and `onetaskgraph schema` can emit this
-//! plugin's configuration schema. Only [`SourcePlugin::build`] is outstanding:
-//! implementing this source is an **additive** change to this one crate, with no
-//! edit to the contract, the registry, or any sibling.
+//! A stateless onetaskgraph source over hand-authored Markdown files.
 #![deny(missing_docs)]
 
-use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName, SourcePlugin, TaskSource};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+};
+
+use onetaskgraph_plugin_api::{
+    Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Health,
+    Label, LabelFilter, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
+    TaskQuery, TaskSource, TextFields, TextQuery,
+};
 use schemars::{Schema, schema_for};
 use serde::Deserialize;
 
-/// The plugin kind a `local-md` source's `plugin:` field names.
+/// The registry name for this plugin.
 pub const KIND: &str = "local-md";
+/// The largest page returned by a folder scan.
+pub const MAX_PAGE_SIZE: u32 = 200;
 
-/// The configuration block a `local-md` source is built from.
-///
-/// Empty until the source lands: an empty schema accepts nothing but `{}`, so a
-/// configuration written against a shape this plugin does not yet have is
-/// rejected at load rather than silently ignored.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct LocalMdConfig {}
+/// Configuration for a Markdown folder source.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LocalMdConfig {
+    /// Folder containing `tasks/` and `projects/`.
+    pub root: PathBuf,
+    /// Case-insensitive source status to normalized-category mapping.
+    #[serde(default = "default_statuses")]
+    pub status_mapping: BTreeMap<String, StatusCategory>,
+}
 
-/// The factory for the local-md source.
+fn default_statuses() -> BTreeMap<String, StatusCategory> {
+    [
+        ("backlog", StatusCategory::Backlog),
+        ("todo", StatusCategory::Todo),
+        ("in progress", StatusCategory::InProgress),
+        ("doing", StatusCategory::InProgress),
+        ("done", StatusCategory::Done),
+        ("cancelled", StatusCategory::Cancelled),
+        ("canceled", StatusCategory::Cancelled),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v))
+    .collect()
+}
+
+/// Factory for [`LocalMdSource`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Plugin;
 
@@ -31,31 +55,506 @@ impl SourcePlugin for Plugin {
     fn kind(&self) -> &'static str {
         KIND
     }
-
     fn config_schema(&self) -> Schema {
         schema_for!(LocalMdConfig)
     }
-
     fn build(
         &self,
         name: &SourceName,
         config: &serde_json::Value,
         _secrets: &dyn SecretResolver,
     ) -> Result<Box<dyn TaskSource>, SourceError> {
-        // Validate before refusing. A typo in the config block is the user's to fix and
-        // is worth naming precisely; "not implemented yet" is not their problem to
-        // debug. This is also what keeps the published schema's promise honest.
-        let _config: LocalMdConfig =
-            serde_json::from_value(config.clone()).map_err(|error| SourceError::Config {
-                message: format!("source {name}: {error}"),
+        let config: LocalMdConfig =
+            serde_json::from_value(config.clone()).map_err(|e| SourceError::Config {
+                message: format!("source {name}: {e}"),
             })?;
+        LocalMdSource::new(config)
+            .map(|s| Box::new(s) as Box<dyn TaskSource>)
+            .map_err(|e| match e {
+                SourceError::Config { message } => SourceError::Config {
+                    message: format!("source {name}: {message}"),
+                },
+                other => other,
+            })
+    }
+}
 
-        Err(SourceError::Config {
-            message: format!(
-                "source {name}: the `{KIND}` plugin is not implemented yet; remove this \
-                 source from your configuration, or use the `in-memory` plugin until it \
-                 lands"
-            ),
+/// A source which re-scans its canonical root for every request.
+#[derive(Debug, Clone)]
+pub struct LocalMdSource {
+    root: PathBuf,
+    statuses: BTreeMap<String, StatusCategory>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrontMatter {
+    title: Option<String>,
+    #[serde(default = "default_status")]
+    status: String,
+    #[serde(default)]
+    labels: Vec<LabelInput>,
+    project: Option<String>,
+    #[serde(default)]
+    depends_on: Vec<Dependency>,
+    url: Option<String>,
+}
+fn default_status() -> String {
+    "todo".to_owned()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Dependency {
+    Id(String),
+    Detailed {
+        id: String,
+        #[serde(default)]
+        kind: EdgeKind,
+    },
+}
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum LabelInput {
+    Name(String),
+    Detailed {
+        id: String,
+        name: String,
+        color: Option<String>,
+    },
+}
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum EdgeKind {
+    #[default]
+    Blocks,
+    Related,
+}
+
+struct Document {
+    id: NativeId,
+    title: String,
+    body: Option<String>,
+    status: Status,
+    labels: Vec<Label>,
+    project: Option<NativeId>,
+    dependencies: Vec<DependencyEdge>,
+    url: Option<String>,
+}
+
+impl LocalMdSource {
+    /// Canonicalize and validate a configured source root.
+    pub fn new(config: LocalMdConfig) -> Result<Self, SourceError> {
+        let root = fs::canonicalize(&config.root).map_err(|e| SourceError::Config {
+            message: format!("cannot canonicalize root {}: {e}", config.root.display()),
+        })?;
+        if !root.is_dir() {
+            return Err(SourceError::Config {
+                message: format!("root {} is not a directory", root.display()),
+            });
+        }
+        Ok(Self {
+            root,
+            statuses: config
+                .status_mapping
+                .into_iter()
+                .map(|(k, v)| (k.to_lowercase(), v))
+                .collect(),
         })
+    }
+
+    fn directory(&self, kind: &str) -> Result<PathBuf, SourceError> {
+        let path = self.root.join(kind);
+        if !path.exists() {
+            return Ok(path);
+        }
+        let canonical = fs::canonicalize(&path).map_err(|e| SourceError::Config {
+            message: format!("cannot resolve {}: {e}", path.display()),
+        })?;
+        if !canonical.starts_with(&self.root) {
+            return Err(SourceError::Config {
+                message: format!(
+                    "{} escapes configured root {}",
+                    path.display(),
+                    self.root.display()
+                ),
+            });
+        }
+        Ok(canonical)
+    }
+
+    fn paths(&self, kind: &str) -> Result<Vec<PathBuf>, SourceError> {
+        fn visit(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), SourceError> {
+            if !dir.exists() {
+                return Ok(());
+            }
+            for entry in fs::read_dir(dir).map_err(|e| SourceError::Unavailable {
+                message: format!("cannot read {}: {e}", dir.display()),
+            })? {
+                let entry = entry.map_err(|e| SourceError::Unavailable {
+                    message: format!("cannot read entry in {}: {e}", dir.display()),
+                })?;
+                let path = entry.path();
+                let canonical = fs::canonicalize(&path).map_err(|e| SourceError::Malformed {
+                    message: format!("{}: {e}", path.display()),
+                })?;
+                if !canonical.starts_with(root) {
+                    return Err(SourceError::Config {
+                        message: format!(
+                            "{} escapes configured root {}",
+                            path.display(),
+                            root.display()
+                        ),
+                    });
+                }
+                if canonical.is_dir() {
+                    visit(root, &canonical, out)?;
+                } else if canonical
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .is_some_and(|x| x.eq_ignore_ascii_case("md"))
+                {
+                    out.push(canonical);
+                }
+            }
+            Ok(())
+        }
+        let directory = self.directory(kind)?;
+        let mut paths = Vec::new();
+        visit(&self.root, &directory, &mut paths)?;
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+
+    fn parse(&self, kind: &str, path: &Path) -> Result<Document, SourceError> {
+        // Both callers canonicalize and confine the path before parsing it. Keeping that
+        // invariant explicit here makes future internal callers notice if they skip the
+        // boundary check without duplicating an unreachable user-facing branch.
+        debug_assert!(path.starts_with(&self.root));
+        let text = fs::read_to_string(path).map_err(|e| SourceError::Malformed {
+            message: format!("{}: {e}", path.display()),
+        })?;
+        let (yaml, body) = text
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---\n"))
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!(
+                    "{}: expected YAML front matter delimited by ---",
+                    path.display()
+                ),
+            })?;
+        let front: FrontMatter =
+            serde_norway::from_str(yaml).map_err(|e| SourceError::Malformed {
+                message: format!("{}: {e}", path.display()),
+            })?;
+        let base = self.directory(kind)?;
+        let relative = path
+            .strip_prefix(base)
+            .expect("a confined document stays under its kind directory");
+        let id = relative
+            .with_extension("")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let fallback = body
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("# ")
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            })
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                relative
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        let title = front.title.unwrap_or(fallback);
+        let body = body.trim();
+        let labels = front
+            .labels
+            .into_iter()
+            .map(|label| match label {
+                LabelInput::Name(name) => Label {
+                    id: NativeId(name.to_lowercase()),
+                    name,
+                    color: None,
+                },
+                LabelInput::Detailed { id, name, color } => Label {
+                    id: NativeId(id),
+                    name,
+                    color,
+                },
+            })
+            .collect();
+        let status = Status {
+            category: self
+                .statuses
+                .get(&front.status.to_lowercase())
+                .copied()
+                .unwrap_or(StatusCategory::Unknown),
+            name: front.status,
+        };
+        let from = NativeId(id.clone());
+        let dependencies = front
+            .depends_on
+            .into_iter()
+            .map(|d| {
+                let (to, kind) = match d {
+                    Dependency::Id(id) => (id, DependencyKind::Blocks),
+                    Dependency::Detailed { id, kind } => (
+                        id,
+                        match kind {
+                            EdgeKind::Blocks => DependencyKind::Blocks,
+                            EdgeKind::Related => DependencyKind::Related,
+                        },
+                    ),
+                };
+                DependencyEdge {
+                    from: from.clone(),
+                    to: NativeId(to),
+                    kind,
+                }
+            })
+            .collect();
+        Ok(Document {
+            id: NativeId(id),
+            title,
+            body: (!body.is_empty()).then(|| body.to_owned()),
+            status,
+            labels,
+            project: front.project.map(NativeId),
+            dependencies,
+            url: front.url,
+        })
+    }
+
+    fn documents(&self, kind: &str) -> Result<Vec<Document>, SourceError> {
+        self.paths(kind)?
+            .into_iter()
+            .filter_map(|p| self.parse(kind, &p).ok())
+            .collect::<Vec<_>>()
+            .pipe(Ok)
+    }
+    fn find(&self, kind: &str, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        let base = self.directory(kind)?;
+        let candidate = base.join(&id.0).with_extension("md");
+        if !candidate.exists() {
+            return Ok(None);
+        }
+        let canonical = fs::canonicalize(&candidate).map_err(|e| SourceError::Malformed {
+            message: format!("{}: {e}", candidate.display()),
+        })?;
+        if !canonical.starts_with(&base) {
+            return Err(SourceError::Config {
+                message: format!(
+                    "{} escapes configured root {}",
+                    candidate.display(),
+                    self.root.display()
+                ),
+            });
+        }
+        self.parse(kind, &canonical).map(Some)
+    }
+
+    fn paginate<T>(&self, items: Vec<T>, page: &PageRequest) -> Result<Page<T>, SourceError> {
+        if page.limit == 0 {
+            return Err(SourceError::Config {
+                message: "page limit must be at least 1".to_owned(),
+            });
+        }
+        let start = match &page.cursor {
+            None => 0,
+            Some(Cursor(raw)) => raw.parse::<usize>().map_err(|_| SourceError::Malformed {
+                message: format!("cursor {raw:?} was not issued by local-md"),
+            })?,
+        };
+        if start > items.len() {
+            return Err(SourceError::Malformed {
+                message: format!("cursor points past {} results", items.len()),
+            });
+        }
+        let total = items.len();
+        let limit = page.limit.min(MAX_PAGE_SIZE) as usize;
+        let end = start.saturating_add(limit).min(items.len());
+        let mut items = items;
+        let tail = items.split_off(start);
+        let window = tail.into_iter().take(end - start).collect();
+        Ok(Page {
+            items: window,
+            next: (end < total).then(|| Cursor(end.to_string())),
+        })
+    }
+}
+
+trait Pipe: Sized {
+    fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {
+        f(self)
+    }
+}
+impl<T> Pipe for T {}
+
+fn labels_match(labels: &[Label], f: &LabelFilter) -> bool {
+    let has = |n: &String| labels.iter().any(|l| l.name.eq_ignore_ascii_case(n));
+    (f.any_of.is_empty() || f.any_of.iter().any(has))
+        && f.all_of.iter().all(has)
+        && !f.none_of.iter().any(has)
+}
+fn text_match(title: &str, body: Option<&str>, q: &TextQuery) -> bool {
+    let t = q.terms.to_lowercase();
+    match q.fields {
+        TextFields::Title => title.to_lowercase().contains(&t),
+        TextFields::Content => body.is_some_and(|b| b.to_lowercase().contains(&t)),
+        TextFields::TitleOrContent => {
+            title.to_lowercase().contains(&t) || body.is_some_and(|b| b.to_lowercase().contains(&t))
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskSource for LocalMdSource {
+    fn kind(&self) -> &'static str {
+        KIND
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            projects: Support::Native,
+            orphan_tasks: Support::Native,
+            filter_by_label: Support::Native,
+            filter_by_status: Support::Native,
+            search_title: Support::Native,
+            search_content: Support::Native,
+            task_dependencies: DependencySupport::BothDirections,
+            project_dependencies: DependencySupport::BothDirections,
+            max_page_size: MAX_PAGE_SIZE,
+        }
+    }
+    async fn health(&self) -> Result<Health, SourceError> {
+        self.paths("tasks")?;
+        self.paths("projects")?;
+        Ok(Health {
+            reachable: true,
+            detail: Some(format!("reading Markdown under {}", self.root.display())),
+        })
+    }
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        Ok(self.find("tasks", id)?.map(task))
+    }
+    async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+        Ok(self.find("projects", id)?.map(project))
+    }
+    async fn query_tasks(&self, q: &TaskQuery, p: &PageRequest) -> Result<Page<Task>, SourceError> {
+        let items = self
+            .documents("tasks")?
+            .into_iter()
+            .map(task)
+            .filter(|t| {
+                labels_match(&t.labels, &q.labels)
+                    && (q.statuses.is_empty() || q.statuses.contains(&t.status.category))
+                    && match &q.project {
+                        ProjectFilter::Any => true,
+                        ProjectFilter::Orphans => t.project.is_none(),
+                        ProjectFilter::Is(id) => t.project.as_ref() == Some(id),
+                    }
+                    && q.text
+                        .as_ref()
+                        .is_none_or(|x| text_match(&t.title, t.content.as_deref(), x))
+            })
+            .collect();
+        self.paginate(items, p)
+    }
+    async fn query_projects(
+        &self,
+        q: &ProjectQuery,
+        p: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        let items = self
+            .documents("projects")?
+            .into_iter()
+            .map(project)
+            .filter(|x| {
+                labels_match(&x.labels, &q.labels)
+                    && (q.statuses.is_empty() || q.statuses.contains(&x.status.category))
+                    && q.text
+                        .as_ref()
+                        .is_none_or(|z| text_match(&x.title, x.content.as_deref(), z))
+            })
+            .collect();
+        self.paginate(items, p)
+    }
+    async fn labels(&self, p: &PageRequest) -> Result<Page<Label>, SourceError> {
+        let mut seen = BTreeSet::new();
+        let mut items: Vec<Label> = self
+            .documents("tasks")?
+            .into_iter()
+            .chain(self.documents("projects")?)
+            .flat_map(|d| d.labels)
+            .filter(|l| seen.insert(l.name.to_lowercase()))
+            .collect();
+        items.sort_by(|left, right| left.id.0.cmp(&right.id.0));
+        self.paginate(items, p)
+    }
+    async fn task_dependencies(
+        &self,
+        id: &NativeId,
+        d: Direction,
+        p: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.edges("tasks", id, d, p)
+    }
+    async fn project_dependencies(
+        &self,
+        id: &NativeId,
+        d: Direction,
+        p: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.edges("projects", id, d, p)
+    }
+}
+impl LocalMdSource {
+    fn edges(
+        &self,
+        k: &str,
+        id: &NativeId,
+        d: Direction,
+        p: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        let edges = self
+            .documents(k)?
+            .into_iter()
+            .flat_map(|x| x.dependencies)
+            .filter(|e| match d {
+                Direction::DependsOn => &e.from == id,
+                Direction::DependedOnBy => &e.to == id,
+            })
+            .collect();
+        self.paginate(edges, p)
+    }
+}
+fn task(d: Document) -> Task {
+    Task {
+        id: d.id,
+        title: d.title,
+        content: d.body,
+        status: d.status,
+        labels: d.labels,
+        project: d.project,
+        url: d.url,
+        created_at: None,
+        updated_at: None,
+    }
+}
+fn project(d: Document) -> Project {
+    Project {
+        id: d.id,
+        title: d.title,
+        content: d.body,
+        status: d.status,
+        labels: d.labels,
+        url: d.url,
+        created_at: None,
+        updated_at: None,
     }
 }
