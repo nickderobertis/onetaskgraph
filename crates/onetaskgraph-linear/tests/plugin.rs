@@ -19,6 +19,13 @@ impl SecretResolver for Secrets {
     }
 }
 
+struct NamedSecrets;
+impl SecretResolver for NamedSecrets {
+    fn get(&self, name: &str) -> Option<SecretString> {
+        (name == "CUSTOM_OTG_TOKEN").then(|| "named-key".into())
+    }
+}
+
 fn source(endpoint: &str) -> Box<dyn TaskSource> {
     onetaskgraph_linear::Plugin
         .build(
@@ -173,6 +180,15 @@ fn factory_validates_config_and_missing_credentials() {
     let rendered = format!("{:?}", onetaskgraph_linear::LinearConfig::default());
     assert!(!rendered.contains("fixture-key"));
     assert_eq!(onetaskgraph_linear::Plugin.kind(), "linear");
+    assert!(
+        onetaskgraph_linear::Plugin
+            .build(
+                &name,
+                &serde_json::json!({"api_key_env":"CUSTOM_OTG_TOKEN"}),
+                &NamedSecrets,
+            )
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -201,6 +217,21 @@ async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
         .unwrap();
     assert_eq!(page.items[0].title, "Fixture issue");
     assert_eq!(page.items[0].status.name, "In Progress");
+    assert_eq!(page.items[0].content.as_deref(), Some("Recorded body"));
+    assert_eq!(page.items[0].project.as_ref().unwrap().0, "p1");
+    assert_eq!(page.items[0].labels[0].color.as_deref(), Some("#ff0000"));
+    assert_eq!(
+        page.items[0].url.as_deref(),
+        Some("https://linear.app/acme/issue/ENG-1")
+    );
+    assert_eq!(
+        page.items[0].created_at.unwrap().to_rfc3339(),
+        "2026-08-01T12:00:00+00:00"
+    );
+    assert_eq!(
+        page.items[0].updated_at.unwrap().to_rfc3339(),
+        "2026-08-02T12:00:00+00:00"
+    );
     assert_eq!(page.next.unwrap().0, "next-1");
     let wire = request.recv().unwrap();
     assert!(wire.contains("issues(first:$first"));
@@ -223,6 +254,16 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
         .await
         .unwrap();
     assert_eq!(projects.items[0].title, "Fixture project");
+    assert_eq!(projects.items[0].content.as_deref(), Some("Project body"));
+    assert_eq!(
+        projects.items[0].labels[0].color.as_deref(),
+        Some("#00ff00")
+    );
+    assert_eq!(
+        projects.items[0].url.as_deref(),
+        Some("https://linear.app/acme/project/p1")
+    );
+    assert!(projects.items[0].created_at.is_some() && projects.items[0].updated_at.is_some());
     let (endpoint, _) = server("200 OK", "", include_str!("fixtures/labels.json"));
     assert_eq!(
         source(&endpoint)
@@ -298,11 +339,37 @@ async fn rate_limit_carries_retry_hint() {
 }
 
 #[tokio::test]
+async fn graphql_rate_limit_uses_http_hint_and_viewer_id_is_validated() {
+    let (endpoint, _) = server(
+        "200 OK",
+        "Retry-After: 23\r\n",
+        r#"{"errors":[{"message":"slow","extensions":{"code":"RATELIMITED"}}]}"#,
+    );
+    assert_eq!(
+        source(&endpoint).health().await.unwrap_err(),
+        SourceError::RateLimited {
+            retry_after_seconds: Some(23)
+        }
+    );
+    for body in [
+        r#"{"data":{"viewer":{}}}"#,
+        r#"{"data":{"viewer":{"id":7}}}"#,
+    ] {
+        let (endpoint, _) = server("200 OK", "", body);
+        assert!(matches!(
+            source(&endpoint).health().await.unwrap_err(),
+            SourceError::Malformed { .. }
+        ));
+    }
+}
+
+#[tokio::test]
 async fn item_reads_and_transport_error_boundaries_are_exercised() {
     let name = SourceName::new("work").unwrap();
     for config in [
         serde_json::json!({"api_key_env":""}),
         serde_json::json!({"api_key_env":"lowercase"}),
+        serde_json::json!({"api_key_env":"123_INVALID"}),
         serde_json::json!({"endpoint":""}),
         serde_json::json!({"endpoint":"not a url"}),
         serde_json::json!({"endpoint":"file:///tmp/x"}),
@@ -572,6 +639,19 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
         .unwrap();
     configured
         .query_tasks(&TaskQuery::default(), &request)
+        .await
+        .unwrap();
+    assert!(wire.recv().unwrap().contains("eqIgnoreCase"));
+    let (endpoint, wire) = server("200 OK", "", include_str!("fixtures/projects.json"));
+    let configured = onetaskgraph_linear::Plugin
+        .build(
+            &SourceName::new("team-projects").unwrap(),
+            &serde_json::json!({"endpoint":endpoint,"team":"ENG"}),
+            &Secrets(Some("x".into())),
+        )
+        .unwrap();
+    configured
+        .query_projects(&ProjectQuery::default(), &request)
         .await
         .unwrap();
     assert!(wire.recv().unwrap().contains("eqIgnoreCase"));

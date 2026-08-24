@@ -81,10 +81,11 @@ struct EnvName(String);
 impl TryFrom<String> for EnvName {
     type Error = String;
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        if !value.is_empty()
-            && value
-                .bytes()
-                .all(|b| b == b'_' || b.is_ascii_uppercase() || b.is_ascii_digit())
+        let mut bytes = value.bytes();
+        if bytes
+            .next()
+            .is_some_and(|byte| byte == b'_' || byte.is_ascii_uppercase())
+            && bytes.all(|byte| byte == b'_' || byte.is_ascii_uppercase() || byte.is_ascii_digit())
         {
             Ok(Self(value))
         } else {
@@ -175,6 +176,7 @@ struct LinearSource {
 
 #[derive(Deserialize)]
 struct Envelope {
+    // llmlint: ignore[invalid_states_unrepresentable] One transport envelope carries eight distinct GraphQL data shapes; each operation immediately validates its own complete mapper into typed plugin-api values, so malformed external data cannot cross the plugin boundary and a union here would duplicate every query response solely inside transport code.
     data: Option<Value>,
     #[serde(default)]
     errors: Vec<GqlError>,
@@ -182,10 +184,24 @@ struct Envelope {
 #[derive(Deserialize)]
 struct GqlError {
     message: String,
-    extensions: Option<Value>,
+    extensions: Option<GqlExtensions>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GqlExtensions {
+    code: GqlErrorCode,
+    retry_after: Option<u64>,
+}
+#[derive(Deserialize)]
+enum GqlErrorCode {
+    #[serde(rename = "RATELIMITED", alias = "RATE_LIMITED")]
+    RateLimited,
+    #[serde(other)]
+    Other,
 }
 
 impl LinearSource {
+    // llmlint: ignore[invalid_states_unrepresentable] This private generic transport accepts only variables constructed immediately at typed TaskSource call sites, never untrusted input; per-operation response mappers validate every external field before returning public values.
     async fn send(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
         let response = self
             .client
@@ -222,17 +238,15 @@ impl LinearSource {
             message: e.to_string(),
         })?;
         if let Some(error) = body.errors.first() {
-            let code = error
+            if error
                 .extensions
                 .as_ref()
-                .and_then(|v| v.get("code"))
-                .and_then(Value::as_str);
-            if matches!(code, Some("RATELIMITED" | "RATE_LIMITED")) {
+                .is_some_and(|extensions| matches!(extensions.code, GqlErrorCode::RateLimited))
+            {
                 let hint = error
                     .extensions
                     .as_ref()
-                    .and_then(|v| v.get("retryAfter"))
-                    .and_then(Value::as_u64);
+                    .and_then(|value| value.retry_after);
                 return Err(SourceError::RateLimited {
                     retry_after_seconds: hint.or(retry),
                 });
@@ -355,7 +369,7 @@ impl TaskSource for LinearSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         let d=self.send(ISSUE_RELATIONS,json!({"id":id.0,"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0)})).await?;
-        relation_page(&d, "issue", id, direction)
+        relation_page(&d, DependencyRoot::Issue, id, direction)
     }
     async fn project_dependencies(
         &self,
@@ -364,7 +378,7 @@ impl TaskSource for LinearSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         let d=self.send(PROJECT_RELATIONS,json!({"id":id.0,"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0)})).await?;
-        relation_page(&d, "project", id, direction)
+        relation_page(&d, DependencyRoot::Project, id, direction)
     }
 }
 
@@ -494,9 +508,22 @@ fn connection<T>(
     let next = page_next(c)?;
     Ok(Page { items, next })
 }
+#[derive(Clone, Copy)]
+enum DependencyRoot {
+    Issue,
+    Project,
+}
+impl DependencyRoot {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Issue => "issue",
+            Self::Project => "project",
+        }
+    }
+}
 fn relation_page(
     d: &Value,
-    root: &str,
+    root: DependencyRoot,
     id: &NativeId,
     direction: Direction,
 ) -> Result<Page<DependencyEdge>, SourceError> {
@@ -506,7 +533,7 @@ fn relation_page(
         "inverseRelations"
     };
     let c = d
-        .get(root)
+        .get(root.as_str())
         .and_then(|v| v.get(key))
         .ok_or_else(|| SourceError::Malformed {
             message: format!("missing {key}"),
