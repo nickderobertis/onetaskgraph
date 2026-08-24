@@ -12,6 +12,7 @@
       "!**/.nx",
       "!**/target",
       "!**/dist",
+      "!sdks/typescript/src/generated",
       "!**/.venv",
       "!gh-secrets.json"
     ]
