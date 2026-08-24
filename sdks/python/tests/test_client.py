@@ -110,7 +110,7 @@ def test_real_binary_response_is_rejected_against_the_wrong_contract(
 
 
 def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) -> None:
-    """Exercise every generated command method and every CLI option encoding shape."""
+    """Exercise every generated command method and representative CLI option shapes."""
     client = Client(binary, cwd=configured(tmp_path))
     assert run(
         client.task_list(
