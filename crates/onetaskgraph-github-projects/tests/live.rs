@@ -116,7 +116,7 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
     assert_eq!(capabilities.search_content, Support::Unsupported);
     assert_eq!(
         capabilities.task_dependencies,
-        DependencySupport::ForwardOnly
+        DependencySupport::BothDirections
     );
     let projects = source
         .query_projects(&ProjectQuery::default(), &page(None))

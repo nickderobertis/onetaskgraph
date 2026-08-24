@@ -14,10 +14,10 @@
 //! `ProjectV2.items` pages but has no label, status, orphan, or content-search arguments.
 //! Project listing alone is native; the plugin ignores every unsupported query predicate so the
 //! engine can compensate from the wider result. Dependencies traverse underlying `Issue` nodes.
-//! `Issue.blockedBy` supplies forward `Blocks` edges. GitHub documents `Issue.blocking` as being
-//! removed and always empty, so both dependency capabilities are `ForwardOnly`; project
-//! dependency reads aggregate the configured project's issue edges. Projects v2 has no native
-//! project-to-project relationship, so those aggregate edges use each blocker's project ID.
+//! `Issue.blockedBy` supplies `DependsOn` edges and `Issue.blocking` supplies `DependedOnBy`
+//! edges, so both dependency capabilities are `BothDirections`; project dependency reads
+//! aggregate the configured project's issue edges. Projects v2 has no native project-to-project
+//! relationship, so those aggregate edges use the related issues' `projectItems.project.id`.
 //!
 //! Live verification is non-destructive by construction: [`TaskSource`] has read operations only
 //! and this crate sends GraphQL `query` operations only, with no mutation for setup or teardown.
@@ -455,12 +455,7 @@ impl GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         validate_page(page)?;
-        if direction == Direction::DependedOnBy {
-            return Err(SourceError::Refused {
-                message: "GitHub's Issue.blocking field is being removed and always empty; reverse traversal must be emulated by the engine".into(),
-            });
-        }
-        const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}}}}"#;
+        const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}}}"#;
         let data = self.graphql(QUERY, json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c| c.0.as_str())})).await?;
         let node =
             data.get("node")
@@ -471,8 +466,12 @@ impl GitHubProjectsSource {
                         id.0
                     ),
                 })?;
+        let connection_name = match direction {
+            Direction::DependsOn => "blockedBy",
+            Direction::DependedOnBy => "blocking",
+        };
         let connection = node
-            .get("blockedBy")
+            .get(connection_name)
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub dependency response is missing its connection".into(),
             })?;
@@ -485,10 +484,18 @@ impl GitHubProjectsSource {
         let items = nodes
             .iter()
             .map(|value| {
-                Ok(DependencyEdge {
-                    from: NativeId(required_str(value, "id")?.into()),
-                    to: id.clone(),
-                    kind: DependencyKind::Blocks,
+                let related = NativeId(required_str(value, "id")?.into());
+                Ok(match direction {
+                    Direction::DependsOn => DependencyEdge {
+                        from: related,
+                        to: id.clone(),
+                        kind: DependencyKind::Blocks,
+                    },
+                    Direction::DependedOnBy => DependencyEdge {
+                        from: id.clone(),
+                        to: related,
+                        kind: DependencyKind::Blocks,
+                    },
                 })
             })
             .collect::<Result<Vec<_>, SourceError>>()?;
@@ -512,8 +519,8 @@ impl TaskSource for GitHubProjectsSource {
             filter_by_status: Support::Unsupported,
             search_title: Support::Unsupported,
             search_content: Support::Unsupported,
-            task_dependencies: DependencySupport::ForwardOnly,
-            project_dependencies: DependencySupport::ForwardOnly,
+            task_dependencies: DependencySupport::BothDirections,
+            project_dependencies: DependencySupport::BothDirections,
             max_page_size: MAX_PAGE_SIZE,
         }
     }
@@ -621,11 +628,6 @@ impl TaskSource for GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         validate_page(page)?;
-        if direction == Direction::DependedOnBy {
-            return Err(SourceError::Refused {
-                message: "GitHub exposes forward project dependencies through Issue.blockedBy; reverse traversal must be emulated by the engine".into(),
-            });
-        }
         let project = self.project_value(None, 1).await?;
         if required_str(&project, "id")? != id.0 {
             return Err(SourceError::Refused {
@@ -636,15 +638,18 @@ impl TaskSource for GitHubProjectsSource {
         for task in self.all_tasks().await? {
             let mut cursor = None;
             loop {
-                const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}}}pageInfo{hasNextPage endCursor}}}}}"#;
+                const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}}}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}}}pageInfo{hasNextPage endCursor}}}}"#;
                 let data = self.graphql(QUERY, json!({"id":task.id.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor: &Cursor| cursor.0.as_str()),"nestedFirst":MAX_PAGE_SIZE})).await?;
-                let connection =
-                    data.pointer("/node/blockedBy")
-                        .ok_or_else(|| SourceError::Malformed {
-                            message:
-                                "GitHub project dependency response is missing Issue.blockedBy"
-                                    .into(),
-                        })?;
+                let connection_name = match direction {
+                    Direction::DependsOn => "blockedBy",
+                    Direction::DependedOnBy => "blocking",
+                };
+                let connection = data
+                    .pointer(&format!("/node/{connection_name}"))
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "GitHub project dependency response is missing Issue.blockedBy"
+                            .into(),
+                    })?;
                 let blockers = connection
                     .get("nodes")
                     .and_then(Value::as_array)
@@ -668,10 +673,18 @@ impl TaskSource for GitHubProjectsSource {
                             "id",
                         )?;
                         if blocker_project != id.0 {
-                            edges.push(DependencyEdge {
-                                from: NativeId(blocker_project.into()),
-                                to: id.clone(),
-                                kind: DependencyKind::Blocks,
+                            let related = NativeId(blocker_project.into());
+                            edges.push(match direction {
+                                Direction::DependsOn => DependencyEdge {
+                                    from: related,
+                                    to: id.clone(),
+                                    kind: DependencyKind::Blocks,
+                                },
+                                Direction::DependedOnBy => DependencyEdge {
+                                    from: id.clone(),
+                                    to: related,
+                                    kind: DependencyKind::Blocks,
+                                },
                             });
                         }
                     }

@@ -370,7 +370,7 @@ async fn project_dependency_failures_are_explicit() {
                 &page(10)
             )
             .await,
-        Err(SourceError::Refused { .. })
+        Err(SourceError::Unavailable { .. })
     ));
     let (endpoint, handle) = server("200 OK", project_response(false), 1, "projectV2");
     assert!(matches!(
@@ -409,7 +409,7 @@ async fn walks_issue_dependencies_forward_through_graphql() {
         "blockedBy":{"nodes":[{"id":"I_blocker"}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},
         "blocking":{"nodes":[{"id":"I_dependent"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}
     }}});
-    let (endpoint, handle) = server("200 OK", response, 1, "blockedBy");
+    let (endpoint, handle) = server("200 OK", response, 2, "blockedBy");
     let source = build(&endpoint);
     let forward = source
         .task_dependencies(&NativeId("I_task".into()), Direction::DependsOn, &page(1))
@@ -425,8 +425,9 @@ async fn walks_issue_dependencies_forward_through_graphql() {
             &page(1),
         )
         .await
-        .unwrap_err();
-    assert!(matches!(reverse, SourceError::Refused { .. }));
+        .unwrap();
+    assert_eq!(reverse.items[0].from.0, "I_task");
+    assert_eq!(reverse.items[0].to.0, "I_dependent");
     handle.join().unwrap();
 }
 
