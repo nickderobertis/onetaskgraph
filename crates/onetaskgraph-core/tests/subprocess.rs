@@ -553,12 +553,11 @@ fn settings_this_host_cannot_read_are_refused_for_what_they_are_missing() {
 fn a_hosted_plugin_that_refuses_to_build_answers_with_its_own_error() {
     let answers = served(&[handshake(1, json!({"kind": "linear", "config": {}}))]);
 
-    // `linear` is registered and its source has not landed, so it refuses by name — which
-    // is the case that proves a build failure crosses the wire as the plugin's own error
-    // rather than as a transport failure.
+    // Linear has no forwarded credential, proving a build failure crosses the wire as
+    // the plugin's own authentication error rather than as a transport failure.
     assert!(answers[0]["error"].is_object(), "{answers:?}");
     assert!(
-        because(&answers[0]).contains("linear"),
+        because(&answers[0]).contains("LINEAR_API_KEY"),
         "{}",
         because(&answers[0])
     );
