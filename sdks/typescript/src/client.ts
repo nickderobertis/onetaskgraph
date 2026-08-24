@@ -13,6 +13,7 @@ import type {
   SourceListings,
 } from "./generated/models.ts";
 import { runtimeSchemas } from "./generated/schemas.ts";
+import { SCHEMA_BUNDLE_VERSION } from "./generated/models.ts";
 
 export type QueryOptions = {
   sources?: string[];
@@ -50,7 +51,7 @@ export class OnetaskgraphValidationError extends Error {
   }
 }
 
-const responseRoots = {
+const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   "config show": "EffectiveConfig",
   "sources list": "SourceListings",
   "task list": "QueryResponseOfQualifiedTask",
@@ -61,9 +62,9 @@ const responseRoots = {
   "project deps": "QueryResponseOfQualifiedEdge",
   "label list": "QueryResponseOfQualifiedLabel",
   search: "QueryResponseOfSearchHit",
-} as const;
+};
 
-export const clientCommands = ["schema", ...Object.keys(responseRoots)] as const;
+export const clientCommands: readonly string[] = binaryCommands;
 
 function packagedBinary(): string {
   const require = createRequire(import.meta.url);
@@ -210,14 +211,33 @@ export class OnetaskgraphClient {
           if (
             typeof value !== "object" ||
             value === null ||
+            !("version" in value) ||
+            value.version !== SCHEMA_BUNDLE_VERSION ||
             !("roots" in value) ||
-            !("commands" in value)
+            typeof value.roots !== "object" ||
+            value.roots === null ||
+            Array.isArray(value.roots) ||
+            Object.values(value.roots).some(
+              (schema) =>
+                typeof schema !== "object" ||
+                schema === null ||
+                !("$schema" in schema) ||
+                typeof schema.$schema !== "string",
+            ) ||
+            !("commands" in value) ||
+            !Array.isArray(value.commands) ||
+            value.commands.length !== binaryCommands.length ||
+            value.commands.some((entry, index) => entry !== binaryCommands[index])
           ) {
             reject(new OnetaskgraphValidationError(command, "invalid bundle"));
             return;
           }
         } else {
-          const root = responseRoots[command as keyof typeof responseRoots];
+          const root = responseRoots[command];
+          if (root === undefined) {
+            reject(new OnetaskgraphValidationError(command, "command has no response schema"));
+            return;
+          }
           const validate = new Ajv2020({ strict: false }).compile(runtimeSchemas[root]);
           if (!validate(value)) {
             reject(new OnetaskgraphValidationError(command, validate.errors));
@@ -228,6 +248,7 @@ export class OnetaskgraphClient {
           reject(new OnetaskgraphExecutionError(code));
           return;
         }
+        // The command-specific runtime schema has established T before this boundary returns it.
         resolvePromise(value as T);
       });
     });
@@ -235,7 +256,11 @@ export class OnetaskgraphClient {
 }
 
 export function assertCompleteCommandSurface(): void {
-  const missing = binaryCommands.filter((command) => !clientCommands.includes(command));
+  const missing = binaryCommands.filter((command) => {
+    const method = command.replace(/ ([a-z])/g, (_, letter: string) => letter.toUpperCase());
+    // Indexing is necessary because method names originate in the emitted runtime contract.
+    return typeof OnetaskgraphClient.prototype[method as keyof OnetaskgraphClient] !== "function";
+  });
   if (missing.length > 0)
     throw new Error(`client has no method for binary command '${missing[0]}'`);
 }

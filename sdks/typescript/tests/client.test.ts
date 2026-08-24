@@ -56,22 +56,48 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 test("every emitted command has a client method", async () => {
   assertCompleteCommandSurface();
-  const bundle = (await client.schema()) as { commands: string[] };
-  expect(bundle.commands).toEqual([...clientCommands]);
+  const bundle = await client.schema();
+  expect(bundle).toHaveProperty("commands", [...clientCommands]);
 });
 
 test("typed methods drive every real binary command", async () => {
   expect((await client.configShow()).settings.length).toBeGreaterThan(0);
   expect((await client.sourcesList())[0]?.source).toBe("work");
-  const tasks = await client.taskList({ sources: ["work"] });
+  const tasks = await client.taskList({
+    sources: ["work"],
+    labels: ["bug"],
+    excludeLabels: ["chore"],
+    statuses: ["todo"],
+    search: "Alpha",
+    fields: "title",
+    limit: 1,
+    project: "P-1",
+  });
   expect(tasks.items[0]?.id).toBe("work:T-1");
-  expect((await client.taskShow("work:T-1")).items[0]?.item.title).toBe("Alpha engine");
-  expect((await client.taskDeps("work:T-1")).items[0]?.to).toBe("work:T-2");
+  if (tasks.next) {
+    expect((await client.taskList({ sources: ["work"], page: tasks.next })).items).toBeArray();
+  }
+  expect((await client.taskList({ sources: ["work"], noProject: true })).items[0]?.id).toBe(
+    "work:T-2",
+  );
+  expect((await client.taskShow("work:T-1", { allowPartial: true })).items[0]?.item.title).toBe(
+    "Alpha engine",
+  );
+  expect((await client.taskDeps("work:T-2", { direction: "depended-on-by" })).items[0]?.from).toBe(
+    "work:T-1",
+  );
   expect((await client.projectList({ sources: ["work"] })).items[0]?.id).toBe("work:P-1");
-  expect((await client.projectShow("work:P-1")).items[0]?.item.title).toBe("Engine");
-  expect((await client.projectDeps("work:P-1")).items[0]?.to).toBe("work:P-2");
+  expect((await client.projectShow("work:P-1", { allowPartial: true })).items[0]?.item.title).toBe(
+    "Engine",
+  );
+  expect(
+    (await client.projectDeps("work:P-2", { direction: "depended-on-by" })).items[0]?.from,
+  ).toBe("work:P-1");
   expect((await client.labelList({ sources: ["work"] })).items[0]?.id).toBe("work:L-1");
-  expect((await client.search("Alpha", { sources: ["work"] })).items[0]?.kind).toBe("task");
+  expect(
+    (await client.search("Alpha", { sources: ["work"], fields: "title", kind: "task", limit: 1 }))
+      .items[0]?.kind,
+  ).toBe("task");
 });
 
 test("a source failure remains typed for partial and accepted-partial exits", async () => {
@@ -125,4 +151,9 @@ test("the PATH fallback drives the real binary", async () => {
 
 test("a real command failure is a typed execution error", async () => {
   expect(client.taskShow("work:absent")).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+});
+
+test("an unavailable explicit executable is a typed execution error", async () => {
+  const unavailable = new OnetaskgraphClient({ binaryPath: resolve(root, "missing-binary") });
+  expect(unavailable.taskList()).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
 });

@@ -86,6 +86,7 @@
     },
     "pack": {
       "executor": "nx:run-commands",
+      "dependsOn": ["build", "generate-check"],
       "options": { "command": "bash sdks/typescript/scripts/test-packed.sh" }
     }
   }
