@@ -106,6 +106,16 @@ test("generator rejects unsafe destinations and malformed executable output", ()
     );
     expect(invalid.status).toBe(1);
     expect(invalid.stderr).toContain("binary emitted an invalid schema bundle");
+
+    if (process.platform !== "win32") {
+      const signalled = resolve(fixtures, "signalled");
+      writeFileSync(signalled, "#!/usr/bin/env node\nprocess.kill(process.pid, 'SIGTERM');\n");
+      chmodSync(signalled, 0o755);
+      const signalFailure = generateWith(signalled, fixtures);
+      expect(signalFailure.status).toBe(1);
+      expect(signalFailure.stderr).toContain("signal SIGTERM");
+      expect(signalFailure.stderr).toContain("next: build the onetaskgraph binary");
+    }
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }

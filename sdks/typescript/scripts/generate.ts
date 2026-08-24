@@ -49,7 +49,9 @@ const emitted = spawnSync(binary, ["schema"], {
   env: binaryEnvironment,
 });
 if (emitted.status !== 0) {
-  const failure = (emitted.error?.message ?? emitted.stderr.trim()) || `exit ${emitted.status}`;
+  const failure =
+    (emitted.error?.message ?? emitted.stderr.trim()) ||
+    (emitted.signal === null ? `exit ${emitted.status}` : `signal ${emitted.signal}`);
   throw new Error(
     `could not emit the SDK contract with ${binary}: ${failure}; ` +
       "next: build the onetaskgraph binary or set ONETASKGRAPH_BIN",
