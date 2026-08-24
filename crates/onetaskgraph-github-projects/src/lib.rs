@@ -1,4 +1,26 @@
 //! A stateless onetaskgraph source over one GitHub Projects v2 project.
+//!
+//! A project maps to the configured GitHub `ProjectV2`, not a repository: one Projects v2
+//! board can contain work from several repositories and draft work from none. Project fields
+//! read `ProjectV2.id`, `title`, `shortDescription`, `url`, `createdAt`, and `updatedAt`. Tasks
+//! map from `ProjectV2Item.content` (`Issue`, `PullRequest`, or `DraftIssue`); labels read the
+//! content's `labels` connection and `ProjectV2ItemFieldLabelValue`.
+//!
+//! Status reads the item value whose `ProjectV2ItemFieldSingleSelectValue.field.name` is
+//! `Status`. Its option name is retained. The default maps Backlog, Todo/Open, In Progress/In
+//! Review, Done/Closed/Merged, and Cancelled/Canceled; `status_mapping` overrides option names
+//! case-insensitively, and all other user-defined names remain `Unknown`.
+//!
+//! `ProjectV2.items` pages but has no label, status, orphan, or content-search arguments.
+//! Project listing alone is native; the plugin ignores every unsupported query predicate so the
+//! engine can compensate from the wider result. Dependencies traverse underlying `Issue` nodes.
+//! `Issue.blockedBy` supplies forward `Blocks` edges. GitHub documents `Issue.blocking` as being
+//! removed and always empty, so both dependency capabilities are `ForwardOnly`; project
+//! dependency reads aggregate the configured project's issue edges. Projects v2 has no native
+//! project-to-project relationship, so those aggregate edges retain the underlying issue IDs.
+//!
+//! Live verification is non-destructive by construction: [`TaskSource`] has read operations only
+//! and this crate sends GraphQL `query` operations only, with no mutation for setup or teardown.
 #![deny(missing_docs)]
 
 use std::collections::BTreeMap;
@@ -20,7 +42,7 @@ pub const KIND: &str = "github-projects";
 /// GitHub's maximum connection page size.
 pub const MAX_PAGE_SIZE: u32 = 100;
 
-fn default_api_key_env() -> String {
+fn default_token_env() -> String {
     "GH_PROJECTS_TOKEN".to_owned()
 }
 fn default_endpoint() -> String {
@@ -36,8 +58,8 @@ pub struct GitHubProjectsConfig {
     /// The project number shown in its GitHub URL.
     pub project_number: u32,
     /// Environment variable containing a GitHub token with project read access.
-    #[serde(default = "default_api_key_env")]
-    pub api_key_env: String,
+    #[serde(default = "default_token_env")]
+    pub token_env: String,
     /// GraphQL endpoint. GitHub Enterprise installations may override it.
     #[serde(default = "default_endpoint")]
     pub endpoint: String,
@@ -106,9 +128,9 @@ impl GitHubProjectsSource {
                 message: "project_number must be at least 1".into(),
             });
         }
-        if config.api_key_env.trim().is_empty() {
+        if config.token_env.trim().is_empty() {
             return Err(SourceError::Config {
-                message: "api_key_env must not be empty".into(),
+                message: "token_env must not be empty".into(),
             });
         }
         let endpoint = Url::parse(&config.endpoint).map_err(|e| SourceError::Config {
@@ -126,8 +148,8 @@ impl GitHubProjectsSource {
                         .into(),
             });
         }
-        let token = secrets.get(&config.api_key_env).ok_or_else(|| SourceError::Auth {
-            message: format!("environment variable {} is not defined; set it to a GitHub token with project read access", config.api_key_env),
+        let token = secrets.get(&config.token_env).filter(|token| !token.expose_secret().is_empty()).ok_or_else(|| SourceError::Auth {
+            message: format!("environment variable {} is missing or empty; set it to a GitHub token with read:project and repository Issues read access", config.token_env),
         })?;
         Ok(Self {
             owner: config.owner,
@@ -165,14 +187,21 @@ impl GitHubProjectsSource {
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse().ok());
-        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-            return Err(SourceError::Auth {
-                message: format!("GitHub rejected the configured credential with HTTP {status}"),
-            });
-        }
-        if status == StatusCode::TOO_MANY_REQUESTS {
+        let exhausted = response
+            .headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            == Some("0");
+        if status == StatusCode::TOO_MANY_REQUESTS || exhausted {
             return Err(SourceError::RateLimited {
                 retry_after_seconds: retry_after,
+            });
+        }
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            return Err(SourceError::Auth {
+                message: format!(
+                    "GitHub rejected the configured credential with HTTP {status}; grant it read:project and repository Issues read access"
+                ),
             });
         }
         if !status.is_success() {
@@ -193,13 +222,20 @@ impl GitHubProjectsSource {
                 .filter_map(|e| e.get("message").and_then(Value::as_str))
                 .collect::<Vec<_>>()
                 .join("; ");
-            return Err(SourceError::Refused {
-                message: if messages.is_empty() {
-                    "GitHub returned GraphQL errors".into()
-                } else {
-                    messages
-                },
-            });
+            let message = if messages.is_empty() {
+                "GitHub returned GraphQL errors".into()
+            } else {
+                messages
+            };
+            let normalized = message.to_ascii_lowercase();
+            if normalized.contains("resource not accessible") || normalized.contains("scope") {
+                return Err(SourceError::Auth {
+                    message: format!(
+                        "{message}; grant GH_PROJECTS_TOKEN read:project and repository Issues read access"
+                    ),
+                });
+            }
+            return Err(SourceError::Refused { message });
         }
         body.get("data")
             .cloned()
@@ -387,7 +423,12 @@ impl GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         validate_page(page)?;
-        const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}} blocking(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}}}}"#;
+        if direction == Direction::DependedOnBy {
+            return Err(SourceError::Refused {
+                message: "GitHub's Issue.blocking field is being removed and always empty; reverse traversal must be emulated by the engine".into(),
+            });
+        }
+        const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}}}}"#;
         let data = self.graphql(QUERY, json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c| c.0.as_str())})).await?;
         let node =
             data.get("node")
@@ -398,30 +439,21 @@ impl GitHubProjectsSource {
                         id.0
                     ),
                 })?;
-        let connection = match direction {
-            Direction::DependsOn => node.get("blockedBy"),
-            Direction::DependedOnBy => node.get("blocking"),
-        }
-        .ok_or_else(|| SourceError::Malformed {
-            message: "GitHub dependency response is missing its connection".into(),
-        })?;
+        let connection = node
+            .get("blockedBy")
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub dependency response is missing its connection".into(),
+            })?;
         let items = connection
             .get("nodes")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .filter_map(|v| v.get("id").and_then(Value::as_str))
-            .map(|other| match direction {
-                Direction::DependsOn => DependencyEdge {
-                    from: id.clone(),
-                    to: NativeId(other.into()),
-                    kind: DependencyKind::Blocks,
-                },
-                Direction::DependedOnBy => DependencyEdge {
-                    from: NativeId(other.into()),
-                    to: id.clone(),
-                    kind: DependencyKind::Blocks,
-                },
+            .map(|other| DependencyEdge {
+                from: id.clone(),
+                to: NativeId(other.into()),
+                kind: DependencyKind::Blocks,
             })
             .collect();
         Ok(Page {
@@ -444,8 +476,8 @@ impl TaskSource for GitHubProjectsSource {
             filter_by_status: Support::Unsupported,
             search_title: Support::Unsupported,
             search_content: Support::Unsupported,
-            task_dependencies: DependencySupport::BothDirections,
-            project_dependencies: DependencySupport::BothDirections,
+            task_dependencies: DependencySupport::ForwardOnly,
+            project_dependencies: DependencySupport::ForwardOnly,
             max_page_size: MAX_PAGE_SIZE,
         }
     }
@@ -540,17 +572,44 @@ impl TaskSource for GitHubProjectsSource {
     async fn project_dependencies(
         &self,
         id: &NativeId,
-        _direction: Direction,
+        direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         validate_page(page)?;
+        if direction == Direction::DependedOnBy {
+            return Err(SourceError::Refused {
+                message: "GitHub exposes forward project dependencies through Issue.blockedBy; reverse traversal must be emulated by the engine".into(),
+            });
+        }
         let project = self.project_value(None, 1).await?;
         if required_str(&project, "id")? != id.0 {
             return Err(SourceError::Refused {
                 message: format!("GitHub project {} was not found", id.0),
             });
         }
-        Ok(Page::last(vec![]))
+        let mut edges = Vec::new();
+        for task in self.all_tasks().await? {
+            let mut cursor = None;
+            loop {
+                let dependencies = self
+                    .dependencies(
+                        &task.id,
+                        Direction::DependsOn,
+                        &PageRequest {
+                            cursor,
+                            limit: MAX_PAGE_SIZE,
+                        },
+                    )
+                    .await?;
+                edges.extend(dependencies.items);
+                cursor = dependencies.next;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+        }
+        let offset = numeric_cursor(page.cursor.as_ref())?;
+        Ok(offset_page(edges, offset, page.limit as usize))
     }
 }
 

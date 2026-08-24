@@ -91,11 +91,42 @@ fn raw_server(status: &str, body: &str) -> (String, thread::JoinHandle<()>) {
     (format!("http://{address}/graphql"), handle)
 }
 
+fn sequence_server(bodies: Vec<Value>) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        for body in bodies {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let count = stream.read(&mut chunk).unwrap();
+                bytes.extend_from_slice(&chunk[..count]);
+                if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let body = body.to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (format!("http://{address}/graphql"), handle)
+}
+
 fn project_response(has_next: bool) -> Value {
-    json!({"data":{"organization":{"projectV2":{
-        "id":"PVT_project","title":"Roadmap","shortDescription":"Delivery plan","url":"https://github.example/projects/7","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-02-01T00:00:00Z","closed":false,
-        "items":{"nodes":[{"id":"PVTI_1","fieldValues":{"nodes":[{"name":"Doing","field":{"name":"Status"}},{"labels":{"nodes":[{"id":"L_field","name":"team","color":"00ff00"}]}}]},"content":{"id":"I_task","title":"Ship it","body":"details","url":"https://github.example/issues/1","createdAt":"2026-01-02T00:00:00Z","updatedAt":"2026-01-03T00:00:00Z","state":"OPEN","labels":{"nodes":[{"id":"L_bug","name":"bug","color":"ff0000"}]}}}],"pageInfo":{"hasNextPage":has_next,"endCursor":if has_next { Some("cursor-2") } else { None::<&str> }}}
-    }},"user":{"projectV2":null}}})
+    let mut fixture: Value = serde_json::from_str(include_str!("fixtures/project.json")).unwrap();
+    let page = &mut fixture["data"]["organization"]["projectV2"]["items"]["pageInfo"];
+    page["hasNextPage"] = json!(has_next);
+    page["endCursor"] = if has_next {
+        json!("cursor-2")
+    } else {
+        Value::Null
+    };
+    fixture
 }
 
 fn build(endpoint: &str) -> Box<dyn onetaskgraph_plugin_api::TaskSource> {
@@ -169,7 +200,7 @@ fn config_schema_is_strict_and_build_validates_inputs_and_secret() {
         json!({}),
         json!({"owner":"","project_number":1}),
         json!({"owner":"org","project_number":0}),
-        json!({"owner":"org","project_number":1,"api_key_env":""}),
+        json!({"owner":"org","project_number":1,"token_env":""}),
         json!({"owner":"org","project_number":1,"endpoint":"not a url"}),
         json!({"owner":"org","project_number":1,"endpoint":"http://example.com"}),
         json!({"owner":"org","project_number":1,"typo":true}),
@@ -194,6 +225,20 @@ fn config_schema_is_strict_and_build_validates_inputs_and_secret() {
     assert!(
         matches!(result, Err(SourceError::Auth { ref message }) if message.contains("GH_PROJECTS_TOKEN") && message.contains("work"))
     );
+    struct EmptyValue;
+    impl SecretResolver for EmptyValue {
+        fn get(&self, _: &str) -> Option<SecretString> {
+            Some("".into())
+        }
+    }
+    assert!(matches!(
+        plugin.build(
+            &SourceName::new("work").unwrap(),
+            &json!({"owner":"org","project_number":1}),
+            &EmptyValue
+        ),
+        Err(SourceError::Auth { .. })
+    ));
 }
 
 #[tokio::test]
@@ -207,40 +252,36 @@ async fn maps_authentication_failure_without_disclosing_the_token() {
 }
 
 #[tokio::test]
-async fn project_dependencies_are_empty_but_validate_the_real_project() {
-    let (endpoint, handle) = server("200 OK", project_response(false), 2, "projectV2");
+async fn project_dependencies_aggregate_underlying_issue_edges() {
+    let dependencies: Value =
+        serde_json::from_str(include_str!("fixtures/dependencies.json")).unwrap();
+    let (endpoint, handle) = sequence_server(vec![
+        project_response(false),
+        project_response(false),
+        dependencies,
+    ]);
     let source = build(&endpoint);
-    assert!(
-        source
-            .project_dependencies(
-                &NativeId("PVT_project".into()),
-                Direction::DependsOn,
-                &page(10)
-            )
-            .await
-            .unwrap()
-            .items
-            .is_empty()
-    );
-    let error = source
+    let edges = source
         .project_dependencies(
-            &NativeId("missing".into()),
-            Direction::DependedOnBy,
+            &NativeId("PVT_project".into()),
+            Direction::DependsOn,
             &page(10),
         )
         .await
-        .unwrap_err();
-    assert!(matches!(error, SourceError::Refused { .. }));
+        .unwrap();
+    assert_eq!(edges.items.len(), 1);
+    assert_eq!(edges.items[0].from.0, "I_task");
+    assert_eq!(edges.items[0].to.0, "I_blocker");
     handle.join().unwrap();
 }
 
 #[tokio::test]
-async fn walks_issue_dependencies_in_both_directions_through_graphql() {
+async fn walks_issue_dependencies_forward_through_graphql() {
     let response = json!({"data":{"node":{
         "blockedBy":{"nodes":[{"id":"I_blocker"}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},
         "blocking":{"nodes":[{"id":"I_dependent"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}
     }}});
-    let (endpoint, handle) = server("200 OK", response, 2, "blockedBy");
+    let (endpoint, handle) = server("200 OK", response, 1, "blockedBy");
     let source = build(&endpoint);
     let forward = source
         .task_dependencies(&NativeId("I_task".into()), Direction::DependsOn, &page(1))
@@ -256,9 +297,8 @@ async fn walks_issue_dependencies_in_both_directions_through_graphql() {
             &page(1),
         )
         .await
-        .unwrap();
-    assert_eq!(reverse.items[0].from.0, "I_dependent");
-    assert_eq!(reverse.items[0].to.0, "I_task");
+        .unwrap_err();
+    assert!(matches!(reverse, SourceError::Refused { .. }));
     handle.join().unwrap();
 }
 
@@ -354,6 +394,11 @@ async fn maps_transport_http_json_and_graphql_failures() {
         ("500 Internal Server Error", "{}", "unavailable"),
         ("200 OK", "not-json", "malformed"),
         ("200 OK", r#"{"errors":[{"message":"denied"}]}"#, "refused"),
+        (
+            "200 OK",
+            r#"{"errors":[{"message":"Resource not accessible by integration scope"}]}"#,
+            "auth",
+        ),
         ("200 OK", r#"{"errors":[{}]}"#, "refused"),
         ("200 OK", "{}", "malformed"),
     ] {
@@ -363,6 +408,7 @@ async fn maps_transport_http_json_and_graphql_failures() {
             "rate" => matches!(error, SourceError::RateLimited { .. }),
             "unavailable" => matches!(error, SourceError::Unavailable { .. }),
             "refused" => matches!(error, SourceError::Refused { .. }),
+            "auth" => matches!(error, SourceError::Auth { .. }),
             _ => matches!(error, SourceError::Malformed { .. }),
         });
         handle.join().unwrap();
