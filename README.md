@@ -20,10 +20,80 @@ Two properties make it different from a lowest-common-denominator wrapper:
   if any file written during a run contains your data, and an assertion that the same
   query asked twice reaches the source twice.
 
-> **Status.** The plugin contract, the workspace, the gate and the configuration layer are
-> in place. The `in-memory` source is complete; `local-md`, `linear` and `github-projects`
-> are registered and refuse with a clear message until their nodes land. The binary answers
-> `--help`, `--version`, `schema` and `config show`; the query verbs arrive with the engine.
+> **Status.** The plugin contract, the workspace, the gate, the configuration layer and the
+> query engine are in place, and the binary answers every verb below. The `in-memory`
+> source is complete; `local-md`, `linear` and `github-projects` are registered and refuse
+> with a clear message until their nodes land — and a configuration naming one of them
+> costs you that source, not the query.
+
+## Using it
+
+```bash
+onetaskgraph sources list
+
+onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
+                       [--status S]... [--project P | --no-project]
+                       [--search TEXT] [--in title|content|both]
+                       [--limit N] [--page TOKEN] [--explain] [--allow-partial] [--json]
+onetaskgraph task show <ID>
+onetaskgraph task deps <ID> [--direction depends-on|depended-on-by]
+
+onetaskgraph project list / show / deps          # the same flags, minus the project filter
+onetaskgraph label list [--source S]...
+onetaskgraph search <TEXT> [--in ...] [--kind task|project|both]
+```
+
+An `<ID>` is qualified: `work:ENG-142`. Repeating `--label` narrows — a second one is a
+second requirement — and `--not-label` excludes. `--project` takes a qualified id, which
+narrows the query to that project's own source, or a bare native id, which is asked of
+every selected source.
+
+### Seeing which plan you got
+
+`--explain` renders the plan the query ran, per source:
+
+```
+$ onetaskgraph task list --label bug --explain
+work:ENG-142   in-progress  Rate-limit the sync loop
+notes:2026-08  todo         Write up the migration
+
+plan:
+  work (linear)  1 page(s)
+    pushed down: label
+  notes (local-md)  3 page(s)
+    applied locally: label
+```
+
+Linear filtered server-side; the folder of Markdown could not, so the engine pulled pages
+and narrowed them itself. Both answers are correct and you can see which you got.
+`--json` carries the same plan as a field, so a script does not have to parse the prose.
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success — every source asked, every source answered. |
+| `1` | The command failed while running: an id that names nothing, a configuration it will not run on, a source name nothing configures. |
+| `2` | The invocation itself was wrong — an unknown flag, a value out of range. |
+| `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. |
+
+`--allow-partial` says a partial answer is acceptable and turns `4` into `0`. Nothing else
+does: a run that lost a source never exits `0` unless you asked for that.
+
+### Paging
+
+`--limit N` gives you a page and, when there is more, the token for the next one:
+
+```bash
+onetaskgraph task list --limit 20
+# ... rows ...
+# next page: --page 5b7b22736f7572...
+```
+
+Rows are interleaved across the selected sources — one from each in configured-name order,
+then the next from each — and within a source they keep that source's own order. The token
+is the engine's own; a source's cursor travels inside it untouched, and a walk returns
+every row exactly once whatever page size you choose.
 
 ## Install
 

@@ -1,0 +1,613 @@
+//! The journeys, written once and run against every row of the fixture table.
+//!
+//! Every one of them drives the compiled binary as a subprocess. Where a journey asserts
+//! on the plan as well as the rows, it asserts what *this row declares* — so the same
+//! journey proves that a source applying a predicate natively has it pushed down and that
+//! a source applying none of them still returns the correct rows.
+
+use std::process::Output;
+
+use crate::common::{Sandbox, stderr, stdout};
+use crate::fixtures::{Fixture, ROWS, Row, SOURCE, qualified};
+
+/// A sandbox holding this row's configuration document and nothing else.
+fn host(row: &Row) -> Sandbox {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&row.document(&sandbox));
+    sandbox
+}
+
+/// Run the binary in `sandbox` and return what it did.
+fn run(sandbox: &Sandbox, arguments: &[&str]) -> Output {
+    sandbox
+        .command()
+        .args(arguments)
+        .assert()
+        .get_output()
+        .clone()
+}
+
+/// Run the binary and insist it succeeded, quoting what it said if it did not.
+fn ok(row: &Row, sandbox: &Sandbox, arguments: &[&str]) -> String {
+    let output = run(sandbox, arguments);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}: `onetaskgraph {}` exited {:?}\n{}",
+        row.name,
+        arguments.join(" "),
+        output.status.code(),
+        stderr(&output)
+    );
+    stdout(&output)
+}
+
+/// The qualified ids in a rendered list, in order.
+///
+/// The id is the first column of every list this binary prints, which is what makes one
+/// reader enough for tasks, projects, labels and dependency edges.
+fn listed(rendered: &str) -> Vec<String> {
+    rendered
+        .lines()
+        .take_while(|line| !line.trim().is_empty())
+        .filter_map(|line| line.split_whitespace().next())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The ids this row's source is expected to answer with.
+fn ours(natives: &[&str]) -> Vec<String> {
+    natives
+        .iter()
+        .map(|native| qualified(SOURCE, native))
+        .collect()
+}
+
+/// Assert the rendered plan says `outcome` covers `predicate` for this row's source.
+fn plan_says(row: &Row, rendered: &str, outcome: &str, predicate: &str) {
+    let line = rendered
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with(&format!("{outcome}:")))
+        .unwrap_or_else(|| {
+            panic!(
+                "{}: the plan has no `{outcome}:` line:\n{rendered}",
+                row.name
+            )
+        });
+    assert!(
+        line.contains(predicate),
+        "{}: the plan's `{outcome}` line does not name {predicate}:\n{rendered}",
+        row.name
+    );
+}
+
+/// Every row that can be configured today.
+fn ready() -> impl Iterator<Item = &'static Row> {
+    ROWS.iter()
+        .filter(|row| matches!(row.fixture, Fixture::Ready(_)))
+}
+
+#[test]
+fn every_source_lists_its_tasks_and_shows_one_by_its_qualified_id() {
+    for row in ready() {
+        let sandbox = host(row);
+
+        let listing = ok(row, &sandbox, &["task", "list"]);
+        assert_eq!(
+            listed(&listing),
+            ours(&["T-1", "T-2", "T-3", "T-4"]),
+            "{}: every task, in the source's own order",
+            row.name
+        );
+        assert!(
+            listing.contains("Alpha engine") && listing.contains("in-progress"),
+            "{}: a list carries each task's title and normalised status:\n{listing}",
+            row.name
+        );
+
+        let shown = ok(row, &sandbox, &["task", "show", &qualified(SOURCE, "T-1")]);
+        for expected in [
+            "Alpha engine",
+            "todo (Todo)",
+            "bug, core",
+            "the engine core",
+        ] {
+            assert!(
+                shown.contains(expected),
+                "{}: `task show` omits {expected}:\n{shown}",
+                row.name
+            );
+        }
+        assert!(
+            shown.contains(&format!("project:  {}", qualified(SOURCE, "P-1"))),
+            "{}: a task's project is qualified too:\n{shown}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn every_source_lists_its_projects_and_shows_one_by_its_qualified_id() {
+    for row in ready() {
+        let sandbox = host(row);
+
+        let listing = ok(row, &sandbox, &["project", "list"]);
+        assert_eq!(listed(&listing), ours(&["P-1", "P-2"]), "{}", row.name);
+
+        let shown = ok(
+            row,
+            &sandbox,
+            &["project", "show", &qualified(SOURCE, "P-1")],
+        );
+        assert!(shown.contains("Engine"), "{}: {shown}", row.name);
+        assert!(
+            shown.contains("in-progress (Doing)"),
+            "{}: {shown}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn a_task_in_no_project_is_listed_by_default_and_can_be_selected_on_its_own() {
+    for row in ready() {
+        let sandbox = host(row);
+        let declared = row.declared().expect("a ready row declares");
+
+        let all = ok(row, &sandbox, &["task", "list"]);
+        assert!(
+            listed(&all).contains(&qualified(SOURCE, "T-3")),
+            "{}: an orphan is not an edge case; it is listed by default",
+            row.name
+        );
+
+        let orphans = ok(
+            row,
+            &sandbox,
+            &["task", "list", "--no-project", "--explain"],
+        );
+        assert_eq!(listed(&orphans), ours(&["T-3"]), "{}", row.name);
+        plan_says(
+            row,
+            &orphans,
+            if declared.orphan_tasks {
+                "pushed down"
+            } else {
+                "applied locally"
+            },
+            "project",
+        );
+
+        // The other way round: tasks of one project, qualified.
+        let of_project = ok(
+            row,
+            &sandbox,
+            &["task", "list", "--project", &qualified(SOURCE, "P-1")],
+        );
+        assert_eq!(listed(&of_project), ours(&["T-1", "T-2"]), "{}", row.name);
+    }
+}
+
+#[test]
+fn every_source_lists_the_labels_it_knows() {
+    for row in ready() {
+        let listing = ok(row, &host(row), &["label", "list"]);
+        assert_eq!(
+            listed(&listing),
+            ours(&["L-1", "L-2", "L-3"]),
+            "{}",
+            row.name
+        );
+        assert!(listing.contains("chore"), "{}: {listing}", row.name);
+    }
+}
+
+#[test]
+fn filtering_by_label_answers_the_same_rows_whoever_applies_the_predicate() {
+    for row in ready() {
+        let sandbox = host(row);
+        let declared = row.declared().expect("a ready row declares");
+        let outcome = if declared.filter_by_label {
+            "pushed down"
+        } else {
+            "applied locally"
+        };
+
+        let one = ok(
+            row,
+            &sandbox,
+            &["task", "list", "--label", "bug", "--explain"],
+        );
+        assert_eq!(listed(&one), ours(&["T-1", "T-3"]), "{}", row.name);
+        plan_says(row, &one, outcome, "label");
+
+        // Several at once narrows rather than widens: a second `--label` is a second
+        // requirement.
+        let several = ok(
+            row,
+            &sandbox,
+            &["task", "list", "--label", "bug", "--label", "core"],
+        );
+        assert_eq!(listed(&several), ours(&["T-1"]), "{}", row.name);
+
+        let excluded = ok(row, &sandbox, &["task", "list", "--not-label", "bug"]);
+        assert_eq!(listed(&excluded), ours(&["T-2", "T-4"]), "{}", row.name);
+    }
+}
+
+#[test]
+fn filtering_by_status_category_answers_the_same_rows_whoever_applies_the_predicate() {
+    for row in ready() {
+        let sandbox = host(row);
+        let declared = row.declared().expect("a ready row declares");
+
+        let todo = ok(
+            row,
+            &sandbox,
+            &["task", "list", "--status", "todo", "--explain"],
+        );
+        assert_eq!(listed(&todo), ours(&["T-1", "T-3"]), "{}", row.name);
+        plan_says(
+            row,
+            &todo,
+            if declared.filter_by_status {
+                "pushed down"
+            } else {
+                "applied locally"
+            },
+            "status",
+        );
+
+        let several = ok(
+            row,
+            &sandbox,
+            &["task", "list", "--status", "todo", "--status", "done"],
+        );
+        assert_eq!(
+            listed(&several),
+            ours(&["T-1", "T-2", "T-3"]),
+            "{}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn searching_covers_titles_bodies_or_either_over_tasks_and_projects() {
+    for row in ready() {
+        let sandbox = host(row);
+        let declared = row.declared().expect("a ready row declares");
+
+        for (fields, predicate, native, expected) in [
+            ("title", "search-title", declared.search_title, vec!["T-1"]),
+            (
+                "content",
+                "search-content",
+                declared.search_content,
+                vec!["T-2"],
+            ),
+        ] {
+            let found = ok(
+                row,
+                &sandbox,
+                &[
+                    "task",
+                    "list",
+                    "--search",
+                    "alpha",
+                    "--in",
+                    fields,
+                    "--explain",
+                ],
+            );
+            assert_eq!(listed(&found), ours(&expected), "{} in {fields}", row.name);
+            plan_says(
+                row,
+                &found,
+                if native {
+                    "pushed down"
+                } else {
+                    "applied locally"
+                },
+                predicate,
+            );
+        }
+
+        // Either: a source that cannot search *both* halves must not be asked at all, or
+        // the body-only match would be dropped — a narrower answer than the truth.
+        let either = ok(
+            row,
+            &sandbox,
+            &["task", "list", "--search", "alpha", "--in", "both"],
+        );
+        assert_eq!(listed(&either), ours(&["T-1", "T-2"]), "{}", row.name);
+
+        // And over projects, through the verb that searches both entities.
+        let projects = ok(row, &sandbox, &["search", "alpha", "--kind", "project"]);
+        assert_eq!(
+            listed(&projects),
+            ["project"],
+            "{}: a search hit says which entity matched\n{projects}",
+            row.name
+        );
+        assert!(projects.contains(&qualified(SOURCE, "P-2")), "{}", row.name);
+
+        let both = ok(row, &sandbox, &["search", "alpha", "--kind", "both"]);
+        assert!(
+            both.contains(&qualified(SOURCE, "T-1")) && both.contains(&qualified(SOURCE, "P-2")),
+            "{}: searching both entities returns both:\n{both}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn task_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itself() {
+    for row in ready() {
+        let sandbox = host(row);
+        let declared = row.declared().expect("a ready row declares");
+
+        let forward = ok(
+            row,
+            &sandbox,
+            &["task", "deps", &qualified(SOURCE, "T-1"), "--explain"],
+        );
+        assert_eq!(listed(&forward), ours(&["T-1"]), "{}", row.name);
+        assert!(
+            forward.contains(&format!("blocks  {}", qualified(SOURCE, "T-2"))),
+            "{}: an edge names both ends and what it means:\n{forward}",
+            row.name
+        );
+
+        let reverse = ok(
+            row,
+            &sandbox,
+            &[
+                "task",
+                "deps",
+                &qualified(SOURCE, "T-2"),
+                "--direction",
+                "depended-on-by",
+                "--explain",
+            ],
+        );
+        assert_eq!(
+            listed(&reverse),
+            ours(&["T-1", "T-3", "T-4"]),
+            "{}: three tasks depend on T-2",
+            row.name
+        );
+        plan_says(
+            row,
+            &reverse,
+            if declared.reverse_task_dependencies {
+                "pushed down"
+            } else {
+                "emulated"
+            },
+            "reverse-dependencies",
+        );
+    }
+}
+
+#[test]
+fn project_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itself() {
+    for row in ready() {
+        let sandbox = host(row);
+        let declared = row.declared().expect("a ready row declares");
+
+        let forward = ok(
+            row,
+            &sandbox,
+            &["project", "deps", &qualified(SOURCE, "P-1")],
+        );
+        assert!(
+            forward.contains(&qualified(SOURCE, "P-2")),
+            "{}: {forward}",
+            row.name
+        );
+
+        let reverse = ok(
+            row,
+            &sandbox,
+            &[
+                "project",
+                "deps",
+                &qualified(SOURCE, "P-2"),
+                "--direction",
+                "depended-on-by",
+                "--explain",
+            ],
+        );
+        assert_eq!(listed(&reverse), ours(&["P-1"]), "{}", row.name);
+        plan_says(
+            row,
+            &reverse,
+            if declared.reverse_project_dependencies {
+                "pushed down"
+            } else {
+                "emulated"
+            },
+            "reverse-dependencies",
+        );
+    }
+}
+
+#[test]
+fn a_limit_smaller_than_the_result_set_walks_to_exhaustion_in_a_stable_order() {
+    for row in ready() {
+        let sandbox = host(row);
+        let whole = listed(&ok(row, &sandbox, &["task", "list"]));
+
+        for limit in ["1", "3"] {
+            let mut walked = Vec::new();
+            let mut token: Option<String> = None;
+            for step in 0..10 {
+                let mut arguments = vec!["task", "list", "--limit", limit];
+                if let Some(page) = &token {
+                    arguments.push("--page");
+                    arguments.push(page);
+                }
+                let rendered = ok(row, &sandbox, &arguments);
+                walked.extend(listed(&rendered));
+                token = rendered
+                    .lines()
+                    .find_map(|line| line.strip_prefix("next page: --page "))
+                    .map(str::to_owned);
+                if token.is_none() {
+                    break;
+                }
+                assert!(step < 9, "{}: a four-row walk must terminate", row.name);
+            }
+            assert_eq!(
+                walked, whole,
+                "{}: walking at --limit {limit} must return every row exactly once, in \
+                 the order one page returns them",
+                row.name
+            );
+        }
+    }
+}
+
+#[test]
+fn a_plugin_whose_source_has_not_landed_says_so_and_leaves_the_command_usable() {
+    // A `Pending` row is a journey, not a placeholder: its plugin is registered, so a
+    // configuration naming it is valid, and what a user must get is that plugin's own
+    // message rather than "unknown plugin" — and exit 4, because this is one source
+    // failing rather than the command being wrong.
+    for row in ROWS
+        .iter()
+        .filter(|row| matches!(row.fixture, Fixture::Pending))
+    {
+        let sandbox = host(row);
+        let output = run(&sandbox, &["task", "list"]);
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "{}: a source that cannot be built is a partial answer\n{}",
+            row.name,
+            stderr(&output)
+        );
+        let complaint = stderr(&output);
+        assert!(
+            complaint.contains(SOURCE) && complaint.contains("not implemented yet"),
+            "{}: the plugin's own message must reach the user:\n{complaint}",
+            row.name
+        );
+        assert!(
+            complaint.contains("--allow-partial"),
+            "{}: and a suggested next action:\n{complaint}",
+            row.name
+        );
+
+        let allowed = run(&sandbox, &["task", "list", "--allow-partial"]);
+        assert_eq!(allowed.status.code(), Some(0), "{}", row.name);
+    }
+}
+
+#[test]
+fn a_shown_item_carries_the_fields_the_source_gave_it_and_says_when_it_has_none() {
+    for row in ready() {
+        let sandbox = host(row);
+
+        let with_url = ok(row, &sandbox, &["task", "show", &qualified(SOURCE, "T-1")]);
+        assert!(
+            with_url.contains("url:") && with_url.contains("https://example.invalid/T-1"),
+            "{}: a task's url is worth showing when the source has one:\n{with_url}",
+            row.name
+        );
+
+        // An orphan says so rather than leaving the row out, which would read as a task
+        // whose project the renderer forgot.
+        let orphan = ok(row, &sandbox, &["task", "show", &qualified(SOURCE, "T-3")]);
+        assert!(
+            orphan.contains("project:  none"),
+            "{}: a task in no project says so:\n{orphan}",
+            row.name
+        );
+        assert!(
+            !orphan.contains("url:"),
+            "{}: and a field the source did not give is left out entirely:\n{orphan}",
+            row.name
+        );
+
+        let project = ok(
+            row,
+            &sandbox,
+            &["project", "show", &qualified(SOURCE, "P-1")],
+        );
+        assert!(
+            project.contains("https://example.invalid/P-1"),
+            "{}",
+            row.name
+        );
+
+        // `--explain` reaches the single-item verbs too.
+        let explained = ok(
+            row,
+            &sandbox,
+            &["task", "show", &qualified(SOURCE, "T-1"), "--explain"],
+        );
+        assert!(
+            explained.contains("plan:") && explained.contains(SOURCE),
+            "{}: {explained}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn every_status_category_and_search_scope_the_command_line_spells_is_accepted() {
+    for row in ready() {
+        let sandbox = host(row);
+
+        // The three categories this fixture holds, one flag each.
+        for (category, expected) in [
+            ("todo", vec!["T-1", "T-3"]),
+            ("done", vec!["T-2"]),
+            ("in-progress", vec!["T-4"]),
+        ] {
+            let found = ok(row, &sandbox, &["task", "list", "--status", category]);
+            assert_eq!(listed(&found), ours(&expected), "{} {category}", row.name);
+        }
+
+        // And the three it does not: accepted, and correctly matching nothing.
+        let none = ok(
+            row,
+            &sandbox,
+            &[
+                "task",
+                "list",
+                "--status",
+                "backlog",
+                "--status",
+                "cancelled",
+                "--status",
+                "unknown",
+            ],
+        );
+        assert!(none.trim().is_empty(), "{}: {none}", row.name);
+
+        let tasks_only = ok(row, &sandbox, &["search", "alpha", "--kind", "task"]);
+        assert!(
+            tasks_only.lines().all(|line| line.starts_with("task")),
+            "{}: --kind task returns tasks and nothing else:\n{tasks_only}",
+            row.name
+        );
+
+        // `--output text` is the other spelling of the default, and has to reach the
+        // same renderer as leaving it out.
+        let explicit = ok(row, &sandbox, &["task", "list", "--output", "text"]);
+        assert_eq!(
+            explicit,
+            ok(row, &sandbox, &["task", "list"]),
+            "{}",
+            row.name
+        );
+
+        // A project named by its native id alone is asked of every selected source.
+        let bare = ok(row, &sandbox, &["task", "list", "--project", "P-2"]);
+        assert_eq!(listed(&bare), ours(&["T-4"]), "{}", row.name);
+    }
+}

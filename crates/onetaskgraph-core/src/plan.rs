@@ -5,11 +5,11 @@
 //! instead of leaving a user to guess why one source was fast and another was not:
 //! `--explain` renders a [`QueryPlan`] and `--json` carries it as a field.
 
-use std::collections::BTreeMap;
-
-use onetaskgraph_plugin_api::{Cursor, SourceError, SourceName};
+use onetaskgraph_plugin_api::{SourceError, SourceName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::engine::StreamState;
 
 /// One page of engine output, with the plan that produced it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -107,8 +107,14 @@ pub struct SourceFailure {
     pub error: SourceError,
 }
 
-/// The engine's own resume token: one plugin [`Cursor`] per source, opaque to the
+/// The engine's own resume token: one plugin cursor per source stream, opaque to the
 /// caller exactly as a plugin's cursor is opaque to the engine.
+///
+/// Rendered as lower-case hex, which is not obfuscation — the inside is not a secret —
+/// but the one property a token a person copies off a terminal has to have: it survives
+/// a shell. The document underneath holds a plugin's own cursor, and a cursor may hold
+/// anything at all, so a token spelled as the raw JSON would carry quotes, braces and
+/// spaces straight into the next command line. Hex has no character a shell reads.
 ///
 /// The wire shape is a bare JSON string, unchanged. What is not representable is a
 /// token this engine never issued: the inner string is private, and both ways in
@@ -121,17 +127,19 @@ pub struct SourceFailure {
 pub struct PageToken(String);
 
 impl PageToken {
-    /// Encode one cursor per source into a single token.
+    /// Encode where every stream still walking picks up.
     ///
-    /// # Errors
+    /// Crate-private on purpose: what a token *means* is the engine's, and a caller able
+    /// to build one from parts could name a stream no query addressed. A caller with a
+    /// token in hand reaches it through [`parse`](Self::parse), which refuses one this
+    /// engine did not issue.
     ///
-    /// Returns [`SourceError::Malformed`] when the cursors cannot be encoded.
-    pub fn encode(cursors: &BTreeMap<SourceName, Cursor>) -> Result<Self, SourceError> {
-        serde_json::to_string(cursors)
-            .map(Self)
-            .map_err(|error| SourceError::Malformed {
-                message: format!("could not encode a page token: {error}"),
-            })
+    /// Infallible: a stream state is a source name, a stream kind, an optional cursor
+    /// and a count, and none of those can fail to serialise.
+    pub(crate) fn encode(streams: &[StreamState]) -> Self {
+        let document = serde_json::to_string(streams)
+            .expect("a stream state is plain data and always serialises");
+        Self(to_hex(&document))
     }
 
     /// Accept a token from a caller — a `--page-token` argument, or a deserialised
@@ -142,7 +150,7 @@ impl PageToken {
     /// Returns [`SourceError::Malformed`] when `raw` does not decode.
     pub fn parse(raw: impl Into<String>) -> Result<Self, SourceError> {
         let token = Self(raw.into());
-        token.decode()?;
+        token.streams()?;
         Ok(token)
     }
 
@@ -152,15 +160,26 @@ impl PageToken {
         &self.0
     }
 
-    /// Decode a token back into one cursor per source.
+    /// Where each stream picks up.
     ///
-    /// # Errors
-    ///
-    /// Returns [`SourceError::Malformed`] when the token was not issued by this
-    /// engine, so a hand-edited token fails loudly instead of silently restarting
-    /// the walk.
-    pub fn decode(&self) -> Result<BTreeMap<SourceName, Cursor>, SourceError> {
-        serde_json::from_str(&self.0).map_err(|error| SourceError::Malformed {
+    /// Infallible, and that is a property of the type rather than an assumption: the only
+    /// two ways to obtain a `PageToken` are [`encode`](Self::encode), which built this
+    /// document, and [`parse`](Self::parse), which refuses anything that does not decode
+    /// — and deserialising one goes through `parse`. So a token that does not decode
+    /// never exists to be read here.
+    pub(crate) fn decode(&self) -> Vec<StreamState> {
+        self.streams()
+            .expect("every way to build a PageToken validates it")
+    }
+
+    /// The states inside, or why this is not one of this engine's tokens.
+    fn streams(&self) -> Result<Vec<StreamState>, SourceError> {
+        let document = from_hex(&self.0).ok_or_else(|| SourceError::Malformed {
+            message: "page token was not issued by this engine: it is not one of this \
+                      engine's tokens at all"
+                .to_owned(),
+        })?;
+        serde_json::from_str(&document).map_err(|error| SourceError::Malformed {
             message: format!("page token was not issued by this engine: {error}"),
         })
     }
@@ -181,4 +200,45 @@ impl From<PageToken> for String {
     fn from(value: PageToken) -> Self {
         value.0
     }
+}
+
+impl std::fmt::Display for PageToken {
+    /// The opaque string a caller passes back as `--page`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Render `document` as lower-case hex.
+fn to_hex(document: &str) -> String {
+    let mut rendered = String::with_capacity(document.len() * 2);
+    for byte in document.as_bytes() {
+        rendered.push(nibble(byte >> 4));
+        rendered.push(nibble(byte & 0x0f));
+    }
+    rendered
+}
+
+/// One hex digit.
+fn nibble(value: u8) -> char {
+    char::from_digit(u32::from(value), 16).expect("a nibble is a hex digit")
+}
+
+/// Read hex back, or `None` when `raw` is not hex of valid UTF-8.
+fn from_hex(raw: &str) -> Option<String> {
+    if !raw.len().is_multiple_of(2) {
+        return None;
+    }
+    let digits: Vec<u8> = raw
+        .chars()
+        .map(|digit| digit.to_digit(16))
+        .collect::<Option<Vec<u32>>>()?
+        .into_iter()
+        .map(|digit| u8::try_from(digit).expect("a hex digit fits in a byte"))
+        .collect();
+    let bytes: Vec<u8> = digits
+        .chunks(2)
+        .map(|pair| (pair[0] << 4) | pair[1])
+        .collect();
+    String::from_utf8(bytes).ok()
 }

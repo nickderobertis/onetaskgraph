@@ -1,9 +1,8 @@
-//! Every journey this binary answers, driven the way a user drives it.
+//! The command surface itself: what `--help` says, what `schema` emits, and what the
+//! binary does when the thing it is writing to goes away.
 //!
-//! Each test spawns the compiled binary as a subprocess and asserts on its exit
-//! code, stdout and stderr — never an in-process `run()` call, and nothing about
-//! the process is mocked. The journey table in `AGENTS.md` grows as verbs land;
-//! these are the ones the binary answers today.
+//! Nothing here reaches a source. The journeys that do are in the modules beside this
+//! one, and they run against every row of the shared fixture table.
 
 use assert_cmd::Command;
 use predicates::str::contains;
@@ -11,6 +10,75 @@ use predicates::str::contains;
 /// The compiled binary, as a user's shell would find it.
 fn onetaskgraph() -> Command {
     Command::cargo_bin("onetaskgraph").expect("the binary is built")
+}
+
+/// Every verb and flag the command surface owes, as `--help` must name them.
+///
+/// Listed here rather than asserted one at a time so that a verb added without help text
+/// — or a flag renamed out from under the documentation — fails one obvious test.
+const SURFACE: &[(&[&str], &[&str])] = &[
+    (
+        &["--help"],
+        &[
+            "sources", "task", "project", "label", "search", "schema", "config",
+        ],
+    ),
+    (&["help", "sources"], &["list"]),
+    (
+        &["help", "task", "list"],
+        &[
+            "--source",
+            "--label",
+            "--not-label",
+            "--status",
+            "--project",
+            "--no-project",
+            "--search",
+            "--in",
+            "--limit",
+            "--page",
+            "--explain",
+            "--allow-partial",
+            "--json",
+        ],
+    ),
+    (&["help", "task", "show"], &["<ID>"]),
+    (&["help", "task", "deps"], &["--direction", "<ID>"]),
+    (
+        &["help", "project", "list"],
+        &[
+            "--source", "--label", "--status", "--search", "--in", "--limit",
+        ],
+    ),
+    (&["help", "project", "show"], &["<ID>"]),
+    (&["help", "project", "deps"], &["--direction", "<ID>"]),
+    (&["help", "label", "list"], &["--source"]),
+    (&["help", "search"], &["--in", "--kind", "<TEXT>"]),
+];
+
+#[test]
+fn help_names_every_verb_and_flag_the_command_surface_owes() {
+    for (arguments, expected) in SURFACE {
+        let assertion = onetaskgraph().args(*arguments).assert().success();
+        let rendered = String::from_utf8_lossy(&assertion.get_output().stdout).into_owned();
+        for name in *expected {
+            assert!(
+                rendered.contains(name),
+                "`onetaskgraph {}` does not mention {name}:\n{rendered}",
+                arguments.join(" ")
+            );
+        }
+    }
+}
+
+#[test]
+fn a_project_list_has_no_project_filter_because_a_project_has_no_project() {
+    let assertion = onetaskgraph()
+        .args(["help", "project", "list"])
+        .assert()
+        .success();
+    let rendered = String::from_utf8_lossy(&assertion.get_output().stdout).into_owned();
+    assert!(!rendered.contains("--no-project"), "{rendered}");
 }
 
 #[test]
@@ -41,8 +109,6 @@ fn help_names_the_product_and_every_verb_the_binary_answers() {
             "One interface over the ticketing systems your work lives in.",
         ))
         .stdout(contains("Usage: onetaskgraph [OPTIONS] <COMMAND>"))
-        .stdout(contains("schema"))
-        .stdout(contains("config"))
         .stdout(contains("--version"))
         .stderr(predicates::str::is_empty());
 }
@@ -73,7 +139,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 2);
+    assert_eq!(bundle["version"], 3);
 
     let roots = bundle["roots"].as_object().expect("roots is an object");
     for root in [
@@ -89,7 +155,11 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
         "QueryPlan",
         "SourcePlan",
         "Predicate",
-        "QueryResponseOfTask",
+        "QualifiedTask",
+        "QueryResponseOfQualifiedTask",
+        "SearchHit",
+        "SourceListing",
+        "PageToken",
         // `config show --json` emits an EffectiveConfig, so an SDK is generated
         // against it from here like every other machine-readable output.
         "EffectiveConfig",
@@ -144,7 +214,8 @@ fn help_documents_the_exit_codes_a_caller_scripts_against() {
         .assert()
         .success()
         .stdout(contains("Exit codes: `0` on success"))
-        .stdout(contains("`2` when the invocation itself was wrong"));
+        .stdout(contains("`2` when the invocation itself was wrong"))
+        .stdout(contains("`4` when a query succeeded for some sources"));
 }
 
 /// `/dev/full` accepts a write and then fails it with ENOSPC, which is the one portable

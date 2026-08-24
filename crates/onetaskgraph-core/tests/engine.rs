@@ -1,14 +1,12 @@
 //! The engine's public surface: qualification, resume tokens, the registry, and
 //! the schema bundle both SDKs are generated from.
 
-use std::collections::BTreeMap;
-
 use onetaskgraph_core::{
     GlobalId, PageToken, Predicate, QueryPlan, QueryResponse, SCHEMA_BUNDLE_VERSION, SourceFailure,
     SourcePlan, plugin_for, plugin_kinds, registry, schema_bundle,
 };
 use onetaskgraph_plugin_api::{
-    Cursor, NativeId, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
+    NativeId, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
 };
 use secrecy::SecretString;
 
@@ -68,23 +66,6 @@ fn a_global_id_round_trips_through_json_as_a_single_string() {
 }
 
 #[test]
-fn a_page_token_carries_one_cursor_per_source_and_round_trips() {
-    let mut cursors = BTreeMap::new();
-    cursors.insert(source("work"), Cursor("50".to_owned()));
-    cursors.insert(source("notes"), Cursor("opaque-plugin-cursor".to_owned()));
-
-    let token = PageToken::encode(&cursors).expect("encodes");
-    assert_eq!(token.decode().expect("decodes"), cursors);
-
-    // The token is opaque to a caller exactly as a plugin's cursor is to the engine.
-    let encoded = serde_json::to_string(&token).expect("encodes");
-    assert_eq!(
-        serde_json::from_str::<PageToken>(&encoded).expect("decodes"),
-        token
-    );
-}
-
-#[test]
 fn a_hand_edited_page_token_fails_loudly_rather_than_silently_restarting_the_walk() {
     // Refused where it enters, not wherever it is first decoded: `parse` is the only
     // way to build one from a caller's string, so an unissued token has no window in
@@ -94,10 +75,19 @@ fn a_hand_edited_page_token_fails_loudly_rather_than_silently_restarting_the_wal
     };
     assert!(message.contains("not issued by this engine"), "{message}");
 
-    // A well-formed token naming an unusable source is refused at the same boundary.
-    let Err(SourceError::Malformed { .. }) = PageToken::parse(r#"{"BAD_NAME":"0"}"#) else {
-        panic!("an invalid source name inside a token must be refused");
-    };
+    // A well-formed document of the wrong shape is refused at the same boundary, and so
+    // is one naming a source no configuration could have: the token's inside is the
+    // engine's, and only what the engine writes decodes.
+    // Hex of `{"work":"0"}` and of `[{"source":"BAD_NAME","stream":"items"}]`: both decode
+    // out of the token's own encoding and are then refused for what they say.
+    for unissued in [
+        "7b22776f726b223a2230227d",
+        "5b7b22736f75726365223a224241445f4e414d45222c2273747265616d223a226974656d73227d5d",
+    ] {
+        let Err(SourceError::Malformed { .. }) = PageToken::parse(unissued) else {
+            panic!("a token this engine did not issue must be refused: {unissued}");
+        };
+    }
 
     // And deserialising goes through the same gate, so a response cannot carry one in.
     let Err(error) = serde_json::from_str::<PageToken>(r#""{not json""#) else {
@@ -167,7 +157,11 @@ fn a_registered_but_unimplemented_plugin_refuses_with_its_own_message() {
 /// without a conscious edit to a table that says not to do that — rather than
 /// impossible to land at all. Catching an in-place edit needs the previously
 /// published bundle, which lives on the registries, not here.
-const PUBLISHED_BUNDLES: &[(u32, &[&str])] = &[(1, &FIRST_BUNDLE_ROOTS), (2, &SECOND_BUNDLE_ROOTS)];
+const PUBLISHED_BUNDLES: &[(u32, &[&str])] = &[
+    (1, &FIRST_BUNDLE_ROOTS),
+    (2, &SECOND_BUNDLE_ROOTS),
+    (3, &THIRD_BUNDLE_ROOTS),
+];
 
 /// The roots version 1 of the bundle publishes.
 const FIRST_BUNDLE_ROOTS: [&str; 26] = [
@@ -236,6 +230,59 @@ const SECOND_BUNDLE_ROOTS: [&str; 33] = [
     "SecretsReport",
     "ResolvedCredential",
     "CredentialLayer",
+];
+
+/// The roots version 3 publishes: version 2's, minus the three unqualified response
+/// roots, plus the ones the query verbs emit.
+///
+/// Every item the engine returns is **qualified** — a plugin deals in its own
+/// `NativeId` and only the engine knows which source an item came from — so
+/// `QueryResponseOfTask` became `QueryResponseOfQualifiedTask`. The old three are gone
+/// rather than kept beside the new: no verb emits one, and a root nothing emits is a
+/// model an SDK would generate and never receive.
+const THIRD_BUNDLE_ROOTS: [&str; 42] = [
+    "Task",
+    "Project",
+    "Label",
+    "Status",
+    "StatusCategory",
+    "DependencyEdge",
+    "DependencyKind",
+    "Direction",
+    "TaskQuery",
+    "ProjectQuery",
+    "PageRequest",
+    "PageOfTask",
+    "PageOfProject",
+    "PageOfLabel",
+    "PageOfDependencyEdge",
+    "Capabilities",
+    "Health",
+    "SourceError",
+    "GlobalId",
+    "QueryPlan",
+    "SourcePlan",
+    "Predicate",
+    "SourceFailure",
+    "EffectiveConfig",
+    "Setting",
+    "Origin",
+    "OutputFormat",
+    "SecretsReport",
+    "ResolvedCredential",
+    "CredentialLayer",
+    "PageToken",
+    "QualifiedTask",
+    "QualifiedProject",
+    "QualifiedLabel",
+    "QualifiedEdge",
+    "SearchHit",
+    "SourceListing",
+    "QueryResponseOfQualifiedTask",
+    "QueryResponseOfQualifiedProject",
+    "QueryResponseOfQualifiedLabel",
+    "QueryResponseOfQualifiedEdge",
+    "QueryResponseOfSearchHit",
 ];
 
 #[test]
@@ -331,7 +378,12 @@ fn a_response_carries_the_plan_that_produced_it_and_round_trips() {
             created_at: None,
             updated_at: None,
         }],
-        next: Some(PageToken::parse(r#"{"work":"50"}"#).expect("a token this engine issued")),
+        // The hex of `[{"source":"work","stream":"items","cursor":"50"}]` —
+        // one stream, resuming at the source's own opaque cursor.
+        next: Some(
+            PageToken::parse("5b7b22736f75726365223a22776f726b222c2273747265616d223a226974656d73222c22637572736f72223a223530227d5d")
+                .expect("a token this engine issued"),
+        ),
         plan: QueryPlan {
             per_source: vec![
                 SourcePlan {

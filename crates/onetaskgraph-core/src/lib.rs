@@ -21,6 +21,8 @@
 
 pub mod config;
 
+mod engine;
+
 mod environment;
 mod global_id;
 mod plan;
@@ -30,10 +32,17 @@ mod schema;
 mod secrets;
 
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
+pub use engine::{
+    DependencyRequest, Engine, EngineError, Filters, LabelRequest, Paging, ProjectRequest,
+    ProjectSelector, Qualified, QualifiedEdge, SearchHit, SearchKind, SearchRequest, SourceListing,
+    SourceState, TaskRequest,
+};
 pub use environment::Environment;
 pub use global_id::GlobalId;
 pub use plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
 pub use registry::{PluginKind, plugin_for, plugin_kinds, registry};
-pub use resolve::{ResolvedSource, resolve, validate_sources};
+pub use resolve::{
+    ResolvedSource, UnavailableSource, resolve, resolve_available, validate_sources,
+};
 pub use schema::{SCHEMA_BUNDLE_VERSION, schema_bundle};
 pub use secrets::{CredentialLayer, CredentialName, ResolvedCredential, Secrets, SecretsReport};

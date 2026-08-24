@@ -16,7 +16,10 @@ use serde_json::{Value, json};
 use crate::config::{EffectiveConfig, Origin, OutputFormat, Setting};
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
-use crate::{GlobalId, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
+use crate::{
+    GlobalId, PageToken, Predicate, Qualified, QualifiedEdge, QueryPlan, QueryResponse, SearchHit,
+    SourceFailure, SourceListing, SourcePlan,
+};
 
 /// The bundle's own version, bumped whenever a root is added, removed or renamed.
 ///
@@ -28,7 +31,16 @@ use crate::{GlobalId, Predicate, QueryPlan, QueryResponse, SourceFailure, Source
 /// `Origin`, `OutputFormat`, `SecretsReport`, `ResolvedCredential` and
 /// `CredentialLayer` — because a machine-readable output with no root in this bundle
 /// is one no SDK can be generated against.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 2;
+///
+/// `3` added the roots the query verbs emit. Every item the engine returns is
+/// **qualified** — a plugin deals in its own `NativeId`, and only the engine knows which
+/// source an item came from — so `QueryResponseOfTask` became
+/// `QueryResponseOfQualifiedTask`, and `QualifiedTask`, `QualifiedProject`,
+/// `QualifiedLabel`, `QualifiedEdge`, `SearchHit`, `SourceListing` and `PageToken`
+/// joined it. The three unqualified response roots are gone rather than kept beside the
+/// new ones: no verb emits one, and a root nothing emits is a model an SDK would
+/// generate and never receive.
+pub const SCHEMA_BUNDLE_VERSION: u32 = 3;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -57,16 +69,37 @@ pub fn schema_bundle() -> Value {
     roots.insert("SourceError", schema_for!(SourceError));
 
     roots.insert("GlobalId", schema_for!(GlobalId));
+    roots.insert("PageToken", schema_for!(PageToken));
     roots.insert("QueryPlan", schema_for!(QueryPlan));
     roots.insert("SourcePlan", schema_for!(SourcePlan));
     roots.insert("Predicate", schema_for!(Predicate));
     roots.insert("SourceFailure", schema_for!(SourceFailure));
-    roots.insert("QueryResponseOfTask", schema_for!(QueryResponse<Task>));
+    roots.insert("QualifiedTask", schema_for!(Qualified<Task>));
+    roots.insert("QualifiedProject", schema_for!(Qualified<Project>));
+    roots.insert("QualifiedLabel", schema_for!(Qualified<Label>));
+    roots.insert("QualifiedEdge", schema_for!(QualifiedEdge));
+    roots.insert("SearchHit", schema_for!(SearchHit));
+    roots.insert("SourceListing", schema_for!(SourceListing));
     roots.insert(
-        "QueryResponseOfProject",
-        schema_for!(QueryResponse<Project>),
+        "QueryResponseOfQualifiedTask",
+        schema_for!(QueryResponse<Qualified<Task>>),
     );
-    roots.insert("QueryResponseOfLabel", schema_for!(QueryResponse<Label>));
+    roots.insert(
+        "QueryResponseOfQualifiedProject",
+        schema_for!(QueryResponse<Qualified<Project>>),
+    );
+    roots.insert(
+        "QueryResponseOfQualifiedLabel",
+        schema_for!(QueryResponse<Qualified<Label>>),
+    );
+    roots.insert(
+        "QueryResponseOfQualifiedEdge",
+        schema_for!(QueryResponse<QualifiedEdge>),
+    );
+    roots.insert(
+        "QueryResponseOfSearchHit",
+        schema_for!(QueryResponse<SearchHit>),
+    );
 
     roots.insert("EffectiveConfig", schema_for!(EffectiveConfig));
     roots.insert("Setting", schema_for!(Setting));

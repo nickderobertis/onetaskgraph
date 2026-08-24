@@ -26,4 +26,9 @@ serde_path_to_error.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+# The trait the engine drives is async, so a source written for a test needs the same
+# attribute macro a plugin does. The engine itself takes neither dependency: it is
+# written against `std::future` alone and runs on whatever runtime its caller brings.
+async-trait.workspace = true
 tempfile.workspace = true
+tokio.workspace = true

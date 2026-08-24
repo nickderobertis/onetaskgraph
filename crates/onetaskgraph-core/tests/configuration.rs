@@ -585,8 +585,10 @@ fn resolving_builds_the_sources_a_configuration_names_in_name_order() {
             .collect::<Vec<_>>(),
         vec!["archive", "work"]
     );
-    assert_eq!(resolved[0].kind(), PluginKind::InMemory);
-    assert_eq!(resolved[0].source().kind(), "in-memory");
+    // The kind is read back off the source rather than stored beside it, so the pair
+    // cannot disagree: a `ResolvedSource` cannot claim a kind its source does not report.
+    assert_eq!(resolved[0].kind(), "in-memory");
+    assert_eq!(resolved[0].kind(), resolved[0].source().kind());
 }
 
 #[test]

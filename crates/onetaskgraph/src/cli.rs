@@ -5,16 +5,21 @@
 //! the product scriptable: a caller who can name a setting in a document can name the
 //! same setting on the command line, at the same dotted path.
 
+use std::num::NonZeroU32;
+
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use onetaskgraph_core::OutputFormat;
 use onetaskgraph_core::config::{Layer, Origin, Setting, SettingPath, value_from_text};
+use onetaskgraph_core::{OutputFormat, SearchKind};
+use onetaskgraph_plugin_api::{Direction, StatusCategory, TextFields};
 use serde_json::Value;
 
 /// One interface over the ticketing systems your work lives in.
 ///
 /// Exit codes: `0` on success, `1` when a command failed while running, `2` when the
-/// invocation itself was wrong (clap's own code for that). `4` is reserved for a query
-/// that succeeded for some sources and failed for others without `--allow-partial`.
+/// invocation itself was wrong (clap's own code for that), `4` when a query succeeded
+/// for some sources and failed for others without `--allow-partial`. `0` means success
+/// and nothing else: a run that reached no source, or lost one, never exits `0` unless
+/// you asked for a partial answer.
 #[derive(Debug, Parser)]
 // `bin_name` is pinned rather than left to clap, which takes it from argv[0] — and on
 // Windows argv[0] is `onetaskgraph.exe`, so the usage line would name a different command
@@ -43,6 +48,330 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+
+    /// Work with the sources this configuration names.
+    Sources {
+        #[command(subcommand)]
+        command: SourcesCommand,
+    },
+
+    /// List, show and walk tasks.
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
+
+    /// List, show and walk projects.
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
+
+    /// List the labels the sources know.
+    Label {
+        #[command(subcommand)]
+        command: LabelCommand,
+    },
+
+    /// Search tasks, projects, or both.
+    Search(SearchArgs),
+}
+
+/// What `onetaskgraph sources` can do.
+#[derive(Debug, Subcommand)]
+pub enum SourcesCommand {
+    /// List every configured source, its plugin, and what it declares it can do.
+    ///
+    /// A source that could not be built is listed too, with the reason — one broken
+    /// credential is a source you can see is broken, not a command that stops working.
+    List,
+}
+
+/// What `onetaskgraph task` can do.
+#[derive(Debug, Subcommand)]
+pub enum TaskCommand {
+    /// List tasks across the selected sources.
+    List(TaskListArgs),
+    /// Show one task by its qualified id, `<source>:<native-id>`.
+    Show(ShowArgs),
+    /// Walk one task's dependency edges.
+    Deps(DependencyArgs),
+}
+
+/// What `onetaskgraph project` can do.
+#[derive(Debug, Subcommand)]
+pub enum ProjectCommand {
+    /// List projects across the selected sources.
+    List(ProjectListArgs),
+    /// Show one project by its qualified id, `<source>:<native-id>`.
+    Show(ShowArgs),
+    /// Walk one project's dependency edges.
+    Deps(DependencyArgs),
+}
+
+/// What `onetaskgraph label` can do.
+#[derive(Debug, Subcommand)]
+pub enum LabelCommand {
+    /// List every label the selected sources know.
+    List(LabelListArgs),
+}
+
+/// Which sources a query addresses.
+#[derive(Debug, Args)]
+pub struct SelectionArgs {
+    /// Address this source. Repeat for several; omit for the configured selection.
+    #[arg(long = "source", value_name = "S")]
+    pub source: Vec<String>,
+}
+
+/// The filters the list verbs share.
+#[derive(Debug, Args)]
+pub struct FilterArgs {
+    /// Keep items carrying this label. Repeat to require several at once.
+    #[arg(long = "label", value_name = "L")]
+    pub label: Vec<String>,
+
+    /// Drop items carrying this label. Repeat for several.
+    #[arg(long = "not-label", value_name = "L")]
+    pub not_label: Vec<String>,
+
+    /// Keep items in this status category. Repeat for several.
+    #[arg(long = "status", value_name = "S")]
+    pub status: Vec<StatusArg>,
+
+    /// Keep items matching this text.
+    #[arg(long, value_name = "TEXT")]
+    pub search: Option<String>,
+
+    /// Which fields --search looks in.
+    #[arg(long = "in", value_name = "FIELDS", default_value = "both")]
+    pub fields: FieldsArg,
+}
+
+/// How much of a result set to return, and how much to say about it.
+#[derive(Debug, Args)]
+pub struct PageArgs {
+    /// How many items this page holds. Defaults to the `page_size` setting.
+    ///
+    /// A `NonZeroU32` rather than a range-checked `u32`: a page of no rows is not a page,
+    /// and typing it should be refused where it was typed rather than carried inwards as
+    /// a number some later layer has to remember to check.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<NonZeroU32>,
+
+    /// Resume from a token a previous page reported.
+    #[arg(long = "page", value_name = "TOKEN")]
+    pub page: Option<String>,
+
+    /// Report what each source was asked and what the engine did itself.
+    #[arg(long)]
+    pub explain: bool,
+
+    /// Accept an answer some sources could not contribute to, and exit 0.
+    #[arg(long = "allow-partial")]
+    pub allow_partial: bool,
+}
+
+/// `onetaskgraph task list`.
+#[derive(Debug, Args)]
+pub struct TaskListArgs {
+    #[command(flatten)]
+    pub selection: SelectionArgs,
+
+    #[command(flatten)]
+    pub filters: FilterArgs,
+
+    /// Keep tasks in this project, qualified (`work:PROJ-1`) or by native id.
+    ///
+    /// A qualified id names one project of one source, so it narrows the query to that
+    /// source. A bare id is asked of every selected source.
+    #[arg(long, value_name = "P", conflicts_with = "no_project")]
+    pub project: Option<String>,
+
+    /// Keep only tasks belonging to no project at all.
+    #[arg(long = "no-project")]
+    pub no_project: bool,
+
+    #[command(flatten)]
+    pub paging: PageArgs,
+}
+
+/// `onetaskgraph project list`.
+#[derive(Debug, Args)]
+pub struct ProjectListArgs {
+    #[command(flatten)]
+    pub selection: SelectionArgs,
+
+    #[command(flatten)]
+    pub filters: FilterArgs,
+
+    #[command(flatten)]
+    pub paging: PageArgs,
+}
+
+/// `onetaskgraph label list`.
+#[derive(Debug, Args)]
+pub struct LabelListArgs {
+    #[command(flatten)]
+    pub selection: SelectionArgs,
+
+    #[command(flatten)]
+    pub paging: PageArgs,
+}
+
+/// `onetaskgraph task show` and `onetaskgraph project show`.
+#[derive(Debug, Args)]
+pub struct ShowArgs {
+    /// The qualified id, `<source>:<native-id>`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// Report what the source was asked.
+    #[arg(long)]
+    pub explain: bool,
+
+    /// Accept an answer the source could not contribute to, and exit 0.
+    #[arg(long = "allow-partial")]
+    pub allow_partial: bool,
+}
+
+/// `onetaskgraph task deps` and `onetaskgraph project deps`.
+#[derive(Debug, Args)]
+pub struct DependencyArgs {
+    /// The qualified id, `<source>:<native-id>`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// Which way to walk. Reverse is emulated for a forward-only source.
+    #[arg(long, value_name = "DIRECTION", default_value = "depends-on")]
+    pub direction: DirectionArg,
+
+    #[command(flatten)]
+    pub paging: PageArgs,
+}
+
+/// `onetaskgraph search`.
+#[derive(Debug, Args)]
+pub struct SearchArgs {
+    /// What to look for.
+    #[arg(value_name = "TEXT")]
+    pub text: String,
+
+    /// Which fields to look in.
+    #[arg(long = "in", value_name = "FIELDS", default_value = "both")]
+    pub fields: FieldsArg,
+
+    /// Which entities to search.
+    #[arg(long, value_name = "KIND", default_value = "both")]
+    pub kind: KindArg,
+
+    #[command(flatten)]
+    pub selection: SelectionArgs,
+
+    #[command(flatten)]
+    pub paging: PageArgs,
+}
+
+/// A status category, as the command line spells it.
+///
+/// A command-line mirror of [`StatusCategory`] rather than that type itself, for the
+/// reason [`Format`] carries: deriving clap's `ValueEnum` on a contract type would put
+/// clap into the plugin contract's dependencies for the sake of one flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum StatusArg {
+    /// Known about, not yet queued.
+    Backlog,
+    /// Queued, not yet started.
+    Todo,
+    /// Being worked on.
+    InProgress,
+    /// Finished.
+    Done,
+    /// Abandoned.
+    Cancelled,
+    /// The source reported a status this vocabulary cannot place.
+    Unknown,
+}
+
+impl StatusArg {
+    /// The contract's own category.
+    #[must_use]
+    pub fn category(self) -> StatusCategory {
+        match self {
+            Self::Backlog => StatusCategory::Backlog,
+            Self::Todo => StatusCategory::Todo,
+            Self::InProgress => StatusCategory::InProgress,
+            Self::Done => StatusCategory::Done,
+            Self::Cancelled => StatusCategory::Cancelled,
+            Self::Unknown => StatusCategory::Unknown,
+        }
+    }
+}
+
+/// Which fields a search covers, as the command line spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum FieldsArg {
+    /// Titles only.
+    Title,
+    /// Bodies only.
+    Content,
+    /// Either one matching is a match.
+    Both,
+}
+
+impl FieldsArg {
+    /// The contract's own field selector.
+    #[must_use]
+    pub fn fields(self) -> TextFields {
+        match self {
+            Self::Title => TextFields::Title,
+            Self::Content => TextFields::Content,
+            Self::Both => TextFields::TitleOrContent,
+        }
+    }
+}
+
+/// Which way a dependency walk goes, as the command line spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DirectionArg {
+    /// What this item depends on.
+    DependsOn,
+    /// What depends on this item.
+    DependedOnBy,
+}
+
+impl DirectionArg {
+    /// The contract's own direction.
+    #[must_use]
+    pub fn direction(self) -> Direction {
+        match self {
+            Self::DependsOn => Direction::DependsOn,
+            Self::DependedOnBy => Direction::DependedOnBy,
+        }
+    }
+}
+
+/// Which entities a search covers, as the command line spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum KindArg {
+    /// Tasks only.
+    Task,
+    /// Projects only.
+    Project,
+    /// Both, interleaved.
+    Both,
+}
+
+impl KindArg {
+    /// The engine's own search scope.
+    #[must_use]
+    pub fn kind(self) -> SearchKind {
+        match self {
+            Self::Task => SearchKind::Tasks,
+            Self::Project => SearchKind::Projects,
+            Self::Both => SearchKind::Both,
+        }
+    }
 }
 
 /// What `onetaskgraph config` can do.

@@ -59,7 +59,8 @@
           "bash scripts/check-plugin-isolation.sh",
           "bash scripts/check-contract-inventory.sh",
           "bash scripts/check-protocol-contract.sh",
-          "bash scripts/check-credential-names.sh"
+          "bash scripts/check-credential-names.sh",
+          "bash scripts/check-journey-matrix.sh"
         ],
         "parallel": false
       },
@@ -86,7 +87,10 @@
         "{workspaceRoot}/gh-secrets.json",
         "{workspaceRoot}/.github/workflows/live.yml",
         "{workspaceRoot}/scripts/check-live-lane.sh",
-        "{workspaceRoot}/scripts/check-credential-names.sh"
+        "{workspaceRoot}/scripts/check-credential-names.sh",
+        "{workspaceRoot}/crates/onetaskgraph-core/src/registry.rs",
+        "{workspaceRoot}/crates/onetaskgraph/tests/e2e/fixtures.rs",
+        "{workspaceRoot}/scripts/check-journey-matrix.sh"
       ]
     },
     "typecheck": {

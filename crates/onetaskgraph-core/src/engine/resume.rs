@@ -1,0 +1,59 @@
+//! Where a walk resumes, per source and per stream.
+//!
+//! This is the inside of the engine's own [`PageToken`](crate::PageToken), and nothing
+//! outside this crate names it. A source's [`Cursor`] passes through untouched — the
+//! engine stores one and hands it back, exactly as a plugin stores nothing of the
+//! engine's page token.
+//!
+//! The `skip` beside the cursor is the engine counting **its own** rows, never
+//! interpreting the source's. It exists because compensation narrows a source page in
+//! memory: a page of 50 that yields 7 surviving rows, of which the caller's page had
+//! room for 3, has to resume at "the page beginning at this cursor, four surviving rows
+//! in". The alternative would be holding the other four somewhere between calls, which
+//! is exactly the caching this product does not do.
+
+use onetaskgraph_plugin_api::{Cursor, SourceName};
+use serde::{Deserialize, Serialize};
+
+/// Which of a source's streams a state addresses.
+///
+/// A verb reads one stream per source, except `search --kind both`, which reads two —
+/// so the key is the pair rather than the source alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum StreamKind {
+    /// The one stream a single-entity verb reads.
+    Items,
+    /// The task half of a search over both entities.
+    Tasks,
+    /// The project half of a search over both entities.
+    Projects,
+}
+
+/// The place one walk of one stream picks up from.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub(crate) struct Resume {
+    /// The source cursor whose page the next row is in, or `None` for the beginning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Cursor>,
+    /// How many surviving rows of that page were already delivered.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub skip: u32,
+}
+
+/// One stream's place, as the page token carries it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct StreamState {
+    /// The configured source this stream belongs to.
+    pub source: SourceName,
+    /// Which of that source's streams it is.
+    pub stream: StreamKind,
+    /// Where to pick up.
+    #[serde(flatten)]
+    pub resume: Resume,
+}
+
+/// Keeps a token that resumes at the beginning of a stream down to its source and kind.
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}

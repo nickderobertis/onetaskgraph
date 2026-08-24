@@ -110,8 +110,10 @@ mechanisms rather than rediscovering the rule; each says how it fails, not how i
 1. `deny.toml` refuses every embedded store, index and cache crate, and `deny` is a
    required check — so reaching for one cannot merge.
 2. `crates/onetaskgraph/tests/e2e/no_persistence.rs` sandboxes `HOME`, every `XDG_*` and
-   `TMPDIR`, plants sentinels, drives every verb, and fails if any file written during the
-   run holds one. It asserts on the effect, so it catches caching by any technique.
+   `TMPDIR` into one tree, plants sentinels in a source's work, drives every verb, and
+   compares the tree with itself: it fails, naming the path, if any file was created or
+   changed during the run, and says which sentinels a new file held. It asserts on the
+   effect, so it catches caching by any technique.
 3. `crates/onetaskgraph-core/tests/no_reuse.rs` catches the half a filesystem scan cannot
    see: one query asked twice must reach the source twice.
 
@@ -175,8 +177,15 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 ### The journeys this repository owes
 
 Each drives the real binary as a subprocess, and each runs against **every** configured
-source kind through one shared fixture table — so a plugin is never proven by a suite of
-its own writing. The list grows as features land, and the suite is what says which of
+source kind through one shared fixture table — `crates/onetaskgraph/tests/e2e/fixtures.rs`
+— so a plugin is never proven by a suite of its own writing. That coverage is not a habit:
+`scripts/check-journey-matrix.sh`, a target in `check`, reconciles the table against the
+registry both ways and fails naming the plugin, so a plugin that lands without a row
+cannot merge. A plugin whose source has not landed carries a `Pending` row, which is a
+journey of its own — it asserts that plugin refuses with its own message — rather than a
+placeholder.
+
+The list grows as features land, and the suite is what says which of
 them do; this is the inventory of what is owed, not a status board.
 
 1. List tasks from one source.
@@ -209,6 +218,28 @@ them do; this is the inventory of what is owed, not a status board.
 22. Failure and recovery: unknown source name, malformed configuration, unknown id, and an
     unreachable source each exit non-zero with the problem and a suggested next action on
     stderr.
+
+## The command surface
+
+Exit codes are part of the contract, because a caller scripts around them: **`0`** means
+success and nothing else; **`1`** the command failed while running; **`2`** the invocation
+itself was wrong (clap's own code, so a bad `--set` and an unknown flag agree); **`4`** the
+query ran, some sources answered and at least one did not. `--allow-partial` is how a
+caller says a partial answer is acceptable, and it turns `4` into `0`. A run that lost a
+source never exits `0` unless it was asked to.
+
+**Ordering across sources is round-robin** — one row from each selected source in
+configured-name order, then the next from each — and within a source the source's own
+order, exactly. Source-major order would be simpler to explain and would cost a call to
+every other source on every page filled by the first, which against a hosted source is a
+request spent on rows nobody will see. Each stream is walked strictly forwards, so a walk
+to exhaustion returns every row exactly once whatever the page size.
+
+The engine mints the page token and never interprets a source's cursor. It carries one of
+those cursors per source stream plus a count of rows the engine itself already handed
+back — the count is what lets compensation resume inside a source page it narrowed,
+without holding the remainder of that page between calls. It is rendered as hex, because a
+plugin cursor may contain anything and a token a person pastes has to survive a shell.
 
 ## Recorded decisions
 
