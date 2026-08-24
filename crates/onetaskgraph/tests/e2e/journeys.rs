@@ -8,7 +8,8 @@
 use std::process::Output;
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{Fixture, ROWS, Row, SOURCE, qualified};
+use crate::fixtures::{Fixture, ROWS, Row, SOURCE, document, qualified};
+use serde_json::json;
 
 /// A sandbox holding this row's configuration document and nothing else.
 fn host(row: &Row) -> Sandbox {
@@ -430,6 +431,122 @@ fn project_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_i
                 "emulated"
             },
             "reverse-dependencies",
+        );
+    }
+}
+
+#[test]
+fn every_source_filters_its_projects_by_label_by_status_and_by_text() {
+    // `project list` carries the same filters `task list` does, over a source's other
+    // entity and through a different query type. A source that applied them to tasks and
+    // dropped them for projects would pass every task journey above.
+    for row in ready() {
+        let sandbox = host(row);
+        let declared = row.declared().expect("a ready row declares");
+
+        let by_label = ok(
+            row,
+            &sandbox,
+            &["project", "list", "--label", "core", "--explain"],
+        );
+        assert_eq!(listed(&by_label), ours(&["P-1"]), "{}", row.name);
+        plan_says(
+            row,
+            &by_label,
+            if declared.filter_by_label {
+                "pushed down"
+            } else {
+                "applied locally"
+            },
+            "label",
+        );
+
+        let excluded = ok(row, &sandbox, &["project", "list", "--not-label", "core"]);
+        assert_eq!(listed(&excluded), ours(&["P-2"]), "{}", row.name);
+
+        let by_status = ok(
+            row,
+            &sandbox,
+            &["project", "list", "--status", "todo", "--explain"],
+        );
+        assert_eq!(listed(&by_status), ours(&["P-2"]), "{}", row.name);
+        plan_says(
+            row,
+            &by_status,
+            if declared.filter_by_status {
+                "pushed down"
+            } else {
+                "applied locally"
+            },
+            "status",
+        );
+
+        // `alpha` is in P-2's body and in neither title, so each field selector keeps a
+        // different set and a source searching the wrong one is caught.
+        let in_title = ok(
+            row,
+            &sandbox,
+            &["project", "list", "--search", "engine", "--in", "title"],
+        );
+        assert_eq!(listed(&in_title), ours(&["P-1"]), "{}", row.name);
+
+        let in_content = ok(
+            row,
+            &sandbox,
+            &["project", "list", "--search", "alpha", "--in", "content"],
+        );
+        assert_eq!(listed(&in_content), ours(&["P-2"]), "{}", row.name);
+
+        let in_both = ok(
+            row,
+            &sandbox,
+            &["project", "list", "--search", "engine", "--in", "both"],
+        );
+        assert_eq!(listed(&in_both), ours(&["P-1"]), "{}", row.name);
+    }
+}
+
+#[test]
+fn showing_one_item_from_a_source_that_cannot_answer_exits_four_unless_partial_is_allowed() {
+    // `show` reads one item from one source, so a source that cannot answer is the whole
+    // of its result rather than one contribution among several — and it must still cost
+    // exit 4 rather than reading as "no such id", which is a different problem with a
+    // different fix. `--allow-partial` is the caller saying an answer without it is fine.
+    for verb in ["task", "project"] {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&document(&json!({
+            "broken": {"plugin": "linear", "config": {}},
+        })));
+
+        let id = qualified("broken", "X-1");
+        let refused = run(&sandbox, &[verb, "show", &id]);
+        assert_eq!(
+            refused.status.code(),
+            Some(4),
+            "`{verb} show` against a source that cannot answer must exit 4:\n{}",
+            stderr(&refused)
+        );
+        let complaint = stderr(&refused);
+        assert!(
+            complaint.contains("broken"),
+            "the failure must name the source:\n{complaint}"
+        );
+        assert!(
+            complaint.contains("--allow-partial"),
+            "and say how to accept it:\n{complaint}"
+        );
+
+        let allowed = run(&sandbox, &[verb, "show", &id, "--allow-partial"]);
+        assert_eq!(
+            allowed.status.code(),
+            Some(0),
+            "the same run with --allow-partial must exit 0:\n{}",
+            stderr(&allowed)
+        );
+        assert!(
+            stderr(&allowed).contains("broken"),
+            "and still say which source was lost:\n{}",
+            stderr(&allowed)
         );
     }
 }

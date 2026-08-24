@@ -26,22 +26,22 @@ plugin's own message, never "unknown plugin".
 
 ## The command surface the binary owes
 
-Exit codes are part of the contract, because a caller scripts around them: **`0`** means
-success and nothing else; **`1`** the command failed while running; **`2`** the invocation
-itself was wrong (clap's own code, so a bad `--set` and an unknown flag agree); **`4`** the
-query ran, some sources answered and at least one did not. `--allow-partial` is how a
-caller says a partial answer is acceptable, and it turns `4` into `0`. A run that lost a
-source never exits `0` unless it was asked to.
+The codes themselves are in `cli.rs` and the README, reconciled against `--help` by
+`surface.rs`; what does not survive in any of the three is the rule behind them. **`0`
+means success and nothing else.** A run that reached no source, or lost one, exits
+non-zero unless `--allow-partial` says a partial answer was wanted. Widening `0` to cover
+"mostly worked" would make every scripted caller wrong at once and none of them would
+notice.
 
-**Ordering across sources is round-robin** — one row from each selected source in
-configured-name order, then the next from each — and within a source the source's own
-order, exactly. Source-major order would be simpler to explain and would cost a call to
-every other source on every page filled by the first, which against a hosted source is a
-request spent on rows nobody will see. Each stream is walked strictly forwards, so a walk
-to exhaustion returns every row exactly once whatever the page size.
+**Ordering across sources is round-robin**, not source-major, and the reason is cost
+rather than taste: with source-major order a page filled entirely by the first source
+still costs a call to each of the others, which against a hosted source is a request spent
+on rows nobody will see.
 
-The engine mints the page token and never interprets a source's cursor. It carries one of
-those cursors per source stream plus a count of rows the engine itself already handed
-back — the count is what lets compensation resume inside a source page it narrowed,
-without holding the remainder of that page between calls. It is rendered as hex, because a
-plugin cursor may contain anything and a token a person pastes has to survive a shell.
+The engine mints the page token and never interprets a source's cursor. Two things in it
+are easy to remove without noticing what they were for. The **count** beside each cursor
+is how compensation resumes inside a source page it narrowed, and the alternative is
+holding that page's remainder between calls, which is the caching this product does not
+do. The **query fingerprint** is what stops a token being answered by a query it was not
+minted for — those cursors are offsets into one result set, and against another they
+return real rows at exit `0` with nothing to say the answer is arbitrary.

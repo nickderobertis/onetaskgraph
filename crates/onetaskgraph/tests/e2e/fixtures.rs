@@ -214,6 +214,10 @@ fn compensated_block(_sandbox: &Sandbox) -> Value {
 /// The work every row serves: four tasks, three of which are in a project, three labels,
 /// two projects, and a dependency graph with a reverse answer worth checking.
 ///
+/// Exactly one of the two projects carries a label, and the two sit in different status
+/// categories, so every project filter has something to keep and something to drop —
+/// a filter both projects satisfied would pass against a source that ignored it.
+///
 /// The dependency edges are listed in the order their `from` items are, which is what
 /// makes the engine's emulated reverse scan — item by item, each item's forward edges in
 /// order — produce the *same sequence* a source answering natively does, rather than the
@@ -238,7 +242,8 @@ pub fn dataset() -> Value {
         ],
         "projects": [
             {"id": "P-1", "title": "Engine", "content": "the engine",
-             "status": {"category": "in-progress", "name": "Doing"}, "labels": [],
+             "status": {"category": "in-progress", "name": "Doing"},
+             "labels": [{"id": "L-3", "name": "core"}],
              "url": "https://example.invalid/P-1"},
             {"id": "P-2", "title": "Docs", "content": "alpha docs",
              "status": {"category": "todo", "name": "Todo"}, "labels": []}
