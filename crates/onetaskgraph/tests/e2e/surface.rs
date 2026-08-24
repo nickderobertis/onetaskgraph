@@ -575,10 +575,12 @@ fn the_command_line_accepts_exactly_the_vocabularies_the_contract_declares() {
 }
 
 #[test]
-fn every_value_the_contract_declares_is_one_the_command_line_actually_takes() {
-    // The other half: that the vocabulary above is not merely the right *size* but that
-    // each value in it is accepted by the running binary rather than only printed by its
-    // help.
+fn every_value_the_help_advertises_is_one_the_command_line_actually_takes() {
+    // The other half, and it reads the help rather than the bundle on purpose: the test
+    // above has already established that the help's vocabulary and the contract's are the
+    // same set, so what is left to prove is that each value the help prints is one the
+    // running binary accepts rather than merely advertises. Reading the bundle again here
+    // would prove the same equality twice and this property not at all.
     let sandbox = Sandbox::new();
     sandbox.project_document(&crate::fixtures::ROWS[0].document(&sandbox));
 

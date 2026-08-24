@@ -322,3 +322,81 @@ fn a_walk_across_sources_returns_one_order_whatever_page_size_the_caller_chose()
         );
     }
 }
+
+#[test]
+fn an_emulated_reverse_walk_pages_to_the_same_answer_the_native_one_gives() {
+    // The most delicate path this engine has, walked one page at a time: the scanned
+    // source answers `depended-on-by` by reading its items page by page — two at a time,
+    // which is its declared ceiling — and collecting each item's forward edges. An outer
+    // page can therefore yield more matching edges than the caller's limit, and what
+    // happens to the surplus is the whole question: held over it would be the caching
+    // this product does not do, dropped it would lose edges, and re-scanned from the top
+    // it would repeat them.
+    //
+    // So the assertion is that every page size walks to the same answer the source that
+    // answers reverse dependencies *natively* gives in one page — edge for edge and in
+    // the same order.
+    let sandbox = host();
+    let native = listed(&ok(
+        &sandbox,
+        &[
+            "task",
+            "deps",
+            &qualified(NATIVE, "T-2"),
+            "--direction",
+            "depended-on-by",
+        ],
+    ));
+    assert_eq!(native.len(), 3, "three tasks depend on T-2");
+
+    for limit in ["1", "2", "3"] {
+        let mut walked = Vec::new();
+        let mut token: Option<String> = None;
+        for step in 0..8 {
+            let mut arguments = vec![
+                "task",
+                "deps",
+                &"",
+                "--direction",
+                "depended-on-by",
+                "--limit",
+                limit,
+            ];
+            let id = qualified(SCANNED, "T-2");
+            arguments[2] = &id;
+            if let Some(page) = &token {
+                arguments.push("--page");
+                arguments.push(page);
+            }
+            let rendered = ok(&sandbox, &arguments);
+            walked.extend(listed(&rendered));
+            token = rendered
+                .lines()
+                .find_map(|line| line.strip_prefix("next page: --page "))
+                .map(str::to_owned);
+            if token.is_none() {
+                break;
+            }
+            assert!(
+                step < 7,
+                "a three-edge walk at --limit {limit} must terminate"
+            );
+        }
+
+        // The two sources hold the same graph under different names, so compare the
+        // native ids the rows are qualified with.
+        let scanned: Vec<String> = walked
+            .iter()
+            .map(|id| id.replace(&format!("{SCANNED}:"), ""))
+            .collect();
+        let expected: Vec<String> = native
+            .iter()
+            .map(|id| id.replace(&format!("{NATIVE}:"), ""))
+            .collect();
+        assert_eq!(
+            scanned, expected,
+            "walking the emulated reverse answer at --limit {limit} must give the native \
+             answer edge for edge"
+        );
+    }
+}

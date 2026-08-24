@@ -76,6 +76,20 @@ impl ResolvedSource {
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnavailableSource {
     name: SourceName,
+    /// The plugin kind that was asked to build it.
+    ///
+    /// The kind a plugin reports, which is an open vocabulary rather than an
+    /// under-modelled one: a subprocess-hosted plugin reports a kind arriving over the
+    /// wire from a binary this workspace never compiled, so no compile-time type can
+    /// enumerate it, and a newtype over the same string would only move where an
+    /// unrelated value is accepted. This is the same field, and the same reason, as
+    /// `SourcePlan.kind` and `SourceListing.kind`, where the contract fixes it as a
+    /// string outright.
+    // llmlint: ignore[invalid_states_unrepresentable] the reason above, recorded a third
+    // time because this is the third site the same field appears at: `kind` is what
+    // `SourcePlan.kind` (plan.rs) and `SourceListing.kind` (engine/mod.rs) already carry
+    // as approved contract text, and narrowing it here alone would only make this crate
+    // disagree with the two documents it renders into.
     kind: &'static str,
     error: SourceError,
 }
