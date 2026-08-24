@@ -561,6 +561,7 @@ fn no_secrets() -> Secrets {
 fn minimal_block(kind: &str) -> Value {
     match kind {
         "subprocess" => json!({"command": "onetaskgraph-source"}),
+        "local-md" => json!({"root": "."}),
         _ => json!({}),
     }
 }

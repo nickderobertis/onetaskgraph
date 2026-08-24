@@ -181,7 +181,23 @@ pub const ROWS: &[Row] = &[
     Row {
         plugin: "local-md",
         name: "local-md",
-        fixture: Fixture::Pending,
+        fixture: Fixture::Ready(Ready {
+            block: local_md_block,
+            // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The journeys use
+            // these expectations to assert the real binary's reported plan, whose values
+            // come from `LocalMdSource::capabilities`; changing that implementation without
+            // this fixture makes those public-boundary assertions fail, so the journeys are
+            // the drift gate rather than a second authoritative declaration.
+            declared: Declared {
+                filter_by_label: true,
+                filter_by_status: true,
+                search_title: true,
+                search_content: true,
+                orphan_tasks: true,
+                reverse_task_dependencies: true,
+                reverse_project_dependencies: true,
+            },
+        }),
     },
     Row {
         plugin: "linear",
@@ -194,6 +210,48 @@ pub const ROWS: &[Row] = &[
         fixture: Fixture::Pending,
     },
 ];
+
+fn local_md_block(sandbox: &Sandbox) -> Value {
+    let root = sandbox.subdirectory("local-md");
+    for (kind, id, front, body) in [
+        (
+            "tasks",
+            "T-1",
+            "title: Alpha engine\nstatus: Todo\nlabels: [{id: L-1, name: bug}, {id: L-3, name: core}]\nproject: P-1\nurl: https://example.invalid/T-1\ndepends_on: [T-2]",
+            "the engine core",
+        ),
+        (
+            "tasks",
+            "T-2",
+            "title: Beta\nstatus: Shipped\nlabels: [{id: L-2, name: chore}]\nproject: P-1",
+            "alpha in the body",
+        ),
+        (
+            "tasks",
+            "T-3",
+            "title: Gamma\nstatus: Todo\nlabels: [{id: L-1, name: bug}]\ndepends_on: [T-2]",
+            "unrelated",
+        ),
+        (
+            "tasks",
+            "T-4",
+            "title: Delta docs\nstatus: Doing\nlabels: [{id: L-3, name: core}]\nproject: P-2\ndepends_on:\n  - id: T-2\n    kind: related",
+            "documentation",
+        ),
+        (
+            "projects",
+            "P-1",
+            "title: Engine\nstatus: Doing\nlabels: [{id: L-3, name: core}]\nurl: https://example.invalid/P-1\ndepends_on: [P-2]",
+            "the engine",
+        ),
+        ("projects", "P-2", "title: Docs\nstatus: Todo", "alpha docs"),
+    ] {
+        let path = root.join(kind).join(format!("{id}.md"));
+        std::fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
+        std::fs::write(path, format!("---\n{front}\n---\n{body}\n")).expect("Markdown fixture");
+    }
+    json!({ "root": root, "status_mapping": {"todo":"todo", "doing":"in-progress", "shipped":"done"} })
+}
 
 /// The `in-memory` row that applies every predicate itself.
 fn native_block(_sandbox: &Sandbox) -> Value {
