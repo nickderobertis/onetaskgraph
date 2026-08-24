@@ -285,6 +285,10 @@ impl LocalMdSource {
         let (yaml, body) = text
             .strip_prefix("---\n")
             .and_then(|rest| rest.split_once("\n---\n"))
+            .or_else(|| {
+                text.strip_prefix("---\r\n")
+                    .and_then(|rest| rest.split_once("\r\n---\r\n"))
+            })
             .ok_or_else(|| SourceError::Malformed {
                 message: format!(
                     "{}: expected YAML front matter delimited by ---",
