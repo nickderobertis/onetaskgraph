@@ -9,7 +9,7 @@ use std::num::NonZeroU32;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use onetaskgraph_core::config::{Layer, Origin, Setting, SettingPath, value_from_text};
-use onetaskgraph_core::{OutputFormat, SearchKind};
+use onetaskgraph_core::{OutputFormat, PluginKind, SearchKind};
 use onetaskgraph_plugin_api::{Direction, StatusCategory, TextFields};
 use serde_json::Value;
 
@@ -36,6 +36,13 @@ pub struct Cli {
 /// The verbs this binary answers.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Host one compiled-in source over the stdio plugin protocol.
+    #[command(hide = true)]
+    PluginServe {
+        /// The compiled-in plugin kind to host.
+        source: PluginKind,
+    },
+
     /// Print the JSON Schema bundle the contract types generate.
     ///
     /// Both SDKs are generated from this document, so it is emitted from the
