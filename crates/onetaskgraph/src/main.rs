@@ -54,10 +54,18 @@ fn fail(message: &str, code: u8) -> ExitCode {
 /// a closed reader is the same failure whichever verb was writing, and one path is one
 /// path to get right.
 fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<(), String> {
+    // Every verb validates the configuration it was handed, including the verbs that do
+    // not read it. An unknown field, an unusable value, a plugin this build does not
+    // have and a source name that breaks the pattern are mistakes wherever they were
+    // written, and a verb that answered anyway would drop them in silence — which is the
+    // one outcome this configuration layer is not allowed to have. Validating here
+    // rather than per-verb is what makes that true of the verbs the engine adds later
+    // without any of them having to remember it.
+    let loaded = load(flags)?;
     let (rendered, what) = match command {
         Command::Schema => (schema_bundle()?, "the schema bundle"),
         Command::Config { command } => match command {
-            ConfigCommand::Show => (effective_config(flags)?, "the configuration"),
+            ConfigCommand::Show => (effective_config(&loaded)?, "the configuration"),
         },
     };
     emit(out, rendered.trim_end(), what)
@@ -70,8 +78,7 @@ fn schema_bundle() -> Result<String, String> {
 }
 
 /// The effective configuration, in the format it asks for.
-fn effective_config(flags: &Layer) -> Result<String, String> {
-    let loaded = load(flags)?;
+fn effective_config(loaded: &Loaded) -> Result<String, String> {
     match loaded.config.output() {
         OutputFormat::Text => Ok(loaded.effective.render_text()),
         OutputFormat::Json => serde_json::to_string_pretty(&loaded.effective)
@@ -106,14 +113,22 @@ fn emit(out: &mut impl Write, rendered: &str, what: &str) -> Result<(), String> 
 mod tests {
     use super::*;
 
-    /// The one verb whose rendering needs nothing of the host, so these tests are about
-    /// the write path rather than about what happens to be on this machine.
-    const SCHEMA: Command = Command::Schema;
+    /// Render and write the schema bundle exactly as [`run`] does for that verb.
+    ///
+    /// The two steps rather than `run` itself, because `run` first loads the
+    /// configuration — real documents, the real environment — and these tests are about
+    /// the rendering and the write path, not about what happens to be on this machine.
+    /// What `run` does with the configuration is proven where it can be proven honestly:
+    /// by the journeys in `tests/configuration.rs`, which drive this binary as a
+    /// subprocess against a sandboxed host.
+    fn write_schema_bundle(out: &mut impl Write) -> Result<(), String> {
+        emit(out, schema_bundle()?.trim_end(), "the schema bundle")
+    }
 
     #[test]
     fn the_schema_verb_writes_a_bundle_with_every_contract_root() {
         let mut out = Vec::new();
-        run(&SCHEMA, &Layer::default(), &mut out).expect("the bundle renders");
+        write_schema_bundle(&mut out).expect("the bundle renders");
 
         let bundle: serde_json::Value =
             serde_json::from_slice(&out).expect("the bundle is valid JSON");
@@ -148,7 +163,7 @@ mod tests {
         let mut sink = Failing {
             fail_on_write: true,
         };
-        let message = run(&SCHEMA, &Layer::default(), &mut sink).expect_err("writes refused");
+        let message = write_schema_bundle(&mut sink).expect_err("writes refused");
         assert!(
             message.contains("could not write the schema bundle"),
             "{message}"
@@ -162,7 +177,7 @@ mod tests {
         let mut sink = Failing {
             fail_on_write: false,
         };
-        let message = run(&SCHEMA, &Layer::default(), &mut sink).expect_err("flushes refused");
+        let message = write_schema_bundle(&mut sink).expect_err("flushes refused");
         assert!(
             message.contains("could not write the schema bundle"),
             "{message}"

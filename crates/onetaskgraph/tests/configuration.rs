@@ -385,10 +385,10 @@ fn asking_for_a_format_and_the_json_shorthand_at_once_is_refused_as_a_bad_invoca
 const SOURCE_FIELD: &str = "sources.work.config.capabilities.max_page_size";
 
 #[test]
-fn a_malformed_configuration_flag_is_refused_on_a_verb_that_reads_no_configuration() {
+fn a_malformed_configuration_flag_is_refused_on_a_verb_that_does_not_use_it() {
     let sandbox = Sandbox::new();
 
-    // `schema` reads no configuration, but the flags are global and parse on it, so a
+    // `schema` renders a static bundle, but the flags are global and parse on it, so a
     // flag written there has to be refused rather than accepted and dropped.
     let message = mistyped(&sandbox, &["schema", "--set", "page_size"]);
     assert!(
@@ -425,7 +425,7 @@ fn a_page_size_of_zero_is_refused_wherever_it_is_written() {
 }
 
 #[test]
-fn a_well_formed_configuration_flag_leaves_a_verb_that_reads_no_configuration_alone() {
+fn a_well_formed_configuration_flag_leaves_the_bundle_this_verb_emits_alone() {
     let sandbox = Sandbox::new();
 
     let output = sandbox
@@ -442,6 +442,78 @@ fn a_well_formed_configuration_flag_leaves_a_verb_that_reads_no_configuration_al
         bundle["roots"]["EffectiveConfig"].is_object(),
         "a flag this verb does not read does not change what it emits"
     );
+}
+
+/// Every layer is validated on every verb, including the verbs that do not use it.
+///
+/// `schema` renders a static bundle, so nothing it emits depends on the configuration —
+/// which is exactly why a setting written for it could be accepted and dropped without
+/// anything looking wrong. A setting that addresses nothing this build has is a mistake
+/// wherever it was written, so it is refused here as it is on `config show`: at the
+/// flag layer a user typed on this invocation, and at the environment layer around it.
+#[test]
+fn a_setting_that_addresses_nothing_is_refused_on_a_verb_that_does_not_use_it() {
+    let sandbox = Sandbox::new();
+
+    let from_flag = sandbox
+        .command()
+        .args(["schema", "--set", "unknown=value"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(
+        stdout(&from_flag).is_empty(),
+        "a refusal emits no bundle for a generator to consume"
+    );
+    assert!(
+        stderr(&from_flag).contains("unknown"),
+        "the refusal names the setting: {}",
+        stderr(&from_flag)
+    );
+
+    let from_environment = sandbox
+        .command()
+        .env("ONETASKGRAPH_UNKNOWN", "value")
+        .args(["schema"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(
+        stderr(&from_environment).contains("unknown"),
+        "the refusal names the setting: {}",
+        stderr(&from_environment)
+    );
+}
+
+/// The other three refusals of the same clause, on that same verb.
+///
+/// An unknown field is one of four ways a setting can be wrong; a source name that
+/// breaks the pattern and a plugin this build does not have are two more, and each is
+/// found by a different check. Proving only the first would leave the other two free to
+/// pass a verb that does not use the configuration.
+#[test]
+fn a_source_this_build_cannot_build_is_refused_on_a_verb_that_does_not_use_it() {
+    let sandbox = Sandbox::new();
+
+    for (assignment, named) in [
+        ("sources.WORK.plugin=in-memory", "sources.WORK"),
+        ("sources.work.plugin=nope", "sources.work.plugin"),
+    ] {
+        let output = sandbox
+            .command()
+            .args(["schema", "--set", assignment])
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        assert!(
+            stderr(&output).contains(named),
+            "`--set {assignment}` is refused naming {named}: {}",
+            stderr(&output)
+        );
+    }
 }
 
 #[test]
