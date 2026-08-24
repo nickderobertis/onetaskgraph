@@ -92,6 +92,9 @@ upgrade:
     @just gate
 
 # Print the JSON Schema bundle both SDKs are generated from.
+# llmlint: ignore[tool_output_is_signal] This command's stdout is the requested schema
+# document consumed by SDK generators, not progress logging; suppressing it would make
+# the command return no product at all.
 schema:
     @cargo run --quiet -p onetaskgraph --bin onetaskgraph -- schema
 
