@@ -349,11 +349,19 @@ fn github_project_page(variables: &Value) -> Value {
             vec![("L-3", "core")],
         ),
     ];
-    let offset = variables["after"]
-        .as_str()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0);
-    let first = variables["first"].as_u64().unwrap_or(100) as usize;
+    let offset = match variables.get("after") {
+        Some(Value::Null) => 0,
+        Some(Value::String(value)) => value.parse::<usize>().expect("numeric after cursor"),
+        _ => panic!("GraphQL after must be null or a numeric string"),
+    };
+    let first = usize::try_from(
+        variables
+            .get("first")
+            .and_then(Value::as_u64)
+            .expect("GraphQL first must be an unsigned integer"),
+    )
+    .expect("GraphQL first fits usize");
+    assert!(first > 0, "GraphQL first must be positive");
     let end = (offset + first).min(tasks.len());
     let nodes = tasks[offset..end]
         .iter()
