@@ -7,6 +7,8 @@
 use assert_cmd::Command;
 use predicates::str::contains;
 
+use crate::common::Sandbox;
+
 /// The compiled binary, as a user's shell would find it.
 fn onetaskgraph() -> Command {
     Command::cargo_bin("onetaskgraph").expect("the binary is built")
@@ -139,7 +141,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 3);
+    assert_eq!(bundle["version"], 4);
 
     let roots = bundle["roots"].as_object().expect("roots is an object");
     for root in [
@@ -419,5 +421,161 @@ fn the_readme_documents_the_command_surface_this_binary_actually_has() {
             !readme.contains(invented),
             "the README documents {invented}, which this binary never exits with"
         );
+    }
+}
+
+/// Each command-line vocabulary, the contract root it mirrors, and whether the two spell
+/// their values the same way.
+///
+/// `--status` and `--direction` deliberately borrow the contract's own spellings, so
+/// those two must agree value for value. `--in` and `--kind` deliberately do not — a user
+/// types `--in both`, not `--in title-or-content`, and `--kind task`, not `--kind tasks` —
+/// so for those the reconciliation is that the command line can name **as many** things as
+/// the contract has, which is what an added variant breaks.
+const VOCABULARIES: &[(&[&str], &str, &str, bool)] = &[
+    (
+        &["help", "task", "list"],
+        "--status",
+        "StatusCategory",
+        true,
+    ),
+    (&["help", "task", "deps"], "--direction", "Direction", true),
+    (&["help", "search"], "--in", "TextFields", false),
+    (&["help", "search"], "--kind", "SearchKind", false),
+];
+
+/// The values clap says `flag` takes, read out of this help text.
+///
+/// From the help rather than from the enum itself, because a test target cannot reach a
+/// binary crate's own modules — and because what a user can actually type is what the
+/// help says, which makes reading it the stronger of the two anyway.
+fn possible_values(help: &str, flag: &str) -> Vec<String> {
+    let after = help
+        .split_once(flag)
+        .unwrap_or_else(|| panic!("`{flag}` is not in this help text:\n{help}"))
+        .1;
+    let block = after
+        .split_once("Possible values:")
+        .unwrap_or_else(|| panic!("`{flag}` prints no possible values:\n{help}"))
+        .1;
+    let values: Vec<String> = block
+        .lines()
+        .map(str::trim)
+        .skip_while(|line| line.is_empty())
+        .take_while(|line| line.starts_with("- "))
+        .map(|line| {
+            line.trim_start_matches("- ")
+                .split_once(':')
+                .expect("clap writes `- value: description`")
+                .0
+                .to_owned()
+        })
+        .collect();
+    assert!(!values.is_empty(), "`{flag}` lists no values:\n{help}");
+    values
+}
+
+#[test]
+fn the_command_line_accepts_exactly_the_vocabularies_the_contract_declares() {
+    // `StatusArg`, `FieldsArg`, `DirectionArg` and `KindArg` each mirror an enum of the
+    // contract or the engine, and they exist so that deriving clap's `ValueEnum` does not
+    // put clap into the plugin contract's dependencies for the sake of four flags. A
+    // mirror drifts: add a status category upstream and nothing here stops compiling,
+    // nothing fails, and the command line simply cannot name it any more.
+    //
+    // So the two are reconciled against the schema bundle this binary emits, which is
+    // generated from the contract types themselves and is therefore the one document that
+    // cannot disagree with them.
+    let sandbox = Sandbox::new();
+    let bundle: serde_json::Value = serde_json::from_slice(
+        &sandbox
+            .command()
+            .arg("schema")
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    )
+    .expect("the bundle is JSON");
+
+    for (arguments, flag, root, same_spelling) in VOCABULARIES {
+        let help = String::from_utf8_lossy(
+            &onetaskgraph()
+                .args(*arguments)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
+        .into_owned();
+        let accepted = possible_values(&help, flag);
+
+        // Each variant carries its own doc comment into the bundle, so schemars writes a
+        // `oneOf` of `const`s rather than a bare `enum` — which is the shape a generator
+        // wants and is where the values are.
+        let mut declared: Vec<String> = bundle["roots"][root]["oneOf"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the bundle's {root} root declares no values"))
+            .iter()
+            .map(|variant| {
+                variant["const"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{root} declares a variant with no value"))
+                    .to_owned()
+            })
+            .collect();
+
+        assert_eq!(
+            accepted.len(),
+            declared.len(),
+            "`{flag}` accepts {accepted:?} while the contract's {root} declares \
+             {declared:?}. A variant added to one and not the other is a value a user \
+             can never name — add it to the mirror in crates/onetaskgraph/src/cli.rs."
+        );
+
+        if *same_spelling {
+            let mut accepted = accepted;
+            accepted.sort();
+            declared.sort();
+            assert_eq!(
+                accepted, declared,
+                "`{flag}` borrows {root}'s own spellings, so the two must agree value for \
+                 value"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_value_the_contract_declares_is_one_the_command_line_actually_takes() {
+    // The other half: that the vocabulary above is not merely the right *size* but that
+    // each value in it is accepted by the running binary rather than only printed by its
+    // help.
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&crate::fixtures::ROWS[0].document(&sandbox));
+
+    for (arguments, flag, _, _) in VOCABULARIES {
+        let help = String::from_utf8_lossy(
+            &onetaskgraph()
+                .args(*arguments)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
+        .into_owned();
+        for value in possible_values(&help, flag) {
+            let verb: Vec<&str> = match *flag {
+                "--status" => vec!["task", "list"],
+                "--direction" => vec!["task", "deps", "work:T-1"],
+                _ => vec!["search", "alpha"],
+            };
+            sandbox
+                .command()
+                .args(verb)
+                .args([*flag, value.as_str()])
+                .assert()
+                .success();
+        }
     }
 }

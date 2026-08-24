@@ -168,6 +168,7 @@ const PUBLISHED_BUNDLES: &[(u32, &[&str])] = &[
     (1, &FIRST_BUNDLE_ROOTS),
     (2, &SECOND_BUNDLE_ROOTS),
     (3, &THIRD_BUNDLE_ROOTS),
+    (4, &FOURTH_BUNDLE_ROOTS),
 ];
 
 /// The roots version 1 of the bundle publishes.
@@ -290,6 +291,59 @@ const THIRD_BUNDLE_ROOTS: [&str; 42] = [
     "QueryResponseOfQualifiedLabel",
     "QueryResponseOfQualifiedEdge",
     "QueryResponseOfSearchHit",
+];
+
+/// The roots version 4 publishes: version 3's, plus the two vocabularies the command line
+/// accepts under `--in` and `--kind`.
+///
+/// Both were already reachable inside `TaskQuery`'s definitions. Roots of their own are
+/// what give `the_command_line_accepts_exactly_the_vocabularies_the_contract_declares`
+/// — in the binary's journeys — one document to reconcile the command line against.
+const FOURTH_BUNDLE_ROOTS: [&str; 44] = [
+    "Task",
+    "Project",
+    "Label",
+    "Status",
+    "StatusCategory",
+    "DependencyEdge",
+    "DependencyKind",
+    "Direction",
+    "TaskQuery",
+    "ProjectQuery",
+    "PageRequest",
+    "PageOfTask",
+    "PageOfProject",
+    "PageOfLabel",
+    "PageOfDependencyEdge",
+    "Capabilities",
+    "Health",
+    "SourceError",
+    "GlobalId",
+    "QueryPlan",
+    "SourcePlan",
+    "Predicate",
+    "SourceFailure",
+    "EffectiveConfig",
+    "Setting",
+    "Origin",
+    "OutputFormat",
+    "SecretsReport",
+    "ResolvedCredential",
+    "CredentialLayer",
+    "PageToken",
+    "QualifiedTask",
+    "QualifiedProject",
+    "QualifiedLabel",
+    "QualifiedEdge",
+    "SearchHit",
+    "SourceListing",
+    "QueryResponseOfQualifiedTask",
+    "QueryResponseOfQualifiedProject",
+    "QueryResponseOfQualifiedLabel",
+    "QueryResponseOfQualifiedEdge",
+    "QueryResponseOfSearchHit",
+    "TextFields",
+    "SearchKind",
 ];
 
 #[test]

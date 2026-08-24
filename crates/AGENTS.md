@@ -14,3 +14,25 @@ plugin's own message, never "unknown plugin".
   cargo does not build as a test target of its own.
 - An empty `tests/live.rs` is load-bearing and is never deleted, because `cargo test --test
   live` fails on a missing target rather than passing vacuously.
+
+## The command surface the binary owes
+
+Exit codes are part of the contract, because a caller scripts around them: **`0`** means
+success and nothing else; **`1`** the command failed while running; **`2`** the invocation
+itself was wrong (clap's own code, so a bad `--set` and an unknown flag agree); **`4`** the
+query ran, some sources answered and at least one did not. `--allow-partial` is how a
+caller says a partial answer is acceptable, and it turns `4` into `0`. A run that lost a
+source never exits `0` unless it was asked to.
+
+**Ordering across sources is round-robin** — one row from each selected source in
+configured-name order, then the next from each — and within a source the source's own
+order, exactly. Source-major order would be simpler to explain and would cost a call to
+every other source on every page filled by the first, which against a hosted source is a
+request spent on rows nobody will see. Each stream is walked strictly forwards, so a walk
+to exhaustion returns every row exactly once whatever the page size.
+
+The engine mints the page token and never interprets a source's cursor. It carries one of
+those cursors per source stream plus a count of rows the engine itself already handed
+back — the count is what lets compensation resume inside a source page it narrowed,
+without holding the remainder of that page between calls. It is rendered as hex, because a
+plugin cursor may contain anything and a token a person pastes has to survive a shell.

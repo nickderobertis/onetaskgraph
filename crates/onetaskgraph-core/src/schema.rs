@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyKind, Direction, Health, Label, Page, PageRequest,
-    Project, ProjectQuery, SourceError, Status, StatusCategory, Task, TaskQuery,
+    Project, ProjectQuery, SourceError, Status, StatusCategory, Task, TaskQuery, TextFields,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
@@ -18,7 +18,7 @@ use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::{
     GlobalId, PageToken, Predicate, Qualified, QualifiedEdge, QueryPlan, QueryResponse, SearchHit,
-    SourceFailure, SourceListing, SourcePlan,
+    SearchKind, SourceFailure, SourceListing, SourcePlan,
 };
 
 /// The bundle's own version, bumped whenever a root is added, removed or renamed.
@@ -32,6 +32,13 @@ use crate::{
 /// `CredentialLayer` — because a machine-readable output with no root in this bundle
 /// is one no SDK can be generated against.
 ///
+/// `4` added `TextFields` and `SearchKind`, the two vocabularies `--in` and `--kind`
+/// accept. They were reachable only inside `TaskQuery`'s definitions, which is enough for
+/// a generator and not enough for a reconciliation: the command line spells both of them
+/// deliberately differently (`both` for `title-or-content`, `task` for `tasks`), so a
+/// variant added to either would leave the command line quietly unable to name it. Roots
+/// of their own give that gate one document to read.
+///
 /// `3` added the roots the query verbs emit. Every item the engine returns is
 /// **qualified** — a plugin deals in its own `NativeId`, and only the engine knows which
 /// source an item came from — so `QueryResponseOfTask` became
@@ -40,7 +47,7 @@ use crate::{
 /// joined it. The three unqualified response roots are gone rather than kept beside the
 /// new ones: no verb emits one, and a root nothing emits is a model an SDK would
 /// generate and never receive.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 3;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 4;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -55,6 +62,8 @@ pub fn schema_bundle() -> Value {
     roots.insert("DependencyEdge", schema_for!(DependencyEdge));
     roots.insert("DependencyKind", schema_for!(DependencyKind));
     roots.insert("Direction", schema_for!(Direction));
+    roots.insert("TextFields", schema_for!(TextFields));
+    roots.insert("SearchKind", schema_for!(SearchKind));
 
     roots.insert("TaskQuery", schema_for!(TaskQuery));
     roots.insert("ProjectQuery", schema_for!(ProjectQuery));

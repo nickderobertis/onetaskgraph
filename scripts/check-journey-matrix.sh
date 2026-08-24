@@ -33,8 +33,26 @@ import sys
 registry_path = os.environ["REGISTRY"]
 table_path = os.environ["TABLE"]
 
-registry_source = open(registry_path, encoding="utf-8").read()
-table_source = open(table_path, encoding="utf-8").read()
+def read(path, what):
+    """The file's text, or a named problem and a concrete next action.
+
+    Every caller of this script is a guard, and a guard that dies on a traceback tells
+    its reader the interpreter's story rather than which file to open.
+    """
+    try:
+        return open(path, encoding="utf-8").read()
+    except (OSError, UnicodeDecodeError) as error:
+        print(f"check-journey-matrix: could not read {what}: {error}", file=sys.stderr)
+        print(
+            f"check-journey-matrix: restore {path} — it is where this check learns "
+            "which plugins exist and which have journeys — then re-run 'just check'.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+
+
+registry_source = read(registry_path, "the plugin registry")
+table_source = read(table_path, "the journey table")
 
 # The registry spells each kind exactly once, in `PluginKind::as_str`. Anchoring on that
 # function rather than on the whole file means a kind named in a doc comment is not
