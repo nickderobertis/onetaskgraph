@@ -322,6 +322,34 @@ fn a_closed_stdout_never_panics_however_the_race_lands() {
     }
 }
 
+/// Wait until `path` can actually be executed.
+///
+/// The tests of one target run as threads of one process, and a copy made by one thread
+/// races every other thread's spawn: `fs::copy` holds a write descriptor, `fork` puts a
+/// copy of it in the child's table, and the kernel refuses `execve` on a file anything
+/// has open for writing — `ETXTBSY` — before close-on-exec ever gets a chance to run.
+/// Nothing in this test's own code can prevent that, because the descriptor belongs to a
+/// different test; the window is a few microseconds wide and closes on its own.
+///
+/// So this waits for it rather than failing the suite over a race it does not own, and
+/// fails loudly if the file is still not executable after a wait no real one would need.
+fn runnable(path: &std::path::Path) {
+    let mut last = None;
+    for _ in 0..200 {
+        match std::process::Command::new(path).arg("--version").output() {
+            Ok(_) => return,
+            Err(error) => {
+                last = Some(error);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+    panic!(
+        "the copied binary would not run after two seconds: {}",
+        last.expect("the loop ran at least once")
+    );
+}
+
 #[test]
 fn help_names_the_product_however_the_executable_on_disk_is_named() {
     // Windows appends `.exe` to the file, and clap takes its usage line from argv[0]
@@ -335,6 +363,7 @@ fn help_names_the_product_however_the_executable_on_disk_is_named() {
     ));
     std::fs::copy(assert_cmd::cargo::cargo_bin("onetaskgraph"), &renamed)
         .expect("the binary copies");
+    runnable(&renamed);
 
     Command::new(&renamed)
         .arg("--help")
