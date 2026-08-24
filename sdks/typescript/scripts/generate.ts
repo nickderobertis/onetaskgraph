@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { compile } from "json-schema-to-typescript";
 
 type Bundle = {
@@ -27,9 +27,13 @@ if (configuredGeneratedRoot !== undefined) {
         "next: create the directory or remove the override",
     );
   }
+  const relativeToTemporaryDirectory = relative(realpathSync(tmpdir()), canonicalGeneratedRoot);
   if (
     process.env.NODE_ENV !== "test" ||
-    !canonicalGeneratedRoot.startsWith(`${realpathSync(tmpdir())}/`)
+    relativeToTemporaryDirectory === "" ||
+    relativeToTemporaryDirectory === ".." ||
+    relativeToTemporaryDirectory.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
+    isAbsolute(relativeToTemporaryDirectory)
   ) {
     throw new Error(
       "generate: ONETASKGRAPH_GENERATED_DIR is only accepted under the test temporary " +
