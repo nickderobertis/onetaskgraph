@@ -108,7 +108,8 @@ pub(crate) fn labels_match(labels: &[Label], filter: &LabelFilter) -> bool {
     !filter.none_of.iter().any(holds)
 }
 
-/// Whether `category` is one of `statuses`. An empty list means unfiltered.
+/// An empty list is unfiltered rather than "keeps nothing", which is what makes
+/// `statuses: Vec<StatusCategory>` able to spell "no status filter at all".
 pub(crate) fn status_matches(category: StatusCategory, statuses: &[StatusCategory]) -> bool {
     statuses.is_empty() || statuses.contains(&category)
 }

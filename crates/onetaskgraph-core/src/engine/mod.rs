@@ -1196,7 +1196,10 @@ fn resume_at(states: &Option<Resumption>, source: &SourceName, kind: StreamKind)
 /// 4. no `skip` reaches a source's declared page ceiling, because the engine's `skip` is
 ///    an index among the surviving rows of one source page and can never reach it.
 ///
-/// A fifth thing needs no check here: at most one stream is owed the next row, because
+/// 5. the stream owed the next row, when the document names one, is a stream the
+///    document also resumes.
+///
+/// A sixth thing needs no check here: at most one stream is owed the next row, because
 /// [`Resumption`] holds that as one optional stream rather than as a flag on each of
 /// them, so a document naming two has no spelling.
 ///
@@ -1280,6 +1283,26 @@ fn resumption(
             });
         }
         seen.push((&state.source, state.stream));
+    }
+
+    // The stream owed the next row has to be one of the streams this document resumes.
+    // Ignoring a stray one would be harmless in its effect — the merge would start at the
+    // first stream instead — but it would be a value from outside accepted without a
+    // reading, and the next thing to depend on it would inherit that.
+    if let Some(owed) = &document.owed
+        && !document
+            .streams
+            .iter()
+            .any(|state| state.source == owed.source && state.stream == owed.stream)
+    {
+        return Err(EngineError::Token {
+            message: format!(
+                "this page token owes the next row to a stream it does not resume, \
+                 {:?}'s {}",
+                owed.source.as_str(),
+                owed.stream.describe()
+            ),
+        });
     }
 
     Ok(Some(document))

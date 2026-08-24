@@ -552,6 +552,77 @@ fn showing_one_item_from_a_source_that_cannot_answer_exits_four_unless_partial_i
 }
 
 #[test]
+fn a_both_kind_search_whose_projects_ran_out_still_resumes_under_the_narrower_kind() {
+    // `search --kind both` reads two streams per source and drops each as it is spent, so
+    // a token from the middle of such a walk can carry the task half alone. Handed to
+    // `--kind task` it resumes, and that is deliberate rather than an oversight: which
+    // streams a search covers is what the token's stream check reads, name by name, so
+    // the scope is left out of the query fingerprint on purpose. A token still carrying
+    // the project half is refused by that check, and this is the other side of it.
+    for row in ready() {
+        let sandbox = host(row);
+
+        let mut token = String::new();
+        let mut narrowed = None;
+        for _ in 0..6 {
+            let mut arguments = vec!["search", "alpha", "--kind", "both", "--limit", "1"];
+            if !token.is_empty() {
+                arguments.push("--page");
+                arguments.push(&token);
+            }
+            let rendered = ok(row, &sandbox, &arguments);
+            let Some(next) = rendered
+                .lines()
+                .find_map(|line| line.strip_prefix("next page: --page "))
+                .map(str::to_owned)
+            else {
+                break;
+            };
+            // The first token that no longer mentions a project stream is the one worth
+            // handing to `--kind task`.
+            if !ok(
+                row,
+                &sandbox,
+                &[
+                    "search", "alpha", "--kind", "both", "--limit", "1", "--page", &next,
+                ],
+            )
+            .lines()
+            .any(|line| line.starts_with("project"))
+            {
+                narrowed = Some(next.clone());
+            }
+            token = next;
+            if narrowed.is_some() {
+                break;
+            }
+        }
+
+        let narrowed = narrowed
+            .unwrap_or_else(|| panic!("{}: the walk never reached a task-only token", row.name));
+        let resumed = ok(
+            row,
+            &sandbox,
+            &[
+                "search", "alpha", "--kind", "task", "--limit", "1", "--page", &narrowed,
+            ],
+        );
+        // A search hit leads with its entity, so the id is the second column here rather
+        // than the first that `listed` reads.
+        assert!(
+            resumed.contains(&qualified(SOURCE, "T-2")),
+            "{}: the task half must carry on:\n{resumed}",
+            row.name
+        );
+        assert!(
+            !resumed.lines().any(|line| line.starts_with("project")),
+            "{}: and the exhausted project half must stay gone:\n{resumed}",
+            row.name
+        );
+    }
+}
+
+#[test]
 fn a_limit_smaller_than_the_result_set_walks_to_exhaustion_in_a_stable_order() {
     for row in ready() {
         let sandbox = host(row);

@@ -268,7 +268,6 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
     }
 }
 
-/// The sources this configuration resolves to.
 fn engine(loaded: &Loaded) -> Engine {
     Engine::build(&loaded.config, &loaded.secrets)
 }

@@ -204,6 +204,41 @@ fn a_well_shaped_token_this_configuration_cannot_honour_is_refused_for_what_it_s
 }
 
 #[test]
+fn a_token_owing_the_next_row_to_a_stream_it_does_not_resume_is_refused() {
+    // The stream owed the next row decides where the page picks its turns up. One naming
+    // a stream the token does not resume is a value from outside with no reading — the
+    // merge would quietly begin at the first stream instead, which is an answer in an
+    // order the token did not ask for.
+    let sandbox = host();
+    let minted: Value = serde_json::from_str(&stdout(&run(
+        &sandbox,
+        &["task", "list", "--limit", "1", "--json"],
+    )))
+    .expect("--json emits a response");
+    let carried = minted["next"]
+        .as_str()
+        .expect("one page of four leaves more");
+    let mut document: Value = serde_json::from_slice(&unhex(carried)).expect("a token holds JSON");
+    document["owed"] = json!({"source": "elsewhere", "stream": "items"});
+
+    let forged: String = serde_json::to_string(&document)
+        .expect("a resume document renders")
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+
+    let output = run(&sandbox, &["task", "list", "--page", &forged]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a token owing a stream it does not resume must be refused:\n{}",
+        stdout(&output)
+    );
+    refused(&output, "does not resume", "the same configuration");
+}
+
+#[test]
 fn a_token_from_one_query_is_refused_by_another_rather_than_resuming_it_somewhere_else() {
     // Every cursor in a token is an offset into the result set *one* query produced. Hand
     // one to a different query and each source picks up at a position that meant
