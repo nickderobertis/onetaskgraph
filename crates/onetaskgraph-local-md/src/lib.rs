@@ -264,14 +264,11 @@ impl LocalMdSource {
                 message: format!("{}: {e}", path.display()),
             })?;
         let base = self.directory(kind)?;
-        let relative = path.strip_prefix(&base).map_err(|_| SourceError::Malformed {
-            message: format!(
-                "{} is outside its {} directory {}",
-                path.display(),
-                kind.directory(),
-                base.display()
-            ),
-        })?;
+        let relative = path
+            .strip_prefix(&base)
+            .map_err(|_| SourceError::Malformed {
+                message: format!("{} is outside {}", path.display(), base.display()),
+            })?;
         let id = relative
             .with_extension("")
             .to_string_lossy()
