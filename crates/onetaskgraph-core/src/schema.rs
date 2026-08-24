@@ -29,7 +29,7 @@ use crate::{
 ///
 /// Which roots each version brought is what `git log` answers; what this number owes a
 /// reader is that it moves whenever [`schema_bundle`] below gains, loses or renames one.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 4;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 5;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -76,6 +76,7 @@ pub fn schema_bundle() -> Value {
     roots.insert("QualifiedEdge", schema_for!(QualifiedEdge));
     roots.insert("SearchHit", schema_for!(SearchHit));
     roots.insert("SourceListing", schema_for!(SourceListing));
+    roots.insert("SourceListings", schema_for!(Vec<SourceListing>));
     roots.insert(
         "QueryResponseOfQualifiedTask",
         schema_for!(QueryResponse<Qualified<Task>>),

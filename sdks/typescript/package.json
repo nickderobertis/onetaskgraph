@@ -4,16 +4,35 @@
   "description": "The TypeScript SDK for onetaskgraph, generated from the binary's own JSON Schema bundle.",
   "license": "MIT",
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nickderobertis/onetaskgraph.git",
     "directory": "sdks/typescript"
   },
   "files": [
-    "src"
+    "dist",
+    "README.md"
   ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node && bun run tsc -p tsconfig.build.json",
+    "generate": "bun scripts/generate.ts",
+    "generate:check": "bun scripts/generate.ts --check"
+  },
+  "optionalDependencies": {
+    "@onetaskgraph/cli": "0.1.0"
+  },
+  "devDependencies": {
+    "ajv": "8.17.1",
+    "json-schema-to-typescript": "15.0.4"
+  },
   "publishConfig": {
     "access": "public"
   }
