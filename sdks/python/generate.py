@@ -28,6 +28,25 @@ RESPONSE_ROOTS = {
     "config_show": "EffectiveConfig",
 }
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
+OPTION_TYPES = {
+    "allow_partial": "bool",
+    "default_sources": "list[str] | tuple[str, ...]",
+    "direction": "str",
+    "explain": "bool",
+    "in_": "str",
+    "kind": "str",
+    "label": "list[str] | tuple[str, ...]",
+    "limit": "int",
+    "no_project": "bool",
+    "not_label": "list[str] | tuple[str, ...]",
+    "page": "str",
+    "page_size": "int",
+    "project": "str",
+    "search": "str",
+    "set": "list[str] | tuple[str, ...]",
+    "source": "list[str] | tuple[str, ...]",
+    "status": "list[str] | tuple[str, ...]",
+}
 
 
 class SchemaBundle(TypedDict):
@@ -252,8 +271,6 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         *[f"    {root}," for root in sorted(set(RESPONSE_ROOTS.values()) | {"GlobalId"})],
         ")",
         "",
-        "type Option = str | int | bool | list[str] | tuple[str, ...] | None",
-        "",
         "class GeneratedClient:",
         '    """Methods generated from the binary command surface."""',
         "",
@@ -266,19 +283,19 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     for name, command in sorted(names.items()):
         root = RESPONSE_ROOTS[name]
         return_type = RETURN_TYPES.get(name, root)
-        positional = (
-            "text"
-            if command == ("search",)
-            else "id"
-            if command[0] in {"task", "project"} and command[-1] in {"show", "deps"}
-            else None
-        )
+        match command:
+            case ("search",):
+                positional = "text"
+            case ("task" | "project", "show" | "deps"):
+                positional = "id"
+            case _:
+                positional = None
         keywords = [item for item in option_names(command) if item != positional]
         positional_type = "GlobalId | str" if positional == "id" else "str"
         parameters = (
             ([f"{positional}: {positional_type}"] if positional else [])
             + ["*"]
-            + [f"{item}: Option = None" for item in keywords]
+            + [f"{item}: {OPTION_TYPES[item]} | None = None" for item in keywords]
         )
         if parameters[-1] == "*":
             parameters.pop()

@@ -13,8 +13,6 @@ from .models import (
     SourceListing,
 )
 
-type Option = str | int | bool | list[str] | tuple[str, ...] | None
-
 
 class GeneratedClient:
     """Methods generated from the binary command surface."""
@@ -23,7 +21,11 @@ class GeneratedClient:
         raise NotImplementedError
 
     async def config_show(
-        self, *, default_sources: Option = None, page_size: Option = None, set: Option = None
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
     ) -> EffectiveConfig:
         """Run ``onetaskgraph config show``."""
         return await self._invoke(
@@ -37,14 +39,14 @@ class GeneratedClient:
     async def label_list(
         self,
         *,
-        allow_partial: Option = None,
-        default_sources: Option = None,
-        explain: Option = None,
-        limit: Option = None,
-        page: Option = None,
-        page_size: Option = None,
-        set: Option = None,
-        source: Option = None,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedLabel:
         """Run ``onetaskgraph label list``."""
         return await self._invoke(
@@ -64,14 +66,14 @@ class GeneratedClient:
         self,
         id: GlobalId | str,
         *,
-        allow_partial: Option = None,
-        default_sources: Option = None,
-        direction: Option = None,
-        explain: Option = None,
-        limit: Option = None,
-        page: Option = None,
-        page_size: Option = None,
-        set: Option = None,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        direction: str | None = None,
+        explain: bool | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedEdge:
         """Run ``onetaskgraph project deps``."""
         return await self._invoke(
@@ -91,19 +93,19 @@ class GeneratedClient:
     async def project_list(
         self,
         *,
-        allow_partial: Option = None,
-        default_sources: Option = None,
-        explain: Option = None,
-        in_: Option = None,
-        label: Option = None,
-        limit: Option = None,
-        not_label: Option = None,
-        page: Option = None,
-        page_size: Option = None,
-        search: Option = None,
-        set: Option = None,
-        source: Option = None,
-        status: Option = None,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: str | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        limit: int | None = None,
+        not_label: list[str] | tuple[str, ...] | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        search: str | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        status: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedProject:
         """Run ``onetaskgraph project list``."""
         return await self._invoke(
@@ -128,11 +130,11 @@ class GeneratedClient:
         self,
         id: GlobalId | str,
         *,
-        allow_partial: Option = None,
-        default_sources: Option = None,
-        explain: Option = None,
-        page_size: Option = None,
-        set: Option = None,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedProject:
         """Run ``onetaskgraph project show``."""
         return await self._invoke(
@@ -150,16 +152,16 @@ class GeneratedClient:
         self,
         text: str,
         *,
-        allow_partial: Option = None,
-        default_sources: Option = None,
-        explain: Option = None,
-        in_: Option = None,
-        kind: Option = None,
-        limit: Option = None,
-        page: Option = None,
-        page_size: Option = None,
-        set: Option = None,
-        source: Option = None,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: str | None = None,
+        kind: str | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfSearchHit:
         """Run ``onetaskgraph search``."""
         return await self._invoke(
@@ -179,7 +181,11 @@ class GeneratedClient:
         )
 
     async def sources_list(
-        self, *, default_sources: Option = None, page_size: Option = None, set: Option = None
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
     ) -> list[SourceListing]:
         """Run ``onetaskgraph sources list``."""
         return await self._invoke(
@@ -194,14 +200,14 @@ class GeneratedClient:
         self,
         id: GlobalId | str,
         *,
-        allow_partial: Option = None,
-        default_sources: Option = None,
-        direction: Option = None,
-        explain: Option = None,
-        limit: Option = None,
-        page: Option = None,
-        page_size: Option = None,
-        set: Option = None,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        direction: str | None = None,
+        explain: bool | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedEdge:
         """Run ``onetaskgraph task deps``."""
         return await self._invoke(
@@ -221,21 +227,21 @@ class GeneratedClient:
     async def task_list(
         self,
         *,
-        allow_partial: Option = None,
-        default_sources: Option = None,
-        explain: Option = None,
-        in_: Option = None,
-        label: Option = None,
-        limit: Option = None,
-        no_project: Option = None,
-        not_label: Option = None,
-        page: Option = None,
-        page_size: Option = None,
-        project: Option = None,
-        search: Option = None,
-        set: Option = None,
-        source: Option = None,
-        status: Option = None,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: str | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        limit: int | None = None,
+        no_project: bool | None = None,
+        not_label: list[str] | tuple[str, ...] | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        project: str | None = None,
+        search: str | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        status: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedTask:
         """Run ``onetaskgraph task list``."""
         return await self._invoke(
@@ -262,11 +268,11 @@ class GeneratedClient:
         self,
         id: GlobalId | str,
         *,
-        allow_partial: Option = None,
-        default_sources: Option = None,
-        explain: Option = None,
-        page_size: Option = None,
-        set: Option = None,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedTask:
         """Run ``onetaskgraph task show``."""
         return await self._invoke(
