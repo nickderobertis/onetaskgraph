@@ -652,12 +652,13 @@ impl TaskSource for GitHubProjectsSource {
                         message: "GitHub project dependency nodes is not an array".into(),
                     })?;
                 for blocker in blockers {
-                    for project_item in blocker
+                    let project_items = blocker
                         .pointer("/projectItems/nodes")
                         .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                    {
+                        .ok_or_else(|| SourceError::Malformed {
+                            message: "GitHub blocker projectItems.nodes is not an array".into(),
+                        })?;
+                    for project_item in project_items {
                         let blocker_project = required_str(
                             project_item
                                 .get("project")

@@ -127,22 +127,8 @@ fn sequence_server(bodies: Vec<Value>) -> (String, thread::JoinHandle<()>) {
 }
 
 fn project_response(has_next: bool) -> Value {
-    // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This is synthetic data,
-    // not a copied GitHub contract: production parsing rejects every required shape and
-    // the credential-gated live test reconciles the same query with GitHub's real API.
-    let mut fixture = json!({"data":{"organization":{"projectV2":{
-        "id":"PVT_project","title":"Roadmap","shortDescription":"Delivery plan",
-        "url":"https://github.example/projects/7","createdAt":"2026-01-01T00:00:00Z",
-        "updatedAt":"2026-02-01T00:00:00Z","closed":false,
-        "items":{"nodes":[{"id":"PVTI_1","fieldValues":{"nodes":[
-            {"name":"Doing","field":{"name":"Status"}},
-            {"labels":{"nodes":[{"id":"L_field","name":"team","color":"00ff00"}]}}
-        ]},"content":{"id":"I_task","title":"Ship it","body":"details",
-            "url":"https://github.example/issues/1","createdAt":"2026-01-02T00:00:00Z",
-            "updatedAt":"2026-01-03T00:00:00Z","state":"OPEN",
-            "labels":{"nodes":[{"id":"L_bug","name":"bug","color":"ff0000"}]}}}],
-            "pageInfo":{"hasNextPage":false,"endCursor":null}}
-    }},"user":{"projectV2":null}}});
+    let mut fixture: Value = serde_json::from_str(include_str!("fixtures/project.json"))
+        .expect("the committed project fixture is valid JSON");
     let page = &mut fixture["data"]["organization"]["projectV2"]["items"]["pageInfo"];
     page["hasNextPage"] = json!(has_next);
     page["endCursor"] = if has_next {
@@ -351,9 +337,8 @@ async fn maps_authentication_failure_without_disclosing_the_token() {
 async fn project_dependencies_aggregate_underlying_issue_edges() {
     // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Synthetic edge data;
     // malformed variants below and the authenticated live query are its drift guards.
-    let dependencies = json!({"data":{"node":{"blockedBy":{"nodes":[{
-        "id":"I_blocker","projectItems":{"nodes":[{"project":{"id":"PVT_blocker"}}]}
-    }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}});
+    let dependencies: Value = serde_json::from_str(include_str!("fixtures/dependencies.json"))
+        .expect("the committed dependency fixture is valid JSON");
     let (endpoint, handle) = sequence_server(vec![
         project_response(false),
         project_response(false),
@@ -393,6 +378,27 @@ async fn project_dependency_failures_are_explicit() {
             .project_dependencies(&NativeId("missing".into()), Direction::DependsOn, &page(10))
             .await,
         Err(SourceError::Refused { .. })
+    ));
+    handle.join().unwrap();
+
+    let malformed_dependencies = json!({"data":{"node":{"blockedBy":{
+        "nodes":[{"id":"I_blocker","projectItems":{}}],
+        "pageInfo":{"hasNextPage":false,"endCursor":null}
+    }}}});
+    let (endpoint, handle) = sequence_server(vec![
+        project_response(false),
+        project_response(false),
+        malformed_dependencies,
+    ]);
+    assert!(matches!(
+        build(&endpoint)
+            .project_dependencies(
+                &NativeId("PVT_project".into()),
+                Direction::DependsOn,
+                &page(10)
+            )
+            .await,
+        Err(SourceError::Malformed { .. })
     ));
     handle.join().unwrap();
 }

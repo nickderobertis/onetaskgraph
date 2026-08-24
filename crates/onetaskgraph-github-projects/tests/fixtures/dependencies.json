@@ -1,0 +1,16 @@
+{
+  "data": {
+    "node": {
+      "blockedBy": {
+        "nodes": [
+          {
+            "id": "I_blocker",
+            "projectItems": { "nodes": [{ "project": { "id": "PVT_blocker" } }] }
+          }
+        ],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      },
+      "blocking": { "nodes": [], "pageInfo": { "hasNextPage": false, "endCursor": null } }
+    }
+  }
+}
