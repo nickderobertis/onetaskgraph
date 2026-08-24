@@ -626,7 +626,9 @@ impl TaskSource for GitHubProjectsSource {
     ) -> Result<Page<Project>, SourceError> {
         validate_page(page)?;
         if page.cursor.is_some() {
-            return Ok(Page::last(vec![]));
+            return Err(SourceError::Config {
+                message: "GitHub project listing does not issue page cursors".into(),
+            });
         }
         Ok(Page::last(vec![
             self.project(&self.project_value(None, 1).await?)?,

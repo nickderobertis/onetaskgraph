@@ -581,20 +581,18 @@ async fn lists_labels_tasks_and_projects_with_cursor_validation() {
         .await
         .unwrap();
     assert_eq!(projects.items[0].id.0, "PVT_project");
-    assert!(
+    assert!(matches!(
         source
             .query_projects(
                 &ProjectQuery::default(),
                 &PageRequest {
-                    cursor: Some(Cursor("done".into())),
+                    cursor: Some(Cursor("not-issued".into())),
                     limit: 10
                 }
             )
-            .await
-            .unwrap()
-            .items
-            .is_empty()
-    );
+            .await,
+        Err(SourceError::Config { .. })
+    ));
     handle.join().unwrap();
 }
 
