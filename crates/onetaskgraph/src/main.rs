@@ -16,7 +16,7 @@ use clap::Parser;
 use onetaskgraph_core::config::Layer;
 use onetaskgraph_core::{
     DependencyRequest, Engine, Environment, Filters, GlobalId, LabelRequest, Loaded, OutputFormat,
-    PageToken, Paging, PluginKind, ProjectRequest, ProjectSelector, QueryResponse, SearchRequest,
+    PageToken, Paging, ProjectRequest, ProjectSelector, QueryResponse, SearchRequest,
     SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{LabelFilter, NativeId, SourceName, TextQuery};
@@ -51,17 +51,8 @@ const EXIT_PARTIAL: u8 = 4;
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     if let Command::PluginServe { source } = &cli.command {
-        let Some(kind) = PluginKind::parse(source) else {
-            return fail(
-                &format!(
-                    "cannot serve unknown plugin {source:?}; this build knows {}",
-                    onetaskgraph_core::plugin_kinds().join(", ")
-                ),
-                EXIT_FAILURE,
-            );
-        };
         let input = io::BufReader::new(io::stdin().lock());
-        return match onetaskgraph_core::serve_plugin(input, io::stdout().lock(), kind).await {
+        return match onetaskgraph_core::serve_plugin(input, io::stdout().lock(), *source).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => fail(&error.to_string(), EXIT_FAILURE),
         };

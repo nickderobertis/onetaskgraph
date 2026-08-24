@@ -40,11 +40,11 @@ fn plugin_serve_refuses_a_source_this_build_does_not_have() {
         .output()
         .expect("the main command runs");
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let complaint = String::from_utf8(output.stderr).expect("diagnostic is UTF-8");
     assert!(
-        complaint.contains("unknown plugin \"missing\""),
+        complaint.contains("no plugin of this build is called \"missing\""),
         "{complaint}"
     );
     assert!(complaint.contains("in-memory"), "{complaint}");
@@ -104,6 +104,35 @@ fn the_shipped_host_answers_a_connection_on_its_standard_input_and_exits_zero() 
     assert!(
         String::from_utf8_lossy(&output.stderr).is_empty(),
         "a successful call writes nothing to standard error (§1)"
+    );
+}
+
+#[test]
+fn the_shipped_host_reports_malformed_plugin_settings_on_the_wire() {
+    let mut asked = handshake();
+    asked["params"]["config"] = json!({"tasks": "not a task list"});
+
+    let mut child = source_host()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("the host runs");
+    let mut input = child.stdin.take().expect("stdin was piped");
+    writeln!(input, "{asked}").expect("the host is listening");
+    drop(input);
+
+    let output = child.wait_with_output().expect("the host finishes");
+
+    assert_eq!(output.status.code(), Some(0));
+    let answered = String::from_utf8(output.stdout).expect("UTF-8");
+    let refusal: Value = serde_json::from_str(answered.trim()).expect("one JSON object");
+    assert_eq!(refusal["id"], "0");
+    assert_eq!(refusal["error"]["kind"], "config");
+    assert!(
+        refusal["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("source work") && message.contains("sequence")),
+        "{answered}"
     );
 }
 
