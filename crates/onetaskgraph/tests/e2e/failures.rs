@@ -142,6 +142,13 @@ fn a_well_shaped_token_this_configuration_cannot_honour_is_refused_for_what_it_s
             r#"[{"source":"work","stream":"items"},{"source":"work","stream":"items","skip":1}]"#,
             "two places to resume",
         ),
+        // The one that would otherwise exit 0 with an empty page: a token a `search`
+        // minted, handed to `task list`, which reads neither of the streams it names.
+        (
+            "5b7b22736f75726365223a22776f726b222c2273747265616d223a227461736b73227d5d",
+            r#"[{"source":"work","stream":"tasks"}]"#,
+            "this command does not read",
+        ),
     ] {
         let output = run(&host(), &["task", "list", "--page", token]);
         assert_eq!(

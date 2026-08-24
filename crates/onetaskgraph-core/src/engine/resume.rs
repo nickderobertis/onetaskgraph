@@ -30,6 +30,17 @@ pub(crate) enum StreamKind {
     Projects,
 }
 
+impl StreamKind {
+    /// What this stream is, for a message a user has to act on.
+    pub(crate) fn describe(self) -> &'static str {
+        match self {
+            Self::Items => "a single-entity listing",
+            Self::Tasks => "the task half of a search",
+            Self::Projects => "the project half of a search",
+        }
+    }
+}
+
 /// The place one walk of one stream picks up from.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub(crate) struct Resume {

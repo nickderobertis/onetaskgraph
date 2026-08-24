@@ -1300,6 +1300,13 @@ async fn a_page_token_this_configuration_cannot_honour_is_refused_for_what_it_sa
             ]),
             "two places to resume",
         ),
+        // The one that would otherwise answer *successfully* and wrongly: a token a
+        // search minted names streams `task list` does not read, so every source would
+        // drop out of the walk and the page would come back empty and exhausted.
+        (
+            json!([{"source": "work", "stream": "tasks"}]),
+            "this command does not read",
+        ),
     ] {
         let raw = serde_json::to_string(&document).expect("a resume document renders");
         let token = PageToken::parse(hex(&raw)).expect("it is this engine's own document");
@@ -1328,4 +1335,45 @@ fn hex(document: &str) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+#[tokio::test]
+async fn a_search_refuses_a_token_from_a_walk_over_entities_it_is_not_covering() {
+    // The mirror of the case above. `--kind task` reading a token a `--kind both` walk
+    // minted would silently drop the project half and report an exhausted walk.
+    let engine = engine_over(json!({
+        "work": {"plugin": "in-memory", "config": work()},
+    }));
+    let both = SearchRequest {
+        sources: Vec::new(),
+        text: TextQuery {
+            terms: "alpha".to_owned(),
+            fields: TextFields::TitleOrContent,
+        },
+        kind: SearchKind::Both,
+        paging: page(1),
+    };
+
+    let first = engine.search(&both).await.expect("the query runs");
+    let token = first.next.expect("more than one row matches");
+
+    let narrowed = SearchRequest {
+        kind: SearchKind::Tasks,
+        paging: resumed(1, token.clone()),
+        ..both.clone()
+    };
+    let Err(EngineError::Token { message }) = engine.search(&narrowed).await else {
+        panic!("a token naming the project half must not be read by a task-only search");
+    };
+    assert!(message.contains("this command does not read"), "{message}");
+
+    // And the same token against the same scope resumes, so the check refuses a mismatch
+    // rather than every token.
+    let resumed_both = SearchRequest {
+        paging: resumed(1, token),
+        ..both
+    };
+    let second = engine.search(&resumed_both).await.expect("the query runs");
+    assert_eq!(second.items.len(), 1);
+    assert_ne!(second.items, first.items);
 }

@@ -339,7 +339,7 @@ impl Engine {
             self.known(&id.source)?;
             names.retain(|name| name == &id.source);
         }
-        let states = resumption(self, request.paging.token.as_ref())?;
+        let states = resumption(self, request.paging.token.as_ref(), &[StreamKind::Items])?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
@@ -389,7 +389,7 @@ impl Engine {
         request: &ProjectRequest,
     ) -> Result<QueryResponse<Qualified<Project>>, EngineError> {
         let names = self.resolve_selection(&request.sources)?;
-        let states = resumption(self, request.paging.token.as_ref())?;
+        let states = resumption(self, request.paging.token.as_ref(), &[StreamKind::Items])?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
@@ -446,7 +446,7 @@ impl Engine {
         request: &LabelRequest,
     ) -> Result<QueryResponse<Qualified<Label>>, EngineError> {
         let names = self.resolve_selection(&request.sources)?;
-        let states = resumption(self, request.paging.token.as_ref())?;
+        let states = resumption(self, request.paging.token.as_ref(), &[StreamKind::Items])?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
@@ -477,7 +477,15 @@ impl Engine {
         request: &SearchRequest,
     ) -> Result<QueryResponse<SearchHit>, EngineError> {
         let names = self.resolve_selection(&request.sources)?;
-        let states = resumption(self, request.paging.token.as_ref())?;
+        // The streams this search reads, which is what a token resuming it may name. A
+        // `--kind both` walk that has exhausted one half carries only the other, so this
+        // is what a token may name rather than what it must.
+        let reads: &[StreamKind] = match request.kind {
+            SearchKind::Tasks => &[StreamKind::Tasks],
+            SearchKind::Projects => &[StreamKind::Projects],
+            SearchKind::Both => &[StreamKind::Tasks, StreamKind::Projects],
+        };
+        let states = resumption(self, request.paging.token.as_ref(), reads)?;
         let budget = request.paging.limit.get();
         let filters = Filters {
             text: Some(request.text.clone()),
@@ -625,7 +633,7 @@ impl Engine {
         entity: Entity,
     ) -> Result<QueryResponse<QualifiedEdge>, EngineError> {
         let name = self.known(&request.id.source)?;
-        let states = resumption(self, request.paging.token.as_ref())?;
+        let states = resumption(self, request.paging.token.as_ref(), &[StreamKind::Items])?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
@@ -1032,8 +1040,13 @@ fn resume_at(
 ///
 /// 1. every stream it names belongs to a configured source, so a token carried over from
 ///    another configuration is refused rather than quietly resuming half a walk;
-/// 2. no stream appears twice, because a walk has one place to pick up per stream;
-/// 3. no `skip` reaches a source's declared page ceiling, because the engine's `skip` is
+/// 2. every stream it names is one **this verb reads**. A token minted by
+///    `search --kind both` carries task and project streams, and `task list` reads
+///    neither; without this it would find nothing to resume, drop every source, and
+///    answer with an empty page and a zero exit — a wrong answer that looks like an
+///    exhausted walk, which is the worst shape this failure could take;
+/// 3. no stream appears twice, because a walk has one place to pick up per stream;
+/// 4. no `skip` reaches a source's declared page ceiling, because the engine's `skip` is
 ///    an index among the surviving rows of one source page and can never reach it.
 ///
 /// None of this is a security boundary and a page token is not a credential: nothing in
@@ -1043,6 +1056,7 @@ fn resume_at(
 fn resumption(
     engine: &Engine,
     token: Option<&PageToken>,
+    reads: &[StreamKind],
 ) -> Result<Option<Vec<StreamState>>, EngineError> {
     let Some(states) = token.map(PageToken::decode) else {
         return Ok(None);
@@ -1050,6 +1064,15 @@ fn resumption(
 
     let mut seen: Vec<(&SourceName, StreamKind)> = Vec::new();
     for state in &states {
+        if !reads.contains(&state.stream) {
+            return Err(EngineError::Token {
+                message: format!(
+                    "this page token resumes {}, which this command does not read — it \
+                     was written by a different query",
+                    state.stream.describe()
+                ),
+            });
+        }
         let ceiling = engine
             .ready
             .iter()
