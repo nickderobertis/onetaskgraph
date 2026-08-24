@@ -202,22 +202,28 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
     // prove its forward dependency connection is readable; an empty connection is well formed.
     let mut dependency_read = false;
     for task in &tasks {
-        if source
+        let forward = source
             .task_dependencies(
                 &NativeId(task.id.0.clone()),
                 Direction::DependsOn,
                 &page(None),
             )
-            .await
-            .is_ok()
-        {
+            .await;
+        let reverse = source
+            .task_dependencies(
+                &NativeId(task.id.0.clone()),
+                Direction::DependedOnBy,
+                &page(None),
+            )
+            .await;
+        if forward.is_ok() && reverse.is_ok() {
             dependency_read = true;
             break;
         }
     }
     assert!(
         dependency_read,
-        "live project has no Issue item on which to exercise Issue.blockedBy; set \
+        "live project has no Issue item on which to exercise Issue.blockedBy and Issue.blocking; set \
          GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER to a project containing an Issue"
     );
 }
