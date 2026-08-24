@@ -496,10 +496,14 @@ impl GitHubProjectsSource {
                 })
             })
             .collect::<Result<Vec<_>, SourceError>>()?;
-        Ok(Page {
-            items,
-            next: next_cursor(connection)?,
-        })
+        let next = next_cursor(connection)?;
+        if let Some(next) = &next {
+            validate_cursor_progress(
+                page.cursor.as_ref().map(|cursor| cursor.0.as_str()),
+                &next.0,
+            )?;
+        }
+        Ok(Page { items, next })
     }
 
     async fn related_issue_projects(&self, issue: &Value) -> Result<Vec<NativeId>, SourceError> {
@@ -621,10 +625,14 @@ impl TaskSource for GitHubProjectsSource {
             .into_iter()
             .flatten()
             .collect();
-        Ok(Page {
-            items,
-            next: next_cursor(items_connection)?,
-        })
+        let next = next_cursor(items_connection)?;
+        if let Some(next) = &next {
+            validate_cursor_progress(
+                page.cursor.as_ref().map(|cursor| cursor.0.as_str()),
+                &next.0,
+            )?;
+        }
+        Ok(Page { items, next })
     }
     async fn query_projects(
         &self,

@@ -41,6 +41,8 @@ async fn discover_project(token: &str) -> Option<(String, u32)> {
         .send()
         .await
         .ok()?
+        .error_for_status()
+        .ok()?
         .json()
         .await
         .ok()?;

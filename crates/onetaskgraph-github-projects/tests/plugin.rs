@@ -699,6 +699,38 @@ async fn walks_source_pages_for_aggregate_reads_and_accepts_a_native_cursor() {
         .unwrap();
     assert_eq!(tasks.items.len(), 1);
     handle.join().unwrap();
+
+    let (endpoint, handle) = server("200 OK", project_response(true), 1, "projectV2");
+    assert!(matches!(
+        build(&endpoint)
+            .query_tasks(
+                &TaskQuery::default(),
+                &PageRequest {
+                    cursor: Some(Cursor("cursor-2".into())),
+                    limit: 10,
+                },
+            )
+            .await,
+        Err(SourceError::Malformed { .. })
+    ));
+    handle.join().unwrap();
+
+    let repeated_dependency_cursor = json!({"data":{"node":{"__typename":"Issue","blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"same"}},"blocking":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}});
+    let (endpoint, handle) = server("200 OK", repeated_dependency_cursor, 1, "blockedBy");
+    assert!(matches!(
+        build(&endpoint)
+            .task_dependencies(
+                &NativeId("I_task".into()),
+                Direction::DependsOn,
+                &PageRequest {
+                    cursor: Some(Cursor("same".into())),
+                    limit: 10,
+                },
+            )
+            .await,
+        Err(SourceError::Malformed { .. })
+    ));
+    handle.join().unwrap();
 }
 
 #[tokio::test]
