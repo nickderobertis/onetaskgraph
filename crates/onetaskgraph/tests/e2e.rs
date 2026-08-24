@@ -40,8 +40,9 @@ fn help_names_the_product_and_every_verb_the_binary_answers() {
         .stdout(contains(
             "One interface over the ticketing systems your work lives in.",
         ))
-        .stdout(contains("Usage: onetaskgraph <COMMAND>"))
+        .stdout(contains("Usage: onetaskgraph [OPTIONS] <COMMAND>"))
         .stdout(contains("schema"))
+        .stdout(contains("config"))
         .stdout(contains("--version"))
         .stderr(predicates::str::is_empty());
 }
@@ -72,7 +73,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 1);
+    assert_eq!(bundle["version"], 2);
 
     let roots = bundle["roots"].as_object().expect("roots is an object");
     for root in [
@@ -89,6 +90,12 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
         "SourcePlan",
         "Predicate",
         "QueryResponseOfTask",
+        // `config show --json` emits an EffectiveConfig, so an SDK is generated
+        // against it from here like every other machine-readable output.
+        "EffectiveConfig",
+        "Setting",
+        "Origin",
+        "SecretsReport",
     ] {
         let schema = &roots[root];
         assert!(schema.is_object(), "the bundle is missing {root}");
@@ -241,4 +248,31 @@ fn a_closed_stdout_never_panics_however_the_race_lands() {
             "{stderr}"
         );
     }
+}
+
+#[test]
+fn help_names_the_product_however_the_executable_on_disk_is_named() {
+    // Windows appends `.exe` to the file, and clap takes its usage line from argv[0]
+    // unless told otherwise — so without a pinned `bin_name` the help there would name
+    // `onetaskgraph.exe`, a command no document tells a user to type. Copying the real
+    // binary under another file name reproduces that condition on every platform.
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let renamed = dir.path().join(format!(
+        "onetaskgraph-under-another-name{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    std::fs::copy(assert_cmd::cargo::cargo_bin("onetaskgraph"), &renamed)
+        .expect("the binary copies");
+
+    Command::new(&renamed)
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("Usage: onetaskgraph [OPTIONS] <COMMAND>"));
+
+    Command::new(&renamed)
+        .args(["help", "schema"])
+        .assert()
+        .success()
+        .stdout(contains("Usage: onetaskgraph schema"));
 }

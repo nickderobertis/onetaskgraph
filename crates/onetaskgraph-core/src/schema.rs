@@ -13,7 +13,9 @@ use onetaskgraph_plugin_api::{
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
 
+use crate::config::{EffectiveConfig, Origin, OutputFormat, Setting};
 use crate::registry::registry;
+use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::{GlobalId, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
 
 /// The bundle's own version, bumped whenever a root is added, removed or renamed.
@@ -21,7 +23,12 @@ use crate::{GlobalId, Predicate, QueryPlan, QueryResponse, SourceFailure, Source
 /// Consumers generate code from this document, so the version is part of the
 /// contract rather than a convenience: an SDK can refuse a bundle it was not
 /// generated against instead of silently emitting the wrong models.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 1;
+///
+/// `2` added the roots `config show --json` emits — `EffectiveConfig`, `Setting`,
+/// `Origin`, `OutputFormat`, `SecretsReport`, `ResolvedCredential` and
+/// `CredentialLayer` — because a machine-readable output with no root in this bundle
+/// is one no SDK can be generated against.
+pub const SCHEMA_BUNDLE_VERSION: u32 = 2;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -60,6 +67,14 @@ pub fn schema_bundle() -> Value {
         schema_for!(QueryResponse<Project>),
     );
     roots.insert("QueryResponseOfLabel", schema_for!(QueryResponse<Label>));
+
+    roots.insert("EffectiveConfig", schema_for!(EffectiveConfig));
+    roots.insert("Setting", schema_for!(Setting));
+    roots.insert("Origin", schema_for!(Origin));
+    roots.insert("OutputFormat", schema_for!(OutputFormat));
+    roots.insert("SecretsReport", schema_for!(SecretsReport));
+    roots.insert("ResolvedCredential", schema_for!(ResolvedCredential));
+    roots.insert("CredentialLayer", schema_for!(CredentialLayer));
 
     let plugins: BTreeMap<String, Schema> = registry()
         .iter()

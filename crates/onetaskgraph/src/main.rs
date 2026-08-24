@@ -1,80 +1,134 @@
 //! The `onetaskgraph` command.
 //!
 //! Every user-facing journey is proven by driving this binary as a subprocess and
-//! asserting on its exit code, stdout and stderr — see `tests/`. Only `--help`,
-//! `--version` and `schema` answer yet; the query verbs land with the engine.
+//! asserting on its exit code, stdout and stderr — see `tests/`. `--help`,
+//! `--version`, `schema` and `config show` answer today; the query verbs land with
+//! the engine.
+
+mod cli;
 
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
+use onetaskgraph_core::config::Layer;
+use onetaskgraph_core::{Environment, Loaded, OutputFormat};
 
-/// Something went wrong while doing what was asked. Distinct from clap's own exit code
-/// for a malformed invocation, so a caller can tell "you typed it wrong" from "it broke".
+use crate::cli::{Cli, Command, ConfigCommand};
+
+/// Something went wrong while doing what was asked. Distinct from [`EXIT_USAGE`], so a
+/// caller can tell "you typed it wrong" from "it broke".
 const EXIT_FAILURE: u8 = 1;
 
-/// One interface over the ticketing systems your work lives in.
-///
-/// Exit codes: `0` on success, `1` when a command failed while running, `2` when the
-/// invocation itself was wrong (clap's own code for that). `4` is reserved for a query
-/// that succeeded for some sources and failed for others without `--allow-partial`.
-#[derive(Debug, Parser)]
-#[command(name = "onetaskgraph", version)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Print the JSON Schema bundle the contract types generate.
-    ///
-    /// Both SDKs are generated from this document, so it is emitted from the
-    /// running binary rather than committed: the schema and the types that
-    /// serialise cannot drift when they are the same types.
-    Schema,
-}
+/// The invocation itself was wrong. Clap's own code for that, used here too: a `--set`
+/// that is not `PATH=VALUE` is the same kind of mistake as an unknown flag, and a caller
+/// that branches on the code cannot be asked to know which of the two spotted it.
+const EXIT_USAGE: u8 = 2;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match run(&cli.command) {
+    // The configuration flags are global — they parse on every verb, because every verb
+    // the engine adds will read them — so the layer they make is built before any verb
+    // runs. A malformed `--set` is then refused wherever it was written rather than only
+    // on the verbs that happen to read the configuration today, and it is refused as the
+    // typing mistake it is.
+    let flags = match cli.overrides.layer() {
+        Ok(flags) => flags,
+        Err(message) => return fail(&message, EXIT_USAGE),
+    };
+    match run(&cli.command, &flags, &mut io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprintln!("onetaskgraph: {message}");
-            ExitCode::from(EXIT_FAILURE)
-        }
+        Err(message) => fail(&message, EXIT_FAILURE),
     }
 }
 
-/// Run one command, returning a message the caller prints to stderr on failure.
-fn run(command: &Command) -> Result<(), String> {
-    match command {
-        Command::Schema => emit_schema(&mut io::stdout().lock()),
+/// Report `message` on stderr and exit with `code`.
+fn fail(message: &str, code: u8) -> ExitCode {
+    eprintln!("onetaskgraph: {message}");
+    ExitCode::from(code)
+}
+
+/// Render what one command answers with and write it to `out`.
+///
+/// Rendering and writing are separate on purpose, and every verb shares the one write:
+/// a closed reader is the same failure whichever verb was writing, and one path is one
+/// path to get right.
+fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<(), String> {
+    // Every verb validates the configuration it was handed, including the verbs that do
+    // not read it. An unknown field, an unusable value, a plugin this build does not
+    // have and a source name that breaks the pattern are mistakes wherever they were
+    // written, and a verb that answered anyway would drop them in silence — which is the
+    // one outcome this configuration layer is not allowed to have. Validating here
+    // rather than per-verb is what makes that true of the verbs the engine adds later
+    // without any of them having to remember it.
+    let loaded = load(flags)?;
+    let (rendered, what) = match command {
+        Command::Schema => (schema_bundle()?, "the schema bundle"),
+        Command::Config { command } => match command {
+            ConfigCommand::Show => (effective_config(&loaded)?, "the configuration"),
+        },
+    };
+    emit(out, rendered.trim_end(), what)
+}
+
+/// The schema bundle as pretty-printed JSON.
+fn schema_bundle() -> Result<String, String> {
+    serde_json::to_string_pretty(&onetaskgraph_core::schema_bundle())
+        .map_err(|error| format!("could not render the schema bundle: {error}"))
+}
+
+/// The effective configuration, in the format it asks for.
+fn effective_config(loaded: &Loaded) -> Result<String, String> {
+    match loaded.config.output() {
+        OutputFormat::Text => Ok(loaded.effective.render_text()),
+        OutputFormat::Json => serde_json::to_string_pretty(&loaded.effective)
+            .map_err(|error| format!("could not render the configuration: {error}")),
     }
 }
 
-/// Write the schema bundle to `out` as pretty-printed JSON.
-fn emit_schema(out: &mut impl Write) -> Result<(), String> {
-    let bundle = onetaskgraph_core::schema_bundle();
-    let rendered = serde_json::to_string_pretty(&bundle)
-        .map_err(|error| format!("could not render the schema bundle: {error}"))?;
-    writeln!(out, "{rendered}")
-        .map_err(|error| format!("could not write the schema bundle: {error}"))?;
-    // Flush explicitly: a user piping into `head` closes the reader early, and a
-    // buffered write that fails at drop would exit zero having emitted a truncated
-    // bundle that a generator would then happily consume.
+/// Load the configuration: documents, then the environment, then these flags.
+fn load(flags: &Layer) -> Result<Loaded, String> {
+    let working_directory = std::env::current_dir().map_err(|error| {
+        format!(
+            "could not read the working directory: {error}\n\
+             next: run this from a directory that still exists."
+        )
+    })?;
+    onetaskgraph_core::config::load(&working_directory, &Environment::from_process(), flags)
+        .map_err(|error| error.to_string())
+}
+
+/// Write `rendered` and a newline, reporting a failed write rather than dying at drop.
+///
+/// The flush is explicit: a user piping into `head` closes the reader early, and a
+/// buffered write that fails at drop would exit zero having emitted a truncated
+/// document that a generator would then happily consume.
+fn emit(out: &mut impl Write, rendered: &str, what: &str) -> Result<(), String> {
+    writeln!(out, "{rendered}").map_err(|error| format!("could not write {what}: {error}"))?;
     out.flush()
-        .map_err(|error| format!("could not write the schema bundle: {error}"))
+        .map_err(|error| format!("could not write {what}: {error}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Render and write the schema bundle exactly as [`run`] does for that verb.
+    ///
+    /// The two steps rather than `run` itself, because `run` first loads the
+    /// configuration — real documents, the real environment — and these tests are about
+    /// the rendering and the write path, not about what happens to be on this machine.
+    /// What `run` does with the configuration is proven where it can be proven honestly:
+    /// by the journeys in `tests/configuration.rs`, which drive this binary as a
+    /// subprocess against a sandboxed host.
+    fn write_schema_bundle(out: &mut impl Write) -> Result<(), String> {
+        emit(out, schema_bundle()?.trim_end(), "the schema bundle")
+    }
+
     #[test]
-    fn emit_schema_writes_a_bundle_with_every_contract_root() {
+    fn the_schema_verb_writes_a_bundle_with_every_contract_root() {
         let mut out = Vec::new();
-        emit_schema(&mut out).expect("the bundle renders");
+        write_schema_bundle(&mut out).expect("the bundle renders");
 
         let bundle: serde_json::Value =
             serde_json::from_slice(&out).expect("the bundle is valid JSON");
@@ -85,7 +139,8 @@ mod tests {
     /// A sink that refuses the write when `fail_on_write` is set and the flush
     /// otherwise, standing in for a reader that went away mid-write and for one that
     /// went away between the write and the flush — the two ways
-    /// `onetaskgraph schema | head -1` ends.
+    /// `onetaskgraph <verb> | head -1` ends. Every verb writes through the one `emit`
+    /// below, so driving it for one verb covers the path all of them take.
     struct Failing {
         fail_on_write: bool,
     }
@@ -104,11 +159,11 @@ mod tests {
     }
 
     #[test]
-    fn emit_schema_reports_a_failed_write_rather_than_panicking() {
+    fn a_verb_reports_a_failed_write_rather_than_panicking() {
         let mut sink = Failing {
             fail_on_write: true,
         };
-        let message = emit_schema(&mut sink).expect_err("the sink refuses writes");
+        let message = write_schema_bundle(&mut sink).expect_err("writes refused");
         assert!(
             message.contains("could not write the schema bundle"),
             "{message}"
@@ -116,13 +171,13 @@ mod tests {
     }
 
     #[test]
-    fn emit_schema_reports_a_failed_flush_rather_than_exiting_zero_on_a_truncated_bundle() {
+    fn a_verb_reports_a_failed_flush_rather_than_exiting_zero_on_a_truncated_document() {
         // The dangerous case: the write is buffered and "succeeds", so without an
         // explicit flush the process would exit zero having emitted nothing.
         let mut sink = Failing {
             fail_on_write: false,
         };
-        let message = emit_schema(&mut sink).expect_err("the sink refuses flushes");
+        let message = write_schema_bundle(&mut sink).expect_err("flushes refused");
         assert!(
             message.contains("could not write the schema bundle"),
             "{message}"
