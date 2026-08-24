@@ -333,25 +333,30 @@ impl Peer {
         exchange(&mut self.writer, &mut self.reader, line)
     }
 
-    /// Whatever the plugin has written to standard error so far.
+    /// Whatever the plugin wrote to standard error, once it can no longer write more.
     ///
-    /// Read directly rather than through a thread because the handshake owns the process
-    /// alone: nothing else is reading these streams yet.
+    /// Only ever reached on a handshake that failed, where this peer is being discarded
+    /// and the one remaining question is what it said. So the child is ended first, on
+    /// purpose: reading a live plugin's standard error means waiting for a line it may
+    /// never write, which would turn a diagnostic into a hang — and a plugin whose
+    /// handshake failed has no connection left to keep open. With the writing end gone the
+    /// read reaches end-of-file, so this returns rather than waits.
     pub(crate) fn said(&mut self) -> String {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         let Some(stderr) = self.stderr.as_mut() else {
             return String::new();
         };
         let mut said = String::new();
         let mut reader = BufReader::new(stderr);
-        // Whatever is already buffered, which is what a plugin that refused the handshake
-        // and exited has left behind. A plugin still running writes nothing here on a
-        // successful call (§1), so this does not wait for one that has more to say.
         while said.len() < KEPT_DIAGNOSTICS {
             let mut line = String::new();
             // Bounded by what is still wanted rather than by the line: a plugin whose
-            // diagnostic is one enormous line must not be able to decide how much of this
-            // process's memory it takes, and the outer condition cannot say that on its
-            // own — it is only consulted between lines.
+            // diagnostic is one enormous line must not decide how much of this process's
+            // memory it takes, and the outer condition cannot say that on its own — it is
+            // only consulted between lines.
             let room = (KEPT_DIAGNOSTICS - said.len()) as u64;
             match (&mut reader).take(room).read_line(&mut line) {
                 Ok(0) | Err(_) => break,

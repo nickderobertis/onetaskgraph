@@ -171,7 +171,7 @@ impl PageToken {
     /// document, or holds a state that is not well formed.
     pub fn parse(raw: impl Into<String>) -> Result<Self, SourceError> {
         let token = Self(raw.into());
-        token.streams()?;
+        token.resumption()?;
         Ok(token)
     }
 
@@ -190,12 +190,12 @@ impl PageToken {
     /// never exists to be read here. Whether what it *says* is usable against the query
     /// being resumed is the engine's to decide, not this type's.
     pub(crate) fn decode(&self) -> Resumption {
-        self.streams()
+        self.resumption()
             .expect("every way to build a PageToken validates it")
     }
 
     /// The document inside, or why this is not one of this engine's tokens.
-    fn streams(&self) -> Result<Resumption, SourceError> {
+    fn resumption(&self) -> Result<Resumption, SourceError> {
         let document = from_hex(&self.0).ok_or_else(|| SourceError::Malformed {
             message: "that is not a page token this engine writes: it is not even hex".to_owned(),
         })?;
