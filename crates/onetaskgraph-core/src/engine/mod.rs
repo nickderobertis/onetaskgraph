@@ -248,12 +248,34 @@ pub enum EngineError {
     NoSources,
 }
 
+/// One configured source, in exactly one of the two states a configured source has.
+///
+/// A sum rather than two lists side by side: with a `ready` vector and an `unavailable`
+/// one, a source appearing in both is a shape the type permits and every reader has to
+/// decide about — and they would not all decide the same way, since one of them fans a
+/// query out and another names failures.
+pub enum ConfiguredSource {
+    /// It built, and answers queries.
+    Ready(ResolvedSource),
+    /// It did not, and every response says so instead.
+    Unavailable(UnavailableSource),
+}
+
+impl ConfiguredSource {
+    /// The name the configuration gave it, whichever state it is in.
+    #[must_use]
+    pub fn name(&self) -> &SourceName {
+        match self {
+            Self::Ready(source) => source.name(),
+            Self::Unavailable(source) => source.name(),
+        }
+    }
+}
+
 /// The sources a configuration resolved to, and the queries they answer.
 pub struct Engine {
-    /// Every source that built, in configured-name order.
-    ready: Vec<ResolvedSource>,
-    /// Every source that did not, in the same order.
-    unavailable: Vec<UnavailableSource>,
+    /// Every configured source, in configured-name order, each in one state.
+    sources: Vec<ConfiguredSource>,
     /// Which sources answer when a request names none.
     selection: Vec<SourceName>,
 }
@@ -269,34 +291,44 @@ impl Engine {
     #[must_use]
     pub fn build(config: &Config, secrets: &dyn SecretResolver) -> Self {
         let (ready, unavailable) = resolve_available(config, secrets);
-        Self {
-            ready,
-            unavailable,
-            selection: config.selected_sources(),
-        }
+        Self::new(
+            ready
+                .into_iter()
+                .map(ConfiguredSource::Ready)
+                .chain(unavailable.into_iter().map(ConfiguredSource::Unavailable))
+                .collect(),
+            config.selected_sources(),
+        )
     }
 
     /// Drive sources built elsewhere — the engine's own tests, and any caller holding a
     /// source it did not resolve from a configuration document.
     #[must_use]
-    pub fn new(
-        ready: Vec<ResolvedSource>,
-        unavailable: Vec<UnavailableSource>,
-        selection: Vec<SourceName>,
-    ) -> Self {
-        Self {
-            ready,
-            unavailable,
-            selection,
-        }
+    pub fn new(sources: Vec<ConfiguredSource>, selection: Vec<SourceName>) -> Self {
+        Self { sources, selection }
+    }
+
+    /// Every source that built, in configured-name order.
+    fn ready(&self) -> impl Iterator<Item = &ResolvedSource> {
+        self.sources.iter().filter_map(|source| match source {
+            ConfiguredSource::Ready(ready) => Some(ready),
+            ConfiguredSource::Unavailable(_) => None,
+        })
+    }
+
+    /// Every source that did not, in the same order.
+    fn unavailable(&self) -> impl Iterator<Item = &UnavailableSource> {
+        self.sources.iter().filter_map(|source| match source {
+            ConfiguredSource::Unavailable(unavailable) => Some(unavailable),
+            ConfiguredSource::Ready(_) => None,
+        })
     }
 
     /// Every configured source, whether or not it built, in name order.
     #[must_use]
     pub fn listing(&self) -> Vec<SourceListing> {
         let mut listings: Vec<SourceListing> = self
-            .ready
-            .iter()
+            .ready()
             .map(|source| SourceListing {
                 source: source.name().clone(),
                 kind: source.kind().to_owned(),
@@ -304,7 +336,7 @@ impl Engine {
                     capabilities: source.source().capabilities(),
                 },
             })
-            .chain(self.unavailable.iter().map(|source| SourceListing {
+            .chain(self.unavailable().map(|source| SourceListing {
                 source: source.name().clone(),
                 kind: source.kind().to_owned(),
                 state: SourceState::Unavailable {
@@ -323,11 +355,7 @@ impl Engine {
     /// rule cannot be applied without knowing what is configured.
     #[must_use]
     pub fn has(&self, name: &SourceName) -> bool {
-        self.ready
-            .iter()
-            .map(ResolvedSource::name)
-            .chain(self.unavailable.iter().map(UnavailableSource::name))
-            .any(|known| known == name)
+        self.sources.iter().any(|source| source.name() == name)
     }
 
     /// One page of tasks.
@@ -775,7 +803,7 @@ impl Engine {
         if self.has(name) {
             return Ok(name.clone());
         }
-        if self.ready.is_empty() && self.unavailable.is_empty() {
+        if self.sources.is_empty() {
             return Err(EngineError::NoSources);
         }
         Err(EngineError::UnknownSource {
@@ -925,14 +953,12 @@ impl Answer {
     fn split<'a>(&mut self, engine: &'a Engine, names: &[SourceName]) -> Vec<&'a ResolvedSource> {
         let mut selected = Vec::new();
         for name in names {
-            if let Some(source) = engine.ready.iter().find(|source| source.name() == name) {
-                selected.push(source);
-            } else if let Some(source) = engine
-                .unavailable
-                .iter()
-                .find(|source| source.name() == name)
-            {
-                self.errors.push(source.failure());
+            match engine.sources.iter().find(|source| source.name() == name) {
+                Some(ConfiguredSource::Ready(source)) => selected.push(source),
+                Some(ConfiguredSource::Unavailable(source)) => {
+                    self.errors.push(source.failure());
+                }
+                None => {}
             }
         }
         selected
@@ -1244,16 +1270,10 @@ fn resumption(
             });
         }
         let ceiling = engine
-            .ready
-            .iter()
+            .ready()
             .find(|source| source.name() == &state.source)
             .map(ceiling);
-        if ceiling.is_none()
-            && !engine
-                .unavailable
-                .iter()
-                .any(|source| source.name() == &state.source)
-        {
+        if ceiling.is_none() && !engine.has(&state.source) {
             return Err(EngineError::Token {
                 message: format!(
                     "this page token resumes a source called {:?}, which this \

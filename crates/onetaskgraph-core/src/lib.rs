@@ -33,9 +33,9 @@ mod secrets;
 
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
 pub use engine::{
-    DependencyRequest, Engine, EngineError, Filters, LabelRequest, Paging, ProjectRequest,
-    ProjectSelector, Qualified, QualifiedEdge, SearchHit, SearchKind, SearchRequest, SourceListing,
-    SourceState, TaskRequest,
+    ConfiguredSource, DependencyRequest, Engine, EngineError, Filters, LabelRequest, Paging,
+    ProjectRequest, ProjectSelector, Qualified, QualifiedEdge, SearchHit, SearchKind,
+    SearchRequest, SourceListing, SourceState, TaskRequest,
 };
 pub use environment::Environment;
 pub use global_id::GlobalId;

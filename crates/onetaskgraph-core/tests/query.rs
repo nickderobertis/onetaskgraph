@@ -18,9 +18,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use onetaskgraph_core::{
-    Config, DependencyRequest, Engine, EngineError, Filters, GlobalId, LabelRequest, PageToken,
-    Paging, Predicate, ProjectRequest, ProjectSelector, QueryPlan, ResolvedSource, SearchKind,
-    SearchRequest, SourcePlan, TaskRequest,
+    Config, ConfiguredSource, DependencyRequest, Engine, EngineError, Filters, GlobalId,
+    LabelRequest, PageToken, Paging, Predicate, ProjectRequest, ProjectSelector, QueryPlan,
+    ResolvedSource, SearchKind, SearchRequest, SourcePlan, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencySupport, Direction, Health, Label, LabelFilter,
@@ -667,18 +667,18 @@ async fn the_sources_are_consulted_at_once_rather_than_one_after_another() {
     // them one after the other would block on the first for ever, so the timeout below
     // is what turns "not concurrent" into a failed test rather than a hung suite.
     let barrier = Arc::new(Barrier::new(2));
-    let sources: Vec<ResolvedSource> = ["one", "two"]
+    let sources: Vec<ConfiguredSource> = ["one", "two"]
         .into_iter()
         .map(|source| {
-            ResolvedSource::adopt(
+            ConfiguredSource::Ready(ResolvedSource::adopt(
                 name(source),
                 Box::new(Rendezvous {
                     barrier: Arc::clone(&barrier),
                 }),
-            )
+            ))
         })
         .collect();
-    let engine = Engine::new(sources, Vec::new(), vec![name("one"), name("two")]);
+    let engine = Engine::new(sources, vec![name("one"), name("two")]);
 
     let response = tokio::time::timeout(
         Duration::from_secs(10),
@@ -782,13 +782,12 @@ impl TaskSource for Stuck {
 async fn a_source_that_never_advances_its_cursor_is_reported_rather_than_walked_for_ever() {
     let calls = Arc::new(AtomicU32::new(0));
     let engine = Engine::new(
-        vec![ResolvedSource::adopt(
+        vec![ConfiguredSource::Ready(ResolvedSource::adopt(
             name("stuck"),
             Box::new(Stuck {
                 calls: Arc::clone(&calls),
             }),
-        )],
-        Vec::new(),
+        ))],
         vec![name("stuck")],
     );
 
@@ -1225,7 +1224,7 @@ async fn a_walk_asks_for_one_page_at_a_time_and_stops_when_the_callers_page_is_f
     // what the caller asked for.
     let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
     let engine = Engine::new(
-        vec![ResolvedSource::adopt(
+        vec![ConfiguredSource::Ready(ResolvedSource::adopt(
             name("wide"),
             Box::new(Recording {
                 asked: Arc::clone(&asked),
@@ -1233,8 +1232,7 @@ async fn a_walk_asks_for_one_page_at_a_time_and_stops_when_the_callers_page_is_f
                 rows: 1_000,
                 overshoot: 0,
             }),
-        )],
-        Vec::new(),
+        ))],
         vec![name("wide")],
     );
 
@@ -1424,7 +1422,7 @@ async fn a_source_that_serves_a_larger_page_than_it_was_asked_for_is_refused() {
     // plugin defect it is rather than absorbed, and rather than truncated, which would
     // narrow the answer silently.
     let engine = Engine::new(
-        vec![ResolvedSource::adopt(
+        vec![ConfiguredSource::Ready(ResolvedSource::adopt(
             name("greedy"),
             Box::new(Recording {
                 asked: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -1432,8 +1430,7 @@ async fn a_source_that_serves_a_larger_page_than_it_was_asked_for_is_refused() {
                 rows: 1_000,
                 overshoot: 2,
             }),
-        )],
-        Vec::new(),
+        ))],
         vec![name("greedy")],
     );
 

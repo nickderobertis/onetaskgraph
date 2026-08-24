@@ -14,8 +14,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use onetaskgraph_core::{
-    DependencyRequest, Engine, Filters, GlobalId, LabelRequest, Paging, ProjectRequest,
-    ProjectSelector, ResolvedSource, SearchKind, SearchRequest, TaskRequest,
+    ConfiguredSource, DependencyRequest, Engine, Filters, GlobalId, LabelRequest, Paging,
+    ProjectRequest, ProjectSelector, ResolvedSource, SearchKind, SearchRequest, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencySupport, Direction, Health, Label, NativeId, Page,
@@ -48,7 +48,10 @@ fn engine() -> (Engine, Arc<AtomicU32>) {
             calls: Arc::clone(&calls),
         }),
     );
-    (Engine::new(vec![source], Vec::new(), vec![name]), calls)
+    (
+        Engine::new(vec![ConfiguredSource::Ready(source)], vec![name]),
+        calls,
+    )
 }
 
 /// Large enough that every verb below answers in one page, so what these tests count is
