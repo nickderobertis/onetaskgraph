@@ -1089,3 +1089,187 @@ async fn a_dependency_walk_pages_like_every_other_walk() {
     }
     assert_eq!(seen, ["work:T-1", "work:T-3", "work:T-4"]);
 }
+
+/// A source with more rows than any page, which records every page size it is asked for.
+///
+/// Instrumentation at the boundary, like [`Rendezvous`]: what a source is *asked* for is
+/// the only thing about the engine's memory bound that is observable from outside it, and
+/// no plugin reports that.
+struct Recording {
+    /// Every `limit` this source has been handed, in order.
+    asked: Arc<std::sync::Mutex<Vec<u32>>>,
+    /// The ceiling it declares.
+    ceiling: u32,
+    /// How many tasks it holds.
+    rows: u32,
+}
+
+impl Recording {
+    /// One page of `self.rows` tasks, starting at the decimal offset `cursor` encodes.
+    fn slice(&self, page: &PageRequest) -> Page<Task> {
+        self.asked
+            .lock()
+            .expect("no test panics here")
+            .push(page.limit);
+        let start: u32 = page.cursor.as_ref().map_or(0, |Cursor(raw)| {
+            raw.parse().expect("this source's own cursor")
+        });
+        let end = start
+            .saturating_add(page.limit.min(self.ceiling))
+            .min(self.rows);
+        let items = (start..end)
+            .map(|index| Task {
+                id: NativeId::from(format!("T-{index}")),
+                title: format!("task {index}"),
+                content: None,
+                status: Status {
+                    category: StatusCategory::Todo,
+                    name: "Todo".to_owned(),
+                },
+                labels: Vec::new(),
+                project: None,
+                url: None,
+                created_at: None,
+                updated_at: None,
+            })
+            .collect();
+        Page {
+            items,
+            next: (end < self.rows).then(|| Cursor(end.to_string())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskSource for Recording {
+    fn kind(&self) -> &'static str {
+        "recording"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            projects: Support::Native,
+            orphan_tasks: Support::Native,
+            filter_by_label: Support::Native,
+            filter_by_status: Support::Native,
+            search_title: Support::Native,
+            search_content: Support::Native,
+            task_dependencies: DependencySupport::BothDirections,
+            project_dependencies: DependencySupport::BothDirections,
+            max_page_size: self.ceiling,
+        }
+    }
+
+    async fn health(&self) -> Result<Health, SourceError> {
+        Ok(Health {
+            reachable: true,
+            detail: None,
+        })
+    }
+
+    async fn get_task(&self, _id: &NativeId) -> Result<Option<Task>, SourceError> {
+        Ok(None)
+    }
+
+    async fn get_project(&self, _id: &NativeId) -> Result<Option<Project>, SourceError> {
+        Ok(None)
+    }
+
+    async fn query_tasks(
+        &self,
+        _query: &TaskQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        Ok(self.slice(page))
+    }
+
+    async fn query_projects(
+        &self,
+        _query: &ProjectQuery,
+        _page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+
+    async fn labels(&self, _page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+
+    async fn task_dependencies(
+        &self,
+        _id: &NativeId,
+        _direction: Direction,
+        _page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+
+    async fn project_dependencies(
+        &self,
+        _id: &NativeId,
+        _direction: Direction,
+        _page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+}
+
+#[tokio::test]
+async fn a_walk_asks_for_one_page_at_a_time_and_stops_when_the_callers_page_is_full() {
+    // The observable half of "at most one source page plus the caller's page". A source
+    // holding a thousand rows must not be drained to answer a request for five: the walk
+    // asks for pages no larger than the source's own ceiling and stops as soon as it has
+    // what the caller asked for.
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let engine = Engine::new(
+        vec![ResolvedSource::adopt(
+            name("wide"),
+            Box::new(Recording {
+                asked: Arc::clone(&asked),
+                ceiling: 3,
+                rows: 1_000,
+            }),
+        )],
+        Vec::new(),
+        vec![name("wide")],
+    );
+
+    let response = engine
+        .tasks(&tasks(Filters::default(), ProjectSelector::Any, page(5)))
+        .await
+        .expect("the query runs");
+
+    assert_eq!(response.items.len(), 5);
+    let asked = asked.lock().expect("no test panics here").clone();
+    assert!(
+        asked.iter().all(|limit| *limit <= 3),
+        "no request may exceed the source's declared ceiling: {asked:?}"
+    );
+    assert_eq!(
+        asked.len(),
+        2,
+        "five rows out of three-row pages is two pages, and then the walk stops: {asked:?}"
+    );
+    assert_eq!(
+        entry(&response.plan, "wide").pages_fetched,
+        2,
+        "and the plan reports exactly what was pulled"
+    );
+
+    // Resuming reaches the source again and still walks one page at a time.
+    let next = response.next.expect("a thousand rows do not fit in five");
+    let resumed_response = engine
+        .tasks(&tasks(
+            Filters::default(),
+            ProjectSelector::Any,
+            resumed(5, next),
+        ))
+        .await
+        .expect("the query runs");
+    assert_eq!(
+        ids(&resumed_response.items),
+        (5..10)
+            .map(|index| format!("wide:T-{index}"))
+            .collect::<Vec<_>>()
+    );
+}
