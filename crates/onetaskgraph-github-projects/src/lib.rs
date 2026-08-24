@@ -156,11 +156,7 @@ impl GitHubProjectsSource {
             project_number: config.project_number,
             endpoint,
             token,
-            statuses: config
-                .status_mapping
-                .into_iter()
-                .map(|(k, v)| (k.to_lowercase(), v))
-                .collect(),
+            statuses: normalize_status_mapping(config.status_mapping)?,
             client: Client::builder()
                 .user_agent("onetaskgraph")
                 .build()
@@ -238,6 +234,7 @@ impl GitHubProjectsSource {
             return Err(SourceError::Refused { message });
         }
         body.get("data")
+            .filter(|data| data.is_object())
             .cloned()
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub response has no data object".into(),
@@ -451,8 +448,8 @@ impl GitHubProjectsSource {
             .flatten()
             .filter_map(|v| v.get("id").and_then(Value::as_str))
             .map(|other| DependencyEdge {
-                from: id.clone(),
-                to: NativeId(other.into()),
+                from: NativeId(other.into()),
+                to: id.clone(),
                 kind: DependencyKind::Blocks,
             })
             .collect();
@@ -591,18 +588,45 @@ impl TaskSource for GitHubProjectsSource {
         for task in self.all_tasks().await? {
             let mut cursor = None;
             loop {
-                let dependencies = self
-                    .dependencies(
-                        &task.id,
-                        Direction::DependsOn,
-                        &PageRequest {
-                            cursor,
-                            limit: MAX_PAGE_SIZE,
-                        },
-                    )
-                    .await?;
-                edges.extend(dependencies.items);
-                cursor = dependencies.next;
+                const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id projectItems(first:100){nodes{project{id}}}}pageInfo{hasNextPage endCursor}}}}}"#;
+                let data = self.graphql(QUERY, json!({"id":task.id.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor: &Cursor| cursor.0.as_str())})).await?;
+                let connection =
+                    data.pointer("/node/blockedBy")
+                        .ok_or_else(|| SourceError::Malformed {
+                            message:
+                                "GitHub project dependency response is missing Issue.blockedBy"
+                                    .into(),
+                        })?;
+                for blocker in connection
+                    .get("nodes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    for project_item in blocker
+                        .pointer("/projectItems/nodes")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                    {
+                        let blocker_project = required_str(
+                            project_item
+                                .get("project")
+                                .ok_or_else(|| SourceError::Malformed {
+                                    message: "GitHub dependency project item has no project".into(),
+                                })?,
+                            "id",
+                        )?;
+                        if blocker_project != id.0 {
+                            edges.push(DependencyEdge {
+                                from: NativeId(blocker_project.into()),
+                                to: id.clone(),
+                                kind: DependencyKind::Blocks,
+                            });
+                        }
+                    }
+                }
+                cursor = next_cursor(connection);
                 if cursor.is_none() {
                     break;
                 }
@@ -611,6 +635,21 @@ impl TaskSource for GitHubProjectsSource {
         let offset = numeric_cursor(page.cursor.as_ref())?;
         Ok(offset_page(edges, offset, page.limit as usize))
     }
+}
+
+fn normalize_status_mapping(
+    mapping: BTreeMap<String, StatusCategory>,
+) -> Result<BTreeMap<String, StatusCategory>, SourceError> {
+    let mut normalized = BTreeMap::new();
+    for (name, category) in mapping {
+        let key = name.to_lowercase();
+        if normalized.insert(key, category).is_some() {
+            return Err(SourceError::Config {
+                message: format!("status_mapping contains case-insensitive duplicate {name}"),
+            });
+        }
+    }
+    Ok(normalized)
 }
 
 fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceError> {

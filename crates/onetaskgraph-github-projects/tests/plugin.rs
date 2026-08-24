@@ -203,6 +203,7 @@ fn config_schema_is_strict_and_build_validates_inputs_and_secret() {
         json!({"owner":"org","project_number":1,"token_env":""}),
         json!({"owner":"org","project_number":1,"endpoint":"not a url"}),
         json!({"owner":"org","project_number":1,"endpoint":"http://example.com"}),
+        json!({"owner":"org","project_number":1,"status_mapping":{"Doing":"todo","doing":"done"}}),
         json!({"owner":"org","project_number":1,"typo":true}),
     ] {
         let result = plugin.build(&SourceName::new("work").unwrap(), &config, &Secrets);
@@ -270,8 +271,8 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
         .await
         .unwrap();
     assert_eq!(edges.items.len(), 1);
-    assert_eq!(edges.items[0].from.0, "I_task");
-    assert_eq!(edges.items[0].to.0, "I_blocker");
+    assert_eq!(edges.items[0].from.0, "PVT_blocker");
+    assert_eq!(edges.items[0].to.0, "PVT_project");
     handle.join().unwrap();
 }
 
@@ -287,8 +288,8 @@ async fn walks_issue_dependencies_forward_through_graphql() {
         .task_dependencies(&NativeId("I_task".into()), Direction::DependsOn, &page(1))
         .await
         .unwrap();
-    assert_eq!(forward.items[0].from.0, "I_task");
-    assert_eq!(forward.items[0].to.0, "I_blocker");
+    assert_eq!(forward.items[0].from.0, "I_blocker");
+    assert_eq!(forward.items[0].to.0, "I_task");
     assert_eq!(forward.next.unwrap().0, "next");
     let reverse = source
         .task_dependencies(
