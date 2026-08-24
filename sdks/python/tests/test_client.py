@@ -89,7 +89,9 @@ def test_public_error_contains_exit_status(binary: Path, tmp_path: Path) -> None
 def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     """Exercise every generated command method and every CLI option encoding shape."""
     client = Client(binary, cwd=configured(tmp_path))
-    assert client.task_list(source=["memory"], status=["todo"], limit=2, explain=True).items
+    assert client.task_list(
+        source=("memory",), status=["todo"], limit=2, explain=True, page=None, no_project=False
+    ).items
     assert client.task_show(id="memory:T-1").items
     assert client.task_deps(id="memory:T-1").items == []
     assert client.project_list(source=["memory"]).items
@@ -99,8 +101,6 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
     assert client.search(text="Memory", kind="task").items
     assert client.sources_list()
     assert client.config_show().settings
-    with pytest.raises(TypeError, match="missing required argument"):
-        client.task_show()
 
 
 def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
@@ -123,6 +123,39 @@ def test_generated_surface_is_current() -> None:
         cwd=WORKSPACE / "sdks" / "python",
         check=True,
     )
+
+
+def test_generator_rejects_drift_and_unmapped_commands(tmp_path: Path) -> None:
+    """Name stale output and a newly discovered command with no client method."""
+    generated = WORKSPACE / "sdks/python/src/onetaskgraph_sdk/_generated/effective_config.py"
+    original = generated.read_text(encoding="utf-8")
+    try:
+        generated.write_text(original + "# stale\n", encoding="utf-8")
+        stale = subprocess.run(
+            [sys.executable, "generate.py", "--check"],
+            cwd=WORKSPACE / "sdks" / "python",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert stale.returncode == 1
+        assert "effective_config.py" in stale.stderr
+    finally:
+        generated.write_text(original, encoding="utf-8")
+    unmapped = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; import generate; "
+            f"generate.generate_client([('future',)], Path({str(tmp_path)!r}))",
+        ],
+        cwd=WORKSPACE / "sdks" / "python",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert unmapped.returncode == 1
+    assert "future" in unmapped.stderr
 
 
 def test_distribution_version() -> None:

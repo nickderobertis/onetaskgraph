@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import keyword
+import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import TypedDict, cast
+
+from pydantic import JsonValue
 
 ROOT = Path(__file__).parent
 GENERATED = ROOT / "src" / "onetaskgraph_sdk" / "_generated"
@@ -24,6 +28,12 @@ RESPONSE_ROOTS = {
     "config_show": "EffectiveConfig",
 }
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
+
+
+class SchemaBundle(TypedDict):
+    """The validated portion of the emitted bundle generation consumes."""
+
+    roots: dict[str, JsonValue]
 
 
 def binary(*args: str) -> str:
@@ -64,7 +74,14 @@ def leaves(prefix: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
     return found
 
 
-def generate_models(bundle: dict[str, Any], destination: Path) -> None:
+def option_names(command: tuple[str, ...]) -> list[str]:
+    """Derive keyword names from clap's help for one discovered leaf command."""
+    names = re.findall(r"^\s+--([a-z][a-z-]*)", binary(*command, "--help"), re.MULTILINE)
+    normalized = {name.replace("-", "_") for name in names} - {"help", "json", "output"}
+    return sorted(f"{name}_" if keyword.iskeyword(name) else name for name in normalized)
+
+
+def generate_models(bundle: SchemaBundle, destination: Path) -> None:
     """Generate Pydantic models directly from every response schema in the bundle."""
     destination.mkdir(parents=True, exist_ok=True)
     exports: list[str] = []
@@ -98,11 +115,18 @@ def generate_models(bundle: dict[str, Any], destination: Path) -> None:
         generated = source.read_text(encoding="utf-8").splitlines()
         if len(generated) > 1 and generated[1].startswith("#   filename:"):
             generated[1] = f"#   schema root: {root}"
-        source.write_text("# ruff: noqa: E501\n" + "\n".join(generated) + "\n", encoding="utf-8")
+        source.write_text(
+            "# ruff: noqa: E501  # Generated descriptions preserve the schema's text.\n"
+            + "\n".join(generated)
+            + "\n",
+            encoding="utf-8",
+        )
         generated_name = "QueryResponse" if root.startswith("QueryResponseOf") else root
         exports.append(f"from .{module} import {generated_name} as {root}  # noqa: F401")
     (destination / "models.py").write_text(
-        "# ruff: noqa: F401, I001\n" + "\n".join(exports) + "\n", encoding="utf-8"
+        "# ruff: noqa: F401, I001  # Generated public re-exports are used by consumers.\n"
+        + "\n".join(exports)
+        + "\n",
     )
 
 
@@ -133,6 +157,8 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         *[f"    {root}," for root in sorted(set(RESPONSE_ROOTS.values()))],
         ")",
         "",
+        "type Option = str | int | bool | list[str] | tuple[str, ...] | None",
+        "",
         "class GeneratedClient:",
         '    """Methods generated from the binary command surface."""',
         "",
@@ -143,18 +169,35 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     for name, command in sorted(names.items()):
         root = RESPONSE_ROOTS[name]
         return_type = RETURN_TYPES.get(name, root)
+        positional = (
+            "text"
+            if command == ("search",)
+            else "id"
+            if command[0] in {"task", "project"} and command[-1] in {"show", "deps"}
+            else None
+        )
+        keywords = [item for item in option_names(command) if item != positional]
+        parameters = (
+            ([f"{positional}: str"] if positional else [])
+            + ["*"]
+            + [f"{item}: Option = None" for item in keywords]
+        )
+        if parameters[-1] == "*":
+            parameters.pop()
+        passed = [f"{item}={item}" for item in ([positional] if positional else []) + keywords]
         lines.extend(
             [
-                f"    def {name}(self, **options: object) -> {return_type}:",
+                f"    def {name}(self, {', '.join(parameters)}) -> {return_type}:",
                 f'        """Run ``onetaskgraph {" ".join(command)}``."""',
-                f"        return self._invoke({list(command)!r}, {return_type}, **options)",
+                "        return self._invoke("
+                f"{list(command)!r}, {return_type}, {', '.join(passed)})",
                 "",
             ]
         )
     (destination / "client.py").write_text("\n".join(lines), encoding="utf-8")
     (destination / "__init__.py").write_text(
         "from .client import GeneratedClient as GeneratedClient\n"
-        "from .models import *  # noqa: F403\n",
+        "from .models import *  # noqa: F403  # Schema roots define the public set.\n",
         encoding="utf-8",
     )
 
@@ -169,7 +212,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    bundle = json.loads(binary("schema"))
+    parsed = json.loads(binary("schema"))
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("roots"), dict):
+        raise SystemExit("binary emitted an invalid schema bundle: expected an object with roots")
+    # The two runtime shape checks above establish the TypedDict portion we consume.
+    bundle = cast(SchemaBundle, parsed)
     commands = leaves()
     with tempfile.TemporaryDirectory() as temporary:
         target = Path(temporary) if args.check else GENERATED

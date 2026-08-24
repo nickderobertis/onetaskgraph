@@ -2,7 +2,7 @@
 
 The typed Python client for `onetaskgraph`. Its request vocabulary, response models,
 and method surface are generated from the JSON Schema and command help emitted by the
-real binary; `python generate.py --check` rejects committed output that has drifted.
+real binary; the workspace's `just lint` rejects committed output that has drifted.
 
 ```python
 from onetaskgraph_sdk import Client

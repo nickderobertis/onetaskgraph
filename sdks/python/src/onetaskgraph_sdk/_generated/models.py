@@ -1,4 +1,4 @@
-# ruff: noqa: F401, I001
+# ruff: noqa: F401, I001  # Generated public re-exports are used by consumers.
 from .effective_config import EffectiveConfig as EffectiveConfig  # noqa: F401
 from .query_plan import QueryPlan as QueryPlan  # noqa: F401
 from .query_response_of_qualified_edge import QueryResponse as QueryResponseOfQualifiedEdge  # noqa: F401

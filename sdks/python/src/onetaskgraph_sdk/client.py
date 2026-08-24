@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import subprocess
@@ -42,47 +43,56 @@ class Client(GeneratedClient):
 
     def _invoke[T](self, command: list[str], model: object, **options: object) -> T:
         arguments = [self.binary, *command]
-        positional = (
-            "text"
-            if command == ["search"]
-            else "id"
-            if command[0] in {"task", "project"} and command[-1] in {"show", "deps"}
-            else None
-        )
+        match command:
+            case ["search"]:
+                positional = "text"
+            case ["task" | "project", "show" | "deps"]:
+                positional = "id"
+            case _:
+                positional = None
         if positional is not None:
             try:
                 arguments.append(str(options.pop(positional)))
             except KeyError as error:
                 raise TypeError(f"missing required argument: {positional}") from error
         for name, value in options.items():
-            if value is None or value is False:
-                continue
-            flag = f"--{name.replace('_', '-')}"
-            if value is True:
-                arguments.append(flag)
-            elif isinstance(value, (list, tuple)):
-                for item in value:
-                    arguments.extend((flag, str(item)))
-            else:
-                arguments.extend((flag, str(value)))
+            flag = f"--{name.removesuffix('_').replace('_', '-')}"
+            match value:
+                case None | False:
+                    continue
+                case True:
+                    arguments.append(flag)
+                case list() | tuple():
+                    for item in value:
+                        arguments.extend((flag, str(item)))
+                case _:
+                    arguments.extend((flag, str(value)))
         arguments.append("--json")
-        completed = subprocess.run(
-            arguments,
-            cwd=self.cwd,
-            env=self.environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        completed = asyncio.run(self._invoke_process(arguments))
         if completed.returncode not in {0, 4}:
             raise OnetaskgraphError(completed.stderr.strip(), exit_code=completed.returncode)
         try:
+            # TypeAdapter validates `model`; its dynamic constructor cannot preserve T.
             return cast(T, TypeAdapter(model).validate_json(completed.stdout))
         except ValidationError as error:
             raise OnetaskgraphError(
                 f"binary returned a response outside its emitted schema: {error}",
                 exit_code=completed.returncode,
             ) from error
+
+    async def _invoke_process(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        """Cross the process boundary without blocking the event-loop IO layer."""
+        process = await asyncio.create_subprocess_exec(
+            *arguments,
+            cwd=self.cwd,
+            env=self.environment,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        return subprocess.CompletedProcess(
+            arguments, process.returncode or 0, stdout.decode(), stderr.decode()
+        )
 
 
 def _resolve_binary(explicit: str | Path | None, environment: Mapping[str, str] | None) -> str:
