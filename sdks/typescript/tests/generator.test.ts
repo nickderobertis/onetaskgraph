@@ -53,6 +53,11 @@ test("generation, clean check, stale check, and invalid arguments use the real b
     const stale = run("--check");
     expect(stale.status).toBe(1);
     expect(stale.stderr).toContain("commands.ts would change");
+    expect(run().status).toBe(0);
+    rmSync(resolve(generated, "commands.ts"));
+    const missing = run("--check");
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain("commands.ts would change");
     expect(run("--unknown").status).toBe(1);
     const unavailable = spawnSync("bun", ["scripts/generate.ts"], {
       cwd: packageRoot,
