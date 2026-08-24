@@ -103,6 +103,33 @@ async fn scans_real_markdown_filters_pages_and_walks_both_directions() {
 }
 
 #[tokio::test]
+async fn reads_windows_line_endings_from_a_real_markdown_file() {
+    let root = tempfile::tempdir().expect("tempdir");
+    fs::create_dir(root.path().join("tasks")).expect("tasks directory");
+    fs::write(
+        root.path().join("tasks/windows.md"),
+        "---\r\ntitle: Windows task\r\nstatus: todo\r\n---\r\nBody from disk\r\n",
+    )
+    .expect("task");
+    let source = onetaskgraph_local_md::Plugin
+        .build(
+            &SourceName::new("windows").unwrap(),
+            &serde_json::json!({"root": root.path()}),
+            &NoSecrets,
+        )
+        .expect("source builds");
+
+    let tasks = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("query tasks");
+
+    assert_eq!(tasks.items.len(), 1);
+    assert_eq!(tasks.items[0].title, "Windows task");
+    assert_eq!(tasks.items[0].content.as_deref(), Some("Body from disk"));
+}
+
+#[tokio::test]
 async fn public_queries_cover_fields_labels_statuses_projects_and_paging() {
     let (_root, source) = source();
     assert_eq!(source.kind(), "local-md");

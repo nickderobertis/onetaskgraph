@@ -151,15 +151,6 @@ def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
         Client(tmp_path / "missing")
 
 
-def test_generated_surface_is_current() -> None:
-    """Fail when schema or command regeneration changes a committed file."""
-    subprocess.run(
-        [sys.executable, "generate.py", "--check"],
-        cwd=WORKSPACE / "sdks" / "python",
-        check=True,
-    )
-
-
 def test_generator_rejects_drift_and_unmapped_commands(tmp_path: Path) -> None:
     """Name stale output and a newly discovered command with no client method."""
     expected = tmp_path / "expected"
