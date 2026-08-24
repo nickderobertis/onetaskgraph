@@ -233,6 +233,12 @@ test("schema output and unsupported exit statuses are validated from real execut
       expect(errorMessage(error)).toContain("next: retry later");
       expect(errorMessage(error)).not.toContain("without a valid response");
     }
+
+    const configResponse = JSON.stringify(await client.configShow());
+    const partialConfig = new OnetaskgraphClient({
+      binaryPath: executableFixture(fixtures, "partial-config", configResponse, "", 4),
+    });
+    expect(partialConfig.configShow()).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }

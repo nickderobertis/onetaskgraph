@@ -71,6 +71,12 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   search: "QueryResponseOfSearchHit",
 };
 
+const partialResponseCommands = new Set(
+  Object.keys(responseRoots).filter(
+    (command) => command !== "config show" && command !== "sources list",
+  ),
+);
+
 export const clientCommands: readonly string[] = binaryCommands;
 
 function packagedBinary(): string {
@@ -254,7 +260,7 @@ export class OnetaskgraphClient {
             return;
           }
         }
-        if (code !== 0 && code !== 4) {
+        if (code !== 0 && (code !== 4 || !partialResponseCommands.has(command))) {
           reject(new OnetaskgraphExecutionError(code, stderr));
           return;
         }
