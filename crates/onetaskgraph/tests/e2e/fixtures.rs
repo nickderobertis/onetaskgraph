@@ -283,6 +283,71 @@ struct LinearRequest {
     variables: serde_json::Map<String, Value>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoVariables {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ItemVariables {
+    id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PageVariables {
+    first: usize,
+    #[serde(default)]
+    after: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QueryVariables {
+    first: usize,
+    #[serde(default)]
+    after: Option<String>,
+    filter: serde_json::Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelationVariables {
+    id: String,
+    first: usize,
+    #[serde(default)]
+    after: Option<String>,
+}
+
+fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &'static str> {
+    use onetaskgraph_linear::graphql;
+    let valid = match operation {
+        graphql::VIEWER => serde_json::from_value::<NoVariables>(variables.clone()).is_ok(),
+        graphql::ISSUE | graphql::PROJECT => {
+            serde_json::from_value::<ItemVariables>(variables.clone())
+                .is_ok_and(|variables| !variables.id.is_empty())
+        }
+        graphql::LABELS => serde_json::from_value::<PageVariables>(variables.clone())
+            .is_ok_and(|variables| variables.first > 0 && variables.after.as_deref() != Some("")),
+        graphql::ISSUES | graphql::PROJECTS => {
+            serde_json::from_value::<QueryVariables>(variables.clone()).is_ok_and(|variables| {
+                variables.first > 0
+                    && variables.after.as_deref() != Some("")
+                    && !variables.filter.contains_key("")
+            })
+        }
+        graphql::ISSUE_RELATIONS | graphql::PROJECT_RELATIONS => {
+            serde_json::from_value::<RelationVariables>(variables.clone()).is_ok_and(|variables| {
+                !variables.id.is_empty()
+                    && variables.first > 0
+                    && variables.after.as_deref() != Some("")
+            })
+        }
+        _ => false,
+    };
+    valid.then_some(()).ok_or("invalid operation variables")
+}
+
 fn linear_response(request: &Value) -> Result<Value, &'static str> {
     let request: LinearRequest =
         serde_json::from_value(request.clone()).map_err(|_| "invalid GraphQL request")?;
@@ -303,6 +368,7 @@ fn linear_response(request: &Value) -> Result<Value, &'static str> {
         return Err("unknown GraphQL operation");
     }
     let vars = Value::Object(request.variables);
+    validate_linear_variables(operation, &vars)?;
     let data = dataset();
     if operation == graphql::LABELS {
         return Ok(
@@ -373,6 +439,11 @@ fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
         json!({"query":onetaskgraph_linear::graphql::VIEWER}),
         json!({"query":onetaskgraph_linear::graphql::VIEWER,"variables":[]}),
         json!({"query":"query { invented { id } }","variables":{}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUE,"variables":{}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUE,"variables":{"id":7}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUE,"variables":{"id":"i1","extra":true}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":0,"after":null,"filter":{}}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":[]}}),
     ] {
         let body = serde_json::to_string(&body).unwrap();
         let mut stream = std::net::TcpStream::connect(address).unwrap();

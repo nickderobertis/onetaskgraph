@@ -49,6 +49,36 @@ fn server(
 }
 
 #[test]
+fn pinned_schema_reconciles_operations_and_response_fixtures() {
+    use onetaskgraph_linear::graphql;
+    let schema = include_str!("fixtures/schema.graphql");
+    for (operation, root) in [
+        (graphql::VIEWER, "viewer"),
+        (graphql::ISSUE, "issue"),
+        (graphql::PROJECT, "project"),
+        (graphql::ISSUES, "issues"),
+        (graphql::PROJECTS, "projects"),
+        (graphql::LABELS, "issueLabels"),
+        (graphql::ISSUE_RELATIONS, "issue"),
+        (graphql::PROJECT_RELATIONS, "project"),
+    ] {
+        assert!(operation.contains(root), "operation does not select {root}");
+        assert!(schema.contains(&format!("  {root}")), "schema lacks {root}");
+    }
+    for (fixture, root) in [
+        (include_str!("fixtures/issues.json"), "issues"),
+        (include_str!("fixtures/projects.json"), "projects"),
+        (include_str!("fixtures/labels.json"), "issueLabels"),
+        (include_str!("fixtures/issue-relations.json"), "issue"),
+        (include_str!("fixtures/project-relations.json"), "project"),
+    ] {
+        let document: serde_json::Value = serde_json::from_str(fixture).unwrap();
+        assert!(document["data"].get(root).is_some(), "fixture lacks {root}");
+        assert!(schema.contains(&format!("  {root}")), "schema lacks {root}");
+    }
+}
+
+#[test]
 fn factory_validates_config_and_missing_credentials() {
     let name = SourceName::new("work").unwrap();
     let error =
