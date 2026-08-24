@@ -84,6 +84,10 @@ test-live projects="":
 deny:
     @{{nx}} run workspace:deny
 
+# Linux-only in CI because generated-code drift is platform-independent.
+generate-check:
+    @{{nx}} run sdk-python:generate-check
+
 # Upgrade every ecosystem's dependencies, then re-run the complete bar on the result.
 upgrade:
     @cargo update --quiet
@@ -92,7 +96,7 @@ upgrade:
     @just gate
 
 # Print the JSON Schema bundle both SDKs are generated from.
-# llmlint: ignore[tool_output_is_signal] This command's stdout is the requested schema document consumed by SDK generators, not progress logging; suppressing it would make the command return no product at all.
+# llmlint: ignore[tool_output_is_signal] stdout is the schema consumed by SDK generators.
 schema:
     @cargo run --quiet -p onetaskgraph --bin onetaskgraph -- schema
 
