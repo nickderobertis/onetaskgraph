@@ -10,22 +10,94 @@ type Query {
   issueLabels(first: Int!, after: String): IssueLabelConnection!
 }
 
-type User { id: ID! }
-type Issue { id: ID!, title: String!, description: String, url: String, createdAt: DateTime, updatedAt: DateTime, state: WorkflowState!, labels: IssueLabelConnection!, project: Project, relations(first: Int!, after: String): IssueRelationConnection!, inverseRelations(first: Int!, after: String): IssueRelationConnection! }
-type Project { id: ID!, name: String!, description: String, url: String, createdAt: DateTime, updatedAt: DateTime, status: ProjectStatus!, labels: ProjectLabelConnection!, relations(first: Int!, after: String): ProjectRelationConnection!, inverseRelations(first: Int!, after: String): ProjectRelationConnection! }
-type WorkflowState { name: String!, type: String! }
-type ProjectStatus { name: String!, type: String! }
-type IssueLabel { id: ID!, name: String!, color: String }
-type ProjectLabel { id: ID!, name: String!, color: String }
-type IssueConnection { nodes: [Issue!]!, pageInfo: PageInfo! }
-type ProjectConnection { nodes: [Project!]!, pageInfo: PageInfo! }
-type IssueLabelConnection { nodes: [IssueLabel!]!, pageInfo: PageInfo! }
-type ProjectLabelConnection { nodes: [ProjectLabel!]!, pageInfo: PageInfo! }
-type IssueRelationConnection { nodes: [IssueRelation!]!, pageInfo: PageInfo! }
-type ProjectRelationConnection { nodes: [ProjectRelation!]!, pageInfo: PageInfo! }
-type IssueRelation { type: String!, issue: Issue, relatedIssue: Issue }
-type ProjectRelation { type: String!, project: Project, relatedProject: Project }
-type PageInfo { hasNextPage: Boolean!, endCursor: String }
-input IssueFilter { and: [IssueFilter!] }
-input ProjectFilter { and: [ProjectFilter!] }
+type User {
+  id: ID!
+}
+type Issue {
+  id: ID!
+  title: String!
+  description: String
+  url: String
+  createdAt: DateTime
+  updatedAt: DateTime
+  state: WorkflowState!
+  labels: IssueLabelConnection!
+  project: Project
+  relations(first: Int!, after: String): IssueRelationConnection!
+  inverseRelations(first: Int!, after: String): IssueRelationConnection!
+}
+type Project {
+  id: ID!
+  name: String!
+  description: String
+  url: String
+  createdAt: DateTime
+  updatedAt: DateTime
+  status: ProjectStatus!
+  labels: ProjectLabelConnection!
+  relations(first: Int!, after: String): ProjectRelationConnection!
+  inverseRelations(first: Int!, after: String): ProjectRelationConnection!
+}
+type WorkflowState {
+  name: String!
+  type: String!
+}
+type ProjectStatus {
+  name: String!
+  type: String!
+}
+type IssueLabel {
+  id: ID!
+  name: String!
+  color: String
+}
+type ProjectLabel {
+  id: ID!
+  name: String!
+  color: String
+}
+type IssueConnection {
+  nodes: [Issue!]!
+  pageInfo: PageInfo!
+}
+type ProjectConnection {
+  nodes: [Project!]!
+  pageInfo: PageInfo!
+}
+type IssueLabelConnection {
+  nodes: [IssueLabel!]!
+  pageInfo: PageInfo!
+}
+type ProjectLabelConnection {
+  nodes: [ProjectLabel!]!
+  pageInfo: PageInfo!
+}
+type IssueRelationConnection {
+  nodes: [IssueRelation!]!
+  pageInfo: PageInfo!
+}
+type ProjectRelationConnection {
+  nodes: [ProjectRelation!]!
+  pageInfo: PageInfo!
+}
+type IssueRelation {
+  type: String!
+  issue: Issue
+  relatedIssue: Issue
+}
+type ProjectRelation {
+  type: String!
+  project: Project
+  relatedProject: Project
+}
+type PageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
+}
+input IssueFilter {
+  and: [IssueFilter!]
+}
+input ProjectFilter {
+  and: [ProjectFilter!]
+}
 scalar DateTime
