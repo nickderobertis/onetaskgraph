@@ -120,6 +120,13 @@ pub enum LabelCommand {
 #[derive(Debug, Args)]
 pub struct SelectionArgs {
     /// Address this source. Repeat for several; omit for the configured selection.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — a `SourceName` here would move
+    /// the refusal into clap, which reports it as an invalid *invocation* (exit 2) under
+    /// clap's own wording. A name that cannot be a source name and one that names no
+    /// configured source are the same typo to the user, and both owe the same next
+    /// action; `selection` in `main` converts through `SourceName::new` immediately and
+    /// attaches it, at the exit code the documented table gives that mistake.
     #[arg(long = "source", value_name = "S")]
     pub source: Vec<String>,
 }
@@ -160,6 +167,13 @@ pub struct PageArgs {
     pub limit: Option<NonZeroU32>,
 
     /// Resume from a token a previous page reported.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — a `PageToken` here would only
+    /// move the *encoding* check to parse time, and a token is refused for three reasons
+    /// beyond its encoding — a configuration it cannot address, a query it did not come
+    /// from, a stream it does not resume — none of which is decidable before the
+    /// configuration is loaded. Splitting one mistake ("I pasted the wrong token") across
+    /// clap's exit 2 and the run's exit 1 is what that would buy.
     #[arg(long = "page", value_name = "TOKEN")]
     pub page: Option<String>,
 
@@ -223,6 +237,12 @@ pub struct LabelListArgs {
 #[derive(Debug, Args)]
 pub struct ShowArgs {
     /// The qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — a `GlobalId` here would refuse an
+    /// unqualified id as a bad invocation, under clap's wording. `qualified` in `main`
+    /// converts through `GlobalId::from_str` immediately and says what a qualified id is
+    /// and where to read the configured names, which is the answer a user typing `T-1`
+    /// needs and the one this repository's failure journeys assert on.
     #[arg(value_name = "ID")]
     pub id: String,
 
@@ -239,6 +259,12 @@ pub struct ShowArgs {
 #[derive(Debug, Args)]
 pub struct DependencyArgs {
     /// The qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — a `GlobalId` here would refuse an
+    /// unqualified id as a bad invocation, under clap's wording. `qualified` in `main`
+    /// converts through `GlobalId::from_str` immediately and says what a qualified id is
+    /// and where to read the configured names, which is the answer a user typing `T-1`
+    /// needs and the one this repository's failure journeys assert on.
     #[arg(value_name = "ID")]
     pub id: String,
 
