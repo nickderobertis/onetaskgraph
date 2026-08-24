@@ -187,6 +187,37 @@ def test_generator_rejects_drift_and_unmapped_commands(tmp_path: Path) -> None:
     )
     assert invalid_bundle.returncode == 1
     assert "invalid schema bundle" in invalid_bundle.stderr
+    changed_option = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import generate; generate.validate_option_placeholders({'limit':'TEXT'}, ['limit'])",
+        ],
+        cwd=WORKSPACE / "sdks" / "python",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert changed_option.returncode == 1
+    assert "value shape" in changed_option.stderr
+    missing_roots = subprocess.run(
+        [sys.executable, "-c", "import generate; generate.validate_schema_bundle({'roots':{}})"],
+        cwd=WORKSPACE / "sdks" / "python",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert missing_roots.returncode == 1
+    assert "missing roots" in missing_roots.stderr
+    missing_choices = subprocess.run(
+        [sys.executable, "-c", "import generate; generate.choice_values('', 'kind')"],
+        cwd=WORKSPACE / "sdks" / "python",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert missing_choices.returncode == 1
+    assert "did not report option" in missing_choices.stderr
     unmapped = subprocess.run(
         [
             sys.executable,

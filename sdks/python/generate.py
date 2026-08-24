@@ -131,12 +131,17 @@ def option_names(command: tuple[str, ...]) -> list[str]:
         for name, placeholder in discovered
         if name not in {"help", "json", "output"}
     }
-    for name in result:
+    validate_option_placeholders(placeholders, result)
+    return result
+
+
+def validate_option_placeholders(placeholders: dict[str, str | None], names: list[str]) -> None:
+    """Reject help whose option value shapes drifted from generated typing."""
+    for name in names:
         if placeholders[name] != OPTION_PLACEHOLDERS[name]:
             raise SystemExit(
                 f"binary changed the value shape for option --{name.replace('_', '-')}"
             )
-    return result
 
 
 def option_type(command: tuple[str, ...], name: str) -> str:
@@ -146,13 +151,21 @@ def option_type(command: tuple[str, ...], name: str) -> str:
         return configured
     cli_name = name.removesuffix("_").replace("_", "-")
     help_text = run_workspace_binary(*command, "--help")
-    block = help_text.split(f"--{cli_name} ", 1)[1]
+    choices = choice_values(help_text, cli_name)
+    literal = "Literal[" + ", ".join(repr(choice) for choice in choices) + "]"
+    return f"list[{literal}] | tuple[{literal}, ...]" if configured == "choice_list" else literal
+
+
+def choice_values(help_text: str, cli_name: str) -> list[str]:
+    """Read one finite option vocabulary from clap's emitted help."""
+    _, separator, block = help_text.partition(f"--{cli_name} ")
+    if not separator:
+        raise SystemExit(f"binary did not report option --{cli_name} in command help")
     block = re.split(r"\n\s+(?:--|-h, --)", block, maxsplit=1)[0]
     choices = re.findall(r"^\s+- ([a-z0-9-]+):", block, re.MULTILINE)
     if not choices:
         raise SystemExit(f"binary did not report possible values for option --{cli_name}")
-    literal = "Literal[" + ", ".join(repr(choice) for choice in choices) + "]"
-    return f"list[{literal}] | tuple[{literal}, ...]" if configured == "choice_list" else literal
+    return choices
 
 
 def generate_models(bundle: SchemaBundle, destination: Path) -> None:
