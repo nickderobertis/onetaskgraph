@@ -488,7 +488,7 @@ fn schema_bundle() -> Result<String, String> {
 struct PublicCommand(String);
 
 impl PublicCommand {
-    fn parse(path: String) -> Result<Self, String> {
+    fn try_new(path: String) -> Result<Self, String> {
         if path.is_empty() || path.split(' ').any(|part| part.is_empty()) {
             return Err(format!("invalid public command path {path:?}"));
         }
@@ -508,7 +508,7 @@ fn public_commands() -> Result<Vec<PublicCommand>, String> {
             .collect();
         if visible.is_empty() {
             if !prefix.is_empty() {
-                commands.push(PublicCommand::parse(prefix.to_owned())?);
+                commands.push(PublicCommand::try_new(prefix.to_owned())?);
             }
             return Ok(());
         }
