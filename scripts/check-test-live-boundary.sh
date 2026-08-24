@@ -133,8 +133,8 @@ SH
 chmod +x "$scratch/scripts/nx.sh"
 unknown_diagnostic="$("$scratch/scripts/test-live.sh" missing 2>&1)" \
   && unknown_status=0 || unknown_status=$?
-if [ "$unknown_status" -ne 1 ]; then
-  fail "an unknown requested project exited $unknown_status instead of 1."
+if [ "$unknown_status" -ne 3 ]; then
+  fail "an unknown requested project exited $unknown_status instead of 3."
 fi
 if ! printf '%s\n' "$unknown_diagnostic" | grep -qxF '  alpha *' \
   || ! printf '%s\n' "$unknown_diagnostic" | grep -qxF '  beta space'; then
@@ -147,8 +147,8 @@ esac
 
 unsafe_diagnostic="$("$scratch/scripts/test-live.sh" $'bad\nname' 2>&1)" \
   && unsafe_status=0 || unsafe_status=$?
-if [ "$unsafe_status" -ne 1 ]; then
-  fail "an unsafe unknown project exited $unsafe_status instead of 1."
+if [ "$unsafe_status" -ne 3 ]; then
+  fail "an unsafe unknown project exited $unsafe_status instead of 3."
 fi
 case "$unsafe_diagnostic" in
   *"$'bad\\nname' is not a project"*) ;;

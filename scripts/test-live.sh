@@ -95,7 +95,8 @@ for project in "$@"; do
       printf '  %s\n' "$known_project" >&2
     done <<< "$known"
     echo "test-live: rerun with one of the project names listed above." >&2
-    exit 1
+    # Status 3 means a caller supplied a project name outside the listed workspace.
+    exit 3
   fi
 done
 
