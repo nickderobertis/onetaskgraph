@@ -182,6 +182,7 @@ def test_generator_rejects_drift_and_unmapped_commands(tmp_path: Path) -> None:
     )
     assert stale.returncode == 1
     assert "effective_config.py" in stale.stderr
+    assert "uv run python generate.py" in stale.stderr
     invalid_bundle = subprocess.run(
         [sys.executable, "-c", "import generate; generate.validate_schema_bundle([])"],
         cwd=WORKSPACE / "sdks" / "python",

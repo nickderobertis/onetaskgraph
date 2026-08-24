@@ -426,7 +426,11 @@ def check_generated(expected_dir: Path, actual_dir: Path) -> None:
         | {name for name in expected.keys() & actual.keys() if expected[name] != actual[name]}
     )
     if changed:
-        raise SystemExit("generated Python SDK is stale: " + ", ".join(changed))
+        raise SystemExit(
+            "generated Python SDK is stale: "
+            + ", ".join(changed)
+            + "; run `uv run python generate.py` from sdks/python to regenerate"
+        )
 
 
 def validate_schema_bundle(parsed: JsonValue) -> SchemaBundle:
