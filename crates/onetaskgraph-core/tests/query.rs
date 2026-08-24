@@ -1453,37 +1453,3 @@ async fn a_source_that_serves_a_larger_page_than_it_was_asked_for_is_refused() {
         response.errors[0]
     );
 }
-
-#[tokio::test]
-async fn a_page_token_owing_two_streams_the_next_row_is_refused() {
-    // Rows come back one stream at a time, so exactly one stream can be owed the next
-    // one. A document naming two says nothing about which of them the page begins at, and
-    // answering it would pick one silently — a page in an order the caller cannot predict
-    // rather than the mistake it is.
-    let engine = engine_over(json!({
-        "one": {"plugin": "in-memory", "config": compensated(nothing_native())},
-        "two": {"plugin": "in-memory", "config": compensated(nothing_native())},
-    }));
-
-    let raw = document_for_task_list(
-        &engine,
-        &json!([
-            {"source": "one", "stream": "items", "first": true},
-            {"source": "two", "stream": "items", "first": true},
-        ]),
-    )
-    .await;
-    let token = PageToken::parse(hex(&raw)).expect("it is this engine's own document");
-
-    let Err(EngineError::Token { message }) = engine
-        .tasks(&tasks(
-            Filters::default(),
-            ProjectSelector::Any,
-            resumed(5, token),
-        ))
-        .await
-    else {
-        panic!("a token owing two streams the next row must be refused");
-    };
-    assert!(message.contains("two streams the next row"), "{message}");
-}

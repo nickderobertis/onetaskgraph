@@ -14,7 +14,7 @@ use std::future::Future;
 
 use onetaskgraph_plugin_api::{Cursor, Page, SourceError, SourceName};
 
-use super::resume::{Resume, StreamKind, StreamState};
+use super::resume::{Owed, Resume, StreamKind, StreamState};
 
 /// One surviving row, with the state that would deliver it first.
 pub(crate) struct Row<T> {
@@ -169,8 +169,8 @@ pub(crate) fn fits(returned: usize, asked_for: u32) -> Result<(), SourceError> {
 pub(crate) fn merge<T>(
     streams: Vec<Stream<T>>,
     budget: u32,
-    resume_first: Option<(&SourceName, StreamKind)>,
-) -> (Vec<(SourceName, T)>, Vec<StreamState>) {
+    resume_first: Option<&Owed>,
+) -> (Vec<(SourceName, T)>, Vec<StreamState>, Option<Owed>) {
     let count = streams.len();
     let mut sources: Vec<SourceName> = Vec::with_capacity(count);
     let mut kinds: Vec<StreamKind> = Vec::with_capacity(count);
@@ -191,8 +191,10 @@ pub(crate) fn merge<T>(
     // the previous page exhausted is not here any more, and a fresh query names none, so
     // both fall back to the first stream — which is where an even round starts anyway.
     let start = resume_first
-        .and_then(|(source, kind)| {
-            (0..count).find(|&position| &sources[position] == source && kinds[position] == kind)
+        .and_then(|owed| {
+            (0..count).find(|&position| {
+                sources[position] == owed.source && kinds[position] == owed.stream
+            })
         })
         .unwrap_or(0);
 
@@ -246,10 +248,23 @@ pub(crate) fn merge<T>(
                 source: sources[position].clone(),
                 stream: kinds[position],
                 resume,
-                first: owed == Some(position),
             });
         }
     }
 
-    (items, states)
+    // Only when that stream still has somewhere to resume from: a stream this page cut
+    // short has, by construction, but saying so here means the answer cannot name one the
+    // next page has nothing to give.
+    let next = owed
+        .map(|position| Owed {
+            source: sources[position].clone(),
+            stream: kinds[position],
+        })
+        .filter(|owed| {
+            states
+                .iter()
+                .any(|state| state.source == owed.source && state.stream == owed.stream)
+        });
+
+    (items, states, next)
 }

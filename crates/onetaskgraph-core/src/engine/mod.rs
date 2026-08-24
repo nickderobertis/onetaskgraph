@@ -40,8 +40,8 @@ use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available};
 use fetch::{Fetched, Stream, fits, merge, walk};
 use join::join_all;
 use local::{LocalProjects, LocalTasks};
+pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
-pub(crate) use resume::{Resumption, StreamState};
 
 pub use local::ProjectSelector;
 
@@ -1038,12 +1038,12 @@ impl Answer {
         self,
         streams: Vec<Stream<T>>,
         budget: u32,
-        first: Option<(&SourceName, StreamKind)>,
+        first: Option<&Owed>,
         query: &str,
         qualify: impl Fn(&SourceName, T) -> U,
     ) -> Result<QueryResponse<U>, EngineError> {
-        let (rows, states) = merge(streams, budget, first);
-        let next = (!states.is_empty()).then(|| PageToken::encode(query, &states));
+        let (rows, states, owed) = merge(streams, budget, first);
+        let next = (!states.is_empty()).then(|| PageToken::encode(query, owed, &states));
         Ok(QueryResponse {
             items: rows
                 .into_iter()
@@ -1111,7 +1111,7 @@ fn merge_plans(plans: Vec<SourcePlan>) -> Vec<SourcePlan> {
 /// restart every finished source from its first row.
 fn walking<'a>(
     selected: Vec<&'a ResolvedSource>,
-    states: &Option<Vec<StreamState>>,
+    states: &Option<Resumption>,
     kind: StreamKind,
 ) -> (Vec<&'a ResolvedSource>, Vec<Resume>) {
     let mut ready = Vec::new();
@@ -1161,23 +1161,16 @@ fn fingerprint(text: &str) -> String {
 ///
 /// A fresh query has no token and every token whose last round ended evenly carries no
 /// such stream, so `None` is the common case and means "begin at the first stream".
-fn owed(states: &Option<Vec<StreamState>>) -> Option<(&SourceName, StreamKind)> {
-    states
-        .as_ref()?
-        .iter()
-        .find(|state| state.first)
-        .map(|state| (&state.source, state.stream))
+fn owed(document: &Option<Resumption>) -> Option<&Owed> {
+    document.as_ref()?.owed.as_ref()
 }
 
 /// Where one stream picks up, or `None` when the token says it is finished.
-fn resume_at(
-    states: &Option<Vec<StreamState>>,
-    source: &SourceName,
-    kind: StreamKind,
-) -> Option<Resume> {
+fn resume_at(states: &Option<Resumption>, source: &SourceName, kind: StreamKind) -> Option<Resume> {
     match states {
         None => Some(Resume::default()),
-        Some(states) => states
+        Some(document) => document
+            .streams
             .iter()
             .find(|state| &state.source == source && state.stream == kind)
             .map(|state| state.resume.clone()),
@@ -1201,9 +1194,11 @@ fn resume_at(
 ///    exhausted walk, which is the worst shape this failure could take;
 /// 3. no stream appears twice, because a walk has one place to pick up per stream;
 /// 4. no `skip` reaches a source's declared page ceiling, because the engine's `skip` is
-///    an index among the surviving rows of one source page and can never reach it;
-/// 5. at most one stream is owed the next row, because the round-robin picks up at one
-///    stream and a document naming two says nothing about which.
+///    an index among the surviving rows of one source page and can never reach it.
+///
+/// A fifth thing needs no check here: at most one stream is owed the next row, because
+/// [`Resumption`] holds that as one optional stream rather than as a flag on each of
+/// them, so a document naming two has no spelling.
 ///
 /// None of this is a security boundary and a page token is not a credential: nothing in
 /// one is secret, and a forged cursor is handed straight back to the source that would
@@ -1214,7 +1209,7 @@ fn resumption(
     token: Option<&PageToken>,
     reads: &[StreamKind],
     query: &str,
-) -> Result<Option<Vec<StreamState>>, EngineError> {
+) -> Result<Option<Resumption>, EngineError> {
     let Some(document) = token.map(PageToken::decode) else {
         return Ok(None);
     };
@@ -1232,10 +1227,10 @@ fn resumption(
                 .to_owned(),
         });
     }
-    let states = document.streams;
+    let states = &document.streams;
 
     let mut seen: Vec<(&SourceName, StreamKind)> = Vec::new();
-    for state in &states {
+    for state in states {
         if !reads.contains(&state.stream) {
             return Err(EngineError::Token {
                 message: format!(
@@ -1287,14 +1282,7 @@ fn resumption(
         seen.push((&state.source, state.stream));
     }
 
-    if states.iter().filter(|state| state.first).count() > 1 {
-        return Err(EngineError::Token {
-            message: "this page token gives two streams the next row, and rows come back                       one stream at a time"
-                .to_owned(),
-        });
-    }
-
-    Ok(Some(states))
+    Ok(Some(document))
 }
 
 /// Which project a task must belong to, as a source sees it.

@@ -9,7 +9,7 @@ use onetaskgraph_plugin_api::{SourceError, SourceName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{Resumption, StreamState};
+use crate::engine::{Owed, Resumption, StreamState};
 
 /// One page of engine output, with the plan that produced it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -149,9 +149,10 @@ impl PageToken {
     /// Only ever reached with at least one stream, because a walk with nothing left to
     /// resume reports no token at all — which is why [`parse`](Self::parse) refuses an
     /// empty one.
-    pub(crate) fn encode(query: &str, streams: &[StreamState]) -> Self {
+    pub(crate) fn encode(query: &str, owed: Option<Owed>, streams: &[StreamState]) -> Self {
         let document = serde_json::to_string(&Resumption {
             query: query.to_owned(),
+            owed,
             streams: streams.to_vec(),
         })
         .expect("a resumption is plain data and always serialises");
@@ -227,7 +228,8 @@ impl TryFrom<String> for PageToken {
     }
 }
 
-/// Serialising is the plain string it has always been; only the way back in changed.
+/// A token is its string, so serialising one is that string and nothing else — the
+/// checking all happens on the way in, where a caller's input is.
 impl From<PageToken> for String {
     fn from(value: PageToken) -> Self {
         value.0
