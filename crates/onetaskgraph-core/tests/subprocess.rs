@@ -690,6 +690,36 @@ fn a_spawned_program_that_fails_at_once_is_reported_with_what_it_wrote() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_spawned_plugin_inherits_no_unrelated_host_environment() {
+    // `HOME` is deliberately not one of the named credentials handed to `connect`.
+    // A real child shell reports which side of the boundary it observed through the
+    // protocol's own error envelope, so this proves the spawned process's environment
+    // rather than inspecting the `Command` that built it.
+    let script = r#"read -r _request
+if [ -z "${HOME+x}" ]; then
+  printf '%s\n' '{"id":"0","error":{"kind":"auth","message":"environment cleared"}}'
+else
+  printf '%s\n' '{"id":"0","error":{"kind":"auth","message":"HOME leaked"}}'
+fi"#;
+    let error = SubprocessSource::connect(
+        "/bin/sh",
+        &["-c".to_owned(), script.to_owned()],
+        &name(),
+        &json!({}),
+        BTreeMap::new(),
+    )
+    .expect_err("the probe refuses after reporting its environment");
+
+    assert_eq!(
+        error,
+        SourceError::Auth {
+            message: "environment cleared".to_owned()
+        }
+    );
+}
+
 #[tokio::test]
 async fn a_source_is_named_in_diagnostics_without_its_connection() {
     let source = a_process_away(hosted_settings()).expect("the handshake succeeds");

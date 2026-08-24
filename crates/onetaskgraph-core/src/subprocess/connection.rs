@@ -288,6 +288,10 @@ impl Peer {
     pub(crate) fn spawn(program: &str, args: &[String]) -> Result<Self, SourceError> {
         let mut child = Command::new(program)
             .args(args)
+            // Credentials cross this boundary only in the initialize request (§3.1).
+            // Inheriting the engine's environment would also hand the plugin every
+            // unrelated token held by its host process.
+            .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
