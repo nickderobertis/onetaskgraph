@@ -43,10 +43,21 @@ SH
     *"test-live: stdout:"*"test-live: stderr:"*) ;;
     *) fail "$name output failed without reporting stdout and stderr separately. Diagnostic: $diagnostic" ;;
   esac
-  case "$diagnostic" in
-    *"run 'just bootstrap', then retry"*) ;;
-    *) fail "$name output failed without a concrete next action. Diagnostic: $diagnostic" ;;
-  esac
+  if [ "$expected_status" -eq 1 ]; then
+    case "$diagnostic" in
+      *"run 'just bootstrap', then retry"*) ;;
+      *) fail "$name output failed without a concrete bootstrap action. Diagnostic: $diagnostic" ;;
+    esac
+  else
+    case "$diagnostic" in
+      *"fix the workspace project listing, then retry"*) ;;
+      *) fail "$name output failed without a concrete listing action. Diagnostic: $diagnostic" ;;
+    esac
+    case "$diagnostic" in
+      *"test-live: validation:"*) ;;
+      *) fail "$name output failed without its validation detail. Diagnostic: $diagnostic" ;;
+    esac
+  fi
   case "$diagnostic" in
     *Traceback*) fail "$name output leaked a Python traceback. Diagnostic: $diagnostic" ;;
   esac
@@ -61,10 +72,17 @@ SH
       *) fail "$name output was not identified as empty. Diagnostic: $diagnostic" ;;
     esac
   fi
-  case "$diagnostic" in
-    *"$stderr"*) ;;
-    *) fail "$name stderr was not preserved for the diagnostic. Diagnostic: $diagnostic" ;;
-  esac
+  if [ -n "$stderr" ]; then
+    case "$diagnostic" in
+      *"$stderr"*) ;;
+      *) fail "$name stderr was not preserved for the diagnostic. Diagnostic: $diagnostic" ;;
+    esac
+  else
+    case "$diagnostic" in
+      *"test-live: stderr:"$'\n'"<empty>"*) ;;
+      *) fail "$name stderr was not identified as empty. Diagnostic: $diagnostic" ;;
+    esac
+  fi
 }
 
 run_case "empty" "" "nx install notice"
@@ -122,6 +140,20 @@ if ! printf '%s\n' "$unknown_diagnostic" | grep -qxF '  alpha *' \
   || ! printf '%s\n' "$unknown_diagnostic" | grep -qxF '  beta space'; then
   fail "known project names were not rendered literally. Diagnostic: $unknown_diagnostic"
 fi
+case "$unknown_diagnostic" in
+  *"rerun with one of the project names listed above"*) ;;
+  *) fail "the unknown-project diagnostic gave no concrete next action: $unknown_diagnostic" ;;
+esac
+
+unsafe_diagnostic="$("$scratch/scripts/test-live.sh" $'bad\nname' 2>&1)" \
+  && unsafe_status=0 || unsafe_status=$?
+if [ "$unsafe_status" -ne 1 ]; then
+  fail "an unsafe unknown project exited $unsafe_status instead of 1."
+fi
+case "$unsafe_diagnostic" in
+  *"$'bad\\nname' is not a project"*) ;;
+  *) fail "an unsafe unknown project was not shell-escaped. Diagnostic: $unsafe_diagnostic" ;;
+esac
 
 if [ "$failures" -ne 0 ]; then
   echo "check-test-live-boundary: $failures expectation(s) failed." >&2

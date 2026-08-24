@@ -35,7 +35,11 @@ project_list_failure() {
     echo "test-live: validation:" >&2
     cat "$validation_file" >&2
   fi
-  echo "test-live: run 'just bootstrap', then retry the command above." >&2
+  if [ "$status" -eq 1 ]; then
+    echo "test-live: run 'just bootstrap', then retry the command above." >&2
+  else
+    echo "test-live: inspect the command above and fix the workspace project listing, then retry." >&2
+  fi
   exit "$status"
 }
 
@@ -86,10 +90,11 @@ fi
 
 for project in "$@"; do
   if ! printf '%s\n' "$known" | grep -qxF -- "$project"; then
-    echo "test-live: $project is not a project of this workspace. Known projects:" >&2
+    printf 'test-live: %q is not a project of this workspace. Known projects:\n' "$project" >&2
     while IFS= read -r known_project; do
       printf '  %s\n' "$known_project" >&2
     done <<< "$known"
+    echo "test-live: rerun with one of the project names listed above." >&2
     exit 1
   fi
 done
