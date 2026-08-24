@@ -14,8 +14,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use onetaskgraph_core::{
-    Engine, Filters, GlobalId, LabelRequest, Paging, ProjectRequest, ProjectSelector,
-    ResolvedSource, SearchKind, SearchRequest, TaskRequest,
+    DependencyRequest, Engine, Filters, GlobalId, LabelRequest, Paging, ProjectRequest,
+    ProjectSelector, ResolvedSource, SearchKind, SearchRequest, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencySupport, Direction, Health, Label, NativeId, Page,
@@ -183,10 +183,10 @@ impl TaskSource for Counting {
 
 /// Every verb that reaches a source, asked twice, must reach it twice.
 ///
-/// One test over all of them rather than one per verb: the failure this catches is a
-/// *cache*, and a cache added to the engine would be added in one place and would make
-/// every one of these stop asking. Listing the verbs here is what makes a verb added
-/// later and quietly memoised fail this.
+/// The list below is the whole of that surface — both list verbs, labels, search, both
+/// show verbs and both dependency walks. Naming them one by one is what makes a verb
+/// added later and quietly memoised fail here: the failure this catches is a cache, and a
+/// cache is added in one place and stops every one of these asking.
 #[tokio::test]
 async fn the_same_query_asked_twice_reaches_the_source_twice() {
     let tasks = TaskRequest {
@@ -214,6 +214,11 @@ async fn the_same_query_asked_twice_reaches_the_source_twice() {
         paging: one_page(),
     };
     let id: GlobalId = "work:T-1".parse().expect("a qualified id");
+    let dependencies = DependencyRequest {
+        id: id.clone(),
+        direction: Direction::DependedOnBy,
+        paging: one_page(),
+    };
 
     for (verb, ask) in [
         ("task list", 0usize),
@@ -222,6 +227,8 @@ async fn the_same_query_asked_twice_reaches_the_source_twice() {
         ("search", 3),
         ("task show", 4),
         ("project show", 5),
+        ("task deps", 6),
+        ("project deps", 7),
     ] {
         let (engine, calls) = engine();
 
@@ -242,8 +249,20 @@ async fn the_same_query_asked_twice_reaches_the_source_twice() {
                 4 => {
                     engine.task(&id).await.expect("the query runs");
                 }
-                _ => {
+                5 => {
                     engine.project(&id).await.expect("the query runs");
+                }
+                6 => {
+                    engine
+                        .task_dependencies(&dependencies)
+                        .await
+                        .expect("the query runs");
+                }
+                _ => {
+                    engine
+                        .project_dependencies(&dependencies)
+                        .await
+                        .expect("the query runs");
                 }
             }
 
