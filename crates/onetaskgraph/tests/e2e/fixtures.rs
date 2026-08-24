@@ -14,7 +14,7 @@
 
 use serde_json::{Value, json};
 
-use crate::common::Sandbox;
+use crate::common::{Sandbox, SourceBoundary};
 
 /// One row: a source kind, in one configuration, over the shared dataset.
 pub struct Row {
@@ -105,6 +105,11 @@ pub const SCANNED: &str = "scanned";
 /// plans — and, for dependencies, one reverse answer the source gives and one the engine
 /// scans for, which must match edge for edge.
 pub fn pair(sandbox: &Sandbox) -> String {
+    pair_at(sandbox, SourceBoundary::Direct)
+}
+
+/// The capability pair built on either side of the process boundary.
+pub fn pair_at(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
     let mut sources = serde_json::Map::new();
     for (name, row) in [(NATIVE, &ROWS[0]), (SCANNED, &ROWS[1])] {
         let Fixture::Ready(ready) = &row.fixture else {
@@ -112,7 +117,7 @@ pub fn pair(sandbox: &Sandbox) -> String {
         };
         sources.insert(
             name.to_owned(),
-            json!({"plugin": row.plugin, "config": (ready.block)(sandbox)}),
+            boundary.source(row.plugin, (ready.block)(sandbox)),
         );
     }
     document(&Value::Object(sources))

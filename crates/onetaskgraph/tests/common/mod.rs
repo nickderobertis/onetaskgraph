@@ -8,7 +8,56 @@
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
+use serde_json::{Value, json};
 use tempfile::TempDir;
+
+/// The two boundaries every source-backed journey must cross.
+#[derive(Clone, Copy, Debug)]
+pub enum SourceBoundary {
+    /// The engine builds the source in its own process.
+    Direct,
+    /// The engine reaches the same source through the shipped stdio host.
+    Subprocess,
+}
+
+pub const SOURCE_BOUNDARIES: [SourceBoundary; 2] =
+    [SourceBoundary::Direct, SourceBoundary::Subprocess];
+
+impl SourceBoundary {
+    /// One configured source, preserving the source's own plugin and configuration.
+    pub fn source(self, plugin: &str, config: Value) -> Value {
+        match self {
+            Self::Direct => json!({"plugin": plugin, "config": config}),
+            Self::Subprocess => json!({
+                "plugin": "subprocess",
+                "config": {
+                    "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                    "settings": {"kind": plugin, "config": config},
+                },
+            }),
+        }
+    }
+
+    /// The configuration path to a field in the source behind this boundary.
+    pub fn config_path(self, field: &str) -> String {
+        match self {
+            Self::Direct => format!("sources.work.config.{field}"),
+            Self::Subprocess => format!("sources.work.config.settings.config.{field}"),
+        }
+    }
+
+    /// The environment spelling of [`Self::config_path`].
+    pub fn config_variable(self, field: &str) -> String {
+        format!(
+            "ONETASKGRAPH_{}",
+            self.config_path(field)
+                .split('.')
+                .map(|segment| segment.to_ascii_uppercase().replace('-', "_"))
+                .collect::<Vec<_>>()
+                .join("__")
+        )
+    }
+}
 
 /// A temporary host: a project tree to run in, and a configuration home over it.
 pub struct Sandbox {

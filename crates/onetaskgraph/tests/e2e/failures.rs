@@ -6,17 +6,21 @@
 
 use std::process::Output;
 
-use crate::common::{Sandbox, stderr, stdout};
+use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
 use crate::fixtures::{ROWS, dataset, document, qualified};
 use serde_json::{Value, json};
 
 /// A sandbox holding one working `in-memory` source called `work`.
 fn host() -> Sandbox {
+    host_at(SourceBoundary::Direct)
+}
+
+fn host_at(boundary: SourceBoundary) -> Sandbox {
     let sandbox = Sandbox::new();
     let mut block = dataset();
     block["capabilities"] = json!({"max_page_size": 50});
     sandbox.project_document(&document(
-        &json!({"work": {"plugin": ROWS[0].plugin, "config": block}}),
+        &json!({"work": boundary.source(ROWS[0].plugin, block)}),
     ));
     sandbox
 }
@@ -92,13 +96,20 @@ fn unhex(raw: &str) -> Vec<u8> {
 
 #[test]
 fn a_source_name_nothing_configures_is_refused_with_the_names_that_exist() {
-    let output = run(&host(), &["task", "list", "--source", "elsewhere"]);
-    refused(&output, "elsewhere", "sources list");
-    assert_eq!(output.status.code(), Some(1));
+    for boundary in SOURCE_BOUNDARIES {
+        let output = run(
+            &host_at(boundary),
+            &["task", "list", "--source", "elsewhere"],
+        );
+        refused(&output, "elsewhere", "sources list");
+        assert_eq!(output.status.code(), Some(1));
+    }
 }
 
 #[test]
 fn a_configuration_that_will_not_parse_is_refused_where_it_is_written() {
+    // Invalid YAML cannot describe a plugin, so this pre-construction refusal has no
+    // protocol capability through which a subprocess wrapper could repeat it.
     let sandbox = Sandbox::new();
     sandbox.project_document("sources:\n  work:\n   plugin: [this is not a plugin name\n");
     let output = run(&sandbox, &["task", "list"]);
@@ -117,34 +128,38 @@ fn a_setting_no_plugin_answers_to_is_refused_by_the_key_that_names_it() {
 
 #[test]
 fn an_id_that_names_nothing_is_refused_and_says_where_to_look() {
-    let sandbox = host();
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = host_at(boundary);
 
-    let missing = run(&sandbox, &["task", "show", &qualified("work", "NOPE")]);
-    refused(&missing, "no task with that id", "task list");
-    assert_eq!(missing.status.code(), Some(1));
+        let missing = run(&sandbox, &["task", "show", &qualified("work", "NOPE")]);
+        refused(&missing, "no task with that id", "task list");
+        assert_eq!(missing.status.code(), Some(1));
 
-    let no_project = run(&sandbox, &["project", "show", &qualified("work", "NOPE")]);
-    refused(&no_project, "no project with that id", "project list");
+        let no_project = run(&sandbox, &["project", "show", &qualified("work", "NOPE")]);
+        refused(&no_project, "no project with that id", "project list");
 
-    // Unqualified, which is a different mistake and gets a different message.
-    let unqualified = run(&sandbox, &["task", "show", "T-1"]);
-    refused(&unqualified, "is not a qualified id", "sources list");
+        // Unqualified, which is a different mistake and gets a different message.
+        let unqualified = run(&sandbox, &["task", "show", "T-1"]);
+        refused(&unqualified, "is not a qualified id", "sources list");
 
-    // And an id whose source is not configured at all.
-    let elsewhere = run(&sandbox, &["task", "show", "elsewhere:T-1"]);
-    refused(&elsewhere, "elsewhere", "sources list");
+        // And an id whose source is not configured at all.
+        let elsewhere = run(&sandbox, &["task", "show", "elsewhere:T-1"]);
+        refused(&elsewhere, "elsewhere", "sources list");
+    }
 }
 
 #[test]
 fn a_source_that_cannot_answer_exits_four_and_names_itself() {
-    let sandbox = Sandbox::new();
-    sandbox.project_document(&document(
-        &json!({"gone": {"plugin": "linear", "config": {}}}),
-    ));
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&document(
+            &json!({"gone": boundary.source("linear", json!({}))}),
+        ));
 
-    let output = run(&sandbox, &["task", "list"]);
-    assert_eq!(output.status.code(), Some(4));
-    refused(&output, "gone", "--allow-partial");
+        let output = run(&sandbox, &["task", "list"]);
+        assert_eq!(output.status.code(), Some(4));
+        refused(&output, "gone", "--allow-partial");
+    }
 }
 
 #[test]

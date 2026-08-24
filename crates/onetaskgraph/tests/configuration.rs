@@ -13,7 +13,7 @@ mod common;
 
 use std::process::Output;
 
-use common::{ONE_SOURCE, Sandbox, stderr, stdout};
+use common::{ONE_SOURCE, SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
 use serde_json::Value;
 
 /// The whole `config show --json` document.
@@ -147,37 +147,52 @@ fn a_flag_beats_the_file() {
 
 #[test]
 fn all_three_layers_at_once_leave_the_flag_on_top_and_each_other_setting_with_its_own_layer() {
-    let sandbox = Sandbox::new();
-    let document = sandbox.project_document(
-        "page_size: 25\nsources:\n  work:\n    plugin: in-memory\n  notes:\n    plugin: in-memory\n",
-    );
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        let document = sandbox.project_document(
+            &serde_json::to_string(&serde_json::json!({
+                "page_size": 25,
+                "sources": {
+                    "work": boundary.source("in-memory", serde_json::json!({})),
+                    "notes": boundary.source("in-memory", serde_json::json!({})),
+                }
+            }))
+            .expect("a document"),
+        );
 
-    let output = sandbox
-        .command()
-        .env("ONETASKGRAPH_PAGE_SIZE", "70")
-        .env("ONETASKGRAPH_DEFAULT_SOURCES", "work,notes")
-        .args(["config", "show", "--json", "--page-size", "9"])
-        .assert()
-        .success()
-        .get_output()
-        .clone();
+        let output = sandbox
+            .command()
+            .env("ONETASKGRAPH_PAGE_SIZE", "70")
+            .env("ONETASKGRAPH_DEFAULT_SOURCES", "work,notes")
+            .args(["config", "show", "--json", "--page-size", "9"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
 
-    let shown = shown(&output);
-    assert_eq!(setting(&shown, "page_size")["value"], 9);
-    assert_eq!(
-        setting(&shown, "page_size")["origin"]["flag"],
-        "--page-size"
-    );
-    assert_eq!(
-        setting(&shown, "default_sources")["origin"]["variable"],
-        "ONETASKGRAPH_DEFAULT_SOURCES",
-        "the layer that set a setting is the layer reported for it, per setting"
-    );
-    assert_eq!(
-        setting(&shown, "sources.work.plugin")["origin"]["path"],
-        document.to_string_lossy().to_string(),
-        "a setting no higher layer touched still comes from the document that set it"
-    );
+        let shown = shown(&output);
+        assert_eq!(setting(&shown, "page_size")["value"], 9);
+        assert_eq!(
+            setting(&shown, "page_size")["origin"]["flag"],
+            "--page-size"
+        );
+        assert_eq!(
+            setting(&shown, "default_sources")["origin"]["variable"],
+            "ONETASKGRAPH_DEFAULT_SOURCES",
+            "the layer that set a setting is the layer reported for it, per setting"
+        );
+        assert_eq!(
+            setting(
+                &shown,
+                match boundary {
+                    SourceBoundary::Direct => "sources.work.plugin",
+                    SourceBoundary::Subprocess => "sources.work.config.settings.kind",
+                },
+            )["origin"]["path"],
+            document.to_string_lossy().to_string(),
+            "a setting no higher layer touched still comes from the document that set it"
+        );
+    }
 }
 
 #[test]
@@ -384,6 +399,15 @@ fn asking_for_a_format_and_the_json_shorthand_at_once_is_refused_as_a_bad_invoca
 /// The setting a named source's own field lives at.
 const SOURCE_FIELD: &str = "sources.work.config.capabilities.max_page_size";
 
+fn source_document(boundary: SourceBoundary, max_page_size: u32) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "sources": {"work": boundary.source("in-memory", serde_json::json!({
+            "capabilities": {"max_page_size": max_page_size}
+        }))}
+    }))
+    .expect("a source document")
+}
+
 #[test]
 fn a_malformed_configuration_flag_is_refused_on_a_verb_that_does_not_use_it() {
     let sandbox = Sandbox::new();
@@ -518,76 +542,81 @@ fn a_source_this_build_cannot_build_is_refused_on_a_verb_that_does_not_use_it() 
 
 #[test]
 fn a_named_sources_own_field_is_set_by_the_file() {
-    let sandbox = Sandbox::new();
-    let document = sandbox.project_document(ONE_SOURCE);
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        let document = sandbox.project_document(&source_document(boundary, 20));
 
-    let output = sandbox
-        .command()
-        .args(["config", "show", "--json"])
-        .assert()
-        .success()
-        .get_output()
+        let output = sandbox
+            .command()
+            .args(["config", "show", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+
+        let field = setting(
+            &shown(&output),
+            &boundary.config_path("capabilities.max_page_size"),
+        )
         .clone();
-
-    let field = setting(&shown(&output), SOURCE_FIELD).clone();
-    assert_eq!(field["value"], 20);
-    assert_eq!(
-        field["origin"]["path"],
-        document.to_string_lossy().to_string()
-    );
+        assert_eq!(field["value"], 20);
+        assert_eq!(
+            field["origin"]["path"],
+            document.to_string_lossy().to_string()
+        );
+    }
 }
 
 #[test]
 fn a_named_sources_own_field_is_set_by_the_environment_over_the_file() {
-    let sandbox = Sandbox::new();
-    sandbox.project_document(ONE_SOURCE);
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&source_document(boundary, 20));
 
-    let output = sandbox
-        .command()
-        .env(
-            "ONETASKGRAPH_SOURCES__WORK__CONFIG__CAPABILITIES__MAX_PAGE_SIZE",
-            "7",
+        let variable = boundary.config_variable("capabilities.max_page_size");
+
+        let output = sandbox
+            .command()
+            .env(&variable, "7")
+            .args(["config", "show", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+
+        let field = setting(
+            &shown(&output),
+            &boundary.config_path("capabilities.max_page_size"),
         )
-        .args(["config", "show", "--json"])
-        .assert()
-        .success()
-        .get_output()
         .clone();
-
-    let field = setting(&shown(&output), SOURCE_FIELD).clone();
-    assert_eq!(field["value"], 7);
-    assert_eq!(
-        field["origin"]["variable"],
-        "ONETASKGRAPH_SOURCES__WORK__CONFIG__CAPABILITIES__MAX_PAGE_SIZE"
-    );
+        assert_eq!(field["value"], 7);
+        assert_eq!(field["origin"]["variable"], variable);
+    }
 }
 
 #[test]
 fn a_named_sources_own_field_is_set_by_a_flag_over_the_environment_and_the_file() {
-    let sandbox = Sandbox::new();
-    sandbox.project_document(ONE_SOURCE);
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&source_document(boundary, 20));
 
-    let output = sandbox
-        .command()
-        .env(
-            "ONETASKGRAPH_SOURCES__WORK__CONFIG__CAPABILITIES__MAX_PAGE_SIZE",
-            "7",
-        )
-        .args([
-            "config",
-            "show",
-            "--json",
-            "--set",
-            "sources.work.config.capabilities.max_page_size=3",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .clone();
+        let variable = boundary.config_variable("capabilities.max_page_size");
+        let field_path = boundary.config_path("capabilities.max_page_size");
+        let assignment = format!("{field_path}=3");
 
-    let field = setting(&shown(&output), SOURCE_FIELD).clone();
-    assert_eq!(field["value"], 3);
-    assert_eq!(field["origin"]["flag"], format!("--set {SOURCE_FIELD}"));
+        let output = sandbox
+            .command()
+            .env(&variable, "7")
+            .args(["config", "show", "--json", "--set", &assignment])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+
+        let field = setting(&shown(&output), &field_path).clone();
+        assert_eq!(field["value"], 3);
+        assert_eq!(field["origin"]["flag"], format!("--set {field_path}"));
+    }
 }
 
 #[test]
