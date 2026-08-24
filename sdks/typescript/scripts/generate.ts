@@ -80,10 +80,13 @@ if (
   !("version" in candidate) ||
   typeof candidate.version !== "number" ||
   !Number.isInteger(candidate.version) ||
+  candidate.version < 0 ||
+  candidate.version > 4_294_967_295 ||
   !("roots" in candidate) ||
   typeof candidate.roots !== "object" ||
   candidate.roots === null ||
   Array.isArray(candidate.roots) ||
+  Object.keys(candidate.roots).some((name) => !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) ||
   Object.values(candidate.roots).some(
     (schema) =>
       typeof schema !== "object" ||

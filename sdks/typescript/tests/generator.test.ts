@@ -149,7 +149,16 @@ test("generator rejects unsafe destinations and malformed executable output", ()
 
     const invalidBundles: ReadonlyArray<readonly [string, unknown]> = [
       ["version", { version: "1", roots: {}, commands: [] }],
+      ["negative-version", { version: -1, roots: {}, commands: [] }],
       ["roots", { version: 1, roots: [], commands: [] }],
+      [
+        "unsafe-root",
+        {
+          version: 1,
+          roots: { "not-safe": { $schema: "https://json-schema.org/draft/2020-12/schema" } },
+          commands: [],
+        },
+      ],
       ["schema", { version: 1, roots: { Broken: { type: "object" } }, commands: [] }],
       ["commands", { version: 1, roots: {}, commands: [1] }],
       ["duplicate-commands", { version: 1, roots: {}, commands: ["schema", "schema"] }],

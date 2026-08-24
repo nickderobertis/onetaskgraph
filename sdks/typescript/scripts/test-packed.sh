@@ -7,10 +7,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)" || {
 }
 readonly ROOT
 readonly BINARY="$ROOT/target/debug/onetaskgraph"
-CLI_VERSION="$(node -p 'require(process.argv[1]).optionalDependencies["@onetaskgraph/cli"]' "$ROOT/sdks/typescript/package.json")" || {
+CLI_VERSION="$(npm pkg get 'optionalDependencies.@onetaskgraph/cli' --prefix "$ROOT/sdks/typescript" | tr -d '"')" || {
   echo "test-packed: could not read the CLI dependency version; next: check package.json." >&2
   exit 1
 }
+if [[ ! "$CLI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+  echo "test-packed: CLI dependency version is not semantic; next: fix package.json." >&2
+  exit 1
+fi
 readonly CLI_VERSION
 TEMP="$(mktemp -d)" || {
   echo "test-packed: could not create a temporary directory; next: check TMPDIR." >&2
