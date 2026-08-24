@@ -7,6 +7,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)" || {
 }
 readonly ROOT
 readonly BINARY="$ROOT/target/debug/onetaskgraph"
+CLI_VERSION="$(node -p 'require(process.argv[1]).optionalDependencies["@onetaskgraph/cli"]' "$ROOT/sdks/typescript/package.json")" || {
+  echo "test-packed: could not read the CLI dependency version; next: check package.json." >&2
+  exit 1
+}
+readonly CLI_VERSION
 TEMP="$(mktemp -d)" || {
   echo "test-packed: could not create a temporary directory; next: check TMPDIR." >&2
   exit 1
@@ -34,7 +39,7 @@ mkdir -p node_modules/@onetaskgraph/cli/bin || {
   echo "test-packed: could not construct the local CLI package; next: check temporary storage." >&2
   exit 1
 }
-printf '%s\n' '{"name":"@onetaskgraph/cli","version":"0.1.0"}' > node_modules/@onetaskgraph/cli/package.json || {
+printf '{"name":"@onetaskgraph/cli","version":"%s"}\n' "$CLI_VERSION" > node_modules/@onetaskgraph/cli/package.json || {
   echo "test-packed: could not write the local CLI manifest; next: check temporary storage." >&2
   exit 1
 }
@@ -54,7 +59,7 @@ printf '%s\n' '{"sources":{"work":{"plugin":"in-memory","config":{"tasks":[{"id"
   echo "test-packed: could not write the fixture config; next: check temporary storage." >&2
   exit 1
 }
-env -u ONETASKGRAPH_BIN node --input-type=module -e '
+if ! cat > packed-query.mjs <<'EOF'
   import { OnetaskgraphClient } from "@onetaskgraph/sdk";
   try {
     const response = await new OnetaskgraphClient({ cwd: "project" }).taskList({ sources: ["work"] });
@@ -63,7 +68,12 @@ env -u ONETASKGRAPH_BIN node --input-type=module -e '
     console.error(`test-packed: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
-' || {
+EOF
+then
+  echo "test-packed: could not write the query program; next: check temporary storage." >&2
+  exit 1
+fi
+env -u ONETASKGRAPH_BIN node packed-query.mjs || {
   echo "test-packed: installed SDK query failed; next: run sdk-typescript:test." >&2
   exit 1
 }
