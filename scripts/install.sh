@@ -56,10 +56,17 @@ if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$tmp/$name" | 
 [ "$actual" = "$expected" ] || die 65 "checksum mismatch for $name"
 mkdir -p "$tmp/unpack" "$install_dir"
 case "$ext" in
-  tar.gz) members=$(tar -tzf "$tmp/$name") || die 65 "archive is unreadable: $name";;
-  zip) members=$(unzip -Z1 "$tmp/$name") || die 65 "archive is unreadable: $name";;
+  tar.gz)
+    members=$(tar -tzf "$tmp/$name") || die 65 "archive is unreadable: $name"
+    links=$(tar -tvzf "$tmp/$name" | awk '$1 ~ /^[lh]/ { print }') || die 65 "archive metadata is unreadable: $name"
+    ;;
+  zip)
+    members=$(unzip -Z1 "$tmp/$name") || die 65 "archive is unreadable: $name"
+    links=$(zipinfo -l "$tmp/$name" | awk '$1 ~ /^l/ { print }') || die 65 "archive metadata is unreadable: $name"
+    ;;
 esac
 printf '%s\n' "$members" | awk '/^\// || /^[A-Za-z]:/ || /(^|\/)\.\.($|\/)/ { bad=1 } END { exit bad }' || die 65 "archive contains an unsafe member path"
+[ -z "$links" ] || die 65 "archive contains a link entry"
 case "$ext" in tar.gz) tar -xzf "$tmp/$name" -C "$tmp/unpack" || die 74 "could not extract $name";; zip) unzip -q "$tmp/$name" -d "$tmp/unpack" || die 74 "could not extract $name";; esac
 [ -f "$tmp/unpack/$binary" ] && [ ! -L "$tmp/unpack/$binary" ] || die 65 "archive binary is not a regular file"
 install -m 755 "$tmp/unpack/$binary" "$install_dir/$binary" || die 74 "could not install into $install_dir"

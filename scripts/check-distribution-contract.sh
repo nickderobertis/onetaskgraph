@@ -14,6 +14,7 @@ macos-latest x86_64-apple-darwin tar.gz darwin-x64
 macos-latest aarch64-apple-darwin tar.gz darwin-arm64
 windows-latest x86_64-pc-windows-msvc zip win32-x64
 MAPPINGS
+grep -Fq 'target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-msvc]' .github/workflows/release.yml || fail "wheel targets disagree with the native release matrix"
 for value in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64; do grep -q "$value" npm/cli/bin/onetaskgraph.js || fail "$value missing from launcher"; done
 node <<'NODE' || fail "an npm carrier manifest disagrees with its directory"
 const fs = require("fs");
