@@ -1,0 +1,50 @@
+# Conventional Commits determine versions; release-plz writes manifests and changelogs.
+[workspace]
+publish = false
+
+# Restrict release PRs to release-worthy commits. Without this, release-plz considers its
+# generated `chore(...): release v...` commit eligible and auto-merge creates a PR loop.
+release_commits = "(?s)^(feat|fix|perf)(\\([^)]+\\))?!?:|BREAKING CHANGE:"
+
+# Run on every main push so an ordinary fix can resume a partly failed publish. If false,
+# failure after versions are bumped wedges the release because no later release PR exists.
+release_always = true
+semver_check = true
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+
+[[package]]
+name = "onetaskgraph-plugin-api"
+git_tag_name = "onetaskgraph-plugin-api-v{{ version }}"
+git_release_enable = false
+[[package]]
+name = "onetaskgraph-in-memory"
+git_tag_name = "onetaskgraph-in-memory-v{{ version }}"
+git_release_enable = false
+[[package]]
+name = "onetaskgraph-local-md"
+git_tag_name = "onetaskgraph-local-md-v{{ version }}"
+git_release_enable = false
+[[package]]
+name = "onetaskgraph-linear"
+git_tag_name = "onetaskgraph-linear-v{{ version }}"
+git_release_enable = false
+[[package]]
+name = "onetaskgraph-github-projects"
+git_tag_name = "onetaskgraph-github-projects-v{{ version }}"
+git_release_enable = false
+[[package]]
+name = "onetaskgraph-core"
+git_tag_name = "onetaskgraph-core-v{{ version }}"
+git_release_enable = false
+
+[changelog]
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^(test|ci|chore|build|style)", skip = true },
+  { message = ".*", skip = true },
+]

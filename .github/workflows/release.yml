@@ -1,0 +1,99 @@
+name: Release
+on:
+  release:
+    types: [published]
+permissions:
+  contents: write
+jobs:
+  archives:
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, ext: tar.gz }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, ext: tar.gz }
+          - { os: macos-latest, target: x86_64-apple-darwin, ext: tar.gz }
+          - { os: macos-latest, target: aarch64-apple-darwin, ext: tar.gz }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: zip }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: { target: "${{ matrix.target }}" }
+      - run: cargo build --release --locked --target "${{ matrix.target }}" -p onetaskgraph
+      - name: Archive, checksum, and attach
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          TARGET: ${{ matrix.target }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          name="onetaskgraph-${TAG}-${TARGET}"; bin="target/${TARGET}/release/onetaskgraph"
+          [ "$EXT" != zip ] || bin="${bin}.exe"
+          if [ "$EXT" = zip ]; then 7z a "${name}.zip" "$bin"; else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
+          asset="${name}.${EXT}"
+          if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"; else shasum -a 256 "$asset" > "$asset.sha256"; fi
+          gh release upload "$TAG" "$asset" "$asset.sha256"
+  build-wheels:
+    needs: archives
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-msvc]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PyO3/maturin-action@v1
+        with: { target: "${{ matrix.target }}", args: "--release --locked --out dist" }
+      - uses: actions/upload-artifact@v4
+        with: { name: "wheels-${{ matrix.target }}", path: dist }
+  build-distributions:
+    needs: archives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - uses: astral-sh/setup-uv@v7
+      - run: |
+          uv build sdks/python --out-dir dist/python-sdk
+          bun run --cwd sdks/typescript build
+          bun pm pack --cwd sdks/typescript --destination ../../dist/typescript-sdk
+          bun pm pack --cwd npm/cli --destination ../../dist/npm
+      - uses: actions/upload-artifact@v4
+        with: { name: distributions, path: dist }
+  publish-crates:
+    needs: archives
+    if: ${{ vars.CARGO_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - env: { CARGO_REGISTRY_TOKEN: "${{ secrets.CARGO_REGISTRY_TOKEN }}" }
+        run: |
+          for crate in onetaskgraph-plugin-api onetaskgraph-in-memory onetaskgraph-local-md onetaskgraph-linear onetaskgraph-github-projects onetaskgraph-core onetaskgraph; do
+            version=$(cargo metadata --no-deps --format-version 1 | jq -r --arg n "$crate" '.packages[]|select(.name==$n)|.version')
+            curl -fsS "https://crates.io/api/v1/crates/$crate/$version" >/dev/null 2>&1 || cargo publish -p "$crate" --locked
+          done
+  publish-python:
+    needs: [build-wheels, build-distributions]
+    if: ${{ vars.PYPI_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { pattern: "wheels-*", path: dist/cli, merge-multiple: true }
+      - uses: actions/download-artifact@v4
+        with: { name: distributions, path: dist/all }
+      - env: { UV_PUBLISH_TOKEN: "${{ secrets.PYPI_TOKEN }}" }
+        run: |
+          pip install uv
+          uv publish --check-url https://pypi.org/simple/onetaskgraph-cli/ dist/cli/*
+          uv publish --check-url https://pypi.org/simple/onetaskgraph-sdk/ dist/all/python-sdk/*
+  publish-npm:
+    needs: build-distributions
+    if: ${{ vars.NPM_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+        run: |
+          for package in npm/platforms/*; do npm view "$(node -p "require('./$package/package.json').name")@$(node -p "require('./$package/package.json').version")" >/dev/null 2>&1 || npm publish "$package" --access public; done
+          npm view "@onetaskgraph/cli@$(node -p "require('./npm/cli/package.json').version")" >/dev/null 2>&1 || npm publish npm/cli --access public
+          npm view "@onetaskgraph/sdk@$(node -p "require('./sdks/typescript/package.json').version")" >/dev/null 2>&1 || npm publish sdks/typescript --access public

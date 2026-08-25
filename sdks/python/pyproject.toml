@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
 authors = [{ name = "Nick DeRobertis" }]
-dependencies = ["pydantic>=2.12"]
+dependencies = ["onetaskgraph-cli==0.1.0", "pydantic>=2.12"]
 
 [project.urls]
 Repository = "https://github.com/nickderobertis/onetaskgraph"
@@ -36,3 +36,6 @@ testpaths = ["tests"]
 
 [tool.ty.environment]
 python-version = "3.14"
+
+[tool.uv.sources]
+onetaskgraph-cli = { workspace = true }

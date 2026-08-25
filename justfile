@@ -36,8 +36,26 @@ check: format-check lint typecheck test coverage
 # push, so nothing affected-detection could miss goes unchecked.
 
 # Full quality gate over EVERY project, plus the supply chain. Fails on any issue.
-gate: deny
+gate: deny version-check distribution-test
     @{{nx}} run-many -t check --all
+
+# Fail when any release manifest or cross-package pin differs from the binary version.
+version-check:
+    @task_log="$$(mktemp)"; trap 'rm -f "$$task_log"' EXIT; \
+        if ! scripts/set-version.sh --check >"$$task_log" 2>&1; then \
+            cat "$$task_log" >&2; \
+            echo "version manifests disagree; next: run 'scripts/set-version.sh <VERSION>' and commit every changed manifest and lockfile" >&2; \
+            exit 1; \
+        fi
+
+# Exercise the installer and npm launcher against a locally built release-shaped asset.
+distribution-test:
+    @task_log="$$(mktemp)"; trap 'rm -f "$$task_log"' EXIT; \
+        if ! scripts/test-distribution.sh >"$$task_log" 2>&1; then \
+            cat "$$task_log" >&2; \
+            echo "distribution journey failed; next: run 'scripts/test-distribution.sh' and fix the named installer or launcher assertion" >&2; \
+            exit 1; \
+        fi
 
 # Tests only, for the affected projects.
 test:
