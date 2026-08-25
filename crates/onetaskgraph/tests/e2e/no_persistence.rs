@@ -48,6 +48,14 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
             let path = entry.path();
             if path.is_dir() {
                 pending.push(path);
+            // LLVM's coverage runtime, rather than the engine, writes these profiler
+            // artifacts. Match only its two exact extensions so every other file remains
+            // evidence of a product write.
+            } else if matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("profraw" | "profdata")
+            ) {
+                continue;
             } else if let Ok(contents) = std::fs::read(&path) {
                 found.insert(path, contents);
             }
