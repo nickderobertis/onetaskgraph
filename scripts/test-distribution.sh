@@ -32,7 +32,9 @@ printf '%s\n' "$install_output" | grep -q "installed $tag to" || { echo "install
 "$tmp/bin/$binary" --help | grep -q 'Usage:' || { echo "installed command did not render help; next: inspect the locally archived binary" >&2; exit 1; }
 ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" "$root/scripts/install.sh" --version "$tag" --to "$tmp/bin" --archive-base-url "file://$tmp/releases" >/dev/null
 "$root/scripts/install.sh" --help | grep -q 'exit codes:' || { echo "installer help omitted exit codes; next: update its public usage contract" >&2; exit 1; }
-if "$root/scripts/install.sh" --unknown 2>"$tmp/error"; then echo "unknown option was accepted; next: inspect argument parsing" >&2; exit 1; fi
+if "$root/scripts/install.sh" --unknown 2>"$tmp/error"; then unknown_option_status=0; else unknown_option_status=$?; fi
+[[ $unknown_option_status -eq 64 ]] || { echo "unknown option exited $unknown_option_status, expected 64; next: inspect argument parsing" >&2; exit 1; }
+grep -q 'unknown option: --unknown' "$tmp/error" || { echo "unknown-option failure omitted its reason; next: inspect argument diagnostics" >&2; exit 1; }
 printf x >> "$tmp/releases/$tag/$name"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "tampered archive installed; next: inspect checksum verification" >&2; exit 1; fi
 grep -q 'checksum mismatch' "$tmp/error" || { echo "tamper failure omitted checksum mismatch; next: inspect installer diagnostics" >&2; exit 1; }
@@ -162,27 +164,33 @@ grep -q 'could not install into' "$tmp/error" || { echo "installation-copy failu
 rm "$tmp/shims/install"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL=https://mirror.example/releases ONETASKGRAPH_CHECKSUM_BASE_URL=https://mirror.example/checks "$root/scripts/install.sh" 2>"$tmp/error"; then echo "mirror-controlled checksum was accepted; next: inspect origin comparison" >&2; exit 1; fi
 grep -q "checksum shares the mirror's origin" "$tmp/error" || { echo "mirror rejection omitted its reason; next: inspect installer diagnostics" >&2; exit 1; }
-if "$root/scripts/install.sh" --version 2>"$tmp/error"; then echo "missing option value was accepted; next: inspect installer argument parsing" >&2; exit 1; fi
+if "$root/scripts/install.sh" --version 2>"$tmp/error"; then missing_value_status=0; else missing_value_status=$?; fi
+[[ $missing_value_status -eq 64 ]] || { echo "missing option value exited $missing_value_status, expected 64; next: inspect argument parsing" >&2; exit 1; }
 grep -q 'requires a value' "$tmp/error" || { echo "missing-value failure omitted its reason; next: inspect argument diagnostics" >&2; exit 1; }
 if "$root/scripts/install.sh" --to '' 2>"$tmp/error"; then empty_destination_status=0; else empty_destination_status=$?; fi
 [[ $empty_destination_status -eq 64 ]] || { echo "empty installation destination exited $empty_destination_status, expected 64; next: inspect destination validation" >&2; exit 1; }
 grep -q 'installation directory must not be empty' "$tmp/error" || { echo "empty-destination failure omitted its reason; next: inspect destination diagnostics" >&2; exit 1; }
-if ONETASKGRAPH_VERSION="${tag}junk" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "malformed tag was accepted; next: inspect tag validation" >&2; exit 1; fi
+if ONETASKGRAPH_VERSION="${tag}junk" "$root/scripts/install.sh" 2>"$tmp/error"; then malformed_tag_status=0; else malformed_tag_status=$?; fi
+[[ $malformed_tag_status -eq 64 ]] || { echo "malformed tag exited $malformed_tag_status, expected 64; next: inspect tag validation" >&2; exit 1; }
+grep -q "unsupported release tag: ${tag}junk" "$tmp/error" || { echo "malformed-tag failure omitted its reason; next: inspect tag diagnostics" >&2; exit 1; }
 node_platform=$(node -p '`${process.platform}-${process.arch}`')
 mkdir -p "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin"
 cp "$root/target/debug/$binary" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 printf '{"name":"@onetaskgraph/cli-%s"}\n' "$node_platform" > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/package.json"
 (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js" --help) | grep -q 'Usage:' || { echo "launcher did not execute the carrier; next: inspect package resolution" >&2; exit 1; }
 printf 'not json\n' > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/package.json"
-if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then echo "launcher accepted malformed carrier JSON; next: inspect manifest validation" >&2; exit 1; fi
+if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then malformed_carrier_status=0; else malformed_carrier_status=$?; fi
+[[ $malformed_carrier_status -eq 69 ]] || { echo "malformed carrier exited $malformed_carrier_status, expected 69; next: inspect manifest validation" >&2; exit 1; }
 grep -q 'invalid @onetaskgraph/cli-' "$tmp/error" || { echo "malformed-carrier failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 printf '{"name":"wrong-carrier"}\n' > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/package.json"
-if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then echo "launcher accepted wrong carrier identity; next: inspect manifest validation" >&2; exit 1; fi
+if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then wrong_carrier_status=0; else wrong_carrier_status=$?; fi
+[[ $wrong_carrier_status -eq 69 ]] || { echo "wrong carrier identity exited $wrong_carrier_status, expected 69; next: inspect manifest validation" >&2; exit 1; }
 grep -q 'identifies itself as wrong-carrier' "$tmp/error" || { echo "wrong-carrier failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 printf '{"name":"@onetaskgraph/cli-%s"}\n' "$node_platform" > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/package.json"
 mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary" "$tmp/real-carrier"
 ln -s "$tmp/real-carrier" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
-if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then echo "launcher accepted escaping carrier binary; next: inspect carrier containment" >&2; exit 1; fi
+if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then escaping_carrier_status=0; else escaping_carrier_status=$?; fi
+[[ $escaping_carrier_status -eq 69 ]] || { echo "escaping carrier exited $escaping_carrier_status, expected 69; next: inspect carrier containment" >&2; exit 1; }
 grep -q 'carrier binary escapes its package' "$tmp/error" || { echo "escaping-carrier failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 rm "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 printf '#!/bin/sh\nkill -TERM $$\n' > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
@@ -197,7 +205,8 @@ launcher_status=$?
 set -e
 [[ $launcher_status -eq 2 ]] || { echo "launcher did not propagate command status 2; next: inspect spawn result handling" >&2; exit 1; }
 chmod -x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
-if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then echo "launcher executed a non-executable carrier; next: inspect spawn errors" >&2; exit 1; fi
+if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then non_executable_status=0; else non_executable_status=$?; fi
+[[ $non_executable_status -eq 69 ]] || { echo "non-executable carrier exited $non_executable_status, expected 69; next: inspect spawn errors" >&2; exit 1; }
 grep -q 'reinstall the platform package' "$tmp/error" || { echo "spawn failure omitted recovery guidance; next: inspect launcher diagnostics" >&2; exit 1; }
 chmod +x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary" "$tmp/missing-binary"
@@ -209,7 +218,8 @@ set -e
 grep -q 'reinstall the platform package' "$tmp/error" || { echo "missing-binary failure omitted recovery guidance; next: inspect spawn errors" >&2; exit 1; }
 mv "$tmp/missing-binary" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}" "$tmp/missing-carrier"
-if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then echo "launcher accepted a missing carrier; next: inspect package resolution" >&2; exit 1; fi
+if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then missing_carrier_status=0; else missing_carrier_status=$?; fi
+[[ $missing_carrier_status -eq 69 ]] || { echo "missing carrier exited $missing_carrier_status, expected 69; next: inspect package resolution" >&2; exit 1; }
 grep -q 'is not installed' "$tmp/error" || { echo "missing-carrier failure omitted recovery guidance; next: inspect launcher diagnostics" >&2; exit 1; }
 set +e
 node -e 'const Module=require("node:module"),original=Module._resolveFilename; Module._resolveFilename=function(request,...args){if(request.startsWith("@onetaskgraph/cli-")){const error=new Error("permission denied"); error.code="EACCES"; throw error;} return original.call(this,request,...args);}; require(process.argv[1]);' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"
@@ -224,10 +234,16 @@ set -e
 [[ $unsupported_status -eq 64 ]] || { echo "unsupported launcher platform exited $unsupported_status, expected 64; next: inspect platform validation" >&2; exit 1; }
 grep -q 'unsupported platform' "$tmp/error" || { echo "unsupported-platform failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 uv run --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }
-for bad_args in '' '1.2.3 extra' invalid; do
-  read -r -a version_args <<< "$bad_args"
-  if "$root/scripts/set-version.sh" "${version_args[@]}" 2>"$tmp/error"; then echo "version updater accepted invalid arguments: $bad_args; next: inspect argument validation" >&2; exit 1; fi
-done
+assert_version_error() {
+  expected_message=$1
+  shift
+  if "$root/scripts/set-version.sh" "$@" 2>"$tmp/error"; then version_error_status=0; else version_error_status=$?; fi
+  [[ $version_error_status -eq 2 ]] || { echo "version updater invalid arguments '$*' exited $version_error_status, expected 2; next: inspect argument validation" >&2; exit 1; }
+  grep -Fq "$expected_message" "$tmp/error" || { echo "version updater invalid arguments '$*' omitted its reason; next: inspect version diagnostics" >&2; exit 1; }
+}
+assert_version_error 'usage: scripts/set-version.sh VERSION | --check'
+assert_version_error 'unexpected extra arguments' 1.2.3 extra
+assert_version_error 'invalid semantic version: invalid' invalid
 # shellcheck source=scripts/scratch-clone.sh
 source "$root/scripts/scratch-clone.sh"
 scratch_clone "$root" "$tmp/version-repo"
