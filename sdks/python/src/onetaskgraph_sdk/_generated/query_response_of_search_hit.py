@@ -3,9 +3,9 @@
 #   schema root: QueryResponseOfSearchHit
 
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, Field, RootModel
+from pydantic import AwareDatetime, BaseModel, Field, JsonValue, RootModel
 
 
 class GlobalId(RootModel[str]):
@@ -204,7 +204,7 @@ class Task(BaseModel):
         ),
     ]
     metadata: Annotated[
-        dict[str, Any] | None,
+        dict[str, JsonValue] | None,
         Field(description="Caller-defined attributes, preserving their JSON types."),
     ] = {}
     project: Annotated[
@@ -249,7 +249,7 @@ class Project(BaseModel):
         Field(description="Inline rather than by id, for the same reason as on [`Task`]."),
     ]
     metadata: Annotated[
-        dict[str, Any] | None,
+        dict[str, JsonValue] | None,
         Field(description="Caller-defined attributes, preserving their JSON types."),
     ] = {}
     repositories: Annotated[

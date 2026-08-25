@@ -372,8 +372,8 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
         .await
         .unwrap();
     assert_eq!(edges.items.len(), 1);
-    assert_eq!(edges.items[0].from.id, "PVT_blocker");
-    assert_eq!(edges.items[0].to.id, "PVT_project");
+    assert_eq!(edges.items[0].from.id(), "PVT_blocker");
+    assert_eq!(edges.items[0].to.id(), "PVT_project");
     handle.join().unwrap();
 
     let first = json!({"data":{"node":{"__typename":"Issue","blockedBy":{"nodes":[{
@@ -397,7 +397,7 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
         )
         .await
         .unwrap();
-    assert_eq!(edges.items[0].from.id, "PVT_blocker");
+    assert_eq!(edges.items[0].from.id(), "PVT_blocker");
     handle.join().unwrap();
 }
 
@@ -464,8 +464,8 @@ async fn project_dependencies_map_reverse_edges_and_page_them() {
         )
         .await
         .unwrap();
-    assert_eq!(first.items[0].from.id, "PVT_project");
-    assert_eq!(first.items[0].to.id, "PVT_dependent_1");
+    assert_eq!(first.items[0].from.id(), "PVT_project");
+    assert_eq!(first.items[0].to.id(), "PVT_dependent_1");
     assert_eq!(first.next.unwrap().0, "1");
     handle.join().unwrap();
 
@@ -481,7 +481,7 @@ async fn project_dependencies_map_reverse_edges_and_page_them() {
         )
         .await
         .unwrap();
-    assert_eq!(second.items[0].to.id, "PVT_dependent_2");
+    assert_eq!(second.items[0].to.id(), "PVT_dependent_2");
     assert!(second.next.is_none());
     handle.join().unwrap();
 }
@@ -543,8 +543,8 @@ async fn walks_issue_dependencies_in_both_directions_through_graphql() {
         .task_dependencies(&NativeId("I_task".into()), Direction::DependsOn, &page(1))
         .await
         .unwrap();
-    assert_eq!(forward.items[0].from.id, "I_blocker");
-    assert_eq!(forward.items[0].to.id, "I_task");
+    assert_eq!(forward.items[0].from.id(), "I_blocker");
+    assert_eq!(forward.items[0].to.id(), "I_task");
     assert_eq!(forward.next.unwrap().0, "next");
     let reverse = source
         .task_dependencies(
@@ -554,8 +554,8 @@ async fn walks_issue_dependencies_in_both_directions_through_graphql() {
         )
         .await
         .unwrap();
-    assert_eq!(reverse.items[0].from.id, "I_task");
-    assert_eq!(reverse.items[0].to.id, "I_dependent");
+    assert_eq!(reverse.items[0].from.id(), "I_task");
+    assert_eq!(reverse.items[0].to.id(), "I_dependent");
     handle.join().unwrap();
 }
 
@@ -808,6 +808,18 @@ async fn metadata_slots_are_validated_and_absence_remains_backward_compatible() 
         );
         handle.join().unwrap();
     }
+
+    let description = "visible\n<!-- onetaskgraph.metadata\n{}\n-->\ntrailing content";
+    let mut response = project_response(false);
+    response["data"]["owner"]["projectV2"]["shortDescription"] = json!(description);
+    let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+    let projects = build(&endpoint)
+        .query_projects(&ProjectQuery::default(), &page(10))
+        .await
+        .expect("a non-trailing marker is visible content, not a reserved slot");
+    assert_eq!(projects.items[0].content.as_deref(), Some(description));
+    assert!(projects.items[0].metadata.is_empty());
+    handle.join().unwrap();
 
     for description in [
         json!("visible\n<!-- onetaskgraph.metadata\n{}"),

@@ -837,12 +837,18 @@ fn qualify_endpoint(
     source: &SourceName,
     endpoint: onetaskgraph_plugin_api::DependencyEndpoint,
 ) -> QualifiedEndpoint {
+    let kind = endpoint.kind;
+    let is_qualified = endpoint.is_qualified();
+    let endpoint_id = endpoint.into_id();
     QualifiedEndpoint {
-        id: endpoint
-            .id
-            .parse()
-            .unwrap_or_else(|_| GlobalId::new(source.clone(), NativeId(endpoint.id))),
-        kind: endpoint.kind,
+        id: if is_qualified {
+            endpoint_id
+                .parse()
+                .expect("plugin-api validates qualified dependency endpoints")
+        } else {
+            GlobalId::new(source.clone(), NativeId(endpoint_id))
+        },
+        kind,
     }
 }
 

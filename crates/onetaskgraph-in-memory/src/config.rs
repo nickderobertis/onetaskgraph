@@ -94,8 +94,8 @@ impl InMemoryConfig {
         ] {
             for edge in edges {
                 for (end, endpoint) in [("from", &edge.from), ("to", &edge.to)] {
-                    let native = NativeId(endpoint.id.clone());
-                    if !endpoint.id.contains(':') && !known.contains(&native) {
+                    let native = NativeId(endpoint.id().to_owned());
+                    if !endpoint.id().contains(':') && !known.contains(&native) {
                         problems.push(format!(
                             "a {noun} dependency edge's `{end}` names {endpoint}, which this source \
                              does not hold"

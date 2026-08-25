@@ -68,9 +68,10 @@ export interface DependencyEdge {
 /**
  * The item the edge starts at.
  */
-from: {
-[k: string]: any
-}
+from: (string | {
+id: string
+kind: ("task" | "project")
+})
 /**
  * What the edge means.
  */
@@ -78,9 +79,10 @@ kind: ("blocks" | "related")
 /**
  * The item the edge points at.
  */
-to: {
-[k: string]: any
-}
+to: (string | {
+id: string
+kind: ("task" | "project")
+})
 [k: string]: any
 }
 
@@ -88,20 +90,12 @@ to: {
 export type DependencyEdge = GeneratedDependencyEdge.DependencyEdge;
 export namespace GeneratedDependencyEndpoint {
 /**
- * One endpoint of a dependency edge.
+ * A dependency endpoint; legacy native-id strings decode as tasks.
  */
-export interface DependencyEndpoint {
-/**
- * A qualified `<source>:<native>` id, or a legacy native id which the engine
- * qualifies to the source reporting the edge.
- */
+export type DependencyEndpoint = (string | {
 id: string
-/**
- * Whether the endpoint names a task or a project.
- */
 kind: ("task" | "project")
-[k: string]: any
-}
+})
 
 }
 export type DependencyEndpoint = GeneratedDependencyEndpoint.DependencyEndpoint;
@@ -361,9 +355,10 @@ export interface DependencyEdge {
 /**
  * The item the edge starts at.
  */
-from: {
-[k: string]: any
-}
+from: (string | {
+id: string
+kind: ("task" | "project")
+})
 /**
  * What the edge means.
  */
@@ -371,9 +366,10 @@ kind: ("blocks" | "related")
 /**
  * The item the edge points at.
  */
-to: {
-[k: string]: any
-}
+to: (string | {
+id: string
+kind: ("task" | "project")
+})
 [k: string]: any
 }
 

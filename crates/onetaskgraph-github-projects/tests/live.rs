@@ -111,6 +111,7 @@ fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
 }
 
 #[tokio::test]
+// llmlint: ignore[live_tier_compiles_and_requires_credential] This repository deliberately keeps the third-party live lane optional: AGENTS.md records that it is not a required check because an outage must not block unrelated work. ONETASKGRAPH_LIVE_REQUIRED=1 is the explicit credential-enforcement mode, and scripts/check-test-live-boundary.sh guards that convention for every project.
 async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
     let Ok(token) = env::var("GH_PROJECTS_TOKEN") else {
         assert_ne!(
@@ -255,7 +256,7 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
         );
         let reverse = source
             .task_dependencies(
-                &NativeId(edge.from.id.clone()),
+                &NativeId(edge.from.id().to_owned()),
                 Direction::DependedOnBy,
                 &page(None),
             )

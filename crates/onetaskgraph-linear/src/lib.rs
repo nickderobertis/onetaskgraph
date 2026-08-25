@@ -611,14 +611,8 @@ fn relation_page(
             DependencyRoot::Project => ItemKind::Project,
         };
         items.push(DependencyEdge {
-            from: DependencyEndpoint {
-                id: from.0,
-                kind: item_kind,
-            },
-            to: DependencyEndpoint {
-                id: to.0,
-                kind: item_kind,
-            },
+            from: DependencyEndpoint::from_native(from, item_kind),
+            to: DependencyEndpoint::from_native(to, item_kind),
             kind,
         });
     }

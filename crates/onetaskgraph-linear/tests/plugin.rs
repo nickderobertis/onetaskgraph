@@ -314,6 +314,50 @@ async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
 }
 
 #[tokio::test]
+async fn linear_metadata_slot_rejects_malformed_values_and_preserves_non_trailing_markers() {
+    for description in [
+        "visible\n<!-- onetaskgraph.metadata\n{}",
+        "visible\n<!-- onetaskgraph.metadata\n{bad}\n-->",
+        "visible\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.repositories\":7}\n-->",
+    ] {
+        let mut body: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/issues.json")).unwrap();
+        body["data"]["issues"]["nodes"][0]["description"] = serde_json::json!(description);
+        let (endpoint, _) = server("200 OK", "", body.to_string());
+        assert!(matches!(
+            source(&endpoint)
+                .query_tasks(
+                    &TaskQuery::default(),
+                    &PageRequest {
+                        cursor: None,
+                        limit: 1
+                    }
+                )
+                .await,
+            Err(SourceError::Malformed { .. })
+        ));
+    }
+
+    let description = "visible\n<!-- onetaskgraph.metadata\n{}\n-->\ntrailing content";
+    let mut body: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/issues.json")).unwrap();
+    body["data"]["issues"]["nodes"][0]["description"] = serde_json::json!(description);
+    let (endpoint, _) = server("200 OK", "", body.to_string());
+    let page = source(&endpoint)
+        .query_tasks(
+            &TaskQuery::default(),
+            &PageRequest {
+                cursor: None,
+                limit: 1,
+            },
+        )
+        .await
+        .expect("a non-trailing marker is visible content, not a reserved slot");
+    assert_eq!(page.items[0].content.as_deref(), Some(description));
+    assert!(page.items[0].metadata.is_empty());
+}
+
+#[tokio::test]
 async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
     let (endpoint, _) = server("200 OK", "", include_str!("fixtures/projects.json"));
     let projects = source(&endpoint)
@@ -370,7 +414,7 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
         )
         .await
         .unwrap();
-    assert_eq!(edges.items[0].to.id, "i2");
+    assert_eq!(edges.items[0].to.id(), "i2");
     let (endpoint, _) = server("200 OK", "", include_str!("fixtures/issue-relations.json"));
     let edges = source(&endpoint)
         .task_dependencies(
@@ -383,7 +427,7 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
         )
         .await
         .unwrap();
-    assert_eq!(edges.items[0].from.id, "i3");
+    assert_eq!(edges.items[0].from.id(), "i3");
     let (endpoint, _) = server(
         "200 OK",
         "",
@@ -403,7 +447,7 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
             .unwrap()
             .items[0]
             .to
-            .id,
+            .id(),
         "p2"
     );
 }
@@ -723,7 +767,7 @@ async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
         .unwrap()
         .items
         .remove(0);
-    assert_eq!(edge.from.id, "p3");
+    assert_eq!(edge.from.id(), "p3");
     let (endpoint, wire) = server("200 OK", "", include_str!("fixtures/projects.json"));
     source(&endpoint)
         .query_projects(

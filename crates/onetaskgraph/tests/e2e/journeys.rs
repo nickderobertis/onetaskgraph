@@ -354,6 +354,35 @@ fn a_cross_source_cross_level_edge_is_reported_without_following_the_far_source(
 }
 
 #[test]
+fn a_colon_in_a_source_native_dependency_id_is_not_reinterpreted_as_a_source() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&document(&json!({
+        SOURCE: {
+            "plugin": "in-memory",
+            "config": {
+                "tasks": [
+                    {"id":"urn:task:7", "title":"Near", "status":{"category":"todo","name":"Todo"}, "labels":[]},
+                    {"id":"T-2", "title":"Far", "status":{"category":"todo","name":"Todo"}, "labels":[]}
+                ],
+                "task_dependencies": [{"from":"urn:task:7", "to":"T-2", "kind":"blocks"}]
+            }
+        }
+    })));
+    let row = ROWS
+        .iter()
+        .find(|row| row.plugin == "in-memory")
+        .expect("in-memory row");
+    let response: serde_json::Value = serde_json::from_str(&ok(
+        row,
+        &sandbox,
+        &["task", "deps", &qualified(SOURCE, "urn:task:7"), "--json"],
+    ))
+    .expect("dependency output is JSON");
+    assert_eq!(response["items"][0]["from"]["id"], "work:urn:task:7");
+    assert_eq!(response["items"][0]["to"]["id"], "work:T-2");
+}
+
+#[test]
 fn malformed_local_markdown_names_its_path_without_hiding_valid_rows() {
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("malformed-local-md");

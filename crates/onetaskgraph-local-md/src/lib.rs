@@ -381,15 +381,9 @@ impl LocalMdSource {
                     ),
                 };
                 DependencyEdge {
-                    from: DependencyEndpoint {
-                        id: from.0.clone(),
-                        kind: item_kind,
-                    },
+                    from: DependencyEndpoint::from_native(from.clone(), item_kind),
                     // llmlint: ignore[boundary_inputs_validated] Dependency targets use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
-                    to: DependencyEndpoint {
-                        id: to,
-                        kind: item_kind,
-                    },
+                    to: DependencyEndpoint::from_native(NativeId(to), item_kind),
                     kind,
                 }
             })

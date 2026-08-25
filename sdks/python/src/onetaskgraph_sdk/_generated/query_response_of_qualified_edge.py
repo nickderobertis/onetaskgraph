@@ -13,6 +13,15 @@ class DependencyKind(StrEnum):
     DependencyKindRelated = "related"
 
 
+class GlobalId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
+        ),
+    ]
+
+
 class ItemKind(StrEnum):
     ItemKindTask = "task"
     ItemKindProject = "project"
@@ -38,7 +47,7 @@ class Predicate(StrEnum):
 
 class QualifiedEndpoint(BaseModel):
     id: Annotated[
-        str,
+        GlobalId,
         Field(description="`<source>:<native>`, preserved when a plugin reports another source."),
     ]
     kind: Annotated[ItemKind, Field(description="Whether this endpoint names a task or project.")]

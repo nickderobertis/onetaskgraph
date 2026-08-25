@@ -109,6 +109,36 @@ export const runtimeSchemas = {
   },
   "DependencyEdge": {
     "$defs": {
+      "DependencyEndpoint": {
+        "description": "A dependency endpoint; legacy native-id strings decode as tasks.",
+        "oneOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "task",
+                  "project"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "DependencyKind": {
         "description": "What a [`DependencyEdge`] means.",
         "oneOf": [
@@ -129,6 +159,7 @@ export const runtimeSchemas = {
     "description": "A dependency between two work items.\n\nAn endpoint may name another source. Keeping that far id on the near item is work data\nowned by its plugin, not an engine-side index or mirror; the engine reports it without\nresolving or fetching the far item.",
     "properties": {
       "from": {
+        "$ref": "#/$defs/DependencyEndpoint",
         "description": "The item the edge starts at."
       },
       "kind": {
@@ -136,6 +167,7 @@ export const runtimeSchemas = {
         "description": "What the edge means."
       },
       "to": {
+        "$ref": "#/$defs/DependencyEndpoint",
         "description": "The item the edge points at."
       }
     },
@@ -148,41 +180,36 @@ export const runtimeSchemas = {
     "type": "object"
   },
   "DependencyEndpoint": {
-    "$defs": {
-      "ItemKind": {
-        "description": "The kind of work item named by a dependency endpoint.",
-        "oneOf": [
-          {
-            "const": "task",
-            "description": "A task.",
-            "type": "string"
-          },
-          {
-            "const": "project",
-            "description": "A project.",
-            "type": "string"
-          }
-        ]
-      }
-    },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "One endpoint of a dependency edge.",
-    "properties": {
-      "id": {
-        "description": "A qualified `<source>:<native>` id, or a legacy native id which the engine\nqualifies to the source reporting the edge.",
+    "description": "A dependency endpoint; legacy native-id strings decode as tasks.",
+    "oneOf": [
+      {
+        "minLength": 1,
         "type": "string"
       },
-      "kind": {
-        "$ref": "#/$defs/ItemKind",
-        "description": "Whether the endpoint names a task or a project."
+      {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "task",
+              "project"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "type": "object"
       }
-    },
-    "required": [
-      "id",
-      "kind"
     ],
-    "title": "DependencyEndpoint",
-    "type": "object"
+    "title": "DependencyEndpoint"
   },
   "DependencyKind": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -580,6 +607,7 @@ export const runtimeSchemas = {
         "description": "A dependency between two work items.\n\nAn endpoint may name another source. Keeping that far id on the near item is work data\nowned by its plugin, not an engine-side index or mirror; the engine reports it without\nresolving or fetching the far item.",
         "properties": {
           "from": {
+            "$ref": "#/$defs/DependencyEndpoint",
             "description": "The item the edge starts at."
           },
           "kind": {
@@ -587,6 +615,7 @@ export const runtimeSchemas = {
             "description": "What the edge means."
           },
           "to": {
+            "$ref": "#/$defs/DependencyEndpoint",
             "description": "The item the edge points at."
           }
         },
@@ -596,6 +625,36 @@ export const runtimeSchemas = {
           "kind"
         ],
         "type": "object"
+      },
+      "DependencyEndpoint": {
+        "description": "A dependency endpoint; legacy native-id strings decode as tasks.",
+        "oneOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "task",
+                  "project"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "DependencyKind": {
         "description": "What a [`DependencyEdge`] means.",

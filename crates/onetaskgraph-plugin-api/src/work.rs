@@ -1,7 +1,7 @@
 //! The work items every source is normalised into.
 
 use chrono::{DateTime, Utc};
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -154,23 +154,130 @@ pub enum StatusCategory {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DependencyEdge {
     /// The item the edge starts at.
-    #[schemars(with = "serde_json::Value")]
     pub from: DependencyEndpoint,
     /// The item the edge points at.
-    #[schemars(with = "serde_json::Value")]
     pub to: DependencyEndpoint,
     /// What the edge means.
     pub kind: DependencyKind,
 }
 
 /// One endpoint of a dependency edge.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DependencyEndpoint {
     /// A qualified `<source>:<native>` id, or a legacy native id which the engine
     /// qualifies to the source reporting the edge.
-    pub id: String,
+    id: EndpointIdentity,
     /// Whether the endpoint names a task or a project.
     pub kind: ItemKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum EndpointIdentity {
+    Native(String),
+    Qualified(String),
+}
+
+impl EndpointIdentity {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Native(id) | Self::Qualified(id) => id,
+        }
+    }
+
+    fn into_string(self) -> String {
+        match self {
+            Self::Native(id) | Self::Qualified(id) => id,
+        }
+    }
+}
+
+impl Serialize for DependencyEndpoint {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            id: &'a str,
+            kind: ItemKind,
+        }
+        Wire {
+            id: self.id(),
+            kind: self.kind,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl JsonSchema for DependencyEndpoint {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "DependencyEndpoint".into()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "A dependency endpoint; legacy native-id strings decode as tasks.",
+            "oneOf": [
+                {"type": "string", "minLength": 1},
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "kind"],
+                    "properties": {
+                        "id": {"type": "string", "minLength": 1},
+                        "kind": {"type": "string", "enum": ["task", "project"]}
+                    }
+                }
+            ]
+        })
+    }
+}
+
+impl DependencyEndpoint {
+    /// Builds an endpoint from a serialized id, validating a qualified id when present.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty id or a malformed `<source>:<native>` id.
+    pub fn new(id: String, kind: ItemKind) -> Result<Self, String> {
+        let is_qualified = id.contains(':');
+        let id = valid_endpoint_id(id)?;
+        Ok(Self {
+            id: if is_qualified {
+                EndpointIdentity::Qualified(id)
+            } else {
+                EndpointIdentity::Native(id)
+            },
+            kind,
+        })
+    }
+
+    /// Builds an endpoint from a source-native id, whose contents are deliberately opaque.
+    #[must_use]
+    pub fn from_native(id: NativeId, kind: ItemKind) -> Self {
+        Self {
+            id: EndpointIdentity::Native(id.0),
+            kind,
+        }
+    }
+
+    /// The serialized native or qualified id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        self.id.as_str()
+    }
+
+    /// Consumes the endpoint and returns its serialized id.
+    #[must_use]
+    pub fn into_id(self) -> String {
+        self.id.into_string()
+    }
+
+    /// Whether the id was explicitly supplied as a qualified endpoint.
+    #[must_use]
+    pub fn is_qualified(&self) -> bool {
+        matches!(self.id, EndpointIdentity::Qualified(_))
+    }
 }
 
 impl<'de> Deserialize<'de> for DependencyEndpoint {
@@ -185,14 +292,15 @@ impl<'de> Deserialize<'de> for DependencyEndpoint {
             Endpoint { id: String, kind: ItemKind },
         }
         match Wire::deserialize(deserializer)? {
-            Wire::Legacy(id) => Ok(Self {
-                id: valid_endpoint_id(id).map_err(serde::de::Error::custom)?,
-                kind: ItemKind::Task,
-            }),
-            Wire::Endpoint { id, kind } => Ok(Self {
-                id: valid_endpoint_id(id).map_err(serde::de::Error::custom)?,
-                kind,
-            }),
+            Wire::Legacy(id) => {
+                if id.is_empty() {
+                    return Err(serde::de::Error::custom(
+                        "a dependency endpoint id cannot be empty",
+                    ));
+                }
+                Ok(Self::from_native(NativeId(id), ItemKind::Task))
+            }
+            Wire::Endpoint { id, kind } => Self::new(id, kind).map_err(serde::de::Error::custom),
         }
     }
 }
@@ -212,13 +320,13 @@ fn valid_endpoint_id(id: String) -> Result<String, String> {
 
 impl std::fmt::Display for DependencyEndpoint {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.id.fmt(formatter)
+        self.id().fmt(formatter)
     }
 }
 
 impl PartialEq<NativeId> for DependencyEndpoint {
     fn eq(&self, other: &NativeId) -> bool {
-        self.id == other.0
+        self.id() == other.0
     }
 }
 

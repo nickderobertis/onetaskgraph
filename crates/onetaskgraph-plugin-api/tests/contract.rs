@@ -455,6 +455,13 @@ fn dependency_endpoints_validate_and_preserve_qualified_ids() {
     assert_eq!(endpoint.to_string(), "other:P-9");
     assert_ne!(endpoint, NativeId::from("P-9"));
 
+    let native = onetaskgraph_plugin_api::DependencyEndpoint::from_native(
+        NativeId::from("urn:task:7"),
+        onetaskgraph_plugin_api::ItemKind::Task,
+    );
+    assert_eq!(native.id(), "urn:task:7");
+    assert_eq!(native.into_id(), "urn:task:7");
+
     for invalid in [
         serde_json::json!({"id":"", "kind":"task"}),
         serde_json::json!({"id":"bad source:T-1", "kind":"task"}),
@@ -604,14 +611,16 @@ fn the_normalised_vocabularies_serialise_as_kebab_case() {
 #[test]
 fn a_dependency_edge_round_trips_through_json() {
     let edge = DependencyEdge {
-        from: onetaskgraph_plugin_api::DependencyEndpoint {
-            id: "source:A".into(),
-            kind: onetaskgraph_plugin_api::ItemKind::Task,
-        },
-        to: onetaskgraph_plugin_api::DependencyEndpoint {
-            id: "other:B".into(),
-            kind: onetaskgraph_plugin_api::ItemKind::Project,
-        },
+        from: onetaskgraph_plugin_api::DependencyEndpoint::new(
+            "source:A".into(),
+            onetaskgraph_plugin_api::ItemKind::Task,
+        )
+        .expect("valid endpoint"),
+        to: onetaskgraph_plugin_api::DependencyEndpoint::new(
+            "other:B".into(),
+            onetaskgraph_plugin_api::ItemKind::Project,
+        )
+        .expect("valid endpoint"),
         kind: DependencyKind::Blocks,
     };
     let encoded = serde_json::to_string(&edge).expect("encodes");

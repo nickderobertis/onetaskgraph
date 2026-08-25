@@ -520,25 +520,13 @@ impl GitHubProjectsSource {
                 let related = NativeId(required_str(value, "id")?.into());
                 Ok(match direction {
                     Direction::DependsOn => DependencyEdge {
-                        from: DependencyEndpoint {
-                            id: related.0,
-                            kind: ItemKind::Task,
-                        },
-                        to: DependencyEndpoint {
-                            id: id.0.clone(),
-                            kind: ItemKind::Task,
-                        },
+                        from: DependencyEndpoint::from_native(related, ItemKind::Task),
+                        to: DependencyEndpoint::from_native(id.clone(), ItemKind::Task),
                         kind: DependencyKind::Blocks,
                     },
                     Direction::DependedOnBy => DependencyEdge {
-                        from: DependencyEndpoint {
-                            id: id.0.clone(),
-                            kind: ItemKind::Task,
-                        },
-                        to: DependencyEndpoint {
-                            id: related.0,
-                            kind: ItemKind::Task,
-                        },
+                        from: DependencyEndpoint::from_native(id.clone(), ItemKind::Task),
+                        to: DependencyEndpoint::from_native(related, ItemKind::Task),
                         kind: DependencyKind::Blocks,
                     },
                 })
@@ -763,25 +751,22 @@ impl TaskSource for GitHubProjectsSource {
                         if related != *id {
                             edges.push(match direction {
                                 Direction::DependsOn => DependencyEdge {
-                                    from: DependencyEndpoint {
-                                        id: related.0,
-                                        kind: ItemKind::Project,
-                                    },
-                                    to: DependencyEndpoint {
-                                        id: id.0.clone(),
-                                        kind: ItemKind::Project,
-                                    },
+                                    from: DependencyEndpoint::from_native(
+                                        related,
+                                        ItemKind::Project,
+                                    ),
+                                    to: DependencyEndpoint::from_native(
+                                        id.clone(),
+                                        ItemKind::Project,
+                                    ),
                                     kind: DependencyKind::Blocks,
                                 },
                                 Direction::DependedOnBy => DependencyEdge {
-                                    from: DependencyEndpoint {
-                                        id: id.0.clone(),
-                                        kind: ItemKind::Project,
-                                    },
-                                    to: DependencyEndpoint {
-                                        id: related.0,
-                                        kind: ItemKind::Project,
-                                    },
+                                    from: DependencyEndpoint::from_native(
+                                        id.clone(),
+                                        ItemKind::Project,
+                                    ),
+                                    to: DependencyEndpoint::from_native(related, ItemKind::Project),
                                     kind: DependencyKind::Blocks,
                                 },
                             });
@@ -879,21 +864,16 @@ fn metadata_field(field_values: &Value) -> Result<BTreeMap<String, Value>, Sourc
     else {
         return Ok(BTreeMap::new());
     };
-    serde_json::from_value(text.clone())
-        .or_else(|_| {
-            text.as_str()
-                .ok_or_else(|| {
-                    serde_json::Error::io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "metadata text is not a string",
-                    ))
-                })
-                .and_then(serde_json::from_str)
+    text.as_str()
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("GitHub {METADATA_FIELD} field text is not a string"),
         })
-        .map_err(|error| SourceError::Malformed {
-            message: format!(
-                "GitHub {METADATA_FIELD} field is not canonical JSON metadata: {error}"
-            ),
+        .and_then(|text| {
+            serde_json::from_str(text).map_err(|error| SourceError::Malformed {
+                message: format!(
+                    "GitHub {METADATA_FIELD} field is not canonical JSON metadata: {error}"
+                ),
+            })
         })
 }
 
@@ -937,6 +917,12 @@ fn metadata_description(
         });
     };
     let value_end = value_start + relative_end;
+    if !description[value_end + PROJECT_METADATA_CLOSE.len()..]
+        .trim()
+        .is_empty()
+    {
+        return Ok((Some(description), BTreeMap::new()));
+    }
     let metadata = serde_json::from_str(&description[value_start..value_end]).map_err(|error| {
         SourceError::Malformed {
             message: format!("invalid canonical JSON in GitHub project metadata slot: {error}"),
