@@ -17,9 +17,13 @@
                 "nodes": [
                   { "name": "Doing", "field": { "name": "Status" } },
                   {
-                    "labels": { "nodes": [{ "id": "L_field", "name": "team", "color": "00ff00" }] }
+                    "labels": {
+                      "nodes": [{ "id": "L_field", "name": "team", "color": "00ff00" }],
+                      "pageInfo": { "hasNextPage": false }
+                    }
                   }
-                ]
+                ],
+                "pageInfo": { "hasNextPage": false }
               },
               "content": {
                 "id": "I_task",
@@ -29,7 +33,10 @@
                 "createdAt": "2026-01-02T00:00:00Z",
                 "updatedAt": "2026-01-03T00:00:00Z",
                 "state": "OPEN",
-                "labels": { "nodes": [{ "id": "L_bug", "name": "bug", "color": "ff0000" }] }
+                "labels": {
+                  "nodes": [{ "id": "L_bug", "name": "bug", "color": "ff0000" }],
+                  "pageInfo": { "hasNextPage": false }
+                }
               }
             }
           ],

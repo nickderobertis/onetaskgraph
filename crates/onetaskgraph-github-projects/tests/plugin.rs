@@ -649,16 +649,29 @@ async fn rejects_invalid_pages_cursors_and_malformed_source_shapes() {
     );
     handle.join().unwrap();
 
+    let mut truncated = project_response(false);
+    truncated["data"]["organization"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["pageInfo"]
+        ["hasNextPage"] = json!(true);
+    let (endpoint, handle) = server("200 OK", truncated, 1, "projectV2");
+    let error = build(&endpoint)
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, SourceError::Malformed { ref message } if message.contains("exceeds the supported nested connection size"))
+    );
+    handle.join().unwrap();
+
     for malformed in [
         json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
         json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
         json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"content":{"id":"T","title":"missing fields"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
-        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[]},"content":{"title":"missing id"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
-        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[]},"content":{"id":"T","title":"bad body","body":7}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
-        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[]},"content":{"id":"T","title":"bad time","createdAt":"yesterday"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
-        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[]},"content":{"id":"T","title":"bad label","labels":{"nodes":[{"name":"missing id"}]}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
-        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":"bad"},"content":{"id":"T","title":"bad status"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
-        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[]},"content":{"id":"T","title":"bad labels","labels":{}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false}},"content":{"title":"missing id"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false}},"content":{"id":"T","title":"bad body","body":7}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false}},"content":{"id":"T","title":"bad time","createdAt":"yesterday"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false}},"content":{"id":"T","title":"bad label","labels":{"nodes":[{"name":"missing id"}],"pageInfo":{"hasNextPage":false}}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":"bad","pageInfo":{"hasNextPage":false}},"content":{"id":"T","title":"bad status"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
+        json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[{"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false}},"content":{"id":"T","title":"bad labels","labels":{}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"user":{"projectV2":null}}}),
         json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[],"pageInfo":{"endCursor":null}}}},"user":{"projectV2":null}}}),
         json!({"data":{"organization":{"projectV2":{"id":"P","title":"x","items":{"nodes":[],"pageInfo":null}}},"user":{"projectV2":null}}}),
     ] {
@@ -877,7 +890,7 @@ async fn normalizes_builtin_statuses_closed_projects_and_empty_items() {
 
     let mut response = project_response(false);
     response["data"]["organization"]["projectV2"]["items"]["nodes"][0]["fieldValues"] =
-        json!({"nodes":[]});
+        json!({"nodes":[],"pageInfo":{"hasNextPage":false}});
     let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
     let task = build(&endpoint)
         .query_tasks(&TaskQuery::default(), &page(10))

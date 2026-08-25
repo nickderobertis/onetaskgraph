@@ -268,10 +268,10 @@ impl GitHubProjectsSource {
             ... on ProjectV2ItemFieldSingleSelectValue{name field{
               ... on ProjectV2SingleSelectField{name}
             }}
-            ... on ProjectV2ItemFieldLabelValue{labels(first:$nestedFirst){nodes{id name color}}}
-          }} content{
-            ... on Issue{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}}}
-            ... on PullRequest{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}}}
+            ... on ProjectV2ItemFieldLabelValue{labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+          }pageInfo{hasNextPage}} content{
+            ... on Issue{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+            ... on PullRequest{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
             ... on DraftIssue{id title body createdAt updatedAt}
           }} pageInfo{hasNextPage endCursor}}
         }"#;
@@ -359,11 +359,26 @@ impl GitHubProjectsSource {
         if content.is_null() {
             return Ok(None);
         }
-        item.pointer("/fieldValues/nodes")
+        let field_values = item
+            .get("fieldValues")
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub project item is missing fieldValues".into(),
+            })?;
+        complete_connection(field_values, "project item field values")?;
+        field_values
+            .get("nodes")
             .and_then(Value::as_array)
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub project item fieldValues.nodes is not an array".into(),
             })?;
+        if let Some(labels) = content.get("labels") {
+            complete_connection(labels, "content labels")?;
+        }
+        for field_value in field_values["nodes"].as_array().expect("validated above") {
+            if let Some(labels) = field_value.get("labels") {
+                complete_connection(labels, "project item field labels")?;
+            }
+        }
         Ok(Some(Task {
             id: NativeId(required_str(content, "id")?.to_owned()),
             title: required_str(content, "title")?.to_owned(),
@@ -838,6 +853,21 @@ fn optional_nodes<'a>(
                 message: format!("GitHub {name}.nodes is not an array"),
             }),
     }
+}
+fn complete_connection(connection: &Value, name: &str) -> Result<(), SourceError> {
+    let page_info = connection
+        .get("pageInfo")
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("GitHub {name} has no pageInfo"),
+        })?;
+    if required_bool(page_info, "hasNextPage")? {
+        return Err(SourceError::Malformed {
+            message: format!(
+                "GitHub {name} exceeds the supported nested connection size of {NESTED_PAGE_SIZE}"
+            ),
+        });
+    }
+    Ok(())
 }
 fn optional_time(value: &Value, field: &str) -> Result<Option<DateTime<Utc>>, SourceError> {
     optional_str(value, field)?

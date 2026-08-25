@@ -361,11 +361,11 @@ fn github_project_page(variables: &Value) -> Value {
         .iter()
         .map(|(id, title, body, status, state, labels)| json!({
             "id": format!("ITEM-{id}"),
-            "fieldValues":{"nodes":[{"name":status,"field":{"name":"Status"}}]},
+            "fieldValues":{"nodes":[{"name":status,"field":{"name":"Status"}}],"pageInfo":{"hasNextPage":false}},
             "content":{
                 "id":id,"title":title,"body":body,"state":state,
                 "url":format!("https://example.invalid/{id}"),
-                "labels":{"nodes":labels.iter().map(|(id, name)| json!({"id":id,"name":name})).collect::<Vec<_>>()}
+                "labels":{"nodes":labels.iter().map(|(id, name)| json!({"id":id,"name":name})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}
             }
         }))
         .collect::<Vec<_>>();
