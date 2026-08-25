@@ -36,15 +36,12 @@ mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
 # over as one document — so ONE invocation answers the "any depth" half of the rule for
 # every plugin at once.
 #
-# It is read as data rather than as rendered text, and that is not a preference. The
-# previous shape rendered `cargo tree --edges all --no-dedupe` per plugin and grepped it,
-# which broke twice over: `--no-dedupe` re-expands every shared subtree at every place it
-# appears, so one plugin's tree measured 180 MB and Windows spent 52.9 minutes of a
-# 69-minute gate job pushing it through a command substitution and a here-string; and a
-# rendered tree piped into a quiet `grep -q` inverts its own result under `pipefail`,
-# because grep exits at the first match and SIGPIPEs the writer still pushing the rest —
-# so the pipeline failed on exactly the runs where the violation was found. Do not
-# reintroduce either: no per-plugin rendering, and nothing large piped into a quiet grep.
+# Read that graph as data, never as rendered text. Two constraints, both left by the
+# `cargo tree --edges all --no-dedupe` shape this replaced: never render a tree per plugin
+# — that one cost 180 MB an invocation and 52.9 minutes of a 69-minute Windows gate job —
+# and never pipe anything large into a quiet `grep -q`, which exits at the first match and
+# SIGPIPEs its writer, so under `pipefail` the pipeline fails on exactly the runs that
+# found a match.
 readonly ISOLATION_SCAN='
 import json
 import os
@@ -174,7 +171,13 @@ scan() {
 # the engine as a normal dependency — is a Cargo cycle, because the engine depends on
 # every plugin. Cargo refuses to resolve a cycle, so the graph phase below cannot run on
 # the very tree this guard exists to refuse.
-manifests="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml)"
+if ! manifests="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml 2>&1)"; then
+  echo "check-plugin-isolation: could not read the workspace manifests, so neither half of" >&2
+  echo "check-plugin-isolation: the rule could be checked. Cargo said:" >&2
+  printf '%s\n' "$manifests" >&2
+  echo "check-plugin-isolation: fix the Cargo.toml that error names, then re-run." >&2
+  exit 1
+fi
 report="$(scan "$manifests")"
 
 if [ -z "$report" ]; then

@@ -7,11 +7,11 @@
 # splitting `onetaskgraph-plugin-api` out of `onetaskgraph-core`, so it is the last one
 # that should be taken on trust.
 #
-# So the tree is really broken, in a scratch clone, seven ways — six against the local
+# So the tree is really broken, in a scratch clone, eight ways — seven against the local
 # guard and one against deny.toml's wrapper restriction, which is the half of this rule
-# that is a required check. Each case asserts on the DIAGNOSTIC as well
-# as the exit status: a guard that refuses without naming the crate and the path sends the
-# next author hunting, which is most of what the guard is for.
+# that is a required check. Each case asserts on the DIAGNOSTIC as well as the exit
+# status: a guard that refuses without naming the crate and the path sends the next
+# author hunting, which is most of what the guard is for.
 #
 # It earned its place immediately. Case 3 — a plugin dev-depending on a crate that
 # normally depends on the engine — passed the guard as originally written, because asking
@@ -113,7 +113,7 @@ expect_refused() {
 }
 
 # 0. The control. Without it, a guard that refused every tree — including this one — would
-#    satisfy all four cases below and look like the strongest check in the repository.
+#    satisfy every case below and look like the strongest check in the repository.
 run_guard
 if [ "$GUARD_STATUS" -ne 0 ]; then
   echo "check-isolation-enforced: the guard refuses the committed tree, so the cases below" >&2
@@ -245,6 +245,15 @@ add_dependency onetaskgraph-local-md dependencies \
 run_guard
 expect_refused "a workspace whose dependency graph does not resolve" \
   "does not resolve" onetaskgraph-local-md onetaskgraph-bridge onetaskgraph-core
+reset_fixture
+
+# 8. A manifest cargo cannot parse is the other way this guard can end up with nothing to
+#    read. It must refuse and name the crate: the failure that matters is a guard that
+#    treats "I could not look" as "I looked and it was clean".
+printf '\nthis is not toml\n' >> "$scratch/repo/crates/onetaskgraph-local-md/Cargo.toml"
+run_guard
+expect_refused "a manifest cargo cannot parse" \
+  "could not read the workspace manifests" onetaskgraph-local-md
 reset_fixture
 
 if [ "$failures" -ne 0 ]; then
