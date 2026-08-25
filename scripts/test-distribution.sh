@@ -489,8 +489,12 @@ assert_npm_auth_refuses() {
   grep -Fq 'usage: scripts/npm-registry-auth.sh [REGISTRY_URL]' "$tmp/error" || { cat "$tmp/error" >&2; echo "npm registry configuration refusal omitted its usage line; next: inspect its diagnostics" >&2; exit 1; }
   grep -Fq "next: $expected_reason" "$tmp/error" || { cat "$tmp/error" >&2; echo "npm registry configuration refusal omitted its next action; next: inspect its diagnostics" >&2; exit 1; }
 }
-assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL: file:///etc' file:///etc
+assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL with a host: file:///etc' file:///etc
 assert_npm_auth_refuses 'pass at most one registry URL' https://registry.npmjs.org/ extra
+assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL with a host: http:///' http:///
+if ONETASKGRAPH_NPM_CONFIG_DIR="$tmp/npm-config-unreportable" "$root/scripts/npm-registry-auth.sh" "$npm_registry" >&- 2>"$tmp/error"; then echo "the npm configuration reported a path over a standard output it could not write; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; fi
+grep -Fq 'could not report the npm configuration path' "$tmp/error" || { cat "$tmp/error" >&2; echo "an unreportable npm configuration path omitted its reason; next: inspect its diagnostics" >&2; exit 1; }
+grep -q '^next: ' "$tmp/error" || { cat "$tmp/error" >&2; echo "an unreportable npm configuration path omitted a next action; next: inspect its diagnostics" >&2; exit 1; }
 assert_npm_auth_stops() {
   expected_reason=$1
   shift
@@ -553,3 +557,4 @@ assert_contract_refuses() {
 assert_contract_refuses 'NODE_AUTH_TOKEN alone leaves the npm client logged out' .github/workflows/release.yml 'NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh'
 assert_contract_refuses 'must be exported as NPM_CONFIG_USERCONFIG' .github/workflows/release.yml 'export NPM_CONFIG_USERCONFIG'
 assert_contract_refuses 'must name NODE_AUTH_TOKEN rather than carry a token value' scripts/npm-registry-auth.sh ':_authToken=${NODE_AUTH_TOKEN}'
+assert_contract_refuses 'no publish-npm job to authenticate' .github/workflows/release.yml '  publish-npm:'

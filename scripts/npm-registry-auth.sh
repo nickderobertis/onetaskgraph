@@ -10,7 +10,9 @@ set -euo pipefail
 usage() { echo "usage: scripts/npm-registry-auth.sh [REGISTRY_URL]" >&2; echo "next: $1" >&2; exit 64; }
 [[ $# -le 1 ]] || usage "pass at most one registry URL, as .github/workflows/release.yml does"
 registry=${1:-https://registry.npmjs.org/}
-[[ $registry =~ ^https?://[^[:space:]]+$ ]] || usage "invalid registry, which must be an http:// or https:// URL: $registry"
+# The authority becomes npm's auth key, so a URL without one would key the token to
+# nothing and publish anonymously.
+[[ $registry =~ ^https?://[^/[:space:]]+(/[^[:space:]]*)?$ ]] || usage "invalid registry, which must be an http:// or https:// URL with a host: $registry"
 # npm keys auth by the registry's scheme-less URL, and matches it with a trailing slash.
 [[ $registry == */ ]] || registry="$registry/"
 directory=${ONETASKGRAPH_NPM_CONFIG_DIR:-${RUNNER_TEMP:-}}
