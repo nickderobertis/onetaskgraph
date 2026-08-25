@@ -220,9 +220,13 @@ pub enum StatusCategory {
 /// [`ForwardOnly`](crate::DependencySupport::ForwardOnly) source's reverse is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DependencyEdge {
-    /// The item the edge starts at, and the one that depends on the other.
+    /// The item the edge starts at, and the one that **depends on** the other.
+    ///
+    /// This is the orientation every source reports in, whichever way its own backend
+    /// spells the relationship: a GitHub `blockedBy` connection read for `ENG-1` yields
+    /// `from: ENG-1`, because `ENG-1` is what depends.
     pub from: DependencyEndpoint,
-    /// The item the edge points at.
+    /// The item the edge points at, and the one that must finish first.
     pub to: DependencyEndpoint,
     /// What the edge means.
     pub kind: DependencyKind,
@@ -241,13 +245,23 @@ impl DependencyEdge {
     /// and `{"id": "<source>:<native>", "kind": "project"}` names any item of any source.
     /// Each becomes one `blocks` edge from `near` to that endpoint.
     ///
+    /// `natively_names` is the kind of item the near item's **own backend** can relate it
+    /// to — `Some(ItemKind::Task)` for a GitHub issue, whose `blockedBy` connection holds
+    /// issues; `None` for a GitHub draft, which has no such connection at all. An
+    /// unqualified endpoint of that kind is refused, because it names an item the backend
+    /// itself could hold, and the rule this key exists to serve is the backend's own
+    /// relationship first. A qualified endpoint is never refused: no backend relates an id
+    /// in a system it knows nothing about, which is the whole case this key is for.
+    ///
     /// # Errors
     ///
-    /// Returns a message when the key holds anything other than a list of endpoints.
+    /// Returns a message when the key holds anything other than a list of endpoints, or
+    /// holds one the near item's own backend was supposed to name.
     pub fn recorded(
         metadata: &BTreeMap<String, Value>,
         near: &NativeId,
         near_kind: ItemKind,
+        natively_names: Option<ItemKind>,
     ) -> Result<Vec<Self>, String> {
         let Some(value) = metadata.get(Self::RECORDED_KEY) else {
             return Ok(Vec::new());
@@ -259,14 +273,23 @@ impl DependencyEdge {
                     Self::RECORDED_KEY
                 )
             })?;
-        Ok(far
-            .into_iter()
-            .map(|to| Self {
-                from: DependencyEndpoint::from_native(near.clone(), near_kind),
-                to,
-                kind: DependencyKind::Blocks,
+        far.into_iter()
+            .map(|to| {
+                if !to.is_qualified() && natively_names == Some(to.kind) {
+                    return Err(format!(
+                        "{key} on {near} records {to}, which this source can relate \
+                         natively; record it as this backend's own dependency and keep \
+                         {key} for a far end no relationship here can name",
+                        key = Self::RECORDED_KEY
+                    ));
+                }
+                Ok(Self {
+                    from: DependencyEndpoint::from_native(near.clone(), near_kind),
+                    to,
+                    kind: DependencyKind::Blocks,
+                })
             })
-            .collect())
+            .collect()
     }
 }
 
@@ -325,7 +348,7 @@ impl JsonSchema for DependencyEndpoint {
 
     fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
         json_schema!({
-            "description": "A dependency endpoint; legacy native-id strings decode as tasks.",
+            "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead.",
             "oneOf": [
                 {"type": "string", "minLength": 1},
                 {
@@ -450,10 +473,14 @@ pub enum ItemKind {
 }
 
 /// What a [`DependencyEdge`] means.
+///
+/// Both variants are read in the one direction [`DependencyEdge::from`] fixes: `from`
+/// depends on `to`. This enum said the opposite of that until the orientation was settled,
+/// which is why it is spelled out twice rather than once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum DependencyKind {
-    /// `from` must finish before `to` can.
+    /// `from` depends on `to`, and `to` must finish before `from` can.
     Blocks,
     /// `from` and `to` are linked without an ordering.
     Related,

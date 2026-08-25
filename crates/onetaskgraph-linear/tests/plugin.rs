@@ -669,6 +669,148 @@ async fn a_far_end_in_another_source_is_read_from_the_reserved_key_at_both_level
     }
 }
 
+/// One Linear relations response for `root`, whose description records `recorded`.
+fn relations_recording(root: &str, recorded: &serde_json::Value) -> String {
+    let slot = format!(
+        "body\n\n<!-- onetaskgraph.metadata\n{}\n-->",
+        serde_json::json!({ "onetaskgraph.depends_on": recorded })
+    );
+    serde_json::json!({"data":{(root):{
+        "description": slot,
+        "relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+        "inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+    }}})
+    .to_string()
+}
+
+#[tokio::test]
+async fn linear_may_not_record_a_far_end_its_own_relations_can_name() {
+    // `relations` on an issue holds issues and on a project holds projects, all of this
+    // workspace. Recording one of those is a plan Linear itself would have drawn, so it is
+    // refused rather than read — that is the native-first rule, enforced at the boundary.
+    for (projects, root, misplaced) in [
+        (false, "issue", serde_json::json!(["ENG-2"])),
+        (
+            false,
+            "issue",
+            serde_json::json!([{"id":"ENG-2","kind":"task"}]),
+        ),
+        (
+            true,
+            "project",
+            serde_json::json!([{"id":"PRJ-2","kind":"project"}]),
+        ),
+    ] {
+        let (endpoint, _) = server("200 OK", "", relations_recording(root, &misplaced));
+        let request = PageRequest {
+            cursor: None,
+            limit: 50,
+        };
+        let source = source(&endpoint);
+        let error = if projects {
+            source
+                .project_dependencies(&"p1".into(), Direction::DependsOn, &request)
+                .await
+        } else {
+            source
+                .task_dependencies(&"i1".into(), Direction::DependsOn, &request)
+                .await
+        }
+        .expect_err("a same-source far end of the kind Linear relates");
+        let message = format!("{error}");
+        assert!(message.contains("relate natively"), "{message}");
+        assert!(message.contains("onetaskgraph.depends_on"), "{message}");
+    }
+}
+
+#[tokio::test]
+async fn linear_records_the_far_end_no_relation_of_its_own_can_hold() {
+    // The two cases no Linear relation can express: an item of another source, and one at
+    // the other level of this one.
+    for (recorded, expected) in [
+        (
+            serde_json::json!([{"id":"elsewhere:P-9","kind":"project"}]),
+            "elsewhere:P-9",
+        ),
+        (
+            serde_json::json!([{"id":"PRJ-9","kind":"project"}]),
+            "PRJ-9",
+        ),
+    ] {
+        let (endpoint, _) = server("200 OK", "", relations_recording("issue", &recorded));
+        let first = source(&endpoint)
+            .task_dependencies(
+                &"i1".into(),
+                Direction::DependsOn,
+                &PageRequest {
+                    cursor: None,
+                    limit: 50,
+                },
+            )
+            .await
+            .expect("the native page is answered");
+        let tail = first.next.expect("a recorded far end still owes a page");
+
+        let (endpoint, _) = server("200 OK", "", relations_recording("issue", &recorded));
+        let recorded_page = source(&endpoint)
+            .task_dependencies(
+                &"i1".into(),
+                Direction::DependsOn,
+                &PageRequest {
+                    cursor: Some(tail),
+                    limit: 50,
+                },
+            )
+            .await
+            .expect("the recorded tail is answered");
+        assert_eq!(recorded_page.items.len(), 1, "{recorded}");
+        assert_eq!(recorded_page.items[0].from.id(), "i1", "{recorded}");
+        assert_eq!(recorded_page.items[0].to.id(), expected, "{recorded}");
+        assert_eq!(
+            recorded_page.items[0].to.kind,
+            ItemKind::Project,
+            "{recorded}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_reserved_dependency_entry_this_interface_cannot_read_is_refused_by_name() {
+    for (recorded, expected) in [
+        (
+            serde_json::json!([{"id":"","kind":"project"}]),
+            "cannot be empty",
+        ),
+        (
+            serde_json::json!([{"id":"bad source:P-9","kind":"project"}]),
+            "source name",
+        ),
+        (
+            serde_json::json!([{"id":"elsewhere:","kind":"project"}]),
+            "native id",
+        ),
+        (
+            serde_json::json!("elsewhere:P-9"),
+            "not a list of dependency endpoints",
+        ),
+    ] {
+        let (endpoint, _) = server("200 OK", "", relations_recording("issue", &recorded));
+        let error = source(&endpoint)
+            .task_dependencies(
+                &"i1".into(),
+                Direction::DependsOn,
+                &PageRequest {
+                    cursor: None,
+                    limit: 50,
+                },
+            )
+            .await
+            .expect_err("an entry this interface cannot represent");
+        let message = format!("{error}");
+        assert!(message.contains(expected), "{recorded}: {message}");
+    }
+}
+
 #[tokio::test]
 async fn a_reserved_dependency_key_holding_the_wrong_shape_is_refused_by_name() {
     let body = r#"{"data":{"issue":{"description":"body\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":7}\n-->","relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}"#;

@@ -315,6 +315,100 @@ fn every_source_preserves_typed_metadata_and_repository_origins_through_the_bina
 }
 
 #[test]
+fn every_source_orients_a_native_edge_from_the_item_that_depends() {
+    // One orientation across every backend: `from` depends on `to`. Each source spells the
+    // relationship its own way — a `depends_on` list, a Linear relation, a GitHub
+    // `blockedBy` connection — and the whole point of one interface over them is that a
+    // caller cannot tell which by reading the answer. So the same edge has to come back
+    // identical whether it is asked for from the end that depends or the end that blocks.
+    let edge = |from: &str, to: &str, kind: &str| {
+        json!({
+            "from": {"id": qualified(SOURCE, from), "kind": kind},
+            "to": {"id": qualified(SOURCE, to), "kind": kind},
+            "kind": "blocks"
+        })
+    };
+    let items = |rendered: &str| -> Vec<serde_json::Value> {
+        serde_json::from_str::<serde_json::Value>(rendered).expect("dependency output is JSON")
+            ["items"]
+            .as_array()
+            .expect("an edge page is a list")
+            .clone()
+    };
+
+    for row in ROWS {
+        let sandbox = host(row);
+
+        // T-1 waits on T-2, read from T-1...
+        let forward = items(&ok(
+            row,
+            &sandbox,
+            &["task", "deps", &qualified(SOURCE, "T-1"), "--json"],
+        ));
+        assert!(
+            forward.contains(&edge("T-1", "T-2", "task")),
+            "{}: T-1 is what depends:\n{forward:#?}",
+            row.name
+        );
+
+        // ...and the same edge, unchanged, read from T-2.
+        let reverse = items(&ok(
+            row,
+            &sandbox,
+            &[
+                "task",
+                "deps",
+                &qualified(SOURCE, "T-2"),
+                "--direction",
+                "depended-on-by",
+                "--json",
+            ],
+        ));
+        assert!(
+            reverse.contains(&edge("T-1", "T-2", "task")),
+            "{}: the reverse read reports the same edge, not its mirror:\n{reverse:#?}",
+            row.name
+        );
+
+        let projects = items(&ok(
+            row,
+            &sandbox,
+            &["project", "deps", &qualified(SOURCE, "P-1"), "--json"],
+        ));
+        assert!(
+            projects.contains(&edge("P-1", "P-2", "project")),
+            "{}: P-1 is what depends:\n{projects:#?}",
+            row.name
+        );
+
+        // The reverse project read is asked of P-2, and one GitHub source is exactly one
+        // board, so that row cannot be asked about another. Its reverse orientation is
+        // covered where it can be: `project_dependencies_map_reverse_edges_and_page_them`
+        // in that crate's own suite, over a real socket.
+        if !row.fixture.complete_dataset {
+            continue;
+        }
+        let reverse_projects = items(&ok(
+            row,
+            &sandbox,
+            &[
+                "project",
+                "deps",
+                &qualified(SOURCE, "P-2"),
+                "--direction",
+                "depended-on-by",
+                "--json",
+            ],
+        ));
+        assert!(
+            reverse_projects.contains(&edge("P-1", "P-2", "project")),
+            "{}: the reverse read reports the same edge:\n{reverse_projects:#?}",
+            row.name
+        );
+    }
+}
+
+#[test]
 fn every_source_reports_a_cross_source_cross_level_edge_without_following_it() {
     // The far ends are in a source called `elsewhere`, which no row configures. A read
     // that resolved one would need the far plugin — the state this product does not hold —

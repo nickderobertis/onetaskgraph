@@ -233,6 +233,18 @@ pub const ROWS: &[Row] = &[
 ];
 
 fn github_projects_block(sandbox: &Sandbox) -> Value {
+    github_projects_server(sandbox, None)
+}
+
+/// The same board, with `T-1` recording `recorded` under the reserved dependency key.
+///
+/// The journeys that drive a key holding something it must not need a board that holds
+/// it, and the shared row cannot be that board — it is the one every other journey reads.
+pub fn github_projects_recording(sandbox: &Sandbox, recorded: Value) -> Value {
+    github_projects_server(sandbox, Some(recorded))
+}
+
+fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
     sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
     let endpoint = format!(
@@ -262,9 +274,12 @@ fn github_projects_block(sandbox: &Sandbox) -> Value {
                     variables["after"].is_null() || variables["after"].is_string(),
                     "dependency after must be null or a string"
                 );
+                // T-2 sits on a second board, so aggregating this board's issue edges
+                // yields a real project-level edge rather than one this board makes with
+                // itself, which the source drops.
                 let blockers = match id {
                     "T-1" | "T-3" | "T-4" => vec![
-                        json!({"id":"T-2","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+                        json!({"id":"T-2","projectItems":{"nodes":[{"project":{"id":"P-2"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
                     ],
                     _ => vec![],
                 };
@@ -285,7 +300,7 @@ fn github_projects_block(sandbox: &Sandbox) -> Value {
                 assert_eq!(variables["owner"], "fixture-owner");
                 assert_eq!(variables["number"], 7);
                 assert_eq!(variables["nestedFirst"], 50);
-                github_project_page(variables)
+                github_project_page(variables, recorded.as_ref())
             } else {
                 panic!("fixture received an unknown GraphQL operation")
             };
@@ -342,7 +357,7 @@ fn read_http_json(stream: &mut impl Read) -> Value {
     serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
 }
 
-fn github_project_page(variables: &Value) -> Value {
+fn github_project_page(variables: &Value, recorded: Option<&Value>) -> Value {
     let tasks = [
         (
             "T-1",
@@ -400,7 +415,8 @@ fn github_project_page(variables: &Value) -> Value {
         .map(|(id, title, body, status, state, labels)| json!({
             "id": format!("ITEM-{id}"),
             "fieldValues":{"nodes":[{"name":status,"field":{"name":"Status"}},
-                {"text": if *id == "T-1" {serde_json::to_string(&json!({"onepipeline.turn_budget":12,"caller.flags":[true,null],"onetaskgraph.depends_on":recorded_far_ends("task_dependencies",&json!("T-1"))})).unwrap()} else {"{}".into()},"field":{"name":"onetaskgraph.metadata"}}],"pageInfo":{"hasNextPage":false}},
+                {"text": if *id == "T-1" {serde_json::to_string(&json!({"onepipeline.turn_budget":12,"caller.flags":[true,null],
+                    "onetaskgraph.depends_on": recorded.cloned().unwrap_or_else(|| Value::Array(recorded_far_ends("task_dependencies",&json!("T-1"))))})).unwrap()} else {"{}".into()},"field":{"name":"onetaskgraph.metadata"}}],"pageInfo":{"hasNextPage":false}},
             "content":{
                 "id":id,"title":title,"body":body,"state":state,"repository":{"nameWithOwner":"nickderobertis/onetaskgraph"},
                 "url":format!("https://example.invalid/{id}"),

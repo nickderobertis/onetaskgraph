@@ -372,8 +372,9 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
         .await
         .unwrap();
     assert_eq!(edges.items.len(), 1);
-    assert_eq!(edges.items[0].from.id(), "PVT_blocker");
-    assert_eq!(edges.items[0].to.id(), "PVT_project");
+    // `from` depends on `to`: the board asked about is what waits on the blocker's board.
+    assert_eq!(edges.items[0].from.id(), "PVT_project");
+    assert_eq!(edges.items[0].to.id(), "PVT_blocker");
     handle.join().unwrap();
 
     let first = json!({"data":{"node":{"__typename":"Issue","blockedBy":{"nodes":[{
@@ -397,7 +398,8 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
         )
         .await
         .unwrap();
-    assert_eq!(edges.items[0].from.id(), "PVT_blocker");
+    assert_eq!(edges.items[0].from.id(), "PVT_project");
+    assert_eq!(edges.items[0].to.id(), "PVT_blocker");
     handle.join().unwrap();
 }
 
@@ -506,8 +508,8 @@ async fn project_dependencies_map_reverse_edges_and_page_them() {
         )
         .await
         .unwrap();
-    assert_eq!(first.items[0].from.id(), "PVT_project");
-    assert_eq!(first.items[0].to.id(), "PVT_dependent_1");
+    assert_eq!(first.items[0].from.id(), "PVT_dependent_1");
+    assert_eq!(first.items[0].to.id(), "PVT_project");
     assert_eq!(first.next.unwrap().0, "1");
     handle.join().unwrap();
 
@@ -523,7 +525,8 @@ async fn project_dependencies_map_reverse_edges_and_page_them() {
         )
         .await
         .unwrap();
-    assert_eq!(second.items[0].to.id(), "PVT_dependent_2");
+    assert_eq!(second.items[0].from.id(), "PVT_dependent_2");
+    assert_eq!(second.items[0].to.id(), "PVT_project");
     assert!(second.next.is_none());
     handle.join().unwrap();
 }
@@ -585,8 +588,9 @@ async fn walks_issue_dependencies_in_both_directions_through_graphql() {
         .task_dependencies(&NativeId("I_task".into()), Direction::DependsOn, &page(1))
         .await
         .unwrap();
-    assert_eq!(forward.items[0].from.id(), "I_blocker");
-    assert_eq!(forward.items[0].to.id(), "I_task");
+    // `blockedBy` says what `I_task` waits on, so `I_task` is what depends.
+    assert_eq!(forward.items[0].from.id(), "I_task");
+    assert_eq!(forward.items[0].to.id(), "I_blocker");
     assert_eq!(forward.next.unwrap().0, "next");
     let reverse = source
         .task_dependencies(
@@ -596,8 +600,9 @@ async fn walks_issue_dependencies_in_both_directions_through_graphql() {
         )
         .await
         .unwrap();
-    assert_eq!(reverse.items[0].from.id(), "I_task");
-    assert_eq!(reverse.items[0].to.id(), "I_dependent");
+    // ...and `blocking` says what waits on it, so the dependent is `from` there.
+    assert_eq!(reverse.items[0].from.id(), "I_dependent");
+    assert_eq!(reverse.items[0].to.id(), "I_task");
     handle.join().unwrap();
 }
 
@@ -628,30 +633,38 @@ async fn non_issue_project_tasks_have_no_issue_dependencies() {
     handle.join().unwrap();
 }
 
-/// The project fixture with `I_task` recording two far ends under the reserved key.
-fn recorded_project_response() -> Value {
+/// The project fixture with `I_task` recording `recorded` under the reserved key.
+fn recording(recorded: Value) -> Value {
     let mut fixture = project_response(false);
-    fixture["data"]["owner"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["nodes"][1]["text"] = json!(
-        serde_json::to_string(&json!({
-            "onetaskgraph.depends_on": ["I_sibling", {"id":"elsewhere:P-9","kind":"project"}]
-        }))
-        .unwrap()
-    );
+    fixture["data"]["owner"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["nodes"][1]["text"] =
+        json!(serde_json::to_string(&json!({ "onetaskgraph.depends_on": recorded })).unwrap());
     fixture
+}
+
+/// Two far ends `blockedBy` cannot name: a board of this source, and another source.
+fn recorded_project_response() -> Value {
+    recording(json!([
+        {"id":"PVT_other","kind":"project"},
+        {"id":"elsewhere:P-9","kind":"project"}
+    ]))
 }
 
 #[tokio::test]
 async fn a_far_end_no_issue_relationship_can_name_is_read_from_the_reserved_key() {
-    // `blockedBy` holds GitHub issues and nothing else, so an edge into another source has
-    // to live on the near item. It is served after the native relationship is spent, and
-    // its own page walks under a cursor of its own.
+    // `blockedBy` holds GitHub issues of this project and nothing else, so an edge to a
+    // board, or into another source, has to live on the near item. It is served after the
+    // native relationship is spent, and its own page walks under a cursor of its own.
     let native = json!({"data":{"node":{"__typename":"Issue","blockedBy":{
         "nodes":[{"id":"I_blocker"}],"pageInfo":{"hasNextPage":false,"endCursor":null}
     }}}});
+    // Each page is one `node` read — which says whether the item is issue-backed, and so
+    // which far ends its reserved key may hold — and one board scan for the metadata.
     let (endpoint, handle) = sequence_server(vec![
         native.clone(),
         recorded_project_response(),
+        native.clone(),
         recorded_project_response(),
+        native,
         recorded_project_response(),
     ]);
     let source = build(&endpoint);
@@ -661,7 +674,8 @@ async fn a_far_end_no_issue_relationship_can_name_is_read_from_the_reserved_key(
         .await
         .expect("the native page is answered");
     assert_eq!(first.items.len(), 1);
-    assert_eq!(first.items[0].from.id(), "I_blocker");
+    assert_eq!(first.items[0].from.id(), "I_task");
+    assert_eq!(first.items[0].to.id(), "I_blocker");
     let next = first.next.expect("a recorded tail follows the native page");
 
     let tail = source
@@ -677,7 +691,8 @@ async fn a_far_end_no_issue_relationship_can_name_is_read_from_the_reserved_key(
         .expect("the recorded tail is answered");
     assert_eq!(tail.items.len(), 1);
     assert_eq!(tail.items[0].from.id(), "I_task");
-    assert_eq!(tail.items[0].to.id(), "I_sibling");
+    assert_eq!(tail.items[0].to.id(), "PVT_other");
+    assert_eq!(tail.items[0].to.kind, ItemKind::Project);
     assert!(!tail.items[0].to.is_qualified());
 
     let last = source
@@ -695,6 +710,91 @@ async fn a_far_end_no_issue_relationship_can_name_is_read_from_the_reserved_key(
     assert_eq!(last.items[0].to.kind, ItemKind::Project);
     assert!(last.next.is_none());
     handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn an_issue_may_not_record_a_far_end_its_own_relationship_can_name() {
+    // The rule is the backend's relationship first. An issue's `blockedBy` holds issues of
+    // this source, so recording one there is a plan GitHub itself would not draw — refused,
+    // naming the entry and what to do with it instead.
+    let native = json!({"data":{"node":{"__typename":"Issue","blockedBy":{
+        "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+    }}}});
+    let (endpoint, handle) = sequence_server(vec![native, recording(json!(["I_sibling"]))]);
+    let error = build(&endpoint)
+        .task_dependencies(&NativeId("I_task".into()), Direction::DependsOn, &page(10))
+        .await
+        .expect_err("an issue naming an issue of this source is GitHub's own edge");
+    let message = format!("{error}");
+    assert!(message.contains("I_sibling"), "{message}");
+    assert!(message.contains("relate natively"), "{message}");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn a_draft_may_record_the_far_end_an_issue_may_not() {
+    // A draft has no `blockedBy` at all, so nothing it depends on can be named natively and
+    // the reserved key is the only place any far end of its own can be.
+    let draft = json!({"data":{"node":{"__typename":"DraftIssue"}}});
+    let mut board = recording(json!(["I_sibling"]));
+    board["data"]["owner"]["projectV2"]["items"]["nodes"][0]["content"] = json!({"id":"DI_task","title":"Sketch","body":null,
+               "createdAt":"2026-01-02T00:00:00Z","updatedAt":"2026-01-03T00:00:00Z"});
+    let (endpoint, handle) = sequence_server(vec![draft, board]);
+    let edges = build(&endpoint)
+        .task_dependencies(&NativeId("DI_task".into()), Direction::DependsOn, &page(10))
+        .await
+        .expect("a draft records what it cannot relate");
+    assert_eq!(edges.items.len(), 1);
+    assert_eq!(edges.items[0].from.id(), "DI_task");
+    assert_eq!(edges.items[0].to.id(), "I_sibling");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn a_board_may_not_record_a_far_end_its_aggregated_edges_can_name() {
+    let mut board = project_response(false);
+    board["data"]["owner"]["projectV2"]["shortDescription"] = json!(
+        "Delivery plan\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":[{\"id\":\"PVT_other\",\"kind\":\"project\"}]}\n-->"
+    );
+    let no_edges = json!({"data":{"node":{"__typename":"Issue",
+        "blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+        "blocking":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}});
+    let (endpoint, handle) = sequence_server(vec![board.clone(), board, no_edges]);
+    let error = build(&endpoint)
+        .project_dependencies(
+            &NativeId("PVT_project".into()),
+            Direction::DependsOn,
+            &page(10),
+        )
+        .await
+        .expect_err("a board relates to another board through its issues");
+    assert!(format!("{error}").contains("PVT_other"), "{error}");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn a_reserved_dependency_entry_this_interface_cannot_read_is_refused_by_name() {
+    for (recorded, expected) in [
+        (json!([{"id":"","kind":"task"}]), "cannot be empty"),
+        (
+            json!([{"id":"bad source:P-9","kind":"project"}]),
+            "source name",
+        ),
+        (json!([{"id":"elsewhere:","kind":"project"}]), "native id"),
+        (json!("elsewhere:P-9"), "not a list of dependency endpoints"),
+    ] {
+        let native = json!({"data":{"node":{"__typename":"Issue","blockedBy":{
+            "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+        }}}});
+        let (endpoint, handle) = sequence_server(vec![native, recording(recorded.clone())]);
+        let error = build(&endpoint)
+            .task_dependencies(&NativeId("I_task".into()), Direction::DependsOn, &page(10))
+            .await
+            .expect_err("an entry this interface cannot represent");
+        let message = format!("{error}");
+        assert!(message.contains(expected), "{recorded}: {message}");
+        handle.join().unwrap();
+    }
 }
 
 #[tokio::test]

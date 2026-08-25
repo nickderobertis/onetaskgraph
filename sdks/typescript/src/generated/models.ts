@@ -73,7 +73,11 @@ export namespace GeneratedDependencyEdge {
  */
 export interface DependencyEdge {
 /**
- * The item the edge starts at, and the one that depends on the other.
+ * The item the edge starts at, and the one that **depends on** the other.
+ * 
+ * This is the orientation every source reports in, whichever way its own backend
+ * spells the relationship: a GitHub `blockedBy` connection read for `ENG-1` yields
+ * `from: ENG-1`, because `ENG-1` is what depends.
  */
 from: (string | {
 id: string
@@ -84,7 +88,7 @@ kind: ("task" | "project")
  */
 kind: ("blocks" | "related")
 /**
- * The item the edge points at.
+ * The item the edge points at, and the one that must finish first.
  */
 to: (string | {
 id: string
@@ -97,7 +101,7 @@ kind: ("task" | "project")
 export type DependencyEdge = GeneratedDependencyEdge.DependencyEdge;
 export namespace GeneratedDependencyEndpoint {
 /**
- * A dependency endpoint; legacy native-id strings decode as tasks.
+ * A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead.
  */
 export type DependencyEndpoint = (string | {
 id: string
@@ -109,6 +113,10 @@ export type DependencyEndpoint = GeneratedDependencyEndpoint.DependencyEndpoint;
 export namespace GeneratedDependencyKind {
 /**
  * What a [`DependencyEdge`] means.
+ * 
+ * Both variants are read in the one direction [`DependencyEdge::from`] fixes: `from`
+ * depends on `to`. This enum said the opposite of that until the orientation was settled,
+ * which is why it is spelled out twice rather than once.
  */
 export type DependencyKind = ("blocks" | "related")
 
@@ -367,7 +375,11 @@ next?: (Cursor | null)
  */
 export interface DependencyEdge {
 /**
- * The item the edge starts at, and the one that depends on the other.
+ * The item the edge starts at, and the one that **depends on** the other.
+ * 
+ * This is the orientation every source reports in, whichever way its own backend
+ * spells the relationship: a GitHub `blockedBy` connection read for `ENG-1` yields
+ * `from: ENG-1`, because `ENG-1` is what depends.
  */
 from: (string | {
 id: string
@@ -378,7 +390,7 @@ kind: ("task" | "project")
  */
 kind: ("blocks" | "related")
 /**
- * The item the edge points at.
+ * The item the edge points at, and the one that must finish first.
  */
 to: (string | {
 id: string

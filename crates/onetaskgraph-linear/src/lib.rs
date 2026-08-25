@@ -449,7 +449,10 @@ fn recorded(
         message: format!("missing {}", root.as_str()),
     })?;
     let (_, metadata) = metadata_description(optional_string(item, "description")?)?;
-    DependencyEdge::recorded(&metadata, id, root.item_kind())
+    // `relations` on an issue holds issues and on a project holds projects, both of this
+    // workspace — so a same-kind far end without a source is one Linear itself was
+    // supposed to hold, and the key is refused rather than quietly read.
+    DependencyEdge::recorded(&metadata, id, root.item_kind(), Some(root.item_kind()))
         .map_err(|message| SourceError::Malformed { message })
 }
 

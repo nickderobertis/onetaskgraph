@@ -110,7 +110,7 @@ export const runtimeSchemas = {
   "DependencyEdge": {
     "$defs": {
       "DependencyEndpoint": {
-        "description": "A dependency endpoint; legacy native-id strings decode as tasks.",
+        "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead.",
         "oneOf": [
           {
             "minLength": 1,
@@ -140,11 +140,11 @@ export const runtimeSchemas = {
         ]
       },
       "DependencyKind": {
-        "description": "What a [`DependencyEdge`] means.",
+        "description": "What a [`DependencyEdge`] means.\n\nBoth variants are read in the one direction [`DependencyEdge::from`] fixes: `from`\ndepends on `to`. This enum said the opposite of that until the orientation was settled,\nwhich is why it is spelled out twice rather than once.",
         "oneOf": [
           {
             "const": "blocks",
-            "description": "`from` must finish before `to` can.",
+            "description": "`from` depends on `to`, and `to` must finish before `from` can.",
             "type": "string"
           },
           {
@@ -160,7 +160,7 @@ export const runtimeSchemas = {
     "properties": {
       "from": {
         "$ref": "#/$defs/DependencyEndpoint",
-        "description": "The item the edge starts at, and the one that depends on the other."
+        "description": "The item the edge starts at, and the one that **depends on** the other.\n\nThis is the orientation every source reports in, whichever way its own backend\nspells the relationship: a GitHub `blockedBy` connection read for `ENG-1` yields\n`from: ENG-1`, because `ENG-1` is what depends."
       },
       "kind": {
         "$ref": "#/$defs/DependencyKind",
@@ -168,7 +168,7 @@ export const runtimeSchemas = {
       },
       "to": {
         "$ref": "#/$defs/DependencyEndpoint",
-        "description": "The item the edge points at."
+        "description": "The item the edge points at, and the one that must finish first."
       }
     },
     "required": [
@@ -181,7 +181,7 @@ export const runtimeSchemas = {
   },
   "DependencyEndpoint": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "A dependency endpoint; legacy native-id strings decode as tasks.",
+    "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead.",
     "oneOf": [
       {
         "minLength": 1,
@@ -213,11 +213,11 @@ export const runtimeSchemas = {
   },
   "DependencyKind": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "What a [`DependencyEdge`] means.",
+    "description": "What a [`DependencyEdge`] means.\n\nBoth variants are read in the one direction [`DependencyEdge::from`] fixes: `from`\ndepends on `to`. This enum said the opposite of that until the orientation was settled,\nwhich is why it is spelled out twice rather than once.",
     "oneOf": [
       {
         "const": "blocks",
-        "description": "`from` must finish before `to` can.",
+        "description": "`from` depends on `to`, and `to` must finish before `from` can.",
         "type": "string"
       },
       {
@@ -608,7 +608,7 @@ export const runtimeSchemas = {
         "properties": {
           "from": {
             "$ref": "#/$defs/DependencyEndpoint",
-            "description": "The item the edge starts at, and the one that depends on the other."
+            "description": "The item the edge starts at, and the one that **depends on** the other.\n\nThis is the orientation every source reports in, whichever way its own backend\nspells the relationship: a GitHub `blockedBy` connection read for `ENG-1` yields\n`from: ENG-1`, because `ENG-1` is what depends."
           },
           "kind": {
             "$ref": "#/$defs/DependencyKind",
@@ -616,7 +616,7 @@ export const runtimeSchemas = {
           },
           "to": {
             "$ref": "#/$defs/DependencyEndpoint",
-            "description": "The item the edge points at."
+            "description": "The item the edge points at, and the one that must finish first."
           }
         },
         "required": [
@@ -627,7 +627,7 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "DependencyEndpoint": {
-        "description": "A dependency endpoint; legacy native-id strings decode as tasks.",
+        "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead.",
         "oneOf": [
           {
             "minLength": 1,
@@ -657,11 +657,11 @@ export const runtimeSchemas = {
         ]
       },
       "DependencyKind": {
-        "description": "What a [`DependencyEdge`] means.",
+        "description": "What a [`DependencyEdge`] means.\n\nBoth variants are read in the one direction [`DependencyEdge::from`] fixes: `from`\ndepends on `to`. This enum said the opposite of that until the orientation was settled,\nwhich is why it is spelled out twice rather than once.",
         "oneOf": [
           {
             "const": "blocks",
-            "description": "`from` must finish before `to` can.",
+            "description": "`from` depends on `to`, and `to` must finish before `from` can.",
             "type": "string"
           },
           {
@@ -1553,11 +1553,11 @@ export const runtimeSchemas = {
   "QualifiedEdge": {
     "$defs": {
       "DependencyKind": {
-        "description": "What a [`DependencyEdge`] means.",
+        "description": "What a [`DependencyEdge`] means.\n\nBoth variants are read in the one direction [`DependencyEdge::from`] fixes: `from`\ndepends on `to`. This enum said the opposite of that until the orientation was settled,\nwhich is why it is spelled out twice rather than once.",
         "oneOf": [
           {
             "const": "blocks",
-            "description": "`from` must finish before `to` can.",
+            "description": "`from` depends on `to`, and `to` must finish before `from` can.",
             "type": "string"
           },
           {
@@ -2230,11 +2230,11 @@ export const runtimeSchemas = {
   "QueryResponseOfQualifiedEdge": {
     "$defs": {
       "DependencyKind": {
-        "description": "What a [`DependencyEdge`] means.",
+        "description": "What a [`DependencyEdge`] means.\n\nBoth variants are read in the one direction [`DependencyEdge::from`] fixes: `from`\ndepends on `to`. This enum said the opposite of that until the orientation was settled,\nwhich is why it is spelled out twice rather than once.",
         "oneOf": [
           {
             "const": "blocks",
-            "description": "`from` must finish before `to` can.",
+            "description": "`from` depends on `to`, and `to` must finish before `from` can.",
             "type": "string"
           },
           {

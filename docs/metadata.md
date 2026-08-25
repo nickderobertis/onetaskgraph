@@ -43,6 +43,23 @@ where it cannot.** `docs/plugin-protocol.md` §4.8 is the normative text. A far 
 another source is the reserved key's case everywhere, because no backend relates an id in
 a system it knows nothing about.
 
+The rule is enforced, not just described. A source **refuses** an `onetaskgraph.depends_on`
+entry its own relationship could have held, naming the entry and saying to record it in the
+backend instead — otherwise a plan would drift into a text field the backend cannot read
+and a person cannot follow, one entry at a time. What each source will and will not accept:
+
+| near item | its native relationship holds | the key may hold |
+| --- | --- | --- |
+| `linear` issue | issues of this workspace | another source, or a Linear project |
+| `linear` project | projects of this workspace | another source, or a Linear issue |
+| `github-projects` issue item | issues of this project | another source, or a board |
+| `github-projects` draft item | nothing | anything |
+| `github-projects` board | boards, aggregated from its issues | another source, or a task |
+
+An edge is always oriented `from` **depends on** `to`, whichever way the backend spells it.
+GitHub's `blockedBy` and `blocking` are one relationship read from either end, so both
+report the same edge with the waiting item as `from`, rather than two mirrored ones.
+
 ## Where each source keeps metadata
 
 | source | reads metadata from |

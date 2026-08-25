@@ -485,17 +485,16 @@ impl GitHubProjectsSource {
         validate_page(page)?;
         let limit = page.limit.min(MAX_PAGE_SIZE) as usize;
         let cursor = page.cursor.as_ref().map(|c| c.0.as_str());
-        if let Some(offset) = recorded_offset(cursor)? {
-            return Ok(recorded_page(
-                self.recorded_task_edges(id, direction).await?,
-                offset,
-                limit,
-            ));
-        }
+        let recorded = recorded_offset(cursor)?;
+        // Asked for even in the recorded phase, whose page reads nothing from the
+        // connection: `__typename` is what says whether this item has a native
+        // relationship at all, and that is what decides which far ends the reserved key is
+        // allowed to hold.
         let data = self
             .graphql(
                 graphql::TASK_DEPENDENCIES,
-                json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":cursor}),
+                json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),
+                       "after":if recorded.is_some() {None} else {cursor}}),
             )
             .await?;
         let node =
@@ -511,12 +510,23 @@ impl GitHubProjectsSource {
             Direction::DependsOn => "blockedBy",
             Direction::DependedOnBy => "blocking",
         };
-        if required_str(node, "__typename")? != "Issue" {
-            // A draft item has neither `blockedBy` nor `blocking`, so the reserved key is
-            // the only place an edge of its own can be. Every other item reaches it below,
-            // once its native relationship is spent.
+        // A draft or a pull request has neither `blockedBy` nor `blocking`, so nothing it
+        // depends on can be named natively and the reserved key may hold any far end. An
+        // issue's connections hold issues, so the key may not hold one of those.
+        let natively_names =
+            (required_str(node, "__typename")? == "Issue").then_some(ItemKind::Task);
+        if let Some(offset) = recorded {
             return Ok(recorded_page(
-                self.recorded_task_edges(id, direction).await?,
+                self.recorded_task_edges(id, direction, natively_names)
+                    .await?,
+                offset,
+                limit,
+            ));
+        }
+        if natively_names.is_none() {
+            return Ok(recorded_page(
+                self.recorded_task_edges(id, direction, natively_names)
+                    .await?,
                 0,
                 limit,
             ));
@@ -532,21 +542,21 @@ impl GitHubProjectsSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub dependency response nodes is not an array".into(),
             })?;
+        // `from` depends on `to`, always. GitHub spells the same relationship from either
+        // end — `blockedBy` lists what this item waits on, `blocking` lists what waits on
+        // it — so the near item is `from` in one direction and `to` in the other.
         let items = nodes
             .iter()
             .map(|value| {
                 let related = NativeId(required_str(value, "id")?.into());
-                Ok(match direction {
-                    Direction::DependsOn => DependencyEdge {
-                        from: DependencyEndpoint::from_native(related, ItemKind::Task),
-                        to: DependencyEndpoint::from_native(id.clone(), ItemKind::Task),
-                        kind: DependencyKind::Blocks,
-                    },
-                    Direction::DependedOnBy => DependencyEdge {
-                        from: DependencyEndpoint::from_native(id.clone(), ItemKind::Task),
-                        to: DependencyEndpoint::from_native(related, ItemKind::Task),
-                        kind: DependencyKind::Blocks,
-                    },
+                let (from, to) = match direction {
+                    Direction::DependsOn => (id.clone(), related),
+                    Direction::DependedOnBy => (related, id.clone()),
+                };
+                Ok(DependencyEdge {
+                    from: DependencyEndpoint::from_native(from, ItemKind::Task),
+                    to: DependencyEndpoint::from_native(to, ItemKind::Task),
+                    kind: DependencyKind::Blocks,
                 })
             })
             .collect::<Result<Vec<_>, SourceError>>()?;
@@ -554,7 +564,12 @@ impl GitHubProjectsSource {
         if let Some(next) = &next {
             validate_cursor_progress(cursor, &next.0)?;
         }
-        if next.is_none() && !self.recorded_task_edges(id, direction).await?.is_empty() {
+        if next.is_none()
+            && !self
+                .recorded_task_edges(id, direction, natively_names)
+                .await?
+                .is_empty()
+        {
             next = Some(Cursor(format!("{RECORDED_CURSOR}0")));
         }
         Ok(Page { items, next })
@@ -573,6 +588,7 @@ impl GitHubProjectsSource {
         &self,
         id: &NativeId,
         direction: Direction,
+        natively_names: Option<ItemKind>,
     ) -> Result<Vec<DependencyEdge>, SourceError> {
         if direction != Direction::DependsOn {
             return Ok(Vec::new());
@@ -585,7 +601,7 @@ impl GitHubProjectsSource {
         else {
             return Ok(Vec::new());
         };
-        DependencyEdge::recorded(&task.metadata, id, ItemKind::Task)
+        DependencyEdge::recorded(&task.metadata, id, ItemKind::Task, natively_names)
             .map_err(|message| SourceError::Malformed { message })
     }
 
@@ -796,26 +812,15 @@ impl TaskSource for GitHubProjectsSource {
                 for related_issue in related_issues {
                     for related in self.related_issue_projects(related_issue).await? {
                         if related != *id {
-                            edges.push(match direction {
-                                Direction::DependsOn => DependencyEdge {
-                                    from: DependencyEndpoint::from_native(
-                                        related,
-                                        ItemKind::Project,
-                                    ),
-                                    to: DependencyEndpoint::from_native(
-                                        id.clone(),
-                                        ItemKind::Project,
-                                    ),
-                                    kind: DependencyKind::Blocks,
-                                },
-                                Direction::DependedOnBy => DependencyEdge {
-                                    from: DependencyEndpoint::from_native(
-                                        id.clone(),
-                                        ItemKind::Project,
-                                    ),
-                                    to: DependencyEndpoint::from_native(related, ItemKind::Project),
-                                    kind: DependencyKind::Blocks,
-                                },
+                            // Same orientation as the task level above, one level up.
+                            let (from, to) = match direction {
+                                Direction::DependsOn => (id.clone(), related),
+                                Direction::DependedOnBy => (related, id.clone()),
+                            };
+                            edges.push(DependencyEdge {
+                                from: DependencyEndpoint::from_native(from, ItemKind::Project),
+                                to: DependencyEndpoint::from_native(to, ItemKind::Project),
+                                kind: DependencyKind::Blocks,
                             });
                         }
                     }
@@ -834,9 +839,17 @@ impl TaskSource for GitHubProjectsSource {
             }
         }
         if direction == Direction::DependsOn {
+            // A board's edges are aggregated from its issues, so another board is exactly
+            // what this source can relate it to — and exactly what the reserved key must
+            // not hold.
             edges.extend(
-                DependencyEdge::recorded(&self.project(&project)?.metadata, id, ItemKind::Project)
-                    .map_err(|message| SourceError::Malformed { message })?,
+                DependencyEdge::recorded(
+                    &self.project(&project)?.metadata,
+                    id,
+                    ItemKind::Project,
+                    Some(ItemKind::Project),
+                )
+                .map_err(|message| SourceError::Malformed { message })?,
             );
         }
         let offset = numeric_cursor(page.cursor.as_ref())?;

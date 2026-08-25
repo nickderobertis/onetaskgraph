@@ -510,17 +510,17 @@ fn a_repeated_repository_origin_is_refused_wherever_a_work_item_is_decoded() {
 
 #[test]
 fn a_near_item_records_the_far_ends_its_backend_cannot_name() {
+    use onetaskgraph_plugin_api::ItemKind;
+
     let metadata = [(
         DependencyEdge::RECORDED_KEY.to_owned(),
         serde_json::json!(["T-2", {"id": "elsewhere:P-9", "kind": "project"}]),
     )]
     .into();
-    let edges = DependencyEdge::recorded(
-        &metadata,
-        &NativeId::from("T-1"),
-        onetaskgraph_plugin_api::ItemKind::Task,
-    )
-    .expect("a list of endpoints");
+    // A source with no relationship of its own may record anything, including a far end
+    // in this source.
+    let edges = DependencyEdge::recorded(&metadata, &NativeId::from("T-1"), ItemKind::Task, None)
+        .expect("a list of endpoints");
 
     assert_eq!(edges.len(), 2);
     assert_eq!(edges[0].from.id(), "T-1");
@@ -529,13 +529,14 @@ fn a_near_item_records_the_far_ends_its_backend_cannot_name() {
     assert_eq!(edges[0].kind, DependencyKind::Blocks);
     assert_eq!(edges[1].to.id(), "elsewhere:P-9");
     assert!(edges[1].to.is_qualified());
-    assert_eq!(edges[1].to.kind, onetaskgraph_plugin_api::ItemKind::Project);
+    assert_eq!(edges[1].to.kind, ItemKind::Project);
 
     assert!(
         DependencyEdge::recorded(
             &Default::default(),
             &NativeId::from("T-1"),
-            onetaskgraph_plugin_api::ItemKind::Task
+            ItemKind::Task,
+            Some(ItemKind::Task)
         )
         .expect("an item recording nothing")
         .is_empty()
@@ -546,13 +547,69 @@ fn a_near_item_records_the_far_ends_its_backend_cannot_name() {
         serde_json::json!({"id": "elsewhere:P-9"}),
     )]
     .into();
-    let error = DependencyEdge::recorded(
-        &malformed,
-        &NativeId::from("T-1"),
-        onetaskgraph_plugin_api::ItemKind::Task,
-    )
-    .expect_err("a mapping is not a list of endpoints");
+    let error = DependencyEdge::recorded(&malformed, &NativeId::from("T-1"), ItemKind::Task, None)
+        .expect_err("a mapping is not a list of endpoints");
     assert!(error.contains(DependencyEdge::RECORDED_KEY), "{error}");
+}
+
+#[test]
+fn a_far_end_the_near_backend_could_have_named_is_refused_rather_than_read() {
+    use onetaskgraph_plugin_api::ItemKind;
+
+    // The rule this key exists to serve is the backend's own relationship first, so an
+    // unqualified far end of the kind that backend relates is misplaced, not a shortcut.
+    let same_kind = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!(["T-2"]),
+    )]
+    .into();
+    let error = DependencyEdge::recorded(
+        &same_kind,
+        &NativeId::from("T-1"),
+        ItemKind::Task,
+        Some(ItemKind::Task),
+    )
+    .expect_err("a task naming a task of this source is the backend's own edge");
+    assert!(error.contains("T-2"), "{error}");
+    assert!(error.contains("relate natively"), "{error}");
+    assert!(error.contains(DependencyEdge::RECORDED_KEY), "{error}");
+
+    // A far end in another source is never refused: no backend relates an id in a system
+    // it knows nothing about, which is the whole case this key is for.
+    let qualified = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!([{"id": "elsewhere:T-9", "kind": "task"}]),
+    )]
+    .into();
+    assert_eq!(
+        DependencyEdge::recorded(
+            &qualified,
+            &NativeId::from("T-1"),
+            ItemKind::Task,
+            Some(ItemKind::Task)
+        )
+        .expect("a far end in another source")
+        .len(),
+        1
+    );
+
+    // Nor is a far end of the other kind, which the same backend cannot relate either.
+    let other_kind = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!([{"id": "P-9", "kind": "project"}]),
+    )]
+    .into();
+    assert_eq!(
+        DependencyEdge::recorded(
+            &other_kind,
+            &NativeId::from("T-1"),
+            ItemKind::Task,
+            Some(ItemKind::Task)
+        )
+        .expect("a level this backend cannot relate across")
+        .len(),
+        1
+    );
 }
 
 #[test]

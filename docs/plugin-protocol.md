@@ -391,6 +391,13 @@ carries it.
 An endpoint kind is `"task"` or `"project"`; an edge kind is `"blocks"` or
 `"related"`, and `from` **depends on** `to`.
 
+**`from` depends on `to` in both directions**, which is the part worth reading twice: the
+direction says which end the caller asked about, not which end the edge starts at. A
+backend that spells the relationship from the blocking side — GitHub's `blockedBy` and
+`blocking` are one relationship read from either end — reports the *same* edge for both,
+with the item that waits as `from`. A plugin that mirrored the edge for
+`"depended-on-by"` would make one relationship read as two contradictory ones.
+
 An endpoint may be in another source. One rule decides where each edge lives, and every
 plugin follows it: **the backend's own relationship wherever that relationship can name
 the far end, and the reserved key only where it cannot.** A plugin reads and writes its
@@ -407,6 +414,15 @@ naming a task or `{"id": "<source>:<native>", "kind": "project"}`, and each read
 Only the forward direction is ever recorded. The reverse of a recorded edge is derived
 from the far end, exactly as a `"forward-only"` plugin's reverse is, so a plugin never
 returns a recorded edge for `"depended-on-by"`.
+
+**The fallback is refused where the backend could have answered.** A plugin rejects a
+recorded endpoint its own relationship can name — an unqualified id of the kind that
+relationship holds — with `{"kind": "malformed"}` naming the entry, because such an edge
+belongs in the backend where its own interface can draw it. A *qualified* endpoint is
+never refused: that is the case this key exists for. Neither is an endpoint at a level the
+backend cannot relate across, which is a gap of the same shape. So a GitHub issue refuses
+a bare issue id and accepts a board or another source; a GitHub draft, having no
+relationship at all, accepts anything.
 
 The engine reports such an edge and never follows it: the read names the far end, and
 fetching it is the caller's next command against that qualified id. Keeping the far id on
