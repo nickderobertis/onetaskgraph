@@ -202,6 +202,14 @@ if ONETASKGRAPH_VERSION="${tag}junk" "$root/scripts/install.sh" 2>"$tmp/error"; 
 [[ $malformed_tag_status -eq 64 ]] || { echo "malformed tag exited $malformed_tag_status, expected 64; next: inspect tag validation" >&2; exit 1; }
 grep -q "unsupported release tag: ${tag}junk" "$tmp/error" || { echo "malformed-tag failure omitted its reason; next: inspect tag diagnostics" >&2; exit 1; }
 node_platform=$(node -p '`${process.platform}-${process.arch}`')
+mkdir -p "$tmp/npm-carrier/bin" "$tmp/npm-packages" "$tmp/npm-install"
+cp "$root/npm/platforms/$node_platform/package.json" "$tmp/npm-carrier/package.json"
+cp "$root/target/debug/$binary" "$tmp/npm-carrier/bin/$binary"
+carrier_package=$(npm pack "$tmp/npm-carrier" --silent --pack-destination "$tmp/npm-packages")
+launcher_package=$(npm pack "$root/npm/cli" --silent --pack-destination "$tmp/npm-packages")
+printf '{"private":true}\n' > "$tmp/npm-install/package.json"
+(cd "$tmp/npm-install" && npm install --offline --ignore-scripts "$tmp/npm-packages/$carrier_package" "$tmp/npm-packages/$launcher_package" >/dev/null)
+"$tmp/npm-install/node_modules/.bin/onetaskgraph" --help | grep -q 'Usage:' || { echo "packed npm command did not render help; next: inspect the launcher and carrier package contents" >&2; exit 1; }
 mkdir -p "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin"
 cp "$root/target/debug/$binary" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 printf '{"name":"@onetaskgraph/cli-%s"}\n' "$node_platform" > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/package.json"
@@ -250,6 +258,11 @@ if node -e 'Object.defineProperty(process,"platform",{value:"unsupported"}); req
 [[ $unsupported_status -eq 64 ]] || { echo "unsupported launcher platform exited $unsupported_status, expected 64; next: inspect platform validation" >&2; exit 1; }
 grep -q 'unsupported platform' "$tmp/error" || { echo "unsupported-platform failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 uv run --quiet --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }
+mkdir -p "$tmp/python-wheel"
+uv build --quiet --wheel "$root" --out-dir "$tmp/python-wheel"
+cli_wheel=$(find "$tmp/python-wheel" -maxdepth 1 -type f -name 'onetaskgraph_cli-*.whl' -print -quit)
+[[ -n $cli_wheel ]] || { echo "Python CLI build produced no wheel; next: inspect the maturin package configuration" >&2; exit 1; }
+uv run --quiet --isolated --no-project --with "$cli_wheel" onetaskgraph --help | grep -q 'Usage:' || { echo "installed Python CLI wheel did not render help; next: inspect the wheel's binary entry point" >&2; exit 1; }
 assert_version_error() {
   expected_message=$1
   shift
