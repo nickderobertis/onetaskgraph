@@ -444,9 +444,9 @@ fn a_task_round_trips_through_json_with_every_field_populated() {
         created_at: Some(Utc.with_ymd_and_hms(2026, 8, 22, 9, 0, 0).unwrap()),
         updated_at: None,
         metadata: [("onepipeline.turn_budget".to_owned(), serde_json::json!(12))].into(),
-        repositories: vec![onetaskgraph_plugin_api::Repository(
-            "github.com/example/work".into(),
-        )],
+        repositories: vec![onetaskgraph_plugin_api::Repository::try_from(
+            "github.com/example/work".to_owned(),
+        ).expect("normalized origin")],
     };
 
     let encoded = serde_json::to_string(&task).expect("encodes");

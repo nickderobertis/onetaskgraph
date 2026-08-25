@@ -902,7 +902,9 @@ fn repositories(content: &Value, field_values: &Value) -> Result<Vec<Repository>
         .pointer("/repository/nameWithOwner")
         .and_then(Value::as_str)
     {
-        return Ok(vec![Repository(format!("github.com/{origin}"))]);
+        return Repository::try_from(format!("github.com/{origin}"))
+            .map(|repository| vec![repository])
+            .map_err(|message| SourceError::Malformed { message });
     }
     let metadata = metadata_field(field_values)?;
     metadata

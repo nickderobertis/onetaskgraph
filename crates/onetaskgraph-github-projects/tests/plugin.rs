@@ -179,7 +179,7 @@ async fn reads_and_normalizes_a_synthetic_graphql_response_through_http() {
     assert_eq!(task.status.category, StatusCategory::InProgress);
     assert_eq!(task.labels.len(), 2);
     assert_eq!(task.metadata["caller.number"], serde_json::json!(7));
-    assert_eq!(task.repositories[0].0, "github.com/acme/work");
+    assert_eq!(task.repositories[0].as_str(), "github.com/acme/work");
     assert_eq!(
         task.created_at.unwrap().to_rfc3339(),
         "2026-01-02T00:00:00+00:00"
@@ -257,7 +257,7 @@ async fn exposes_project_health_and_lookup_over_the_public_trait() {
     assert_eq!(project.title, "Roadmap");
     assert_eq!(project.content.as_deref(), Some("Delivery plan"));
     assert_eq!(project.metadata["caller.enabled"], serde_json::json!(true));
-    assert_eq!(project.repositories[0].0, "github.com/acme/work");
+    assert_eq!(project.repositories[0].as_str(), "github.com/acme/work");
     assert!(
         source
             .get_project(&NativeId("missing".into()))

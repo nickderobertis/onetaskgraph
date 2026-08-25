@@ -75,7 +75,7 @@ pub struct QualifiedEdge {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct QualifiedEndpoint {
     /// `<source>:<native>`, preserved when a plugin reports another source.
-    pub id: String,
+    pub id: GlobalId,
     /// Whether this endpoint names a task or project.
     pub kind: onetaskgraph_plugin_api::ItemKind,
 }
@@ -838,11 +838,7 @@ fn qualify_endpoint(
     endpoint: onetaskgraph_plugin_api::DependencyEndpoint,
 ) -> QualifiedEndpoint {
     QualifiedEndpoint {
-        id: if endpoint.id.contains(':') {
-            endpoint.id
-        } else {
-            format!("{source}:{}", endpoint.id)
-        },
+        id: endpoint.id.parse().unwrap_or_else(|_| GlobalId::new(source.clone(), NativeId(endpoint.id))),
         kind: endpoint.kind,
     }
 }

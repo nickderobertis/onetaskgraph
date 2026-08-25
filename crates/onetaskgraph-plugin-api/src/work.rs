@@ -70,8 +70,34 @@ pub struct Project {
 
 /// A repository identified by its normalized origin, without a URL scheme or `.git` suffix.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(transparent)]
-pub struct Repository(pub String);
+#[serde(try_from = "String", into = "String")]
+pub struct Repository(String);
+
+impl Repository {
+    /// The normalized `host/owner/name` origin.
+    #[must_use]
+    pub fn as_str(&self) -> &str { &self.0 }
+}
+
+impl TryFrom<String> for Repository {
+    type Error = String;
+
+    fn try_from(origin: String) -> Result<Self, Self::Error> {
+        let valid = !origin.is_empty()
+            && !origin.contains("://")
+            && !origin.ends_with(".git")
+            && !origin.chars().any(char::is_whitespace)
+            && origin.split('/').count() >= 3
+            && origin.split('/').all(|part| !part.is_empty() && part != "." && part != "..");
+        valid.then_some(Self(origin.clone())).ok_or_else(|| format!(
+            "{origin:?} is not a normalized repository origin; use host/owner/name without a scheme or .git suffix"
+        ))
+    }
+}
+
+impl From<Repository> for String {
+    fn from(repository: Repository) -> Self { repository.0 }
+}
 
 /// A tag a source attaches to work.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -154,12 +180,21 @@ impl<'de> Deserialize<'de> for DependencyEndpoint {
         }
         match Wire::deserialize(deserializer)? {
             Wire::Legacy(id) => Ok(Self {
-                id,
+                id: valid_endpoint_id(id).map_err(serde::de::Error::custom)?,
                 kind: ItemKind::Task,
             }),
-            Wire::Endpoint { id, kind } => Ok(Self { id, kind }),
+            Wire::Endpoint { id, kind } => Ok(Self { id: valid_endpoint_id(id).map_err(serde::de::Error::custom)?, kind }),
         }
     }
+}
+
+fn valid_endpoint_id(id: String) -> Result<String, String> {
+    if id.is_empty() { return Err("a dependency endpoint id cannot be empty".into()); }
+    if let Some((source, native)) = id.split_once(':') {
+        crate::SourceName::new(source).map_err(|error| error.to_string())?;
+        if native.is_empty() { return Err("a qualified dependency endpoint must name a native id".into()); }
+    }
+    Ok(id)
 }
 
 impl std::fmt::Display for DependencyEndpoint {
