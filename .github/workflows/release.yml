@@ -11,11 +11,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, ext: tar.gz }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, ext: tar.gz }
-          - { os: macos-latest, target: x86_64-apple-darwin, ext: tar.gz }
-          - { os: macos-latest, target: aarch64-apple-darwin, ext: tar.gz }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: zip }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, ext: tar.gz, npm: linux-x64 }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, ext: tar.gz, npm: linux-arm64 }
+          - { os: macos-latest, target: x86_64-apple-darwin, ext: tar.gz, npm: darwin-x64 }
+          - { os: macos-latest, target: aarch64-apple-darwin, ext: tar.gz, npm: darwin-arm64 }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: zip, npm: win32-x64 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -30,6 +30,7 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
           TARGET: ${{ matrix.target }}
           EXT: ${{ matrix.ext }}
+          NPM_PLATFORM: ${{ matrix.npm }}
         run: |
           printf '%s\n' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$' || { echo "invalid release tag: $TAG" >&2; exit 64; }
           name="onetaskgraph-${TAG}-${TARGET}"; bin="target/${TARGET}/release/onetaskgraph"
@@ -38,6 +39,12 @@ jobs:
           asset="${name}.${EXT}"
           if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"; else shasum -a 256 "$asset" > "$asset.sha256"; fi
           gh release upload "$TAG" "$asset" "$asset.sha256"
+          mkdir -p "carrier/bin" "dist/carriers"
+          cp "npm/platforms/${NPM_PLATFORM}/package.json" carrier/package.json
+          cp "$bin" "carrier/bin/$(basename "$bin")"
+          npm pack ./carrier --pack-destination dist/carriers
+      - uses: actions/upload-artifact@v4
+        with: { name: "carrier-${{ matrix.npm }}", path: dist/carriers/*.tgz }
   build-wheels:
     needs: archives
     strategy:
@@ -94,14 +101,21 @@ jobs:
           uv publish --check-url https://pypi.org/simple/onetaskgraph-cli/ dist/cli/*
           uv publish --check-url https://pypi.org/simple/onetaskgraph-sdk/ dist/all/python-sdk/*
   publish-npm:
-    needs: build-distributions
+    needs: [archives, build-distributions]
     if: ${{ vars.NPM_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with: { pattern: "carrier-*", path: dist/carriers, merge-multiple: true }
       - env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
         run: |
           [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN is required" >&2; exit 1; }
-          for package in npm/platforms/*; do npm view "$(node -p "require('./$package/package.json').name")@$(node -p "require('./$package/package.json').version")" >/dev/null 2>&1 || npm publish "$package" --access public; done
+          for package in npm/platforms/*; do
+            name=$(node -p "require('./$package/package.json').name")
+            version=$(node -p "require('./$package/package.json').version")
+            platform=${package##*/}
+            npm view "$name@$version" >/dev/null 2>&1 || npm publish "dist/carriers/onetaskgraph-cli-${platform}-${version}.tgz" --access public
+          done
           npm view "@onetaskgraph/cli@$(node -p "require('./npm/cli/package.json').version")" >/dev/null 2>&1 || npm publish npm/cli --access public
           npm view "@onetaskgraph/sdk@$(node -p "require('./sdks/typescript/package.json').version")" >/dev/null 2>&1 || npm publish sdks/typescript --access public

@@ -9,5 +9,8 @@ for value in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-dar
   grep -q "$value" .github/workflows/release.yml || fail "$value missing from release matrix"
 done
 for value in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64; do grep -q "$value" npm/cli/bin/onetaskgraph.js || fail "$value missing from launcher"; done
+grep -q 'npm pack ./carrier' .github/workflows/release.yml || fail "release workflow does not build npm carrier tarballs"
+grep -q 'cp "$bin"' .github/workflows/release.yml || fail "release workflow does not put native binaries in npm carriers"
+grep -q 'pattern: "carrier-\*"' .github/workflows/release.yml || fail "npm publish does not download built carrier tarballs"
 mapfile -t crates < <(for manifest in crates/*/Cargo.toml; do basename "$(dirname "$manifest")"; done | sort)
 for crate in "${crates[@]}"; do grep -q "name = \"$crate\"" release-plz.toml || [[ $crate == onetaskgraph ]] || fail "$crate missing from release-plz package inventory"; grep -q "for crate in .*$crate" .github/workflows/release.yml || fail "$crate missing from publish order"; done
