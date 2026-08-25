@@ -603,8 +603,12 @@ fn complete_dataset_sources_walk_task_dependencies_forwards_and_backwards() {
             row.name
         );
         assert!(
-            forward.lines().any(|line| line.split_whitespace().collect::<Vec<_>>() == ["task", "work:T-1", "blocks", "task", "work:T-2"]),
-            "{}: text edges render both endpoint kinds:\n{forward}", row.name
+            forward
+                .lines()
+                .any(|line| line.split_whitespace().collect::<Vec<_>>()
+                    == ["task", "work:T-1", "blocks", "task", "work:T-2"]),
+            "{}: text edges render both endpoint kinds:\n{forward}",
+            row.name
         );
 
         let reverse = ok(

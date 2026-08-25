@@ -838,7 +838,10 @@ fn qualify_endpoint(
     endpoint: onetaskgraph_plugin_api::DependencyEndpoint,
 ) -> QualifiedEndpoint {
     QualifiedEndpoint {
-        id: endpoint.id.parse().unwrap_or_else(|_| GlobalId::new(source.clone(), NativeId(endpoint.id))),
+        id: endpoint
+            .id
+            .parse()
+            .unwrap_or_else(|_| GlobalId::new(source.clone(), NativeId(endpoint.id))),
         kind: endpoint.kind,
     }
 }

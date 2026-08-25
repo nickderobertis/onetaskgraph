@@ -1508,6 +1508,10 @@ export const runtimeSchemas = {
           }
         ]
       },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
       "ItemKind": {
         "description": "The kind of work item named by a dependency endpoint.",
         "oneOf": [
@@ -1527,8 +1531,8 @@ export const runtimeSchemas = {
         "description": "One typed, qualified endpoint in an engine dependency response.",
         "properties": {
           "id": {
-            "description": "`<source>:<native>`, preserved when a plugin reports another source.",
-            "type": "string"
+            "$ref": "#/$defs/GlobalId",
+            "description": "`<source>:<native>`, preserved when a plugin reports another source."
           },
           "kind": {
             "$ref": "#/$defs/ItemKind",
@@ -1568,6 +1572,10 @@ export const runtimeSchemas = {
   },
   "QualifiedEndpoint": {
     "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
       "ItemKind": {
         "description": "The kind of work item named by a dependency endpoint.",
         "oneOf": [
@@ -1588,8 +1596,8 @@ export const runtimeSchemas = {
     "description": "One typed, qualified endpoint in an engine dependency response.",
     "properties": {
       "id": {
-        "description": "`<source>:<native>`, preserved when a plugin reports another source.",
-        "type": "string"
+        "$ref": "#/$defs/GlobalId",
+        "description": "`<source>:<native>`, preserved when a plugin reports another source."
       },
       "kind": {
         "$ref": "#/$defs/ItemKind",
@@ -2177,6 +2185,10 @@ export const runtimeSchemas = {
           }
         ]
       },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
       "ItemKind": {
         "description": "The kind of work item named by a dependency endpoint.",
         "oneOf": [
@@ -2258,8 +2270,8 @@ export const runtimeSchemas = {
         "description": "One typed, qualified endpoint in an engine dependency response.",
         "properties": {
           "id": {
-            "description": "`<source>:<native>`, preserved when a plugin reports another source.",
-            "type": "string"
+            "$ref": "#/$defs/GlobalId",
+            "description": "`<source>:<native>`, preserved when a plugin reports another source."
           },
           "kind": {
             "$ref": "#/$defs/ItemKind",

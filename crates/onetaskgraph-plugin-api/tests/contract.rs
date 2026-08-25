@@ -425,6 +425,48 @@ fn a_native_id_carries_whatever_the_source_says_including_colons() {
 }
 
 #[test]
+fn repository_origins_accept_only_the_normalized_public_identity() {
+    let repository =
+        onetaskgraph_plugin_api::Repository::try_from("github.com/example/work".to_owned())
+            .expect("normalized origin");
+    assert_eq!(repository.as_str(), "github.com/example/work");
+    assert_eq!(String::from(repository), "github.com/example/work");
+
+    for invalid in [
+        "",
+        "github.com/example",
+        "https://github.com/example/work",
+        "github.com/example/work.git",
+        "github.com/example/work tree",
+        "github.com//work",
+        "github.com/../work",
+    ] {
+        let error = onetaskgraph_plugin_api::Repository::try_from(invalid.to_owned())
+            .expect_err("non-normalized origin is rejected");
+        assert!(error.contains("normalized repository origin"), "{error}");
+    }
+}
+
+#[test]
+fn dependency_endpoints_validate_and_preserve_qualified_ids() {
+    let endpoint: onetaskgraph_plugin_api::DependencyEndpoint =
+        serde_json::from_value(serde_json::json!({"id":"other:P-9", "kind":"project"}))
+            .expect("qualified endpoint");
+    assert_eq!(endpoint.to_string(), "other:P-9");
+    assert_ne!(endpoint, NativeId::from("P-9"));
+
+    for invalid in [
+        serde_json::json!({"id":"", "kind":"task"}),
+        serde_json::json!({"id":"bad source:T-1", "kind":"task"}),
+        serde_json::json!({"id":"other:", "kind":"project"}),
+    ] {
+        assert!(
+            serde_json::from_value::<onetaskgraph_plugin_api::DependencyEndpoint>(invalid).is_err()
+        );
+    }
+}
+
+#[test]
 fn a_task_round_trips_through_json_with_every_field_populated() {
     let task = Task {
         id: NativeId::from("ENG-1"),
@@ -444,9 +486,10 @@ fn a_task_round_trips_through_json_with_every_field_populated() {
         created_at: Some(Utc.with_ymd_and_hms(2026, 8, 22, 9, 0, 0).unwrap()),
         updated_at: None,
         metadata: [("onepipeline.turn_budget".to_owned(), serde_json::json!(12))].into(),
-        repositories: vec![onetaskgraph_plugin_api::Repository::try_from(
-            "github.com/example/work".to_owned(),
-        ).expect("normalized origin")],
+        repositories: vec![
+            onetaskgraph_plugin_api::Repository::try_from("github.com/example/work".to_owned())
+                .expect("normalized origin"),
+        ],
     };
 
     let encoded = serde_json::to_string(&task).expect("encodes");

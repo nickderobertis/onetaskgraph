@@ -269,9 +269,7 @@ async fn an_emulated_reverse_walk_answers_exactly_what_a_native_one_does() {
                 .map(|edge| {
                     format!(
                         "{}->{} {:?}",
-                        edge.from.id.native,
-                        edge.to.id.native,
-                        edge.kind
+                        edge.from.id.native, edge.to.id.native, edge.kind
                     )
                 })
                 .collect::<Vec<_>>(),

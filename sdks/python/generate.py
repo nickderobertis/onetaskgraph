@@ -237,8 +237,9 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
             ]
         if any("dict[str, Any]" in line for line in generated):
             generated = [
-                line.replace("from pydantic import ", "from pydantic import JsonValue, ")
-                .replace("dict[str, Any]", "dict[str, JsonValue]")
+                line.replace("from pydantic import ", "from pydantic import JsonValue, ").replace(
+                    "dict[str, Any]", "dict[str, JsonValue]"
+                )
                 for line in generated
             ]
         source.write_text(

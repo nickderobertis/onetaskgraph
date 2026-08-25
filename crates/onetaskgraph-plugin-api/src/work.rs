@@ -76,7 +76,9 @@ pub struct Repository(String);
 impl Repository {
     /// The normalized `host/owner/name` origin.
     #[must_use]
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl TryFrom<String> for Repository {
@@ -88,7 +90,9 @@ impl TryFrom<String> for Repository {
             && !origin.ends_with(".git")
             && !origin.chars().any(char::is_whitespace)
             && origin.split('/').count() >= 3
-            && origin.split('/').all(|part| !part.is_empty() && part != "." && part != "..");
+            && origin
+                .split('/')
+                .all(|part| !part.is_empty() && part != "." && part != "..");
         valid.then_some(Self(origin.clone())).ok_or_else(|| format!(
             "{origin:?} is not a normalized repository origin; use host/owner/name without a scheme or .git suffix"
         ))
@@ -96,7 +100,9 @@ impl TryFrom<String> for Repository {
 }
 
 impl From<Repository> for String {
-    fn from(repository: Repository) -> Self { repository.0 }
+    fn from(repository: Repository) -> Self {
+        repository.0
+    }
 }
 
 /// A tag a source attaches to work.
@@ -183,16 +189,23 @@ impl<'de> Deserialize<'de> for DependencyEndpoint {
                 id: valid_endpoint_id(id).map_err(serde::de::Error::custom)?,
                 kind: ItemKind::Task,
             }),
-            Wire::Endpoint { id, kind } => Ok(Self { id: valid_endpoint_id(id).map_err(serde::de::Error::custom)?, kind }),
+            Wire::Endpoint { id, kind } => Ok(Self {
+                id: valid_endpoint_id(id).map_err(serde::de::Error::custom)?,
+                kind,
+            }),
         }
     }
 }
 
 fn valid_endpoint_id(id: String) -> Result<String, String> {
-    if id.is_empty() { return Err("a dependency endpoint id cannot be empty".into()); }
+    if id.is_empty() {
+        return Err("a dependency endpoint id cannot be empty".into());
+    }
     if let Some((source, native)) = id.split_once(':') {
         crate::SourceName::new(source).map_err(|error| error.to_string())?;
-        if native.is_empty() { return Err("a qualified dependency endpoint must name a native id".into()); }
+        if native.is_empty() {
+            return Err("a qualified dependency endpoint must name a native id".into());
+        }
     }
     Ok(id)
 }
