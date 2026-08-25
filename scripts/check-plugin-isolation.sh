@@ -53,6 +53,12 @@ API = "onetaskgraph-plugin-api"
 ENGINE = "onetaskgraph-core"
 PREFIX = "check-plugin-isolation:"
 
+# llmlint: ignore[boundary_inputs_validated] this document is not external input and is
+# not validated against a schema here: `--format-version 1` IS the versioned contract
+# cargo maintains for reading it this way, and its producer is the pinned toolchain this
+# workspace builds with. A document these keys cannot read raises, python exits non-zero,
+# and the command substitution in the caller propagates that under `set -e` — so a graph
+# this cannot read fails the guard closed rather than passing it.
 metadata = json.load(sys.stdin)
 names = {package["id"]: package["name"] for package in metadata["packages"]}
 labels = {

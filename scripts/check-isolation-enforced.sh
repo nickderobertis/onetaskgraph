@@ -62,7 +62,8 @@ run_guard() {
 
 # Restore the committed tree, including Cargo.lock, and drop any crate a fixture added.
 reset_fixture() {
-  rm -rf "$scratch/repo/crates/onetaskgraph-bridge"
+  rm -rf "$scratch/repo/crates/onetaskgraph-bridge" \
+    "$scratch/repo/crates/onetaskgraph-phantom"
   git -C "$scratch/repo" checkout --quiet -- .
 }
 
@@ -201,21 +202,30 @@ reset_fixture
 # 6. The guard reads the plugin set from the layer:plugin tags and the dependency graph
 #    from cargo, and those are two different sources. A name in one and not the other
 #    means the rule cannot be checked for that crate at all — which must be a refusal,
-#    because the alternative is a plugin that quietly stops being checked the moment
-#    somebody renames it.
-python3 - "$scratch/repo/crates/onetaskgraph-local-md/project.json" <<'PY'
-import json
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-project = json.loads(path.read_text())
-project["name"] = "onetaskgraph-renamed-away"
-path.write_text(json.dumps(project, indent=2) + "\n")
-PY
+#    because the alternative is a plugin that quietly stops being checked the moment its
+#    project.json name drifts from the Cargo package name underneath it.
+mkdir -p "$scratch/repo/crates/onetaskgraph-phantom/src"
+cat > "$scratch/repo/crates/onetaskgraph-phantom/Cargo.toml" <<'EOF'
+[package]
+name = "onetaskgraph-shadow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+EOF
+: > "$scratch/repo/crates/onetaskgraph-phantom/src/lib.rs"
+cat > "$scratch/repo/crates/onetaskgraph-phantom/project.json" <<'EOF'
+{
+  "name": "onetaskgraph-phantom",
+  "projectType": "library",
+  "tags": ["layer:plugin"]
+}
+EOF
 run_guard
 expect_refused "a layer:plugin crate that is no package of the workspace" \
-  onetaskgraph-renamed-away layer:plugin
+  onetaskgraph-phantom layer:plugin
 reset_fixture
 
 # 7. The guard answers "at any depth" from the RESOLVED graph, and a workspace whose graph
