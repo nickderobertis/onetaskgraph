@@ -2,7 +2,7 @@
 set -euo pipefail
 fail() { echo "distribution contract drift: $1" >&2; echo "next: update the release matrix, installer, launcher, and carrier manifests together" >&2; exit 1; }
 expected=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64)
-mapfile -t packages < <(find npm/platforms -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+mapfile -t packages < <(find npm/platforms -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)
 [[ ${packages[*]} == "${expected[*]}" ]] || fail "npm carriers are '${packages[*]}', expected '${expected[*]}'"
 while read -r os target ext npm; do
   grep -Fq -- "- { os: $os, target: $target, ext: $ext, npm: $npm }" .github/workflows/release.yml || fail "$target is not mapped to $os/$ext/$npm in the release matrix"
