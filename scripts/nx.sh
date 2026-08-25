@@ -38,10 +38,11 @@ case "${1:-}" in
   *) exec node_modules/.bin/nx "$@" ;;
 esac
 
-# One line to say what is running, then nothing unless it fails — at which point the whole
-# of Nx's output is replayed, because that is when every line of it is worth reading.
-echo "nx: $*" >&2
-if ! output="$(node_modules/.bin/nx "$@" --outputStyle=static 2>&1)"; then
-  printf '%s\n' "$output" >&2
-  exit 1
-fi
+# TIMING PROBE BRANCH ONLY — do not merge.
+#
+# The committed script buffers Nx's output and replays it only on failure, so a green CI
+# run carries no per-task timing at all and the Windows lane's 75 minutes cannot be
+# attributed. Here it streams, one task at a time, so the GitHub log's per-line timestamps
+# localise every second to a project, a target, and a compiled crate.
+echo "nx: $* (streaming, parallel=1)" >&2
+exec node_modules/.bin/nx "$@" --outputStyle=stream --parallel=1

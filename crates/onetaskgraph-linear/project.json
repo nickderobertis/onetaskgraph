@@ -33,19 +33,19 @@
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo clippy --quiet -p onetaskgraph-linear --all-targets --all-features --locked -- -D warnings"
+        "command": "cargo clippy -p onetaskgraph-linear --all-targets --all-features --locked -- -D warnings"
       }
     },
     "typecheck": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo check --quiet -p onetaskgraph-linear --all-targets --all-features --locked"
+        "command": "cargo check -p onetaskgraph-linear --all-targets --all-features --locked"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo test --quiet -p onetaskgraph-linear --all-features --locked"
+        "command": "cargo test -p onetaskgraph-linear --all-features --locked --no-run && cargo test -p onetaskgraph-linear --all-features --locked"
       }
     },
     "coverage": {
