@@ -158,6 +158,20 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
                             selected.name, schema_argument.value_type
                         );
                     }
+                    for required in field.arguments.iter().filter(|argument| {
+                        matches!(argument.value_type, schema::Type::NonNullType(_))
+                            && argument.default_value.is_none()
+                    }) {
+                        assert!(
+                            selected
+                                .arguments
+                                .iter()
+                                .any(|(name, _)| name == &required.name),
+                            "production operation omits required {type_name}.{}({}:)",
+                            selected.name,
+                            required.name
+                        );
+                    }
                     if !selected.selection_set.items.is_empty() {
                         validate(
                             named_type(&field.field_type),
