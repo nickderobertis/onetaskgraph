@@ -33,6 +33,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-semver-checks,release-plz
+      # llmlint: ignore-block[changed_behavior_has_e2e] Proving these steps requires publishing crates and a GitHub Release and auto-merging its pull request, which a pre-publication dispatch cannot perform.
       - name: Publish crates, tag, and cut the GitHub Release with the PAT
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
@@ -48,3 +49,4 @@ jobs:
         run: |
           pr=$(gh pr list --json number,headRefName --jq 'map(select(.headRefName | startswith("release-plz-"))) | .[0].number // empty')
           [ -z "$pr" ] || gh pr merge "$pr" --auto --squash --delete-branch
+      # llmlint: ignore-end[changed_behavior_has_e2e]

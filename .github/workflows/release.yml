@@ -121,6 +121,10 @@ jobs:
             printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$' || { echo "invalid carrier version: $version" >&2; exit 64; }
             npm view "$name@$version" >/dev/null 2>&1 || npm publish "dist/carriers/onetaskgraph-cli-${platform}-${version}.tgz" --access public
           done
-          npm view "@onetaskgraph/cli@$(node -p "require('./npm/cli/package.json').version")" >/dev/null 2>&1 || npm publish npm/cli --access public
-          npm view "@onetaskgraph/sdk@$(node -p "require('./sdks/typescript/package.json').version")" >/dev/null 2>&1 || npm publish sdks/typescript --access public
+          cli_version=$(node -p "require('./npm/cli/package.json').version")
+          sdk_version=$(node -p "require('./sdks/typescript/package.json').version")
+          printf '%s\n' "$cli_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$' || { echo "invalid CLI version: $cli_version" >&2; exit 64; }
+          printf '%s\n' "$sdk_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$' || { echo "invalid TypeScript SDK version: $sdk_version" >&2; exit 64; }
+          npm view "@onetaskgraph/cli@$cli_version" >/dev/null 2>&1 || npm publish npm/cli --access public
+          npm view "@onetaskgraph/sdk@$sdk_version" >/dev/null 2>&1 || npm publish sdks/typescript --access public
 # llmlint: ignore-end[changed_behavior_has_e2e]

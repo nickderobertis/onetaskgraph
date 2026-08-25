@@ -16,7 +16,11 @@ if [[ ${1:-} == --check ]]; then
   uv lock --project sdks/python --check --quiet
   expected=$current
 else
-  expected=${1:?usage: scripts/set-version.sh VERSION | --check}
+  if [[ $# -eq 0 ]]; then
+    echo "usage: scripts/set-version.sh VERSION | --check; next: supply an X.Y.Z version or use --check" >&2
+    exit 2
+  fi
+  expected=$1
   [[ $expected =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
     echo "invalid semantic version: $expected; expected X.Y.Z, then rerun scripts/set-version.sh $expected" >&2; exit 2;
   }
