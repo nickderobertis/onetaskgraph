@@ -5,11 +5,13 @@ const { join } = require("node:path");
 const key = `${process.platform}-${process.arch}`;
 const packages = { "linux-x64": "linux-x64", "linux-arm64": "linux-arm64", "darwin-x64": "darwin-x64", "darwin-arm64": "darwin-arm64", "win32-x64": "win32-x64" };
 if (!packages[key]) { console.error(`onetaskgraph: unsupported platform ${key}; install with cargo instead`); process.exit(64); }
-let manifestPath;
-try { manifestPath = require.resolve(`@onetaskgraph/cli-${packages[key]}/package.json`); } catch (_) {
-  console.error(`onetaskgraph: platform package @onetaskgraph/cli-${packages[key]} is not installed; reinstall @onetaskgraph/cli`); process.exit(69);
-}
 const expectedPackage = `@onetaskgraph/cli-${packages[key]}`;
+let manifestPath;
+try { manifestPath = require.resolve(`${expectedPackage}/package.json`); } catch (error) {
+  if (error.code === "MODULE_NOT_FOUND") console.error(`onetaskgraph: platform package ${expectedPackage} is not installed; reinstall @onetaskgraph/cli`);
+  else console.error(`onetaskgraph: invalid ${expectedPackage}: ${error.message}; reinstall the platform package`);
+  process.exit(69);
+}
 let command;
 try {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));

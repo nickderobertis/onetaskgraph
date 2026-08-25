@@ -66,11 +66,13 @@ mkdir -p "$tmp/unpack" "$install_dir" || die 74 "could not create the installati
 case "$ext" in
   tar.gz)
     members=$(tar -tzf "$tmp/$name") || die 65 "archive is unreadable: $name"
-    links=$(tar -tvzf "$tmp/$name" | awk '$1 ~ /^[lh]/ { print }') || die 65 "archive metadata is unreadable: $name"
+    metadata=$(tar -tvzf "$tmp/$name") || die 65 "archive metadata is unreadable: $name"
+    links=$(printf '%s\n' "$metadata" | awk '$1 ~ /^[lh]/ { print }')
     ;;
   zip)
     members=$(unzip -Z1 "$tmp/$name") || die 65 "archive is unreadable: $name"
-    links=$(zipinfo -l "$tmp/$name" | awk '$1 ~ /^l/ { print }') || die 65 "archive metadata is unreadable: $name"
+    metadata=$(zipinfo -l "$tmp/$name") || die 65 "archive metadata is unreadable: $name"
+    links=$(printf '%s\n' "$metadata" | awk '$1 ~ /^l/ { print }')
     ;;
 esac
 printf '%s\n' "$members" | awk '/^\// || /^[A-Za-z]:/ || /(^|\/)\.\.($|\/)/ { bad=1 } END { exit bad }' || die 65 "archive contains an unsafe member path"
