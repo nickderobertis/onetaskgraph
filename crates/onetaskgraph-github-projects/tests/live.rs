@@ -17,7 +17,29 @@ impl SecretResolver for LiveSecret {
     }
 }
 
-async fn discover_project(token: &str) -> Option<(String, u32)> {
+async fn graphql(token: &str, query: &str, query_name: &str) -> Result<Value, String> {
+    let response: Value = reqwest::Client::new()
+        .post("https://api.github.com/graphql")
+        .header("user-agent", "onetaskgraph-live-test")
+        .bearer_auth(token)
+        .json(&json!({"query":query}))
+        .send()
+        .await
+        .map_err(|error| format!("{query_name} query could not reach GitHub: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("{query_name} query failed: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("{query_name} query returned invalid JSON: {error}"))?;
+    if let Some(errors) = response.get("errors") {
+        return Err(format!(
+            "{query_name} query was rejected by GitHub: {errors}"
+        ));
+    }
+    Ok(response)
+}
+
+async fn discover_project(token: &str) -> Result<Option<(String, u32)>, String> {
     let configured_owner = env::var("GH_PROJECTS_OWNER").ok();
     let configured_number = env::var("GH_PROJECTS_NUMBER").ok();
     if configured_owner.is_some() || configured_number.is_some() {
@@ -27,25 +49,18 @@ async fn discover_project(token: &str) -> Option<(String, u32)> {
             .parse::<u32>()
             .expect("GH_PROJECTS_NUMBER must be an unsigned integer");
         if !owner.trim().is_empty() && number > 0 && number <= i32::MAX as u32 {
-            return Some((owner, number));
+            return Ok(Some((owner, number)));
         }
         panic!(
             "GH_PROJECTS_OWNER must be non-blank and GH_PROJECTS_NUMBER must be a positive GraphQL Int"
         );
     }
-    let response: Value = reqwest::Client::new()
-        .post("https://api.github.com/graphql")
-        .header("user-agent", "onetaskgraph-live-test")
-        .bearer_auth(token)
-        .json(&json!({"query":"query { viewer { login projectsV2(first:1, orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { number } } organizations(first:100) { nodes { login projectsV2(first:1, orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { number } } } } } }"}))
-        .send()
-        .await
-        .ok()?
-        .error_for_status()
-        .ok()?
-        .json()
-        .await
-        .ok()?;
+    let response = graphql(
+        token,
+        "query { viewer { login projectsV2(first:1, orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { number } } } }",
+        "viewer project discovery",
+    )
+    .await?;
     if let (Some(owner), Some(number)) = (
         response
             .pointer("/data/viewer/login")
@@ -54,23 +69,41 @@ async fn discover_project(token: &str) -> Option<(String, u32)> {
             .pointer("/data/viewer/projectsV2/nodes/0/number")
             .and_then(Value::as_u64),
     ) {
-        return Some((owner.to_owned(), u32::try_from(number).ok()?));
+        return Ok(Some((
+            owner.to_owned(),
+            u32::try_from(number)
+                .map_err(|_| "viewer project number does not fit in a u32".to_owned())?,
+        )));
     }
-    response
-        .pointer("/data/viewer/organizations/nodes")?
-        .as_array()?
-        .iter()
-        .find_map(|organization| {
-            Some((
-                organization.get("login")?.as_str()?.to_owned(),
-                u32::try_from(
-                    organization
-                        .pointer("/projectsV2/nodes/0/number")?
-                        .as_u64()?,
-                )
-                .ok()?,
-            ))
-        })
+    let response = graphql(
+        token,
+        "query { viewer { organizations(first:100) { nodes { login projectsV2(first:1, orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { number } } } } } }",
+        "organization project discovery",
+    )
+    .await
+    .map_err(|error| {
+        format!(
+            "the viewer owns no visible project, and {error}; set GH_PROJECTS_OWNER and \
+             GH_PROJECTS_NUMBER when organization enumeration is unavailable"
+        )
+    })?;
+    let organizations = response
+        .pointer("/data/viewer/organizations/nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            "organization project discovery returned no organizations connection".to_owned()
+        })?;
+    Ok(organizations.iter().find_map(|organization| {
+        Some((
+            organization.get("login")?.as_str()?.to_owned(),
+            u32::try_from(
+                organization
+                    .pointer("/projectsV2/nodes/0/number")?
+                    .as_u64()?,
+            )
+            .ok()?,
+        ))
+    }))
 }
 
 fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
@@ -97,10 +130,14 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
         eprintln!("skipped live GitHub Projects journey: GH_PROJECTS_TOKEN is empty");
         return;
     }
-    let (owner, project_number) = discover_project(&token).await.expect(
-        "GH_PROJECTS_TOKEN has no discoverable project; set GH_PROJECTS_OWNER and \
-         GH_PROJECTS_NUMBER to a visible project containing at least one Issue",
-    );
+    let (owner, project_number) = discover_project(&token)
+        .await
+        .unwrap_or_else(|error| panic!("GitHub Projects discovery failed: {error}"))
+        .expect(
+            "GH_PROJECTS_TOKEN can enumerate projects, but none are visible; set \
+             GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER to a visible project containing at least \
+             one Issue",
+        );
     let source = onetaskgraph_github_projects::Plugin
         .build(
             &SourceName::new("github-live").unwrap(),
