@@ -15,7 +15,7 @@ cleanup() {
 }
 trap cleanup EXIT
 version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$root/crates/onetaskgraph/Cargo.toml" | head -n1)
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || {
   echo "distribution test found an invalid binary version; next: restore crates/onetaskgraph/Cargo.toml to an X.Y.Z version" >&2
   exit 1
 }
@@ -41,24 +41,24 @@ ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" "$root/scripts/install.sh
 "$root/scripts/install.sh" --help | grep -q 'exit codes:' || { echo "installer help omitted exit codes; next: update its public usage contract" >&2; exit 1; }
 if "$root/scripts/install.sh" --unknown 2>"$tmp/error"; then unknown_option_status=0; else unknown_option_status=$?; fi
 [[ $unknown_option_status -eq 64 ]] || { echo "unknown option exited $unknown_option_status, expected 64; next: inspect argument parsing" >&2; exit 1; }
-grep -q 'unknown option: --unknown' "$tmp/error" || { echo "unknown-option failure omitted its reason; next: inspect argument diagnostics" >&2; exit 1; }
+grep -q 'unknown option: --unknown' "$tmp/error" || { cat "$tmp/error" >&2; echo "unknown-option failure omitted its reason; next: inspect argument diagnostics" >&2; exit 1; }
 printf x >> "$tmp/releases/$tag/$name"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "tampered archive installed; next: inspect checksum verification" >&2; exit 1; fi
-grep -q 'checksum mismatch' "$tmp/error" || { echo "tamper failure omitted checksum mismatch; next: inspect installer diagnostics" >&2; exit 1; }
+grep -q 'checksum mismatch' "$tmp/error" || { cat "$tmp/error" >&2; echo "tamper failure omitted checksum mismatch; next: inspect installer diagnostics" >&2; exit 1; }
 printf 'not an archive' > "$tmp/releases/$tag/$name"
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "unreadable archive installed; next: inspect archive validation" >&2; exit 1; fi
-grep -q 'archive is unreadable' "$tmp/error" || { echo "archive failure omitted its reason; next: inspect archive validation" >&2; exit 1; }
+grep -q 'archive is unreadable' "$tmp/error" || { cat "$tmp/error" >&2; echo "archive failure omitted its reason; next: inspect archive validation" >&2; exit 1; }
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/missing" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "missing archive installed; next: inspect download failure handling" >&2; exit 1; fi
-grep -q 'download failed' "$tmp/error" || { echo "download failure omitted its reason; next: inspect download diagnostics" >&2; exit 1; }
+grep -q 'download failed' "$tmp/error" || { cat "$tmp/error" >&2; echo "download failure omitted its reason; next: inspect download diagnostics" >&2; exit 1; }
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/missing" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "missing checksum accepted; next: inspect checksum download handling" >&2; exit 1; fi
-grep -q 'checksum download failed' "$tmp/error" || { echo "checksum download failure omitted its reason; next: inspect download diagnostics" >&2; exit 1; }
+grep -q 'checksum download failed' "$tmp/error" || { cat "$tmp/error" >&2; echo "checksum download failure omitted its reason; next: inspect download diagnostics" >&2; exit 1; }
 printf 'not-a-digest\n' > "$tmp/canonical/$tag/$name.sha256"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "malformed checksum accepted; next: inspect checksum parsing" >&2; exit 1; fi
-grep -q 'does not contain one SHA-256 digest' "$tmp/error" || { echo "malformed checksum failure omitted its reason; next: inspect checksum diagnostics" >&2; exit 1; }
+grep -q 'does not contain one SHA-256 digest' "$tmp/error" || { cat "$tmp/error" >&2; echo "malformed checksum failure omitted its reason; next: inspect checksum diagnostics" >&2; exit 1; }
 printf '%064d first\n%064d second\n' 0 1 > "$tmp/canonical/$tag/$name.sha256"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "multiple checksum records accepted; next: inspect checksum cardinality" >&2; exit 1; fi
-grep -q 'exactly one SHA-256 record' "$tmp/error" || { echo "multi-record checksum failure omitted its reason; next: inspect checksum diagnostics" >&2; exit 1; }
+grep -q 'exactly one SHA-256 record' "$tmp/error" || { cat "$tmp/error" >&2; echo "multi-record checksum failure omitted its reason; next: inspect checksum diagnostics" >&2; exit 1; }
 "$python_bin" - "$tmp/releases/$tag/$name" "$ext" <<'PY'
 import io
 import sys
@@ -77,9 +77,9 @@ else:
 PY
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "unsafe archive member installed; next: inspect member validation" >&2; exit 1; fi
-grep -q 'unsafe member path' "$tmp/error" || { echo "unsafe-member failure omitted its reason; next: inspect archive validation" >&2; exit 1; }
+grep -q 'unsafe member path' "$tmp/error" || { cat "$tmp/error" >&2; echo "unsafe-member failure omitted its reason; next: inspect archive validation" >&2; exit 1; }
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="ftp://invalid/releases" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "unsupported download scheme was accepted; next: inspect source validation" >&2; exit 1; fi
-grep -q 'download base must use' "$tmp/error" || { echo "unsupported-scheme failure omitted its reason; next: inspect source diagnostics" >&2; exit 1; }
+grep -q 'download base must use' "$tmp/error" || { cat "$tmp/error" >&2; echo "unsupported-scheme failure omitted its reason; next: inspect source diagnostics" >&2; exit 1; }
 rm "$tmp/releases/$tag/$name"
 if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
@@ -127,15 +127,15 @@ chmod +x "$tmp/shims/curl"
 PATH="$tmp/shims:$PATH" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" >/dev/null
 printf '#!/bin/sh\nexit 1\n' > "$tmp/shims/curl"
 if PATH="$tmp/shims:$PATH" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "latest-release lookup failure was accepted; next: inspect release resolution" >&2; exit 1; fi
-grep -q 'could not resolve the latest GitHub Release' "$tmp/error" || { echo "latest-release failure omitted its reason; next: inspect release diagnostics" >&2; exit 1; }
+grep -q 'could not resolve the latest GitHub Release' "$tmp/error" || { cat "$tmp/error" >&2; echo "latest-release failure omitted its reason; next: inspect release diagnostics" >&2; exit 1; }
 printf '#!/bin/sh\nprintf '\''Unsupported\\n'\''\n' > "$tmp/shims/uname"
 chmod +x "$tmp/shims/uname"
 if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "unsupported installer platform was accepted; next: inspect platform selection" >&2; exit 1; fi
-grep -q 'no prebuilt binary' "$tmp/error" || { echo "unsupported-installer-platform failure omitted its reason; next: inspect platform diagnostics" >&2; exit 1; }
+grep -q 'no prebuilt binary' "$tmp/error" || { cat "$tmp/error" >&2; echo "unsupported-installer-platform failure omitted its reason; next: inspect platform diagnostics" >&2; exit 1; }
 rm "$tmp/shims/uname" "$tmp/shims/curl"
 printf 'not a directory' > "$tmp/not-a-directory"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/not-a-directory/child" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "uncreatable installation directory was accepted; next: inspect directory creation" >&2; exit 1; fi
-grep -q 'could not create the installation directory' "$tmp/error" || { echo "directory-creation failure omitted its reason; next: inspect filesystem diagnostics" >&2; exit 1; }
+grep -q 'could not create the installation directory' "$tmp/error" || { cat "$tmp/error" >&2; echo "directory-creation failure omitted its reason; next: inspect filesystem diagnostics" >&2; exit 1; }
 "$python_bin" - "$tmp/releases/$tag/$name" "$ext" <<'PY'
 import sys
 import tarfile
@@ -145,6 +145,9 @@ path, extension = sys.argv[1:]
 if extension == "zip":
     with zipfile.ZipFile(path, "w") as archive:
         member = zipfile.ZipInfo("linked")
+        # ZipInfo defaults to the host OS. Declare Unix explicitly so Windows readers
+        # interpret the high external-attribute bits below as a symlink mode too.
+        member.create_system = 3
         member.external_attr = 0o120777 << 16
         archive.writestr(member, "onetaskgraph")
 else:
@@ -156,51 +159,54 @@ else:
 PY
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "archive link entry was accepted; next: inspect link validation" >&2; exit 1; fi
-grep -q 'archive contains a link entry' "$tmp/error" || { echo "link-entry failure omitted its reason; next: inspect archive diagnostics" >&2; exit 1; }
+grep -q 'archive contains a link entry' "$tmp/error" || { cat "$tmp/error" >&2; echo "link-entry failure omitted its reason; next: inspect archive diagnostics" >&2; exit 1; }
 rm "$tmp/releases/$tag/$name"
 if [[ $ext == zip ]]; then (cd "$tmp" && 7z a "$tmp/releases/$tag/$name" error >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$tmp" error; fi
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "archive without binary was accepted; next: inspect binary validation" >&2; exit 1; fi
-grep -q 'archive binary is not a regular file' "$tmp/error" || { echo "missing-archive-binary failure omitted its reason; next: inspect archive diagnostics" >&2; exit 1; }
+grep -q 'archive binary is not a regular file' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing-archive-binary failure omitted its reason; next: inspect archive diagnostics" >&2; exit 1; }
 rm "$tmp/releases/$tag/$name"
 if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 mkdir "$tmp/no-hash-path"
 for utility in awk cp dirname grep install mkdir mktemp rm sed tar uname; do ln -s "$(command -v "$utility")" "$tmp/no-hash-path/$utility"; done
 if PATH="$tmp/no-hash-path" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "installer accepted a system without SHA-256 tooling; next: inspect hash-tool detection" >&2; exit 1; fi
-grep -q 'no SHA-256 implementation is installed' "$tmp/error" || { echo "missing-hash-tool failure omitted its reason; next: inspect integrity diagnostics" >&2; exit 1; }
+grep -q 'no SHA-256 implementation is installed' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing-hash-tool failure omitted its reason; next: inspect integrity diagnostics" >&2; exit 1; }
 printf '#!/bin/sh\nexit 1\n' > "$tmp/shims/mktemp"
 chmod +x "$tmp/shims/mktemp"
 if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "temporary-directory failure was accepted; next: inspect temporary setup" >&2; exit 1; fi
-grep -q 'could not create a temporary directory' "$tmp/error" || { echo "temporary-directory failure omitted its reason; next: inspect filesystem diagnostics" >&2; exit 1; }
+grep -q 'could not create a temporary directory' "$tmp/error" || { cat "$tmp/error" >&2; echo "temporary-directory failure omitted its reason; next: inspect filesystem diagnostics" >&2; exit 1; }
 rm "$tmp/shims/mktemp"
 if [[ $ext == tar.gz ]]; then
   real_tar=$(command -v tar)
   printf '#!/bin/sh\nif [ "$1" = -tvzf ]; then exit 1; fi\nexec %s "$@"\n' "$real_tar" > "$tmp/shims/tar"
   chmod +x "$tmp/shims/tar"
   if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "unreadable archive metadata was accepted; next: inspect metadata validation" >&2; exit 1; fi
-  grep -q 'archive metadata is unreadable' "$tmp/error" || { echo "metadata failure omitted its reason; next: inspect archive diagnostics" >&2; exit 1; }
+  grep -q 'archive metadata is unreadable' "$tmp/error" || { cat "$tmp/error" >&2; echo "metadata failure omitted its reason; next: inspect archive diagnostics" >&2; exit 1; }
   printf '#!/bin/sh\nif [ "$1" = -xzf ]; then exit 1; fi\nexec %s "$@"\n' "$real_tar" > "$tmp/shims/tar"
   if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "archive extraction failure was accepted; next: inspect extraction handling" >&2; exit 1; fi
-  grep -q 'could not extract' "$tmp/error" || { echo "extraction failure omitted its reason; next: inspect archive diagnostics" >&2; exit 1; }
+  grep -q 'could not extract' "$tmp/error" || { cat "$tmp/error" >&2; echo "extraction failure omitted its reason; next: inspect archive diagnostics" >&2; exit 1; }
   rm "$tmp/shims/tar"
 fi
 printf '#!/bin/sh\nexit 1\n' > "$tmp/shims/install"
 chmod +x "$tmp/shims/install"
 if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "final installation failure was accepted; next: inspect executable installation" >&2; exit 1; fi
-grep -q 'could not install into' "$tmp/error" || { echo "installation-copy failure omitted its reason; next: inspect filesystem diagnostics" >&2; exit 1; }
+grep -q 'could not install into' "$tmp/error" || { cat "$tmp/error" >&2; echo "installation-copy failure omitted its reason; next: inspect filesystem diagnostics" >&2; exit 1; }
 rm "$tmp/shims/install"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL=https://mirror.example/releases ONETASKGRAPH_CHECKSUM_BASE_URL=https://mirror.example/checks "$root/scripts/install.sh" 2>"$tmp/error"; then echo "mirror-controlled checksum was accepted; next: inspect origin comparison" >&2; exit 1; fi
-grep -q "checksum shares the mirror's origin" "$tmp/error" || { echo "mirror rejection omitted its reason; next: inspect installer diagnostics" >&2; exit 1; }
+grep -q "checksum shares the mirror's origin" "$tmp/error" || { cat "$tmp/error" >&2; echo "mirror rejection omitted its reason; next: inspect installer diagnostics" >&2; exit 1; }
 if "$root/scripts/install.sh" --version 2>"$tmp/error"; then missing_value_status=0; else missing_value_status=$?; fi
 [[ $missing_value_status -eq 64 ]] || { echo "missing option value exited $missing_value_status, expected 64; next: inspect argument parsing" >&2; exit 1; }
-grep -q 'requires a value' "$tmp/error" || { echo "missing-value failure omitted its reason; next: inspect argument diagnostics" >&2; exit 1; }
+grep -q 'requires a value' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing-value failure omitted its reason; next: inspect argument diagnostics" >&2; exit 1; }
 if "$root/scripts/install.sh" --to '' 2>"$tmp/error"; then empty_destination_status=0; else empty_destination_status=$?; fi
 [[ $empty_destination_status -eq 64 ]] || { echo "empty installation destination exited $empty_destination_status, expected 64; next: inspect destination validation" >&2; exit 1; }
-grep -q 'installation directory must not be empty' "$tmp/error" || { echo "empty-destination failure omitted its reason; next: inspect destination diagnostics" >&2; exit 1; }
+grep -q 'installation directory must not be empty' "$tmp/error" || { cat "$tmp/error" >&2; echo "empty-destination failure omitted its reason; next: inspect destination diagnostics" >&2; exit 1; }
 if ONETASKGRAPH_VERSION="${tag}junk" "$root/scripts/install.sh" 2>"$tmp/error"; then malformed_tag_status=0; else malformed_tag_status=$?; fi
 [[ $malformed_tag_status -eq 64 ]] || { echo "malformed tag exited $malformed_tag_status, expected 64; next: inspect tag validation" >&2; exit 1; }
-grep -q "unsupported release tag: ${tag}junk" "$tmp/error" || { echo "malformed-tag failure omitted its reason; next: inspect tag diagnostics" >&2; exit 1; }
+grep -q "unsupported release tag: ${tag}junk" "$tmp/error" || { cat "$tmp/error" >&2; echo "malformed-tag failure omitted its reason; next: inspect tag diagnostics" >&2; exit 1; }
+if ONETASKGRAPH_VERSION="${tag}+build+again" "$root/scripts/install.sh" 2>"$tmp/error"; then repeated_metadata_status=0; else repeated_metadata_status=$?; fi
+[[ $repeated_metadata_status -eq 64 ]] || { echo "repeated metadata separator exited $repeated_metadata_status, expected 64; next: inspect tag validation" >&2; exit 1; }
+grep -q "unsupported release tag: ${tag}+build+again" "$tmp/error" || { cat "$tmp/error" >&2; echo "repeated-metadata failure omitted its reason; next: inspect tag diagnostics" >&2; exit 1; }
 node_platform=$(node -p '`${process.platform}-${process.arch}`')
 mkdir -p "$tmp/npm-carrier/bin" "$tmp/npm-packages" "$tmp/npm-install"
 cp "$root/npm/platforms/$node_platform/package.json" "$tmp/npm-carrier/package.json"
@@ -217,46 +223,46 @@ printf '{"name":"@onetaskgraph/cli-%s"}\n' "$node_platform" > "$tmp/node_modules
 printf 'not json\n' > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/package.json"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then malformed_carrier_status=0; else malformed_carrier_status=$?; fi
 [[ $malformed_carrier_status -eq 69 ]] || { echo "malformed carrier exited $malformed_carrier_status, expected 69; next: inspect manifest validation" >&2; exit 1; }
-grep -q 'invalid @onetaskgraph/cli-' "$tmp/error" || { echo "malformed-carrier failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
+grep -q 'invalid @onetaskgraph/cli-' "$tmp/error" || { cat "$tmp/error" >&2; echo "malformed-carrier failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 printf '{"name":"wrong-carrier"}\n' > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/package.json"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then wrong_carrier_status=0; else wrong_carrier_status=$?; fi
 [[ $wrong_carrier_status -eq 69 ]] || { echo "wrong carrier identity exited $wrong_carrier_status, expected 69; next: inspect manifest validation" >&2; exit 1; }
-grep -q 'identifies itself as wrong-carrier' "$tmp/error" || { echo "wrong-carrier failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
+grep -q 'identifies itself as wrong-carrier' "$tmp/error" || { cat "$tmp/error" >&2; echo "wrong-carrier failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 printf '{"name":"@onetaskgraph/cli-%s"}\n' "$node_platform" > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/package.json"
 mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary" "$tmp/real-carrier"
 ln -s "$tmp/real-carrier" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then escaping_carrier_status=0; else escaping_carrier_status=$?; fi
 [[ $escaping_carrier_status -eq 69 ]] || { echo "escaping carrier exited $escaping_carrier_status, expected 69; next: inspect carrier containment" >&2; exit 1; }
-grep -q 'carrier binary escapes its package' "$tmp/error" || { echo "escaping-carrier failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
+grep -q 'carrier binary escapes its package' "$tmp/error" || { cat "$tmp/error" >&2; echo "escaping-carrier failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 rm "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 printf '#!/bin/sh\nkill -TERM $$\n' > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 chmod +x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then signal_status=0; else signal_status=$?; fi
 [[ $signal_status -eq 70 ]] || { echo "signaled carrier exited $signal_status, expected 70; next: inspect signal handling" >&2; exit 1; }
-grep -q 'carrier terminated by' "$tmp/error" || { echo "signal failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
+grep -q 'carrier terminated by' "$tmp/error" || { cat "$tmp/error" >&2; echo "signal failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 mv "$tmp/real-carrier" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js" --definitely-invalid >/dev/null 2>&1); then launcher_status=0; else launcher_status=$?; fi
 [[ $launcher_status -eq 2 ]] || { echo "launcher did not propagate command status 2; next: inspect spawn result handling" >&2; exit 1; }
 chmod -x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then non_executable_status=0; else non_executable_status=$?; fi
 [[ $non_executable_status -eq 69 ]] || { echo "non-executable carrier exited $non_executable_status, expected 69; next: inspect spawn errors" >&2; exit 1; }
-grep -q 'reinstall the platform package' "$tmp/error" || { echo "spawn failure omitted recovery guidance; next: inspect launcher diagnostics" >&2; exit 1; }
+grep -q 'reinstall the platform package' "$tmp/error" || { cat "$tmp/error" >&2; echo "spawn failure omitted recovery guidance; next: inspect launcher diagnostics" >&2; exit 1; }
 chmod +x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary" "$tmp/missing-binary"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then missing_binary_status=0; else missing_binary_status=$?; fi
 [[ $missing_binary_status -eq 69 ]] || { echo "missing carrier binary exited $missing_binary_status, expected 69; next: inspect spawn errors" >&2; exit 1; }
-grep -q 'reinstall the platform package' "$tmp/error" || { echo "missing-binary failure omitted recovery guidance; next: inspect spawn errors" >&2; exit 1; }
+grep -q 'reinstall the platform package' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing-binary failure omitted recovery guidance; next: inspect spawn errors" >&2; exit 1; }
 mv "$tmp/missing-binary" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}" "$tmp/missing-carrier"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then missing_carrier_status=0; else missing_carrier_status=$?; fi
 [[ $missing_carrier_status -eq 69 ]] || { echo "missing carrier exited $missing_carrier_status, expected 69; next: inspect package resolution" >&2; exit 1; }
-grep -q 'is not installed' "$tmp/error" || { echo "missing-carrier failure omitted recovery guidance; next: inspect launcher diagnostics" >&2; exit 1; }
+grep -q 'is not installed' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing-carrier failure omitted recovery guidance; next: inspect launcher diagnostics" >&2; exit 1; }
 if node -e 'const Module=require("node:module"),original=Module._resolveFilename; Module._resolveFilename=function(request,...args){if(request.startsWith("@onetaskgraph/cli-")){const error=new Error("permission denied"); error.code="EACCES"; throw error;} return original.call(this,request,...args);}; require(process.argv[1]);' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then resolution_status=0; else resolution_status=$?; fi
 [[ $resolution_status -eq 69 ]] || { echo "carrier resolution error exited $resolution_status, expected 69; next: inspect package resolution" >&2; exit 1; }
-grep -q 'permission denied; reinstall the platform package' "$tmp/error" || { echo "carrier-resolution failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
+grep -q 'permission denied; reinstall the platform package' "$tmp/error" || { cat "$tmp/error" >&2; echo "carrier-resolution failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 if node -e 'Object.defineProperty(process,"platform",{value:"unsupported"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then unsupported_status=0; else unsupported_status=$?; fi
 [[ $unsupported_status -eq 64 ]] || { echo "unsupported launcher platform exited $unsupported_status, expected 64; next: inspect platform validation" >&2; exit 1; }
-grep -q 'unsupported platform' "$tmp/error" || { echo "unsupported-platform failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
+grep -q 'unsupported platform' "$tmp/error" || { cat "$tmp/error" >&2; echo "unsupported-platform failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 uv run --quiet --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }
 mkdir -p "$tmp/python-wheel"
 uv build --quiet --wheel "$root" --out-dir "$tmp/python-wheel"
@@ -268,18 +274,19 @@ assert_version_error() {
   shift
   if "$root/scripts/set-version.sh" "$@" 2>"$tmp/error"; then version_error_status=0; else version_error_status=$?; fi
   [[ $version_error_status -eq 2 ]] || { echo "version updater invalid arguments '$*' exited $version_error_status, expected 2; next: inspect argument validation" >&2; exit 1; }
-  grep -Fq "$expected_message" "$tmp/error" || { echo "version updater invalid arguments '$*' omitted its reason; next: inspect version diagnostics" >&2; exit 1; }
+  grep -Fq "$expected_message" "$tmp/error" || { cat "$tmp/error" >&2; echo "version updater invalid arguments '$*' omitted its reason; next: inspect version diagnostics" >&2; exit 1; }
 }
 assert_version_error 'usage: scripts/set-version.sh VERSION | --check'
 assert_version_error 'unexpected extra arguments' 1.2.3 extra
 assert_version_error 'invalid semantic version: invalid' invalid
+assert_version_error 'invalid semantic version: 1.2.3+build+again' '1.2.3+build+again'
 assert_version_error 'unexpected extra arguments after --check' --check ignored
 # shellcheck source=scripts/scratch-clone.sh
 source "$root/scripts/scratch-clone.sh"
 scratch_clone "$root" "$tmp/version-repo"
 node -e 'const fs=require("fs"),f=process.argv[1],p=JSON.parse(fs.readFileSync(f));p.version="9.9.9";fs.writeFileSync(f,JSON.stringify(p,null,2)+"\n")' "$tmp/version-repo/npm/cli/package.json"
 if "$tmp/version-repo/scripts/set-version.sh" --check 2>"$tmp/error"; then echo "version drift was accepted; next: inspect version checking" >&2; exit 1; fi
-grep -q 'version drift found' "$tmp/error" || { echo "version-drift failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
+grep -q 'version drift found' "$tmp/error" || { cat "$tmp/error" >&2; echo "version-drift failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
 git -C "$tmp/version-repo" restore npm/cli/package.json
 "$tmp/version-repo/scripts/set-version.sh" 0.1.1
 grep -q '^version = "0.1.1"' "$tmp/version-repo/Cargo.toml" || { echo "version updater missed the workspace manifest; next: inspect manifest mutation" >&2; exit 1; }

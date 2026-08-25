@@ -18,7 +18,7 @@ cargo_metadata() {
 }
 binary_manifest=crates/onetaskgraph/Cargo.toml
 current=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$binary_manifest" | head -n1)
-[[ $current =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
+[[ $current =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || {
   echo "$binary_manifest has no valid semantic version; next: restore its X.Y.Z version and rerun" >&2; exit 2;
 }
 
@@ -41,7 +41,7 @@ else
     exit 2
   fi
   expected=$1
-  [[ $expected =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
+  [[ $expected =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || {
     echo "invalid semantic version: $expected; expected X.Y.Z, then rerun scripts/set-version.sh $expected" >&2; exit 2;
   }
 fi
