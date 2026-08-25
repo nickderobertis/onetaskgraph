@@ -40,7 +40,7 @@ gate: deny distribution-check distribution-test
     @{{nx}} run-many -t check --all
 
 distribution-check:
-    @task_log="$$(mktemp)"; trap 'rm -f "$$task_log"' EXIT; \
+    @task_log="$$(mktemp)" || { echo "distribution check could not create its log; next: inspect temporary-directory permissions and free space" >&2; exit 1; }; trap 'rm -f "$$task_log"' EXIT; \
         if ! scripts/set-version.sh --check >"$$task_log" 2>&1; then \
             cat "$$task_log" >&2; \
             echo "version manifests disagree; next: run 'scripts/set-version.sh <VERSION>' and commit every changed manifest and lockfile" >&2; \
@@ -49,7 +49,7 @@ distribution-check:
     @scripts/check-distribution-contract.sh
 
 distribution-test:
-    @task_log="$$(mktemp)"; trap 'rm -f "$$task_log"' EXIT; \
+    @task_log="$$(mktemp)" || { echo "distribution journey could not create its log; next: inspect temporary-directory permissions and free space" >&2; exit 1; }; trap 'rm -f "$$task_log"' EXIT; \
         if ! scripts/test-distribution.sh >"$$task_log" 2>&1; then \
             cat "$$task_log" >&2; \
             echo "distribution journey failed; next: run 'scripts/test-distribution.sh' and fix the named installer or launcher assertion" >&2; \

@@ -2,7 +2,12 @@
 set -euo pipefail
 fail() { echo "distribution contract drift: $1" >&2; echo "next: update the release matrix, installer, launcher, and carrier manifests together" >&2; exit 1; }
 expected=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64)
-mapfile -t packages < <(find npm/platforms -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)
+packages_file="$(mktemp)" || fail "could not create a temporary carrier inventory"
+trap 'rm -f "$packages_file"' EXIT
+if ! find npm/platforms -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort > "$packages_file"; then
+  fail "could not inspect npm/platforms"
+fi
+mapfile -t packages < "$packages_file"
 [[ ${packages[*]} == "${expected[*]}" ]] || fail "npm carriers are '${packages[*]}', expected '${expected[*]}'"
 while read -r os target ext npm; do
   grep -Fq -- "- { os: $os, target: $target, ext: $ext, npm: $npm }" .github/workflows/release.yml || fail "$target is not mapped to $os/$ext/$npm in the release matrix"
@@ -15,7 +20,7 @@ macos-latest aarch64-apple-darwin tar.gz darwin-arm64
 windows-latest x86_64-pc-windows-msvc zip win32-x64
 MAPPINGS
 grep -Fq 'target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-msvc]' .github/workflows/release.yml || fail "wheel targets disagree with the native release matrix"
-node <<'NODE'
+if ! node <<'NODE'
 const fs = require("fs");
 function fail(message) {
   console.error(`distribution contract drift: ${message}`);
@@ -42,6 +47,11 @@ for (const platform of platforms) {
   if (String(manifest.cpu) !== cpu) fail(`${path} cpu is ${manifest.cpu}, expected ${cpu}`);
 }
 NODE
+then
+  fail "could not reconcile launcher and carrier manifests"
+fi
+[[ $(grep -Fc 'git_tag_name = "v{{ version }}"' release-plz.toml) -eq 1 ]] || fail "the binary must be the only package using the plain v-prefixed tag"
+[[ $(grep -Fc 'git_release_name = "v{{ version }}"' release-plz.toml) -eq 1 ]] || fail "the GitHub Release name must match the binary's plain v-prefixed tag"
 grep -q 'npm pack ./carrier' .github/workflows/release.yml || fail "release workflow does not build npm carrier tarballs"
 grep -q 'cp "$bin"' .github/workflows/release.yml || fail "release workflow does not put native binaries in npm carriers"
 grep -q 'pattern: "carrier-\*"' .github/workflows/release.yml || fail "npm publish does not download built carrier tarballs"
