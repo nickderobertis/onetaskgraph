@@ -43,6 +43,11 @@ start_server() {
     exit 1
   fi
   server_port=$(<"$server_port_file")
+  [[ $server_port =~ ^[0-9]+$ && $server_port -ge 1 && $server_port -le 65535 ]] || {
+    echo "local HTTP $server_label server reported an unusable port '$server_port'" >&2
+    echo "next: inspect the distribution test server" >&2
+    exit 1
+  }
 }
 cleanup() {
   stop_server "${http_server_pid:-}"
@@ -381,6 +386,16 @@ assert_publication_stops 'does not say whether it is published' broken-crate 1.0
 stop_server "$registry_server_pid"
 registry_server_pid=
 assert_publication_stops 'could not reach crates.io' absent-crate 1.0.0
-if "$root/scripts/crate-publication-status.sh" onetaskgraph 2>"$tmp/error"; then publication_usage_status=0; else publication_usage_status=$?; fi
-[[ $publication_usage_status -eq 64 ]] || { echo "publication status without a version exited $publication_usage_status, expected 64; next: inspect argument validation" >&2; exit 1; }
-grep -q 'usage: scripts/crate-publication-status.sh CRATE VERSION' "$tmp/error" || { cat "$tmp/error" >&2; echo "publication status usage error omitted its usage line; next: inspect publication diagnostics" >&2; exit 1; }
+assert_publication_refuses() {
+  expected_reason=$1
+  shift
+  if "$@" >"$tmp/publication" 2>"$tmp/error"; then publication_usage_status=0; else publication_usage_status=$?; fi
+  [[ $publication_usage_status -eq 64 ]] || { cat "$tmp/error" >&2; echo "publication status for '$expected_reason' exited $publication_usage_status, expected 64; next: inspect argument validation" >&2; exit 1; }
+  [[ ! -s $tmp/publication ]] || { cat "$tmp/publication" >&2; echo "a refused publication query still reported a decision; next: inspect scripts/crate-publication-status.sh" >&2; exit 1; }
+  grep -Fq 'usage: scripts/crate-publication-status.sh CRATE VERSION' "$tmp/error" || { cat "$tmp/error" >&2; echo "publication status refusal omitted its usage line; next: inspect publication diagnostics" >&2; exit 1; }
+  grep -Fq "next: $expected_reason" "$tmp/error" || { cat "$tmp/error" >&2; echo "publication status refusal omitted its next action; next: inspect publication diagnostics" >&2; exit 1; }
+}
+assert_publication_refuses 'name one crate and its X.Y.Z version' "$root/scripts/crate-publication-status.sh" onetaskgraph
+assert_publication_refuses 'invalid crate name: ../onetaskgraph' "$root/scripts/crate-publication-status.sh" ../onetaskgraph 1.0.0
+assert_publication_refuses 'invalid version: 1.0' "$root/scripts/crate-publication-status.sh" onetaskgraph 1.0
+assert_publication_refuses 'invalid registry base, which must be an http:// or https:// URL: file:///etc' env ONETASKGRAPH_CRATES_API_BASE_URL=file:///etc "$root/scripts/crate-publication-status.sh" onetaskgraph 1.0.0
