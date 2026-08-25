@@ -519,10 +519,16 @@ assert_npm_auth_stops 'could not write the npm configuration' "ONETASKGRAPH_NPM_
 RUNNER_TEMP="$tmp/runner-temp" "$root/scripts/npm-registry-auth.sh" "$npm_registry" >/dev/null
 grep -Fq ':_authToken=${NODE_AUTH_TOKEN}' "$tmp/runner-temp/.npmrc" || { echo "the npm configuration did not land in the runner's temporary tree; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
 mkdir -p "$tmp/fallback-temp"
-env -u RUNNER_TEMP TMPDIR="$tmp/fallback-temp" "$root/scripts/npm-registry-auth.sh" "$npm_registry" >/dev/null
-fallback_config=$(find "$tmp/fallback-temp" -name .npmrc -print -quit)
-[[ -n $fallback_config ]] || { echo "the npm configuration had nowhere to go with no runner temporary tree; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
+# Which directory mktemp picks is the platform's own business — GNU mktemp honours TMPDIR
+# and BSD mktemp ignores it for /tmp — so this reads the path the helper printed, the way
+# the release workflow reads it, rather than searching where this side guessed it landed.
+fallback_config=$(env -u RUNNER_TEMP TMPDIR="$tmp/fallback-temp" "$root/scripts/npm-registry-auth.sh" "$npm_registry")
+[[ -s $fallback_config ]] || { echo "the npm configuration had nowhere to go with no runner temporary tree; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
 grep -Fq ':_authToken=${NODE_AUTH_TOKEN}' "$fallback_config" || { cat "$fallback_config" >&2; echo "the fallback npm configuration did not name NODE_AUTH_TOKEN; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
+# That directory is the helper's own and can sit outside this journey's tree, so it is
+# taken away here rather than left for the cleanup that only reaches $tmp.
+rm -f "$fallback_config"
+rmdir "$(dirname "$fallback_config")" 2>/dev/null || true
 # The two tools this helper leans on are forced to fail the way the installer's own cases
 # force theirs, because neither refusal can be provoked on the platform that runs here.
 mkdir -p "$tmp/npm-shims"
