@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 jobs:
-  archives:
+  native-assets-and-carriers:
     permissions:
       contents: write
     strategy:
@@ -46,7 +46,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: "carrier-${{ matrix.npm }}", path: dist/carriers/*.tgz }
   build-wheels:
-    needs: archives
+    needs: native-assets-and-carriers
     strategy:
       matrix:
         target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-msvc]
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: "wheels-${{ matrix.target }}", path: dist }
   build-distributions:
-    needs: archives
+    needs: native-assets-and-carriers
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: distributions, path: dist }
   publish-crates:
-    needs: archives
+    needs: native-assets-and-carriers
     if: ${{ vars.CARGO_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -101,7 +101,7 @@ jobs:
           uv publish --check-url https://pypi.org/simple/onetaskgraph-cli/ dist/cli/*
           uv publish --check-url https://pypi.org/simple/onetaskgraph-sdk/ dist/all/python-sdk/*
   publish-npm:
-    needs: [archives, build-distributions]
+    needs: [native-assets-and-carriers, build-distributions]
     if: ${{ vars.NPM_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     steps:

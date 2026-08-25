@@ -30,7 +30,7 @@ bootstrap:
 # exports it; locally, `NX_BASE=<ref> just check` does the same.
 
 # Everyday gate: format, lint, types, tests and coverage over the affected projects.
-check: format-check lint typecheck test coverage
+check: format-check lint typecheck test coverage version-check distribution-test
 
 # This is what .githooks/pre-push runs and what the default branch sweeps on every
 # push, so nothing affected-detection could miss goes unchecked.

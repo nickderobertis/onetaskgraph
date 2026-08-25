@@ -11,4 +11,5 @@ try { manifestPath = require.resolve(`@onetaskgraph/cli-${packages[key]}/package
 const command = join(manifestPath, "..", "bin", process.platform === "win32" ? "onetaskgraph.exe" : "onetaskgraph");
 const result = spawnSync(command, process.argv.slice(2), { stdio: "inherit" });
 if (result.error) { console.error(`onetaskgraph: ${result.error.message}; reinstall the platform package`); process.exit(69); }
-process.exit(result.status === null ? 70 : result.status);
+if (result.status === null) { console.error(`onetaskgraph: carrier terminated by ${result.signal || "a signal"}`); process.exit(70); }
+process.exit(result.status);

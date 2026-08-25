@@ -8,6 +8,9 @@ binary_manifest=crates/onetaskgraph/Cargo.toml
 current=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$binary_manifest" | head -n1)
 
 if [[ ${1:-} == --check ]]; then
+  cargo metadata --locked --format-version 1 >/dev/null
+  uv lock --project . --check --quiet
+  uv lock --project sdks/python --check --quiet
   expected=$current
 else
   expected=${1:?usage: scripts/set-version.sh VERSION | --check}
