@@ -199,10 +199,7 @@ if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgr
 [[ $signal_status -eq 70 ]] || { echo "signaled carrier exited $signal_status, expected 70; next: inspect signal handling" >&2; exit 1; }
 grep -q 'carrier terminated by' "$tmp/error" || { echo "signal failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 mv "$tmp/real-carrier" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
-set +e
-(cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js" --definitely-invalid >/dev/null 2>&1)
-launcher_status=$?
-set -e
+if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js" --definitely-invalid >/dev/null 2>&1); then launcher_status=0; else launcher_status=$?; fi
 [[ $launcher_status -eq 2 ]] || { echo "launcher did not propagate command status 2; next: inspect spawn result handling" >&2; exit 1; }
 chmod -x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then non_executable_status=0; else non_executable_status=$?; fi
@@ -210,10 +207,7 @@ if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgr
 grep -q 'reinstall the platform package' "$tmp/error" || { echo "spawn failure omitted recovery guidance; next: inspect launcher diagnostics" >&2; exit 1; }
 chmod +x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
 mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary" "$tmp/missing-binary"
-set +e
-(cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"
-missing_binary_status=$?
-set -e
+if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then missing_binary_status=0; else missing_binary_status=$?; fi
 [[ $missing_binary_status -eq 69 ]] || { echo "missing carrier binary exited $missing_binary_status, expected 69; next: inspect spawn errors" >&2; exit 1; }
 grep -q 'reinstall the platform package' "$tmp/error" || { echo "missing-binary failure omitted recovery guidance; next: inspect spawn errors" >&2; exit 1; }
 mv "$tmp/missing-binary" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
@@ -221,16 +215,10 @@ mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}" "$tmp/missing-carrier"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then missing_carrier_status=0; else missing_carrier_status=$?; fi
 [[ $missing_carrier_status -eq 69 ]] || { echo "missing carrier exited $missing_carrier_status, expected 69; next: inspect package resolution" >&2; exit 1; }
 grep -q 'is not installed' "$tmp/error" || { echo "missing-carrier failure omitted recovery guidance; next: inspect launcher diagnostics" >&2; exit 1; }
-set +e
-node -e 'const Module=require("node:module"),original=Module._resolveFilename; Module._resolveFilename=function(request,...args){if(request.startsWith("@onetaskgraph/cli-")){const error=new Error("permission denied"); error.code="EACCES"; throw error;} return original.call(this,request,...args);}; require(process.argv[1]);' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"
-resolution_status=$?
-set -e
+if node -e 'const Module=require("node:module"),original=Module._resolveFilename; Module._resolveFilename=function(request,...args){if(request.startsWith("@onetaskgraph/cli-")){const error=new Error("permission denied"); error.code="EACCES"; throw error;} return original.call(this,request,...args);}; require(process.argv[1]);' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then resolution_status=0; else resolution_status=$?; fi
 [[ $resolution_status -eq 69 ]] || { echo "carrier resolution error exited $resolution_status, expected 69; next: inspect package resolution" >&2; exit 1; }
 grep -q 'permission denied; reinstall the platform package' "$tmp/error" || { echo "carrier-resolution failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
-set +e
-node -e 'Object.defineProperty(process,"platform",{value:"unsupported"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"
-unsupported_status=$?
-set -e
+if node -e 'Object.defineProperty(process,"platform",{value:"unsupported"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then unsupported_status=0; else unsupported_status=$?; fi
 [[ $unsupported_status -eq 64 ]] || { echo "unsupported launcher platform exited $unsupported_status, expected 64; next: inspect platform validation" >&2; exit 1; }
 grep -q 'unsupported platform' "$tmp/error" || { echo "unsupported-platform failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 uv run --quiet --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }

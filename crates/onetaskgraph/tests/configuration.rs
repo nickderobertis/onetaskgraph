@@ -1168,7 +1168,7 @@ fn mistyped(sandbox: &Sandbox, arguments: &[&str]) -> String {
 fn a_working_directory_that_no_longer_exists_is_reported_rather_than_crashing() {
     let sandbox = Sandbox::new();
     let doomed = sandbox.subdirectory("doomed");
-    let binary = assert_cmd::cargo::cargo_bin("onetaskgraph");
+    let binary = env!("CARGO_BIN_EXE_onetaskgraph");
 
     // The shell removes the directory it is standing in and then execs the binary into
     // it, so the binary really starts life somewhere the kernel can no longer name —
@@ -1177,11 +1177,7 @@ fn a_working_directory_that_no_longer_exists_is_reported_rather_than_crashing() 
         .current_dir(&doomed)
         .env("XDG_CONFIG_HOME", sandbox.config_home())
         .env_remove("HOME")
-        .args([
-            "-c",
-            r#"rm -rf "$PWD" && exec "$0" config show"#,
-            &binary.to_string_lossy(),
-        ])
+        .args(["-c", r#"rm -rf "$PWD" && exec "$0" config show"#, binary])
         .output()
         .expect("the shell runs");
 

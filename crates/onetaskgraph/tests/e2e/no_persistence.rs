@@ -147,7 +147,7 @@ fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
 
         let mut answered = 0;
         for arguments in every_verb() {
-            let mut command = Command::cargo_bin("onetaskgraph").expect("the binary is built");
+            let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
             for (name, _) in std::env::vars() {
                 if name.starts_with("ONETASKGRAPH_") {
                     command.env_remove(name);

@@ -123,7 +123,7 @@ impl Sandbox {
     /// environment cleared: a coverage run hands the child `LLVM_PROFILE_FILE`, and
     /// clearing it would silently stop attributing this binary's lines to its crate.
     pub fn command_in(&self, directory: &Path) -> Command {
-        let mut command = Command::cargo_bin("onetaskgraph").expect("the binary is built");
+        let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
         for (name, _) in std::env::vars() {
             if name.starts_with("ONETASKGRAPH_") {
                 command.env_remove(name);

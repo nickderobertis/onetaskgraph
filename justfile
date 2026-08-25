@@ -30,16 +30,16 @@ bootstrap:
 # exports it; locally, `NX_BASE=<ref> just check` does the same.
 
 # Everyday gate: format, lint, types, tests and coverage over the affected projects.
-check: format-check lint typecheck test coverage version-check distribution-test
+check: format-check lint typecheck test coverage distribution-check distribution-test
 
 # This is what .githooks/pre-push runs and what the default branch sweeps on every
 # push, so nothing affected-detection could miss goes unchecked.
 
 # Full quality gate over EVERY project, plus the supply chain. Fails on any issue.
-gate: deny version-check distribution-test
+gate: deny distribution-check distribution-test
     @{{nx}} run-many -t check --all
 
-version-check:
+distribution-check:
     @task_log="$$(mktemp)"; trap 'rm -f "$$task_log"' EXIT; \
         if ! scripts/set-version.sh --check >"$$task_log" 2>&1; then \
             cat "$$task_log" >&2; \
