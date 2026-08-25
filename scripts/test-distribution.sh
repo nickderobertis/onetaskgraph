@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-trap 'status=$?; echo "distribution setup failed at line $LINENO (exit $status); next: rerun scripts/test-distribution.sh and inspect that command" >&2' ERR
+report_failure() {
+  echo "distribution setup failed at line $2 (exit $1): $3; next: rerun scripts/test-distribution.sh and fix that command" >&2
+}
+trap 'report_failure "$?" "$LINENO" "$BASH_COMMAND"' ERR
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$root/crates/onetaskgraph/Cargo.toml" | head -n1)

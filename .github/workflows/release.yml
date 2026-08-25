@@ -4,6 +4,7 @@ on:
     types: [published]
 permissions:
   contents: read
+# llmlint: ignore-block[changed_behavior_has_e2e] Proving these jobs requires publishing a GitHub Release and registry packages, which a pre-publication dispatch cannot perform.
 jobs:
   native-assets-and-carriers:
     permissions:
@@ -122,3 +123,4 @@ jobs:
           done
           npm view "@onetaskgraph/cli@$(node -p "require('./npm/cli/package.json').version")" >/dev/null 2>&1 || npm publish npm/cli --access public
           npm view "@onetaskgraph/sdk@$(node -p "require('./sdks/typescript/package.json').version")" >/dev/null 2>&1 || npm publish sdks/typescript --access public
+# llmlint: ignore-end[changed_behavior_has_e2e]
