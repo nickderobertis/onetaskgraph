@@ -260,7 +260,7 @@ impl GitHubProjectsSource {
         items_first: u32,
     ) -> Result<Value, SourceError> {
         const QUERY: &str = r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!){
-          organization:repositoryOwner(login:$owner){
+          owner:repositoryOwner(login:$owner){
             ... on ProjectV2Owner{projectV2(number:$number){...Project}}
           }
         } fragment Project on ProjectV2 { id title shortDescription url createdAt updatedAt closed
@@ -276,7 +276,7 @@ impl GitHubProjectsSource {
           }} pageInfo{hasNextPage endCursor}}
         }"#;
         let data = self.graphql(QUERY, json!({"owner":self.owner,"number":self.project_number,"first":items_first.min(MAX_PAGE_SIZE),"after":items_after,"nestedFirst":NESTED_PAGE_SIZE})).await?;
-        data.pointer("/organization/projectV2")
+        data.pointer("/owner/projectV2")
             .filter(|v| !v.is_null())
             .cloned()
             .ok_or_else(|| SourceError::Refused {

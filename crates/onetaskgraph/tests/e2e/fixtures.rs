@@ -370,7 +370,7 @@ fn github_project_page(variables: &Value) -> Value {
         }))
         .collect::<Vec<_>>();
     json!({
-        "organization":{"projectV2":{
+        "owner":{"projectV2":{
             "id":"P-1","title":"Engine","shortDescription":"alpha engine project",
             "url":"https://example.invalid/P-1","closed":false,
             "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < tasks.len(),"endCursor":end.to_string()}}
