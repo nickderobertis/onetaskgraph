@@ -427,7 +427,13 @@ class NpmRegistry(http.server.BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_PUT(self):
-        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        declared = self.headers.get("Content-Length", "0")
+        # A carrier tarball is a few megabytes. Anything unreadable as a length, or larger
+        # than this stub will hold, is refused rather than read.
+        if not declared.isdigit() or int(declared) > 64 * 1024 * 1024:
+            self.send_error(400, "unusable Content-Length")
+            return
+        self.rfile.read(int(declared))
         if self.record("PUT") != "authorized":
             self.send_error(401)
             return
