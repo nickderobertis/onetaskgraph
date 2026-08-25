@@ -10,7 +10,7 @@ use predicates::str::contains;
 use crate::common::Sandbox;
 
 fn onetaskgraph() -> Command {
-    Command::cargo_bin("onetaskgraph").expect("the binary is built")
+    Command::new(env!("CARGO_BIN_EXE_onetaskgraph"))
 }
 
 /// Every verb and flag the command surface owes, as `--help` must name them.
@@ -251,7 +251,7 @@ fn a_failed_write_to_stdout_exits_one_and_names_the_problem_on_stderr() {
         .open("/dev/full")
         .expect("/dev/full exists on Linux");
 
-    let output = StdCommand::new(assert_cmd::cargo::cargo_bin("onetaskgraph"))
+    let output = StdCommand::new(env!("CARGO_BIN_EXE_onetaskgraph"))
         .arg("schema")
         .stdout(Stdio::from(full))
         .stderr(Stdio::piped())
@@ -326,7 +326,7 @@ fn a_closed_stdout_never_panics_however_the_race_lands() {
     use std::io::Read as _;
     use std::process::{Command as StdCommand, Stdio};
 
-    let mut child = StdCommand::new(assert_cmd::cargo::cargo_bin("onetaskgraph"))
+    let mut child = StdCommand::new(env!("CARGO_BIN_EXE_onetaskgraph"))
         .arg("schema")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -397,8 +397,7 @@ fn help_names_the_product_however_the_executable_on_disk_is_named() {
         "onetaskgraph-under-another-name{}",
         std::env::consts::EXE_SUFFIX
     ));
-    std::fs::copy(assert_cmd::cargo::cargo_bin("onetaskgraph"), &renamed)
-        .expect("the binary copies");
+    std::fs::copy(env!("CARGO_BIN_EXE_onetaskgraph"), &renamed).expect("the binary copies");
     runnable(&renamed);
 
     Command::new(&renamed)

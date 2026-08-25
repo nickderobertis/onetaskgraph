@@ -21,6 +21,21 @@ permissions:
   contents: read
 
 jobs:
+  install-path:
+    name: install path (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: extractions/setup-just@v4
+      - uses: astral-sh/setup-uv@v7
+      - name: Prove the recommended installer and launcher
+        shell: bash
+        run: just distribution-test
+
   # The three required OS lanes. All three are required because this ships a
   # cross-platform command-line tool whose install path CI has to prove on the real
   # matrix; affected selection is what keeps that affordable.

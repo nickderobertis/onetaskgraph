@@ -48,6 +48,14 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
             let path = entry.path();
             if path.is_dir() {
                 pending.push(path);
+            // LLVM's coverage runtime, rather than the engine, writes these profiler
+            // artifacts. Match only its two exact extensions so every other file remains
+            // evidence of a product write.
+            } else if matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("profraw" | "profdata")
+            ) {
+                continue;
             } else if let Ok(contents) = std::fs::read(&path) {
                 found.insert(path, contents);
             }
@@ -121,6 +129,10 @@ fn every_verb() -> Vec<Vec<String>> {
 fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
     for boundary in SOURCE_BOUNDARIES {
         let sandbox = Sandbox::new();
+        // Instrumented binaries write LLVM coverage data on exit. Keep that tool-owned
+        // output outside the observed tree so the assertion below retains its literal
+        // meaning: every file created under the sandbox is an engine write.
+        let coverage = tempfile::tempdir().expect("a directory for coverage runtime output");
         let document = sandbox.project_document(&planted(boundary));
         let root = document
             .parent()
@@ -147,7 +159,7 @@ fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
 
         let mut answered = 0;
         for arguments in every_verb() {
-            let mut command = Command::cargo_bin("onetaskgraph").expect("the binary is built");
+            let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
             for (name, _) in std::env::vars() {
                 if name.starts_with("ONETASKGRAPH_") {
                     command.env_remove(name);
@@ -164,6 +176,10 @@ fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
                 .env("TMPDIR", &homes[5])
                 .env("TEMP", &homes[5])
                 .env("TMP", &homes[5])
+                .env(
+                    "LLVM_PROFILE_FILE",
+                    coverage.path().join("onetaskgraph-%p-%m.profraw"),
+                )
                 .args(&arguments)
                 .assert()
                 .success()

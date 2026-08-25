@@ -1,0 +1,53 @@
+name: Release-plz
+on:
+  push:
+    branches: [main]
+permissions: {}
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - id: check
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          CARGO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        # llmlint: ignore[changed_behavior_has_e2e] This branch depends on GitHub's secret boundary, which a pre-publication dispatch cannot exercise.
+        run: echo "enabled=$([ -n "$RELEASE_TOKEN" ] && [ -n "$CARGO_TOKEN" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+  release-plz:
+    needs: guard
+    if: needs.guard.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks,release-plz
+      # llmlint: ignore-block[changed_behavior_has_e2e] Proving these steps requires publishing crates and a GitHub Release and auto-merging its pull request, which a pre-publication dispatch cannot perform.
+      - name: Tag and cut the GitHub Release with the PAT
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: release-plz release --git-token "$GITHUB_TOKEN"
+      - name: Open or update the release pull request
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: release-plz release-pr --git-token "$GITHUB_TOKEN"
+      - name: Enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: |
+          pr=$(gh pr list --json number,headRefName --jq 'map(select(.headRefName | startswith("release-plz-"))) | .[0].number // empty')
+          [ -z "$pr" ] || gh pr merge "$pr" --auto --squash --delete-branch
+      # llmlint: ignore-end[changed_behavior_has_e2e]

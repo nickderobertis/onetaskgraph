@@ -724,7 +724,9 @@ fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
     }
     let mut stream = std::net::TcpStream::connect(address).unwrap();
     write!(stream, "GET /graphql HTTP/1.1\r\nHost: {address}\r\n\r\n").unwrap();
-    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .expect("half-close the invalid-method fixture request before reading its response");
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
@@ -735,7 +737,9 @@ fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
         "POST /graphql HTTP/1.1\r\nHost: {address}\r\nContent-Length: 9\r\n\r\n{{}}"
     )
     .unwrap();
-    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .expect("half-close the short-body fixture request before reading its response");
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
@@ -747,7 +751,8 @@ fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
         "POST /graphql HTTP/1.1\r\nHost: {address}\r\nContent-Length: {}\r\n\r\n{oversized}",
         oversized.len()
     );
-    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    // The fixture can reject and close this oversized request before the client reaches
+    // shutdown, so a half-close here would race with the expected server response.
     let mut response = String::new();
     let _ = stream.read_to_string(&mut response);
     assert!(response.starts_with("HTTP/1.1 413 Content Too Large"));

@@ -30,14 +30,31 @@ bootstrap:
 # exports it; locally, `NX_BASE=<ref> just check` does the same.
 
 # Everyday gate: format, lint, types, tests and coverage over the affected projects.
-check: format-check lint typecheck test coverage
+check: format-check lint typecheck test coverage distribution-check distribution-test
 
 # This is what .githooks/pre-push runs and what the default branch sweeps on every
 # push, so nothing affected-detection could miss goes unchecked.
 
 # Full quality gate over EVERY project, plus the supply chain. Fails on any issue.
-gate: deny
+gate: deny distribution-check distribution-test
     @{{nx}} run-many -t check --all
+
+distribution-check:
+    @task_log="$$(mktemp)" || { echo "distribution check could not create its log; next: inspect temporary-directory permissions and free space" >&2; exit 1; }; trap 'rm -f "$$task_log"' EXIT; \
+        if ! scripts/set-version.sh --check >"$$task_log" 2>&1; then \
+            cat "$$task_log" >&2; \
+            echo "version manifests disagree; next: run 'scripts/set-version.sh <VERSION>' and commit every changed manifest and lockfile" >&2; \
+            exit 1; \
+        fi
+    @scripts/check-distribution-contract.sh
+
+distribution-test:
+    @task_log="$$(mktemp)" || { echo "distribution journey could not create its log; next: inspect temporary-directory permissions and free space" >&2; exit 1; }; trap 'rm -f "$$task_log"' EXIT; \
+        if ! scripts/test-distribution.sh >"$$task_log" 2>&1; then \
+            cat "$$task_log" >&2; \
+            echo "distribution journey failed; next: run 'scripts/test-distribution.sh' and fix the named installer or launcher assertion" >&2; \
+            exit 1; \
+        fi
 
 # Tests only, for the affected projects.
 test:
