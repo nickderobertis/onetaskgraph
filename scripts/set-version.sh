@@ -4,6 +4,18 @@ trap 'echo "version update failed; next: fix the reported manifest or lock error
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
+cargo_metadata() {
+  local log
+  log=$(mktemp)
+  if cargo metadata "$@" >/dev/null 2>"$log"; then
+    rm "$log"
+  else
+    cat "$log" >&2
+    rm "$log"
+    echo "cargo metadata could not validate the workspace; next: fix the manifest error above and rerun scripts/set-version.sh" >&2
+    return 1
+  fi
+}
 binary_manifest=crates/onetaskgraph/Cargo.toml
 current=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$binary_manifest" | head -n1)
 [[ $current =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
@@ -15,7 +27,7 @@ if [[ ${1:-} == --check ]]; then
     echo "unexpected extra arguments after --check; next: pass --check by itself" >&2
     exit 2
   fi
-  cargo metadata --locked --format-version 1 >/dev/null
+  cargo_metadata --locked --format-version 1
   uv lock --project . --check --quiet
   uv lock --project sdks/python --check --quiet
   expected=$current
@@ -59,6 +71,6 @@ for manifest in npm/cli/package.json npm/platforms/*/package.json sdks/typescrip
   node -e 'const fs=require("fs"),f=process.argv[1],v=process.argv[2],p=JSON.parse(fs.readFileSync(f)); p.version=v; for(const n of Object.keys(p.optionalDependencies||{}))p.optionalDependencies[n]=v; fs.writeFileSync(f,JSON.stringify(p,null,2)+"\n")' "$manifest" "$expected"
 done
 # Refresh workspace package versions without re-resolving unrelated dependencies.
-cargo metadata --format-version 1 >/dev/null
+cargo_metadata --format-version 1
 uv lock --project . --quiet
 uv lock --project sdks/python --quiet

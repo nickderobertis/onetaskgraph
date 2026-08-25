@@ -15,6 +15,10 @@ cleanup() {
 }
 trap cleanup EXIT
 version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$root/crates/onetaskgraph/Cargo.toml" | head -n1)
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
+  echo "distribution test found an invalid binary version; next: restore crates/onetaskgraph/Cargo.toml to an X.Y.Z version" >&2
+  exit 1
+}
 tag="v$version"
 mkdir -p "$tmp/releases/$tag" "$tmp/canonical/$tag" "$tmp/bin"
 RUSTFLAGS='-D warnings' cargo build --manifest-path "$root/Cargo.toml" --locked -p onetaskgraph --quiet
