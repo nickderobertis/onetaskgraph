@@ -23,10 +23,16 @@ title: Ship the release
 status: doing
 labels: [release, urgent]
 project: platform
+metadata:
+  onepipeline.turn_budget: 12
+  caller.reviewers: [ada, grace]
+repositories: [github.com/nickderobertis/onetaskgraph]
 depends_on:
   - design
   - id: security/review
     kind: related
+  - id: work:PLAT-9
+    item: project
 ---
 # Ship the release
 
@@ -41,8 +47,17 @@ dependency is a blocking edge; the expanded form accepts `kind: blocks` or `rela
 Labels may also use `{id: label-id, name: release, color: red}` when an explicit stable
 identifier or color is useful. `url` is optional.
 Projects use the same fields except that `project` is ignored conceptually and should be
-omitted. Expanded dependency endpoints can name an item kind and qualified id in another
-source; the engine reports that far end without fetching it.
+omitted.
+
+A bare `depends_on` entry is this source's own item, colons and all, so an identifier
+containing one is never mistaken for a source name. The expanded form is where an author
+says otherwise: `item: task` or `item: project` names what the far end is — it defaults to
+the kind of the near document — and an `id` of the form `<source>:<native>` names an item
+of another source entirely. The engine reports that far end without fetching it; opening
+it is a command of your own against that qualified id.
+
+`metadata` keys beginning `onetaskgraph.` and `onepipeline.` are reserved; see
+[`metadata.md`](./metadata.md).
 
 Status names are preserved for display and mapped case-insensitively to normalized
 categories. The default mapping is `backlog` → backlog, `todo` → todo, `in progress` and

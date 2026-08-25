@@ -391,10 +391,28 @@ carries it.
 An endpoint kind is `"task"` or `"project"`; an edge kind is `"blocks"` or
 `"related"`, and `from` **depends on** `to`.
 
-An endpoint may be in another source. The plugin reads that qualified far id from the
-near item's reserved `onetaskgraph.depends_on` metadata when its backend cannot express
-the relationship. The engine reports but never follows it. Keeping the far id on the
-near item is plugin-owned work data, not the forbidden engine-side index or mirror.
+An endpoint may be in another source. One rule decides where each edge lives, and every
+plugin follows it: **the backend's own relationship wherever that relationship can name
+the far end, and the reserved key only where it cannot.** A plugin reads and writes its
+edges natively for every far end its backend can hold, so the backend knows the graph and
+its own interface draws it.
+
+A far end in another source is the case no backend can hold — nothing relates an id in a
+system it knows nothing about — so every plugin falls back for that one, and none falls
+back for a far end its own relationship can name. The fallback is the near item's
+`onetaskgraph.depends_on` metadata: a list of endpoints, each either a bare native id
+naming a task or `{"id": "<source>:<native>", "kind": "project"}`, and each read as one
+`"blocks"` edge from the near item to that endpoint.
+
+Only the forward direction is ever recorded. The reverse of a recorded edge is derived
+from the far end, exactly as a `"forward-only"` plugin's reverse is, so a plugin never
+returns a recorded edge for `"depended-on-by"`.
+
+The engine reports such an edge and never follows it: the read names the far end, and
+fetching it is the caller's next command against that qualified id. Keeping the far id on
+the near item is plugin-owned work data, not the forbidden engine-side index or mirror —
+what the invariant forbids is the engine holding a resolution from one source's id to
+another's, and reporting an id a plugin already owns holds nothing.
 
 A plugin that declared `"both-directions"` answers both directions itself, and must
 never return an empty page for a direction it declared.
