@@ -15,6 +15,16 @@ macos-latest aarch64-apple-darwin tar.gz darwin-arm64
 windows-latest x86_64-pc-windows-msvc zip win32-x64
 MAPPINGS
 for value in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64; do grep -q "$value" npm/cli/bin/onetaskgraph.js || fail "$value missing from launcher"; done
+node <<'NODE' || fail "an npm carrier manifest disagrees with its directory"
+const fs = require("fs");
+for (const platform of fs.readdirSync("npm/platforms")) {
+  const manifest = JSON.parse(fs.readFileSync(`npm/platforms/${platform}/package.json`));
+  const separator = platform.lastIndexOf("-");
+  const os = platform.slice(0, separator);
+  const cpu = platform.slice(separator + 1);
+  if (manifest.name !== `@onetaskgraph/cli-${platform}` || String(manifest.os) !== os || String(manifest.cpu) !== cpu) process.exit(1);
+}
+NODE
 grep -q 'npm pack ./carrier' .github/workflows/release.yml || fail "release workflow does not build npm carrier tarballs"
 grep -q 'cp "$bin"' .github/workflows/release.yml || fail "release workflow does not put native binaries in npm carriers"
 grep -q 'pattern: "carrier-\*"' .github/workflows/release.yml || fail "npm publish does not download built carrier tarballs"

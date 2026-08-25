@@ -38,6 +38,25 @@ grep -q 'checksum download failed' "$tmp/error" || { echo "checksum download fai
 printf 'not-a-digest\n' > "$tmp/canonical/$tag/$name.sha256"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "malformed checksum accepted; next: inspect checksum parsing" >&2; exit 1; fi
 grep -q 'does not contain one SHA-256 digest' "$tmp/error" || { echo "malformed checksum failure omitted its reason; next: inspect checksum diagnostics" >&2; exit 1; }
+python - "$tmp/releases/$tag/$name" "$ext" <<'PY'
+import io
+import sys
+import tarfile
+import zipfile
+
+path, extension = sys.argv[1:]
+if extension == "zip":
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("../escape", b"unsafe")
+else:
+    with tarfile.open(path, "w:gz") as archive:
+        member = tarfile.TarInfo("../escape")
+        member.size = 6
+        archive.addfile(member, io.BytesIO(b"unsafe"))
+PY
+if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
+if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "unsafe archive member installed; next: inspect member validation" >&2; exit 1; fi
+grep -q 'unsafe member path' "$tmp/error" || { echo "unsafe-member failure omitted its reason; next: inspect archive validation" >&2; exit 1; }
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL=https://mirror.example/releases ONETASKGRAPH_CHECKSUM_BASE_URL=https://mirror.example/checks "$root/scripts/install.sh" 2>"$tmp/error"; then echo "mirror-controlled checksum was accepted; next: inspect origin comparison" >&2; exit 1; fi
 grep -q "checksum shares the mirror's origin" "$tmp/error" || { echo "mirror rejection omitted its reason; next: inspect installer diagnostics" >&2; exit 1; }
 if "$root/scripts/install.sh" --version 2>"$tmp/error"; then echo "missing option value was accepted; next: inspect installer argument parsing" >&2; exit 1; fi
@@ -64,3 +83,9 @@ mv "$tmp/missing-binary" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/b
 mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}" "$tmp/missing-carrier"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then echo "launcher accepted a missing carrier; next: inspect package resolution" >&2; exit 1; fi
 grep -q 'is not installed' "$tmp/error" || { echo "missing-carrier failure omitted recovery guidance; next: inspect launcher diagnostics" >&2; exit 1; }
+set +e
+node -e 'Object.defineProperty(process,"platform",{value:"unsupported"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"
+unsupported_status=$?
+set -e
+[[ $unsupported_status -eq 64 ]] || { echo "unsupported launcher platform exited $unsupported_status, expected 64; next: inspect platform validation" >&2; exit 1; }
+grep -q 'unsupported platform' "$tmp/error" || { echo "unsupported-platform failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
