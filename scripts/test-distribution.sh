@@ -513,6 +513,14 @@ TMPDIR="$tmp/fallback-temp" "$root/scripts/npm-registry-auth.sh" "$npm_registry"
 fallback_config=$(find "$tmp/fallback-temp" -name .npmrc -print -quit)
 [[ -n $fallback_config ]] || { echo "the npm configuration had nowhere to go with no runner temporary tree; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
 grep -Fq ':_authToken=${NODE_AUTH_TOKEN}' "$fallback_config" || { cat "$fallback_config" >&2; echo "the fallback npm configuration did not name NODE_AUTH_TOKEN; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
+# The two tools this helper leans on are forced to fail the way the installer's own cases
+# force theirs, because neither refusal can be provoked on the platform that runs here.
+mkdir -p "$tmp/npm-shims"
+printf '#!/bin/sh\nexit 1\n' > "$tmp/npm-shims/mktemp"
+printf '#!/bin/sh\nexit 1\n' > "$tmp/npm-shims/cygpath"
+chmod +x "$tmp/npm-shims/mktemp" "$tmp/npm-shims/cygpath"
+assert_npm_auth_stops 'could not create a directory for the npm configuration' -u RUNNER_TEMP "PATH=$tmp/npm-shims:$PATH"
+assert_npm_auth_stops 'could not express the npm configuration path for this platform' "ONETASKGRAPH_NPM_CONFIG_DIR=$tmp/npm-config-cygpath" "PATH=$tmp/npm-shims:$PATH"
 # The release workflow names no registry either, so the default is what actually publishes.
 ONETASKGRAPH_NPM_CONFIG_DIR="$tmp/npm-config-default" "$root/scripts/npm-registry-auth.sh" >/dev/null
 grep -Fq 'registry=https://registry.npmjs.org/' "$tmp/npm-config-default/.npmrc" || { cat "$tmp/npm-config-default/.npmrc" >&2; echo "the default npm configuration did not point at the public registry; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
