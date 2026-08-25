@@ -30,14 +30,24 @@ bootstrap:
 # exports it; locally, `NX_BASE=<ref> just check` does the same.
 
 # Everyday gate: format, lint, types, tests and coverage over the affected projects.
-check: format-check lint typecheck test coverage distribution-check distribution-test
+check: script-check format-check lint typecheck test coverage distribution-check distribution-test
 
 # This is what .githooks/pre-push runs and what the default branch sweeps on every
 # push, so nothing affected-detection could miss goes unchecked.
 
 # Full quality gate over EVERY project, plus the supply chain. Fails on any issue.
-gate: deny distribution-check distribution-test
+gate: script-check deny distribution-check distribution-test
     @{{nx}} run-many -t check --all
+
+# Nx maps no project to scripts/, so `nx affected` selects nothing at all for a change that
+# only edits one — exactly the change these three exist to catch. Hence a recipe rather than
+# an Nx target.
+
+# Prove the scripts still run on the bash 3.2 macos-latest ships. Seconds, so it goes first.
+script-check:
+    @scripts/check-bash4-array-builtins.sh
+    @scripts/check-bash4-array-builtins-enforced.sh
+    @scripts/check-line-reads.sh
 
 distribution-check:
     @task_log="$$(mktemp)" || { echo "distribution check could not create its log; next: inspect temporary-directory permissions and free space" >&2; exit 1; }; trap 'rm -f "$$task_log"' EXIT; \

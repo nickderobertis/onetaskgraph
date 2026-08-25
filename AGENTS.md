@@ -275,6 +275,16 @@ them do; this is the inventory of what is owed, not a status board.
 
 - **Scripts are context.** Quiet on success; on failure print the exact problem and a
   concrete next action.
+- **They run on bash 3.2.** macos-latest ships it, and every script here declares
+  `#!/usr/bin/env bash`, so on that runner each one IS a 3.2 script — which is why
+  `mapfile` and `readarray`, one bash 4 builtin under two names, are refused by
+  `scripts/check-bash4-array-builtins.sh`: reaching one there aborts the script with
+  `command not found`, which reads as whatever it was proving having gone wrong rather than
+  as a portability failure. Write `read_lines` from `scripts/read-lines.sh` instead.
+  `scripts/check-bash4-array-builtins-enforced.sh` watches that guard refuse both spellings
+  in every command position, and pass the name in a comment. `just script-check` runs them
+  outside Nx, because Nx maps no project to `scripts/` and so selects nothing for a change
+  that only edits one.
 - **Suppress narrowly.** A diagnostic is an error or a suppression at that one site with a
   stated reason. `notignored` posts every suppression a PR adds, so they are read.
 - **`gh-secrets.json` is tracked and load-bearing.** It declares the repository secrets

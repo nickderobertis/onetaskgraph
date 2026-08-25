@@ -46,7 +46,14 @@ esac
 # every `check`, and cargo refuses an invalid package name loudly — that refusal is
 # the very failure the `tr` here exists to fix.
 # tr: see scripts/check-plugin-isolation.sh — python's stdout is CRLF on Windows.
-mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
+# shellcheck source=scripts/read-lines.sh
+source "$ROOT/scripts/read-lines.sh" || {
+  echo "check-affected-selection: could not load $ROOT/scripts/read-lines.sh, which reads the" >&2
+  echo "check-affected-selection: plugin set into an array." >&2
+  echo "check-affected-selection: restore it with 'git checkout -- scripts/read-lines.sh', then re-run." >&2
+  exit 1
+}
+read_lines PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
