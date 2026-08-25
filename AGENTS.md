@@ -243,6 +243,11 @@ them do; this is the inventory of what is owed, not a status board.
 24. A dependency edge that leaves the source — across projects, across the task and project
     levels, and across sources — is reported by qualified id and item kind, is never
     reported in reverse, and is never followed to the far source.
+25. One relationship reads the same from either end: `from` is the item that depends,
+    whichever way a backend spells the relationship, so a source that stores it from the
+    blocking side reports the same edge rather than its mirror.
+26. A reserved-key far end the near item's own backend could have named is refused, naming
+    the entry and what to record instead; so is one this interface cannot represent.
 
 ## Recorded decisions
 

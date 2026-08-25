@@ -143,7 +143,7 @@ test("typed methods drive every real binary command", async () => {
         allowPartial: true,
       })
     ).items[0]?.from,
-  ).toEqual({ id: "work:P-1", kind: "task" });
+  ).toEqual({ id: "work:P-1", kind: "project" });
   expect(
     (await client.labelList({ sources: ["work"], limit: 1, allowPartial: true })).items[0]?.id,
   ).toBe("work:L-1");
