@@ -2,17 +2,11 @@
 # Prove that scripts/check-distribution-contract.sh REFUSES a release workflow whose
 # crates.io existence query does not identify the caller to the registry.
 #
-# That pin exists because crates.io answers curl's default user agent with 403 — an answer
-# that says nothing about whether a crate is published — so the publish-crates job could
-# never reach either arm it knows how to act on, and a whole release cycle was spent
-# discovering it. A pin nobody has watched fail is a pin nobody knows works: these greps
-# would pass just as quietly if a pattern stopped matching what it describes, or if the
-# query moved somewhere the pin does not read.
-#
-# So the unidentified query is reintroduced for real, four ways, in a scratch copy of the
-# working tree, and each case asserts on the DIAGNOSTIC as well as the refusal — a pin that
-# refuses without naming the user agent sends the next author hunting through a release
-# workflow, which is most of what it is for.
+# crates.io answers curl's default user agent with 403 — an answer that says nothing about
+# whether a crate is published — so an unidentified query leaves publish-crates unable to
+# reach either arm it knows how to act on. A pin nobody has watched fail is a pin nobody
+# knows works: those greps would pass just as quietly if a pattern stopped matching what it
+# describes, or if the query moved somewhere the pin does not read.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
