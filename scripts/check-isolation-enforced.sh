@@ -7,9 +7,10 @@
 # splitting `onetaskgraph-plugin-api` out of `onetaskgraph-core`, so it is the last one
 # that should be taken on trust.
 #
-# So the tree is really broken, in a scratch clone, ten ways — nine against the local
-# guard and one against deny.toml's wrapper restriction, which is the half of this rule
-# that is a required check. Each case asserts on the DIAGNOSTIC as well as the exit
+# So the tree is really broken, in a scratch clone, ten kinds of way — nine against the
+# local guard, case 9 being a table with one row per field the guard reads, and one
+# against deny.toml's wrapper restriction, which is the half of this rule that is a
+# required check. Each case asserts on the DIAGNOSTIC as well as the exit
 # status: a guard that refuses without naming the crate and the path sends the next
 # author hunting, which is most of what the guard is for.
 #
@@ -179,6 +180,12 @@ reset_fixture
 #    it, whereas Cargo permits a cycle through a dev edge. So the wrapper restriction is
 #    what stands between a dev-dependency on the engine and a merge.
 add_dependency onetaskgraph-linear dev-dependencies 'onetaskgraph-core.workspace = true'
+# llmlint: ignore[work_goes_through_command_surface] `just deny` is the command surface
+# for this repository, and it is the wrong tool here twice over: it runs the whole suite,
+# including advisories, which reaches the advisory database over a network this check
+# deliberately closes (CARGO_NET_OFFLINE above), and it would run against THIS repository
+# rather than the scratch clone the fixture lives in. `bans` alone, in that clone, is what
+# this case is about.
 deny_output="$(cd "$scratch/repo" && cargo deny check bans 2>&1)" \
   && deny_status=0 || deny_status=$?
 if [ "$deny_status" -eq 0 ]; then
@@ -266,6 +273,54 @@ expect_refused "a manifest cargo cannot parse" \
   "could not read the workspace manifests" onetaskgraph-local-md
 reset_fixture
 
+# 9. cargo's document is this guard's one input, and the guard reads named fields out of
+#    it. Every shape those fields cannot be read from must be a refusal that says which
+#    document and which format version — not a Python traceback, and above all not a pass.
+#    No manifest can produce such a shape while cargo honours `--format-version 1`, so the
+#    boundary itself is what these cases replace: a cargo earlier on PATH that answers
+#    `metadata` with a document of this fixture's choosing and delegates everything else
+#    to the real one.
+shim="$scratch/shim"
+mkdir -p "$shim"
+cat > "$shim/cargo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "metadata" ]; then
+  printf '%s\n' "$SHIM_METADATA"
+  exit 0
+fi
+exec "$REAL_CARGO" "$@"
+EOF
+chmod +x "$shim/cargo"
+
+# One row per field the scan dereferences, so a field that stops being established stops
+# being covered here too.
+shim_cases=(
+  "not a document at all|no JSON"
+  "[]|a document that is not an object"
+  '{"workspace_members": []}|no packages'
+  '{"packages": {}, "workspace_members": []}|packages that are not an array'
+  '{"packages": []}|no workspace_members'
+  '{"packages": [1], "workspace_members": []}|a package that is not an object'
+  '{"packages": [{"id": "a", "name": "a", "dependencies": []}], "workspace_members": []}|a package with no version'
+  '{"packages": [{"id": "a", "name": "a", "version": "1"}], "workspace_members": []}|a package with no dependencies'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [{}]}], "workspace_members": []}|a dependency with no name'
+  '{"packages": [], "workspace_members": ["ghost"]}|a workspace member that is no package'
+  '{"packages": [], "workspace_members": [], "resolve": {}}|a resolve section with no nodes'
+  '{"packages": [], "workspace_members": [], "resolve": {"nodes": [{}]}}|a resolve node with no id'
+  '{"packages": [], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{}]}]}}|a resolve dependency with no pkg'
+)
+for shim_case in "${shim_cases[@]}"; do
+  GUARD_OUTPUT="$(cd "$scratch/repo" \
+    && PATH="$shim:$PATH" REAL_CARGO="$(command -v cargo)" \
+       SHIM_METADATA="${shim_case%%|*}" bash scripts/check-plugin-isolation.sh 2>&1)" \
+    && GUARD_STATUS=0 || GUARD_STATUS=$?
+  expect_refused "cargo handing over ${shim_case##*|}" \
+    "could not read the document" "--format-version 1"
+done
+rm -rf "$shim"
+reset_fixture
+
 # 10. The plugin set is the guard's other input, and it arrives from another script. A
 #     producer that failed must not read as a workspace with no plugins in it: an empty
 #     set passes every check below while checking no crate at all, which is the quietest
@@ -274,32 +329,6 @@ rm -f "$scratch/repo/scripts/plugin-crates.sh"
 run_guard
 expect_refused "the plugin set failing to arrive" \
   "could not read the plugin set" plugin-crates.sh
-reset_fixture
-
-# 9. cargo's document is this guard's one input, and the guard reads named keys out of
-#    it. A shape those keys cannot read must be a refusal that says which document and
-#    which keys — not a Python traceback, and above all not a pass. No manifest can
-#    produce that shape while cargo honours `--format-version 1`, so the boundary itself
-#    is what this case replaces: a cargo earlier on PATH that answers `metadata` with an
-#    empty object and delegates everything else to the real one.
-shim="$scratch/shim"
-mkdir -p "$shim"
-cat > "$shim/cargo" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-if [ "${1:-}" = "metadata" ]; then
-  echo '{}'
-  exit 0
-fi
-exec "$REAL_CARGO" "$@"
-EOF
-chmod +x "$shim/cargo"
-GUARD_OUTPUT="$(cd "$scratch/repo" \
-  && PATH="$shim:$PATH" REAL_CARGO="$(command -v cargo)" bash scripts/check-plugin-isolation.sh 2>&1)" \
-  && GUARD_STATUS=0 || GUARD_STATUS=$?
-expect_refused "cargo handing over a document the scan cannot read" \
-  "could not read the document" "--format-version 1"
-rm -rf "$shim"
 reset_fixture
 
 if [ "$failures" -ne 0 ]; then

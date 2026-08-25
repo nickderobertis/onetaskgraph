@@ -30,7 +30,8 @@ cd "$ROOT"
 # arrives as "\r\n". `mapfile -t` strips the newline but not the carriage return, and a
 # crate name carrying a trailing CR matches no package in the graph — a failure no Linux
 # or macOS run can reproduce.
-if ! plugin_names="$(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')"; then
+if ! plugin_names="$(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')" \
+  || [ -z "${plugin_names//[[:space:]]/}" ]; then
   echo "check-plugin-isolation: could not read the plugin set, so nothing was checked." >&2
   echo "check-plugin-isolation: fix what scripts/plugin-crates.sh reported above — an empty" >&2
   echo "check-plugin-isolation: plugin set would pass this guard while checking no crate." >&2
@@ -60,14 +61,33 @@ ENGINE = "onetaskgraph-core"
 PREFIX = "check-plugin-isolation:"
 
 # `--format-version 1` is the contract cargo maintains for reading this document, but a
-# contract is only a promise until it is checked. Every key this scan goes on to
-# dereference is established here, and a document that does not carry them is refused with
-# the reason — the caller turns that into a diagnostic. A guard that cannot read its input
-# has not checked the rule, and must never be mistaken for one that checked and found
-# nothing.
+# contract is only a promise until something checks it. Every field this scan goes on to
+# dereference is established below, and a document missing one is refused with the reason
+# through a single path the caller turns into a diagnostic — a guard that could not read
+# its input has not checked the rule, and must never be mistaken for one that checked and
+# found nothing. Case 9 of scripts/check-isolation-enforced.sh drives these shapes through
+# a shimmed cargo, because no manifest can produce them.
 def refuse(problem):
     print("the document cargo handed over " + problem, file=sys.stderr)
     raise SystemExit(1)
+
+
+def mapping(value, what):
+    if not isinstance(value, dict):
+        refuse("holds " + what + " that is not an object")
+    return value
+
+
+def array(value, what):
+    if not isinstance(value, list):
+        refuse("holds " + what + " that is not an array")
+    return value
+
+
+def text(value, what):
+    if not isinstance(value, str):
+        refuse("holds " + what + " that is not a string")
+    return value
 
 
 try:
@@ -75,19 +95,17 @@ try:
 except ValueError as error:
     refuse(f"is not JSON: {error}")
 
-if not isinstance(metadata, dict):
-    refuse("is not a JSON object")
-for key in ("packages", "workspace_members"):
-    if not isinstance(metadata.get(key), list):
-        refuse(f"carries no {key} array")
+mapping(metadata, "a document")
+array(metadata.get("packages"), "a packages field")
+array(metadata.get("workspace_members"), "a workspace_members field")
+
 for package in metadata["packages"]:
-    if not isinstance(package, dict) or not {
-        "id",
-        "name",
-        "version",
-        "dependencies",
-    } <= package.keys():
-        refuse("holds a package without an id, a name, a version and a dependencies list")
+    mapping(package, "a package")
+    for field in ("id", "name", "version"):
+        text(package.get(field), f"a package {field}")
+    for dependency in array(package.get("dependencies"), "a package dependencies field"):
+        mapping(dependency, "a package dependency")
+        text(dependency.get("name"), "a package dependency name")
 
 names = {package["id"]: package["name"] for package in metadata["packages"]}
 labels = {
@@ -95,7 +113,31 @@ labels = {
     for package in metadata["packages"]
 }
 members = set(metadata["workspace_members"])
+for member in members:
+    if member not in names:
+        refuse("names a workspace member that is no package of the same document")
 workspace = {names[member] for member in members}
+
+# `--no-deps` resolves nothing and so carries no resolve section: the caller runs this scan
+# over that document first, and over the resolved one after. Where there is one, it is
+# established here rather than at the walk below, so that a document this cannot read is
+# refused as unreadable rather than by whichever rule trips on the readable part first.
+resolve = metadata.get("resolve")
+nodes = None
+if resolve is not None:
+    mapping(resolve, "a resolve section")
+    for node in array(resolve.get("nodes"), "a resolve nodes field"):
+        mapping(node, "a resolve node")
+        text(node.get("id"), "a resolve node id")
+        for dependency in array(node.get("deps"), "a resolve node deps field"):
+            mapping(dependency, "a resolve dependency")
+            text(dependency.get("pkg"), "a resolve dependency pkg")
+            for entry in array(dependency.get("dep_kinds") or [], "a dep_kinds field"):
+                mapping(entry, "a dep_kinds entry")
+    nodes = {node["id"]: node for node in resolve["nodes"]}
+    for member in members:
+        if member not in nodes:
+            refuse("resolves no node for a workspace member")
 
 # The manifests as written. This is not redundant with the walk below: it sees an edge the
 # resolver may leave out of the graph — an optional dependency behind a feature nothing
@@ -133,18 +175,9 @@ if missing:
     print(f"{PREFIX} isolation cannot be checked for a crate that is not in the graph.")
     raise SystemExit(0)
 
-# `--no-deps` resolves nothing and so carries no graph. The caller runs this scan over
-# that document first, and over the resolved one after; everything below needs the graph.
-resolve = metadata.get("resolve")
-if resolve is None:
+# Everything below needs the graph.
+if nodes is None:
     raise SystemExit(0)
-if not isinstance(resolve, dict) or not isinstance(resolve.get("nodes"), list):
-    refuse("carries a resolve section with no nodes array")
-for node in resolve["nodes"]:
-    if not isinstance(node, dict) or "id" not in node or not isinstance(node.get("deps"), list):
-        refuse("holds a resolve node without an id and a deps list")
-
-nodes = {node["id"]: node for node in resolve["nodes"]}
 
 
 def edge_kinds(dependency):
