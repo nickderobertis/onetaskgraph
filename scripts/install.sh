@@ -9,7 +9,13 @@ release_base=${ONETASKGRAPH_RELEASE_BASE_URL:-$canonical}
 checksum_base=${ONETASKGRAPH_CHECKSUM_BASE_URL:-$canonical}
 
 die() { code=$1; shift; printf 'error: %s\nnext: run scripts/install.sh --help or choose another documented install method\n' "$*" >&2; exit "$code"; }
-origin() { printf '%s\n' "$1" | sed -E 's#^([a-zA-Z][a-zA-Z0-9+.-]*://[^/]+).*#\1#'; }
+source_identity() {
+  case "$1" in
+    file://*) printf '%s\n' "${1#file://}";;
+    http://*|https://*) printf '%s\n' "$1" | sed -E 's#^([a-zA-Z][a-zA-Z0-9+.-]*://[^/]+).*#\1#';;
+    *) die 64 "download base must use https://, http://, or file://";;
+  esac
+}
 download() { case "$1" in file://*) cp "${1#file://}" "$2";; *) curl -fsSL "$1" -o "$2";; esac; }
 
 while [ "$#" -gt 0 ]; do
@@ -42,7 +48,7 @@ esac
 name="onetaskgraph-${version}-${target}.${ext}"
 archive_url="${release_base%/}/${version}/${name}"
 checksum_url="${checksum_base%/}/${version}/${name}.sha256"
-if [ "$(origin "$release_base")" = "$(origin "$checksum_base")" ] && [ "$(origin "$release_base")" != "$(origin "$canonical")" ]; then
+if [ "$(source_identity "$release_base")" = "$(source_identity "$checksum_base")" ] && [ "$(source_identity "$release_base")" != "$(source_identity "$canonical")" ]; then
   die 65 "checksum shares the mirror's origin; refusing a mirror-controlled trust root"
 fi
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT HUP INT TERM
