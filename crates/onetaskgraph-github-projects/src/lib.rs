@@ -565,6 +565,10 @@ impl GitHubProjectsSource {
     ///
     /// Only forwards. The reverse of a recorded edge is derived from the far end, and this
     /// source never writes one down.
+    ///
+    /// The metadata lives on the *project item*, not on the issue this method is given, so
+    /// reading it costs one board scan. That is why it happens once the native connection
+    /// is spent rather than on every page.
     async fn recorded_task_edges(
         &self,
         id: &NativeId,

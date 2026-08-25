@@ -326,10 +326,6 @@ fn every_source_reports_a_cross_source_cross_level_edge_without_following_it() {
             ("task", "T-1", "elsewhere:P-9", "project"),
             ("project", "P-1", "elsewhere:T-9", "task"),
         ] {
-            if verb == "project" && !row.fixture.complete_dataset && row.plugin != "github-projects"
-            {
-                continue;
-            }
             let forward: serde_json::Value = serde_json::from_str(&ok(
                 row,
                 &sandbox,
