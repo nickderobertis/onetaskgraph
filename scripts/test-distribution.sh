@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-trap 'echo "distribution setup failed; next: rerun scripts/test-distribution.sh and inspect the command immediately above this diagnostic" >&2' ERR
+trap 'status=$?; echo "distribution setup failed at line $LINENO (exit $status); next: rerun scripts/test-distribution.sh and inspect that command" >&2' ERR
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$root/crates/onetaskgraph/Cargo.toml" | head -n1)
@@ -38,6 +38,9 @@ grep -q 'checksum download failed' "$tmp/error" || { echo "checksum download fai
 printf 'not-a-digest\n' > "$tmp/canonical/$tag/$name.sha256"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "malformed checksum accepted; next: inspect checksum parsing" >&2; exit 1; fi
 grep -q 'does not contain one SHA-256 digest' "$tmp/error" || { echo "malformed checksum failure omitted its reason; next: inspect checksum diagnostics" >&2; exit 1; }
+printf '%064d first\n%064d second\n' 0 1 > "$tmp/canonical/$tag/$name.sha256"
+if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "multiple checksum records accepted; next: inspect checksum cardinality" >&2; exit 1; fi
+grep -q 'exactly one SHA-256 record' "$tmp/error" || { echo "multi-record checksum failure omitted its reason; next: inspect checksum diagnostics" >&2; exit 1; }
 python - "$tmp/releases/$tag/$name" "$ext" <<'PY'
 import io
 import sys

@@ -48,7 +48,9 @@ fi
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 download "$archive_url" "$tmp/$name" || die 69 "download failed: $archive_url"
 download "$checksum_url" "$tmp/$name.sha256" || die 69 "checksum download failed: $checksum_url"
-expected=$(awk '{print $1}' "$tmp/$name.sha256")
+records=$(awk 'NF { count++ } END { print count+0 }' "$tmp/$name.sha256")
+[ "$records" -eq 1 ] || die 65 "checksum file must contain exactly one SHA-256 record"
+expected=$(awk 'NF {print $1}' "$tmp/$name.sha256")
 printf '%s\n' "$expected" | grep -Eq '^[0-9A-Fa-f]{64}$' || die 65 "checksum file does not contain one SHA-256 digest"
 if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$tmp/$name" | awk '{print $1}'); elif command -v shasum >/dev/null 2>&1; then actual=$(shasum -a 256 "$tmp/$name" | awk '{print $1}'); else die 69 "no SHA-256 implementation is installed"; fi
 [ "$actual" = "$expected" ] || die 65 "checksum mismatch for $name"
@@ -59,5 +61,6 @@ case "$ext" in
 esac
 printf '%s\n' "$members" | awk '/^\// || /^[A-Za-z]:/ || /(^|\/)\.\.($|\/)/ { bad=1 } END { exit bad }' || die 65 "archive contains an unsafe member path"
 case "$ext" in tar.gz) tar -xzf "$tmp/$name" -C "$tmp/unpack" || die 74 "could not extract $name";; zip) unzip -q "$tmp/$name" -d "$tmp/unpack" || die 74 "could not extract $name";; esac
+[ -f "$tmp/unpack/$binary" ] && [ ! -L "$tmp/unpack/$binary" ] || die 65 "archive binary is not a regular file"
 install -m 755 "$tmp/unpack/$binary" "$install_dir/$binary" || die 74 "could not install into $install_dir"
 printf 'installed %s to %s\n' "$version" "$install_dir/$binary"
