@@ -49,7 +49,6 @@ version-check:
         fi
     @scripts/check-distribution-contract.sh
 
-# Exercise the installer and npm launcher against a locally built release-shaped asset.
 distribution-test:
     @task_log="$$(mktemp)"; trap 'rm -f "$$task_log"' EXIT; \
         if ! scripts/test-distribution.sh >"$$task_log" 2>&1; then \
