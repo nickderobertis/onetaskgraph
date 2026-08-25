@@ -111,8 +111,8 @@ fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
 }
 
 #[tokio::test]
-// llmlint: ignore[live_tier_compiles_and_requires_credential] This lane skips without a credential by decision (AGENTS.md); `ONETASKGRAPH_LIVE_REQUIRED=1` is what demands one.
 async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
+    // llmlint: ignore-block[live_tier_compiles_and_requires_credential] AGENTS.md records the third-party live lane as deliberately non-required, so an absent credential skips with a printed notice rather than failing an unrelated merge; `ONETASKGRAPH_LIVE_REQUIRED=1` is the mode that demands one, and scripts/check-test-live-boundary.sh enforces the convention for every project.
     let Ok(token) = env::var("GH_PROJECTS_TOKEN") else {
         assert_ne!(
             env::var("ONETASKGRAPH_LIVE_REQUIRED").as_deref(),
@@ -131,6 +131,7 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
         eprintln!("skipped live GitHub Projects journey: GH_PROJECTS_TOKEN is empty");
         return;
     }
+    // llmlint: ignore-end[live_tier_compiles_and_requires_credential]
     let (owner, project_number) = discover_project(&token)
         .await
         .unwrap_or_else(|error| panic!("GitHub Projects discovery failed: {error}"))
