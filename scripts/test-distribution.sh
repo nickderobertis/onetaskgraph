@@ -5,7 +5,12 @@ report_failure() {
 }
 trap 'report_failure "$?" "$LINENO" "$BASH_COMMAND"' ERR
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+tmp=$(mktemp -d)
+cleanup() {
+  if [[ -n ${http_server_pid:-} ]]; then kill "$http_server_pid" 2>/dev/null || true; wait "$http_server_pid" 2>/dev/null || true; fi
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
 version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$root/crates/onetaskgraph/Cargo.toml" | head -n1)
 tag="v$version"
 mkdir -p "$tmp/releases/$tag" "$tmp/canonical/$tag" "$tmp/bin"
@@ -68,6 +73,26 @@ if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="ftp://invalid/rele
 grep -q 'download base must use' "$tmp/error" || { echo "unsupported-scheme failure omitted its reason; next: inspect source diagnostics" >&2; exit 1; }
 if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
+python - "$tmp" "$tmp/http-port" >"$tmp/http.log" 2>&1 <<'PY' &
+import http.server
+import os
+import sys
+
+root, port_file = sys.argv[1:]
+os.chdir(root)
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http.server.SimpleHTTPRequestHandler)
+with open(port_file, "w", encoding="utf-8") as stream:
+    stream.write(str(server.server_port))
+server.serve_forever()
+PY
+http_server_pid=$!
+for _ in {1..100}; do [[ -s "$tmp/http-port" ]] && break; sleep 0.05; done
+[[ -s "$tmp/http-port" ]] || { echo "local HTTP release server did not start; next: inspect the distribution test server" >&2; exit 1; }
+http_port=$(<"$tmp/http-port")
+ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="http://127.0.0.1:$http_port/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" >/dev/null
+kill "$http_server_pid"
+wait "$http_server_pid" 2>/dev/null || true
+http_server_pid=
 mkdir -p "$tmp/shims"
 printf '#!/bin/sh\necho '\''{"tag_name":"%s"}'\''\n' "$tag" > "$tmp/shims/curl"
 chmod +x "$tmp/shims/curl"
@@ -186,6 +211,12 @@ mv "$tmp/missing-binary" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/b
 mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}" "$tmp/missing-carrier"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then echo "launcher accepted a missing carrier; next: inspect package resolution" >&2; exit 1; fi
 grep -q 'is not installed' "$tmp/error" || { echo "missing-carrier failure omitted recovery guidance; next: inspect launcher diagnostics" >&2; exit 1; }
+set +e
+node -e 'const Module=require("node:module"),original=Module._resolveFilename; Module._resolveFilename=function(request,...args){if(request.startsWith("@onetaskgraph/cli-")){const error=new Error("permission denied"); error.code="EACCES"; throw error;} return original.call(this,request,...args);}; require(process.argv[1]);' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"
+resolution_status=$?
+set -e
+[[ $resolution_status -eq 69 ]] || { echo "carrier resolution error exited $resolution_status, expected 69; next: inspect package resolution" >&2; exit 1; }
+grep -q 'permission denied; reinstall the platform package' "$tmp/error" || { echo "carrier-resolution failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 set +e
 node -e 'Object.defineProperty(process,"platform",{value:"unsupported"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"
 unsupported_status=$?
