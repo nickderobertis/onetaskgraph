@@ -38,6 +38,7 @@ perl -pi -e 's/(onetaskgraph-cli==)[^" ]+/${1}'$expected'/' sdks/python/pyprojec
 for manifest in npm/cli/package.json npm/platforms/*/package.json sdks/typescript/package.json; do
   node -e 'const fs=require("fs"),f=process.argv[1],v=process.argv[2],p=JSON.parse(fs.readFileSync(f)); p.version=v; for(const n of Object.keys(p.optionalDependencies||{}))p.optionalDependencies[n]=v; fs.writeFileSync(f,JSON.stringify(p,null,2)+"\n")' "$manifest" "$expected"
 done
-cargo generate-lockfile --quiet
+# Refresh workspace package versions without re-resolving unrelated dependencies.
+cargo metadata --format-version 1 >/dev/null
 uv lock --project . --quiet
 uv lock --project sdks/python --quiet
