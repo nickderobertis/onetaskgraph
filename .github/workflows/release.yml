@@ -89,7 +89,6 @@ jobs:
           [ -n "$CARGO_REGISTRY_TOKEN" ] || { echo "CARGO_REGISTRY_TOKEN is required" >&2; exit 1; }
           for crate in onetaskgraph-plugin-api onetaskgraph-in-memory onetaskgraph-local-md onetaskgraph-linear onetaskgraph-github-projects onetaskgraph-core onetaskgraph; do
             version=$(cargo metadata --no-deps --format-version 1 | jq -r --arg n "$crate" '.packages[]|select(.name==$n)|.version')
-            printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || { echo "invalid version for $crate: $version" >&2; exit 64; }
             publication=$(scripts/crate-publication-status.sh "$crate" "$version") || exit $?
             case "$publication" in
               published) ;;

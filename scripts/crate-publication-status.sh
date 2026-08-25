@@ -12,7 +12,7 @@ agent="onetaskgraph-release (https://github.com/nickderobertis/onetaskgraph)"
 # Both arguments become path segments of the query below, so they are checked against the
 # grammars crates.io accepts rather than trusted from the caller.
 [[ $crate =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || usage "invalid crate name: $crate"
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || usage "invalid version: $version"
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || usage "invalid version for $crate: $version"
 [[ $base =~ ^https?://[^[:space:]]+$ ]] || usage "invalid registry base, which must be an http:// or https:// URL: $base"
 url="$base/$crate/$version"
 status=$(curl -sS -o /dev/null -w '%{http_code}' --user-agent "$agent" "$url") || {

@@ -397,5 +397,5 @@ assert_publication_refuses() {
 }
 assert_publication_refuses 'name one crate and its X.Y.Z version' "$root/scripts/crate-publication-status.sh" onetaskgraph
 assert_publication_refuses 'invalid crate name: ../onetaskgraph' "$root/scripts/crate-publication-status.sh" ../onetaskgraph 1.0.0
-assert_publication_refuses 'invalid version: 1.0' "$root/scripts/crate-publication-status.sh" onetaskgraph 1.0
+assert_publication_refuses 'invalid version for onetaskgraph: 1.0' "$root/scripts/crate-publication-status.sh" onetaskgraph 1.0
 assert_publication_refuses 'invalid registry base, which must be an http:// or https:// URL: file:///etc' env ONETASKGRAPH_CRATES_API_BASE_URL=file:///etc "$root/scripts/crate-publication-status.sh" onetaskgraph 1.0.0
