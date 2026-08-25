@@ -68,7 +68,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - run: |
           uv build sdks/python --out-dir dist/python-sdk
-          bun run --cwd sdks/typescript build
+          ./scripts/nx.sh run sdk-typescript:build
           bun pm pack --cwd sdks/typescript --destination ../../dist/typescript-sdk
           bun pm pack --cwd npm/cli --destination ../../dist/npm
       - uses: actions/upload-artifact@v4
