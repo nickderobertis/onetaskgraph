@@ -178,6 +178,8 @@ async fn reads_and_normalizes_a_synthetic_graphql_response_through_http() {
     assert_eq!(task.project.as_ref().unwrap().0, "PVT_project");
     assert_eq!(task.status.category, StatusCategory::InProgress);
     assert_eq!(task.labels.len(), 2);
+    assert_eq!(task.metadata["caller.number"], serde_json::json!(7));
+    assert_eq!(task.repositories[0].0, "github.com/acme/work");
     assert_eq!(
         task.created_at.unwrap().to_rfc3339(),
         "2026-01-02T00:00:00+00:00"
@@ -254,6 +256,8 @@ async fn exposes_project_health_and_lookup_over_the_public_trait() {
         .unwrap();
     assert_eq!(project.title, "Roadmap");
     assert_eq!(project.content.as_deref(), Some("Delivery plan"));
+    assert_eq!(project.metadata["caller.enabled"], serde_json::json!(true));
+    assert_eq!(project.repositories[0].0, "github.com/acme/work");
     assert!(
         source
             .get_project(&NativeId("missing".into()))
@@ -774,6 +778,87 @@ async fn rejects_malformed_optional_project_fields() {
         ));
         handle.join().unwrap();
     }
+}
+
+#[tokio::test]
+async fn metadata_slots_are_validated_and_absence_remains_backward_compatible() {
+    for value in [json!(7), json!("{bad json")] {
+        let mut response = project_response(false);
+        response["data"]["owner"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["nodes"][1]["text"] =
+            value;
+        let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+        assert!(matches!(
+            build(&endpoint)
+                .query_tasks(&TaskQuery::default(), &page(10))
+                .await,
+            Err(SourceError::Malformed { .. })
+        ));
+        handle.join().unwrap();
+    }
+
+    for description in [Value::Null, json!("ordinary description")] {
+        let mut response = project_response(false);
+        response["data"]["owner"]["projectV2"]["shortDescription"] = description;
+        let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+        assert!(
+            build(&endpoint)
+                .query_projects(&ProjectQuery::default(), &page(10))
+                .await
+                .is_ok()
+        );
+        handle.join().unwrap();
+    }
+
+    for description in [
+        json!("visible\n<!-- onetaskgraph.metadata\n{}"),
+        json!("visible\n<!-- onetaskgraph.metadata\n{bad}\n-->"),
+    ] {
+        let mut response = project_response(false);
+        response["data"]["owner"]["projectV2"]["shortDescription"] = description;
+        let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+        assert!(matches!(
+            build(&endpoint)
+                .query_projects(&ProjectQuery::default(), &page(10))
+                .await,
+            Err(SourceError::Malformed { .. })
+        ));
+        handle.join().unwrap();
+    }
+
+    for (repositories, succeeds) in [
+        (json!(["github.com/acme/fallback"]), true),
+        (json!(7), false),
+    ] {
+        let mut response = project_response(false);
+        response["data"]["owner"]["projectV2"]["items"]["nodes"][0]["content"]
+            .as_object_mut()
+            .unwrap()
+            .remove("repository");
+        response["data"]["owner"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["nodes"][1]["text"] = json!(
+            serde_json::to_string(&json!({"onetaskgraph.repositories": repositories})).unwrap()
+        );
+        let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+        assert_eq!(
+            build(&endpoint)
+                .query_tasks(&TaskQuery::default(), &page(10))
+                .await
+                .is_ok(),
+            succeeds
+        );
+        handle.join().unwrap();
+    }
+
+    let mut response = project_response(false);
+    response["data"]["owner"]["projectV2"]["shortDescription"] =
+        json!("visible\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.repositories\":7}\n-->");
+    let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+    assert!(matches!(
+        build(&endpoint)
+            .query_projects(&ProjectQuery::default(), &page(10))
+            .await,
+        Err(SourceError::Malformed { .. })
+    ));
+    handle.join().unwrap();
 }
 
 #[tokio::test]

@@ -283,6 +283,11 @@ async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
     assert_eq!(page.items[0].title, "Fixture issue");
     assert_eq!(page.items[0].status.name, "In Progress");
     assert_eq!(page.items[0].content.as_deref(), Some("Recorded body"));
+    assert_eq!(
+        page.items[0].metadata["caller.number"],
+        serde_json::json!(7)
+    );
+    assert_eq!(page.items[0].repositories[0].0, "github.com/acme/work");
     assert_eq!(page.items[0].project.as_ref().unwrap().0, "p1");
     assert_eq!(page.items[0].labels[0].color.as_deref(), Some("#ff0000"));
     assert_eq!(
@@ -320,6 +325,11 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
         .unwrap();
     assert_eq!(projects.items[0].title, "Fixture project");
     assert_eq!(projects.items[0].content.as_deref(), Some("Project body"));
+    assert_eq!(
+        projects.items[0].metadata["caller.enabled"],
+        serde_json::json!(true)
+    );
+    assert_eq!(projects.items[0].repositories[0].0, "github.com/acme/work");
     assert_eq!(
         projects.items[0].labels[0].color.as_deref(),
         Some("#00ff00")

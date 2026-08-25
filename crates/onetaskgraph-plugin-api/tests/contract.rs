@@ -576,6 +576,12 @@ fn a_dependency_edge_round_trips_through_json() {
         serde_json::from_str::<DependencyEdge>(&encoded).expect("decodes"),
         edge
     );
+    let legacy: DependencyEdge = serde_json::from_value(serde_json::json!({
+        "from":"A", "to":"B", "kind":"related"
+    }))
+    .expect("legacy native endpoints still decode");
+    assert_eq!(legacy.from.to_string(), "A");
+    assert_eq!(legacy.from.kind, onetaskgraph_plugin_api::ItemKind::Task);
 }
 
 #[test]
