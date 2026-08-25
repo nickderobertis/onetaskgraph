@@ -13,6 +13,7 @@ jobs:
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        # llmlint: ignore[changed_behavior_has_e2e] This branch depends on GitHub's secret boundary, which a pre-publication dispatch cannot exercise.
         run: echo "enabled=$([ -n "$RELEASE_TOKEN" ] && [ -n "$CARGO_TOKEN" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
   release-plz:
     needs: guard

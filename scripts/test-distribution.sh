@@ -96,9 +96,22 @@ with open(port_file, "w", encoding="utf-8") as stream:
 server.serve_forever()
 PY
 http_server_pid=$!
-for _ in {1..200}; do [[ -s "$tmp/http-port" ]] && break; sleep 0.05; done
+http_server_status=
+for _ in {1..600}; do
+  [[ -s "$tmp/http-port" ]] && break
+  if ! kill -0 "$http_server_pid" 2>/dev/null; then
+    if wait "$http_server_pid"; then http_server_status=0; else http_server_status=$?; fi
+    http_server_pid=
+    break
+  fi
+  sleep 0.05
+done
 if [[ ! -s "$tmp/http-port" ]]; then
-  echo "local HTTP release server did not start; server output follows:" >&2
+  if [[ -n $http_server_status ]]; then
+    echo "local HTTP release server exited with status $http_server_status before starting; server output follows:" >&2
+  else
+    echo "local HTTP release server was still running after 30 seconds; server output follows:" >&2
+  fi
   sed 's/^/  /' "$tmp/http.log" >&2
   echo "next: inspect the distribution test server" >&2
   exit 1
