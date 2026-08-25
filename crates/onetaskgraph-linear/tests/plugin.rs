@@ -314,6 +314,55 @@ async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
 }
 
 #[tokio::test]
+async fn the_metadata_slot_changes_nothing_else_the_item_carries() {
+    // The slot lives inside the description, so the field it could plausibly disturb is
+    // the content — and the ones a reader would never think to check are the rest. This
+    // reads the same issue twice, once with the slot and once without, and asserts that
+    // the only difference between the two is the metadata and the origins read out of it.
+    async fn read(description: &str) -> onetaskgraph_plugin_api::Task {
+        let mut body: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/issues.json")).unwrap();
+        body["data"]["issues"]["nodes"][0]["description"] = serde_json::json!(description);
+        let (endpoint, _) = server("200 OK", "", body.to_string());
+        source(&endpoint)
+            .query_tasks(
+                &TaskQuery::default(),
+                &PageRequest {
+                    cursor: None,
+                    limit: 1,
+                },
+            )
+            .await
+            .expect("the fixture issue reads")
+            .items
+            .remove(0)
+    }
+
+    let bare = read("Recorded body").await;
+    let with_slot = read(
+        "Recorded body\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":7,\"onetaskgraph.repositories\":[\"github.com/acme/work\"]}\n-->",
+    )
+    .await;
+
+    assert!(bare.metadata.is_empty());
+    assert!(bare.repositories.is_empty());
+    assert_eq!(with_slot.metadata["caller.number"], serde_json::json!(7));
+    assert_eq!(
+        with_slot.repositories[0].as_str(),
+        "github.com/acme/work"
+    );
+    assert_eq!(
+        onetaskgraph_plugin_api::Task {
+            metadata: Default::default(),
+            repositories: Vec::new(),
+            ..with_slot
+        },
+        bare,
+        "the slot must leave the title, the content, the labels, the state and the rest alone"
+    );
+}
+
+#[tokio::test]
 async fn linear_metadata_slot_rejects_malformed_values_and_preserves_non_trailing_markers() {
     for description in [
         "visible\n<!-- onetaskgraph.metadata\n{}",
