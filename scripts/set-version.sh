@@ -6,6 +6,9 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 binary_manifest=crates/onetaskgraph/Cargo.toml
 current=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$binary_manifest" | head -n1)
+[[ $current =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
+  echo "$binary_manifest has no valid semantic version; next: restore its X.Y.Z version and rerun" >&2; exit 2;
+}
 
 if [[ ${1:-} == --check ]]; then
   cargo metadata --locked --format-version 1 >/dev/null
