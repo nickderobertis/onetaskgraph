@@ -1,9 +1,5 @@
 # Recorded GraphQL shapes
 
-<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] These external-contract
-fixtures are an explicit acceptance deliverable. Their authoritative sources are linked below;
-production validates every required field and the credential-gated live lane detects API drift. -->
-
 `project.json` follows GitHub's published `ProjectV2`, `ProjectV2Item`,
 `ProjectV2ItemContent`, `ProjectV2ItemFieldSingleSelectValue`, and label-connection schema.
 `dependencies.json` follows the published `Issue.blockedBy: IssueConnection` and
@@ -13,3 +9,8 @@ The values are synthetic and stable; the object, union, and connection shapes ar
 the official GraphQL references at <https://docs.github.com/en/graphql/reference/projects> and
 <https://docs.github.com/en/graphql/reference/issues>. Tests serve these files through an actual
 loopback HTTP server and exercise request construction, authentication, parsing, and mapping.
+
+`schema.graphql` is the authoritative read-contract subset obtained from GitHub.com's GraphQL
+introspection endpoint on 2026-08-24. The pinned-schema test validates every production operation's
+selected fields, arguments, variable types, fragment type conditions, and fixture keys against it;
+the credentialed live lane provides the freshness check against GitHub's current schema.

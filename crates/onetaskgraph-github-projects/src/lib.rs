@@ -45,6 +45,36 @@ pub const MAX_PAGE_SIZE: u32 = 100;
 /// Nested connection size which keeps GitHub's worst-case query below its node limit.
 const NESTED_PAGE_SIZE: u32 = 50;
 
+/// Exact GraphQL query documents issued by this plugin.
+///
+/// Keeping the production documents here lets the pinned-schema test validate the same bytes
+/// that are sent to GitHub, rather than a test-only copy which could drift independently.
+pub mod graphql {
+    /// Reads the configured project and its task page.
+    pub const PROJECT: &str = r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!){
+      owner:repositoryOwner(login:$owner){
+        ... on ProjectV2Owner{projectV2(number:$number){...Project}}
+      }
+    } fragment Project on ProjectV2 { id title shortDescription url createdAt updatedAt closed
+      items(first:$first,after:$after){nodes{id fieldValues(first:$nestedFirst){nodes{
+        ... on ProjectV2ItemFieldSingleSelectValue{name field{
+          ... on ProjectV2SingleSelectField{name}
+        }}
+        ... on ProjectV2ItemFieldLabelValue{labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+      }pageInfo{hasNextPage}} content{
+        ... on Issue{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on PullRequest{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on DraftIssue{id title body createdAt updatedAt}
+      }} pageInfo{hasNextPage endCursor}}
+    }"#;
+    /// Reads both dependency directions for one issue.
+    pub const TASK_DEPENDENCIES: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){__typename ... on Issue{blockedBy(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}}}}"#;
+    /// Continues the projects connection for an issue related to a dependency.
+    pub const RELATED_PROJECTS: &str = r#"query($id:ID!,$first:Int!,$after:String!){node(id:$id){... on Issue{projectItems(first:$first,after:$after){nodes{project{id}}pageInfo{hasNextPage endCursor}}}}}"#;
+    /// Reads issue dependencies and the projects containing each related issue.
+    pub const PROJECT_DEPENDENCIES: &str = r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}}}}"#;
+}
+
 fn default_token_env() -> String {
     "GH_PROJECTS_TOKEN".to_owned()
 }
@@ -259,23 +289,7 @@ impl GitHubProjectsSource {
         items_after: Option<&str>,
         items_first: u32,
     ) -> Result<Value, SourceError> {
-        const QUERY: &str = r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!){
-          owner:repositoryOwner(login:$owner){
-            ... on ProjectV2Owner{projectV2(number:$number){...Project}}
-          }
-        } fragment Project on ProjectV2 { id title shortDescription url createdAt updatedAt closed
-          items(first:$first,after:$after){nodes{id fieldValues(first:$nestedFirst){nodes{
-            ... on ProjectV2ItemFieldSingleSelectValue{name field{
-              ... on ProjectV2SingleSelectField{name}
-            }}
-            ... on ProjectV2ItemFieldLabelValue{labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
-          }pageInfo{hasNextPage}} content{
-            ... on Issue{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
-            ... on PullRequest{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
-            ... on DraftIssue{id title body createdAt updatedAt}
-          }} pageInfo{hasNextPage endCursor}}
-        }"#;
-        let data = self.graphql(QUERY, json!({"owner":self.owner,"number":self.project_number,"first":items_first.min(MAX_PAGE_SIZE),"after":items_after,"nestedFirst":NESTED_PAGE_SIZE})).await?;
+        let data = self.graphql(graphql::PROJECT, json!({"owner":self.owner,"number":self.project_number,"first":items_first.min(MAX_PAGE_SIZE),"after":items_after,"nestedFirst":NESTED_PAGE_SIZE})).await?;
         data.pointer("/owner/projectV2")
             .filter(|v| !v.is_null())
             .cloned()
@@ -462,8 +476,7 @@ impl GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         validate_page(page)?;
-        const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){__typename ... on Issue{blockedBy(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}}}}"#;
-        let data = self.graphql(QUERY, json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c| c.0.as_str())})).await?;
+        let data = self.graphql(graphql::TASK_DEPENDENCIES, json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c| c.0.as_str())})).await?;
         let node =
             data.get("node")
                 .filter(|v| !v.is_null())
@@ -556,10 +569,9 @@ impl GitHubProjectsSource {
             };
             validate_cursor_progress(previous.as_deref(), &cursor.0)?;
             previous = Some(cursor.0.clone());
-            const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String!){node(id:$id){... on Issue{projectItems(first:$first,after:$after){nodes{project{id}}pageInfo{hasNextPage endCursor}}}}}"#;
             let data = self
                 .graphql(
-                    QUERY,
+                    graphql::RELATED_PROJECTS,
                     json!({"id":issue_id,"first":MAX_PAGE_SIZE,"after":cursor.0}),
                 )
                 .await?;
@@ -711,8 +723,7 @@ impl TaskSource for GitHubProjectsSource {
         for task in self.all_tasks().await? {
             let mut cursor = None;
             loop {
-                const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}}}}"#;
-                let data = self.graphql(QUERY, json!({"id":task.id.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor: &Cursor| cursor.0.as_str()),"nestedFirst":MAX_PAGE_SIZE})).await?;
+                let data = self.graphql(graphql::PROJECT_DEPENDENCIES, json!({"id":task.id.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor: &Cursor| cursor.0.as_str()),"nestedFirst":MAX_PAGE_SIZE})).await?;
                 let connection_name = match direction {
                     Direction::DependsOn => "blockedBy",
                     Direction::DependedOnBy => "blocking",
