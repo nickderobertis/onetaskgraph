@@ -244,6 +244,7 @@ assert_version_error() {
 assert_version_error 'usage: scripts/set-version.sh VERSION | --check'
 assert_version_error 'unexpected extra arguments' 1.2.3 extra
 assert_version_error 'invalid semantic version: invalid' invalid
+assert_version_error 'unexpected extra arguments after --check' --check ignored
 # shellcheck source=scripts/scratch-clone.sh
 source "$root/scripts/scratch-clone.sh"
 scratch_clone "$root" "$tmp/version-repo"

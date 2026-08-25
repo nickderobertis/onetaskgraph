@@ -11,6 +11,10 @@ current=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$binary_manifest" | head -n1)
 }
 
 if [[ ${1:-} == --check ]]; then
+  if [[ $# -ne 1 ]]; then
+    echo "unexpected extra arguments after --check; next: pass --check by itself" >&2
+    exit 2
+  fi
   cargo metadata --locked --format-version 1 >/dev/null
   uv lock --project . --check --quiet
   uv lock --project sdks/python --check --quiet

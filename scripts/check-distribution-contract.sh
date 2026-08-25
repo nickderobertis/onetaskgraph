@@ -15,23 +15,31 @@ macos-latest aarch64-apple-darwin tar.gz darwin-arm64
 windows-latest x86_64-pc-windows-msvc zip win32-x64
 MAPPINGS
 grep -Fq 'target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-msvc]' .github/workflows/release.yml || fail "wheel targets disagree with the native release matrix"
-node <<'NODE' || fail "an npm carrier manifest disagrees with its directory"
+node <<'NODE'
 const fs = require("fs");
+function fail(message) {
+  console.error(`distribution contract drift: ${message}`);
+  console.error("next: update the launcher mapping and carrier manifests together");
+  process.exit(1);
+}
 const platforms = fs.readdirSync("npm/platforms").sort();
 const expectedPackages = Object.fromEntries(platforms.map(platform => [platform, platform]));
 const launcher = fs.readFileSync("npm/cli/bin/onetaskgraph.js", "utf8");
 const packageMapping = launcher.match(/const packages = (\{[^;]+\});/);
 const actualPackages = packageMapping && JSON.parse(packageMapping[1]);
-if (!actualPackages || JSON.stringify(Object.entries(actualPackages).sort()) !== JSON.stringify(Object.entries(expectedPackages).sort())) process.exit(1);
+if (!actualPackages || JSON.stringify(Object.entries(actualPackages).sort()) !== JSON.stringify(Object.entries(expectedPackages).sort())) fail("npm/cli/bin/onetaskgraph.js platform mapping disagrees with npm/platforms");
 const launcherManifest = JSON.parse(fs.readFileSync("npm/cli/package.json"));
 const expectedDependencies = platforms.map(platform => `@onetaskgraph/cli-${platform}`).sort();
-if (JSON.stringify(Object.keys(launcherManifest.optionalDependencies || {}).sort()) !== JSON.stringify(expectedDependencies)) process.exit(1);
+if (JSON.stringify(Object.keys(launcherManifest.optionalDependencies || {}).sort()) !== JSON.stringify(expectedDependencies)) fail("npm/cli/package.json optionalDependencies disagree with npm/platforms");
 for (const platform of platforms) {
-  const manifest = JSON.parse(fs.readFileSync(`npm/platforms/${platform}/package.json`));
+  const path = `npm/platforms/${platform}/package.json`;
+  const manifest = JSON.parse(fs.readFileSync(path));
   const separator = platform.lastIndexOf("-");
   const os = platform.slice(0, separator);
   const cpu = platform.slice(separator + 1);
-  if (manifest.name !== `@onetaskgraph/cli-${platform}` || String(manifest.os) !== os || String(manifest.cpu) !== cpu) process.exit(1);
+  if (manifest.name !== `@onetaskgraph/cli-${platform}`) fail(`${path} name is ${manifest.name}, expected @onetaskgraph/cli-${platform}`);
+  if (String(manifest.os) !== os) fail(`${path} os is ${manifest.os}, expected ${os}`);
+  if (String(manifest.cpu) !== cpu) fail(`${path} cpu is ${manifest.cpu}, expected ${cpu}`);
 }
 NODE
 grep -q 'npm pack ./carrier' .github/workflows/release.yml || fail "release workflow does not build npm carrier tarballs"
