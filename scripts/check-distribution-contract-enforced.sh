@@ -9,23 +9,46 @@
 # describes, or if the query moved somewhere the pin does not read.
 set -euo pipefail
 
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Every step that builds the scratch tree is fatal, and `set -e` alone would end the run on
+# the underlying tool's diagnostic with nothing said about what to do about it.
+fatal() {
+  echo "check-distribution-contract-enforced: $1" >&2
+  echo "check-distribution-contract-enforced: next: $2" >&2
+  exit 1
+}
 
-scratch="$(mktemp -d)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
+  "could not resolve this repository's root from ${BASH_SOURCE[0]}" \
+  "run the check from a checkout of this repository, as 'just distribution-check' does"
+readonly ROOT
+
+scratch="$(mktemp -d)" || fatal \
+  "could not create the scratch tree this check mutates" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 trap 'rm -rf "$scratch"' EXIT
 
 # Git exports GIT_DIR to every hook and GIT_DIR overrides `git -C`; the gate runs from
 # .githooks/pre-push, so `git ls-files` below has to be asked in a stripped environment or
 # it answers about whatever repository the hook was invoked for.
+#
+# The path below is built from $ROOT at run time, so ShellCheck cannot follow it to decide
+# whether scratch_clone_strip_git_env is defined; the directive names the file it resolves
+# to so that check keeps working.
 # shellcheck source=scripts/scratch-clone.sh
-source "$ROOT/scripts/scratch-clone.sh"
+source "$ROOT/scripts/scratch-clone.sh" || fatal \
+  "could not load $ROOT/scripts/scratch-clone.sh, which strips the git environment" \
+  "restore that file with 'git checkout -- scripts/scratch-clone.sh' and rerun"
 scratch_clone_strip_git_env
 
 # The WORKING tree's tracked files, not HEAD's: what is under test is the pin as it is
 # right now, so an author repairing it does not watch this check keep failing against the
 # version they just replaced.
-mkdir -p "$scratch/repo"
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$scratch/repo"
+mkdir -p "$scratch/repo" || fatal \
+  "could not create the scratch tree at $scratch/repo" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$scratch/repo" || fatal \
+  "could not copy $ROOT's tracked files into $scratch/repo (see the tar or git output above)" \
+  "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 
 failures=0
 GUARD_OUTPUT=""
@@ -41,30 +64,68 @@ run_guard() {
 restore() {
   local path
   for path in "$@"; do
-    mkdir -p "$(dirname "$scratch/repo/$path")"
-    cp "$ROOT/$path" "$scratch/repo/$path"
+    mkdir -p "$(dirname "$scratch/repo/$path")" || fatal \
+      "could not recreate the directory holding $path in $scratch/repo" \
+      "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+    # An unrestored file leaves every later case mutating a tree that is already wrong, so
+    # this stops rather than carrying on with cases that would prove nothing.
+    cp "$ROOT/$path" "$scratch/repo/$path" || fatal \
+      "could not restore $path in $scratch/repo, so the cases after this one would run against a tree still carrying the previous mutation" \
+      "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
   done
 }
 
 # Replace one literal substring of a file in the scratch tree. python3 rather than `sed -i`,
 # whose in-place spelling differs between GNU and BSD and so would fail on the macOS runner.
 substitute() {
-  local path="$1" before="$2" after="$3"
-  python3 - "$scratch/repo/$path" "$before" "$after" <<'PY'
+  local path="$1" before="$2" after="$3" status=0
+  # Exit 3 is the helper saying it already printed the problem and the next action. Any
+  # other non-zero status is python3 itself failing — a missing interpreter, an unexpected
+  # exception — which would otherwise end the run on a traceback alone.
+  python3 - "$scratch/repo/$path" "$before" "$after" <<'PY' || status=$?
 import pathlib
 import sys
 
 path, before, after = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-text = path.read_text(encoding="utf-8")
+try:
+    text = path.read_text(encoding="utf-8")
+except OSError as error:
+    print(
+        f"check-distribution-contract-enforced: could not read {path}, the scratch copy\n"
+        f"check-distribution-contract-enforced: this case rewrites: {error}\n"
+        "check-distribution-contract-enforced: next: check the permissions of $TMPDIR and\n"
+        "check-distribution-contract-enforced: 'df -h' for free space, then rerun.",
+        file=sys.stderr,
+    )
+    raise SystemExit(3)
 if before not in text:
-    raise SystemExit(
+    print(
         f"check-distribution-contract-enforced: {path} no longer contains the text this case\n"
         f"check-distribution-contract-enforced: rewrites, so the case would prove nothing:\n"
         f"    {before}\n"
-        "check-distribution-contract-enforced: update the case to the text that replaced it."
+        "check-distribution-contract-enforced: next: update the case to the text that replaced it.",
+        file=sys.stderr,
     )
-path.write_text(text.replace(before, after, 1), encoding="utf-8")
+    raise SystemExit(3)
+try:
+    path.write_text(text.replace(before, after, 1), encoding="utf-8")
+except OSError as error:
+    print(
+        f"check-distribution-contract-enforced: could not write the mutated {path}, so this\n"
+        f"check-distribution-contract-enforced: case could not be put to the pin: {error}\n"
+        "check-distribution-contract-enforced: next: check the permissions of $TMPDIR and\n"
+        "check-distribution-contract-enforced: 'df -h' for free space, then rerun.",
+        file=sys.stderr,
+    )
+    raise SystemExit(3)
 PY
+  case "$status" in
+    0) ;;
+    3) exit 1 ;;
+    *) fatal \
+      "the helper that rewrites $path in the scratch tree ended with status $status, so this case was never put to the pin" \
+      "run 'python3 --version' to confirm a working python3 is on PATH, then rerun" ;;
+  esac
 }
 
 report_guard_output() {
