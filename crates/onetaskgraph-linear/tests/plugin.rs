@@ -347,10 +347,7 @@ async fn the_metadata_slot_changes_nothing_else_the_item_carries() {
     assert!(bare.metadata.is_empty());
     assert!(bare.repositories.is_empty());
     assert_eq!(with_slot.metadata["caller.number"], serde_json::json!(7));
-    assert_eq!(
-        with_slot.repositories[0].as_str(),
-        "github.com/acme/work"
-    );
+    assert_eq!(with_slot.repositories[0].as_str(), "github.com/acme/work");
     assert_eq!(
         onetaskgraph_plugin_api::Task {
             metadata: Default::default(),
