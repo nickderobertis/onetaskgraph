@@ -7,10 +7,8 @@
 //! a source that filters natively and one that does not.
 //!
 //! `scripts/check-journey-matrix.sh` fails, naming the plugin, when a plugin the registry
-//! knows has no row here. A plugin whose source has not landed carries a
-//! [`Fixture::Pending`] row rather than no row: that row is a journey too — it asserts
-//! the plugin refuses with its own message — so a placeholder cannot sit here doing
-//! nothing.
+//! knows has no row here. Every registered plugin is implemented, so every row carries a
+//! working source fixture.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -28,17 +26,8 @@ pub struct Row {
     pub plugin: &'static str,
     /// This row's own name, unique across rows, used in failure messages.
     pub name: &'static str,
-    /// How to build it, or why it cannot be built yet.
-    pub fixture: Fixture,
-}
-
-/// A row that can be configured, or one whose plugin has not landed.
-pub enum Fixture {
-    /// A working source over the shared dataset.
-    Ready(Ready),
-    /// The plugin is registered and refuses to build. The journey for such a row asserts
-    /// exactly that, so this is a test rather than a placeholder.
-    Pending,
+    /// How to build it.
+    pub fixture: Ready,
 }
 
 /// Everything a journey needs in order to drive one configured source.
@@ -47,6 +36,8 @@ pub struct Ready {
     pub block: fn(&Sandbox) -> Value,
     /// What this configuration declares it applies itself.
     pub declared: Declared,
+    /// Whether this source can represent the complete cross-plugin dataset.
+    pub complete_dataset: bool,
 }
 
 /// What one row's source declares, so a journey can assert the plan as well as the rows.
@@ -73,21 +64,15 @@ impl Row {
     /// Written as JSON, which the YAML reader accepts, so a fixture is a value rather
     /// than a string a test has to indent correctly.
     pub fn document(&self, sandbox: &Sandbox) -> String {
-        let block = match &self.fixture {
-            Fixture::Ready(ready) => (ready.block)(sandbox),
-            Fixture::Pending => json!({}),
-        };
+        let block = (self.fixture.block)(sandbox);
         document(&json!({
             SOURCE: {"plugin": self.plugin, "config": block}
         }))
     }
 
-    /// What this row declares, or nothing when its plugin has not landed.
-    pub fn declared(&self) -> Option<&Declared> {
-        match &self.fixture {
-            Fixture::Ready(ready) => Some(&ready.declared),
-            Fixture::Pending => None,
-        }
+    /// What this row declares.
+    pub fn declared(&self) -> &Declared {
+        &self.fixture.declared
     }
 }
 
@@ -108,12 +93,9 @@ pub const SCANNED: &str = "scanned";
 pub fn pair_at(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
     let mut sources = serde_json::Map::new();
     for (name, row) in [(NATIVE, &ROWS[0]), (SCANNED, &ROWS[1])] {
-        let Fixture::Ready(ready) = &row.fixture else {
-            panic!("the first two rows are the configured `in-memory` pair");
-        };
         sources.insert(
             name.to_owned(),
-            boundary.source(row.plugin, (ready.block)(sandbox)),
+            boundary.source(row.plugin, (row.fixture.block)(sandbox)),
         );
     }
     document(&Value::Object(sources))
@@ -139,8 +121,9 @@ pub const ROWS: &[Row] = &[
     Row {
         plugin: "in-memory",
         name: "in-memory (declares everything native)",
-        fixture: Fixture::Ready(Ready {
+        fixture: Ready {
             block: native_block,
+            complete_dataset: true,
             declared: Declared {
                 filter_by_label: true,
                 filter_by_status: true,
@@ -150,13 +133,14 @@ pub const ROWS: &[Row] = &[
                 reverse_task_dependencies: true,
                 reverse_project_dependencies: true,
             },
-        }),
+        },
     },
     Row {
         plugin: "in-memory",
         name: "in-memory (declares nothing native, forward-only)",
-        fixture: Fixture::Ready(Ready {
+        fixture: Ready {
             block: compensated_block,
+            complete_dataset: true,
             declared: Declared {
                 filter_by_label: false,
                 filter_by_status: false,
@@ -166,13 +150,14 @@ pub const ROWS: &[Row] = &[
                 reverse_task_dependencies: false,
                 reverse_project_dependencies: false,
             },
-        }),
+        },
     },
     Row {
         plugin: "subprocess",
         name: "subprocess (the in-memory source over a real pipe)",
-        fixture: Fixture::Ready(Ready {
+        fixture: Ready {
             block: hosted_block,
+            complete_dataset: true,
             declared: Declared {
                 filter_by_label: true,
                 filter_by_status: true,
@@ -182,13 +167,14 @@ pub const ROWS: &[Row] = &[
                 reverse_task_dependencies: true,
                 reverse_project_dependencies: true,
             },
-        }),
+        },
     },
     Row {
         plugin: "local-md",
         name: "local-md",
-        fixture: Fixture::Ready(Ready {
+        fixture: Ready {
             block: local_md_block,
+            complete_dataset: true,
             // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The journeys use
             // these expectations to assert the real binary's reported plan, whose values
             // come from `LocalMdSource::capabilities`; changing that implementation without
@@ -203,13 +189,16 @@ pub const ROWS: &[Row] = &[
                 reverse_task_dependencies: true,
                 reverse_project_dependencies: true,
             },
-        }),
+        },
     },
     Row {
         plugin: "linear",
         name: "linear",
-        fixture: Fixture::Ready(Ready {
+        fixture: Ready {
             block: linear_block,
+            // Linear models the whole table: two projects, an orphan, and dependencies in
+            // both directions, so it drives the shared complete-dataset journeys.
+            complete_dataset: true,
             declared: Declared {
                 filter_by_label: true,
                 filter_by_status: true,
@@ -219,14 +208,200 @@ pub const ROWS: &[Row] = &[
                 reverse_task_dependencies: true,
                 reverse_project_dependencies: true,
             },
-        }),
+        },
     },
     Row {
         plugin: "github-projects",
         name: "github-projects",
-        fixture: Fixture::Pending,
+        fixture: Ready {
+            block: github_projects_block,
+            // One GitHub source is exactly one ProjectV2 board and every item belongs to
+            // it. It cannot faithfully represent the table's two projects and orphan.
+            // Focused journeys drive this working row over the subset GitHub can model.
+            complete_dataset: false,
+            declared: Declared {
+                filter_by_label: false,
+                filter_by_status: false,
+                search_title: false,
+                search_content: false,
+                orphan_tasks: false,
+                reverse_task_dependencies: false,
+                reverse_project_dependencies: false,
+            },
+        },
     },
 ];
+
+fn github_projects_block(sandbox: &Sandbox) -> Value {
+    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
+    let endpoint = format!(
+        "http://{}/graphql",
+        listener.local_addr().expect("fixture address")
+    );
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.expect("GitHub fixture connection");
+            let request = read_http_json(&mut stream);
+            let query = request["query"].as_str().expect("GraphQL query string");
+            graphql_parser::parse_query::<String>(query).expect("valid GraphQL document");
+            let variables = request["variables"]
+                .as_object()
+                .expect("GraphQL variables object");
+            let variables = &Value::Object(variables.clone());
+            let data = if query.contains("node(id:$id)") {
+                let id = variables["id"].as_str().expect("dependency id");
+                let first = variables["first"]
+                    .as_u64()
+                    .expect("dependency first must be an unsigned integer");
+                assert!(
+                    (1..=100).contains(&first),
+                    "dependency first is out of range"
+                );
+                assert!(
+                    variables["after"].is_null() || variables["after"].is_string(),
+                    "dependency after must be null or a string"
+                );
+                let blockers = match id {
+                    "T-1" | "T-3" | "T-4" => vec![json!({"id":"T-2","projectItems":{"nodes":[]}})],
+                    _ => vec![],
+                };
+                json!({"node":{"__typename":"Issue","blockedBy":{"nodes":blockers,"pageInfo":{"hasNextPage":false,"endCursor":null}}}})
+            } else if query.contains("owner:repositoryOwner") {
+                assert_eq!(variables["owner"], "fixture-owner");
+                assert_eq!(variables["number"], 7);
+                assert_eq!(variables["nestedFirst"], 50);
+                github_project_page(variables)
+            } else {
+                panic!("fixture received an unknown GraphQL operation")
+            };
+            let body = json!({"data":data}).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("GitHub fixture response");
+        }
+    });
+    json!({
+        "owner": "fixture-owner",
+        "project_number": 7,
+        "token_env": "GITHUB_PROJECTS_FIXTURE_TOKEN",
+        "endpoint": endpoint,
+        "status_mapping": {"Doing":"in-progress", "Shipped":"done"}
+    })
+}
+
+fn read_http_json(stream: &mut impl Read) -> Value {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    loop {
+        let count = stream.read(&mut chunk).expect("fixture request");
+        assert!(count > 0, "fixture request ended before its HTTP headers");
+        bytes.extend_from_slice(&chunk[..count]);
+        if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    let header_end = bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("HTTP header terminator")
+        + 4;
+    let headers = String::from_utf8_lossy(&bytes[..header_end]);
+    assert!(headers.contains("authorization: Bearer test-token"));
+    let length = headers
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("content-length: ")
+                .and_then(|value| value.parse::<usize>().ok())
+        })
+        .expect("Content-Length");
+    while bytes.len() - header_end < length {
+        let count = stream.read(&mut chunk).expect("fixture request body");
+        assert!(count > 0, "fixture request ended before its declared body");
+        bytes.extend_from_slice(&chunk[..count]);
+    }
+    serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
+}
+
+fn github_project_page(variables: &Value) -> Value {
+    let tasks = [
+        (
+            "T-1",
+            "Alpha engine",
+            "the engine core",
+            "Todo",
+            "OPEN",
+            vec![("L-1", "bug"), ("L-3", "core")],
+        ),
+        (
+            "T-2",
+            "Beta",
+            "alpha in the body",
+            "Shipped",
+            "CLOSED",
+            vec![("L-2", "chore")],
+        ),
+        (
+            "T-3",
+            "Gamma",
+            "unrelated",
+            "Todo",
+            "OPEN",
+            vec![("L-1", "bug")],
+        ),
+        (
+            "T-4",
+            "Delta docs",
+            "documentation",
+            "Doing",
+            "OPEN",
+            vec![("L-3", "core")],
+        ),
+    ];
+    let offset = match variables.get("after") {
+        Some(Value::Null) => 0,
+        Some(Value::String(value)) => value.parse::<usize>().expect("numeric after cursor"),
+        _ => panic!("GraphQL after must be null or a numeric string"),
+    };
+    let first = usize::try_from(
+        variables
+            .get("first")
+            .and_then(Value::as_u64)
+            .expect("GraphQL first must be an unsigned integer"),
+    )
+    .expect("GraphQL first fits usize");
+    assert!(first > 0, "GraphQL first must be positive");
+    assert!(
+        offset <= tasks.len(),
+        "GraphQL after cursor is out of range"
+    );
+    let end = (offset + first).min(tasks.len());
+    let nodes = tasks[offset..end]
+        .iter()
+        .map(|(id, title, body, status, state, labels)| json!({
+            "id": format!("ITEM-{id}"),
+            "fieldValues":{"nodes":[{"name":status,"field":{"name":"Status"}}],"pageInfo":{"hasNextPage":false}},
+            "content":{
+                "id":id,"title":title,"body":body,"state":state,
+                "url":format!("https://example.invalid/{id}"),
+                "labels":{"nodes":labels.iter().map(|(id, name)| json!({"id":id,"name":name})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}
+            }
+        }))
+        .collect::<Vec<_>>();
+    json!({
+        "owner":{"projectV2":{
+            "id":"P-1","title":"Engine","shortDescription":"alpha engine project",
+            "url":"https://example.invalid/P-1","closed":false,
+            "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < tasks.len(),"endCursor":end.to_string()}}
+        }},
+        "user":{"projectV2":null}
+    })
+}
 
 /// A socket-level Linear GraphQL fixture used by the shared binary journeys.
 fn linear_block(sandbox: &Sandbox) -> Value {

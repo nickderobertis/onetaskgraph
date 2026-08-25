@@ -1,0 +1,49 @@
+{
+  "data": {
+    "owner": {
+      "projectV2": {
+        "id": "PVT_project",
+        "title": "Roadmap",
+        "shortDescription": "Delivery plan",
+        "url": "https://github.example/projects/7",
+        "createdAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-02-01T00:00:00Z",
+        "closed": false,
+        "items": {
+          "nodes": [
+            {
+              "id": "PVTI_1",
+              "fieldValues": {
+                "nodes": [
+                  { "name": "Doing", "field": { "name": "Status" } },
+                  {
+                    "labels": {
+                      "nodes": [{ "id": "L_field", "name": "team", "color": "00ff00" }],
+                      "pageInfo": { "hasNextPage": false }
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": false }
+              },
+              "content": {
+                "id": "I_task",
+                "title": "Ship it",
+                "body": "details",
+                "url": "https://github.example/issues/1",
+                "createdAt": "2026-01-02T00:00:00Z",
+                "updatedAt": "2026-01-03T00:00:00Z",
+                "state": "OPEN",
+                "labels": {
+                  "nodes": [{ "id": "L_bug", "name": "bug", "color": "ff0000" }],
+                  "pageInfo": { "hasNextPage": false }
+                }
+              }
+            }
+          ],
+          "pageInfo": { "hasNextPage": false, "endCursor": null }
+        }
+      }
+    },
+    "user": { "projectV2": null }
+  }
+}
