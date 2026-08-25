@@ -73,30 +73,6 @@ async fn discover_project(token: &str) -> Option<(String, u32)> {
         })
 }
 
-async fn is_issue(token: &str, id: &str) -> bool {
-    let Ok(response) = reqwest::Client::new()
-        .post("https://api.github.com/graphql")
-        .header("user-agent", "onetaskgraph-live-test")
-        .bearer_auth(token)
-        .json(&json!({
-            "query": "query($id:ID!){node(id:$id){__typename}}",
-            "variables": {"id": id}
-        }))
-        .send()
-        .await
-        .and_then(reqwest::Response::error_for_status)
-    else {
-        return false;
-    };
-    let Ok(response) = response.json::<Value>().await else {
-        return false;
-    };
-    response
-        .pointer("/data/node/__typename")
-        .and_then(Value::as_str)
-        == Some("Issue")
-}
-
 fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
     PageRequest { cursor, limit: 25 }
 }
@@ -224,37 +200,36 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
         .unwrap();
     assert_eq!(wider.items, baseline.items);
 
-    // Draft issues and pull requests do not expose Issue.blockedBy. Find any Issue content and
-    // prove its forward dependency connection is readable; an empty connection is well formed.
-    let mut dependency_read = false;
+    // Find an Issue with a real blocked-by edge, then follow the blocker back through its
+    // blocking connection. Draft issues and pull requests simply contribute no Issue edges.
+    let mut dependency_round_trip = false;
     for task in &tasks {
-        if !is_issue(&token, &task.id.0).await {
-            continue;
-        }
         let forward = source
-            .task_dependencies(
-                &NativeId(task.id.0.clone()),
-                Direction::DependsOn,
-                &page(None),
-            )
+            .task_dependencies(&task.id, Direction::DependsOn, &page(None))
             .await
             .unwrap_or_else(|error| panic!("forward dependency read failed: {error}"));
+        let Some(edge) = forward.items.first() else {
+            continue;
+        };
+        assert_eq!(edge.to, task.id);
+        assert!(
+            tasks.iter().any(|candidate| candidate.id == edge.from),
+            "the forward dependency must resolve to another task on the project"
+        );
         let reverse = source
-            .task_dependencies(
-                &NativeId(task.id.0.clone()),
-                Direction::DependedOnBy,
-                &page(None),
-            )
+            .task_dependencies(&edge.from, Direction::DependedOnBy, &page(None))
             .await
             .unwrap_or_else(|error| panic!("reverse dependency read failed: {error}"));
-        assert!(forward.next.is_none() || !forward.items.is_empty());
-        assert!(reverse.next.is_none() || !reverse.items.is_empty());
-        dependency_read = true;
+        assert!(
+            reverse.items.contains(edge),
+            "the blocker must name the blocked task through its reverse edge"
+        );
+        dependency_round_trip = true;
         break;
     }
     assert!(
-        dependency_read,
-        "live project has no Issue item on which to exercise Issue.blockedBy and Issue.blocking; set \
-         GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER to a project containing an Issue"
+        dependency_round_trip,
+        "live project has no non-empty Issue.blockedBy connection whose blocker names the task \
+         through Issue.blocking"
     );
 }
