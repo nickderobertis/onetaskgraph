@@ -168,8 +168,25 @@ for member in sorted(members, key=lambda member: names[member]):
     print(f"{PREFIX} break that path — the arrow only runs one way.")
 '
 
+# Print the report for one cargo-metadata document, or refuse if the scan cannot read it.
+#
+# That refusal has no fixture in scripts/check-isolation-enforced.sh, because no tree it
+# can build reaches it: while cargo honours `--format-version 1` the keys below are there.
+# It exists so the day cargo changes that shape, the next author reads what to do rather
+# than a traceback — and so an unreadable graph is never mistaken for a clean one.
 scan() {
-  printf '%s' "$1" | PLUGINS="${PLUGINS[*]}" python3 -c "$ISOLATION_SCAN"
+  local output status
+  output="$(printf '%s' "$1" | PLUGINS="${PLUGINS[*]}" python3 -c "$ISOLATION_SCAN" 2>&1)" \
+    && status=0 || status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "check-plugin-isolation: could not read the document cargo handed over, so neither" >&2
+    echo "check-plugin-isolation: half of the rule was checked. The scan said:" >&2
+    printf '%s\n' "$output" | sed 's/^/check-plugin-isolation:   /' >&2
+    echo "check-plugin-isolation: compare 'cargo metadata --format-version 1' against the keys" >&2
+    echo "check-plugin-isolation: this script reads, and update the scan to the shape it found." >&2
+    exit 1
+  fi
+  printf '%s' "$output"
 }
 
 # The manifests first, and they are read WITHOUT resolving anything, which is what makes
