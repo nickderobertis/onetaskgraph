@@ -73,6 +73,7 @@ if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releas
 grep -q 'unsafe member path' "$tmp/error" || { echo "unsafe-member failure omitted its reason; next: inspect archive validation" >&2; exit 1; }
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="ftp://invalid/releases" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "unsupported download scheme was accepted; next: inspect source validation" >&2; exit 1; fi
 grep -q 'download base must use' "$tmp/error" || { echo "unsupported-scheme failure omitted its reason; next: inspect source diagnostics" >&2; exit 1; }
+rm "$tmp/releases/$tag/$name"
 if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 python - "$tmp" "$tmp/http-port" >"$tmp/http.log" 2>&1 <<'PY' &
@@ -131,10 +132,12 @@ PY
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "archive link entry was accepted; next: inspect link validation" >&2; exit 1; fi
 grep -q 'archive contains a link entry' "$tmp/error" || { echo "link-entry failure omitted its reason; next: inspect archive diagnostics" >&2; exit 1; }
+rm "$tmp/releases/$tag/$name"
 if [[ $ext == zip ]]; then (cd "$tmp" && 7z a "$tmp/releases/$tag/$name" error >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$tmp" error; fi
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "archive without binary was accepted; next: inspect binary validation" >&2; exit 1; fi
 grep -q 'archive binary is not a regular file' "$tmp/error" || { echo "missing-archive-binary failure omitted its reason; next: inspect archive diagnostics" >&2; exit 1; }
+rm "$tmp/releases/$tag/$name"
 if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 mkdir "$tmp/no-hash-path"
