@@ -90,6 +90,13 @@ def text(value, what):
     return value
 
 
+def kind_of(carrier, what):
+    """The edge kind a dependency or a dep_kinds entry carries. Cargo writes null for a
+    normal edge, so null is the one non-string this accepts."""
+    kind = carrier.get("kind")
+    return "normal" if kind is None else text(kind, what)
+
+
 try:
     metadata = json.loads(sys.stdin.read())
 except ValueError as error:
@@ -106,6 +113,7 @@ for package in metadata["packages"]:
     for dependency in array(package.get("dependencies"), "a package dependencies field"):
         mapping(dependency, "a package dependency")
         text(dependency.get("name"), "a package dependency name")
+        kind_of(dependency, "a package dependency kind")
 
 names = {package["id"]: package["name"] for package in metadata["packages"]}
 labels = {
@@ -114,6 +122,7 @@ labels = {
 }
 members = set(metadata["workspace_members"])
 for member in members:
+    text(member, "a workspace member")
     if member not in names:
         refuse("names a workspace member that is no package of the same document")
 workspace = {names[member] for member in members}
@@ -131,9 +140,13 @@ if resolve is not None:
         text(node.get("id"), "a resolve node id")
         for dependency in array(node.get("deps"), "a resolve node deps field"):
             mapping(dependency, "a resolve dependency")
-            text(dependency.get("pkg"), "a resolve dependency pkg")
-            for entry in array(dependency.get("dep_kinds") or [], "a dep_kinds field"):
-                mapping(entry, "a dep_kinds entry")
+            if text(dependency.get("pkg"), "a resolve dependency pkg") not in names:
+                refuse("resolves a dependency on no package of the same document")
+            kinds = dependency.get("dep_kinds")
+            if kinds is not None:
+                for entry in array(kinds, "a dep_kinds field"):
+                    mapping(entry, "a dep_kinds entry")
+                    kind_of(entry, "a dep_kinds kind")
     nodes = {node["id"]: node for node in resolve["nodes"]}
     for member in members:
         if member not in nodes:
@@ -151,7 +164,7 @@ for package in metadata["packages"]:
     name = package["name"]
     for dependency in package["dependencies"]:
         target = dependency["name"]
-        kind = dependency.get("kind") or "normal"
+        kind = kind_of(dependency, "a package dependency kind")
         if name in PLUGINS and target == ENGINE:
             direct.append(f"{name} -> {target} ({kind}): a plugin crate may not depend on the engine")
         if name == API and target in workspace:
@@ -183,7 +196,8 @@ if nodes is None:
 def edge_kinds(dependency):
     """Every kind of edge this one dependency represents, as `--edges all` means it: a
     null kind is a normal dependency."""
-    kinds = {entry.get("kind") or "normal" for entry in dependency.get("dep_kinds") or []}
+    entries = dependency.get("dep_kinds")
+    kinds = {kind_of(entry, "a dep_kinds kind") for entry in entries or []}
     return ",".join(sorted(kinds)) or "normal"
 
 

@@ -309,6 +309,11 @@ shim_cases=(
   '{"packages": [], "workspace_members": [], "resolve": {}}|a resolve section with no nodes'
   '{"packages": [], "workspace_members": [], "resolve": {"nodes": [{}]}}|a resolve node with no id'
   '{"packages": [], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{}]}]}}|a resolve dependency with no pkg'
+  '{"packages": [], "workspace_members": [1]}|a workspace member that is not a string'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [{"name": "b", "kind": 1}]}], "workspace_members": []}|a dependency whose kind is not a string'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "ghost"}]}]}}|a resolve dependency on no package of the document'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": {}}]}]}}|dep_kinds that are not an array'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": [{"kind": 1}]}]}]}}|a dep_kinds kind that is not a string'
 )
 for shim_case in "${shim_cases[@]}"; do
   GUARD_OUTPUT="$(cd "$scratch/repo" \
