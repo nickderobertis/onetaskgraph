@@ -177,6 +177,19 @@ fn github_projects_missing_credential_reaches_the_binary_user() {
         "{complaint}"
     );
     assert!(complaint.contains("--allow-partial"), "{complaint}");
+
+    let allowed = run(&sandbox, &["task", "list", "--allow-partial"]);
+    assert_eq!(
+        allowed.status.code(),
+        Some(0),
+        "allowing the missing source must make the partial run succeed: {}",
+        stderr(&allowed)
+    );
+    assert!(
+        stderr(&allowed).contains("DELIBERATELY_MISSING_GITHUB_TOKEN"),
+        "the partial run must still explain the missing credential: {}",
+        stderr(&allowed)
+    );
 }
 
 #[test]
