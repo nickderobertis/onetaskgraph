@@ -62,7 +62,10 @@ fn server(
             }
             let request: Value =
                 serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap();
-            assert!(request["query"].as_str().unwrap().contains(&expected_query));
+            let query = request["query"].as_str().unwrap();
+            graphql_parser::parse_query::<String>(query)
+                .expect("the production request must be valid GraphQL");
+            assert!(query.contains(&expected_query));
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -156,7 +159,12 @@ fn page(limit: u32) -> PageRequest {
 
 #[tokio::test]
 async fn reads_and_normalizes_a_synthetic_graphql_response_through_http() {
-    let (endpoint, handle) = server("200 OK", project_response(true), 1, "projectV2");
+    let (endpoint, handle) = server(
+        "200 OK",
+        project_response(true),
+        1,
+        "... on ProjectV2SingleSelectField{name}",
+    );
     let source = build(&endpoint);
     assert_eq!(source.kind(), "github-projects");
     assert_eq!(source.capabilities().max_page_size, 100);
@@ -207,12 +215,13 @@ async fn maps_pull_request_and_draft_issue_content_shapes() {
 }
 
 #[tokio::test]
-async fn resolves_user_owned_projects_and_ignores_unsupported_predicates() {
-    let mut response = project_response(false);
-    let project = response["data"]["organization"]["projectV2"].clone();
-    response["data"]["organization"]["projectV2"] = Value::Null;
-    response["data"]["user"]["projectV2"] = project;
-    let (endpoint, handle) = server("200 OK", response, 1, "projectV2");
+async fn resolves_a_project_v2_owner_and_ignores_unsupported_predicates() {
+    let (endpoint, handle) = server(
+        "200 OK",
+        project_response(false),
+        1,
+        "organization:repositoryOwner",
+    );
     let source = build(&endpoint);
     let mut query = TaskQuery::default();
     query.labels.any_of.push("absent".into());

@@ -42,6 +42,8 @@ use serde_json::{Value, json};
 pub const KIND: &str = "github-projects";
 /// GitHub's maximum connection page size.
 pub const MAX_PAGE_SIZE: u32 = 100;
+/// Nested connection size which keeps GitHub's worst-case query below its node limit.
+const NESTED_PAGE_SIZE: u32 = 50;
 
 fn default_token_env() -> String {
     "GH_PROJECTS_TOKEN".to_owned()
@@ -258,11 +260,14 @@ impl GitHubProjectsSource {
         items_first: u32,
     ) -> Result<Value, SourceError> {
         const QUERY: &str = r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!){
-          organization(login:$owner){projectV2(number:$number){...Project}}
-          user(login:$owner){projectV2(number:$number){...Project}}
+          organization:repositoryOwner(login:$owner){
+            ... on ProjectV2Owner{projectV2(number:$number){...Project}}
+          }
         } fragment Project on ProjectV2 { id title shortDescription url createdAt updatedAt closed
           items(first:$first,after:$after){nodes{id fieldValues(first:$nestedFirst){nodes{
-            ... on ProjectV2ItemFieldSingleSelectValue{name field{name}}
+            ... on ProjectV2ItemFieldSingleSelectValue{name field{
+              ... on ProjectV2SingleSelectField{name}
+            }}
             ... on ProjectV2ItemFieldLabelValue{labels(first:$nestedFirst){nodes{id name color}}}
           }} content{
             ... on Issue{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}}}
@@ -270,13 +275,9 @@ impl GitHubProjectsSource {
             ... on DraftIssue{id title body createdAt updatedAt}
           }} pageInfo{hasNextPage endCursor}}
         }"#;
-        let data = self.graphql(QUERY, json!({"owner":self.owner,"number":self.project_number,"first":items_first.min(MAX_PAGE_SIZE),"after":items_after,"nestedFirst":MAX_PAGE_SIZE})).await?;
+        let data = self.graphql(QUERY, json!({"owner":self.owner,"number":self.project_number,"first":items_first.min(MAX_PAGE_SIZE),"after":items_after,"nestedFirst":NESTED_PAGE_SIZE})).await?;
         data.pointer("/organization/projectV2")
             .filter(|v| !v.is_null())
-            .or_else(|| {
-                data.pointer("/user/projectV2")
-                    .filter(|value| !value.is_null())
-            })
             .cloned()
             .ok_or_else(|| SourceError::Refused {
                 message: format!(
@@ -446,7 +447,7 @@ impl GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         validate_page(page)?;
-        const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){__typename ... on Issue{blockedBy(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}}}"#;
+        const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){__typename ... on Issue{blockedBy(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id}pageInfo{hasNextPage endCursor}}}}}"#;
         let data = self.graphql(QUERY, json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c| c.0.as_str())})).await?;
         let node =
             data.get("node")
@@ -695,7 +696,7 @@ impl TaskSource for GitHubProjectsSource {
         for task in self.all_tasks().await? {
             let mut cursor = None;
             loop {
-                const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}}}"#;
+                const QUERY: &str = r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}}}}"#;
                 let data = self.graphql(QUERY, json!({"id":task.id.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor: &Cursor| cursor.0.as_str()),"nestedFirst":MAX_PAGE_SIZE})).await?;
                 let connection_name = match direction {
                     Direction::DependsOn => "blockedBy",

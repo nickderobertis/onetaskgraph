@@ -237,18 +237,20 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
                 Direction::DependsOn,
                 &page(None),
             )
-            .await;
+            .await
+            .unwrap_or_else(|error| panic!("forward dependency read failed: {error}"));
         let reverse = source
             .task_dependencies(
                 &NativeId(task.id.0.clone()),
                 Direction::DependedOnBy,
                 &page(None),
             )
-            .await;
-        if forward.is_ok() && reverse.is_ok() {
-            dependency_read = true;
-            break;
-        }
+            .await
+            .unwrap_or_else(|error| panic!("reverse dependency read failed: {error}"));
+        assert!(forward.next.is_none() || !forward.items.is_empty());
+        assert!(reverse.next.is_none() || !reverse.items.is_empty());
+        dependency_read = true;
+        break;
     }
     assert!(
         dependency_read,
