@@ -169,7 +169,11 @@ rm "$tmp/releases/$tag/$name"
 if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 mkdir "$tmp/no-hash-path"
-for utility in awk cp dirname grep install mkdir mktemp rm sed tar uname; do ln -s "$(command -v "$utility")" "$tmp/no-hash-path/$utility"; done
+for utility in awk cp dirname grep install mkdir mktemp rm sed tar uname; do
+  utility_path=$(command -v "$utility")
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$utility_path" > "$tmp/no-hash-path/$utility"
+  chmod +x "$tmp/no-hash-path/$utility"
+done
 if PATH="$tmp/no-hash-path" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "installer accepted a system without SHA-256 tooling; next: inspect hash-tool detection" >&2; exit 1; fi
 grep -q 'no SHA-256 implementation is installed' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing-hash-tool failure omitted its reason; next: inspect integrity diagnostics" >&2; exit 1; }
 printf '#!/bin/sh\nexit 1\n' > "$tmp/shims/mktemp"
