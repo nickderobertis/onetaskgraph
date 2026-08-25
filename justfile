@@ -39,7 +39,6 @@ check: format-check lint typecheck test coverage version-check distribution-test
 gate: deny version-check distribution-test
     @{{nx}} run-many -t check --all
 
-# Fail when any release manifest or cross-package pin differs from the binary version.
 version-check:
     @task_log="$$(mktemp)"; trap 'rm -f "$$task_log"' EXIT; \
         if ! scripts/set-version.sh --check >"$$task_log" 2>&1; then \

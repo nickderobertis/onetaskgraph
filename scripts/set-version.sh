@@ -20,6 +20,10 @@ else
     echo "usage: scripts/set-version.sh VERSION | --check; next: supply an X.Y.Z version or use --check" >&2
     exit 2
   fi
+  if [[ $# -ne 1 ]]; then
+    echo "unexpected extra arguments; next: pass exactly one X.Y.Z version or use --check" >&2
+    exit 2
+  fi
   expected=$1
   [[ $expected =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
     echo "invalid semantic version: $expected; expected X.Y.Z, then rerun scripts/set-version.sh $expected" >&2; exit 2;
