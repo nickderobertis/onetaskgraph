@@ -391,7 +391,6 @@ reset_fixture
 
 cat > "$scratch/repo/scripts/plugin-crates.sh" <<'EOF'
 #!/usr/bin/env bash
-# Succeed, and name no plugin at all.
 exit 0
 EOF
 run_guard
