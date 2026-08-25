@@ -170,10 +170,11 @@ for member in sorted(members, key=lambda member: names[member]):
 
 # Print the report for one cargo-metadata document, or refuse if the scan cannot read it.
 #
-# That refusal has no fixture in scripts/check-isolation-enforced.sh, because no tree it
-# can build reaches it: while cargo honours `--format-version 1` the keys below are there.
-# It exists so the day cargo changes that shape, the next author reads what to do rather
-# than a traceback — and so an unreadable graph is never mistaken for a clean one.
+# No manifest reaches that refusal while cargo honours `--format-version 1`, so case 9 of
+# scripts/check-isolation-enforced.sh replaces the boundary instead: a cargo earlier on
+# PATH that answers `metadata` with an empty object. It exists for the day cargo changes
+# that shape — the next author must read what to do rather than a traceback, and an
+# unreadable document must never be mistaken for a clean workspace.
 scan() {
   local output status
   output="$(printf '%s' "$1" | PLUGINS="${PLUGINS[*]}" python3 -c "$ISOLATION_SCAN" 2>&1)" \

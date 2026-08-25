@@ -7,7 +7,7 @@
 # splitting `onetaskgraph-plugin-api` out of `onetaskgraph-core`, so it is the last one
 # that should be taken on trust.
 #
-# So the tree is really broken, in a scratch clone, eight ways — seven against the local
+# So the tree is really broken, in a scratch clone, nine ways — eight against the local
 # guard and one against deny.toml's wrapper restriction, which is the half of this rule
 # that is a required check. Each case asserts on the DIAGNOSTIC as well as the exit
 # status: a guard that refuses without naming the crate and the path sends the next
@@ -264,6 +264,32 @@ printf '\nthis is not toml\n' >> "$scratch/repo/crates/onetaskgraph-local-md/Car
 run_guard
 expect_refused "a manifest cargo cannot parse" \
   "could not read the workspace manifests" onetaskgraph-local-md
+reset_fixture
+
+# 9. cargo's document is this guard's one input, and the guard reads named keys out of
+#    it. A shape those keys cannot read must be a refusal that says which document and
+#    which keys — not a Python traceback, and above all not a pass. No manifest can
+#    produce that shape while cargo honours `--format-version 1`, so the boundary itself
+#    is what this case replaces: a cargo earlier on PATH that answers `metadata` with an
+#    empty object and delegates everything else to the real one.
+shim="$scratch/shim"
+mkdir -p "$shim"
+cat > "$shim/cargo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "metadata" ]; then
+  echo '{}'
+  exit 0
+fi
+exec "$REAL_CARGO" "$@"
+EOF
+chmod +x "$shim/cargo"
+GUARD_OUTPUT="$(cd "$scratch/repo" \
+  && PATH="$shim:$PATH" REAL_CARGO="$(command -v cargo)" bash scripts/check-plugin-isolation.sh 2>&1)" \
+  && GUARD_STATUS=0 || GUARD_STATUS=$?
+expect_refused "cargo handing over a document the scan cannot read" \
+  "could not read the document" "--format-version 1"
+rm -rf "$shim"
 reset_fixture
 
 if [ "$failures" -ne 0 ]; then
