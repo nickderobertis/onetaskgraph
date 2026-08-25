@@ -108,8 +108,11 @@ array(metadata.get("workspace_members"), "a workspace_members field")
 
 for package in metadata["packages"]:
     mapping(package, "a package")
-    for field in ("id", "name", "version"):
-        text(package.get(field), f"a package {field}")
+    # Spelled out rather than looped, so the reconciliation in case 9 of
+    # scripts/check-isolation-enforced.sh can read every field this establishes.
+    text(package.get("id"), "a package id")
+    text(package.get("name"), "a package name")
+    text(package.get("version"), "a package version")
     for dependency in array(package.get("dependencies"), "a package dependencies field"):
         mapping(dependency, "a package dependency")
         text(dependency.get("name"), "a package dependency name")

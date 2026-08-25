@@ -274,12 +274,12 @@ expect_refused "a manifest cargo cannot parse" \
 reset_fixture
 
 # 9. cargo's document is this guard's one input, and the guard reads named fields out of
-#    it. Every shape those fields cannot be read from must be a refusal that says which
-#    document and which format version — not a Python traceback, and above all not a pass.
-#    No manifest can produce such a shape while cargo honours `--format-version 1`, so the
-#    boundary itself is what these cases replace: a cargo earlier on PATH that answers
-#    `metadata` with a document of this fixture's choosing and delegates everything else
-#    to the real one.
+#    it. Every shape those fields cannot be read from must be a refusal that names the
+#    document, the format version and the field — not a Python traceback, and above all
+#    not a pass. No manifest can produce such a shape while cargo honours
+#    `--format-version 1`, so the boundary itself is what these cases replace: a cargo
+#    earlier on PATH that answers `metadata` with a document of this table's choosing and
+#    delegates everything else to the real one.
 shim="$scratch/shim"
 mkdir -p "$shim"
 cat > "$shim/cargo" <<'EOF'
@@ -293,44 +293,84 @@ exec "$REAL_CARGO" "$@"
 EOF
 chmod +x "$shim/cargo"
 
-# One row per field the scan dereferences, so a field that stops being established stops
-# being covered here too.
+# One row per refusal the scan can emit: the document to hand over, and the message it
+# must come back with.
 shim_cases=(
-  "not a document at all|no JSON"
-  "[]|a document that is not an object"
-  '{"workspace_members": []}|no packages'
-  '{"packages": {}, "workspace_members": []}|packages that are not an array'
-  '{"packages": []}|no workspace_members'
-  '{"packages": [1], "workspace_members": []}|a package that is not an object'
-  '{"packages": [{"id": "a", "name": "a", "dependencies": []}], "workspace_members": []}|a package with no version'
-  '{"packages": [{"id": "a", "name": "a", "version": "1"}], "workspace_members": []}|a package with no dependencies'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [{}]}], "workspace_members": []}|a dependency with no name'
-  '{"packages": [], "workspace_members": ["ghost"]}|a workspace member that is no package'
-  '{"packages": [], "workspace_members": [], "resolve": {}}|a resolve section with no nodes'
-  '{"packages": [], "workspace_members": [], "resolve": {"nodes": [{}]}}|a resolve node with no id'
-  '{"packages": [], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{}]}]}}|a resolve dependency with no pkg'
-  '{"packages": [], "workspace_members": [1]}|a workspace member that is not a string'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [{"name": "b", "kind": 1}]}], "workspace_members": []}|a dependency whose kind is not a string'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "ghost"}]}]}}|a resolve dependency on no package of the document'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": {}}]}]}}|dep_kinds that are not an array'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": [{"kind": 1}]}]}]}}|a dep_kinds kind that is not a string'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a"}]}}|a resolve node with no deps'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": ["a"], "resolve": {"nodes": []}}|a workspace member with no resolve node'
-  '{"packages": [{"name": "a", "version": "1", "dependencies": []}], "workspace_members": []}|a package with no id'
-  '{"packages": [{"id": "a", "version": "1", "dependencies": []}], "workspace_members": []}|a package with no name'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [1]}], "workspace_members": []}|a package dependency that is not an object'
-  '{"packages": [], "workspace_members": [], "resolve": []}|a resolve section that is not an object'
-  '{"packages": [], "workspace_members": [], "resolve": {"nodes": [1]}}|a resolve node that is not an object'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [1]}]}}|a resolve dependency that is not an object'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": [1]}]}]}}|a dep_kinds entry that is not an object'
+  'not a document at all|is not JSON'
+  '[]|holds a document that is not an object'
+  '{"workspace_members": []}|holds a packages field that is not an array'
+  '{"packages": {}, "workspace_members": []}|holds a packages field that is not an array'
+  '{"packages": []}|holds a workspace_members field that is not an array'
+  '{"packages": [1], "workspace_members": []}|holds a package that is not an object'
+  '{"packages": [{"name": "a", "version": "1", "dependencies": []}], "workspace_members": []}|holds a package id that is not a string'
+  '{"packages": [{"id": "a", "version": "1", "dependencies": []}], "workspace_members": []}|holds a package name that is not a string'
+  '{"packages": [{"id": "a", "name": "a", "dependencies": []}], "workspace_members": []}|holds a package version that is not a string'
+  '{"packages": [{"id": "a", "name": "a", "version": "1"}], "workspace_members": []}|holds a package dependencies field that is not an array'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [1]}], "workspace_members": []}|holds a package dependency that is not an object'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [{}]}], "workspace_members": []}|holds a package dependency name that is not a string'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [{"name": "b", "kind": 1}]}], "workspace_members": []}|holds a package dependency kind that is not a string'
+  '{"packages": [], "workspace_members": [1]}|holds a workspace member that is not a string'
+  '{"packages": [], "workspace_members": ["ghost"]}|names a workspace member that is no package of the same document'
+  '{"packages": [], "workspace_members": [], "resolve": []}|holds a resolve section that is not an object'
+  '{"packages": [], "workspace_members": [], "resolve": {}}|holds a resolve nodes field that is not an array'
+  '{"packages": [], "workspace_members": [], "resolve": {"nodes": [1]}}|holds a resolve node that is not an object'
+  '{"packages": [], "workspace_members": [], "resolve": {"nodes": [{}]}}|holds a resolve node id that is not a string'
+  '{"packages": [], "workspace_members": [], "resolve": {"nodes": [{"id": "a"}]}}|holds a resolve node deps field that is not an array'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [1]}]}}|holds a resolve dependency that is not an object'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{}]}]}}|holds a resolve dependency pkg that is not a string'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "ghost"}]}]}}|resolves a dependency on no package of the same document'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": {}}]}]}}|holds a dep_kinds field that is not an array'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": [1]}]}]}}|holds a dep_kinds entry that is not an object'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": [{"kind": 1}]}]}]}}|holds a dep_kinds kind that is not a string'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": ["a"], "resolve": {"nodes": []}}|resolves no node for a workspace member'
 )
+
+# A table that mirrors another file drifts, and a drifted table is a field nobody checks
+# any more while this still reports ten green cases. So it is reconciled against the scan
+# itself, both ways, before a single row runs: the messages the scan can emit are read out
+# of its source, and a message with no row — or a row whose message the scan can no longer
+# emit — fails here, by name.
+shim_drift="$(
+  printf '%s\n' "${shim_cases[@]##*|}" \
+    | python3 -c '
+import pathlib
+import re
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text()
+scan = source.split("readonly ISOLATION_SCAN=" + chr(39), 1)[1].split(chr(10) + chr(39) + chr(10), 1)[0]
+
+SHAPES = {"mapping": "an object", "array": "an array", "text": "a string", "kind_of": "a string"}
+emitted = set()
+for match in re.finditer(r"refuse\(\"([^\"]+)\"\)", scan):
+    emitted.add(match.group(1))
+for match in re.finditer(r"refuse\(f\"([^\"{]+)\{", scan):
+    emitted.add(match.group(1).rstrip(": "))
+for helper, what in re.findall(r"\b(mapping|array|text|kind_of)\([^" + chr(10) + r"]*?, \"([^\"]+)\"\)", scan):
+    emitted.add("holds " + what + " that is not " + SHAPES[helper])
+
+covered = {line.strip() for line in sys.stdin if line.strip()}
+for message in sorted(emitted - covered):
+    print("the scan can refuse with \"" + message + "\", and no row reaches it")
+for message in sorted(covered - emitted):
+    print("a row expects \"" + message + "\", which the scan can no longer emit")
+' "$scratch/repo/scripts/check-plugin-isolation.sh"
+)"
+if [ -n "$shim_drift" ]; then
+  echo "check-isolation-enforced: the malformed-document table and the scan have drifted:" >&2
+  printf '%s\n' "$shim_drift" | sed 's/^/    /' >&2
+  echo "check-isolation-enforced: add the row, or drop it — a field the scan establishes" >&2
+  echo "check-isolation-enforced: with no row is a field nobody has watched it refuse." >&2
+  failures=$((failures + 1))
+fi
+
 for shim_case in "${shim_cases[@]}"; do
   GUARD_OUTPUT="$(cd "$scratch/repo" \
     && PATH="$shim:$PATH" REAL_CARGO="$(command -v cargo)" \
        SHIM_METADATA="${shim_case%%|*}" bash scripts/check-plugin-isolation.sh 2>&1)" \
     && GUARD_STATUS=0 || GUARD_STATUS=$?
-  expect_refused "cargo handing over ${shim_case##*|}" \
-    "could not read the document" "--format-version 1"
+  expect_refused "cargo handing over a document that ${shim_case##*|}" \
+    "could not read the document" "--format-version 1" "${shim_case##*|}"
 done
 rm -rf "$shim"
 reset_fixture
