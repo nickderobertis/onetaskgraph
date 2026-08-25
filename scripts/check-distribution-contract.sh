@@ -9,6 +9,9 @@ if ! find npm/platforms -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | s
 fi
 mapfile -t packages < "$packages_file"
 [[ ${packages[*]} == "${expected[*]}" ]] || fail "npm carriers are '${packages[*]}', expected '${expected[*]}'"
+release_tag_pattern=$(sed -n "/invalid release tag:/s/.*grep -Eq '\([^']*\)'.*/\1/p" .github/workflows/release.yml)
+installer_tag_pattern=$(sed -n "/unsupported release tag:/s/.*grep -Eq '\([^']*\)'.*/\1/p" scripts/install.sh)
+[[ -n $release_tag_pattern && $release_tag_pattern == "$installer_tag_pattern" ]] || fail "release workflow and installer accept different release-tag grammars"
 while read -r os target ext npm; do
   grep -Fq -- "- { os: $os, target: $target, ext: $ext, npm: $npm }" .github/workflows/release.yml || fail "$target is not mapped to $os/$ext/$npm in the release matrix"
   grep -Fq "$target; ext=$ext" scripts/install.sh || fail "$target is not mapped to $ext in the installer"
