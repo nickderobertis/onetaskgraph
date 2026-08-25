@@ -232,4 +232,29 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
         "live project has no non-empty Issue.blockedBy connection whose blocker names the task \
          through Issue.blocking"
     );
+
+    let forward_projects = source
+        .project_dependencies(&project.id, Direction::DependsOn, &page(None))
+        .await
+        .expect("forward project dependency read failed");
+    assert!(
+        forward_projects
+            .items
+            .iter()
+            .all(|edge| edge.to == project.id
+                && projects.items.iter().any(|item| item.id == edge.from)),
+        "every forward issue dependency must resolve through projectItems to a visible project"
+    );
+    let reverse_projects = source
+        .project_dependencies(&project.id, Direction::DependedOnBy, &page(None))
+        .await
+        .expect("reverse project dependency read failed");
+    assert!(
+        reverse_projects
+            .items
+            .iter()
+            .all(|edge| edge.from == project.id
+                && projects.items.iter().any(|item| item.id == edge.to)),
+        "every reverse issue dependency must resolve through projectItems to a visible project"
+    );
 }
