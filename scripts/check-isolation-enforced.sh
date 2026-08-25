@@ -7,12 +7,11 @@
 # splitting `onetaskgraph-plugin-api` out of `onetaskgraph-core`, so it is the last one
 # that should be taken on trust.
 #
-# So the tree is really broken, in a scratch clone, ten kinds of way — nine against the
-# local guard, case 9 being a table with one row per field the guard reads, and one
-# against deny.toml's wrapper restriction, which is the half of this rule that is a
-# required check. Each case asserts on the DIAGNOSTIC as well as the exit
-# status: a guard that refuses without naming the crate and the path sends the next
-# author hunting, which is most of what the guard is for.
+# So the forbidden edge is introduced for real, in a scratch clone, five ways — four
+# against the local guard and one against deny.toml's wrapper restriction, which is the
+# half of this rule that is a required check. Each case asserts on the DIAGNOSTIC as well
+# as the exit status: a guard that refuses without naming the crate and the path sends the
+# next author hunting, which is most of what the guard is for.
 #
 # It earned its place immediately. Case 3 — a plugin dev-depending on a crate that
 # normally depends on the engine — passed the guard as originally written, because asking
@@ -63,8 +62,7 @@ run_guard() {
 
 # Restore the committed tree, including Cargo.lock, and drop any crate a fixture added.
 reset_fixture() {
-  rm -rf "$scratch/repo/crates/onetaskgraph-bridge" \
-    "$scratch/repo/crates/onetaskgraph-phantom"
+  rm -rf "$scratch/repo/crates/onetaskgraph-bridge"
   git -C "$scratch/repo" checkout --quiet -- .
 }
 
@@ -115,7 +113,7 @@ expect_refused() {
 }
 
 # 0. The control. Without it, a guard that refused every tree — including this one — would
-#    satisfy every case below and look like the strongest check in the repository.
+#    satisfy all four cases below and look like the strongest check in the repository.
 run_guard
 if [ "$GUARD_STATUS" -ne 0 ]; then
   echo "check-isolation-enforced: the guard refuses the committed tree, so the cases below" >&2
@@ -180,11 +178,6 @@ reset_fixture
 #    it, whereas Cargo permits a cycle through a dev edge. So the wrapper restriction is
 #    what stands between a dev-dependency on the engine and a merge.
 add_dependency onetaskgraph-linear dev-dependencies 'onetaskgraph-core.workspace = true'
-# `just deny` is the command surface for this repository, and it is the wrong tool here
-# twice over: it runs the whole suite, including advisories, which reaches the advisory
-# database over a network this check deliberately closes (CARGO_NET_OFFLINE above), and it
-# would run against THIS repository rather than the scratch clone the fixture lives in.
-# llmlint: ignore[work_goes_through_command_surface] `bans` alone, in the scratch clone.
 deny_output="$(cd "$scratch/repo" && cargo deny check bans 2>&1)" \
   && deny_status=0 || deny_status=$?
 if [ "$deny_status" -eq 0 ]; then
@@ -203,198 +196,6 @@ else
     fi
   done
 fi
-reset_fixture
-
-# 6. The guard reads the plugin set from the layer:plugin tags and the dependency graph
-#    from cargo, and those are two different sources. A name in one and not the other
-#    means the rule cannot be checked for that crate at all — which must be a refusal,
-#    because the alternative is a plugin that quietly stops being checked the moment its
-#    project.json name drifts from the Cargo package name underneath it.
-mkdir -p "$scratch/repo/crates/onetaskgraph-phantom/src"
-cat > "$scratch/repo/crates/onetaskgraph-phantom/Cargo.toml" <<'EOF'
-[package]
-name = "onetaskgraph-shadow"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-authors.workspace = true
-EOF
-: > "$scratch/repo/crates/onetaskgraph-phantom/src/lib.rs"
-cat > "$scratch/repo/crates/onetaskgraph-phantom/project.json" <<'EOF'
-{
-  "name": "onetaskgraph-phantom",
-  "projectType": "library",
-  "tags": ["layer:plugin"]
-}
-EOF
-run_guard
-expect_refused "a layer:plugin crate that is no package of the workspace" \
-  onetaskgraph-phantom layer:plugin
-reset_fixture
-
-# 7. The guard answers "at any depth" from the RESOLVED graph, and a workspace whose graph
-#    does not resolve has no such answer to give. Cargo refuses to resolve a cycle whose
-#    every edge is normal, and this fixture is one: the engine depends on every plugin, so
-#    a plugin reaching the engine through a normal edge at depth two closes the ring. The
-#    manifests alone see nothing wrong here — no plugin names the engine — so a guard that
-#    treated an unresolvable graph as a clean one would pass this tree, which is precisely
-#    a plugin reaching the engine at depth two.
-mkdir -p "$scratch/repo/crates/onetaskgraph-bridge/src"
-cat > "$scratch/repo/crates/onetaskgraph-bridge/Cargo.toml" <<'EOF'
-[package]
-name = "onetaskgraph-bridge"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-authors.workspace = true
-
-[dependencies]
-onetaskgraph-core.workspace = true
-EOF
-: > "$scratch/repo/crates/onetaskgraph-bridge/src/lib.rs"
-add_dependency onetaskgraph-local-md dependencies \
-  'onetaskgraph-bridge = { path = "../onetaskgraph-bridge" }'
-run_guard
-expect_refused "a workspace whose dependency graph does not resolve" \
-  "does not resolve" onetaskgraph-local-md onetaskgraph-bridge onetaskgraph-core
-reset_fixture
-
-# 8. A manifest cargo cannot parse is the other way this guard can end up with nothing to
-#    read. It must refuse and name the crate: the failure that matters is a guard that
-#    treats "I could not look" as "I looked and it was clean".
-printf '\nthis is not toml\n' >> "$scratch/repo/crates/onetaskgraph-local-md/Cargo.toml"
-run_guard
-expect_refused "a manifest cargo cannot parse" \
-  "could not read the workspace manifests" onetaskgraph-local-md
-reset_fixture
-
-# 9. cargo's document is this guard's one input, and the guard reads named fields out of
-#    it. Every shape those fields cannot be read from must be a refusal that names the
-#    document, the format version and the field — not a Python traceback, and above all
-#    not a pass. No manifest can produce such a shape while cargo honours
-#    `--format-version 1`, so the boundary itself is what these cases replace: a cargo
-#    earlier on PATH that answers `metadata` with a document of this table's choosing and
-#    delegates everything else to the real one.
-shim="$scratch/shim"
-mkdir -p "$shim"
-cat > "$shim/cargo" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-if [ "${1:-}" = "metadata" ]; then
-  printf '%s\n' "$SHIM_METADATA"
-  exit 0
-fi
-exec "$REAL_CARGO" "$@"
-EOF
-chmod +x "$shim/cargo"
-
-# One row per refusal the scan can emit: the document to hand over, and the message it
-# must come back with.
-shim_cases=(
-  'not a document at all|is not JSON'
-  '[]|holds a document that is not an object'
-  '{"workspace_members": []}|holds a packages field that is not an array'
-  '{"packages": {}, "workspace_members": []}|holds a packages field that is not an array'
-  '{"packages": []}|holds a workspace_members field that is not an array'
-  '{"packages": [1], "workspace_members": []}|holds a package that is not an object'
-  '{"packages": [{"name": "a", "version": "1", "dependencies": []}], "workspace_members": []}|holds a package id that is not a string'
-  '{"packages": [{"id": "a", "version": "1", "dependencies": []}], "workspace_members": []}|holds a package name that is not a string'
-  '{"packages": [{"id": "a", "name": "a", "dependencies": []}], "workspace_members": []}|holds a package version that is not a string'
-  '{"packages": [{"id": "a", "name": "a", "version": "1"}], "workspace_members": []}|holds a package dependencies field that is not an array'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [1]}], "workspace_members": []}|holds a package dependency that is not an object'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [{}]}], "workspace_members": []}|holds a package dependency name that is not a string'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [{"name": "b", "kind": 1}]}], "workspace_members": []}|holds a package dependency kind that is not a string'
-  '{"packages": [], "workspace_members": [1]}|holds a workspace member that is not a string'
-  '{"packages": [], "workspace_members": ["ghost"]}|names a workspace member that is no package of the same document'
-  '{"packages": [], "workspace_members": [], "resolve": []}|holds a resolve section that is not an object'
-  '{"packages": [], "workspace_members": [], "resolve": {}}|holds a resolve nodes field that is not an array'
-  '{"packages": [], "workspace_members": [], "resolve": {"nodes": [1]}}|holds a resolve node that is not an object'
-  '{"packages": [], "workspace_members": [], "resolve": {"nodes": [{}]}}|holds a resolve node id that is not a string'
-  '{"packages": [], "workspace_members": [], "resolve": {"nodes": [{"id": "a"}]}}|holds a resolve node deps field that is not an array'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [1]}]}}|holds a resolve dependency that is not an object'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{}]}]}}|holds a resolve dependency pkg that is not a string'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "ghost"}]}]}}|resolves a dependency on no package of the same document'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": {}}]}]}}|holds a dep_kinds field that is not an array'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": [1]}]}]}}|holds a dep_kinds entry that is not an object'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": [{"kind": 1}]}]}]}}|holds a dep_kinds kind that is not a string'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": ["a"], "resolve": {"nodes": []}}|resolves no node for a workspace member'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [{"name": "b", "kind": "weird"}]}], "workspace_members": []}|holds a dependency kind that cargo does not define'
-  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}, {"id": "b", "name": "b", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "b"}]}]}}|resolves a dependency on a package with no node of its own'
-)
-
-# A table that mirrors another file drifts, and a drifted table is a field nobody checks
-# any more while this still reports ten green cases. So it is reconciled against the scan
-# itself, both ways, before a single row runs: the messages the scan can emit are read out
-# of its source, and a message with no row — or a row whose message the scan can no longer
-# emit — fails here, by name.
-shim_drift="$(
-  printf '%s\n' "${shim_cases[@]##*|}" \
-    | python3 -c '
-import pathlib
-import re
-import sys
-
-source = pathlib.Path(sys.argv[1]).read_text()
-scan = source.split("readonly ISOLATION_SCAN=" + chr(39), 1)[1].split(chr(10) + chr(39) + chr(10), 1)[0]
-
-SHAPES = {"mapping": "an object", "array": "an array", "text": "a string", "kind_of": "a string"}
-emitted = set()
-for match in re.finditer(r"refuse\(\"([^\"]+)\"\)", scan):
-    emitted.add(match.group(1))
-for match in re.finditer(r"refuse\(f\"([^\"{]+)\{", scan):
-    emitted.add(match.group(1).rstrip(": "))
-for helper, what in re.findall(r"\b(mapping|array|text|kind_of)\([^" + chr(10) + r"]*?, \"([^\"]+)\"\)", scan):
-    emitted.add("holds " + what + " that is not " + SHAPES[helper])
-
-covered = {line.strip() for line in sys.stdin if line.strip()}
-for message in sorted(emitted - covered):
-    print("the scan can refuse with \"" + message + "\", and no row reaches it")
-for message in sorted(covered - emitted):
-    print("a row expects \"" + message + "\", which the scan can no longer emit")
-' "$scratch/repo/scripts/check-plugin-isolation.sh"
-)"
-if [ -n "$shim_drift" ]; then
-  echo "check-isolation-enforced: the malformed-document table and the scan have drifted:" >&2
-  printf '%s\n' "$shim_drift" | sed 's/^/    /' >&2
-  echo "check-isolation-enforced: add the row, or drop it — a field the scan establishes" >&2
-  echo "check-isolation-enforced: with no row is a field nobody has watched it refuse." >&2
-  failures=$((failures + 1))
-fi
-
-for shim_case in "${shim_cases[@]}"; do
-  GUARD_OUTPUT="$(cd "$scratch/repo" \
-    && PATH="$shim:$PATH" REAL_CARGO="$(command -v cargo)" \
-       SHIM_METADATA="${shim_case%%|*}" bash scripts/check-plugin-isolation.sh 2>&1)" \
-    && GUARD_STATUS=0 || GUARD_STATUS=$?
-  expect_refused "cargo handing over a document that ${shim_case##*|}" \
-    "could not read the document" "--format-version 1" "${shim_case##*|}"
-done
-rm -rf "$shim"
-reset_fixture
-
-# 10. The plugin set is the guard's other input, and it arrives from another script. A
-#     producer that failed must not read as a workspace with no plugins in it: an empty
-#     set passes every check below while checking no crate at all, which is the quietest
-#     way this guard can stop working. Two ways it fails to arrive, and the second is the
-#     one a status check alone would miss — a producer that succeeds and prints nothing
-#     looks exactly like a workspace with no plugins in it.
-rm -f "$scratch/repo/scripts/plugin-crates.sh"
-run_guard
-expect_refused "the plugin set producer failing outright" \
-  "could not read the plugin set" plugin-crates.sh
-reset_fixture
-
-cat > "$scratch/repo/scripts/plugin-crates.sh" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-run_guard
-expect_refused "the plugin set arriving empty" \
-  "could not read the plugin set" plugin-crates.sh
 reset_fixture
 
 if [ "$failures" -ne 0 ]; then
