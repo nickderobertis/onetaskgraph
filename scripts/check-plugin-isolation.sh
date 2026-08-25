@@ -250,7 +250,7 @@ for member in sorted(members, key=lambda member: names[member]):
 
 # No manifest can produce a document the scan cannot read, so case 9 of
 # scripts/check-isolation-enforced.sh replaces the boundary to reach this: a cargo earlier
-# on PATH answering `metadata` with an empty object.
+# on PATH answering `metadata` from a table with one malformed shape per field.
 scan() {
   local output status
   output="$(printf '%s' "$1" | PLUGINS="${PLUGINS[*]}" python3 -c "$ISOLATION_SCAN" 2>&1)" \
