@@ -314,6 +314,8 @@ shim_cases=(
   '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "ghost"}]}]}}|a resolve dependency on no package of the document'
   '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": {}}]}]}}|dep_kinds that are not an array'
   '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": [{"kind": 1}]}]}]}}|a dep_kinds kind that is not a string'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a"}]}}|a resolve node with no deps'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": ["a"], "resolve": {"nodes": []}}|a workspace member with no resolve node'
 )
 for shim_case in "${shim_cases[@]}"; do
   GUARD_OUTPUT="$(cd "$scratch/repo" \
@@ -329,10 +331,22 @@ reset_fixture
 # 10. The plugin set is the guard's other input, and it arrives from another script. A
 #     producer that failed must not read as a workspace with no plugins in it: an empty
 #     set passes every check below while checking no crate at all, which is the quietest
-#     way this guard can stop working.
+#     way this guard can stop working. Two ways it fails to arrive, and the second is the
+#     one a status check alone would miss — a producer that succeeds and prints nothing
+#     looks exactly like a workspace with no plugins in it.
 rm -f "$scratch/repo/scripts/plugin-crates.sh"
 run_guard
-expect_refused "the plugin set failing to arrive" \
+expect_refused "the plugin set producer failing outright" \
+  "could not read the plugin set" plugin-crates.sh
+reset_fixture
+
+cat > "$scratch/repo/scripts/plugin-crates.sh" <<'EOF'
+#!/usr/bin/env bash
+# Succeed, and name no plugin at all.
+exit 0
+EOF
+run_guard
+expect_refused "the plugin set arriving empty" \
   "could not read the plugin set" plugin-crates.sh
 reset_fixture
 

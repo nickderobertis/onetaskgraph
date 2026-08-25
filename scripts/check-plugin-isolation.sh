@@ -188,7 +188,6 @@ if missing:
     print(f"{PREFIX} isolation cannot be checked for a crate that is not in the graph.")
     raise SystemExit(0)
 
-# Everything below needs the graph.
 if nodes is None:
     raise SystemExit(0)
 
