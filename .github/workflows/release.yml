@@ -122,6 +122,11 @@ jobs:
       - env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
         run: |
           [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN is required (received ${#NODE_AUTH_TOKEN} characters)" >&2; exit 1; }
+          # npm reads no credential from the environment on its own. Without this
+          # configuration naming NODE_AUTH_TOKEN, every publish below packs in full and
+          # then fails ENEEDAUTH, as though this job were logged out.
+          NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh https://registry.npmjs.org/)
+          export NPM_CONFIG_USERCONFIG
           publish_if_absent() {
             spec=$1
             shift

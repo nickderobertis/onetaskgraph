@@ -43,6 +43,10 @@ grep -Fq 'absent) RUSTFLAGS=' <<< "$crate_job" || fail "a crate absent from crat
 grep -Fq -- '--user-agent "$agent"' scripts/crate-publication-status.sh || fail "the crates.io existence query must send an explicit user agent; the registry answers curl's default with 403"
 grep -Fq 'agent="onetaskgraph-release (https://github.com/nickderobertis/onetaskgraph)"' scripts/crate-publication-status.sh || fail "the crates.io user agent must name this release and a contact URL for it"
 grep -Fq 'NPM_TOKEN is required (received ${#NODE_AUTH_TOKEN} characters)' .github/workflows/release.yml || fail "the npm token guard must report only the received token length"
+npm_job=$(sed -n '/^  publish-npm:/,$p' .github/workflows/release.yml)
+grep -Fq 'NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh https://registry.npmjs.org/)' <<< "$npm_job" || fail "npm publication must configure registry authentication with scripts/npm-registry-auth.sh; NODE_AUTH_TOKEN alone leaves the npm client logged out"
+grep -Fq 'export NPM_CONFIG_USERCONFIG' <<< "$npm_job" || fail "the npm configuration must be exported as NPM_CONFIG_USERCONFIG, which is how the npm client finds it"
+grep -Fq ':_authToken=${NODE_AUTH_TOKEN}' scripts/npm-registry-auth.sh || fail "the npm configuration must name NODE_AUTH_TOKEN rather than carry a token value"
 if ! node <<'NODE'
 const fs = require("fs");
 function fail(message) {
