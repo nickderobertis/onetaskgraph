@@ -85,7 +85,12 @@ jobs:
           for crate in onetaskgraph-plugin-api onetaskgraph-in-memory onetaskgraph-local-md onetaskgraph-linear onetaskgraph-github-projects onetaskgraph-core onetaskgraph; do
             version=$(cargo metadata --no-deps --format-version 1 | jq -r --arg n "$crate" '.packages[]|select(.name==$n)|.version')
             printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$' || { echo "invalid version for $crate: $version" >&2; exit 64; }
-            curl -fsS "https://crates.io/api/v1/crates/$crate/$version" >/dev/null 2>&1 || cargo publish -p "$crate" --locked
+            status=$(curl -sS -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/$crate/$version") || { echo "could not query crates.io for $crate $version" >&2; exit 69; }
+            case "$status" in
+              200) ;;
+              404) cargo publish -p "$crate" --locked ;;
+              *) echo "crates.io query for $crate $version returned HTTP $status" >&2; exit 69 ;;
+            esac
           done
   publish-python:
     needs: [build-wheels, build-distributions]
@@ -113,18 +118,28 @@ jobs:
       - env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
         run: |
           [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN is required" >&2; exit 1; }
+          publish_if_absent() {
+            spec=$1
+            shift
+            error="$RUNNER_TEMP/npm-view-error"
+            if npm view "$spec" >/dev/null 2>"$error"; then return; fi
+            if grep -Eq 'E404|404 Not Found' "$error"; then npm publish "$@" --access public; return; fi
+            cat "$error" >&2
+            echo "could not query npm for $spec" >&2
+            exit 69
+          }
           for package in npm/platforms/*; do
             name=$(node -p "require('./$package/package.json').name")
             version=$(node -p "require('./$package/package.json').version")
             platform=${package##*/}
             [[ $name == "@onetaskgraph/cli-$platform" ]] || { echo "invalid carrier name: $name" >&2; exit 64; }
             printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$' || { echo "invalid carrier version: $version" >&2; exit 64; }
-            npm view "$name@$version" >/dev/null 2>&1 || npm publish "dist/carriers/onetaskgraph-cli-${platform}-${version}.tgz" --access public
+            publish_if_absent "$name@$version" "dist/carriers/onetaskgraph-cli-${platform}-${version}.tgz"
           done
           cli_version=$(node -p "require('./npm/cli/package.json').version")
           sdk_version=$(node -p "require('./sdks/typescript/package.json').version")
           printf '%s\n' "$cli_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$' || { echo "invalid CLI version: $cli_version" >&2; exit 64; }
           printf '%s\n' "$sdk_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$' || { echo "invalid TypeScript SDK version: $sdk_version" >&2; exit 64; }
-          npm view "@onetaskgraph/cli@$cli_version" >/dev/null 2>&1 || npm publish npm/cli --access public
-          npm view "@onetaskgraph/sdk@$sdk_version" >/dev/null 2>&1 || npm publish sdks/typescript --access public
+          publish_if_absent "@onetaskgraph/cli@$cli_version" npm/cli
+          publish_if_absent "@onetaskgraph/sdk@$sdk_version" sdks/typescript
 # llmlint: ignore-end[changed_behavior_has_e2e]

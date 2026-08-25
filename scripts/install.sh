@@ -75,7 +75,7 @@ case "$ext" in
     links=$(printf '%s\n' "$metadata" | awk '$1 ~ /^l/ { print }')
     ;;
 esac
-printf '%s\n' "$members" | awk '/^\// || /^[A-Za-z]:/ || /(^|\/)\.\.($|\/)/ { bad=1 } END { exit bad }' || die 65 "archive contains an unsafe member path"
+printf '%s\n' "$members" | awk '/^[\\\/]/ || /^[A-Za-z]:/ || /(^|[\\\/])\.\.($|[\\\/])/ { bad=1 } END { exit bad }' || die 65 "archive contains an unsafe member path"
 [ -z "$links" ] || die 65 "archive contains a link entry"
 case "$ext" in tar.gz) tar -xzf "$tmp/$name" -C "$tmp/unpack" || die 74 "could not extract $name";; zip) unzip -q "$tmp/$name" -d "$tmp/unpack" || die 74 "could not extract $name";; esac
 [ -f "$tmp/unpack/$binary" ] && [ ! -L "$tmp/unpack/$binary" ] || die 65 "archive binary is not a regular file"

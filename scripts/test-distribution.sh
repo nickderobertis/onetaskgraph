@@ -68,7 +68,7 @@ import zipfile
 path, extension = sys.argv[1:]
 if extension == "zip":
     with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("../escape", b"unsafe")
+        archive.writestr("..\\escape", b"unsafe")
 else:
     with tarfile.open(path, "w:gz") as archive:
         member = tarfile.TarInfo("../escape")
