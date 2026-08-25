@@ -68,6 +68,9 @@ if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL=https://mirror.exam
 grep -q "checksum shares the mirror's origin" "$tmp/error" || { echo "mirror rejection omitted its reason; next: inspect installer diagnostics" >&2; exit 1; }
 if "$root/scripts/install.sh" --version 2>"$tmp/error"; then echo "missing option value was accepted; next: inspect installer argument parsing" >&2; exit 1; fi
 grep -q 'requires a value' "$tmp/error" || { echo "missing-value failure omitted its reason; next: inspect argument diagnostics" >&2; exit 1; }
+if "$root/scripts/install.sh" --to '' 2>"$tmp/error"; then empty_destination_status=0; else empty_destination_status=$?; fi
+[[ $empty_destination_status -eq 64 ]] || { echo "empty installation destination exited $empty_destination_status, expected 64; next: inspect destination validation" >&2; exit 1; }
+grep -q 'installation directory must not be empty' "$tmp/error" || { echo "empty-destination failure omitted its reason; next: inspect destination diagnostics" >&2; exit 1; }
 if ONETASKGRAPH_VERSION="${tag}junk" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "malformed tag was accepted; next: inspect tag validation" >&2; exit 1; fi
 node_platform=$(node -p '`${process.platform}-${process.arch}`')
 mkdir -p "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin"
