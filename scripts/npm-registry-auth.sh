@@ -24,6 +24,9 @@ config="$directory/.npmrc"
   printf 'registry=%s\n//%s:_authToken=${NODE_AUTH_TOKEN}\n' "$registry" "${registry#*://}" > "$config"
 ) || { echo "could not write the npm configuration: $config" >&2; echo "next: point ONETASKGRAPH_NPM_CONFIG_DIR at a writable directory" >&2; exit 1; }
 # npm on Windows is a native program that cannot resolve this shell's POSIX paths, so the
-# path is printed in the form the local client reads.
-if command -v cygpath >/dev/null 2>&1; then config=$(cygpath -w "$config"); fi
+# path is printed in the form the local client reads. The Windows lane of the install-path
+# job is what runs this branch: it drives the real npm client through this configuration.
+if command -v cygpath >/dev/null 2>&1; then
+  config=$(cygpath -w "$config") || { echo "could not express the npm configuration path for this platform: $config" >&2; echo "next: report the cygpath failure above; scripts/npm-registry-auth.sh needs a path the local npm client can read" >&2; exit 1; }
+fi
 printf '%s\n' "$config"

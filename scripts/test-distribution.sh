@@ -450,14 +450,17 @@ PY
 npm_token=distribution-test-token-not-a-credential
 start_server npm-registry "$tmp/npm-registry-server.py" "$npm_token" "$tmp/npm-requests"
 npm_registry_server_pid=$server_pid
-npm_registry="http://127.0.0.1:$server_port/"
+# The publication below is driven at the registry URL without its trailing slash, so the
+# normalization npm's auth key needs is proven by the real client rather than asserted.
+npm_registry="http://127.0.0.1:$server_port"
+npm_registry_url="$npm_registry/"
 probe=@onetaskgraph/cli-publication-probe
 mkdir -p "$tmp/npm-package" "$tmp/npm-config" "$tmp/npm-config-without-auth"
 printf 'module.exports = {};\n' > "$tmp/npm-package/index.js"
 node -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({name: process.argv[2], version: process.argv[3], main: "index.js"}, null, 2) + "\n")' "$tmp/npm-package/package.json" "$probe" "$version"
 npm_config=$(ONETASKGRAPH_NPM_CONFIG_DIR="$tmp/npm-config" "$root/scripts/npm-registry-auth.sh" "$npm_registry")
 [[ -s $tmp/npm-config/.npmrc ]] || { echo "the npm registry configuration was not written; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
-grep -Fq "registry=$npm_registry" "$tmp/npm-config/.npmrc" || { cat "$tmp/npm-config/.npmrc" >&2; echo "the npm configuration did not point the client at the registry it was given; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
+grep -Fq "registry=$npm_registry_url" "$tmp/npm-config/.npmrc" || { cat "$tmp/npm-config/.npmrc" >&2; echo "the npm configuration did not point the client at the registry it was given; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
 grep -Fq ':_authToken=${NODE_AUTH_TOKEN}' "$tmp/npm-config/.npmrc" || { cat "$tmp/npm-config/.npmrc" >&2; echo "the npm configuration did not name NODE_AUTH_TOKEN as the registry's auth token; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
 if grep -Fq "$npm_token" "$tmp/npm-config/.npmrc"; then echo "the npm configuration recorded a token value instead of naming the variable; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; fi
 # The defect this journey pins: a job that exports NODE_AUTH_TOKEN and configures the
@@ -488,3 +491,57 @@ assert_npm_auth_refuses() {
 }
 assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL: file:///etc' file:///etc
 assert_npm_auth_refuses 'pass at most one registry URL' https://registry.npmjs.org/ extra
+assert_npm_auth_stops() {
+  expected_reason=$1
+  shift
+  if env "$@" "$root/scripts/npm-registry-auth.sh" "$npm_registry" >"$tmp/npm-config-path" 2>"$tmp/error"; then npm_auth_status=0; else npm_auth_status=$?; fi
+  [[ $npm_auth_status -eq 1 ]] || { cat "$tmp/error" >&2; echo "npm registry configuration for '$*' exited $npm_auth_status, expected 1; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
+  [[ ! -s $tmp/npm-config-path ]] || { cat "$tmp/npm-config-path" >&2; echo "an unwritable npm registry configuration still reported a path; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
+  grep -Fq "$expected_reason" "$tmp/error" || { cat "$tmp/error" >&2; echo "an unwritable npm registry configuration omitted its reason; next: inspect its diagnostics" >&2; exit 1; }
+  grep -q '^next: ' "$tmp/error" || { cat "$tmp/error" >&2; echo "an unwritable npm registry configuration omitted a next action; next: inspect its diagnostics" >&2; exit 1; }
+}
+printf 'not a directory' > "$tmp/npm-not-a-directory"
+assert_npm_auth_stops 'could not create the npm configuration directory' "ONETASKGRAPH_NPM_CONFIG_DIR=$tmp/npm-not-a-directory/child"
+mkdir -p "$tmp/npm-config-unwritable/.npmrc"
+assert_npm_auth_stops 'could not write the npm configuration' "ONETASKGRAPH_NPM_CONFIG_DIR=$tmp/npm-config-unwritable"
+# The release workflow passes no directory: it takes the runner's temporary tree, and falls
+# back to one of its own where there is none.
+RUNNER_TEMP="$tmp/runner-temp" "$root/scripts/npm-registry-auth.sh" "$npm_registry" >/dev/null
+grep -Fq ':_authToken=${NODE_AUTH_TOKEN}' "$tmp/runner-temp/.npmrc" || { echo "the npm configuration did not land in the runner's temporary tree; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
+mkdir -p "$tmp/fallback-temp"
+TMPDIR="$tmp/fallback-temp" "$root/scripts/npm-registry-auth.sh" "$npm_registry" >/dev/null
+fallback_config=$(find "$tmp/fallback-temp" -name .npmrc -print -quit)
+[[ -n $fallback_config ]] || { echo "the npm configuration had nowhere to go with no runner temporary tree; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
+grep -Fq ':_authToken=${NODE_AUTH_TOKEN}' "$fallback_config" || { cat "$fallback_config" >&2; echo "the fallback npm configuration did not name NODE_AUTH_TOKEN; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
+# The release workflow names no registry either, so the default is what actually publishes.
+ONETASKGRAPH_NPM_CONFIG_DIR="$tmp/npm-config-default" "$root/scripts/npm-registry-auth.sh" >/dev/null
+grep -Fq 'registry=https://registry.npmjs.org/' "$tmp/npm-config-default/.npmrc" || { cat "$tmp/npm-config-default/.npmrc" >&2; echo "the default npm configuration did not point at the public registry; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
+grep -Fq '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}' "$tmp/npm-config-default/.npmrc" || { cat "$tmp/npm-config-default/.npmrc" >&2; echo "the default npm configuration did not name NODE_AUTH_TOKEN for the public registry; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
+scratch_clone "$root" "$tmp/contract-repo"
+# The clone supplies the surrounding tree; the three files under test come from the working
+# copy, because what the gate has to refuse is the release path as it stands right now.
+restore_contract_repo() {
+  cp "$root/.github/workflows/release.yml" "$tmp/contract-repo/.github/workflows/release.yml"
+  cp "$root/scripts/npm-registry-auth.sh" "$tmp/contract-repo/scripts/npm-registry-auth.sh"
+  cp "$root/scripts/check-distribution-contract.sh" "$tmp/contract-repo/scripts/check-distribution-contract.sh"
+}
+restore_contract_repo
+(cd "$tmp/contract-repo" && ./scripts/check-distribution-contract.sh) || { echo "the distribution contract refused the release path it is meant to accept; next: rerun scripts/check-distribution-contract.sh" >&2; exit 1; }
+assert_contract_refuses() {
+  expected_reason=$1
+  relative=$2
+  removed=$3
+  restore_contract_repo
+  grep -Fv "$removed" "$tmp/contract-repo/$relative" > "$tmp/contract-mutation"
+  cp "$tmp/contract-mutation" "$tmp/contract-repo/$relative"
+  if (cd "$tmp/contract-repo" && ./scripts/check-distribution-contract.sh) >"$tmp/contract-output" 2>"$tmp/error"; then
+    echo "the distribution contract accepted a release with '$removed' removed from $relative; next: inspect scripts/check-distribution-contract.sh" >&2
+    exit 1
+  fi
+  grep -Fq "$expected_reason" "$tmp/error" || { cat "$tmp/error" >&2; echo "the distribution contract refused '$relative' without naming npm authentication; next: inspect its diagnostics" >&2; exit 1; }
+  grep -Fq 'next: restore the npm registry authentication' "$tmp/error" || { cat "$tmp/error" >&2; echo "the distribution contract refused '$relative' without a next action that repairs npm authentication; next: inspect its diagnostics" >&2; exit 1; }
+  restore_contract_repo
+}
+assert_contract_refuses 'NODE_AUTH_TOKEN alone leaves the npm client logged out' .github/workflows/release.yml 'NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh'
+assert_contract_refuses 'must be exported as NPM_CONFIG_USERCONFIG' .github/workflows/release.yml 'export NPM_CONFIG_USERCONFIG'
+assert_contract_refuses 'must name NODE_AUTH_TOKEN rather than carry a token value' scripts/npm-registry-auth.sh ':_authToken=${NODE_AUTH_TOKEN}'
