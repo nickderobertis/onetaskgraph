@@ -53,6 +53,11 @@ printf '%s\n' "$expected" | grep -Eq '^[0-9A-Fa-f]{64}$' || die 65 "checksum fil
 if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$tmp/$name" | awk '{print $1}'); elif command -v shasum >/dev/null 2>&1; then actual=$(shasum -a 256 "$tmp/$name" | awk '{print $1}'); else die 69 "no SHA-256 implementation is installed"; fi
 [ "$actual" = "$expected" ] || die 65 "checksum mismatch for $name"
 mkdir -p "$tmp/unpack" "$install_dir"
+case "$ext" in
+  tar.gz) members=$(tar -tzf "$tmp/$name") || die 65 "archive is unreadable: $name";;
+  zip) members=$(unzip -Z1 "$tmp/$name") || die 65 "archive is unreadable: $name";;
+esac
+printf '%s\n' "$members" | awk '/^\// || /^[A-Za-z]:/ || /(^|\/)\.\.($|\/)/ { bad=1 } END { exit bad }' || die 65 "archive contains an unsafe member path"
 case "$ext" in tar.gz) tar -xzf "$tmp/$name" -C "$tmp/unpack" || die 74 "could not extract $name";; zip) unzip -q "$tmp/$name" -d "$tmp/unpack" || die 74 "could not extract $name";; esac
 install -m 755 "$tmp/unpack/$binary" "$install_dir/$binary" || die 74 "could not install into $install_dir"
 printf 'installed %s to %s\n' "$version" "$install_dir/$binary"

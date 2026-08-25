@@ -4,10 +4,16 @@ fail() { echo "distribution contract drift: $1" >&2; echo "next: update the rele
 expected=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64)
 mapfile -t packages < <(find npm/platforms -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
 [[ ${packages[*]} == "${expected[*]}" ]] || fail "npm carriers are '${packages[*]}', expected '${expected[*]}'"
-for value in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-msvc; do
-  grep -q "$value" scripts/install.sh || fail "$value missing from installer"
-  grep -q "$value" .github/workflows/release.yml || fail "$value missing from release matrix"
-done
+while read -r os target ext npm; do
+  grep -Fq -- "- { os: $os, target: $target, ext: $ext, npm: $npm }" .github/workflows/release.yml || fail "$target is not mapped to $os/$ext/$npm in the release matrix"
+  grep -Fq "$target; ext=$ext" scripts/install.sh || fail "$target is not mapped to $ext in the installer"
+done <<'MAPPINGS'
+ubuntu-latest x86_64-unknown-linux-gnu tar.gz linux-x64
+ubuntu-24.04-arm aarch64-unknown-linux-gnu tar.gz linux-arm64
+macos-latest x86_64-apple-darwin tar.gz darwin-x64
+macos-latest aarch64-apple-darwin tar.gz darwin-arm64
+windows-latest x86_64-pc-windows-msvc zip win32-x64
+MAPPINGS
 for value in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64; do grep -q "$value" npm/cli/bin/onetaskgraph.js || fail "$value missing from launcher"; done
 grep -q 'npm pack ./carrier' .github/workflows/release.yml || fail "release workflow does not build npm carrier tarballs"
 grep -q 'cp "$bin"' .github/workflows/release.yml || fail "release workflow does not put native binaries in npm carriers"
