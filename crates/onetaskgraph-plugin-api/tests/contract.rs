@@ -448,6 +448,48 @@ fn repository_origins_accept_only_the_normalized_public_identity() {
 }
 
 #[test]
+fn repository_origins_are_read_from_the_one_reserved_key_they_are_recorded_under() {
+    let metadata = [(
+        onetaskgraph_plugin_api::Repository::METADATA_KEY.to_owned(),
+        serde_json::json!(["github.com/example/work", "github.com/example/docs"]),
+    )]
+    .into();
+    let origins = onetaskgraph_plugin_api::Repository::from_metadata(&metadata)
+        .expect("a list of normalized origins");
+    assert_eq!(
+        origins
+            .iter()
+            .map(onetaskgraph_plugin_api::Repository::as_str)
+            .collect::<Vec<_>>(),
+        ["github.com/example/work", "github.com/example/docs"]
+    );
+
+    assert!(
+        onetaskgraph_plugin_api::Repository::from_metadata(&Default::default())
+            .expect("an item recording none")
+            .is_empty()
+    );
+
+    for (value, expected) in [
+        (serde_json::json!("github.com/example/work"), "not a list"),
+        (
+            serde_json::json!(["github.com/example/work", "github.com/example/work"]),
+            "listed twice",
+        ),
+        (serde_json::json!(["work"]), "normalized repository origin"),
+    ] {
+        let metadata = [(
+            onetaskgraph_plugin_api::Repository::METADATA_KEY.to_owned(),
+            value,
+        )]
+        .into();
+        let error = onetaskgraph_plugin_api::Repository::from_metadata(&metadata)
+            .expect_err("a repository list this interface cannot represent");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
 fn a_repeated_repository_origin_is_refused_wherever_a_work_item_is_decoded() {
     let repeated = serde_json::json!({
         "id": "ENG-1", "title": "Ship", "content": null,
@@ -538,10 +580,21 @@ fn dependency_endpoints_validate_and_preserve_qualified_ids() {
     assert_eq!(native.id(), "urn:task:7");
     assert_eq!(native.into_id(), "urn:task:7");
 
+    // An id built through the validating constructor without a colon stays this source's
+    // own, which is what keeps a bare far id a native one.
+    let unqualified = onetaskgraph_plugin_api::DependencyEndpoint::new(
+        "T-2".to_owned(),
+        onetaskgraph_plugin_api::ItemKind::Task,
+    )
+    .expect("an unqualified endpoint");
+    assert!(!unqualified.is_qualified());
+    assert_eq!(unqualified, NativeId::from("T-2"));
+
     for invalid in [
         serde_json::json!({"id":"", "kind":"task"}),
         serde_json::json!({"id":"bad source:T-1", "kind":"task"}),
         serde_json::json!({"id":"other:", "kind":"project"}),
+        serde_json::json!(""),
     ] {
         assert!(
             serde_json::from_value::<onetaskgraph_plugin_api::DependencyEndpoint>(invalid).is_err()
