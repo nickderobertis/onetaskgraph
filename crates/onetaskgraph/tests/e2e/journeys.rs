@@ -1,4 +1,5 @@
-//! The journeys, written once and run against every row of the fixture table.
+//! Shared journeys over complete-dataset rows, plus focused journeys for sources whose
+//! native model cannot represent that whole dataset.
 //!
 //! Every one of them drives the compiled binary as a subprocess. Where a journey asserts
 //! on the plan as well as the rows, it asserts what *this row declares* — so the same
@@ -8,7 +9,7 @@
 use std::process::Output;
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{Fixture, ROWS, Row, SOURCE, document, qualified};
+use crate::fixtures::{ROWS, Row, SOURCE, document, qualified};
 use serde_json::json;
 
 /// A sandbox holding this row's configuration document and nothing else.
@@ -83,15 +84,117 @@ fn plan_says(row: &Row, rendered: &str, outcome: &str, predicate: &str) {
     );
 }
 
-/// Every row that can be configured today.
-fn ready() -> impl Iterator<Item = &'static Row> {
-    ROWS.iter()
-        .filter(|row| matches!(row.fixture, Fixture::Ready(_)))
+/// Rows that can represent every entity and relationship in the shared dataset.
+fn complete_dataset_rows() -> impl Iterator<Item = &'static Row> {
+    ROWS.iter().filter(|row| row.fixture.complete_dataset)
 }
 
 #[test]
-fn every_source_lists_its_tasks_and_shows_one_by_its_qualified_id() {
-    for row in ready() {
+fn github_projects_runs_shared_binary_journeys_against_its_fixture_server() {
+    let row = ROWS
+        .iter()
+        .find(|row| row.plugin == "github-projects")
+        .expect("GitHub Projects fixture row");
+    let sandbox = host(row);
+
+    let listed_tasks = ok(row, &sandbox, &["task", "list"]);
+    assert_eq!(listed(&listed_tasks), ours(&["T-1", "T-2", "T-3", "T-4"]));
+
+    let filtered = ok(
+        row,
+        &sandbox,
+        &[
+            "task",
+            "list",
+            "--label",
+            "bug",
+            "--status",
+            "todo",
+            "--explain",
+        ],
+    );
+    assert_eq!(listed(&filtered), ours(&["T-1", "T-3"]));
+    plan_says(row, &filtered, "applied locally", "label");
+    plan_says(row, &filtered, "applied locally", "status");
+
+    let searched = ok(
+        row,
+        &sandbox,
+        &[
+            "task",
+            "list",
+            "--search",
+            "alpha",
+            "--in",
+            "both",
+            "--explain",
+        ],
+    );
+    assert_eq!(listed(&searched), ours(&["T-1", "T-2"]));
+    plan_says(row, &searched, "applied locally", "search-title");
+    plan_says(row, &searched, "applied locally", "search-content");
+
+    let dependencies = ok(row, &sandbox, &["task", "deps", &qualified(SOURCE, "T-1")]);
+    assert!(
+        dependencies.contains(&qualified(SOURCE, "T-2")),
+        "{dependencies}"
+    );
+
+    let mut walked = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let mut arguments = vec!["task", "list", "--limit", "1"];
+        if let Some(page) = &token {
+            arguments.extend(["--page", page]);
+        }
+        let rendered = ok(row, &sandbox, &arguments);
+        walked.extend(listed(&rendered));
+        token = rendered
+            .lines()
+            .find_map(|line| line.strip_prefix("next page: --page "))
+            .map(str::to_owned);
+        if token.is_none() {
+            break;
+        }
+    }
+    assert_eq!(walked, ours(&["T-1", "T-2", "T-3", "T-4"]));
+}
+
+#[test]
+fn github_projects_missing_credential_reaches_the_binary_user() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&document(&json!({
+        SOURCE: {"plugin":"github-projects","config":{
+            "owner":"fixture-owner","project_number":7,
+            "token_env":"DELIBERATELY_MISSING_GITHUB_TOKEN"
+        }}
+    })));
+    let output = run(&sandbox, &["task", "list"]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let complaint = stderr(&output);
+    assert!(
+        complaint.contains("DELIBERATELY_MISSING_GITHUB_TOKEN"),
+        "{complaint}"
+    );
+    assert!(complaint.contains("--allow-partial"), "{complaint}");
+
+    let allowed = run(&sandbox, &["task", "list", "--allow-partial"]);
+    assert_eq!(
+        allowed.status.code(),
+        Some(0),
+        "allowing the missing source must make the partial run succeed: {}",
+        stderr(&allowed)
+    );
+    assert!(
+        stderr(&allowed).contains("DELIBERATELY_MISSING_GITHUB_TOKEN"),
+        "the partial run must still explain the missing credential: {}",
+        stderr(&allowed)
+    );
+}
+
+#[test]
+fn every_complete_dataset_source_lists_its_tasks_and_shows_one_by_its_qualified_id() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
 
         let listing = ok(row, &sandbox, &["task", "list"]);
@@ -129,8 +232,8 @@ fn every_source_lists_its_tasks_and_shows_one_by_its_qualified_id() {
 }
 
 #[test]
-fn every_source_lists_its_projects_and_shows_one_by_its_qualified_id() {
-    for row in ready() {
+fn every_complete_dataset_source_lists_its_projects_and_shows_one_by_its_qualified_id() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
 
         let listing = ok(row, &sandbox, &["project", "list"]);
@@ -191,9 +294,9 @@ fn malformed_local_markdown_names_its_path_without_hiding_valid_rows() {
 
 #[test]
 fn a_task_in_no_project_is_listed_by_default_and_can_be_selected_on_its_own() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
 
         let all = ok(row, &sandbox, &["task", "list"]);
         assert!(
@@ -230,8 +333,8 @@ fn a_task_in_no_project_is_listed_by_default_and_can_be_selected_on_its_own() {
 }
 
 #[test]
-fn every_source_lists_the_labels_it_knows() {
-    for row in ready() {
+fn every_complete_dataset_source_lists_the_labels_it_knows() {
+    for row in complete_dataset_rows() {
         let listing = ok(row, &host(row), &["label", "list"]);
         assert_eq!(
             listed(&listing),
@@ -244,10 +347,10 @@ fn every_source_lists_the_labels_it_knows() {
 }
 
 #[test]
-fn filtering_by_label_answers_the_same_rows_whoever_applies_the_predicate() {
-    for row in ready() {
+fn complete_dataset_sources_agree_on_label_filtering_wherever_it_is_applied() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
         let outcome = if declared.filter_by_label {
             "pushed down"
         } else {
@@ -277,10 +380,10 @@ fn filtering_by_label_answers_the_same_rows_whoever_applies_the_predicate() {
 }
 
 #[test]
-fn filtering_by_status_category_answers_the_same_rows_whoever_applies_the_predicate() {
-    for row in ready() {
+fn complete_dataset_sources_agree_on_status_filtering_wherever_it_is_applied() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
 
         let todo = ok(
             row,
@@ -315,9 +418,9 @@ fn filtering_by_status_category_answers_the_same_rows_whoever_applies_the_predic
 
 #[test]
 fn searching_covers_titles_bodies_or_either_over_tasks_and_projects() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
 
         for (fields, predicate, native, expected) in [
             ("title", "search-title", declared.search_title, vec!["T-1"]),
@@ -383,10 +486,10 @@ fn searching_covers_titles_bodies_or_either_over_tasks_and_projects() {
 }
 
 #[test]
-fn task_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itself() {
-    for row in ready() {
+fn complete_dataset_sources_walk_task_dependencies_forwards_and_backwards() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
 
         let forward = ok(
             row,
@@ -432,10 +535,10 @@ fn task_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itse
 }
 
 #[test]
-fn project_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itself() {
-    for row in ready() {
+fn complete_dataset_sources_walk_project_dependencies_forwards_and_backwards() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
 
         let forward = ok(
             row,
@@ -475,13 +578,13 @@ fn project_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_i
 }
 
 #[test]
-fn every_source_filters_its_projects_by_label_by_status_and_by_text() {
+fn every_complete_dataset_source_filters_projects_by_label_status_and_text() {
     // `project list` carries the same filters `task list` does, over a source's other
     // entity and through a different query type. A source that applied them to tasks and
     // dropped them for projects would pass every task journey above.
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
-        let declared = row.declared().expect("a ready row declares");
+        let declared = row.declared();
 
         let by_label = ok(
             row,
@@ -598,7 +701,7 @@ fn a_both_kind_search_whose_projects_ran_out_still_resumes_under_the_narrower_ki
     // streams a search covers is what the token's stream check reads, name by name, so
     // the scope is left out of the query fingerprint on purpose. A token still carrying
     // the project half is refused by that check, and this is the other side of it.
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
 
         let mut token = String::new();
@@ -663,7 +766,7 @@ fn a_both_kind_search_whose_projects_ran_out_still_resumes_under_the_narrower_ki
 
 #[test]
 fn a_limit_smaller_than_the_result_set_walks_to_exhaustion_in_a_stable_order() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
         let whole = listed(&ok(row, &sandbox, &["task", "list"]));
 
@@ -698,44 +801,8 @@ fn a_limit_smaller_than_the_result_set_walks_to_exhaustion_in_a_stable_order() {
 }
 
 #[test]
-fn a_plugin_whose_source_has_not_landed_says_so_and_leaves_the_command_usable() {
-    // A `Pending` row is a journey, not a placeholder: its plugin is registered, so a
-    // configuration naming it is valid, and what a user must get is that plugin's own
-    // message rather than "unknown plugin" — and exit 4, because this is one source
-    // failing rather than the command being wrong.
-    for row in ROWS
-        .iter()
-        .filter(|row| matches!(row.fixture, Fixture::Pending))
-    {
-        let sandbox = host(row);
-        let output = run(&sandbox, &["task", "list"]);
-        assert_eq!(
-            output.status.code(),
-            Some(4),
-            "{}: a source that cannot be built is a partial answer\n{}",
-            row.name,
-            stderr(&output)
-        );
-        let complaint = stderr(&output);
-        assert!(
-            complaint.contains(SOURCE) && complaint.contains("not implemented yet"),
-            "{}: the plugin's own message must reach the user:\n{complaint}",
-            row.name
-        );
-        assert!(
-            complaint.contains("--allow-partial"),
-            "{}: and a suggested next action:\n{complaint}",
-            row.name
-        );
-
-        let allowed = run(&sandbox, &["task", "list", "--allow-partial"]);
-        assert_eq!(allowed.status.code(), Some(0), "{}", row.name);
-    }
-}
-
-#[test]
 fn a_shown_item_carries_the_fields_the_source_gave_it_and_says_when_it_has_none() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
 
         let with_url = ok(row, &sandbox, &["task", "show", &qualified(SOURCE, "T-1")]);
@@ -786,7 +853,7 @@ fn a_shown_item_carries_the_fields_the_source_gave_it_and_says_when_it_has_none(
 
 #[test]
 fn every_status_category_and_search_scope_the_command_line_spells_is_accepted() {
-    for row in ready() {
+    for row in complete_dataset_rows() {
         let sandbox = host(row);
 
         // The three categories this fixture holds, one flag each.

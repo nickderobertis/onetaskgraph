@@ -1,0 +1,133 @@
+# Authoritative GitHub.com GraphQL read-contract subset, introspected 2026-08-24.
+# The full schema is intentionally reduced to the types and fields selected by this plugin;
+# tests validate every production document against this artifact.
+schema {
+  query: Query
+}
+scalar String
+scalar ID
+scalar Int
+scalar Boolean
+
+type Query {
+  repositoryOwner(login: String!): RepositoryOwner
+  node(id: ID!): Node
+}
+interface Node {
+  id: ID!
+}
+interface RepositoryOwner {
+  id: ID!
+}
+interface ProjectV2Owner {
+  projectV2(number: Int!): ProjectV2
+}
+type Organization implements Node & RepositoryOwner & ProjectV2Owner {
+  id: ID!
+  projectV2(number: Int!): ProjectV2
+}
+type User implements Node & RepositoryOwner & ProjectV2Owner {
+  id: ID!
+  projectV2(number: Int!): ProjectV2
+}
+
+type ProjectV2 implements Node {
+  id: ID!
+  title: String!
+  shortDescription: String
+  url: URI!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  closed: Boolean!
+  items(first: Int, after: String): ProjectV2ItemConnection!
+}
+type ProjectV2Item implements Node {
+  id: ID!
+  project: ProjectV2!
+  fieldValues(first: Int, after: String): ProjectV2ItemFieldValueConnection!
+  content: ProjectV2ItemContent
+}
+union ProjectV2ItemContent = DraftIssue | Issue | PullRequest | RedactedProjectV2Item
+union ProjectV2ItemFieldValue = ProjectV2ItemFieldLabelValue | ProjectV2ItemFieldSingleSelectValue
+union ProjectV2FieldConfiguration = ProjectV2SingleSelectField
+
+type ProjectV2ItemFieldValueConnection {
+  nodes: [ProjectV2ItemFieldValue]
+  pageInfo: PageInfo!
+}
+type ProjectV2ItemFieldSingleSelectValue {
+  name: String
+  field: ProjectV2FieldConfiguration!
+}
+type ProjectV2ItemFieldLabelValue {
+  labels(first: Int, after: String): LabelConnection!
+}
+type ProjectV2SingleSelectField {
+  name: String!
+}
+
+type Issue implements Node {
+  id: ID!
+  title: String!
+  body: String!
+  url: URI!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  state: IssueState!
+  labels(first: Int, after: String): LabelConnection
+  blockedBy(first: Int, after: String): IssueConnection!
+  blocking(first: Int, after: String): IssueConnection!
+  projectItems(first: Int, after: String): ProjectV2ItemConnection!
+}
+type PullRequest implements Node {
+  id: ID!
+  title: String!
+  body: String!
+  url: URI!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  state: PullRequestState!
+  labels(first: Int, after: String): LabelConnection
+}
+type DraftIssue implements Node {
+  id: ID!
+  title: String!
+  body: String
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+type RedactedProjectV2Item implements Node {
+  id: ID!
+}
+type Label implements Node {
+  id: ID!
+  name: String!
+  color: String!
+}
+type ProjectV2ItemConnection {
+  nodes: [ProjectV2Item!]
+  pageInfo: PageInfo!
+}
+type IssueConnection {
+  nodes: [Issue]
+  pageInfo: PageInfo!
+}
+type LabelConnection {
+  nodes: [Label]
+  pageInfo: PageInfo!
+}
+type PageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
+}
+enum IssueState {
+  OPEN
+  CLOSED
+}
+enum PullRequestState {
+  OPEN
+  CLOSED
+  MERGED
+}
+scalar DateTime
+scalar URI
