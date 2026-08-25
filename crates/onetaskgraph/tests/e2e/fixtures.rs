@@ -244,16 +244,36 @@ fn github_projects_block(sandbox: &Sandbox) -> Value {
             let mut stream = stream.expect("GitHub fixture connection");
             let request = read_http_json(&mut stream);
             let query = request["query"].as_str().expect("GraphQL query string");
-            let variables = &request["variables"];
+            graphql_parser::parse_query::<String>(query).expect("valid GraphQL document");
+            let variables = request["variables"]
+                .as_object()
+                .expect("GraphQL variables object");
+            let variables = &Value::Object(variables.clone());
             let data = if query.contains("node(id:$id)") {
                 let id = variables["id"].as_str().expect("dependency id");
+                let first = variables["first"]
+                    .as_u64()
+                    .expect("dependency first must be an unsigned integer");
+                assert!(
+                    (1..=100).contains(&first),
+                    "dependency first is out of range"
+                );
+                assert!(
+                    variables["after"].is_null() || variables["after"].is_string(),
+                    "dependency after must be null or a string"
+                );
                 let blockers = match id {
                     "T-1" | "T-3" | "T-4" => vec![json!({"id":"T-2","projectItems":{"nodes":[]}})],
                     _ => vec![],
                 };
                 json!({"node":{"__typename":"Issue","blockedBy":{"nodes":blockers,"pageInfo":{"hasNextPage":false,"endCursor":null}}}})
-            } else {
+            } else if query.contains("owner:repositoryOwner") {
+                assert_eq!(variables["owner"], "fixture-owner");
+                assert_eq!(variables["number"], 7);
+                assert_eq!(variables["nestedFirst"], 50);
                 github_project_page(variables)
+            } else {
+                panic!("fixture received an unknown GraphQL operation")
             };
             let body = json!({"data":data}).to_string();
             let response = format!(
@@ -356,6 +376,10 @@ fn github_project_page(variables: &Value) -> Value {
     )
     .expect("GraphQL first fits usize");
     assert!(first > 0, "GraphQL first must be positive");
+    assert!(
+        offset <= tasks.len(),
+        "GraphQL after cursor is out of range"
+    );
     let end = (offset + first).min(tasks.len());
     let nodes = tasks[offset..end]
         .iter()
