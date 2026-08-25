@@ -180,12 +180,11 @@ reset_fixture
 #    it, whereas Cargo permits a cycle through a dev edge. So the wrapper restriction is
 #    what stands between a dev-dependency on the engine and a merge.
 add_dependency onetaskgraph-linear dev-dependencies 'onetaskgraph-core.workspace = true'
-# llmlint: ignore[work_goes_through_command_surface] `just deny` is the command surface
-# for this repository, and it is the wrong tool here twice over: it runs the whole suite,
-# including advisories, which reaches the advisory database over a network this check
-# deliberately closes (CARGO_NET_OFFLINE above), and it would run against THIS repository
-# rather than the scratch clone the fixture lives in. `bans` alone, in that clone, is what
-# this case is about.
+# `just deny` is the command surface for this repository, and it is the wrong tool here
+# twice over: it runs the whole suite, including advisories, which reaches the advisory
+# database over a network this check deliberately closes (CARGO_NET_OFFLINE above), and it
+# would run against THIS repository rather than the scratch clone the fixture lives in.
+# llmlint: ignore[work_goes_through_command_surface] `bans` alone, in the scratch clone.
 deny_output="$(cd "$scratch/repo" && cargo deny check bans 2>&1)" \
   && deny_status=0 || deny_status=$?
 if [ "$deny_status" -eq 0 ]; then
