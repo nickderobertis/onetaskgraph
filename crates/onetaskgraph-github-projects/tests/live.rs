@@ -250,11 +250,15 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
         };
         assert_eq!(edge.to, task.id);
         assert!(
-            tasks.iter().any(|candidate| candidate.id == edge.from),
+            tasks.iter().any(|candidate| edge.from == candidate.id),
             "the forward dependency must resolve to another task on the project"
         );
         let reverse = source
-            .task_dependencies(&edge.from, Direction::DependedOnBy, &page(None))
+            .task_dependencies(
+                &NativeId(edge.from.id.clone()),
+                Direction::DependedOnBy,
+                &page(None),
+            )
             .await
             .unwrap_or_else(|error| panic!("reverse dependency read failed: {error}"));
         assert!(
@@ -279,7 +283,7 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
             .items
             .iter()
             .all(|edge| edge.to == project.id
-                && projects.items.iter().any(|item| item.id == edge.from)),
+                && projects.items.iter().any(|item| edge.from == item.id)),
         "every forward issue dependency must resolve through projectItems to a visible project"
     );
     let reverse_projects = source
@@ -291,7 +295,7 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
             .items
             .iter()
             .all(|edge| edge.from == project.id
-                && projects.items.iter().any(|item| item.id == edge.to)),
+                && projects.items.iter().any(|item| edge.to == item.id)),
         "every reverse issue dependency must resolve through projectItems to a visible project"
     );
 }

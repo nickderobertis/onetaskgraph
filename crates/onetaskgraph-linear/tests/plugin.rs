@@ -354,7 +354,7 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
         )
         .await
         .unwrap();
-    assert_eq!(edges.items[0].to.0, "i2");
+    assert_eq!(edges.items[0].to.id, "i2");
     let (endpoint, _) = server("200 OK", "", include_str!("fixtures/issue-relations.json"));
     let edges = source(&endpoint)
         .task_dependencies(
@@ -367,7 +367,7 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
         )
         .await
         .unwrap();
-    assert_eq!(edges.items[0].from.0, "i3");
+    assert_eq!(edges.items[0].from.id, "i3");
     let (endpoint, _) = server(
         "200 OK",
         "",
@@ -387,7 +387,7 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
             .unwrap()
             .items[0]
             .to
-            .0,
+            .id,
         "p2"
     );
 }
@@ -707,7 +707,7 @@ async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
         .unwrap()
         .items
         .remove(0);
-    assert_eq!(edge.from.0, "p3");
+    assert_eq!(edge.from.id, "p3");
     let (endpoint, wire) = server("200 OK", "", include_str!("fixtures/projects.json"));
     source(&endpoint)
         .query_projects(

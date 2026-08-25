@@ -7,8 +7,9 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, DependencyKind, Direction, Health, Label, Page, PageRequest,
-    Project, ProjectQuery, SourceError, Status, StatusCategory, Task, TaskQuery, TextFields,
+    Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Health, ItemKind,
+    Label, Page, PageRequest, Project, ProjectQuery, Repository, SourceError, Status,
+    StatusCategory, Task, TaskQuery, TextFields,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
@@ -17,8 +18,8 @@ use crate::config::{EffectiveConfig, Origin, OutputFormat, Setting};
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::{
-    GlobalId, PageToken, Predicate, Qualified, QualifiedEdge, QueryPlan, QueryResponse, SearchHit,
-    SearchKind, SourceFailure, SourceListing, SourcePlan,
+    GlobalId, PageToken, Predicate, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan,
+    QueryResponse, SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan,
 };
 
 /// The bundle's own version, bumped whenever a root is added, removed or renamed.
@@ -29,7 +30,7 @@ use crate::{
 ///
 /// Which roots each version brought is what `git log` answers; what this number owes a
 /// reader is that it moves whenever [`schema_bundle`] below gains, loses or renames one.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 5;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 6;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -42,6 +43,10 @@ pub fn schema_bundle() -> Value {
     roots.insert("Status", schema_for!(Status));
     roots.insert("StatusCategory", schema_for!(StatusCategory));
     roots.insert("DependencyEdge", schema_for!(DependencyEdge));
+    roots.insert("DependencyEndpoint", schema_for!(DependencyEndpoint));
+    roots.insert("QualifiedEndpoint", schema_for!(QualifiedEndpoint));
+    roots.insert("ItemKind", schema_for!(ItemKind));
+    roots.insert("Repository", schema_for!(Repository));
     roots.insert("DependencyKind", schema_for!(DependencyKind));
     roots.insert("Direction", schema_for!(Direction));
     // Roots of their own although both are reachable inside `TaskQuery`'s definitions,

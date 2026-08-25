@@ -385,9 +385,10 @@ fn github_project_page(variables: &Value) -> Value {
         .iter()
         .map(|(id, title, body, status, state, labels)| json!({
             "id": format!("ITEM-{id}"),
-            "fieldValues":{"nodes":[{"name":status,"field":{"name":"Status"}}],"pageInfo":{"hasNextPage":false}},
+            "fieldValues":{"nodes":[{"name":status,"field":{"name":"Status"}},
+                {"text": if *id == "T-1" {serde_json::to_string(&json!({"onepipeline.turn_budget":12,"caller.flags":[true,null]})).unwrap()} else {"{}".into()},"field":{"name":"onetaskgraph.metadata"}}],"pageInfo":{"hasNextPage":false}},
             "content":{
-                "id":id,"title":title,"body":body,"state":state,
+                "id":id,"title":title,"body":body,"state":state,"repository":{"nameWithOwner":"nickderobertis/onetaskgraph"},
                 "url":format!("https://example.invalid/{id}"),
                 "labels":{"nodes":labels.iter().map(|(id, name)| json!({"id":id,"name":name})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}
             }
@@ -395,7 +396,7 @@ fn github_project_page(variables: &Value) -> Value {
         .collect::<Vec<_>>();
     json!({
         "owner":{"projectV2":{
-            "id":"P-1","title":"Engine","shortDescription":"alpha engine project",
+            "id":"P-1","title":"Engine","shortDescription":"alpha engine project\n\n<!-- onetaskgraph.metadata\n{\"onepipeline.publication\":{\"mode\":\"review\"},\"onetaskgraph.repositories\":[\"github.com/nickderobertis/onetaskgraph\"]}\n-->",
             "url":"https://example.invalid/P-1","closed":false,
             "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < tasks.len(),"endCursor":end.to_string()}}
         }},
@@ -766,10 +767,29 @@ fn linear_state(v: &Value) -> Value {
     json!({"name":v["name"],"type":match category{"todo"=>"unstarted","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
 }
 fn linear_task(v: &Value) -> Value {
-    json!({"id":v["id"],"title":v["title"],"description":v["content"],"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":v.get("url"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"title":v["title"],"description":linear_description(v),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":v.get("url"),"createdAt":null,"updatedAt":null})
 }
 fn linear_project(v: &Value) -> Value {
-    json!({"id":v["id"],"name":v["title"],"description":v["content"],"status":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":v.get("url"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"name":v["title"],"description":linear_description(v),"status":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":v.get("url"),"createdAt":null,"updatedAt":null})
+}
+fn linear_description(v: &Value) -> String {
+    let mut metadata = v
+        .get("metadata")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(repositories) = v.get("repositories") {
+        metadata.insert("onetaskgraph.repositories".into(), repositories.clone());
+    }
+    let content = v.get("content").and_then(Value::as_str).unwrap_or_default();
+    if metadata.is_empty() {
+        content.into()
+    } else {
+        format!(
+            "{content}\n\n<!-- onetaskgraph.metadata\n{}\n-->",
+            serde_json::to_string(&metadata).unwrap()
+        )
+    }
 }
 fn linear_connection(rows: Vec<Value>, vars: &Value) -> Value {
     let start = vars["after"]
@@ -851,7 +871,7 @@ fn local_md_block(sandbox: &Sandbox) -> Value {
         (
             "tasks",
             "T-1",
-            "title: Alpha engine\nstatus: Todo\nlabels: [{id: L-1, name: bug}, {id: L-3, name: core}]\nproject: P-1\nurl: https://example.invalid/T-1\ndepends_on: [T-2]",
+            "title: Alpha engine\nstatus: Todo\nlabels: [{id: L-1, name: bug}, {id: L-3, name: core}]\nproject: P-1\nurl: https://example.invalid/T-1\nmetadata: {onepipeline.turn_budget: 12, caller.flags: [true, null]}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [T-2]",
             "the engine core",
         ),
         (
@@ -875,7 +895,7 @@ fn local_md_block(sandbox: &Sandbox) -> Value {
         (
             "projects",
             "P-1",
-            "title: Engine\nstatus: Doing\nlabels: [{id: L-3, name: core}]\nurl: https://example.invalid/P-1\ndepends_on: [P-2]",
+            "title: Engine\nstatus: Doing\nlabels: [{id: L-3, name: core}]\nurl: https://example.invalid/P-1\nmetadata: {onepipeline.publication: {mode: review}}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [P-2]",
             "the engine",
         ),
         ("projects", "P-2", "title: Docs\nstatus: Todo", "alpha docs"),
@@ -950,7 +970,9 @@ pub fn dataset() -> Value {
             {"id": "T-1", "title": "Alpha engine", "content": "the engine core",
              "status": {"category": "todo", "name": "Todo"},
              "labels": [{"id": "L-1", "name": "bug"}, {"id": "L-3", "name": "core"}],
-             "project": "P-1", "url": "https://example.invalid/T-1"},
+            "project": "P-1", "url": "https://example.invalid/T-1",
+            "metadata": {"onepipeline.turn_budget": 12, "caller.flags": [true, null]},
+            "repositories": ["github.com/nickderobertis/onetaskgraph"]},
             {"id": "T-2", "title": "Beta", "content": "alpha in the body",
              "status": {"category": "done", "name": "Shipped"},
              "labels": [{"id": "L-2", "name": "chore"}], "project": "P-1"},
@@ -965,7 +987,9 @@ pub fn dataset() -> Value {
             {"id": "P-1", "title": "Engine", "content": "the engine",
              "status": {"category": "in-progress", "name": "Doing"},
              "labels": [{"id": "L-3", "name": "core"}],
-             "url": "https://example.invalid/P-1"},
+             "url": "https://example.invalid/P-1",
+             "metadata": {"onepipeline.publication": {"mode": "review"}},
+             "repositories": ["github.com/nickderobertis/onetaskgraph"]},
             {"id": "P-2", "title": "Docs", "content": "alpha docs",
              "status": {"category": "todo", "name": "Todo"}, "labels": []}
         ],

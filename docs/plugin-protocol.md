@@ -386,12 +386,15 @@ carries it.
 ```
 
 `direction` is `"depends-on"` or `"depended-on-by"`. `result` is a
-`Page<DependencyEdge>`, each edge being
-`{"from": "<native id>", "to": "<native id>", "kind": "blocks"}` where `kind` is
-`"blocks"` or `"related"`, and `from` **depends on** `to`.
+`Page<DependencyEdge>`, each edge being `{"from":{"id":"<qualified id>",
+"kind":"task"},"to":{"id":"<qualified id>","kind":"project"},"kind":"blocks"}`.
+An endpoint kind is `"task"` or `"project"`; an edge kind is `"blocks"` or
+`"related"`, and `from` **depends on** `to`.
 
-Both edge ends are ids **within this source**. A cross-source edge would need state
-the engine is forbidden to hold, so there is no way to express one.
+An endpoint may be in another source. The plugin reads that qualified far id from the
+near item's reserved `onetaskgraph.depends_on` metadata when its backend cannot express
+the relationship. The engine reports but never follows it. Keeping the far id on the
+near item is plugin-owned work data, not the forbidden engine-side index or mirror.
 
 A plugin that declared `"both-directions"` answers both directions itself, and must
 never return an empty page for a direction it declared.

@@ -3,7 +3,7 @@
 #   schema root: QueryResponseOfSearchHit
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, Field, RootModel
 
@@ -42,6 +42,15 @@ class Predicate(StrEnum):
     PredicateSearchContent = "search-content"
     PredicateProject = "project"
     PredicateReverseDependencies = "reverse-dependencies"
+
+
+class Repository(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="A repository identified by its normalized origin, without a URL scheme or `.git` suffix."
+        ),
+    ]
 
 
 class SourceErrorConfig(BaseModel):
@@ -194,10 +203,21 @@ class Task(BaseModel):
             description="Inline rather than by id: a source returning a task already knows them."
         ),
     ]
+    metadata: Annotated[
+        dict[str, Any] | None,
+        Field(description="Caller-defined attributes, preserving their JSON types."),
+    ] = {}
     project: Annotated[
         NativeId | None,
         Field(description="`None` is a first-class case — an orphan task — not an edge case."),
     ] = None
+    repositories: Annotated[
+        list[Repository] | None,
+        Field(
+            description="Normalized repository origins this task concerns, in source order.",
+            validate_default=True,
+        ),
+    ] = []
     status: Annotated[Status, Field(description="The source's status, normalised and preserved.")]
     title: Annotated[str, Field(description="The one-line summary a user recognises the task by.")]
     updated_at: Annotated[
@@ -228,6 +248,17 @@ class Project(BaseModel):
         list[Label],
         Field(description="Inline rather than by id, for the same reason as on [`Task`]."),
     ]
+    metadata: Annotated[
+        dict[str, Any] | None,
+        Field(description="Caller-defined attributes, preserving their JSON types."),
+    ] = {}
+    repositories: Annotated[
+        list[Repository] | None,
+        Field(
+            description="Normalized repository origins this project concerns, in source order.",
+            validate_default=True,
+        ),
+    ] = []
     status: Annotated[Status, Field(description="The source's status, normalised and preserved.")]
     title: Annotated[
         str, Field(description="The one-line summary a user recognises the project by.")

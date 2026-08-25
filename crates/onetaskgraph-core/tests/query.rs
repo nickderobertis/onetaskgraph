@@ -266,7 +266,14 @@ async fn an_emulated_reverse_walk_answers_exactly_what_a_native_one_does() {
             response
                 .items
                 .iter()
-                .map(|edge| format!("{}->{} {:?}", edge.from.native, edge.to.native, edge.kind))
+                .map(|edge| {
+                    format!(
+                        "{}->{} {:?}",
+                        edge.from.id.split_once(':').unwrap().1,
+                        edge.to.id.split_once(':').unwrap().1,
+                        edge.kind
+                    )
+                })
                 .collect::<Vec<_>>(),
         );
     }
@@ -626,6 +633,8 @@ impl TaskSource for Rendezvous {
             url: None,
             created_at: None,
             updated_at: None,
+            metadata: Default::default(),
+            repositories: Vec::new(),
         }]))
     }
 
@@ -1132,6 +1141,8 @@ impl Recording {
                 url: None,
                 created_at: None,
                 updated_at: None,
+                metadata: Default::default(),
+                repositories: Vec::new(),
             })
             .collect();
         Page {

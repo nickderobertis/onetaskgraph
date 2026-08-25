@@ -87,7 +87,7 @@ async fn scans_real_markdown_filters_pages_and_walks_both_directions() {
         )
         .await
         .unwrap();
-    assert_eq!(forward.items[0].to.0, "b");
+    assert_eq!(forward.items[0].to.id, "b");
     let reverse = source
         .task_dependencies(
             &NativeId("b".into()),
@@ -99,7 +99,7 @@ async fn scans_real_markdown_filters_pages_and_walks_both_directions() {
         )
         .await
         .unwrap();
-    assert_eq!(reverse.items[0].from.0, "nested/a");
+    assert_eq!(reverse.items[0].from.id, "nested/a");
 }
 
 #[tokio::test]
@@ -254,7 +254,7 @@ async fn public_queries_cover_fields_labels_statuses_projects_and_paging() {
         .project_dependencies(&NativeId("q".into()), Direction::DependedOnBy, &page(10))
         .await
         .unwrap();
-    assert_eq!(projects.items[0].from.0, "p");
+    assert_eq!(projects.items[0].from.id, "p");
 }
 
 #[tokio::test]

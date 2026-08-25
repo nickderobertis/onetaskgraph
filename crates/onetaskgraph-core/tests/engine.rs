@@ -165,6 +165,7 @@ const PUBLISHED_BUNDLES: &[(u32, &[&str])] = &[
     (3, &THIRD_BUNDLE_ROOTS),
     (4, &FOURTH_BUNDLE_ROOTS),
     (5, &FIFTH_BUNDLE_ROOTS),
+    (6, &SIXTH_BUNDLE_ROOTS),
 ];
 
 /// The roots version 1 of the bundle publishes.
@@ -392,6 +393,59 @@ const FIFTH_BUNDLE_ROOTS: [&str; 45] = [
     "SearchKind",
 ];
 
+/// Version 6 adds repository identity and typed dependency endpoints.
+const SIXTH_BUNDLE_ROOTS: [&str; 49] = [
+    "Task",
+    "Project",
+    "Label",
+    "Status",
+    "StatusCategory",
+    "DependencyEdge",
+    "DependencyEndpoint",
+    "QualifiedEndpoint",
+    "ItemKind",
+    "Repository",
+    "DependencyKind",
+    "Direction",
+    "TaskQuery",
+    "ProjectQuery",
+    "PageRequest",
+    "PageOfTask",
+    "PageOfProject",
+    "PageOfLabel",
+    "PageOfDependencyEdge",
+    "Capabilities",
+    "Health",
+    "SourceError",
+    "GlobalId",
+    "QueryPlan",
+    "SourcePlan",
+    "Predicate",
+    "SourceFailure",
+    "EffectiveConfig",
+    "Setting",
+    "Origin",
+    "OutputFormat",
+    "SecretsReport",
+    "ResolvedCredential",
+    "CredentialLayer",
+    "PageToken",
+    "QualifiedTask",
+    "QualifiedProject",
+    "QualifiedLabel",
+    "QualifiedEdge",
+    "SearchHit",
+    "SourceListing",
+    "SourceListings",
+    "QueryResponseOfQualifiedTask",
+    "QueryResponseOfQualifiedProject",
+    "QueryResponseOfQualifiedLabel",
+    "QueryResponseOfQualifiedEdge",
+    "QueryResponseOfSearchHit",
+    "TextFields",
+    "SearchKind",
+];
+
 #[test]
 fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
     let bundle = schema_bundle();
@@ -490,6 +544,8 @@ fn a_response_carries_the_plan_that_produced_it_and_round_trips() {
             url: None,
             created_at: None,
             updated_at: None,
+            metadata: Default::default(),
+            repositories: Vec::new(),
         }],
         // The hex of
         // `{"query":"0123456789abcdef","streams":[{"source":"work","stream":"items","cursor":"50"}]}`

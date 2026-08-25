@@ -12,6 +12,11 @@
 //! three text predicates are deliberately unsupported and ignored here for
 //! sound engine compensation. Pagination uses Relay `first` and `after`.
 //!
+//! Caller metadata is canonical JSON in a trailing
+//! `<!-- onetaskgraph.metadata ... -->` Markdown comment in the item's description. The
+//! visible description is returned unchanged without that slot. This node is read-only;
+//! the later Linear write-side node must write the same slot and preserve visible content.
+//!
 //! Fixture provenance is recorded in `tests/fixtures/README.md`. Live tests are
 //! non-destructive by construction: [`TaskSource`] exposes reads only, and no
 //! test uses GraphQL mutations for setup or teardown.
@@ -19,10 +24,10 @@
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Health,
-    Label, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
-    TaskSource,
+    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
+    Direction, Health, ItemKind, Label, NativeId, Page, PageRequest, Project, ProjectFilter,
+    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
+    StatusCategory, Support, Task, TaskQuery, TaskSource,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -440,10 +445,12 @@ fn time(v: &Value, k: &str) -> Result<Option<DateTime<Utc>>, SourceError> {
         .transpose()
 }
 fn map_task(v: &Value) -> Result<Task, SourceError> {
+    let (content, metadata) = metadata_description(optional_string(v, "description")?)?;
+    let repositories = repositories_from_metadata(&metadata)?;
     Ok(Task {
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "title")?.into(),
-        content: optional_string(v, "description")?,
+        content,
         status: status(v.get("state").ok_or_else(|| SourceError::Malformed {
             message: "missing state".into(),
         })?)?,
@@ -462,13 +469,17 @@ fn map_task(v: &Value) -> Result<Task, SourceError> {
         url: optional_string(v, "url")?,
         created_at: time(v, "createdAt")?,
         updated_at: time(v, "updatedAt")?,
+        metadata,
+        repositories,
     })
 }
 fn map_project(v: &Value) -> Result<Project, SourceError> {
+    let (content, metadata) = metadata_description(optional_string(v, "description")?)?;
+    let repositories = repositories_from_metadata(&metadata)?;
     Ok(Project {
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "name")?.into(),
-        content: optional_string(v, "description")?,
+        content,
         status: status(v.get("status").ok_or_else(|| SourceError::Malformed {
             message: "missing status".into(),
         })?)?,
@@ -478,6 +489,8 @@ fn map_project(v: &Value) -> Result<Project, SourceError> {
         url: optional_string(v, "url")?,
         created_at: time(v, "createdAt")?,
         updated_at: time(v, "updatedAt")?,
+        metadata,
+        repositories,
     })
 }
 fn optional<T>(
@@ -593,7 +606,21 @@ fn relation_page(
             RelationKind::Related => DependencyKind::Related,
         };
         // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-        items.push(DependencyEdge { from, to, kind });
+        let item_kind = match root {
+            DependencyRoot::Issue => ItemKind::Task,
+            DependencyRoot::Project => ItemKind::Project,
+        };
+        items.push(DependencyEdge {
+            from: DependencyEndpoint {
+                id: from.0,
+                kind: item_kind,
+            },
+            to: DependencyEndpoint {
+                id: to.0,
+                kind: item_kind,
+            },
+            kind,
+        });
     }
     let next = page_next(c)?;
     Ok(Page { items, next })
@@ -612,6 +639,59 @@ fn optional_str<'a>(v: &'a Value, k: &str) -> Result<Option<&'a str>, SourceErro
                 message: format!("field {k} is not a string"),
             }),
     }
+}
+
+/// Linear has no caller-defined fields. The source owns an unobtrusive Markdown comment
+/// at the end of `description`; its later write side must use this exact encoding.
+const METADATA_OPEN: &str = "<!-- onetaskgraph.metadata\n";
+const METADATA_CLOSE: &str = "\n-->";
+
+fn metadata_description(
+    description: Option<String>,
+) -> Result<(Option<String>, std::collections::BTreeMap<String, Value>), SourceError> {
+    let Some(description) = description else {
+        return Ok((None, Default::default()));
+    };
+    let Some(start) = description.rfind(METADATA_OPEN) else {
+        return Ok((Some(description), Default::default()));
+    };
+    let encoded_start = start + METADATA_OPEN.len();
+    let Some(relative_end) = description[encoded_start..].find(METADATA_CLOSE) else {
+        return Err(SourceError::Malformed {
+            message: "unterminated onetaskgraph metadata slot in Linear description".into(),
+        });
+    };
+    let encoded_end = encoded_start + relative_end;
+    if !description[encoded_end + METADATA_CLOSE.len()..]
+        .trim()
+        .is_empty()
+    {
+        return Ok((Some(description), Default::default()));
+    }
+    let metadata =
+        serde_json::from_str(&description[encoded_start..encoded_end]).map_err(|error| {
+            SourceError::Malformed {
+                message: format!(
+                    "invalid canonical JSON in Linear onetaskgraph metadata slot: {error}"
+                ),
+            }
+        })?;
+    let visible = description[..start].trim_end();
+    Ok(((!visible.is_empty()).then(|| visible.to_owned()), metadata))
+}
+
+fn repositories_from_metadata(
+    metadata: &std::collections::BTreeMap<String, Value>,
+) -> Result<Vec<Repository>, SourceError> {
+    metadata
+        .get("onetaskgraph.repositories")
+        .map_or(Ok(Vec::new()), |value| {
+            serde_json::from_value(value.clone()).map_err(|error| SourceError::Malformed {
+                message: format!(
+                    "onetaskgraph.repositories is not a list of repository origins: {error}"
+                ),
+            })
+        })
 }
 fn optional_string(v: &Value, k: &str) -> Result<Option<String>, SourceError> {
     Ok(optional_str(v, k)?.map(Into::into))

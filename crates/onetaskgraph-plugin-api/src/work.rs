@@ -3,6 +3,8 @@
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
 
 use crate::NativeId;
 
@@ -29,6 +31,12 @@ pub struct Task {
     pub created_at: Option<DateTime<Utc>>,
     /// When the source says the task last changed.
     pub updated_at: Option<DateTime<Utc>>,
+    /// Caller-defined attributes, preserving their JSON types.
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
+    /// Normalized repository origins this task concerns, in source order.
+    #[serde(default)]
+    pub repositories: Vec<Repository>,
 }
 
 /// A grouping of tasks, shaped like a [`Task`] without a parent of its own.
@@ -52,7 +60,18 @@ pub struct Project {
     pub created_at: Option<DateTime<Utc>>,
     /// When the source says the project last changed.
     pub updated_at: Option<DateTime<Utc>>,
+    /// Caller-defined attributes, preserving their JSON types.
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
+    /// Normalized repository origins this project concerns, in source order.
+    #[serde(default)]
+    pub repositories: Vec<Repository>,
 }
+
+/// A repository identified by its normalized origin, without a URL scheme or `.git` suffix.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct Repository(pub String);
 
 /// A tag a source attaches to work.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -95,18 +114,74 @@ pub enum StatusCategory {
     Unknown,
 }
 
-/// A dependency between two items **of the same source**.
+/// A dependency between two work items.
 ///
-/// Cross-source edges are deliberately absent: relating an id in one system to an
-/// id in another needs state, and the engine is forbidden to hold any.
+/// An endpoint may name another source. Keeping that far id on the near item is work data
+/// owned by its plugin, not an engine-side index or mirror; the engine reports it without
+/// resolving or fetching the far item.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DependencyEdge {
     /// The item the edge starts at.
-    pub from: NativeId,
+    #[schemars(with = "serde_json::Value")]
+    pub from: DependencyEndpoint,
     /// The item the edge points at.
-    pub to: NativeId,
+    #[schemars(with = "serde_json::Value")]
+    pub to: DependencyEndpoint,
     /// What the edge means.
     pub kind: DependencyKind,
+}
+
+/// One endpoint of a dependency edge.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, JsonSchema)]
+pub struct DependencyEndpoint {
+    /// A qualified `<source>:<native>` id, or a legacy native id which the engine
+    /// qualifies to the source reporting the edge.
+    pub id: String,
+    /// Whether the endpoint names a task or a project.
+    pub kind: ItemKind,
+}
+
+impl<'de> Deserialize<'de> for DependencyEndpoint {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Legacy(String),
+            Endpoint { id: String, kind: ItemKind },
+        }
+        match Wire::deserialize(deserializer)? {
+            Wire::Legacy(id) => Ok(Self {
+                id,
+                kind: ItemKind::Task,
+            }),
+            Wire::Endpoint { id, kind } => Ok(Self { id, kind }),
+        }
+    }
+}
+
+impl std::fmt::Display for DependencyEndpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.id.fmt(formatter)
+    }
+}
+
+impl PartialEq<NativeId> for DependencyEndpoint {
+    fn eq(&self, other: &NativeId) -> bool {
+        self.id == other.0
+    }
+}
+
+/// The kind of work item named by a dependency endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ItemKind {
+    /// A task.
+    Task,
+    /// A project.
+    Project,
 }
 
 /// What a [`DependencyEdge`] means.

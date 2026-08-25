@@ -30,5 +30,6 @@ pub use query::{
 };
 pub use source::{Health, SecretResolver, SourcePlugin, TaskSource};
 pub use work::{
-    DependencyEdge, DependencyKind, Direction, Label, Project, Status, StatusCategory, Task,
+    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, ItemKind, Label, Project,
+    Repository, Status, StatusCategory, Task,
 };

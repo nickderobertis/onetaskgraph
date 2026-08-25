@@ -443,6 +443,10 @@ fn a_task_round_trips_through_json_with_every_field_populated() {
         url: Some("https://example.invalid/ENG-1".to_owned()),
         created_at: Some(Utc.with_ymd_and_hms(2026, 8, 22, 9, 0, 0).unwrap()),
         updated_at: None,
+        metadata: [("onepipeline.turn_budget".to_owned(), serde_json::json!(12))].into(),
+        repositories: vec![onetaskgraph_plugin_api::Repository(
+            "github.com/example/work".into(),
+        )],
     };
 
     let encoded = serde_json::to_string(&task).expect("encodes");
@@ -469,6 +473,8 @@ fn a_project_and_an_orphan_task_round_trip_through_json() {
         url: None,
         created_at: None,
         updated_at: Some(Utc.with_ymd_and_hms(2026, 8, 22, 9, 0, 0).unwrap()),
+        metadata: Default::default(),
+        repositories: Vec::new(),
     };
     let encoded = serde_json::to_string(&project).expect("encodes");
     assert_eq!(
@@ -555,8 +561,14 @@ fn the_normalised_vocabularies_serialise_as_kebab_case() {
 #[test]
 fn a_dependency_edge_round_trips_through_json() {
     let edge = DependencyEdge {
-        from: NativeId::from("A"),
-        to: NativeId::from("B"),
+        from: onetaskgraph_plugin_api::DependencyEndpoint {
+            id: "source:A".into(),
+            kind: onetaskgraph_plugin_api::ItemKind::Task,
+        },
+        to: onetaskgraph_plugin_api::DependencyEndpoint {
+            id: "other:B".into(),
+            kind: onetaskgraph_plugin_api::ItemKind::Project,
+        },
         kind: DependencyKind::Blocks,
     };
     let encoded = serde_json::to_string(&edge).expect("encodes");

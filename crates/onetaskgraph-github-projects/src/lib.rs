@@ -28,9 +28,10 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Health,
-    Label, NativeId, Page, PageRequest, Project, ProjectQuery, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource,
+    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
+    Direction, Health, ItemKind, Label, NativeId, Page, PageRequest, Project, ProjectQuery,
+    Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
+    Support, Task, TaskQuery, TaskSource,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -60,10 +61,11 @@ pub mod graphql {
         ... on ProjectV2ItemFieldSingleSelectValue{name field{
           ... on ProjectV2SingleSelectField{name}
         }}
+        ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2Field{name}}}
         ... on ProjectV2ItemFieldLabelValue{labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
       }pageInfo{hasNextPage}} content{
-        ... on Issue{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
-        ... on PullRequest{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on Issue{id title body url createdAt updatedAt state repository{nameWithOwner} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on PullRequest{id title body url createdAt updatedAt state repository{nameWithOwner} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
         ... on DraftIssue{id title body createdAt updatedAt}
       }} pageInfo{hasNextPage endCursor}}
     }"#;
@@ -405,17 +407,20 @@ impl GitHubProjectsSource {
             url: optional_str(content, "url")?.map(str::to_owned),
             created_at: optional_time(content, "createdAt")?,
             updated_at: optional_time(content, "updatedAt")?,
+            metadata: metadata_field(field_values)?,
+            repositories: repositories(content, field_values)?,
         }))
     }
 
     fn project(&self, value: &Value) -> Result<Project, SourceError> {
         let id = required_str(value, "id")?;
+        let (content, metadata) =
+            metadata_description(optional_str(value, "shortDescription")?.map(str::to_owned))?;
+        let repositories = repositories_from_metadata(&metadata)?;
         Ok(Project {
             id: NativeId(id.into()),
             title: required_str(value, "title")?.into(),
-            content: optional_str(value, "shortDescription")?
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned),
+            content,
             status: Status {
                 category: if required_bool(value, "closed")? {
                     StatusCategory::Done
@@ -433,6 +438,8 @@ impl GitHubProjectsSource {
             url: optional_str(value, "url")?.map(str::to_owned),
             created_at: optional_time(value, "createdAt")?,
             updated_at: optional_time(value, "updatedAt")?,
+            metadata,
+            repositories,
         })
     }
 
@@ -513,13 +520,25 @@ impl GitHubProjectsSource {
                 let related = NativeId(required_str(value, "id")?.into());
                 Ok(match direction {
                     Direction::DependsOn => DependencyEdge {
-                        from: related,
-                        to: id.clone(),
+                        from: DependencyEndpoint {
+                            id: related.0,
+                            kind: ItemKind::Task,
+                        },
+                        to: DependencyEndpoint {
+                            id: id.0.clone(),
+                            kind: ItemKind::Task,
+                        },
                         kind: DependencyKind::Blocks,
                     },
                     Direction::DependedOnBy => DependencyEdge {
-                        from: id.clone(),
-                        to: related,
+                        from: DependencyEndpoint {
+                            id: id.0.clone(),
+                            kind: ItemKind::Task,
+                        },
+                        to: DependencyEndpoint {
+                            id: related.0,
+                            kind: ItemKind::Task,
+                        },
                         kind: DependencyKind::Blocks,
                     },
                 })
@@ -744,13 +763,25 @@ impl TaskSource for GitHubProjectsSource {
                         if related != *id {
                             edges.push(match direction {
                                 Direction::DependsOn => DependencyEdge {
-                                    from: related,
-                                    to: id.clone(),
+                                    from: DependencyEndpoint {
+                                        id: related.0,
+                                        kind: ItemKind::Project,
+                                    },
+                                    to: DependencyEndpoint {
+                                        id: id.0.clone(),
+                                        kind: ItemKind::Project,
+                                    },
                                     kind: DependencyKind::Blocks,
                                 },
                                 Direction::DependedOnBy => DependencyEdge {
-                                    from: id.clone(),
-                                    to: related,
+                                    from: DependencyEndpoint {
+                                        id: id.0.clone(),
+                                        kind: ItemKind::Project,
+                                    },
+                                    to: DependencyEndpoint {
+                                        id: related.0,
+                                        kind: ItemKind::Project,
+                                    },
                                     kind: DependencyKind::Blocks,
                                 },
                             });
@@ -829,6 +860,101 @@ fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceErro
         .and_then(Value::as_str)
         .ok_or_else(|| SourceError::Malformed {
             message: format!("GitHub response is missing string field {field}"),
+        })
+}
+
+const METADATA_FIELD: &str = "onetaskgraph.metadata";
+
+fn metadata_field(field_values: &Value) -> Result<BTreeMap<String, Value>, SourceError> {
+    let nodes = field_values
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "GitHub project item fieldValues.nodes is not an array".into(),
+        })?;
+    let Some(text) = nodes
+        .iter()
+        .find(|node| node.pointer("/field/name").and_then(Value::as_str) == Some(METADATA_FIELD))
+        .and_then(|node| node.get("text"))
+    else {
+        return Ok(BTreeMap::new());
+    };
+    serde_json::from_value(text.clone())
+        .or_else(|_| {
+            text.as_str()
+                .ok_or_else(|| {
+                    serde_json::Error::io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "metadata text is not a string",
+                    ))
+                })
+                .and_then(serde_json::from_str)
+        })
+        .map_err(|error| SourceError::Malformed {
+            message: format!(
+                "GitHub {METADATA_FIELD} field is not canonical JSON metadata: {error}"
+            ),
+        })
+}
+
+fn repositories(content: &Value, field_values: &Value) -> Result<Vec<Repository>, SourceError> {
+    if let Some(origin) = content
+        .pointer("/repository/nameWithOwner")
+        .and_then(Value::as_str)
+    {
+        return Ok(vec![Repository(format!("github.com/{origin}"))]);
+    }
+    let metadata = metadata_field(field_values)?;
+    metadata
+        .get("onetaskgraph.repositories")
+        .map_or(Ok(Vec::new()), |value| {
+            serde_json::from_value(value.clone()).map_err(|error| SourceError::Malformed {
+                message: format!(
+                    "onetaskgraph.repositories is not a list of repository origins: {error}"
+                ),
+            })
+        })
+}
+
+const PROJECT_METADATA_OPEN: &str = "<!-- onetaskgraph.metadata\n";
+const PROJECT_METADATA_CLOSE: &str = "\n-->";
+
+fn metadata_description(
+    description: Option<String>,
+) -> Result<(Option<String>, BTreeMap<String, Value>), SourceError> {
+    let Some(description) = description else {
+        return Ok((None, BTreeMap::new()));
+    };
+    let Some(start) = description.rfind(PROJECT_METADATA_OPEN) else {
+        return Ok((Some(description), BTreeMap::new()));
+    };
+    let value_start = start + PROJECT_METADATA_OPEN.len();
+    let Some(relative_end) = description[value_start..].find(PROJECT_METADATA_CLOSE) else {
+        return Err(SourceError::Malformed {
+            message: "unterminated onetaskgraph metadata slot in GitHub project description".into(),
+        });
+    };
+    let value_end = value_start + relative_end;
+    let metadata = serde_json::from_str(&description[value_start..value_end]).map_err(|error| {
+        SourceError::Malformed {
+            message: format!("invalid canonical JSON in GitHub project metadata slot: {error}"),
+        }
+    })?;
+    let visible = description[..start].trim_end();
+    Ok(((!visible.is_empty()).then(|| visible.into()), metadata))
+}
+
+fn repositories_from_metadata(
+    metadata: &BTreeMap<String, Value>,
+) -> Result<Vec<Repository>, SourceError> {
+    metadata
+        .get("onetaskgraph.repositories")
+        .map_or(Ok(Vec::new()), |value| {
+            serde_json::from_value(value.clone()).map_err(|error| SourceError::Malformed {
+                message: format!(
+                    "onetaskgraph.repositories is not a list of repository origins: {error}"
+                ),
+            })
         })
 }
 fn required_bool(value: &Value, field: &str) -> Result<bool, SourceError> {

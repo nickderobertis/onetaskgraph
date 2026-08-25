@@ -34,12 +34,15 @@ Long-form task content goes here.
 ```
 
 `title` is optional; it falls back to the first level-one heading, then the file name.
-`status` defaults to `todo`. `labels`, `project`, and `depends_on` are optional. A simple
+`status` defaults to `todo`. `labels`, `project`, `metadata`, `repositories`, and
+`depends_on` are optional. `metadata` is an ordered mapping of JSON-compatible YAML
+values; `repositories` is an ordered list of normalized origins. A simple
 dependency is a blocking edge; the expanded form accepts `kind: blocks` or `related`.
 Labels may also use `{id: label-id, name: release, color: red}` when an explicit stable
 identifier or color is useful. `url` is optional.
 Projects use the same fields except that `project` is ignored conceptually and should be
-omitted. Dependencies name native identifiers within the same source.
+omitted. Expanded dependency endpoints can name an item kind and qualified id in another
+source; the engine reports that far end without fetching it.
 
 Status names are preserved for display and mapped case-insensitively to normalized
 categories. The default mapping is `backlog` → backlog, `todo` → todo, `in progress` and

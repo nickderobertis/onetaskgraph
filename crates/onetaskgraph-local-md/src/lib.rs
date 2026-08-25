@@ -8,10 +8,10 @@ use std::{
 };
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Health,
-    Label, LabelFilter, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery,
-    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
-    TaskQuery, TaskSource, TextFields, TextQuery,
+    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
+    Direction, Health, ItemKind, Label, LabelFilter, NativeId, Page, PageRequest, Project,
+    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
 };
 use schemars::{Schema, schema_for};
 use serde::Deserialize;
@@ -100,6 +100,10 @@ struct FrontMatter {
     depends_on: Vec<Dependency>,
     // llmlint: ignore[invalid_states_unrepresentable, boundary_inputs_validated] `Task::url` and `Project::url` are frozen as `Option<String>` in the plugin contract, which permits source-native URL-like values; parsing here would narrow that approved boundary and is the contract owner's decision.
     url: Option<String>,
+    #[serde(default)]
+    metadata: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    repositories: Vec<Repository>,
 }
 fn default_status() -> String {
     "todo".to_owned()
@@ -146,6 +150,8 @@ struct Document {
     project: Option<NativeId>,
     dependencies: Vec<DependencyEdge>,
     url: Option<String>,
+    metadata: BTreeMap<String, serde_json::Value>,
+    repositories: Vec<Repository>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -356,6 +362,10 @@ impl LocalMdSource {
             name: front.status,
         };
         let from = NativeId(id.clone());
+        let item_kind = match kind {
+            DocumentKind::Task => ItemKind::Task,
+            DocumentKind::Project => ItemKind::Project,
+        };
         let dependencies = front
             .depends_on
             .into_iter()
@@ -371,9 +381,15 @@ impl LocalMdSource {
                     ),
                 };
                 DependencyEdge {
-                    from: from.clone(),
+                    from: DependencyEndpoint {
+                        id: from.0.clone(),
+                        kind: item_kind,
+                    },
                     // llmlint: ignore[boundary_inputs_validated] Dependency targets use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
-                    to: NativeId(to),
+                    to: DependencyEndpoint {
+                        id: to,
+                        kind: item_kind,
+                    },
                     kind,
                 }
             })
@@ -388,6 +404,8 @@ impl LocalMdSource {
             project: front.project.map(NativeId),
             dependencies,
             url: front.url,
+            metadata: front.metadata,
+            repositories: front.repositories,
         })
     }
 
@@ -604,6 +622,8 @@ fn task(d: Document) -> Task {
         url: d.url,
         created_at: None,
         updated_at: None,
+        metadata: d.metadata,
+        repositories: d.repositories,
     }
 }
 fn project(d: Document) -> Project {
@@ -616,5 +636,7 @@ fn project(d: Document) -> Project {
         url: d.url,
         created_at: None,
         updated_at: None,
+        metadata: d.metadata,
+        repositories: d.repositories,
     }
 }

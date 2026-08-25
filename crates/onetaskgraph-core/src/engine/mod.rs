@@ -59,16 +59,31 @@ pub struct Qualified<T> {
 
 /// One dependency edge with both ends qualified.
 ///
-/// Both ends belong to the same source: a cross-source edge would need state relating an
-/// id in one system to an id in another, and the engine holds none.
+/// An end may belong to another source. The near plugin owns that qualified far id and the
+/// engine reports it without resolving or fetching the far source, so it holds no index.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct QualifiedEdge {
     /// The item the edge starts at.
-    pub from: GlobalId,
+    pub from: QualifiedEndpoint,
     /// The item the edge points at.
-    pub to: GlobalId,
+    pub to: QualifiedEndpoint,
     /// What the edge means.
     pub kind: onetaskgraph_plugin_api::DependencyKind,
+}
+
+/// One typed, qualified endpoint in an engine dependency response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct QualifiedEndpoint {
+    /// `<source>:<native>`, preserved when a plugin reports another source.
+    pub id: String,
+    /// Whether this endpoint names a task or project.
+    pub kind: onetaskgraph_plugin_api::ItemKind,
+}
+
+impl std::fmt::Display for QualifiedEndpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.id.fmt(formatter)
+    }
 }
 
 /// One hit of a search that may cross entities.
@@ -780,8 +795,8 @@ impl Engine {
             owed(&states),
             &query,
             |name, edge: DependencyEdge| QualifiedEdge {
-                from: GlobalId::new(name.clone(), edge.from),
-                to: GlobalId::new(name.clone(), edge.to),
+                from: qualify_endpoint(name, edge.from),
+                to: qualify_endpoint(name, edge.to),
                 kind: edge.kind,
             },
         )
@@ -815,6 +830,20 @@ impl Engine {
                 .collect::<Vec<_>>()
                 .join(", "),
         })
+    }
+}
+
+fn qualify_endpoint(
+    source: &SourceName,
+    endpoint: onetaskgraph_plugin_api::DependencyEndpoint,
+) -> QualifiedEndpoint {
+    QualifiedEndpoint {
+        id: if endpoint.id.contains(':') {
+            endpoint.id
+        } else {
+            format!("{source}:{}", endpoint.id)
+        },
+        kind: endpoint.kind,
     }
 }
 

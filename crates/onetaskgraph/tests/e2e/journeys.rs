@@ -57,6 +57,15 @@ fn listed(rendered: &str) -> Vec<String> {
         .collect()
 }
 
+fn edge_starts(rendered: &str) -> Vec<String> {
+    rendered
+        .lines()
+        .take_while(|line| !line.trim().is_empty())
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The ids this row's source is expected to answer with.
 fn ours(natives: &[&str]) -> Vec<String> {
     natives
@@ -251,6 +260,97 @@ fn every_complete_dataset_source_lists_its_projects_and_shows_one_by_its_qualifi
             row.name
         );
     }
+}
+
+#[test]
+fn every_source_preserves_typed_metadata_and_repository_origins_through_the_binary() {
+    for row in ROWS {
+        let sandbox = host(row);
+        let task: serde_json::Value = serde_json::from_str(&ok(
+            row,
+            &sandbox,
+            &["task", "show", &qualified(SOURCE, "T-1"), "--json"],
+        ))
+        .expect("task show emits JSON");
+        let task = &task["items"][0]["item"];
+        assert_eq!(
+            task["metadata"]["onepipeline.turn_budget"],
+            json!(12),
+            "{}",
+            row.name
+        );
+        assert_eq!(
+            task["metadata"]["caller.flags"],
+            json!([true, null]),
+            "{}",
+            row.name
+        );
+        assert_eq!(
+            task["repositories"],
+            json!(["github.com/nickderobertis/onetaskgraph"]),
+            "{}",
+            row.name
+        );
+
+        let project: serde_json::Value = serde_json::from_str(&ok(
+            row,
+            &sandbox,
+            &["project", "show", &qualified(SOURCE, "P-1"), "--json"],
+        ))
+        .expect("project show emits JSON");
+        let project = &project["items"][0]["item"];
+        assert_eq!(
+            project["metadata"]["onepipeline.publication"],
+            json!({"mode":"review"}),
+            "{}",
+            row.name
+        );
+        assert_eq!(
+            project["repositories"],
+            json!(["github.com/nickderobertis/onetaskgraph"]),
+            "{}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn a_cross_source_cross_level_edge_is_reported_without_following_the_far_source() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&document(&json!({
+        SOURCE: {
+            "plugin": "in-memory",
+            "config": {
+                "tasks": [{
+                    "id":"T-1", "title":"Near", "status":{"category":"todo","name":"Todo"},
+                    "labels":[]
+                }],
+                "task_dependencies": [{
+                    "from":{"id":"T-1","kind":"task"},
+                    "to":{"id":"elsewhere:P-9","kind":"project"},
+                    "kind":"blocks"
+                }]
+            }
+        }
+    })));
+    let row = ROWS
+        .iter()
+        .find(|row| row.plugin == "in-memory")
+        .expect("in-memory row");
+    let response: serde_json::Value = serde_json::from_str(&ok(
+        row,
+        &sandbox,
+        &["task", "deps", &qualified(SOURCE, "T-1"), "--json"],
+    ))
+    .expect("dependency output is JSON");
+    assert_eq!(
+        response["items"],
+        json!([{
+            "from":{"id":"work:T-1","kind":"task"},
+            "to":{"id":"elsewhere:P-9","kind":"project"},
+            "kind":"blocks"
+        }])
+    );
 }
 
 #[test]
@@ -496,9 +596,9 @@ fn complete_dataset_sources_walk_task_dependencies_forwards_and_backwards() {
             &sandbox,
             &["task", "deps", &qualified(SOURCE, "T-1"), "--explain"],
         );
-        assert_eq!(listed(&forward), ours(&["T-1"]), "{}", row.name);
+        assert_eq!(edge_starts(&forward), ours(&["T-1"]), "{}", row.name);
         assert!(
-            forward.contains(&format!("blocks  {}", qualified(SOURCE, "T-2"))),
+            forward.contains("blocks") && forward.contains(&qualified(SOURCE, "T-2")),
             "{}: an edge names both ends and what it means:\n{forward}",
             row.name
         );
@@ -516,7 +616,7 @@ fn complete_dataset_sources_walk_task_dependencies_forwards_and_backwards() {
             ],
         );
         assert_eq!(
-            listed(&reverse),
+            edge_starts(&reverse),
             ours(&["T-1", "T-3", "T-4"]),
             "{}: three tasks depend on T-2",
             row.name
@@ -563,7 +663,7 @@ fn complete_dataset_sources_walk_project_dependencies_forwards_and_backwards() {
                 "--explain",
             ],
         );
-        assert_eq!(listed(&reverse), ours(&["P-1"]), "{}", row.name);
+        assert_eq!(edge_starts(&reverse), ours(&["P-1"]), "{}", row.name);
         plan_says(
             row,
             &reverse,

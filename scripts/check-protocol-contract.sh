@@ -95,6 +95,7 @@ ENUM_SECTIONS = {
     "TextFields": "### 4.5 `query_tasks`",
     "ProjectFilter": "### 4.5 `query_tasks`",
     "DependencyKind": "### 4.8 `task_dependencies` and `project_dependencies`",
+    "ItemKind": "### 4.8 `task_dependencies` and `project_dependencies`",
     "Direction": "### 4.8 `task_dependencies` and `project_dependencies`",
 }
 
@@ -482,6 +483,7 @@ STRUCT_SECTIONS = {
     "LabelFilter": "### 4.5 `query_tasks`",
     "ProjectQuery": "### 4.6 `query_projects`",
     "DependencyEdge": "### 4.8 `task_dependencies` and `project_dependencies`",
+    "DependencyEndpoint": "### 4.8 `task_dependencies` and `project_dependencies`",
 }
 
 for struct, heading in STRUCT_SECTIONS.items():
