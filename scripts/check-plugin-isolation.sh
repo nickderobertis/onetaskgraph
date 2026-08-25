@@ -90,7 +90,7 @@ def text(value, what):
     return value
 
 
-KINDS = ("dev", "build")
+NON_NORMAL_KINDS = ("dev", "build")
 
 
 def kind_of(carrier, what):
@@ -101,7 +101,7 @@ def kind_of(carrier, what):
     kind = carrier.get("kind")
     if kind is None:
         return "normal"
-    if text(kind, what) not in KINDS:
+    if text(kind, what) not in NON_NORMAL_KINDS:
         refuse("holds a dependency kind that cargo does not define")
     return kind
 
