@@ -6,6 +6,9 @@ report_failure() {
 trap 'report_failure "$?" "$LINENO" "$BASH_COMMAND"' ERR
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
+python_bin=$(command -v python3 || command -v python || true)
+[[ -n $python_bin ]] || { echo "distribution test requires Python 3; next: install python3 and rerun scripts/test-distribution.sh" >&2; exit 1; }
+"$python_bin" -c 'import sys; raise SystemExit(sys.version_info < (3, 8))' || { echo "distribution test requires Python 3.8 or newer; next: install a supported python3 and rerun scripts/test-distribution.sh" >&2; exit 1; }
 cleanup() {
   if [[ -n ${http_server_pid:-} ]]; then kill "$http_server_pid" 2>/dev/null || true; wait "$http_server_pid" 2>/dev/null || true; fi
   rm -rf "$tmp"
@@ -52,7 +55,7 @@ grep -q 'does not contain one SHA-256 digest' "$tmp/error" || { echo "malformed 
 printf '%064d first\n%064d second\n' 0 1 > "$tmp/canonical/$tag/$name.sha256"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "multiple checksum records accepted; next: inspect checksum cardinality" >&2; exit 1; fi
 grep -q 'exactly one SHA-256 record' "$tmp/error" || { echo "multi-record checksum failure omitted its reason; next: inspect checksum diagnostics" >&2; exit 1; }
-python - "$tmp/releases/$tag/$name" "$ext" <<'PY'
+"$python_bin" - "$tmp/releases/$tag/$name" "$ext" <<'PY'
 import io
 import sys
 import tarfile
@@ -76,7 +79,7 @@ grep -q 'download base must use' "$tmp/error" || { echo "unsupported-scheme fail
 rm "$tmp/releases/$tag/$name"
 if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
-python - "$tmp" "$tmp/http-port" >"$tmp/http.log" 2>&1 <<'PY' &
+"$python_bin" - "$tmp" "$tmp/http-port" >"$tmp/http.log" 2>&1 <<'PY' &
 import http.server
 import os
 import sys
@@ -89,8 +92,13 @@ with open(port_file, "w", encoding="utf-8") as stream:
 server.serve_forever()
 PY
 http_server_pid=$!
-for _ in {1..100}; do [[ -s "$tmp/http-port" ]] && break; sleep 0.05; done
-[[ -s "$tmp/http-port" ]] || { echo "local HTTP release server did not start; next: inspect the distribution test server" >&2; exit 1; }
+for _ in {1..200}; do [[ -s "$tmp/http-port" ]] && break; sleep 0.05; done
+if [[ ! -s "$tmp/http-port" ]]; then
+  echo "local HTTP release server did not start; server output follows:" >&2
+  sed 's/^/  /' "$tmp/http.log" >&2
+  echo "next: inspect the distribution test server" >&2
+  exit 1
+fi
 http_port=$(<"$tmp/http-port")
 ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="http://127.0.0.1:$http_port/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" >/dev/null
 kill "$http_server_pid"
@@ -111,7 +119,7 @@ rm "$tmp/shims/uname" "$tmp/shims/curl"
 printf 'not a directory' > "$tmp/not-a-directory"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/not-a-directory/child" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "uncreatable installation directory was accepted; next: inspect directory creation" >&2; exit 1; fi
 grep -q 'could not create the installation directory' "$tmp/error" || { echo "directory-creation failure omitted its reason; next: inspect filesystem diagnostics" >&2; exit 1; }
-python - "$tmp/releases/$tag/$name" "$ext" <<'PY'
+"$python_bin" - "$tmp/releases/$tag/$name" "$ext" <<'PY'
 import sys
 import tarfile
 import zipfile

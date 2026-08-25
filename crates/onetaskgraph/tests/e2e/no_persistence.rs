@@ -121,6 +121,10 @@ fn every_verb() -> Vec<Vec<String>> {
 fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
     for boundary in SOURCE_BOUNDARIES {
         let sandbox = Sandbox::new();
+        // Instrumented binaries write LLVM coverage data on exit. Keep that tool-owned
+        // output outside the observed tree so the assertion below retains its literal
+        // meaning: every file created under the sandbox is an engine write.
+        let coverage = tempfile::tempdir().expect("a directory for coverage runtime output");
         let document = sandbox.project_document(&planted(boundary));
         let root = document
             .parent()
@@ -164,6 +168,10 @@ fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
                 .env("TMPDIR", &homes[5])
                 .env("TEMP", &homes[5])
                 .env("TMP", &homes[5])
+                .env(
+                    "LLVM_PROFILE_FILE",
+                    coverage.path().join("onetaskgraph-%p-%m.profraw"),
+                )
                 .args(&arguments)
                 .assert()
                 .success()
