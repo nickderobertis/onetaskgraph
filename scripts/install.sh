@@ -30,6 +30,7 @@ while [ "$#" -gt 0 ]; do
     *) die 64 "unknown option: $1";;
   esac
 done
+[ -n "$install_dir" ] || die 64 "installation directory must not be empty"
 if [ -z "$version" ]; then
   body=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest") || die 69 "could not resolve the latest GitHub Release"
   version=$(printf '%s\n' "$body" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
@@ -51,7 +52,8 @@ checksum_url="${checksum_base%/}/${version}/${name}.sha256"
 if [ "$(source_identity "$release_base")" = "$(source_identity "$checksum_base")" ] && [ "$(source_identity "$release_base")" != "$(source_identity "$canonical")" ]; then
   die 65 "checksum shares the mirror's origin; refusing a mirror-controlled trust root"
 fi
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+tmp=$(mktemp -d) || die 74 "could not create a temporary directory"
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 download "$archive_url" "$tmp/$name" || die 69 "download failed: $archive_url"
 download "$checksum_url" "$tmp/$name.sha256" || die 69 "checksum download failed: $checksum_url"
 records=$(awk 'NF { count++ } END { print count+0 }' "$tmp/$name.sha256")
@@ -60,7 +62,7 @@ expected=$(awk 'NF {print $1}' "$tmp/$name.sha256")
 printf '%s\n' "$expected" | grep -Eq '^[0-9A-Fa-f]{64}$' || die 65 "checksum file does not contain one SHA-256 digest"
 if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$tmp/$name" | awk '{print $1}'); elif command -v shasum >/dev/null 2>&1; then actual=$(shasum -a 256 "$tmp/$name" | awk '{print $1}'); else die 69 "no SHA-256 implementation is installed"; fi
 [ "$actual" = "$expected" ] || die 65 "checksum mismatch for $name"
-mkdir -p "$tmp/unpack" "$install_dir"
+mkdir -p "$tmp/unpack" "$install_dir" || die 74 "could not create the installation directory: $install_dir"
 case "$ext" in
   tar.gz)
     members=$(tar -tzf "$tmp/$name") || die 65 "archive is unreadable: $name"
