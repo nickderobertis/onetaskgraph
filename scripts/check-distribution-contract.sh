@@ -22,7 +22,20 @@ macos-latest x86_64-apple-darwin tar.gz darwin-x64
 macos-latest aarch64-apple-darwin tar.gz darwin-arm64
 windows-latest x86_64-pc-windows-msvc zip win32-x64
 MAPPINGS
-grep -Fq 'target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-msvc]' .github/workflows/release.yml || fail "wheel targets disagree with the native release matrix"
+wheel_job=$(sed -n '/^  build-wheels:/,/^  build-distributions:/p' .github/workflows/release.yml)
+grep -Fq 'runs-on: ${{ matrix.os }}' <<< "$wheel_job" || fail "build-wheels must take its runner from matrix.os"
+[[ $(grep -Fc -- '- { os:' <<< "$wheel_job") -eq 5 ]] || fail "build-wheels must contain exactly five target/runner entries"
+while read -r os target; do
+  grep -Fq -- "- { os: $os, target: $target }" <<< "$wheel_job" || fail "build-wheels does not map $target to $os"
+done <<'WHEEL_MAPPINGS'
+ubuntu-latest x86_64-unknown-linux-gnu
+ubuntu-24.04-arm aarch64-unknown-linux-gnu
+macos-latest x86_64-apple-darwin
+macos-latest aarch64-apple-darwin
+windows-latest x86_64-pc-windows-msvc
+WHEEL_MAPPINGS
+grep -Fq 'gh release upload "$TAG" "$asset" "$asset.sha256" --clobber' .github/workflows/release.yml || fail "release asset uploads must replace assets left by an earlier attempt"
+grep -Fq 'NPM_TOKEN is required (received ${#NODE_AUTH_TOKEN} characters)' .github/workflows/release.yml || fail "the npm token guard must report only the received token length"
 if ! node <<'NODE'
 const fs = require("fs");
 function fail(message) {
