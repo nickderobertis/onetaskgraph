@@ -7,9 +7,9 @@
 # splitting `onetaskgraph-plugin-api` out of `onetaskgraph-core`, so it is the last one
 # that should be taken on trust.
 #
-# So the forbidden edge is introduced for real, in a scratch clone, five ways — four
-# against the local guard and one against deny.toml's wrapper restriction, which is the
-# half of this rule that is a required check. Each case asserts on the DIAGNOSTIC as well
+# So the tree is really broken, in a scratch clone, seven ways — six against the local
+# guard and one against deny.toml's wrapper restriction, which is the half of this rule
+# that is a required check. Each case asserts on the DIAGNOSTIC as well
 # as the exit status: a guard that refuses without naming the crate and the path sends the
 # next author hunting, which is most of what the guard is for.
 #
@@ -196,6 +196,55 @@ else
     fi
   done
 fi
+reset_fixture
+
+# 6. The guard reads the plugin set from the layer:plugin tags and the dependency graph
+#    from cargo, and those are two different sources. A name in one and not the other
+#    means the rule cannot be checked for that crate at all — which must be a refusal,
+#    because the alternative is a plugin that quietly stops being checked the moment
+#    somebody renames it.
+python3 - "$scratch/repo/crates/onetaskgraph-local-md/project.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+project = json.loads(path.read_text())
+project["name"] = "onetaskgraph-renamed-away"
+path.write_text(json.dumps(project, indent=2) + "\n")
+PY
+run_guard
+expect_refused "a layer:plugin crate that is no package of the workspace" \
+  onetaskgraph-renamed-away layer:plugin
+reset_fixture
+
+# 7. The guard answers "at any depth" from the RESOLVED graph, and a workspace whose graph
+#    does not resolve has no such answer to give. Cargo refuses to resolve a cycle whose
+#    every edge is normal, and this fixture is one: the engine depends on every plugin, so
+#    a plugin reaching the engine through a normal edge at depth two closes the ring. The
+#    manifests alone see nothing wrong here — no plugin names the engine — so a guard that
+#    treated an unresolvable graph as a clean one would pass this tree, which is precisely
+#    a plugin reaching the engine at depth two.
+mkdir -p "$scratch/repo/crates/onetaskgraph-bridge/src"
+cat > "$scratch/repo/crates/onetaskgraph-bridge/Cargo.toml" <<'EOF'
+[package]
+name = "onetaskgraph-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+onetaskgraph-core.workspace = true
+EOF
+: > "$scratch/repo/crates/onetaskgraph-bridge/src/lib.rs"
+add_dependency onetaskgraph-local-md dependencies \
+  'onetaskgraph-bridge = { path = "../onetaskgraph-bridge" }'
+run_guard
+expect_refused "a workspace whose dependency graph does not resolve" \
+  "does not resolve" onetaskgraph-local-md onetaskgraph-bridge onetaskgraph-core
 reset_fixture
 
 if [ "$failures" -ne 0 ]; then
