@@ -63,10 +63,17 @@ export namespace GeneratedDependencyEdge {
  * An endpoint may name another source. Keeping that far id on the near item is work data
  * owned by its plugin, not an engine-side index or mirror; the engine reports it without
  * resolving or fetching the far item.
+ * 
+ * A source uses its backend's own relationship wherever that relationship can name the
+ * far end, so the backend knows the graph and its own interface draws it. Where it
+ * cannot — a far end in another source, which no backend relates — the source reads
+ * [`Self::recorded`] from the near item instead. Only the forward direction is ever
+ * recorded; the reverse of a recorded edge is derived, exactly as a
+ * [`ForwardOnly`](crate::DependencySupport::ForwardOnly) source's reverse is.
  */
 export interface DependencyEdge {
 /**
- * The item the edge starts at.
+ * The item the edge starts at, and the one that depends on the other.
  */
 from: (string | {
 id: string
@@ -350,10 +357,17 @@ next?: (Cursor | null)
  * An endpoint may name another source. Keeping that far id on the near item is work data
  * owned by its plugin, not an engine-side index or mirror; the engine reports it without
  * resolving or fetching the far item.
+ * 
+ * A source uses its backend's own relationship wherever that relationship can name the
+ * far end, so the backend knows the graph and its own interface draws it. Where it
+ * cannot — a far end in another source, which no backend relates — the source reads
+ * [`Self::recorded`] from the near item instead. Only the forward direction is ever
+ * recorded; the reverse of a recorded edge is derived, exactly as a
+ * [`ForwardOnly`](crate::DependencySupport::ForwardOnly) source's reverse is.
  */
 export interface DependencyEdge {
 /**
- * The item the edge starts at.
+ * The item the edge starts at, and the one that depends on the other.
  */
 from: (string | {
 id: string
@@ -463,13 +477,15 @@ id: string
  */
 labels: Label[]
 /**
- * Caller-defined attributes, preserving their JSON types.
+ * Caller-defined attributes, preserving their JSON types, on the same terms as
+ * [`Task::metadata`].
  */
 metadata?: {
 [k: string]: any
 }
 /**
- * Normalized repository origins this project concerns, in source order.
+ * Normalized repository origins this project concerns, in source order and without
+ * repeats.
  */
 repositories?: Repository[]
 status: Status
@@ -577,6 +593,11 @@ id: string
 labels: Label[]
 /**
  * Caller-defined attributes, preserving their JSON types.
+ * 
+ * Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
+ * product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
+ * the two it defines — and `onepipeline.` belongs to that consumer. Every other key
+ * is the caller's, and a source returns it exactly as it holds it.
  */
 metadata?: {
 [k: string]: any
@@ -586,7 +607,8 @@ metadata?: {
  */
 project?: (NativeId | null)
 /**
- * Normalized repository origins this task concerns, in source order.
+ * Normalized repository origins this task concerns, in source order and without
+ * repeats.
  */
 repositories?: Repository[]
 status: Status
@@ -729,13 +751,15 @@ id: string
  */
 labels: Label[]
 /**
- * Caller-defined attributes, preserving their JSON types.
+ * Caller-defined attributes, preserving their JSON types, on the same terms as
+ * [`Task::metadata`].
  */
 metadata?: {
 [k: string]: any
 }
 /**
- * Normalized repository origins this project concerns, in source order.
+ * Normalized repository origins this project concerns, in source order and without
+ * repeats.
  */
 repositories?: Repository[]
 status: Status
@@ -986,13 +1010,15 @@ id: string
  */
 labels: Label[]
 /**
- * Caller-defined attributes, preserving their JSON types.
+ * Caller-defined attributes, preserving their JSON types, on the same terms as
+ * [`Task::metadata`].
  */
 metadata?: {
 [k: string]: any
 }
 /**
- * Normalized repository origins this project concerns, in source order.
+ * Normalized repository origins this project concerns, in source order and without
+ * repeats.
  */
 repositories?: Repository[]
 status: Status
@@ -1095,6 +1121,11 @@ id: string
 labels: Label[]
 /**
  * Caller-defined attributes, preserving their JSON types.
+ * 
+ * Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
+ * product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
+ * the two it defines — and `onepipeline.` belongs to that consumer. Every other key
+ * is the caller's, and a source returns it exactly as it holds it.
  */
 metadata?: {
 [k: string]: any
@@ -1104,7 +1135,8 @@ metadata?: {
  */
 project?: (NativeId | null)
 /**
- * Normalized repository origins this task concerns, in source order.
+ * Normalized repository origins this task concerns, in source order and without
+ * repeats.
  */
 repositories?: Repository[]
 status: Status
@@ -1772,13 +1804,15 @@ id: string
  */
 labels: Label[]
 /**
- * Caller-defined attributes, preserving their JSON types.
+ * Caller-defined attributes, preserving their JSON types, on the same terms as
+ * [`Task::metadata`].
  */
 metadata?: {
 [k: string]: any
 }
 /**
- * Normalized repository origins this project concerns, in source order.
+ * Normalized repository origins this project concerns, in source order and without
+ * repeats.
  */
 repositories?: Repository[]
 status: Status
@@ -2041,6 +2075,11 @@ id: string
 labels: Label[]
 /**
  * Caller-defined attributes, preserving their JSON types.
+ * 
+ * Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
+ * product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
+ * the two it defines — and `onepipeline.` belongs to that consumer. Every other key
+ * is the caller's, and a source returns it exactly as it holds it.
  */
 metadata?: {
 [k: string]: any
@@ -2050,7 +2089,8 @@ metadata?: {
  */
 project?: (NativeId | null)
 /**
- * Normalized repository origins this task concerns, in source order.
+ * Normalized repository origins this task concerns, in source order and without
+ * repeats.
  */
 repositories?: Repository[]
 status: Status
@@ -2952,6 +2992,11 @@ id: string
 labels: Label[]
 /**
  * Caller-defined attributes, preserving their JSON types.
+ * 
+ * Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
+ * product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
+ * the two it defines — and `onepipeline.` belongs to that consumer. Every other key
+ * is the caller's, and a source returns it exactly as it holds it.
  */
 metadata?: {
 [k: string]: any
@@ -2961,7 +3006,8 @@ metadata?: {
  */
 project?: (NativeId | null)
 /**
- * Normalized repository origins this task concerns, in source order.
+ * Normalized repository origins this task concerns, in source order and without
+ * repeats.
  */
 repositories?: Repository[]
 status: Status

@@ -5,8 +5,8 @@ use std::{
 };
 
 use onetaskgraph_plugin_api::{
-    Cursor, Direction, ItemKind, NativeId, PageRequest, ProjectQuery, SecretResolver,
-    SourceError, SourceName, SourcePlugin, StatusCategory, TaskQuery,
+    Cursor, Direction, ItemKind, NativeId, PageRequest, ProjectQuery, SecretResolver, SourceError,
+    SourceName, SourcePlugin, StatusCategory, TaskQuery,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -607,7 +607,12 @@ async fn non_issue_project_tasks_have_no_issue_dependencies() {
     // reserved key, which neither of these two records anything under.
     let responses = ["PullRequest", "DraftIssue"]
         .into_iter()
-        .flat_map(|kind| [json!({"data":{"node":{"__typename":kind}}}), project_response(false)])
+        .flat_map(|kind| {
+            [
+                json!({"data":{"node":{"__typename":kind}}}),
+                project_response(false),
+            ]
+        })
         .collect();
     let (endpoint, handle) = sequence_server(responses);
     let source = build(&endpoint);
@@ -626,11 +631,12 @@ async fn non_issue_project_tasks_have_no_issue_dependencies() {
 /// The project fixture with `I_task` recording two far ends under the reserved key.
 fn recorded_project_response() -> Value {
     let mut fixture = project_response(false);
-    fixture["data"]["owner"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["nodes"][1]["text"] =
-        json!(serde_json::to_string(&json!({
+    fixture["data"]["owner"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["nodes"][1]["text"] = json!(
+        serde_json::to_string(&json!({
             "onetaskgraph.depends_on": ["I_sibling", {"id":"elsewhere:P-9","kind":"project"}]
         }))
-        .unwrap());
+        .unwrap()
+    );
     fixture
 }
 
@@ -719,8 +725,8 @@ async fn a_reserved_dependency_key_holding_the_wrong_shape_is_refused_by_name() 
         "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
     }}}});
     let mut malformed = project_response(false);
-    malformed["data"]["owner"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["nodes"][1]
-        ["text"] = json!(r#"{"onetaskgraph.depends_on":{"id":"elsewhere:P-9"}}"#);
+    malformed["data"]["owner"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["nodes"][1]["text"] =
+        json!(r#"{"onetaskgraph.depends_on":{"id":"elsewhere:P-9"}}"#);
     let (endpoint, handle) = sequence_server(vec![native, malformed]);
     let source = build(&endpoint);
     let error = source

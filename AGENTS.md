@@ -237,6 +237,12 @@ them do; this is the inventory of what is owed, not a status board.
 22. Failure and recovery: unknown source name, malformed configuration, unknown id, and an
     unreachable source each exit non-zero with the problem and a suggested next action on
     stderr.
+23. Caller-defined metadata and repository origins come back out of every source kind with
+    their JSON types intact, and the keys this product reserves are read while every other
+    key is passed through untouched.
+24. A dependency edge that leaves the source — across projects, across the task and project
+    levels, and across sources — is reported by qualified id and item kind, is never
+    reported in reverse, and is never followed to the far source.
 
 ## Recorded decisions
 

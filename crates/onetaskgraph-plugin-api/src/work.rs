@@ -106,7 +106,10 @@ impl Repository {
             return Ok(Vec::new());
         };
         let origins: Vec<Self> = serde_json::from_value(value.clone()).map_err(|error| {
-            format!("{} is not a list of repository origins: {error}", Self::METADATA_KEY)
+            format!(
+                "{} is not a list of repository origins: {error}",
+                Self::METADATA_KEY
+            )
         })?;
         Self::unique(origins)
     }
@@ -249,9 +252,13 @@ impl DependencyEdge {
         let Some(value) = metadata.get(Self::RECORDED_KEY) else {
             return Ok(Vec::new());
         };
-        let far: Vec<DependencyEndpoint> = serde_json::from_value(value.clone()).map_err(
-            |error| format!("{} is not a list of dependency endpoints: {error}", Self::RECORDED_KEY),
-        )?;
+        let far: Vec<DependencyEndpoint> =
+            serde_json::from_value(value.clone()).map_err(|error| {
+                format!(
+                    "{} is not a list of dependency endpoints: {error}",
+                    Self::RECORDED_KEY
+                )
+            })?;
         Ok(far
             .into_iter()
             .map(|to| Self {

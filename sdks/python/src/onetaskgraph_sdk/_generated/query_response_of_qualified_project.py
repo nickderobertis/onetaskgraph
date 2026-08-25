@@ -203,12 +203,14 @@ class Project(BaseModel):
     ]
     metadata: Annotated[
         dict[str, JsonValue] | None,
-        Field(description="Caller-defined attributes, preserving their JSON types."),
+        Field(
+            description="Caller-defined attributes, preserving their JSON types, on the same terms as\n[`Task::metadata`]."
+        ),
     ] = {}
     repositories: Annotated[
         list[Repository] | None,
         Field(
-            description="Normalized repository origins this project concerns, in source order.",
+            description="Normalized repository origins this project concerns, in source order and without\nrepeats.",
             validate_default=True,
         ),
     ] = []

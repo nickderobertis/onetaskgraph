@@ -385,14 +385,12 @@ fn every_source_reports_a_cross_source_cross_level_edge_without_following_it() {
 fn a_far_end_a_source_cannot_name_travels_with_its_kind_through_text_output() {
     let row = &ROWS[0];
     let sandbox = host(row);
-    let rendered = ok(
-        row,
-        &sandbox,
-        &["task", "deps", &qualified(SOURCE, "T-1")],
-    );
+    let rendered = ok(row, &sandbox, &["task", "deps", &qualified(SOURCE, "T-1")]);
     assert!(
-        rendered.lines().any(|line| line.split_whitespace().collect::<Vec<_>>()
-            == ["task", "work:T-1", "blocks", "project", "elsewhere:P-9"]),
+        rendered
+            .lines()
+            .any(|line| line.split_whitespace().collect::<Vec<_>>()
+                == ["task", "work:T-1", "blocks", "project", "elsewhere:P-9"]),
         "{rendered}"
     );
 }

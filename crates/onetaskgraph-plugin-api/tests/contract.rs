@@ -459,7 +459,10 @@ fn a_repeated_repository_origin_is_refused_wherever_a_work_item_is_decoded() {
     assert!(error.to_string().contains("listed twice"), "{error}");
 
     let mut project = repeated;
-    project.as_object_mut().expect("an object").remove("project");
+    project
+        .as_object_mut()
+        .expect("an object")
+        .remove("project");
     assert!(serde_json::from_value::<Project>(project).is_err());
 }
 
@@ -484,10 +487,7 @@ fn a_near_item_records_the_far_ends_its_backend_cannot_name() {
     assert_eq!(edges[0].kind, DependencyKind::Blocks);
     assert_eq!(edges[1].to.id(), "elsewhere:P-9");
     assert!(edges[1].to.is_qualified());
-    assert_eq!(
-        edges[1].to.kind,
-        onetaskgraph_plugin_api::ItemKind::Project
-    );
+    assert_eq!(edges[1].to.kind, onetaskgraph_plugin_api::ItemKind::Project);
 
     assert!(
         DependencyEdge::recorded(

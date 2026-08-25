@@ -418,7 +418,11 @@ impl LinearSource {
             let d = self
                 .send(query, json!({"id":id.0,"first":1,"after":null}))
                 .await?;
-            return Ok(recorded_page(recorded(&d, root, id)?, offset, limit as usize));
+            return Ok(recorded_page(
+                recorded(&d, root, id)?,
+                offset,
+                limit as usize,
+            ));
         }
         let d = self
             .send(query, json!({"id":id.0,"first":limit,"after":cursor}))
@@ -518,8 +522,8 @@ fn time(v: &Value, k: &str) -> Result<Option<DateTime<Utc>>, SourceError> {
 }
 fn map_task(v: &Value) -> Result<Task, SourceError> {
     let (content, metadata) = metadata_description(optional_string(v, "description")?)?;
-    let repositories =
-        Repository::from_metadata(&metadata).map_err(|message| SourceError::Malformed { message })?;
+    let repositories = Repository::from_metadata(&metadata)
+        .map_err(|message| SourceError::Malformed { message })?;
     Ok(Task {
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "title")?.into(),
@@ -548,8 +552,8 @@ fn map_task(v: &Value) -> Result<Task, SourceError> {
 }
 fn map_project(v: &Value) -> Result<Project, SourceError> {
     let (content, metadata) = metadata_description(optional_string(v, "description")?)?;
-    let repositories =
-        Repository::from_metadata(&metadata).map_err(|message| SourceError::Malformed { message })?;
+    let repositories = Repository::from_metadata(&metadata)
+        .map_err(|message| SourceError::Malformed { message })?;
     Ok(Project {
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "name")?.into(),

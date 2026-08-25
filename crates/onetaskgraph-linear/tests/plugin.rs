@@ -557,7 +557,11 @@ async fn a_far_end_in_another_source_is_read_from_the_reserved_key_at_both_level
                 .await
                 .unwrap()
         };
-        assert_eq!(native.items.len(), 1, "{root}: the native relation is first");
+        assert_eq!(
+            native.items.len(),
+            1,
+            "{root}: the native relation is first"
+        );
         let tail = native
             .next
             .expect("a recorded far end still owes the walk a page");

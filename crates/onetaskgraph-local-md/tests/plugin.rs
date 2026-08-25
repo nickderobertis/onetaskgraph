@@ -1,9 +1,9 @@
 use std::fs;
 
 use onetaskgraph_plugin_api::{
-    Cursor, DependencyKind, Direction, ItemKind, LabelFilter, NativeId, PageRequest,
-    ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin,
-    StatusCategory, TaskQuery, TaskSource, TextFields, TextQuery,
+    Cursor, DependencyKind, Direction, ItemKind, LabelFilter, NativeId, PageRequest, ProjectFilter,
+    ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, StatusCategory, TaskQuery,
+    TaskSource, TextFields, TextQuery,
 };
 use secrecy::SecretString;
 
@@ -152,7 +152,10 @@ async fn front_matter_carries_typed_metadata_repositories_and_a_far_end_of_its_o
         .await
         .unwrap()
         .expect("the near task is read");
-    assert_eq!(task.metadata["onepipeline.turn_budget"], serde_json::json!(12));
+    assert_eq!(
+        task.metadata["onepipeline.turn_budget"],
+        serde_json::json!(12)
+    );
     assert_eq!(
         task.metadata["caller.flags"],
         serde_json::json!([true, null])

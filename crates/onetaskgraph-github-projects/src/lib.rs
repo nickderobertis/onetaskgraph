@@ -492,7 +492,12 @@ impl GitHubProjectsSource {
                 limit,
             ));
         }
-        let data = self.graphql(graphql::TASK_DEPENDENCIES, json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":cursor})).await?;
+        let data = self
+            .graphql(
+                graphql::TASK_DEPENDENCIES,
+                json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":cursor}),
+            )
+            .await?;
         let node =
             data.get("node")
                 .filter(|v| !v.is_null())

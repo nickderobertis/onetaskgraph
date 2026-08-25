@@ -205,7 +205,9 @@ class Task(BaseModel):
     ]
     metadata: Annotated[
         dict[str, JsonValue] | None,
-        Field(description="Caller-defined attributes, preserving their JSON types."),
+        Field(
+            description="Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two it defines — and `onepipeline.` belongs to that consumer. Every other key\nis the caller's, and a source returns it exactly as it holds it."
+        ),
     ] = {}
     project: Annotated[
         NativeId | None,
@@ -214,7 +216,7 @@ class Task(BaseModel):
     repositories: Annotated[
         list[Repository] | None,
         Field(
-            description="Normalized repository origins this task concerns, in source order.",
+            description="Normalized repository origins this task concerns, in source order and without\nrepeats.",
             validate_default=True,
         ),
     ] = []

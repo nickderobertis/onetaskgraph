@@ -263,7 +263,9 @@ fn github_projects_block(sandbox: &Sandbox) -> Value {
                     "dependency after must be null or a string"
                 );
                 let blockers = match id {
-                    "T-1" | "T-3" | "T-4" => vec![json!({"id":"T-2","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}})],
+                    "T-1" | "T-3" | "T-4" => vec![
+                        json!({"id":"T-2","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+                    ],
                     _ => vec![],
                 };
                 // The production document selects both connections, so the fixture answers
@@ -898,7 +900,11 @@ fn linear_relations(data: &Value, key: &str, id: &str, suffix: &str) -> Value {
         .filter(|e| e["to"] == id && e["from"].is_string())
         .map(|e| json!({"type":e["kind"],(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
         .collect::<Vec<_>>();
-    let items = if suffix == "Issue" { "tasks" } else { "projects" };
+    let items = if suffix == "Issue" {
+        "tasks"
+    } else {
+        "projects"
+    };
     let item = data[items]
         .as_array()
         .unwrap()
