@@ -5,8 +5,8 @@ use std::{
 };
 
 use onetaskgraph_plugin_api::{
-    Cursor, Direction, NativeId, PageRequest, ProjectQuery, SecretResolver, SourceError,
-    SourceName, SourcePlugin, StatusCategory, TaskQuery,
+    Cursor, Direction, ItemKind, NativeId, PageRequest, ProjectQuery, SecretResolver,
+    SourceError, SourceName, SourcePlugin, StatusCategory, TaskQuery,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -402,6 +402,48 @@ async fn project_dependencies_aggregate_underlying_issue_edges() {
 }
 
 #[tokio::test]
+async fn a_project_records_a_far_end_no_issue_relationship_can_reach() {
+    // A ProjectV2 board relates to nothing directly — its edges are aggregated from its
+    // issues — so a far end in another source lives in the board's own metadata slot.
+    let mut project = project_response(false);
+    project["data"]["owner"]["projectV2"]["shortDescription"] = json!(
+        "Delivery plan\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":[{\"id\":\"elsewhere:T-9\",\"kind\":\"task\"}]}\n-->"
+    );
+    let no_edges = json!({"data":{"node":{"__typename":"Issue",
+        "blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+        "blocking":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}});
+    let (endpoint, handle) =
+        sequence_server(vec![project.clone(), project.clone(), no_edges.clone()]);
+    let edges = build(&endpoint)
+        .project_dependencies(
+            &NativeId("PVT_project".into()),
+            Direction::DependsOn,
+            &page(10),
+        )
+        .await
+        .expect("the recorded far end is reported");
+    assert_eq!(edges.items.len(), 1);
+    assert_eq!(edges.items[0].from.id(), "PVT_project");
+    assert_eq!(edges.items[0].from.kind, ItemKind::Project);
+    assert_eq!(edges.items[0].to.id(), "elsewhere:T-9");
+    assert_eq!(edges.items[0].to.kind, ItemKind::Task);
+    handle.join().unwrap();
+
+    // ...and never in reverse, which belongs to the far end.
+    let (endpoint, handle) = sequence_server(vec![project.clone(), project, no_edges]);
+    let reverse = build(&endpoint)
+        .project_dependencies(
+            &NativeId("PVT_project".into()),
+            Direction::DependedOnBy,
+            &page(10),
+        )
+        .await
+        .expect("the reverse page is answered");
+    assert!(reverse.items.is_empty());
+    handle.join().unwrap();
+}
+
+#[tokio::test]
 async fn project_dependencies_skip_pull_requests_and_drafts() {
     let mut mixed = project_response(false);
     let issue = mixed["data"]["owner"]["projectV2"]["items"]["nodes"][0].clone();
@@ -561,9 +603,11 @@ async fn walks_issue_dependencies_in_both_directions_through_graphql() {
 
 #[tokio::test]
 async fn non_issue_project_tasks_have_no_issue_dependencies() {
+    // A pull request and a draft have no `blockedBy`, so the source falls through to the
+    // reserved key, which neither of these two records anything under.
     let responses = ["PullRequest", "DraftIssue"]
         .into_iter()
-        .map(|kind| json!({"data":{"node":{"__typename":kind}}}))
+        .flat_map(|kind| [json!({"data":{"node":{"__typename":kind}}}), project_response(false)])
         .collect();
     let (endpoint, handle) = sequence_server(responses);
     let source = build(&endpoint);
@@ -576,6 +620,117 @@ async fn non_issue_project_tasks_have_no_issue_dependencies() {
         assert!(dependencies.items.is_empty());
         assert!(dependencies.next.is_none());
     }
+    handle.join().unwrap();
+}
+
+/// The project fixture with `I_task` recording two far ends under the reserved key.
+fn recorded_project_response() -> Value {
+    let mut fixture = project_response(false);
+    fixture["data"]["owner"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["nodes"][1]["text"] =
+        json!(serde_json::to_string(&json!({
+            "onetaskgraph.depends_on": ["I_sibling", {"id":"elsewhere:P-9","kind":"project"}]
+        }))
+        .unwrap());
+    fixture
+}
+
+#[tokio::test]
+async fn a_far_end_no_issue_relationship_can_name_is_read_from_the_reserved_key() {
+    // `blockedBy` holds GitHub issues and nothing else, so an edge into another source has
+    // to live on the near item. It is served after the native relationship is spent, and
+    // its own page walks under a cursor of its own.
+    let native = json!({"data":{"node":{"__typename":"Issue","blockedBy":{
+        "nodes":[{"id":"I_blocker"}],"pageInfo":{"hasNextPage":false,"endCursor":null}
+    }}}});
+    let (endpoint, handle) = sequence_server(vec![
+        native.clone(),
+        recorded_project_response(),
+        recorded_project_response(),
+        recorded_project_response(),
+    ]);
+    let source = build(&endpoint);
+
+    let first = source
+        .task_dependencies(&NativeId("I_task".into()), Direction::DependsOn, &page(10))
+        .await
+        .expect("the native page is answered");
+    assert_eq!(first.items.len(), 1);
+    assert_eq!(first.items[0].from.id(), "I_blocker");
+    let next = first.next.expect("a recorded tail follows the native page");
+
+    let tail = source
+        .task_dependencies(
+            &NativeId("I_task".into()),
+            Direction::DependsOn,
+            &PageRequest {
+                limit: 1,
+                cursor: Some(next),
+            },
+        )
+        .await
+        .expect("the recorded tail is answered");
+    assert_eq!(tail.items.len(), 1);
+    assert_eq!(tail.items[0].from.id(), "I_task");
+    assert_eq!(tail.items[0].to.id(), "I_sibling");
+    assert!(!tail.items[0].to.is_qualified());
+
+    let last = source
+        .task_dependencies(
+            &NativeId("I_task".into()),
+            Direction::DependsOn,
+            &PageRequest {
+                limit: 1,
+                cursor: Some(tail.next.expect("one recorded edge is still owed")),
+            },
+        )
+        .await
+        .expect("the last recorded page is answered");
+    assert_eq!(last.items[0].to.id(), "elsewhere:P-9");
+    assert_eq!(last.items[0].to.kind, ItemKind::Project);
+    assert!(last.next.is_none());
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn a_recorded_far_end_is_never_reported_in_reverse() {
+    // The reverse of a recorded edge belongs to the far end, which this source cannot
+    // reach — so it is derived from there and never written down here.
+    let native = json!({"data":{"node":{"__typename":"Issue","blocking":{
+        "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+    }}}});
+    let (endpoint, handle) = sequence_server(vec![native]);
+    let source = build(&endpoint);
+    let reverse = source
+        .task_dependencies(
+            &NativeId("I_task".into()),
+            Direction::DependedOnBy,
+            &page(10),
+        )
+        .await
+        .expect("the reverse page is answered");
+    assert!(reverse.items.is_empty());
+    assert!(reverse.next.is_none());
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn a_reserved_dependency_key_holding_the_wrong_shape_is_refused_by_name() {
+    let native = json!({"data":{"node":{"__typename":"Issue","blockedBy":{
+        "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+    }}}});
+    let mut malformed = project_response(false);
+    malformed["data"]["owner"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["nodes"][1]
+        ["text"] = json!(r#"{"onetaskgraph.depends_on":{"id":"elsewhere:P-9"}}"#);
+    let (endpoint, handle) = sequence_server(vec![native, malformed]);
+    let source = build(&endpoint);
+    let error = source
+        .task_dependencies(&NativeId("I_task".into()), Direction::DependsOn, &page(10))
+        .await
+        .expect_err("a mapping is not a list of endpoints");
+    assert!(
+        format!("{error}").contains("onetaskgraph.depends_on"),
+        "{error}"
+    );
     handle.join().unwrap();
 }
 

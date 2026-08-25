@@ -483,7 +483,16 @@ impl GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         validate_page(page)?;
-        let data = self.graphql(graphql::TASK_DEPENDENCIES, json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c| c.0.as_str())})).await?;
+        let limit = page.limit.min(MAX_PAGE_SIZE) as usize;
+        let cursor = page.cursor.as_ref().map(|c| c.0.as_str());
+        if let Some(offset) = recorded_offset(cursor)? {
+            return Ok(recorded_page(
+                self.recorded_task_edges(id, direction).await?,
+                offset,
+                limit,
+            ));
+        }
+        let data = self.graphql(graphql::TASK_DEPENDENCIES, json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":cursor})).await?;
         let node =
             data.get("node")
                 .filter(|v| !v.is_null())
@@ -498,10 +507,14 @@ impl GitHubProjectsSource {
             Direction::DependedOnBy => "blocking",
         };
         if required_str(node, "__typename")? != "Issue" {
-            return Ok(Page {
-                items: Vec::new(),
-                next: None,
-            });
+            // A draft item has neither `blockedBy` nor `blocking`, so the reserved key is
+            // the only place an edge of its own can be. Every other item reaches it below,
+            // once its native relationship is spent.
+            return Ok(recorded_page(
+                self.recorded_task_edges(id, direction).await?,
+                0,
+                limit,
+            ));
         }
         let connection = node
             .get(connection_name)
@@ -532,14 +545,39 @@ impl GitHubProjectsSource {
                 })
             })
             .collect::<Result<Vec<_>, SourceError>>()?;
-        let next = next_cursor(connection)?;
+        let mut next = next_cursor(connection)?;
         if let Some(next) = &next {
-            validate_cursor_progress(
-                page.cursor.as_ref().map(|cursor| cursor.0.as_str()),
-                &next.0,
-            )?;
+            validate_cursor_progress(cursor, &next.0)?;
+        }
+        if next.is_none() && !self.recorded_task_edges(id, direction).await?.is_empty() {
+            next = Some(Cursor(format!("{RECORDED_CURSOR}0")));
         }
         Ok(Page { items, next })
+    }
+
+    /// The edges this item records under [`DependencyEdge::RECORDED_KEY`], which is where
+    /// a far end in another source has to live: no GitHub issue relationship can name one.
+    ///
+    /// Only forwards. The reverse of a recorded edge is derived from the far end, and this
+    /// source never writes one down.
+    async fn recorded_task_edges(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+    ) -> Result<Vec<DependencyEdge>, SourceError> {
+        if direction != Direction::DependsOn {
+            return Ok(Vec::new());
+        }
+        let Some(task) = self
+            .all_tasks()
+            .await?
+            .into_iter()
+            .find(|task| task.id == *id)
+        else {
+            return Ok(Vec::new());
+        };
+        DependencyEdge::recorded(&task.metadata, id, ItemKind::Task)
+            .map_err(|message| SourceError::Malformed { message })
     }
 
     async fn related_issue_projects(&self, issue: &Value) -> Result<Vec<NativeId>, SourceError> {
@@ -786,9 +824,38 @@ impl TaskSource for GitHubProjectsSource {
                 }
             }
         }
+        if direction == Direction::DependsOn {
+            edges.extend(
+                DependencyEdge::recorded(&self.project(&project)?.metadata, id, ItemKind::Project)
+                    .map_err(|message| SourceError::Malformed { message })?,
+            );
+        }
         let offset = numeric_cursor(page.cursor.as_ref())?;
         Ok(offset_page(edges, offset, page.limit as usize))
     }
+}
+
+/// Where the recorded tail of a task-dependency walk resumes; see
+/// [`GitHubProjectsSource::recorded_task_edges`].
+const RECORDED_CURSOR: &str = "onetaskgraph.depends_on:";
+
+fn recorded_offset(cursor: Option<&str>) -> Result<Option<usize>, SourceError> {
+    cursor
+        .and_then(|cursor| cursor.strip_prefix(RECORDED_CURSOR))
+        .map(|offset| {
+            offset.parse().map_err(|_| SourceError::Config {
+                message: format!("{RECORDED_CURSOR}{offset} is not a recorded-edge cursor"),
+            })
+        })
+        .transpose()
+}
+
+fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Page<DependencyEdge> {
+    let mut page = offset_page(edges, offset, limit.max(1));
+    page.next = page
+        .next
+        .map(|cursor| Cursor(format!("{RECORDED_CURSOR}{}", cursor.0)));
+    page
 }
 
 fn normalize_status_mapping(
@@ -886,16 +953,7 @@ fn repositories(content: &Value, field_values: &Value) -> Result<Vec<Repository>
             .map(|repository| vec![repository])
             .map_err(|message| SourceError::Malformed { message });
     }
-    let metadata = metadata_field(field_values)?;
-    metadata
-        .get("onetaskgraph.repositories")
-        .map_or(Ok(Vec::new()), |value| {
-            serde_json::from_value(value.clone()).map_err(|error| SourceError::Malformed {
-                message: format!(
-                    "onetaskgraph.repositories is not a list of repository origins: {error}"
-                ),
-            })
-        })
+    repositories_from_metadata(&metadata_field(field_values)?)
 }
 
 const PROJECT_METADATA_OPEN: &str = "<!-- onetaskgraph.metadata\n";
@@ -935,15 +993,7 @@ fn metadata_description(
 fn repositories_from_metadata(
     metadata: &BTreeMap<String, Value>,
 ) -> Result<Vec<Repository>, SourceError> {
-    metadata
-        .get("onetaskgraph.repositories")
-        .map_or(Ok(Vec::new()), |value| {
-            serde_json::from_value(value.clone()).map_err(|error| SourceError::Malformed {
-                message: format!(
-                    "onetaskgraph.repositories is not a list of repository origins: {error}"
-                ),
-            })
-        })
+    Repository::from_metadata(metadata).map_err(|message| SourceError::Malformed { message })
 }
 fn required_bool(value: &Value, field: &str) -> Result<bool, SourceError> {
     value

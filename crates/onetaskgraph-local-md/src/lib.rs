@@ -119,7 +119,24 @@ enum Dependency {
         id: String,
         #[serde(default)]
         kind: EdgeKind,
+        /// What the far end is, when it is not the same kind of item as the near one.
+        item: Option<EndpointKind>,
     },
+}
+/// What an expanded dependency endpoint names.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum EndpointKind {
+    Task,
+    Project,
+}
+impl From<EndpointKind> for ItemKind {
+    fn from(kind: EndpointKind) -> Self {
+        match kind {
+            EndpointKind::Task => Self::Task,
+            EndpointKind::Project => Self::Project,
+        }
+    }
 }
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -366,28 +383,34 @@ impl LocalMdSource {
             DocumentKind::Task => ItemKind::Task,
             DocumentKind::Project => ItemKind::Project,
         };
+        // A bare `depends_on: [b]` names this source's own item, colons and all, so it
+        // stays an opaque native id. The expanded form is where an author says otherwise:
+        // `{id: other:P-9, item: project}` names a far end this source cannot hold, and
+        // `DependencyEndpoint::new` is what validates that qualified id.
         let dependencies = front
             .depends_on
             .into_iter()
-            .map(|d| {
-                let (to, kind) = match d {
-                    Dependency::Id(id) => (id, DependencyKind::Blocks),
-                    Dependency::Detailed { id, kind } => (
-                        id,
-                        match kind {
-                            EdgeKind::Blocks => DependencyKind::Blocks,
-                            EdgeKind::Related => DependencyKind::Related,
-                        },
-                    ),
-                };
-                DependencyEdge {
+            .map(|d| match d {
+                // llmlint: ignore[boundary_inputs_validated] Dependency targets use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
+                Dependency::Id(id) => Ok(DependencyEdge {
                     from: DependencyEndpoint::from_native(from.clone(), item_kind),
-                    // llmlint: ignore[boundary_inputs_validated] Dependency targets use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
-                    to: DependencyEndpoint::from_native(NativeId(to), item_kind),
-                    kind,
-                }
+                    to: DependencyEndpoint::from_native(NativeId(id), item_kind),
+                    kind: DependencyKind::Blocks,
+                }),
+                Dependency::Detailed { id, kind, item } => Ok(DependencyEdge {
+                    from: DependencyEndpoint::from_native(from.clone(), item_kind),
+                    to: DependencyEndpoint::new(id, item.map_or(item_kind, Into::into)).map_err(
+                        |message| SourceError::Malformed {
+                            message: format!("{}: {message}", path.display()),
+                        },
+                    )?,
+                    kind: match kind {
+                        EdgeKind::Blocks => DependencyKind::Blocks,
+                        EdgeKind::Related => DependencyKind::Related,
+                    },
+                }),
             })
-            .collect();
+            .collect::<Result<Vec<_>, SourceError>>()?;
         Ok(Document {
             id: NativeId(id),
             title,
@@ -399,7 +422,11 @@ impl LocalMdSource {
             dependencies,
             url: front.url,
             metadata: front.metadata,
-            repositories: front.repositories,
+            repositories: Repository::unique(front.repositories).map_err(|message| {
+                SourceError::Malformed {
+                    message: format!("{}: {message}", path.display()),
+                }
+            })?,
         })
     }
 

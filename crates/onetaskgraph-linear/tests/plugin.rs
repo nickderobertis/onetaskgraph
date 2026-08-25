@@ -1,8 +1,8 @@
 //! Public factory and real-HTTP fixture journeys.
 
 use onetaskgraph_plugin_api::{
-    Direction, LabelFilter, PageRequest, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
-    SourceName, SourcePlugin, StatusCategory, TaskQuery, TaskSource,
+    Direction, ItemKind, LabelFilter, PageRequest, ProjectFilter, ProjectQuery, SecretResolver,
+    SourceError, SourceName, SourcePlugin, StatusCategory, TaskQuery, TaskSource,
 };
 use secrecy::SecretString;
 use std::{
@@ -531,6 +531,116 @@ async fn graphql_rate_limit_uses_http_hint_and_viewer_id_is_validated() {
 }
 
 #[tokio::test]
+async fn a_far_end_in_another_source_is_read_from_the_reserved_key_at_both_levels() {
+    // `relatedIssue` and `relatedProject` hold a Linear id and nothing else, so an edge
+    // into another source is the one edge no Linear relation can name. It is read from the
+    // near item's own reserved key and served after the native relations are spent.
+    for projects in [false, true] {
+        let (root, fixture) = if projects {
+            ("project", include_str!("fixtures/project-relations.json"))
+        } else {
+            ("issue", include_str!("fixtures/issue-relations.json"))
+        };
+        let request = PageRequest {
+            cursor: None,
+            limit: 50,
+        };
+        let (endpoint, _) = server("200 OK", "", fixture);
+        let native = if projects {
+            source(&endpoint)
+                .project_dependencies(&"p1".into(), Direction::DependsOn, &request)
+                .await
+                .unwrap()
+        } else {
+            source(&endpoint)
+                .task_dependencies(&"i1".into(), Direction::DependsOn, &request)
+                .await
+                .unwrap()
+        };
+        assert_eq!(native.items.len(), 1, "{root}: the native relation is first");
+        let tail = native
+            .next
+            .expect("a recorded far end still owes the walk a page");
+
+        let (endpoint, _) = server("200 OK", "", fixture);
+        let recorded = if projects {
+            source(&endpoint)
+                .project_dependencies(
+                    &"p1".into(),
+                    Direction::DependsOn,
+                    &PageRequest {
+                        cursor: Some(tail),
+                        limit: 50,
+                    },
+                )
+                .await
+                .unwrap()
+        } else {
+            source(&endpoint)
+                .task_dependencies(
+                    &"i1".into(),
+                    Direction::DependsOn,
+                    &PageRequest {
+                        cursor: Some(tail),
+                        limit: 50,
+                    },
+                )
+                .await
+                .unwrap()
+        };
+        assert_eq!(recorded.items.len(), 1, "{root}");
+        assert_eq!(recorded.items[0].to.id(), "elsewhere:P-9", "{root}");
+        assert_eq!(recorded.items[0].to.kind, ItemKind::Project, "{root}");
+        assert_eq!(
+            recorded.items[0].from.id(),
+            if projects { "p1" } else { "i1" },
+            "{root}"
+        );
+        assert!(recorded.next.is_none(), "{root}");
+
+        // The reverse of a recorded edge is derived from the far end, never recorded here.
+        let (endpoint, _) = server("200 OK", "", fixture);
+        let reverse = if projects {
+            source(&endpoint)
+                .project_dependencies(&"p1".into(), Direction::DependedOnBy, &request)
+                .await
+                .unwrap()
+        } else {
+            source(&endpoint)
+                .task_dependencies(&"i1".into(), Direction::DependedOnBy, &request)
+                .await
+                .unwrap()
+        };
+        assert!(reverse.next.is_none(), "{root}");
+        assert!(
+            reverse.items.iter().all(|edge| !edge.from.is_qualified()),
+            "{root}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_reserved_dependency_key_holding_the_wrong_shape_is_refused_by_name() {
+    let body = r#"{"data":{"issue":{"description":"body\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":7}\n-->","relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}"#;
+    let (endpoint, _) = server("200 OK", "", body);
+    let error = source(&endpoint)
+        .task_dependencies(
+            &"i1".into(),
+            Direction::DependsOn,
+            &PageRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
+        .await
+        .expect_err("a number is not a list of endpoints");
+    assert!(
+        format!("{error}").contains("onetaskgraph.depends_on"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
 async fn dependency_cursors_are_sent_on_second_task_and_project_requests() {
     let request = PageRequest {
         cursor: None,
@@ -544,7 +654,7 @@ async fn dependency_cursors_are_sent_on_second_task_and_project_requests() {
             "relatedIssue"
         };
         let body = format!(
-            r#"{{"data":{{"{root}":{{"relations":{{"nodes":[{{"type":"blocks","{related}":{{"id":"other"}}}}],"pageInfo":{{"hasNextPage":true,"endCursor":"next-edge"}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
+            r#"{{"data":{{"{root}":{{"description":null,"relations":{{"nodes":[{{"type":"blocks","{related}":{{"id":"other"}}}}],"pageInfo":{{"hasNextPage":true,"endCursor":"next-edge"}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
         );
         let (endpoint, _) = server("200 OK", "", body);
         let first = if projects {
@@ -560,7 +670,7 @@ async fn dependency_cursors_are_sent_on_second_task_and_project_requests() {
         };
         let cursor = first.next.unwrap();
         let body = format!(
-            r#"{{"data":{{"{root}":{{"relations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
+            r#"{{"data":{{"{root}":{{"description":null,"relations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
         );
         let (endpoint, wire) = server("200 OK", "", body);
         let second = PageRequest {

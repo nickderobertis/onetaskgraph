@@ -94,8 +94,11 @@ impl InMemoryConfig {
         ] {
             for edge in edges {
                 for (end, endpoint) in [("from", &edge.from), ("to", &edge.to)] {
+                    // A qualified endpoint deliberately names an item of another source,
+                    // which this one cannot hold and must not be asked to. A native id
+                    // containing a colon is still this source's own, so it is checked.
                     let native = NativeId(endpoint.id().to_owned());
-                    if !endpoint.id().contains(':') && !known.contains(&native) {
+                    if !endpoint.is_qualified() && !known.contains(&native) {
                         problems.push(format!(
                             "a {noun} dependency edge's `{end}` names {endpoint}, which this source \
                              does not hold"

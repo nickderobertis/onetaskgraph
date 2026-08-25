@@ -56,9 +56,9 @@ pub mod graphql {
     /// List issue labels.
     pub const LABELS: &str = "query($first:Int!,$after:String){ issueLabels(first:$first,after:$after){ nodes{id name color} pageInfo{hasNextPage endCursor} } }";
     /// Fetch issue dependency relations.
-    pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ relations(first:$first,after:$after){nodes{type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+    pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type issue{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Fetch project dependency relations.
-    pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ relations(first:$first,after:$after){nodes{type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type project{id}} pageInfo{hasNextPage endCursor}} } }";
+    pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ description relations(first:$first,after:$after){nodes{type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type project{id}} pageInfo{hasNextPage endCursor}} } }";
 }
 
 use graphql::{
@@ -373,8 +373,8 @@ impl TaskSource for LinearSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        let d=self.send(ISSUE_RELATIONS,json!({"id":id.0,"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0)})).await?;
-        relation_page(&d, DependencyRoot::Issue, id, direction)
+        self.dependencies(ISSUE_RELATIONS, DependencyRoot::Issue, id, direction, page)
+            .await
     }
     async fn project_dependencies(
         &self,
@@ -382,8 +382,80 @@ impl TaskSource for LinearSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        let d=self.send(PROJECT_RELATIONS,json!({"id":id.0,"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0)})).await?;
-        relation_page(&d, DependencyRoot::Project, id, direction)
+        self.dependencies(
+            PROJECT_RELATIONS,
+            DependencyRoot::Project,
+            id,
+            direction,
+            page,
+        )
+        .await
+    }
+}
+
+/// Linear relates one Linear item to another and nothing else, so an edge whose far end
+/// is in a different source is the one edge no `relations` entry can hold. Those edges
+/// are read from the near item's own [`DependencyEdge::RECORDED_KEY`] metadata, and they
+/// are served *after* the native relations are spent: a page under this cursor is the
+/// recorded tail of the same walk, which keeps the native pages exactly what they were.
+const RECORDED_CURSOR: &str = "onetaskgraph.depends_on:";
+
+impl LinearSource {
+    async fn dependencies(
+        &self,
+        query: &str,
+        root: DependencyRoot,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        let limit = page.limit.min(250);
+        let cursor = page.cursor.as_ref().map(|c| c.0.as_str());
+        if let Some(offset) = cursor.and_then(|c| c.strip_prefix(RECORDED_CURSOR)) {
+            let offset: usize = offset.parse().map_err(|_| SourceError::Malformed {
+                message: format!("{RECORDED_CURSOR}{offset} is not a recorded-edge cursor"),
+            })?;
+            let d = self
+                .send(query, json!({"id":id.0,"first":1,"after":null}))
+                .await?;
+            return Ok(recorded_page(recorded(&d, root, id)?, offset, limit as usize));
+        }
+        let d = self
+            .send(query, json!({"id":id.0,"first":limit,"after":cursor}))
+            .await?;
+        let mut answered = relation_page(&d, root, id, direction)?;
+        // Only forwards: the reverse of a recorded edge is derived from the far end, never
+        // written down on the near item.
+        if answered.next.is_none()
+            && direction == Direction::DependsOn
+            && !recorded(&d, root, id)?.is_empty()
+        {
+            answered.next = Some(Cursor(format!("{RECORDED_CURSOR}0")));
+        }
+        Ok(answered)
+    }
+}
+
+fn recorded(
+    d: &Value,
+    root: DependencyRoot,
+    id: &NativeId,
+) -> Result<Vec<DependencyEdge>, SourceError> {
+    let item = d.get(root.as_str()).ok_or_else(|| SourceError::Malformed {
+        message: format!("missing {}", root.as_str()),
+    })?;
+    let (_, metadata) = metadata_description(optional_string(item, "description")?)?;
+    DependencyEdge::recorded(&metadata, id, root.item_kind())
+        .map_err(|message| SourceError::Malformed { message })
+}
+
+fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Page<DependencyEdge> {
+    let total = edges.len();
+    let items: Vec<DependencyEdge> = edges.into_iter().skip(offset).take(limit.max(1)).collect();
+    let end = offset.saturating_add(items.len());
+    Page {
+        items,
+        next: (end < total).then(|| Cursor(format!("{RECORDED_CURSOR}{end}"))),
     }
 }
 
@@ -446,7 +518,8 @@ fn time(v: &Value, k: &str) -> Result<Option<DateTime<Utc>>, SourceError> {
 }
 fn map_task(v: &Value) -> Result<Task, SourceError> {
     let (content, metadata) = metadata_description(optional_string(v, "description")?)?;
-    let repositories = repositories_from_metadata(&metadata)?;
+    let repositories =
+        Repository::from_metadata(&metadata).map_err(|message| SourceError::Malformed { message })?;
     Ok(Task {
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "title")?.into(),
@@ -475,7 +548,8 @@ fn map_task(v: &Value) -> Result<Task, SourceError> {
 }
 fn map_project(v: &Value) -> Result<Project, SourceError> {
     let (content, metadata) = metadata_description(optional_string(v, "description")?)?;
-    let repositories = repositories_from_metadata(&metadata)?;
+    let repositories =
+        Repository::from_metadata(&metadata).map_err(|message| SourceError::Malformed { message })?;
     Ok(Project {
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "name")?.into(),
@@ -532,6 +606,12 @@ enum DependencyRoot {
     Project,
 }
 impl DependencyRoot {
+    const fn item_kind(self) -> ItemKind {
+        match self {
+            Self::Issue => ItemKind::Task,
+            Self::Project => ItemKind::Project,
+        }
+    }
     const fn as_str(self) -> &'static str {
         match self {
             Self::Issue => "issue",
@@ -606,10 +686,7 @@ fn relation_page(
             RelationKind::Related => DependencyKind::Related,
         };
         // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-        let item_kind = match root {
-            DependencyRoot::Issue => ItemKind::Task,
-            DependencyRoot::Project => ItemKind::Project,
-        };
+        let item_kind = root.item_kind();
         items.push(DependencyEdge {
             from: DependencyEndpoint::from_native(from, item_kind),
             to: DependencyEndpoint::from_native(to, item_kind),
@@ -674,19 +751,6 @@ fn metadata_description(
     Ok(((!visible.is_empty()).then(|| visible.to_owned()), metadata))
 }
 
-fn repositories_from_metadata(
-    metadata: &std::collections::BTreeMap<String, Value>,
-) -> Result<Vec<Repository>, SourceError> {
-    metadata
-        .get("onetaskgraph.repositories")
-        .map_or(Ok(Vec::new()), |value| {
-            serde_json::from_value(value.clone()).map_err(|error| SourceError::Malformed {
-                message: format!(
-                    "onetaskgraph.repositories is not a list of repository origins: {error}"
-                ),
-            })
-        })
-}
 fn optional_string(v: &Value, k: &str) -> Result<Option<String>, SourceError> {
     Ok(optional_str(v, k)?.map(Into::into))
 }
