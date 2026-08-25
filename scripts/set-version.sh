@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'echo "version update failed; next: fix the reported manifest or lock error and rerun scripts/set-version.sh <VERSION>" >&2' ERR
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
@@ -11,7 +12,7 @@ if [[ ${1:-} == --check ]]; then
 else
   expected=${1:?usage: scripts/set-version.sh VERSION | --check}
   [[ $expected =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
-    echo "invalid semantic version: $expected" >&2; exit 2;
+    echo "invalid semantic version: $expected; expected X.Y.Z, then rerun scripts/set-version.sh $expected" >&2; exit 2;
   }
 fi
 
@@ -29,6 +30,7 @@ if [[ ${1:-} == --check ]]; then
   check_value "$(sed -n 's/^version = "\([^"]*\)"/\1/p' sdks/python/pyproject.toml | head -n1)" sdks/python/pyproject.toml
   check_value "$(sed -n 's/.*onetaskgraph-cli==\([^" ]*\).*/\1/p' sdks/python/pyproject.toml)" 'Python SDK CLI pin'
   node -e 'const fs=require("fs"); const v=process.argv[1]; for (const f of ["npm/cli/package.json",...fs.readdirSync("npm/platforms").map(x=>`npm/platforms/${x}/package.json`),"sdks/typescript/package.json"]) { const p=JSON.parse(fs.readFileSync(f)); if(p.version!==v) throw Error(`${f} has ${p.version}; expected ${v}`); for(const [n,x] of Object.entries(p.optionalDependencies||{})) if(x!==v) throw Error(`${f} ${n} pin has ${x}; expected ${v}`) }' "$expected" || fail=1
+  if [[ $fail -ne 0 ]]; then echo "version drift found; next: run scripts/set-version.sh $expected" >&2; fi
   exit "$fail"
 fi
 
