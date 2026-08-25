@@ -77,17 +77,16 @@ fi
 # scripts/check-isolation-enforced.sh caught the first time it ran; the union is the rule
 # as AGENTS.md states it: any edge, at any depth.
 #
-# Read as data, from ONE `cargo metadata` for every plugin at once, rather than rendered
-# per plugin. `cargo tree --edges all --no-dedupe` re-expands every shared subtree at every
-# place it appears, and reqwest’s graph is a wide diamond: one plugin’s tree measured
-# 7,613,874 lines and 179,806,436 bytes, all of it crossing a command substitution and a
-# here-string, and Windows spent 52.9 minutes of a 69-minute gate job pushing it through.
-# Rendering it also invited a quiet `grep -q` to SIGPIPE the writer still pushing the rest,
-# which under `pipefail` inverts the pipeline’s status on exactly the runs that found a
-# match. Do not reintroduce either.
+# Read as data, from ONE `cargo metadata` for every plugin at once. Never render a tree
+# per plugin again: `--no-dedupe` re-expands every shared subtree at every place it
+# appears, so one plugin of this workspace came to 180 MB, and Windows spent 52.9 minutes
+# of a 69-minute gate job pushing it through a command substitution. Never pipe a large
+# rendering into a quiet `grep -q` either — it exits at the first match and SIGPIPEs the
+# writer, so under `pipefail` the pipeline fails on exactly the runs that found a match.
 
-# Capture rather than discard: a `cargo metadata` that failed would otherwise look exactly
-# like a workspace with no edge to the engine, and this check would pass on a broken query.
+# Capture rather than discard, as the per-plugin query this replaces did: a `cargo
+# metadata` that failed would otherwise look exactly like a workspace with no edge to the
+# engine, and this check would pass on a broken query.
 if ! graph="$(cargo metadata --format-version 1 --manifest-path Cargo.toml 2>&1)"; then
   echo "check-plugin-isolation: could not read the workspace dependency graph:" >&2
   printf '%s\n' "$graph" >&2
@@ -106,6 +105,11 @@ PLUGINS = set(os.environ["PLUGINS"].split())
 ENGINE = "onetaskgraph-core"
 PREFIX = "check-plugin-isolation:"
 
+# llmlint: ignore[boundary_inputs_validated] not external input, and not schema-checked
+# here on purpose: `--format-version 1` is the versioned contract cargo maintains for
+# reading this document, its producer is the toolchain this workspace pins, and a shape
+# these keys cannot read raises — python exits non-zero, the command substitution
+# propagates that under `set -e`, and the guard fails closed rather than passing.
 metadata = json.load(sys.stdin)
 names = {package["id"]: package["name"] for package in metadata["packages"]}
 labels = {
@@ -123,17 +127,8 @@ for name in sorted(PLUGINS - {names[member] for member in members}):
     print(f"{PREFIX} be checked for a crate that is not in the graph.")
 
 
-def edge_kinds(dependency):
-    """Every kind of edge this one dependency represents. Cargo writes null for a normal
-    edge."""
-    kinds = {entry.get("kind") or "normal" for entry in dependency.get("dep_kinds") or []}
-    return ",".join(sorted(kinds)) or "normal"
-
-
 def path_to_engine(start):
-    """The shortest path from `start` to the engine, innermost crate first, or None.
-    Breadth-first, so the path reported is the shortest one there is — a long way round
-    through a diamond says less about what to go and break."""
+    """The crates from `start` to the engine, innermost first, or None."""
     came_from = {start: None}
     queue = deque([start])
     while queue:
@@ -142,13 +137,12 @@ def path_to_engine(start):
             target = dependency["pkg"]
             if target in came_from or target not in nodes:
                 continue
-            came_from[target] = (current, edge_kinds(dependency))
+            came_from[target] = current
             if names[target] == ENGINE:
-                path, node = [(target, None)], target
+                path, node = [target], target
                 while came_from[node] is not None:
-                    parent, kind = came_from[node]
-                    path.append((parent, kind))
-                    node = parent
+                    node = came_from[node]
+                    path.append(node)
                 return path
             queue.append(target)
     return None
@@ -163,9 +157,8 @@ for member in members:
         continue
     print(f"{PREFIX} {plugin} reaches {ENGINE} through a dependency edge.")
     print(f"{PREFIX} the path, innermost crate first:")
-    for package_id, kind in path:
-        suffix = f" ({kind})" if kind else ""
-        print(f"{PREFIX}   {labels[package_id]}{suffix}")
+    for package_id in path:
+        print(f"{PREFIX}   {labels[package_id]}")
     print(f"{PREFIX} break that path — the arrow only runs one way.")
 '
 )"
