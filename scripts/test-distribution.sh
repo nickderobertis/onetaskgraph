@@ -236,25 +236,31 @@ if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgr
 [[ $wrong_carrier_status -eq 69 ]] || { echo "wrong carrier identity exited $wrong_carrier_status, expected 69; next: inspect manifest validation" >&2; exit 1; }
 grep -q 'identifies itself as wrong-carrier' "$tmp/error" || { cat "$tmp/error" >&2; echo "wrong-carrier failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
 printf '{"name":"@onetaskgraph/cli-%s"}\n' "$node_platform" > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/package.json"
-mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary" "$tmp/real-carrier"
-ln -s "$tmp/real-carrier" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
+mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin" "$tmp/real-carrier-bin"
+node -e 'require("node:fs").symlinkSync(process.argv[1],process.argv[2],process.platform === "win32" ? "junction" : "dir")' "$tmp/real-carrier-bin" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then escaping_carrier_status=0; else escaping_carrier_status=$?; fi
 [[ $escaping_carrier_status -eq 69 ]] || { echo "escaping carrier exited $escaping_carrier_status, expected 69; next: inspect carrier containment" >&2; exit 1; }
 grep -q 'carrier binary escapes its package' "$tmp/error" || { cat "$tmp/error" >&2; echo "escaping-carrier failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
-rm "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
-printf '#!/bin/sh\nkill -TERM $$\n' > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
-chmod +x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
-if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then signal_status=0; else signal_status=$?; fi
-[[ $signal_status -eq 70 ]] || { echo "signaled carrier exited $signal_status, expected 70; next: inspect signal handling" >&2; exit 1; }
-grep -q 'carrier terminated by' "$tmp/error" || { cat "$tmp/error" >&2; echo "signal failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
-mv "$tmp/real-carrier" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
+rm "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin"
+mv "$tmp/real-carrier-bin" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin"
+if [[ $node_platform != win32-* ]]; then
+  mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary" "$tmp/real-carrier"
+  printf '#!/bin/sh\nkill -TERM $$\n' > "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
+  chmod +x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
+  if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then signal_status=0; else signal_status=$?; fi
+  [[ $signal_status -eq 70 ]] || { echo "signaled carrier exited $signal_status, expected 70; next: inspect signal handling" >&2; exit 1; }
+  grep -q 'carrier terminated by' "$tmp/error" || { cat "$tmp/error" >&2; echo "signal failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
+  mv "$tmp/real-carrier" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
+fi
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js" --definitely-invalid >/dev/null 2>&1); then launcher_status=0; else launcher_status=$?; fi
 [[ $launcher_status -eq 2 ]] || { echo "launcher did not propagate command status 2; next: inspect spawn result handling" >&2; exit 1; }
-chmod -x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
-if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then non_executable_status=0; else non_executable_status=$?; fi
-[[ $non_executable_status -eq 69 ]] || { echo "non-executable carrier exited $non_executable_status, expected 69; next: inspect spawn errors" >&2; exit 1; }
-grep -q 'reinstall the platform package' "$tmp/error" || { cat "$tmp/error" >&2; echo "spawn failure omitted recovery guidance; next: inspect launcher diagnostics" >&2; exit 1; }
-chmod +x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
+if [[ $node_platform != win32-* ]]; then
+  chmod -x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
+  if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then non_executable_status=0; else non_executable_status=$?; fi
+  [[ $non_executable_status -eq 69 ]] || { echo "non-executable carrier exited $non_executable_status, expected 69; next: inspect spawn errors" >&2; exit 1; }
+  grep -q 'reinstall the platform package' "$tmp/error" || { cat "$tmp/error" >&2; echo "spawn failure omitted recovery guidance; next: inspect launcher diagnostics" >&2; exit 1; }
+  chmod +x "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"
+fi
 mv "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary" "$tmp/missing-binary"
 if (cd "$tmp" && NODE_PATH="$tmp/node_modules" node "$root/npm/cli/bin/onetaskgraph.js") 2>"$tmp/error"; then missing_binary_status=0; else missing_binary_status=$?; fi
 [[ $missing_binary_status -eq 69 ]] || { echo "missing carrier binary exited $missing_binary_status, expected 69; next: inspect spawn errors" >&2; exit 1; }
