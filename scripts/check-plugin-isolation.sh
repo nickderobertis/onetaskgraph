@@ -34,41 +34,6 @@ readonly ENGINE_CRATE="onetaskgraph-core"
 # or macOS run can reproduce.
 mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
 
-metadata="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml)"
-
-violations="$(
-  printf '%s' "$metadata" | PLUGINS="${PLUGINS[*]}" ENGINE="$ENGINE_CRATE" python3 -c '
-import json
-import os
-import sys
-
-PLUGINS = set(os.environ["PLUGINS"].split())
-API = "onetaskgraph-plugin-api"
-ENGINE = os.environ["ENGINE"]
-
-metadata = json.load(sys.stdin)
-workspace = {package["name"] for package in metadata["packages"]}
-
-for package in metadata["packages"]:
-    name = package["name"]
-    for dependency in package["dependencies"]:
-        target = dependency["name"]
-        kind = dependency.get("kind") or "normal"
-        if name in PLUGINS and target == ENGINE:
-            print(f"{name} -> {target} ({kind}): a plugin crate may not depend on the engine")
-        if name == API and target in workspace:
-            print(f"{name} -> {target} ({kind}): the contract crate may depend on no other crate of this workspace")
-'
-)"
-
-if [ -n "$violations" ]; then
-  echo "check-plugin-isolation: the dependency direction the crate split establishes is broken." >&2
-  printf '%s\n' "$violations" >&2
-  echo "check-plugin-isolation: move the shared type into onetaskgraph-plugin-api, or copy" >&2
-  echo "check-plugin-isolation: the helper into the plugin — the arrow only runs one way." >&2
-  exit 1
-fi
-
 # Direct edges are only half the rule: an indirect path reaches the engine just as surely.
 #
 # One walk over the union of the edge kinds, not one per kind. A path to the engine need
@@ -86,10 +51,14 @@ fi
 # rendering into a quiet `grep -q` either — it exits at the first match and SIGPIPEs the
 # writer, so under `pipefail` the pipeline fails on exactly the runs that found a match.
 
-# llmlint: ignore[changed_behavior_has_e2e] stands in for the refusal the per-plugin `cargo tree` gave, which no fixture reached either; the file that could add one, scripts/check-isolation-enforced.sh, is pinned unchanged by this node.
-if ! graph="$(cargo metadata --format-version 1 --manifest-path Cargo.toml 2>&1)"; then
+# llmlint: ignore[changed_behavior_has_e2e] scripts/check-isolation-enforced.sh drives the real guard against direct dependency-resolution failures in a scratch clone.
+metadata_stderr="$(mktemp)"
+trap 'rm -f "$metadata_stderr"' EXIT
+if ! graph="$(cargo metadata --format-version 1 --manifest-path Cargo.toml 2>"$metadata_stderr")"; then
   echo "check-plugin-isolation: could not read the workspace dependency graph:" >&2
+  cat "$metadata_stderr" >&2
   printf '%s\n' "$graph" >&2
+  echo "check-plugin-isolation: cargo could not resolve the normal, build, and dev edge graph." >&2
   echo "check-plugin-isolation: fix the workspace so 'cargo metadata' resolves, then re-run." >&2
   exit 1
 fi
@@ -102,6 +71,7 @@ import sys
 from collections import deque
 
 PLUGINS = set(os.environ["PLUGINS"].split())
+API = "onetaskgraph-plugin-api"
 ENGINE = os.environ["ENGINE"]
 PREFIX = "check-plugin-isolation:"
 
@@ -132,7 +102,8 @@ def path_to_engine(start):
 # the handler turns it into a refusal that names a next action rather than a traceback.
 try:
     # llmlint: ignore[boundary_inputs_validated] every field cargo supplies is read inside this block, whose handler refuses with a next action; a schema check here would restate the --format-version 1 contract cargo already fixes.
-    metadata = json.load(sys.stdin)
+    graph = sys.stdin.read()
+    metadata = json.loads(graph)
     names = {package["id"]: package["name"] for package in metadata["packages"]}
     labels = {
         package["id"]: package["name"] + " v" + package["version"]
@@ -142,9 +113,19 @@ try:
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
     workspace = {names[member] for member in members}
 
+    for package in metadata["packages"]:
+        name = package["name"]
+        for dependency in package["dependencies"]:
+            target = dependency["name"]
+            kind = dependency.get("kind") or "normal"
+            if name in PLUGINS and target == ENGINE:
+                print(f"{PREFIX} {name} -> {target} ({kind}): a plugin crate may not depend on the engine")
+            if name == API and target in workspace:
+                print(f"{PREFIX} {name} -> {target} ({kind}): the contract crate may depend on no other crate of this workspace")
+
     # The engine is named in one place, and a rename there that no package answers to
     # would disarm the walk in silence — every plugin would come back clean.
-    # llmlint: ignore[changed_behavior_has_e2e] it keeps the loud failure `cargo tree --package` gave on a name no package answers to; the file that could reach it is pinned unchanged by this node.
+    # llmlint: ignore[changed_behavior_has_e2e] it keeps the loud failure `cargo tree --package` gave on a name no package answers to; scripts/check-workspace-config.sh independently reconciles committed project and package names.
     for name in sorted(({ENGINE} | PLUGINS) - workspace):
         print(f"{PREFIX} {name} is no package of this workspace, so the rule cannot be")
         print(f"{PREFIX} checked for it. Fix that name where it is written — a crate this")
@@ -162,10 +143,12 @@ try:
         for package_id in path:
             print(f"{PREFIX}   {labels[package_id]}")
         print(f"{PREFIX} break that path — the arrow only runs one way.")
-# llmlint: ignore[changed_behavior_has_e2e] the shape it refuses cannot come from any manifest, so only a stand-in for cargo could drive it, and the file that would hold one, scripts/check-isolation-enforced.sh, is pinned unchanged by this node.
+# llmlint: ignore[changed_behavior_has_e2e] scripts/check-plugin-isolation-concurrent.sh drives non-JSON output through the real guard; missing fields cannot come from a manifest and require the same Cargo stand-in.
 except (KeyError, TypeError, ValueError) as error:
     print(f"{PREFIX} could not read the dependency graph cargo handed over: {error}",
           file=sys.stderr)
+    print(f"{PREFIX} cargo stdout was:", file=sys.stderr)
+    print(graph, file=sys.stderr)
     print(f"{PREFIX} compare cargo metadata --format-version 1 against the fields this",
           file=sys.stderr)
     print(f"{PREFIX} script reads, and update it to the shape cargo now emits.",

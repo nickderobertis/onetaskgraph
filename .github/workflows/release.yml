@@ -39,7 +39,7 @@ jobs:
           if [ "$EXT" = zip ]; then 7z a "${name}.zip" "$bin"; else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
           asset="${name}.${EXT}"
           if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"; else shasum -a 256 "$asset" > "$asset.sha256"; fi
-          gh release upload "$TAG" "$asset" "$asset.sha256"
+          gh release upload "$TAG" "$asset" "$asset.sha256" --clobber
           mkdir -p "carrier/bin" "dist/carriers"
           cp "npm/platforms/${NPM_PLATFORM}/package.json" carrier/package.json
           cp "$bin" "carrier/bin/$(basename "$bin")"
@@ -50,8 +50,13 @@ jobs:
     needs: native-assets-and-carriers
     strategy:
       matrix:
-        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-msvc]
-    runs-on: ubuntu-latest
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: PyO3/maturin-action@v1
@@ -84,12 +89,11 @@ jobs:
           [ -n "$CARGO_REGISTRY_TOKEN" ] || { echo "CARGO_REGISTRY_TOKEN is required" >&2; exit 1; }
           for crate in onetaskgraph-plugin-api onetaskgraph-in-memory onetaskgraph-local-md onetaskgraph-linear onetaskgraph-github-projects onetaskgraph-core onetaskgraph; do
             version=$(cargo metadata --no-deps --format-version 1 | jq -r --arg n "$crate" '.packages[]|select(.name==$n)|.version')
-            printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || { echo "invalid version for $crate: $version" >&2; exit 64; }
-            status=$(curl -sS -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/$crate/$version") || { echo "could not query crates.io for $crate $version" >&2; exit 69; }
-            case "$status" in
-              200) ;;
-              404) RUSTFLAGS='-D warnings' cargo publish -p "$crate" --locked ;;
-              *) echo "crates.io query for $crate $version returned HTTP $status" >&2; exit 69 ;;
+            publication=$(scripts/crate-publication-status.sh "$crate" "$version") || exit $?
+            case "$publication" in
+              published) ;;
+              absent) RUSTFLAGS='-D warnings' cargo publish -p "$crate" --locked ;;
+              *) echo "unusable crates.io answer for $crate $version: $publication" >&2; exit 69 ;;
             esac
           done
   publish-python:
@@ -117,7 +121,7 @@ jobs:
         with: { pattern: "carrier-*", path: dist/carriers, merge-multiple: true }
       - env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
         run: |
-          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN is required" >&2; exit 1; }
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN is required (received ${#NODE_AUTH_TOKEN} characters)" >&2; exit 1; }
           publish_if_absent() {
             spec=$1
             shift
