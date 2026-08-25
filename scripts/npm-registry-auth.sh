@@ -29,4 +29,4 @@ config="$directory/.npmrc"
 if command -v cygpath >/dev/null 2>&1; then
   config=$(cygpath -w "$config") || { echo "could not express the npm configuration path for this platform: $config" >&2; echo "next: report the cygpath failure above; scripts/npm-registry-auth.sh needs a path the local npm client can read" >&2; exit 1; }
 fi
-printf '%s\n' "$config"
+printf '%s\n' "$config" || { echo "could not report the npm configuration path: $config" >&2; echo "next: rerun scripts/npm-registry-auth.sh with a writable standard output, which is what the caller reads the path from" >&2; exit 1; }

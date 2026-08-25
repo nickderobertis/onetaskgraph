@@ -509,7 +509,7 @@ assert_npm_auth_stops 'could not write the npm configuration' "ONETASKGRAPH_NPM_
 RUNNER_TEMP="$tmp/runner-temp" "$root/scripts/npm-registry-auth.sh" "$npm_registry" >/dev/null
 grep -Fq ':_authToken=${NODE_AUTH_TOKEN}' "$tmp/runner-temp/.npmrc" || { echo "the npm configuration did not land in the runner's temporary tree; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
 mkdir -p "$tmp/fallback-temp"
-TMPDIR="$tmp/fallback-temp" "$root/scripts/npm-registry-auth.sh" "$npm_registry" >/dev/null
+env -u RUNNER_TEMP TMPDIR="$tmp/fallback-temp" "$root/scripts/npm-registry-auth.sh" "$npm_registry" >/dev/null
 fallback_config=$(find "$tmp/fallback-temp" -name .npmrc -print -quit)
 [[ -n $fallback_config ]] || { echo "the npm configuration had nowhere to go with no runner temporary tree; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
 grep -Fq ':_authToken=${NODE_AUTH_TOKEN}' "$fallback_config" || { cat "$fallback_config" >&2; echo "the fallback npm configuration did not name NODE_AUTH_TOKEN; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }

@@ -46,7 +46,7 @@ grep -Fq 'NPM_TOKEN is required (received ${#NODE_AUTH_TOKEN} characters)' .gith
 # npm authentication drift is repaired in the publication path rather than in the
 # manifests the generic next action names, so it reports its own.
 fail_npm_auth() { echo "distribution contract drift: $1" >&2; echo "next: restore the npm registry authentication in .github/workflows/release.yml and scripts/npm-registry-auth.sh together" >&2; exit 1; }
-npm_job=$(sed -n '/^  publish-npm:/,$p' .github/workflows/release.yml)
+npm_job=$(sed -n '/^  publish-npm:/,$p' .github/workflows/release.yml) || fail_npm_auth "could not read the npm publication job out of .github/workflows/release.yml"
 grep -Fq 'NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh https://registry.npmjs.org/)' <<< "$npm_job" || fail_npm_auth "npm publication must configure registry authentication with scripts/npm-registry-auth.sh; NODE_AUTH_TOKEN alone leaves the npm client logged out"
 grep -Fq 'export NPM_CONFIG_USERCONFIG' <<< "$npm_job" || fail_npm_auth "the npm configuration must be exported as NPM_CONFIG_USERCONFIG, which is how the npm client finds it"
 grep -Fq ':_authToken=${NODE_AUTH_TOKEN}' scripts/npm-registry-auth.sh || fail_npm_auth "the npm configuration must name NODE_AUTH_TOKEN rather than carry a token value"
