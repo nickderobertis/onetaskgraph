@@ -7,7 +7,7 @@
 # splitting `onetaskgraph-plugin-api` out of `onetaskgraph-core`, so it is the last one
 # that should be taken on trust.
 #
-# So the tree is really broken, in a scratch clone, nine ways — eight against the local
+# So the tree is really broken, in a scratch clone, ten ways — nine against the local
 # guard and one against deny.toml's wrapper restriction, which is the half of this rule
 # that is a required check. Each case asserts on the DIAGNOSTIC as well as the exit
 # status: a guard that refuses without naming the crate and the path sends the next
@@ -264,6 +264,16 @@ printf '\nthis is not toml\n' >> "$scratch/repo/crates/onetaskgraph-local-md/Car
 run_guard
 expect_refused "a manifest cargo cannot parse" \
   "could not read the workspace manifests" onetaskgraph-local-md
+reset_fixture
+
+# 10. The plugin set is the guard's other input, and it arrives from another script. A
+#     producer that failed must not read as a workspace with no plugins in it: an empty
+#     set passes every check below while checking no crate at all, which is the quietest
+#     way this guard can stop working.
+rm -f "$scratch/repo/scripts/plugin-crates.sh"
+run_guard
+expect_refused "the plugin set failing to arrive" \
+  "could not read the plugin set" plugin-crates.sh
 reset_fixture
 
 # 9. cargo's document is this guard's one input, and the guard reads named keys out of

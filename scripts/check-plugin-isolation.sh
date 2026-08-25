@@ -30,7 +30,13 @@ cd "$ROOT"
 # arrives as "\r\n". `mapfile -t` strips the newline but not the carriage return, and a
 # crate name carrying a trailing CR matches no package in the graph — a failure no Linux
 # or macOS run can reproduce.
-mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
+if ! plugin_names="$(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')"; then
+  echo "check-plugin-isolation: could not read the plugin set, so nothing was checked." >&2
+  echo "check-plugin-isolation: fix what scripts/plugin-crates.sh reported above — an empty" >&2
+  echo "check-plugin-isolation: plugin set would pass this guard while checking no crate." >&2
+  exit 1
+fi
+mapfile -t PLUGINS <<<"$plugin_names"
 
 # Reachability is a property of the resolved graph, and `cargo metadata` hands that graph
 # over as one document — so ONE invocation answers the "any depth" half of the rule for
@@ -53,13 +59,36 @@ API = "onetaskgraph-plugin-api"
 ENGINE = "onetaskgraph-core"
 PREFIX = "check-plugin-isolation:"
 
-# llmlint: ignore[boundary_inputs_validated] this document is not external input and is
-# not validated against a schema here: `--format-version 1` IS the versioned contract
-# cargo maintains for reading it this way, and its producer is the pinned toolchain this
-# workspace builds with. A document these keys cannot read raises, python exits non-zero,
-# and the command substitution in the caller propagates that under `set -e` — so a graph
-# this cannot read fails the guard closed rather than passing it.
-metadata = json.load(sys.stdin)
+# `--format-version 1` is the contract cargo maintains for reading this document, but a
+# contract is only a promise until it is checked. Every key this scan goes on to
+# dereference is established here, and a document that does not carry them is refused with
+# the reason — the caller turns that into a diagnostic. A guard that cannot read its input
+# has not checked the rule, and must never be mistaken for one that checked and found
+# nothing.
+def refuse(problem):
+    print("the document cargo handed over " + problem, file=sys.stderr)
+    raise SystemExit(1)
+
+
+try:
+    metadata = json.loads(sys.stdin.read())
+except ValueError as error:
+    refuse(f"is not JSON: {error}")
+
+if not isinstance(metadata, dict):
+    refuse("is not a JSON object")
+for key in ("packages", "workspace_members"):
+    if not isinstance(metadata.get(key), list):
+        refuse(f"carries no {key} array")
+for package in metadata["packages"]:
+    if not isinstance(package, dict) or not {
+        "id",
+        "name",
+        "version",
+        "dependencies",
+    } <= package.keys():
+        refuse("holds a package without an id, a name, a version and a dependencies list")
+
 names = {package["id"]: package["name"] for package in metadata["packages"]}
 labels = {
     package["id"]: package["name"] + " v" + package["version"]
@@ -109,6 +138,11 @@ if missing:
 resolve = metadata.get("resolve")
 if resolve is None:
     raise SystemExit(0)
+if not isinstance(resolve, dict) or not isinstance(resolve.get("nodes"), list):
+    refuse("carries a resolve section with no nodes array")
+for node in resolve["nodes"]:
+    if not isinstance(node, dict) or "id" not in node or not isinstance(node.get("deps"), list):
+        refuse("holds a resolve node without an id and a deps list")
 
 nodes = {node["id"]: node for node in resolve["nodes"]}
 
@@ -168,13 +202,9 @@ for member in sorted(members, key=lambda member: names[member]):
     print(f"{PREFIX} break that path — the arrow only runs one way.")
 '
 
-# Print the report for one cargo-metadata document, or refuse if the scan cannot read it.
-#
-# No manifest reaches that refusal while cargo honours `--format-version 1`, so case 9 of
-# scripts/check-isolation-enforced.sh replaces the boundary instead: a cargo earlier on
-# PATH that answers `metadata` with an empty object. It exists for the day cargo changes
-# that shape — the next author must read what to do rather than a traceback, and an
-# unreadable document must never be mistaken for a clean workspace.
+# No manifest can produce a document the scan cannot read, so case 9 of
+# scripts/check-isolation-enforced.sh replaces the boundary to reach this: a cargo earlier
+# on PATH answering `metadata` with an empty object.
 scan() {
   local output status
   output="$(printf '%s' "$1" | PLUGINS="${PLUGINS[*]}" python3 -c "$ISOLATION_SCAN" 2>&1)" \
