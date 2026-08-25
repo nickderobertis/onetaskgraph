@@ -44,7 +44,6 @@ run_guard() {
     && GUARD_STATUS=0 || GUARD_STATUS=$?
 }
 
-# Undo a case's edit by restoring that file from the working tree it was copied from.
 restore() {
   local path
   for path in "$@"; do
