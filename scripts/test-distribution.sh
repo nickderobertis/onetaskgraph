@@ -201,6 +201,9 @@ grep -q 'requires a value' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing
 if "$root/scripts/install.sh" --to '' 2>"$tmp/error"; then empty_destination_status=0; else empty_destination_status=$?; fi
 [[ $empty_destination_status -eq 64 ]] || { echo "empty installation destination exited $empty_destination_status, expected 64; next: inspect destination validation" >&2; exit 1; }
 grep -q 'installation directory must not be empty' "$tmp/error" || { cat "$tmp/error" >&2; echo "empty-destination failure omitted its reason; next: inspect destination diagnostics" >&2; exit 1; }
+if "$root/scripts/install.sh" --to '-unsafe' 2>"$tmp/error"; then leading_dash_status=0; else leading_dash_status=$?; fi
+[[ $leading_dash_status -eq 64 ]] || { echo "leading-dash installation destination exited $leading_dash_status, expected 64; next: inspect destination validation" >&2; exit 1; }
+grep -q "installation directory must not begin with '-'" "$tmp/error" || { cat "$tmp/error" >&2; echo "leading-dash destination failure omitted its reason; next: inspect destination diagnostics" >&2; exit 1; }
 if ONETASKGRAPH_VERSION="${tag}junk" "$root/scripts/install.sh" 2>"$tmp/error"; then malformed_tag_status=0; else malformed_tag_status=$?; fi
 [[ $malformed_tag_status -eq 64 ]] || { echo "malformed tag exited $malformed_tag_status, expected 64; next: inspect tag validation" >&2; exit 1; }
 grep -q "unsupported release tag: ${tag}junk" "$tmp/error" || { cat "$tmp/error" >&2; echo "malformed-tag failure omitted its reason; next: inspect tag diagnostics" >&2; exit 1; }
@@ -214,7 +217,7 @@ cp "$root/target/debug/$binary" "$tmp/npm-carrier/bin/$binary"
 carrier_package=$(npm pack "$tmp/npm-carrier" --silent --pack-destination "$tmp/npm-packages")
 launcher_package=$(npm pack "$root/npm/cli" --silent --pack-destination "$tmp/npm-packages")
 printf '{"private":true}\n' > "$tmp/npm-install/package.json"
-(cd "$tmp/npm-install" && npm install --offline --ignore-scripts "$tmp/npm-packages/$carrier_package" "$tmp/npm-packages/$launcher_package" >/dev/null)
+(cd "$tmp/npm-install" && npm install --silent --offline --ignore-scripts "$tmp/npm-packages/$carrier_package" "$tmp/npm-packages/$launcher_package" >/dev/null)
 "$tmp/npm-install/node_modules/.bin/onetaskgraph" --help | grep -q 'Usage:' || { echo "packed npm command did not render help; next: inspect the launcher and carrier package contents" >&2; exit 1; }
 mkdir -p "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin"
 cp "$root/target/debug/$binary" "$tmp/node_modules/@onetaskgraph/cli-${node_platform}/bin/$binary"

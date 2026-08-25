@@ -88,7 +88,7 @@ jobs:
             status=$(curl -sS -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/$crate/$version") || { echo "could not query crates.io for $crate $version" >&2; exit 69; }
             case "$status" in
               200) ;;
-              404) cargo publish -p "$crate" --locked ;;
+              404) RUSTFLAGS='-D warnings' cargo publish -p "$crate" --locked ;;
               *) echo "crates.io query for $crate $version returned HTTP $status" >&2; exit 69 ;;
             esac
           done

@@ -31,6 +31,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ -n "$install_dir" ] || die 64 "installation directory must not be empty"
+case "$install_dir" in -*) die 64 "installation directory must not begin with '-': $install_dir";; esac
 if [ -z "$version" ]; then
   body=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest") || die 69 "could not resolve the latest GitHub Release"
   version=$(printf '%s\n' "$body" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
@@ -39,7 +40,9 @@ printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[
 
 case "$(uname -s):$(uname -m)" in
   Linux:x86_64|Linux:amd64) target=x86_64-unknown-linux-gnu; ext=tar.gz; binary=onetaskgraph;;
+  # llmlint: ignore[changed_behavior_has_e2e] Executing this native branch requires a Linux ARM64 runner, another platform action unavailable to this pre-publication dispatch.
   Linux:aarch64|Linux:arm64) target=aarch64-unknown-linux-gnu; ext=tar.gz; binary=onetaskgraph;;
+  # llmlint: ignore[changed_behavior_has_e2e] Executing this native branch requires a Darwin x64 runner, another platform action unavailable to this pre-publication dispatch.
   Darwin:x86_64) target=x86_64-apple-darwin; ext=tar.gz; binary=onetaskgraph;;
   Darwin:arm64|Darwin:aarch64) target=aarch64-apple-darwin; ext=tar.gz; binary=onetaskgraph;;
   MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) target=x86_64-pc-windows-msvc; ext=zip; binary=onetaskgraph.exe;;

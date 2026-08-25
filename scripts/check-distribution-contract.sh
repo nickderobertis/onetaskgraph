@@ -55,6 +55,23 @@ then
 fi
 [[ $(grep -Fc 'git_tag_name = "v{{ version }}"' release-plz.toml) -eq 1 ]] || fail "the binary must be the only package using the plain v-prefixed tag"
 [[ $(grep -Fc 'git_release_name = "v{{ version }}"' release-plz.toml) -eq 1 ]] || fail "the GitHub Release name must match the binary's plain v-prefixed tag"
+if ! python3 <<'PY'
+import re
+import tomllib
+
+with open("release-plz.toml", "rb") as manifest:
+    policy = re.compile(tomllib.load(manifest)["workspace"]["release_commits"])
+
+eligible = ("feat: add source", "fix(cli): handle failure", "perf!: remove bottleneck", "docs: explain\n\nBREAKING CHANGE: remove old API")
+ineligible = ("chore(onetaskgraph): release v1.2.3", "docs: explain setup", "test: cover release")
+if any(policy.search(commit) is None for commit in eligible):
+    raise SystemExit("release-worthy Conventional Commit was rejected")
+if any(policy.search(commit) is not None for commit in ineligible):
+    raise SystemExit("non-release commit was accepted")
+PY
+then
+  fail "release-plz commit eligibility does not match the release policy"
+fi
 grep -q 'npm pack ./carrier' .github/workflows/release.yml || fail "release workflow does not build npm carrier tarballs"
 grep -q 'cp "$bin"' .github/workflows/release.yml || fail "release workflow does not put native binaries in npm carriers"
 grep -q 'pattern: "carrier-\*"' .github/workflows/release.yml || fail "npm publish does not download built carrier tarballs"
