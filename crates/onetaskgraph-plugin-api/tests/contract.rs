@@ -448,6 +448,82 @@ fn repository_origins_accept_only_the_normalized_public_identity() {
 }
 
 #[test]
+fn a_repeated_repository_origin_is_refused_wherever_a_work_item_is_decoded() {
+    let repeated = serde_json::json!({
+        "id": "ENG-1", "title": "Ship", "content": null,
+        "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": null,
+        "url": null, "created_at": null, "updated_at": null,
+        "repositories": ["github.com/example/work", "github.com/example/work"]
+    });
+    let error = serde_json::from_value::<Task>(repeated.clone()).expect_err("a repeat is refused");
+    assert!(error.to_string().contains("listed twice"), "{error}");
+
+    let mut project = repeated;
+    project.as_object_mut().expect("an object").remove("project");
+    assert!(serde_json::from_value::<Project>(project).is_err());
+}
+
+#[test]
+fn a_near_item_records_the_far_ends_its_backend_cannot_name() {
+    let metadata = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!(["T-2", {"id": "elsewhere:P-9", "kind": "project"}]),
+    )]
+    .into();
+    let edges = DependencyEdge::recorded(
+        &metadata,
+        &NativeId::from("T-1"),
+        onetaskgraph_plugin_api::ItemKind::Task,
+    )
+    .expect("a list of endpoints");
+
+    assert_eq!(edges.len(), 2);
+    assert_eq!(edges[0].from.id(), "T-1");
+    assert_eq!(edges[0].to.id(), "T-2");
+    assert!(!edges[0].to.is_qualified());
+    assert_eq!(edges[0].kind, DependencyKind::Blocks);
+    assert_eq!(edges[1].to.id(), "elsewhere:P-9");
+    assert!(edges[1].to.is_qualified());
+    assert_eq!(
+        edges[1].to.kind,
+        onetaskgraph_plugin_api::ItemKind::Project
+    );
+
+    assert!(
+        DependencyEdge::recorded(
+            &Default::default(),
+            &NativeId::from("T-1"),
+            onetaskgraph_plugin_api::ItemKind::Task
+        )
+        .expect("an item recording nothing")
+        .is_empty()
+    );
+
+    let malformed = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!({"id": "elsewhere:P-9"}),
+    )]
+    .into();
+    let error = DependencyEdge::recorded(
+        &malformed,
+        &NativeId::from("T-1"),
+        onetaskgraph_plugin_api::ItemKind::Task,
+    )
+    .expect_err("a mapping is not a list of endpoints");
+    assert!(error.contains(DependencyEdge::RECORDED_KEY), "{error}");
+}
+
+#[test]
+fn the_two_reserved_keys_are_spelled_once_and_under_this_products_prefix() {
+    for key in [
+        onetaskgraph_plugin_api::Repository::METADATA_KEY,
+        DependencyEdge::RECORDED_KEY,
+    ] {
+        assert!(key.starts_with("onetaskgraph."), "{key}");
+    }
+}
+
+#[test]
 fn dependency_endpoints_validate_and_preserve_qualified_ids() {
     let endpoint: onetaskgraph_plugin_api::DependencyEndpoint =
         serde_json::from_value(serde_json::json!({"id":"other:P-9", "kind":"project"}))
