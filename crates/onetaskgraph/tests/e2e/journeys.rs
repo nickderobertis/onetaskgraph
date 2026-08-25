@@ -1,4 +1,5 @@
-//! The journeys, written once and run against every row of the fixture table.
+//! Shared journeys over complete-dataset rows, plus focused journeys for sources whose
+//! native model cannot represent that whole dataset.
 //!
 //! Every one of them drives the compiled binary as a subprocess. Where a journey asserts
 //! on the plan as well as the rows, it asserts what *this row declares* — so the same
@@ -179,7 +180,7 @@ fn github_projects_missing_credential_reaches_the_binary_user() {
 }
 
 #[test]
-fn every_source_lists_its_tasks_and_shows_one_by_its_qualified_id() {
+fn every_complete_dataset_source_lists_its_tasks_and_shows_one_by_its_qualified_id() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
 
@@ -218,7 +219,7 @@ fn every_source_lists_its_tasks_and_shows_one_by_its_qualified_id() {
 }
 
 #[test]
-fn every_source_lists_its_projects_and_shows_one_by_its_qualified_id() {
+fn every_complete_dataset_source_lists_its_projects_and_shows_one_by_its_qualified_id() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
 
@@ -319,7 +320,7 @@ fn a_task_in_no_project_is_listed_by_default_and_can_be_selected_on_its_own() {
 }
 
 #[test]
-fn every_source_lists_the_labels_it_knows() {
+fn every_complete_dataset_source_lists_the_labels_it_knows() {
     for row in complete_dataset_rows() {
         let listing = ok(row, &host(row), &["label", "list"]);
         assert_eq!(
@@ -333,7 +334,7 @@ fn every_source_lists_the_labels_it_knows() {
 }
 
 #[test]
-fn filtering_by_label_answers_the_same_rows_whoever_applies_the_predicate() {
+fn complete_dataset_sources_agree_on_label_filtering_wherever_it_is_applied() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
         let declared = row.declared();
@@ -366,7 +367,7 @@ fn filtering_by_label_answers_the_same_rows_whoever_applies_the_predicate() {
 }
 
 #[test]
-fn filtering_by_status_category_answers_the_same_rows_whoever_applies_the_predicate() {
+fn complete_dataset_sources_agree_on_status_filtering_wherever_it_is_applied() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
         let declared = row.declared();
@@ -472,7 +473,7 @@ fn searching_covers_titles_bodies_or_either_over_tasks_and_projects() {
 }
 
 #[test]
-fn task_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itself() {
+fn complete_dataset_sources_walk_task_dependencies_forwards_and_backwards() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
         let declared = row.declared();
@@ -521,7 +522,7 @@ fn task_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itse
 }
 
 #[test]
-fn project_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_itself() {
+fn complete_dataset_sources_walk_project_dependencies_forwards_and_backwards() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
         let declared = row.declared();
@@ -564,7 +565,7 @@ fn project_dependencies_walk_forwards_and_backwards_whatever_the_source_can_do_i
 }
 
 #[test]
-fn every_source_filters_its_projects_by_label_by_status_and_by_text() {
+fn every_complete_dataset_source_filters_projects_by_label_status_and_text() {
     // `project list` carries the same filters `task list` does, over a source's other
     // entity and through a different query type. A source that applied them to tasks and
     // dropped them for projects would pass every task journey above.
