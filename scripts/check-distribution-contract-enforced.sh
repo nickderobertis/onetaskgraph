@@ -9,7 +9,7 @@
 # would pass just as quietly if a pattern stopped matching what it describes, or if the
 # query moved somewhere the pin does not read.
 #
-# So the unidentified query is reintroduced for real, three ways, in a scratch copy of the
+# So the unidentified query is reintroduced for real, four ways, in a scratch copy of the
 # working tree, and each case asserts on the DIAGNOSTIC as well as the refusal — a pin that
 # refuses without naming the user agent sends the next author hunting through a release
 # workflow, which is most of what it is for.
@@ -105,7 +105,7 @@ expect_refused() {
 }
 
 # 0. The control. Without it, a pin that refused every tree — including this one — would
-#    satisfy all three cases below and look like the strictest check in the repository.
+#    satisfy all four cases below and look like the strictest check in the repository.
 run_guard
 if [ "$GUARD_STATUS" -ne 0 ]; then
   echo "check-distribution-contract-enforced: the pin refuses the tree under test, so the cases" >&2
