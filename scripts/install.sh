@@ -49,6 +49,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 download "$archive_url" "$tmp/$name" || die 69 "download failed: $archive_url"
 download "$checksum_url" "$tmp/$name.sha256" || die 69 "checksum download failed: $checksum_url"
 expected=$(awk '{print $1}' "$tmp/$name.sha256")
+printf '%s\n' "$expected" | grep -Eq '^[0-9A-Fa-f]{64}$' || die 65 "checksum file does not contain one SHA-256 digest"
 if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$tmp/$name" | awk '{print $1}'); elif command -v shasum >/dev/null 2>&1; then actual=$(shasum -a 256 "$tmp/$name" | awk '{print $1}'); else die 69 "no SHA-256 implementation is installed"; fi
 [ "$actual" = "$expected" ] || die 65 "checksum mismatch for $name"
 mkdir -p "$tmp/unpack" "$install_dir"

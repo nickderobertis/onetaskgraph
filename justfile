@@ -47,6 +47,7 @@ version-check:
             echo "version manifests disagree; next: run 'scripts/set-version.sh <VERSION>' and commit every changed manifest and lockfile" >&2; \
             exit 1; \
         fi
+    @scripts/check-distribution-contract.sh
 
 # Exercise the installer and npm launcher against a locally built release-shaped asset.
 distribution-test:

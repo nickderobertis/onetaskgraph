@@ -2,6 +2,7 @@
   "name": "@onetaskgraph/cli",
   "version": "0.1.0",
   "description": "Platform-selecting launcher for onetaskgraph",
+  "x-exit-codes": { "64": "unsupported platform", "69": "carrier unavailable or could not execute", "70": "carrier terminated by signal" },
   "license": "MIT",
   "bin": {
     "onetaskgraph": "bin/onetaskgraph.js"
