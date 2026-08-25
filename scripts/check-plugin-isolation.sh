@@ -90,11 +90,20 @@ def text(value, what):
     return value
 
 
+KINDS = ("dev", "build")
+
+
 def kind_of(carrier, what):
     """The edge kind a dependency or a dep_kinds entry carries. Cargo writes null for a
-    normal edge, so null is the one non-string this accepts."""
+    normal edge, so null is the one non-string this accepts, and the rest is a closed set
+    — an unknown kind is an edge this guard cannot classify, which is not a thing to guess
+    about when what it decides is whether a plugin reaches the engine."""
     kind = carrier.get("kind")
-    return "normal" if kind is None else text(kind, what)
+    if kind is None:
+        return "normal"
+    if text(kind, what) not in KINDS:
+        refuse("holds a dependency kind that cargo does not define")
+    return kind
 
 
 try:
@@ -138,13 +147,20 @@ resolve = metadata.get("resolve")
 nodes = None
 if resolve is not None:
     mapping(resolve, "a resolve section")
-    for node in array(resolve.get("nodes"), "a resolve nodes field"):
+    resolved_ids = {
+        node["id"]
+        for node in array(resolve.get("nodes"), "a resolve nodes field")
+        if isinstance(node, dict) and isinstance(node.get("id"), str)
+    }
+    for node in resolve["nodes"]:
         mapping(node, "a resolve node")
         text(node.get("id"), "a resolve node id")
         for dependency in array(node.get("deps"), "a resolve node deps field"):
             mapping(dependency, "a resolve dependency")
             if text(dependency.get("pkg"), "a resolve dependency pkg") not in names:
                 refuse("resolves a dependency on no package of the same document")
+            if dependency["pkg"] not in resolved_ids:
+                refuse("resolves a dependency on a package with no node of its own")
             kinds = dependency.get("dep_kinds")
             if kinds is not None:
                 for entry in array(kinds, "a dep_kinds field"):
@@ -222,7 +238,7 @@ def path_to_engine(start):
         current = queue.popleft()
         for dependency in nodes[current]["deps"]:
             target = dependency["pkg"]
-            if target in came_from or target not in nodes:
+            if target in came_from:
                 continue
             came_from[target] = (current, edge_kinds(dependency))
             if names[target] == ENGINE:

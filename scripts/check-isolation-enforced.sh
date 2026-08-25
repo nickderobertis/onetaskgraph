@@ -323,6 +323,8 @@ shim_cases=(
   '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": [1]}]}]}}|holds a dep_kinds entry that is not an object'
   '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "a", "dep_kinds": [{"kind": 1}]}]}]}}|holds a dep_kinds kind that is not a string'
   '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}], "workspace_members": ["a"], "resolve": {"nodes": []}}|resolves no node for a workspace member'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": [{"name": "b", "kind": "weird"}]}], "workspace_members": []}|holds a dependency kind that cargo does not define'
+  '{"packages": [{"id": "a", "name": "a", "version": "1", "dependencies": []}, {"id": "b", "name": "b", "version": "1", "dependencies": []}], "workspace_members": [], "resolve": {"nodes": [{"id": "a", "deps": [{"pkg": "b"}]}]}}|resolves a dependency on a package with no node of its own'
 )
 
 # A table that mirrors another file drifts, and a drifted table is a field nobody checks
