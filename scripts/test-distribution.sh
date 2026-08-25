@@ -233,7 +233,7 @@ unsupported_status=$?
 set -e
 [[ $unsupported_status -eq 64 ]] || { echo "unsupported launcher platform exited $unsupported_status, expected 64; next: inspect platform validation" >&2; exit 1; }
 grep -q 'unsupported platform' "$tmp/error" || { echo "unsupported-platform failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
-uv run --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }
+uv run --quiet --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }
 assert_version_error() {
   expected_message=$1
   shift
