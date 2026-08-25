@@ -35,6 +35,13 @@ macos-latest aarch64-apple-darwin
 windows-latest x86_64-pc-windows-msvc
 WHEEL_MAPPINGS
 grep -Fq 'gh release upload "$TAG" "$asset" "$asset.sha256" --clobber' .github/workflows/release.yml || fail "release asset uploads must replace assets left by an earlier attempt"
+crate_job=$(sed -n '/^  publish-crates:/,/^  publish-python:/p' .github/workflows/release.yml)
+grep -Fq 'publication=$(scripts/crate-publication-status.sh "$crate" "$version") || exit $?' <<< "$crate_job" || fail "crate publication must decide from scripts/crate-publication-status.sh, which identifies the caller to crates.io"
+! grep -Eq 'curl|wget' <<< "$crate_job" || fail "the crates.io existence query must stay in scripts/crate-publication-status.sh, where the caller is identified to the registry"
+grep -Fq 'published) ;;' <<< "$crate_job" || fail "a crate already on crates.io must be left alone"
+grep -Fq 'absent) RUSTFLAGS=' <<< "$crate_job" || fail "a crate absent from crates.io must be published"
+grep -Fq -- '--user-agent "$agent"' scripts/crate-publication-status.sh || fail "the crates.io existence query must send an explicit user agent; the registry answers curl's default with 403"
+grep -Fq 'agent="onetaskgraph-release (https://github.com/nickderobertis/onetaskgraph)"' scripts/crate-publication-status.sh || fail "the crates.io user agent must name this release and a contact URL for it"
 grep -Fq 'NPM_TOKEN is required (received ${#NODE_AUTH_TOKEN} characters)' .github/workflows/release.yml || fail "the npm token guard must report only the received token length"
 if ! node <<'NODE'
 const fs = require("fs");

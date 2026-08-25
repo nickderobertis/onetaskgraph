@@ -9,8 +9,44 @@ tmp=$(mktemp -d)
 python_bin=$(command -v python3 || command -v python || true)
 [[ -n $python_bin ]] || { echo "distribution test requires Python 3; next: install python3 and rerun scripts/test-distribution.sh" >&2; exit 1; }
 "$python_bin" -c 'import sys; raise SystemExit(sys.version_info < (3, 8))' || { echo "distribution test requires Python 3.8 or newer; next: install a supported python3 and rerun scripts/test-distribution.sh" >&2; exit 1; }
+stop_server() {
+  [[ -n ${1:-} ]] || return 0
+  kill "$1" 2>/dev/null || true
+  wait "$1" 2>/dev/null || true
+}
+start_server() {
+  server_label=$1
+  server_program=$2
+  shift 2
+  server_port_file="$tmp/$server_label.port"
+  server_log="$tmp/$server_label.log"
+  "$python_bin" "$server_program" "$server_port_file" "$@" >"$server_log" 2>&1 &
+  server_pid=$!
+  server_exit=
+  for _ in {1..600}; do
+    [[ -s $server_port_file ]] && break
+    if ! kill -0 "$server_pid" 2>/dev/null; then
+      if wait "$server_pid"; then server_exit=0; else server_exit=$?; fi
+      server_pid=
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ ! -s $server_port_file ]]; then
+    if [[ -n $server_exit ]]; then
+      echo "local HTTP $server_label server exited with status $server_exit before starting; server output follows:" >&2
+    else
+      echo "local HTTP $server_label server was still running after 30 seconds; server output follows:" >&2
+    fi
+    sed 's/^/  /' "$server_log" >&2
+    echo "next: inspect the distribution test server" >&2
+    exit 1
+  fi
+  server_port=$(<"$server_port_file")
+}
 cleanup() {
-  if [[ -n ${http_server_pid:-} ]]; then kill "$http_server_pid" 2>/dev/null || true; wait "$http_server_pid" 2>/dev/null || true; fi
+  stop_server "${http_server_pid:-}"
+  stop_server "${registry_server_pid:-}"
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -83,43 +119,22 @@ grep -q 'download base must use' "$tmp/error" || { cat "$tmp/error" >&2; echo "u
 rm "$tmp/releases/$tag/$name"
 if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
-"$python_bin" - "$tmp" "$tmp/http-port" >"$tmp/http.log" 2>&1 <<'PY' &
+cat > "$tmp/release-server.py" <<'PY'
 import http.server
 import os
 import sys
 
-root, port_file = sys.argv[1:]
+port_file, root = sys.argv[1:]
 os.chdir(root)
 server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http.server.SimpleHTTPRequestHandler)
 with open(port_file, "w", encoding="utf-8") as stream:
     stream.write(str(server.server_port))
 server.serve_forever()
 PY
-http_server_pid=$!
-http_server_status=
-for _ in {1..600}; do
-  [[ -s "$tmp/http-port" ]] && break
-  if ! kill -0 "$http_server_pid" 2>/dev/null; then
-    if wait "$http_server_pid"; then http_server_status=0; else http_server_status=$?; fi
-    http_server_pid=
-    break
-  fi
-  sleep 0.05
-done
-if [[ ! -s "$tmp/http-port" ]]; then
-  if [[ -n $http_server_status ]]; then
-    echo "local HTTP release server exited with status $http_server_status before starting; server output follows:" >&2
-  else
-    echo "local HTTP release server was still running after 30 seconds; server output follows:" >&2
-  fi
-  sed 's/^/  /' "$tmp/http.log" >&2
-  echo "next: inspect the distribution test server" >&2
-  exit 1
-fi
-http_port=$(<"$tmp/http-port")
-ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="http://127.0.0.1:$http_port/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" >/dev/null
-kill "$http_server_pid"
-wait "$http_server_pid" 2>/dev/null || true
+start_server release "$tmp/release-server.py" "$tmp"
+http_server_pid=$server_pid
+ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="http://127.0.0.1:$server_port/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" >/dev/null
+stop_server "$http_server_pid"
 http_server_pid=
 mkdir -p "$tmp/shims"
 printf '#!/bin/sh\necho '\''{"tag_name":"%s"}'\''\n' "$tag" > "$tmp/shims/curl"
@@ -307,3 +322,65 @@ grep -q 'onetaskgraph-cli==0.1.1' "$tmp/version-repo/sdks/python/pyproject.toml"
 node -e 'const p=require(process.argv[1]); if(p.version!=="0.1.1" || Object.values(p.optionalDependencies).some(v=>v!=="0.1.1")) process.exit(1)' "$tmp/version-repo/npm/cli/package.json" || { echo "version updater missed npm metadata; next: inspect JSON mutation" >&2; exit 1; }
 grep -q 'version = "0.1.1"' "$tmp/version-repo/Cargo.lock" || { echo "version updater missed Cargo.lock; next: inspect lock refresh" >&2; exit 1; }
 grep -q 'version = "0.1.1"' "$tmp/version-repo/uv.lock" || { echo "version updater missed uv.lock; next: inspect lock refresh" >&2; exit 1; }
+cat > "$tmp/registry-server.py" <<'PY'
+import http.server
+import sys
+
+port_file, agent_log = sys.argv[1:]
+answers = {"published-crate": 200, "absent-crate": 404, "declined-crate": 403, "broken-crate": 500}
+
+
+class Registry(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        agent = self.headers.get("User-Agent", "")
+        with open(agent_log, "a", encoding="utf-8") as stream:
+            stream.write(f"{self.path} {agent}\n")
+        # crates.io answers curl's default agent with 403, which is the defect under test.
+        if not agent or agent.startswith("curl/"):
+            self.send_error(403)
+            return
+        answer = answers.get(self.path.rsplit("/", 2)[-2], 404)
+        if answer == 200:
+            body = b'{"version":{"num":"1.0.0"}}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_error(answer)
+
+    def log_message(self, *args):
+        pass
+
+
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Registry)
+with open(port_file, "w", encoding="utf-8") as stream:
+    stream.write(str(server.server_port))
+server.serve_forever()
+PY
+start_server registry "$tmp/registry-server.py" "$tmp/registry-agents"
+registry_server_pid=$server_pid
+registry_base="http://127.0.0.1:$server_port/api/v1/crates"
+publication_status() { ONETASKGRAPH_CRATES_API_BASE_URL="$registry_base" "$root/scripts/crate-publication-status.sh" "$@"; }
+unidentified=$(curl -sS -o /dev/null -w '%{http_code}' "$registry_base/absent-crate/1.0.0")
+[[ $unidentified == 403 ]] || { echo "registry stub answered an unidentified caller $unidentified, expected 403; next: inspect the crates.io stub" >&2; exit 1; }
+[[ $(publication_status absent-crate 1.0.0) == absent ]] || { echo "an unpublished crate was not reported absent; next: inspect scripts/crate-publication-status.sh" >&2; exit 1; }
+[[ $(publication_status published-crate 1.0.0) == published ]] || { echo "a published crate was not reported published; next: inspect scripts/crate-publication-status.sh" >&2; exit 1; }
+grep -q '^/api/v1/crates/absent-crate/1.0.0 onetaskgraph-release (https://github.com/nickderobertis/onetaskgraph)$' "$tmp/registry-agents" || { cat "$tmp/registry-agents" >&2; echo "the publication query did not identify itself to the registry; next: inspect the user agent it sends" >&2; exit 1; }
+assert_publication_stops() {
+  expected_reason=$1
+  shift
+  if publication_status "$@" >"$tmp/publication" 2>"$tmp/error"; then publication_exit=0; else publication_exit=$?; fi
+  [[ $publication_exit -eq 69 ]] || { cat "$tmp/error" >&2; echo "unusable crates.io answer for '$*' exited $publication_exit, expected 69; next: inspect scripts/crate-publication-status.sh" >&2; exit 1; }
+  [[ ! -s $tmp/publication ]] || { cat "$tmp/publication" >&2; echo "unusable crates.io answer for '$*' still reported a publication decision; next: inspect scripts/crate-publication-status.sh" >&2; exit 1; }
+  grep -q "$expected_reason" "$tmp/error" || { cat "$tmp/error" >&2; echo "unusable crates.io answer for '$*' omitted its reason; next: inspect publication diagnostics" >&2; exit 1; }
+  grep -q '^next: ' "$tmp/error" || { cat "$tmp/error" >&2; echo "unusable crates.io answer for '$*' omitted a next action; next: inspect publication diagnostics" >&2; exit 1; }
+}
+assert_publication_stops 'declined the caller' declined-crate 1.0.0
+assert_publication_stops 'does not say whether it is published' broken-crate 1.0.0
+stop_server "$registry_server_pid"
+registry_server_pid=
+assert_publication_stops 'could not reach crates.io' absent-crate 1.0.0
+if "$root/scripts/crate-publication-status.sh" onetaskgraph 2>"$tmp/error"; then publication_usage_status=0; else publication_usage_status=$?; fi
+[[ $publication_usage_status -eq 64 ]] || { echo "publication status without a version exited $publication_usage_status, expected 64; next: inspect argument validation" >&2; exit 1; }
+grep -q 'usage: scripts/crate-publication-status.sh CRATE VERSION' "$tmp/error" || { cat "$tmp/error" >&2; echo "publication status usage error omitted its usage line; next: inspect publication diagnostics" >&2; exit 1; }
