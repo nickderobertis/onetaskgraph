@@ -1,10 +1,10 @@
-//! Read-only structural verification against GitHub's real Projects v2 API.
+//! Structural and residue-free write verification against GitHub's real Projects v2 API.
 
-use std::env;
+use std::{collections::BTreeMap, env, future::Future};
 
 use onetaskgraph_plugin_api::{
-    DependencySupport, Direction, NativeId, PageRequest, ProjectQuery, SecretResolver, SourceName,
-    SourcePlugin, StatusCategory, Support, TaskQuery,
+    DependencySupport, Direction, ItemWrite, NativeId, PageRequest, ProjectQuery, SecretResolver,
+    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -18,11 +18,20 @@ impl SecretResolver for LiveSecret {
 }
 
 async fn graphql(token: &str, query: &str, query_name: &str) -> Result<Value, String> {
+    graphql_variables(token, query, query_name, json!({})).await
+}
+
+async fn graphql_variables(
+    token: &str,
+    query: &str,
+    query_name: &str,
+    variables: Value,
+) -> Result<Value, String> {
     let response: Value = reqwest::Client::new()
         .post("https://api.github.com/graphql")
         .header("user-agent", "onetaskgraph-live-test")
         .bearer_auth(token)
-        .json(&json!({"query":query}))
+        .json(&json!({"query":query,"variables":variables}))
         .send()
         .await
         .map_err(|error| format!("{query_name} query could not reach GitHub: {error}"))?
@@ -37,6 +46,134 @@ async fn graphql(token: &str, query: &str, query_name: &str) -> Result<Value, St
         ));
     }
     Ok(response)
+}
+
+async fn live_write_status(token: &str, project_id: &str) -> Result<String, String> {
+    let response = graphql_variables(
+        token,
+        "query($id:ID!){node(id:$id){... on ProjectV2{fields(first:100){nodes{... on ProjectV2SingleSelectField{name options{name}} ... on ProjectV2Field{name}}}}}}",
+        "writable field discovery",
+        json!({"id":project_id}),
+    )
+    .await?;
+    let fields = response
+        .pointer("/data/node/fields/nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "writable field discovery returned no project fields".to_owned())?;
+    if !fields
+        .iter()
+        .any(|field| field.get("name").and_then(Value::as_str) == Some("onetaskgraph.metadata"))
+    {
+        return Err("live project has no onetaskgraph.metadata text field".to_owned());
+    }
+    fields
+        .iter()
+        .find(|field| field.get("name").and_then(Value::as_str) == Some("Status"))
+        .and_then(|field| field.get("options"))
+        .and_then(Value::as_array)
+        .and_then(|options| options.first())
+        .and_then(|option| option.get("name"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "live project has no selectable Status option".to_owned())
+}
+
+async fn artifact_item_ids(
+    token: &str,
+    project_id: &str,
+    title: &str,
+) -> Result<Vec<String>, String> {
+    let mut after = Value::Null;
+    let mut matches = Vec::new();
+    loop {
+        let response = graphql_variables(
+            token,
+            "query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){nodes{id content{... on DraftIssue{title}}}pageInfo{hasNextPage endCursor}}}}}",
+            "live artifact lookup",
+            json!({"id":project_id,"after":after}),
+        )
+        .await?;
+        let connection = response
+            .pointer("/data/node/items")
+            .ok_or_else(|| "live artifact lookup returned no items connection".to_owned())?;
+        let nodes = connection
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "live artifact lookup nodes is not an array".to_owned())?;
+        for node in nodes {
+            if node.pointer("/content/title").and_then(Value::as_str) == Some(title) {
+                matches.push(
+                    node.get("id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "live artifact has no project item id".to_owned())?
+                        .to_owned(),
+                );
+            }
+        }
+        if connection
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Ok(matches);
+        }
+        after = Value::String(
+            connection
+                .pointer("/pageInfo/endCursor")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "live artifact lookup has no advancing cursor".to_owned())?
+                .to_owned(),
+        );
+    }
+}
+
+async fn remove_live_artifacts(token: &str, project_id: &str, title: &str) -> Result<(), String> {
+    for item_id in artifact_item_ids(token, project_id, title).await? {
+        let response = graphql_variables(
+            token,
+            "mutation($input:DeleteProjectV2ItemInput!){deleteProjectV2Item(input:$input){deletedItemId}}",
+            "live artifact cleanup",
+            json!({"input":{"projectId":project_id,"itemId":item_id}}),
+        )
+        .await?;
+        if response
+            .pointer("/data/deleteProjectV2Item/deletedItemId")
+            .and_then(Value::as_str)
+            != Some(item_id.as_str())
+        {
+            return Err(format!(
+                "GitHub did not confirm deletion of project item {item_id}"
+            ));
+        }
+    }
+    let residue = artifact_item_ids(token, project_id, title).await?;
+    if residue.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "live artifact cleanup left project items: {}",
+            residue.join(", ")
+        ))
+    }
+}
+
+async fn run_then_cleanup<J, JF, C, CF>(journey: J, cleanup: C) -> Result<(), String>
+where
+    J: FnOnce() -> JF,
+    JF: Future<Output = Result<(), String>>,
+    C: FnOnce() -> CF,
+    CF: Future<Output = Result<(), String>>,
+{
+    let journey_result = journey().await;
+    let cleanup_result = cleanup().await;
+    match (journey_result, cleanup_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(journey), Ok(())) => Err(journey),
+        (Ok(()), Err(cleanup)) => Err(format!("live cleanup failed: {cleanup}")),
+        (Err(journey), Err(cleanup)) => Err(format!(
+            "{journey}; additionally, live cleanup failed: {cleanup}"
+        )),
+    }
 }
 
 async fn discover_project(token: &str) -> Result<Option<(String, u32)>, String> {
@@ -136,6 +273,11 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             "RemoveBlockedByInput",
             "RemoveBlockedByPayload",
         ),
+        (
+            "deleteProjectV2Item",
+            "DeleteProjectV2ItemInput",
+            "DeleteProjectV2ItemPayload",
+        ),
         ("updateIssue", "UpdateIssueInput", "UpdateIssuePayload"),
         (
             "updateProjectV2",
@@ -215,6 +357,11 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             true,
             &["issueId", "blockingIssueId"][..],
         ),
+        (
+            "DeleteProjectV2ItemInput",
+            true,
+            &["projectId", "itemId"][..],
+        ),
         ("AddProjectV2DraftIssuePayload", false, &["projectItem"][..]),
         (
             "UpdateProjectV2DraftIssuePayload",
@@ -238,6 +385,7 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             false,
             &["issue", "blockingIssue"][..],
         ),
+        ("DeleteProjectV2ItemPayload", false, &["deletedItemId"][..]),
     ] {
         let selection = if input { "inputFields" } else { "fields" };
         let document = format!(
@@ -268,7 +416,7 @@ fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
 
 #[ignore = "the live lane: run it with `just test-live onetaskgraph-github-projects`"]
 #[tokio::test]
-async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
+async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     // llmlint: ignore-block[live_tier_compiles_and_requires_credential] This lane is non-required by decision (AGENTS.md), so an absent credential skips; `ONETASKGRAPH_LIVE_REQUIRED=1` demands one.
     let Ok(token) = env::var("GH_PROJECTS_TOKEN") else {
         assert_ne!(
@@ -472,4 +620,97 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
                 && projects.items.iter().any(|item| edge.from == item.id)),
         "every reverse issue dependency must resolve through projectItems to a visible project"
     );
+
+    let project_id = project.id.0.clone();
+    let status_name = live_write_status(&token, &project_id)
+        .await
+        .unwrap_or_else(|error| panic!("GitHub live project cannot exercise writes: {error}"));
+    let title = format!(
+        "onetaskgraph live cleanup {}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_micros()
+    );
+    let written_title = title.clone();
+    let cleanup_title = title.clone();
+    run_then_cleanup(
+        || async {
+            let mut metadata = BTreeMap::new();
+            metadata.insert("live.round_trip".into(), json!({"nested":[1,true,null]}));
+            let id = source
+                .write_task(&ItemWrite {
+                    target: None,
+                    item: Task {
+                        id: NativeId("live-source-item".into()),
+                        title: written_title.clone(),
+                        content: Some(
+                            "temporary credentialed write; the live lane removes this".into(),
+                        ),
+                        status: Status {
+                            category: StatusCategory::Unknown,
+                            name: status_name,
+                        },
+                        labels: vec![],
+                        project: None,
+                        url: None,
+                        created_at: None,
+                        updated_at: None,
+                        metadata,
+                        repositories: vec![],
+                    },
+                    depends_on: vec![],
+                })
+                .await
+                .map_err(|error| format!("live GitHub write failed: {error}"))?;
+            let written = source
+                .get_task(&id)
+                .await
+                .map_err(|error| format!("live GitHub write read-back failed: {error}"))?
+                .ok_or_else(|| "live GitHub write was not readable after creation".to_owned())?;
+            if written.title != written_title
+                || written.metadata.get("live.round_trip") != Some(&json!({"nested":[1,true,null]}))
+            {
+                return Err("live GitHub write did not round-trip title and metadata".to_owned());
+            }
+            Ok(())
+        },
+        || remove_live_artifacts(&token, &project_id, &cleanup_title),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("GitHub live write journey failed: {error}"));
+}
+
+#[tokio::test]
+async fn cleanup_runs_after_a_successful_live_journey() {
+    let cleaned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = cleaned.clone();
+    assert_eq!(
+        run_then_cleanup(
+            || async { Ok(()) },
+            || async move {
+                observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        )
+        .await,
+        Ok(())
+    );
+    assert!(cleaned.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn cleanup_runs_after_a_failed_live_journey() {
+    let cleaned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = cleaned.clone();
+    assert_eq!(
+        run_then_cleanup(
+            || async { Err("injected mutation failure".to_owned()) },
+            || async move {
+                observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        )
+        .await,
+        Err("injected mutation failure".to_owned())
+    );
+    assert!(cleaned.load(std::sync::atomic::Ordering::SeqCst));
 }

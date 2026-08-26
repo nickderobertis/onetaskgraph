@@ -23,7 +23,8 @@
 //! Writes update the configured board, create draft items (never another board), update existing
 //! draft items, set the source-owned metadata field, and use GitHub's native issue dependency
 //! mutation when both ends are issues. Required checks use only the local fixture server; the
-//! ignored credentialed lane verifies GitHub's current read schema without changing a real board.
+//! ignored credentialed lane verifies the current schema, creates and reads back one uniquely
+//! named draft, then deletes every matching project item and verifies that no residue remains.
 #![deny(missing_docs)]
 
 use std::collections::BTreeMap;
