@@ -60,7 +60,7 @@ command -v release-plz >/dev/null 2>&1 || fail \
 quietly \
   "release-plz could not decide the next version" \
   "fix what it reports above; a registry it cannot reach and a manifest it cannot parse both land here" \
-  release-plz update
+  scripts/select-release-version.sh
 
 binary_manifest=crates/onetaskgraph/Cargo.toml
 version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$binary_manifest" | head -n1)
