@@ -845,6 +845,48 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         .unwrap_err();
     assert!(format!("{error}").contains("issueRelationCreate"));
     drop(wire);
+    let project_relation = DependencyEdge {
+        from: DependencyEndpoint::from_native("P".into(), ItemKind::Project),
+        to: DependencyEndpoint::from_native("FAR".into(), ItemKind::Project),
+        kind: DependencyKind::Blocks,
+    };
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"NEW"}}}),
+        serde_json::json!({"project":{"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":""}}}),
+    ]);
+    let error = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project(),
+            depends_on: vec![project_relation],
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error}").contains("empty backend id"), "{error}");
+    drop(wire);
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P"}}}),
+        serde_json::json!({"project":{"relations":{"nodes":[{"id":"R"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"projectRelationDelete":{"success":false}}),
+    ]);
+    let error = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: Some("P".into()),
+            item: project(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error}").contains("projectRelationDelete"),
+        "{error}"
+    );
+    drop(wire);
     for (relation_response, expected) in [
         (serde_json::json!({}), "missing relation item"),
         (serde_json::json!({"issue":{}}), "missing relations"),

@@ -604,14 +604,22 @@ impl LinearSource {
                 )
             };
             let data = self.send(query, json!({"input":input})).await?;
-            mutation_payload(
-                &data,
-                if matches!(kind, WriteKind::Project) {
-                    MutationRoot::ProjectRelationCreate
+            let mutation = if matches!(kind, WriteKind::Project) {
+                MutationRoot::ProjectRelationCreate
+            } else {
+                MutationRoot::IssueRelationCreate
+            };
+            let payload = mutation_payload(&data, mutation)?;
+            let relation = payload
+                .get(if matches!(kind, WriteKind::Project) {
+                    "projectRelation"
                 } else {
-                    MutationRoot::IssueRelationCreate
-                },
-            )?;
+                    "issueRelation"
+                })
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!("missing {} relation", mutation.as_str()),
+                })?;
+            backend_id(relation, "id")?;
         }
         Ok(())
     }
