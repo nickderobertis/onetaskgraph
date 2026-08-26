@@ -77,6 +77,13 @@ RECONCILED_VERSION_FILES: Tuple[VersionFile, ...] = (
         Path("sdks/typescript/src/index.ts"),
         (re.compile(r'(?m)^(export const VERSION\s*=\s*")([^"]+)(";)'),),
     ),
+    RegexVersionFile(
+        Path("bun.lock"),
+        (
+            re.compile(r'(?m)^(\s+"version": ")([^"]+)(",)$'),
+            re.compile(r'(?m)^(\s+"@onetaskgraph/cli": ")([^"]+)(",)$'),
+        ),
+    ),
     JsonVersionFile(
         Path("sdks/typescript/package.json"),
         (("version",), ("optionalDependencies", "@onetaskgraph/cli")),
@@ -155,6 +162,10 @@ def discover_product_version_files() -> Tuple[Path, ...]:
         package = read_json_manifest(path)
         name = package.get("name")
         if isinstance(name, str) and name.startswith("@onetaskgraph/"):
+            discovered.append(path)
+    for path in Path(".").glob("**/bun.lock"):
+        text = path.read_text()
+        if '"name": "@onetaskgraph/' in text:
             discovered.append(path)
     for path in Path(".").glob("**/*"):
         if (

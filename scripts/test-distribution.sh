@@ -354,6 +354,8 @@ grep -q '^__version__ = "0.1.1"' "$tmp/version-repo/sdks/python/src/onetaskgraph
 grep -q '^export const VERSION = "0.1.1";' "$tmp/version-repo/sdks/typescript/src/index.ts" || { echo "version updater missed the TypeScript SDK exported version; next: inspect product-version mutation" >&2; exit 1; }
 grep -q 'onetaskgraph-cli==0.1.1' "$tmp/version-repo/sdks/python/pyproject.toml" || { echo "version updater missed the Python CLI pin; next: inspect dependency mutation" >&2; exit 1; }
 node -e 'const p=require(process.argv[1]); if(p.version!=="0.1.1" || Object.values(p.optionalDependencies).some(v=>v!=="0.1.1")) process.exit(1)' "$tmp/version-repo/npm/cli/package.json" || { echo "version updater missed npm metadata; next: inspect JSON mutation" >&2; exit 1; }
+grep -q '^      "version": "0.1.1",' "$tmp/version-repo/bun.lock" || { echo "version updater missed the TypeScript workspace lock version; next: inspect lock mutation" >&2; exit 1; }
+grep -q '^        "@onetaskgraph/cli": "0.1.1",' "$tmp/version-repo/bun.lock" || { echo "version updater missed the TypeScript CLI lock pin; next: inspect lock mutation" >&2; exit 1; }
 assert_unregistered_version() {
   relative_path=$1
   mkdir -p "$(dirname "$tmp/version-repo/$relative_path")"
@@ -367,6 +369,7 @@ assert_unregistered_version() {
 assert_unregistered_version 'crates/unregistered/Cargo.toml' $'[package]\nname = "unregistered"\nversion = "0.1.1"'
 assert_unregistered_version 'unregistered/pyproject.toml' $'[project]\nname = "onetaskgraph-cli"\nversion = "0.1.1"'
 assert_unregistered_version 'unregistered/package.json' '{"name":"@onetaskgraph/unregistered","version":"0.1.1"}'
+assert_unregistered_version 'unregistered/bun.lock' $'{\n  "workspaces": {\n    "pkg": {\n      "name": "@onetaskgraph/unregistered",\n      "version": "0.1.1",\n    },\n  },\n}'
 assert_unregistered_version 'sdks/python/src/unregistered_version.py' '__version__ = "0.1.1"'
 assert_unregistered_version 'sdks/typescript/src/unregistered-version.ts' 'export const VERSION = "0.1.1";'
 mkdir -p "$tmp/version-repo/node_modules/unregistered" "$tmp/version-repo/sdks/typescript/src/generated"
