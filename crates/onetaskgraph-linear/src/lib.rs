@@ -1,4 +1,4 @@
-//! A read-only source over Linear's published GraphQL API.
+//! A read/write source over Linear's published GraphQL API.
 //!
 //! Linear `Issue` maps to [`Task`], `Project` to [`Project`], `IssueLabel` and
 //! `ProjectLabel` to [`Label`], and `WorkflowState.name` is preserved while its
@@ -14,20 +14,22 @@
 //!
 //! Caller metadata is canonical JSON in a trailing
 //! `<!-- onetaskgraph.metadata ... -->` Markdown comment in the item's description. The
-//! visible description is returned unchanged without that slot. This node is read-only;
-//! the later Linear write-side node must write the same slot and preserve visible content.
+//! visible description is returned unchanged without that slot. Writes put the same
+//! canonical encoding back beside the visible description, and use Linear issue/project
+//! relations for same-source dependencies. Only cross-source far ends use the reserved
+//! `onetaskgraph.depends_on` metadata key.
 //!
-//! Fixture provenance is recorded in `tests/fixtures/README.md`. Live tests are
-//! non-destructive by construction: [`TaskSource`] exposes reads only, and no
-//! test uses GraphQL mutations for setup or teardown.
+//! Fixture provenance is recorded in `tests/fixtures/README.md`. The ignored live lane
+//! exercises reads by default; its mutation journey requires an explicitly named scratch
+//! team and deletes every item it creates before returning.
 #![deny(missing_docs)]
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Health, ItemKind, Label, NativeId, Page, PageRequest, Project, ProjectFilter,
-    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskSource,
+    Direction, Health, ItemKind, ItemWrite, Label, NativeId, Page, PageRequest, Project,
+    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -59,6 +61,34 @@ pub mod graphql {
     pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type issue{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Fetch project dependency relations.
     pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ description relations(first:$first,after:$after){nodes{type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type project{id}} pageInfo{hasNextPage endCursor}} } }";
+    /// Resolve the configured team key to Linear's backend id.
+    pub const TEAM: &str =
+        "query($key:String!){ teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id}} }";
+    /// Resolve an issue workflow-state display name.
+    pub const ISSUE_STATE: &str = "query($name:String!,$team:String!){ workflowStates(filter:{name:{eqIgnoreCase:$name},team:{id:{eq:$team}}}){nodes{id}} }";
+    /// Resolve a project status display name.
+    pub const PROJECT_STATUS: &str =
+        "query($name:String!){ projectStatuses(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
+    /// Resolve an issue-label display name.
+    pub const ISSUE_LABEL: &str =
+        "query($name:String!){ issueLabels(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
+    /// Resolve a project-label display name.
+    pub const PROJECT_LABEL: &str =
+        "query($name:String!){ projectLabels(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
+    /// Create an issue.
+    pub const ISSUE_CREATE: &str =
+        "mutation($input:IssueCreateInput!){ issueCreate(input:$input){success issue{id}} }";
+    /// Update an issue.
+    pub const ISSUE_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id}} }";
+    /// Create a project.
+    pub const PROJECT_CREATE: &str =
+        "mutation($input:ProjectCreateInput!){ projectCreate(input:$input){success project{id}} }";
+    /// Update a project.
+    pub const PROJECT_UPDATE: &str = "mutation($id:String!,$input:ProjectUpdateInput!){ projectUpdate(id:$id,input:$input){success project{id}} }";
+    /// Create a native issue dependency.
+    pub const ISSUE_RELATION_CREATE: &str = "mutation($input:IssueRelationCreateInput!){ issueRelationCreate(input:$input){success issueRelation{id}} }";
+    /// Create a native project dependency.
+    pub const PROJECT_RELATION_CREATE: &str = "mutation($input:ProjectRelationCreateInput!){ projectRelationCreate(input:$input){success projectRelation{id}} }";
 }
 
 use graphql::{
@@ -305,6 +335,139 @@ impl LinearSource {
         }
     }
     // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+    async fn one_id(
+        &self,
+        query: &str,
+        variables: Value,
+        connection: &str,
+        what: &str,
+    ) -> Result<String, SourceError> {
+        let data = self.send(query, variables).await?;
+        let nodes = data
+            .get(connection)
+            .and_then(|v| v.get("nodes"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("missing {connection}.nodes"),
+            })?;
+        if nodes.len() != 1 {
+            return Err(SourceError::Refused {
+                message: format!("source {} cannot resolve {what} uniquely", self.name),
+            });
+        }
+        Ok(str_at(&nodes[0], "id")?.to_owned())
+    }
+    async fn team_id(&self) -> Result<String, SourceError> {
+        let team = self.team.as_ref().ok_or_else(|| SourceError::Refused {
+            message: format!(
+                "source {} needs config.team before it can create Linear items",
+                self.name
+            ),
+        })?;
+        self.one_id(
+            graphql::TEAM,
+            json!({"key":team.0}),
+            "teams",
+            "configured team",
+        )
+        .await
+    }
+    async fn label_ids(&self, labels: &[Label], project: bool) -> Result<Vec<String>, SourceError> {
+        let mut ids = Vec::with_capacity(labels.len());
+        for label in labels {
+            ids.push(
+                self.one_id(
+                    if project {
+                        graphql::PROJECT_LABEL
+                    } else {
+                        graphql::ISSUE_LABEL
+                    },
+                    json!({"name":label.name}),
+                    if project {
+                        "projectLabels"
+                    } else {
+                        "issueLabels"
+                    },
+                    &format!("label {:?}", label.name),
+                )
+                .await?,
+            );
+        }
+        Ok(ids)
+    }
+    fn write_description(
+        &self,
+        content: Option<&str>,
+        metadata: &std::collections::BTreeMap<String, Value>,
+        repositories: &[Repository],
+        edges: &[DependencyEdge],
+    ) -> Result<Option<String>, SourceError> {
+        let mut metadata = metadata.clone();
+        if repositories.is_empty() {
+            metadata.remove(Repository::METADATA_KEY);
+        } else {
+            metadata.insert(Repository::METADATA_KEY.into(), json!(repositories));
+        }
+        let recorded = edges
+            .iter()
+            .filter(|edge| {
+                edge.to
+                    .id()
+                    .split_once(':')
+                    .is_some_and(|(source, _)| source != self.name.as_str())
+            })
+            .map(|edge| json!({"id":edge.to.id(),"kind":edge.to.kind}))
+            .collect::<Vec<_>>();
+        if recorded.is_empty() {
+            metadata.remove(DependencyEdge::RECORDED_KEY);
+        } else {
+            metadata.insert(DependencyEdge::RECORDED_KEY.into(), Value::Array(recorded));
+        }
+        let visible = content.unwrap_or_default();
+        if metadata.is_empty() {
+            return Ok((!visible.is_empty()).then(|| visible.to_owned()));
+        }
+        let encoded = serde_json::to_string(&metadata).map_err(|error| SourceError::Malformed {
+            message: error.to_string(),
+        })?;
+        Ok(Some(if visible.is_empty() {
+            format!("{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
+        } else {
+            format!("{visible}\n\n{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
+        }))
+    }
+    async fn write_relations(
+        &self,
+        near: &NativeId,
+        edges: &[DependencyEdge],
+        project: bool,
+    ) -> Result<(), SourceError> {
+        for edge in edges {
+            let far = match edge.to.id().split_once(':') {
+                Some((source, native)) if source == self.name.as_str() => native,
+                Some(_) => continue,
+                None => edge.to.id(),
+            };
+            let relation_type = match edge.kind {
+                DependencyKind::Blocks => "blocks",
+                DependencyKind::Related => "related",
+            };
+            let (query, input) = if project {
+                (
+                    graphql::PROJECT_RELATION_CREATE,
+                    json!({"projectId":near.0,"relatedProjectId":far,"type":relation_type}),
+                )
+            } else {
+                (
+                    graphql::ISSUE_RELATION_CREATE,
+                    json!({"issueId":near.0,"relatedIssueId":far,"type":relation_type}),
+                )
+            };
+            self.send(query, json!({"input":input})).await?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -324,6 +487,9 @@ impl TaskSource for LinearSource {
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: 250,
         }
+    }
+    fn writes(&self) -> WriteSupport {
+        WriteSupport::Supported
     }
     async fn health(&self) -> Result<Health, SourceError> {
         let data = self.send(VIEWER, json!({})).await?;
@@ -395,6 +561,96 @@ impl TaskSource for LinearSource {
             page,
         )
         .await
+    }
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        let team = self.team_id().await?;
+        let state = self
+            .one_id(
+                graphql::ISSUE_STATE,
+                json!({"name":write.item.status.name,"team":team}),
+                "workflowStates",
+                &format!("workflow state {:?}", write.item.status.name),
+            )
+            .await?;
+        let labels = self.label_ids(&write.item.labels, false).await?;
+        let description = self.write_description(
+            write.item.content.as_deref(),
+            &write.item.metadata,
+            &write.item.repositories,
+            &write.depends_on,
+        )?;
+        let input = json!({"title":write.item.title,"description":description,"stateId":state,"labelIds":labels,"projectId":write.item.project.as_ref().map(|id| id.0.clone())});
+        let (query, variables, root) = match &write.target {
+            Some(id) => (
+                graphql::ISSUE_UPDATE,
+                json!({"id":id.0,"input":input}),
+                "issueUpdate",
+            ),
+            None => (
+                graphql::ISSUE_CREATE,
+                {
+                    let mut input = input;
+                    input["teamId"] = team.into();
+                    json!({"input":input})
+                },
+                "issueCreate",
+            ),
+        };
+        let data = self.send(query, variables).await?;
+        let issue =
+            data.get(root)
+                .and_then(|v| v.get("issue"))
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!("missing {root}.issue"),
+                })?;
+        let id = NativeId(str_at(issue, "id")?.into());
+        self.write_relations(&id, &write.depends_on, false).await?;
+        Ok(id)
+    }
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        let team = self.team_id().await?;
+        let status = self
+            .one_id(
+                graphql::PROJECT_STATUS,
+                json!({"name":write.item.status.name}),
+                "projectStatuses",
+                &format!("project status {:?}", write.item.status.name),
+            )
+            .await?;
+        let labels = self.label_ids(&write.item.labels, true).await?;
+        let description = self.write_description(
+            write.item.content.as_deref(),
+            &write.item.metadata,
+            &write.item.repositories,
+            &write.depends_on,
+        )?;
+        let input = json!({"name":write.item.title,"description":description,"statusId":status,"labelIds":labels});
+        let (query, variables, root) = match &write.target {
+            Some(id) => (
+                graphql::PROJECT_UPDATE,
+                json!({"id":id.0,"input":input}),
+                "projectUpdate",
+            ),
+            None => (
+                graphql::PROJECT_CREATE,
+                {
+                    let mut input = input;
+                    input["teamIds"] = json!([team]);
+                    json!({"input":input})
+                },
+                "projectCreate",
+            ),
+        };
+        let data = self.send(query, variables).await?;
+        let project = data
+            .get(root)
+            .and_then(|v| v.get("project"))
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("missing {root}.project"),
+            })?;
+        let id = NativeId(str_at(project, "id")?.into());
+        self.write_relations(&id, &write.depends_on, true).await?;
+        Ok(id)
     }
 }
 

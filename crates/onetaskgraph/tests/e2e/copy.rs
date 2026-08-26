@@ -16,7 +16,7 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{ROWS, SOURCE, document, empty_folder, qualified};
+use crate::fixtures::{ROWS, SOURCE, document, empty_folder, linear_block, qualified};
 
 /// The folder every copy journey copies into, configured beside the source under test.
 const NOTES: &str = "notes";
@@ -107,6 +107,45 @@ fn folders(sandbox: &Sandbox) -> std::path::PathBuf {
         NOTES: {"plugin": "local-md", "config": empty_folder(sandbox, NOTES)},
     })));
     root
+}
+
+#[test]
+fn linear_is_a_permanent_task_destination_with_typed_metadata_and_repository_origins() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("linear-task-source");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(root.join("tasks/A.md"), "---\ntitle: Authored locally\nstatus: Todo\nlabels: [{id: local-bug, name: bug}]\nmetadata: {object: {a: 1}, array: [1, true], string: text, number: 3.5, boolean: true, null: null}\nrepositories: [github.com/acme/work]\n---\nvisible body\n").unwrap();
+    sandbox.project_document(&document(&json!({
+        "authored": {"plugin":"local-md","config":{"root":root,"status_mapping":{"Todo":"todo"}}},
+        "linear": {"plugin":"linear","config":linear_block(&sandbox)},
+    })));
+
+    let first = reported(&ok(
+        &sandbox,
+        &["task", "copy", "authored:A", "--to", "linear", "--json"],
+    ));
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].2, "created");
+    let destination = first[0].1.as_str().unwrap().to_owned();
+    let item = shown(&sandbox, "task", &destination);
+    assert_eq!(item["title"], "Authored locally");
+    assert_eq!(item["content"], "visible body");
+    assert_eq!(item["status"]["name"], "Todo");
+    assert_eq!(item["labels"][0]["name"], "bug");
+    assert_eq!(item["repositories"], json!(["github.com/acme/work"]));
+    for key in ["object", "array", "string", "number", "boolean", "null"] {
+        let source = shown(&sandbox, "task", "authored:A");
+        assert_eq!(
+            item["metadata"][key], source["metadata"][key],
+            "metadata key {key}"
+        );
+    }
+    let second = reported(&ok(
+        &sandbox,
+        &["task", "copy", "authored:A", "--to", "linear", "--json"],
+    ));
+    assert_eq!(second[0].1, destination);
+    assert!(matches!(second[0].2.as_str(), "updated" | "unchanged"));
 }
 
 #[test]
