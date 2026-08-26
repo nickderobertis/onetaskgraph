@@ -103,6 +103,18 @@ run_case() {
     "repair scripts/select-release-version.sh without widening release_commits eligibility"
 }
 
+# With no commit after the release boundary, selection is a successful no-op. This is the
+# normal rerun shape after a tag has already been cut, and reaches the empty rev-list path
+# rather than a non-releasable commit.
+git -C "$repo" switch --quiet --detach "v$version" || fatal \
+  "could not detach the release-boundary fixture" "check that git works and rerun"
+(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh) || finding \
+  "the selector failed with HEAD exactly at the release tag" \
+  "repair the no-post-tag-commit path and rerun"
+[ "$(read_version)" = "$version" ] || finding \
+  "the selector bumped a repository with no commit after the release tag" \
+  "repair the no-post-tag-commit path and rerun"
+
 run_case "fix: repair release workflow" ".github/workflows/release.yml" \
   "$major.$minor.$((patch + 1))"
 run_case "feat: extend distribution contract" "scripts/check-distribution-contract.sh" \
