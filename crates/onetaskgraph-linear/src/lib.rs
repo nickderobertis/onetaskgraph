@@ -111,7 +111,7 @@ pub struct LinearConfig {
     /// Environment variable resolved by the host.
     #[schemars(with = "String")]
     api_key_env: EnvName,
-    /// Optional Linear team key/id narrowing task and project reads.
+    /// Linear team key/id used to narrow reads and required for item writes.
     #[schemars(with = "Option<String>")]
     team: Option<Team>,
     /// GraphQL endpoint override, primarily for fixture servers.
@@ -228,8 +228,8 @@ enum WriteKind {
     Project,
 }
 enum Lookup<'a> {
-    Team,
-    IssueState(&'a str),
+    Team(&'a str),
+    IssueState { name: &'a str, team: &'a NativeId },
     ProjectStatus(&'a str),
     IssueLabel(&'a str),
     ProjectLabel(&'a str),
@@ -237,8 +237,8 @@ enum Lookup<'a> {
 impl Lookup<'_> {
     fn query(&self) -> &'static str {
         match self {
-            Self::Team => graphql::TEAM,
-            Self::IssueState(_) => graphql::ISSUE_STATE,
+            Self::Team(_) => graphql::TEAM,
+            Self::IssueState { .. } => graphql::ISSUE_STATE,
             Self::ProjectStatus(_) => graphql::PROJECT_STATUS,
             Self::IssueLabel(_) => graphql::ISSUE_LABEL,
             Self::ProjectLabel(_) => graphql::PROJECT_LABEL,
@@ -246,8 +246,8 @@ impl Lookup<'_> {
     }
     fn connection(&self) -> &'static str {
         match self {
-            Self::Team => "teams",
-            Self::IssueState(_) => "workflowStates",
+            Self::Team(_) => "teams",
+            Self::IssueState { .. } => "workflowStates",
             Self::ProjectStatus(_) => "projectStatuses",
             Self::IssueLabel(_) => "issueLabels",
             Self::ProjectLabel(_) => "projectLabels",
@@ -255,10 +255,19 @@ impl Lookup<'_> {
     }
     fn diagnostic(&self) -> String {
         match self {
-            Self::Team => "configured team".into(),
-            Self::IssueState(name) => format!("workflow state {name:?}"),
+            Self::Team(_) => "configured team".into(),
+            Self::IssueState { name, .. } => format!("workflow state {name:?}"),
             Self::ProjectStatus(name) => format!("project status {name:?}"),
             Self::IssueLabel(name) | Self::ProjectLabel(name) => format!("label {name:?}"),
+        }
+    }
+    fn variables(&self) -> Value {
+        match self {
+            Self::Team(key) => json!({"key":key}),
+            Self::IssueState { name, team } => json!({"name":name,"team":team.0}),
+            Self::ProjectStatus(name) | Self::IssueLabel(name) | Self::ProjectLabel(name) => {
+                json!({"name":name})
+            }
         }
     }
 }
@@ -410,8 +419,8 @@ impl LinearSource {
     }
     // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
-    async fn one_id(&self, lookup: Lookup<'_>, variables: Value) -> Result<NativeId, SourceError> {
-        let data = self.send(lookup.query(), variables).await?;
+    async fn one_id(&self, lookup: Lookup<'_>) -> Result<NativeId, SourceError> {
+        let data = self.send(lookup.query(), lookup.variables()).await?;
         let connection = lookup.connection();
         let nodes = data
             .get(connection)
@@ -438,7 +447,7 @@ impl LinearSource {
                 self.name
             ),
         })?;
-        self.one_id(Lookup::Team, json!({"key":team.0})).await
+        self.one_id(Lookup::Team(&team.0)).await
     }
     async fn label_ids(
         &self,
@@ -448,14 +457,11 @@ impl LinearSource {
         let mut ids = Vec::with_capacity(labels.len());
         for label in labels {
             ids.push(
-                self.one_id(
-                    if matches!(kind, WriteKind::Project) {
-                        Lookup::ProjectLabel(&label.name)
-                    } else {
-                        Lookup::IssueLabel(&label.name)
-                    },
-                    json!({"name":label.name}),
-                )
+                self.one_id(if matches!(kind, WriteKind::Project) {
+                    Lookup::ProjectLabel(&label.name)
+                } else {
+                    Lookup::IssueLabel(&label.name)
+                })
                 .await?,
             );
         }
@@ -766,10 +772,10 @@ impl TaskSource for LinearSource {
             .await?;
         let team = self.team_id().await?;
         let state = self
-            .one_id(
-                Lookup::IssueState(&write.item.status.name),
-                json!({"name":write.item.status.name,"team":team}),
-            )
+            .one_id(Lookup::IssueState {
+                name: &write.item.status.name,
+                team: &team,
+            })
             .await?;
         let labels = self.label_ids(&write.item.labels, WriteKind::Task).await?;
         let description = self.write_description(
@@ -813,10 +819,7 @@ impl TaskSource for LinearSource {
             .await?;
         let team = self.team_id().await?;
         let status = self
-            .one_id(
-                Lookup::ProjectStatus(&write.item.status.name),
-                json!({"name":write.item.status.name}),
-            )
+            .one_id(Lookup::ProjectStatus(&write.item.status.name))
             .await?;
         let labels = self
             .label_ids(&write.item.labels, WriteKind::Project)
