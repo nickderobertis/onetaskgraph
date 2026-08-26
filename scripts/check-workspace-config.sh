@@ -139,7 +139,7 @@ for path, version in declared.items():
 
 for path in unregistered:
     problems.append(
-        f"{path}: carries a product version but is absent from "
+        f"{path.as_posix()}: carries a product version but is absent from "
         "RECONCILED_VERSION_FILES; register it in scripts/product_versions.py so release "
         "updates cannot leave it behind"
     )

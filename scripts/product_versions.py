@@ -171,6 +171,7 @@ def discover_product_version_files() -> Tuple[Path, ...]:
         if (
             not path.is_file()
             or path.suffix not in {".py", ".ts"}
+            or "node_modules" in path.parts
             or "generated" in path.parts
             or any(part.startswith(".") for part in path.parts)
         ):

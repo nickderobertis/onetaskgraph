@@ -319,6 +319,10 @@ assert_version_error 'unexpected extra arguments after --check' --check ignored
 # shellcheck source=scripts/scratch-clone.sh
 source "$root/scripts/scratch-clone.sh"
 scratch_clone "$root" "$tmp/version-repo"
+# Exercise the working tree's version inventory and gate integration. The scratch clone
+# supplies a real repository for mutation, but HEAD may not contain the repair being tested.
+cp "$root/scripts/product_versions.py" "$tmp/version-repo/scripts/product_versions.py"
+cp "$root/scripts/check-workspace-config.sh" "$tmp/version-repo/scripts/check-workspace-config.sh"
 if (cd "$tmp/version-repo" && python3 scripts/product_versions.py) 2>"$tmp/error"; then helper_usage_status=0; else helper_usage_status=$?; fi
 [[ $helper_usage_status -eq 2 ]] || { echo "product-version helper usage failure exited $helper_usage_status, expected 2; next: inspect argument validation" >&2; exit 1; }
 grep -q 'usage: scripts/product_versions.py' "$tmp/error" || { cat "$tmp/error" >&2; echo "product-version helper usage failure omitted its reason; next: inspect argument diagnostics" >&2; exit 1; }
@@ -374,6 +378,7 @@ assert_unregistered_version 'sdks/python/src/unregistered_version.py' '__version
 assert_unregistered_version 'sdks/typescript/src/unregistered-version.ts' 'export const VERSION = "0.1.1";'
 mkdir -p "$tmp/version-repo/node_modules/unregistered" "$tmp/version-repo/sdks/typescript/src/generated"
 printf '%s\n' '{"name":"@onetaskgraph/unregistered","version":"0.1.1"}' > "$tmp/version-repo/node_modules/unregistered/package.json"
+printf '%s\n' 'export const VERSION = "0.1.1";' > "$tmp/version-repo/node_modules/unregistered/index.ts"
 printf '%s\n' 'export const VERSION = "0.1.1";' > "$tmp/version-repo/sdks/typescript/src/generated/unregistered-version.ts"
 # llmlint: ignore[work_goes_through_command_surface] This exclusion journey must run discovery against scratch-only dependency and generated files.
 if ! (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then cat "$tmp/error" >&2; echo "workspace check treated dependency or generated versions as product declarations; next: inspect discovery exclusions" >&2; exit 1; fi
