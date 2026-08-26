@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from collections.abc import Awaitable
 from pathlib import Path
 
@@ -413,7 +414,8 @@ def test_generator_write_mode_uses_real_binary(tmp_path: Path) -> None:
 
 def test_distribution_version() -> None:
     """Keep the one public version aligned with the manifest."""
-    assert __version__ == "0.1.0"
+    manifest = tomllib.loads((WORKSPACE / "sdks" / "python" / "pyproject.toml").read_text())
+    assert __version__ == manifest["project"]["version"]
 
 
 def test_metadata_and_repositories_survive_the_generated_models(
