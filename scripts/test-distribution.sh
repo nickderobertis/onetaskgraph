@@ -375,15 +375,23 @@ if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/er
 grep -q 'product version files could not be read' "$tmp/error" || { cat "$tmp/error" >&2; echo "workspace missing-manifest failure omitted recovery guidance; next: inspect workspace diagnostics" >&2; exit 1; }
 mv "$tmp/version-repo/sdks/typescript/package.json.missing" "$tmp/version-repo/sdks/typescript/package.json"
 git -C "$tmp/version-repo" restore sdks/typescript/package.json
-for readonly_manifest in Cargo.toml sdks/typescript/package.json; do
-  chmod 444 "$tmp/version-repo/$readonly_manifest"
-  if (cd "$tmp/version-repo" && python3 scripts/product_versions.py set 0.1.2) 2>"$tmp/error"; then echo "product-version helper rewrote read-only $readonly_manifest; next: inspect write error handling" >&2; exit 1; fi
-  grep -q 'product version files could not be processed' "$tmp/error" || { cat "$tmp/error" >&2; echo "read-only manifest failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
-  grep -q '^version = "0.1.1"' "$tmp/version-repo/Cargo.toml" || { echo "failed product-version update partially rewrote the workspace manifest; next: inspect write preflight" >&2; exit 1; }
-  chmod 644 "$tmp/version-repo/$readonly_manifest"
-  git -C "$tmp/version-repo" restore .
-  "$tmp/version-repo/scripts/set-version.sh" 0.1.1
-done
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    # chmod does not make a file unwritable to Python on the Windows runner, so it cannot
+    # create the failure this journey exercises. Linux and macOS both gate the preflight.
+    ;;
+  *)
+    for readonly_manifest in Cargo.toml sdks/typescript/package.json; do
+      chmod 444 "$tmp/version-repo/$readonly_manifest"
+      if (cd "$tmp/version-repo" && python3 scripts/product_versions.py set 0.1.2) 2>"$tmp/error"; then echo "product-version helper rewrote read-only $readonly_manifest; next: inspect write error handling" >&2; exit 1; fi
+      grep -q 'product version files could not be processed' "$tmp/error" || { cat "$tmp/error" >&2; echo "read-only manifest failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
+      grep -q '^version = "0.1.1"' "$tmp/version-repo/Cargo.toml" || { echo "failed product-version update partially rewrote the workspace manifest; next: inspect write preflight" >&2; exit 1; }
+      chmod 644 "$tmp/version-repo/$readonly_manifest"
+      git -C "$tmp/version-repo" restore .
+      "$tmp/version-repo/scripts/set-version.sh" 0.1.1
+    done
+    ;;
+esac
 grep -q 'version = "0.1.1"' "$tmp/version-repo/Cargo.lock" || { echo "version updater missed Cargo.lock; next: inspect lock refresh" >&2; exit 1; }
 grep -q 'version = "0.1.1"' "$tmp/version-repo/uv.lock" || { echo "version updater missed uv.lock; next: inspect lock refresh" >&2; exit 1; }
 cat > "$tmp/registry-server.py" <<'PY'
