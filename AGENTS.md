@@ -183,7 +183,12 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 - **The live lane** is a uniform `test-live` target on every project, empty ones included.
   It is **not** a required check, and that is a decision: a required check a third party
   can turn red is a check that stops being trusted, and a Linear or GitHub outage must not
-  block an unrelated merge.
+  block an unrelated merge. **Every live test carries `#[ignore]`, and that is what makes
+  the decision true rather than stated.** `check` runs `cargo test -p <crate>`, which runs
+  every test target the crate has — so an un-ignored live test is part of a required check
+  on any machine exporting the credential, and part of a *cached* one, replaying a
+  third-party verdict against a tree that cannot describe it. The test stays compiled and
+  linted; `test-live` passes `--include-ignored`, which is the only place it runs.
 
 ### The journeys this repository owes
 

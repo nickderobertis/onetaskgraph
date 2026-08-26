@@ -13,6 +13,12 @@ impl SecretResolver for Environment {
     }
 }
 
+/// `#[ignore]` keeps the live lane out of the everyday gate, for the reason spelled out
+/// beside the same attribute in the GitHub Projects lane: `check` runs `cargo test -p
+/// <crate>`, which would otherwise make this credentialed, third-party-facing test part
+/// of a required — and cached — check on any machine that exports `LINEAR_API_KEY`. The
+/// test stays compiled and linted; `just test-live` runs it with `--include-ignored`.
+#[ignore = "the live lane: run it with `just test-live onetaskgraph-linear`"]
 #[tokio::test]
 async fn real_linear_reads_obey_structural_invariants_when_data_exists() {
     // llmlint: ignore-block[live_tier_compiles_and_requires_credential,tests_assert_real_behavior] This repository's live lane is explicitly non-required and uniformly skips absent third-party credentials so an unavailable secret cannot block unrelated work; the printed skip is the required observable behavior and scripts/check-live-lane.sh enforces that contract.
