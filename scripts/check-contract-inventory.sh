@@ -41,6 +41,11 @@ EXCEPTIONS = {
         "contract question; resolving it belongs to the contract's owner, not to this "
         "repository"
     ),
+    "unwritable": (
+        "a free function, not one of the contract's types — the inventory enumerates the "
+        "traits and types a plugin author implements against, and this is the one refusal "
+        "`WriteSupport::Unsupported` obliges every unwritten source to answer a write with"
+    ),
     "SOURCE_NAME_PATTERN": (
         "a const, not one of the contract's types — the inventory enumerates the traits "
         "and types a plugin author implements against"

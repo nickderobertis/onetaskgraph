@@ -62,7 +62,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `Direction`, `NativeId`, `SourceName`; the query and paging types `TaskQuery`,
   `ProjectQuery`, `TextQuery`, `TextFields`, `LabelFilter`, `ProjectFilter`, `PageRequest`,
   `Page`, `Cursor`; the capability types `Capabilities`, `Support`, `DependencySupport`;
-  and `SourceError`. **It depends on no other crate of this workspace.**
+  the write types `ItemWrite` and `WriteSupport`; and `SourceError`.
+  **It depends on no other crate of this workspace.**
 - **`onetaskgraph-core`** — the engine, plus the reporting types `QueryResponse`,
   `QueryPlan`, `SourcePlan`, `Predicate`, `PageToken`, `SourceFailure` and `GlobalId`.
 
@@ -118,13 +119,26 @@ Nothing of a user's work is stored, cached, indexed or mirrored outside the plug
 owns it. The engine compensates transiently and writes nothing down. Extend these three
 mechanisms rather than rediscovering the rule; each says how it fails, not how it works.
 
+**A destination write is not a cache, and the difference is stated rather than assumed.**
+A destination write is at the user's explicit request, names its destination, goes through
+that source's own write interface into that source's own store, and is never read back to
+answer a query. A cache is a write nobody asked for that the engine reads back. The
+invariant above does not move: `copy` writes *into a plugin*, which is the one place a
+user's work is allowed to be. The same terms settle a cross-source dependency edge —
+storing the far end's qualified id on the near item, inside the plugin that owns it, at
+the user's explicit request, is not the state `DependencyEdge`'s own documentation
+forbids, because the engine holds nothing between calls and reads nothing back to answer a
+later query.
+
 1. `deny.toml` refuses every embedded store, index and cache crate, and `deny` is a
    required check — so reaching for one cannot merge.
 2. `crates/onetaskgraph/tests/e2e/no_persistence.rs` sandboxes `HOME`, every `XDG_*` and
    `TMPDIR` into one tree, plants sentinels in a source's work, drives every verb, and
    compares the tree with itself: it fails, naming the path, if any file was created or
    changed during the run, and says which sentinels a new file held. It asserts on the
-   effect, so it catches caching by any technique.
+   effect, so it catches caching by any technique. It drives `copy` too, which is the one
+   verb that writes: the named destination's own store is the only place a file may
+   change, and every other path in the tree is held to exactly the rule above.
 3. `crates/onetaskgraph-core/tests/no_reuse.rs` catches the half a filesystem scan cannot
    see: one query asked twice must reach the source twice.
 

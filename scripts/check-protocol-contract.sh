@@ -59,13 +59,14 @@ def api(module):
 document = read(os.environ["DOCUMENT"], "the protocol document")
 source_rs = api("source.rs")
 error_rs = api("error.rs")
-contract_rs = error_rs + api("capability.rs") + api("query.rs") + api("work.rs")
+contract_rs = error_rs + api("capability.rs") + api("query.rs") + api("work.rs") + api("write.rs")
 
 # Trait methods the protocol deliberately does not carry as methods of its own, each with
 # the reason. A method missing from BOTH this map and the document's table is drift.
 NOT_METHODS = {
     "kind": "settled by the handshake response's `kind` field",
     "capabilities": "settled by the handshake response's `capabilities` field",
+    "writes": "settled by the handshake response's `writes` field, which §3.3 specifies",
 }
 
 # The one protocol method with no trait method behind it: it stands for building the
@@ -86,9 +87,12 @@ METHOD_SECTIONS = {
     "labels": "### 4.7 `labels`",
     "task_dependencies": "### 4.8 `task_dependencies` and `project_dependencies`",
     "project_dependencies": "### 4.8 `task_dependencies` and `project_dependencies`",
+    "write_task": "### 4.9 `write_task` and `write_project`",
+    "write_project": "### 4.9 `write_task` and `write_project`",
 }
 
 ENUM_SECTIONS = {
+    "WriteSupport": "### 3.3 `writes`",
     "Support": CAPABILITIES_SECTION,
     "DependencySupport": CAPABILITIES_SECTION,
     "StatusCategory": "### 4.5 `query_tasks`",
@@ -484,6 +488,7 @@ STRUCT_SECTIONS = {
     "ProjectQuery": "### 4.6 `query_projects`",
     "DependencyEdge": "### 4.8 `task_dependencies` and `project_dependencies`",
     "DependencyEndpoint": "### 4.8 `task_dependencies` and `project_dependencies`",
+    "ItemWrite": "### 4.9 `write_task` and `write_project`",
 }
 
 def wire_members(struct):
