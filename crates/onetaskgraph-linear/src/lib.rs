@@ -410,7 +410,7 @@ impl LinearSource {
     }
     // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
-    async fn one_id(&self, lookup: Lookup<'_>, variables: Value) -> Result<String, SourceError> {
+    async fn one_id(&self, lookup: Lookup<'_>, variables: Value) -> Result<NativeId, SourceError> {
         let data = self.send(lookup.query(), variables).await?;
         let connection = lookup.connection();
         let nodes = data
@@ -429,9 +429,9 @@ impl LinearSource {
                 ),
             });
         }
-        Ok(backend_id(&nodes[0], "id")?.to_owned())
+        Ok(NativeId(backend_id(&nodes[0], "id")?.to_owned()))
     }
-    async fn team_id(&self) -> Result<String, SourceError> {
+    async fn team_id(&self) -> Result<NativeId, SourceError> {
         let team = self.team.as_ref().ok_or_else(|| SourceError::Refused {
             message: format!(
                 "source {} needs config.team before it can create Linear items",
@@ -444,7 +444,7 @@ impl LinearSource {
         &self,
         labels: &[Label],
         kind: WriteKind,
-    ) -> Result<Vec<String>, SourceError> {
+    ) -> Result<Vec<NativeId>, SourceError> {
         let mut ids = Vec::with_capacity(labels.len());
         for label in labels {
             ids.push(
@@ -790,7 +790,7 @@ impl TaskSource for LinearSource {
                 graphql::ISSUE_CREATE,
                 {
                     let mut input = input;
-                    input["teamId"] = team.into();
+                    input["teamId"] = Value::String(team.0);
                     json!({"input":input})
                 },
                 MutationRoot::IssueCreate,

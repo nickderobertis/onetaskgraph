@@ -134,6 +134,56 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
             _ => None,
         })
         .collect::<std::collections::HashMap<_, _>>();
+    let inputs = schema
+        .definitions
+        .iter()
+        .filter_map(|definition| match definition {
+            schema::Definition::TypeDefinition(schema::TypeDefinition::InputObject(input)) => {
+                Some((input.name.as_str(), input))
+            }
+            _ => None,
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    for (name, expected) in [
+        (
+            "IssueCreateInput",
+            &[
+                "teamId",
+                "title",
+                "description",
+                "stateId",
+                "labelIds",
+                "projectId",
+            ][..],
+        ),
+        (
+            "IssueUpdateInput",
+            &["title", "description", "stateId", "labelIds", "projectId"][..],
+        ),
+        (
+            "ProjectCreateInput",
+            &["teamIds", "name", "description", "statusId", "labelIds"][..],
+        ),
+        (
+            "ProjectUpdateInput",
+            &["name", "description", "statusId", "labelIds"][..],
+        ),
+        (
+            "IssueRelationCreateInput",
+            &["issueId", "relatedIssueId", "type"][..],
+        ),
+        (
+            "ProjectRelationCreateInput",
+            &["projectId", "relatedProjectId", "type"][..],
+        ),
+    ] {
+        let actual = inputs[name]
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "pinned {name} fields drifted");
+    }
     fn named_type<'a>(kind: &'a schema::Type<'a, String>) -> &'a str {
         match kind {
             schema::Type::NamedType(name) => name,
@@ -299,6 +349,16 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
             schema::Type::ListType(inner) | schema::Type::NonNullType(inner) => named(inner),
         }
     }
+    fn same_type(schema: &schema::Type<'_, String>, query: &query::Type<'_, String>) -> bool {
+        match (schema, query) {
+            (schema::Type::NamedType(left), query::Type::NamedType(right)) => left == right,
+            (schema::Type::ListType(left), query::Type::ListType(right))
+            | (schema::Type::NonNullType(left), query::Type::NonNullType(right)) => {
+                same_type(left, right)
+            }
+            _ => false,
+        }
+    }
     fn validate<'a>(
         objects: &std::collections::HashMap<&str, &'a schema::ObjectType<'a, String>>,
         type_name: &str,
@@ -343,15 +403,16 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::ISSUE_DELETE, true),
     ] {
         let parsed = query::parse_query::<String>(document).unwrap();
-        let selection = match &parsed.definitions[0] {
+        let (selection_set, variables) = match &parsed.definitions[0] {
             query::Definition::Operation(query::OperationDefinition::Query(operation)) => {
-                &operation.selection_set.items[0]
+                (&operation.selection_set, &operation.variable_definitions)
             }
             query::Definition::Operation(query::OperationDefinition::Mutation(operation)) => {
-                &operation.selection_set.items[0]
+                (&operation.selection_set, &operation.variable_definitions)
             }
             _ => panic!("production document is an explicit query or mutation"),
         };
+        let selection = &selection_set.items[0];
         let query::Selection::Field(root) = selection else {
             panic!("operation has a root field")
         };
@@ -365,18 +426,35 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
             "pinned schema lacks {}",
             root.name
         );
+        let schema_root = objects[if mutation { "Mutation" } else { "Query" }]
+            .fields
+            .iter()
+            .find(|field| field.name == root.name)
+            .unwrap();
+        for (argument_name, value) in &root.arguments {
+            let query::Value::Variable(variable_name) = value else {
+                continue;
+            };
+            let variable = variables
+                .iter()
+                .find(|variable| variable.name == *variable_name)
+                .unwrap();
+            let argument = schema_root
+                .arguments
+                .iter()
+                .find(|argument| argument.name == *argument_name)
+                .unwrap();
+            assert!(
+                same_type(&argument.value_type, &variable.var_type),
+                "{}.{} variable ${variable_name} type or nullability drifted",
+                if mutation { "Mutation" } else { "Query" },
+                root.name
+            );
+        }
         validate(
             &objects,
             if mutation { "Mutation" } else { "Query" },
-            match &parsed.definitions[0] {
-                query::Definition::Operation(query::OperationDefinition::Query(operation)) => {
-                    &operation.selection_set
-                }
-                query::Definition::Operation(query::OperationDefinition::Mutation(operation)) => {
-                    &operation.selection_set
-                }
-                _ => unreachable!(),
-            },
+            selection_set,
         );
     }
 }
