@@ -211,7 +211,13 @@ def read_reconciled_versions() -> Dict[str, Optional[SemanticVersion]]:
     for version_file in RECONCILED_VERSION_FILES:
         path = version_file.path
         values = _read_version_values(version_file)
-        value = values[0] if values and len(set(values)) == 1 else None
+        value = (
+            values[0]
+            if values
+            and all(isinstance(candidate, str) for candidate in values)
+            and all(candidate == values[0] for candidate in values)
+            else None
+        )
         versions[path.as_posix()] = (
             SemanticVersion(value)
             if value is not None and SEMANTIC_VERSION_RE.fullmatch(value)
