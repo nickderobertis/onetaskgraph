@@ -103,6 +103,8 @@ pub enum TaskCommand {
     Show(ShowArgs),
     /// Walk one task's dependency edges.
     Deps(DependencyArgs),
+    /// Copy tasks into another configured source, by qualified id.
+    Copy(TaskCopyArgs),
 }
 
 /// What `onetaskgraph project` can do.
@@ -114,6 +116,8 @@ pub enum ProjectCommand {
     Show(ShowArgs),
     /// Walk one project's dependency edges.
     Deps(DependencyArgs),
+    /// Copy one project, and the tasks in it, into another configured source.
+    Copy(ProjectCopyArgs),
 }
 
 /// What `onetaskgraph label` can do.
@@ -281,6 +285,68 @@ pub struct DependencyArgs {
 
     #[command(flatten)]
     pub paging: PageArgs,
+}
+
+/// The arguments both copy verbs share.
+///
+/// A copy is one write into one destination, so there is no paging, no `--explain` and no
+/// `--allow-partial` here: a partial write is not an answer a caller could act on.
+#[derive(Debug, Args)]
+pub struct CopyArgs {
+    /// The configured source to copy into. A source name, never a qualified id.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — a `SourceName` here would move
+    /// the refusal into clap, which reports it as an invalid *invocation* (exit 2) under
+    /// clap's own wording, for the reason recorded on `SelectionArgs::source`. A name
+    /// that cannot be a source name and one that names no configured source are the same
+    /// typo, and both owe the same next action.
+    #[arg(long, value_name = "SOURCE")]
+    pub to: String,
+
+    /// Re-establish a lost correspondence by matching on `title` or on a metadata key.
+    #[arg(long = "match-by", value_name = "KEY")]
+    pub match_by: Option<String>,
+
+    /// Create a new destination item when a recorded origin names nothing there.
+    #[arg(long)]
+    pub recreate: bool,
+
+    /// Perform every read, write nothing, and report what would have happened.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+}
+
+/// `onetaskgraph task copy`.
+#[derive(Debug, Args)]
+pub struct TaskCopyArgs {
+    /// The qualified ids to copy, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — a `GlobalId` here would refuse an
+    /// unqualified id as a bad invocation, under clap's wording, for the reason recorded
+    /// on `ShowArgs::id`. `qualified` in `main` converts through `GlobalId::from_str` and
+    /// says what a qualified id is and where to read the configured names.
+    #[arg(value_name = "ID", required = true)]
+    pub id: Vec<String>,
+
+    #[command(flatten)]
+    pub copy: CopyArgs,
+}
+
+/// `onetaskgraph project copy`.
+#[derive(Debug, Args)]
+pub struct ProjectCopyArgs {
+    /// The qualified id to copy, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCopyArgs::id`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// Copy the project alone, leaving the tasks in it where they are.
+    #[arg(long = "no-tasks")]
+    pub no_tasks: bool,
+
+    #[command(flatten)]
+    pub copy: CopyArgs,
 }
 
 /// `onetaskgraph search`.

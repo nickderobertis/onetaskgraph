@@ -15,15 +15,15 @@ use std::str::FromStr as _;
 use clap::{CommandFactory as _, Parser};
 use onetaskgraph_core::config::Layer;
 use onetaskgraph_core::{
-    DependencyRequest, Engine, Environment, Filters, GlobalId, LabelRequest, Loaded, OutputFormat,
-    PageToken, Paging, ProjectRequest, ProjectSelector, QueryResponse, SearchRequest,
-    SourceFailure, TaskRequest,
+    CopyRequest, DependencyRequest, Engine, Environment, Filters, GlobalId, LabelRequest, Loaded,
+    MatchBy, OutputFormat, PageToken, Paging, ProjectRequest, ProjectSelector, QueryResponse,
+    SearchRequest, SourceFailure, TaskRequest,
 };
-use onetaskgraph_plugin_api::{LabelFilter, NativeId, SourceName, TextQuery};
+use onetaskgraph_plugin_api::{ItemKind, LabelFilter, NativeId, SourceName, TextQuery};
 use serde::Serialize;
 
 use crate::cli::{
-    Cli, Command, ConfigCommand, DependencyArgs, FilterArgs, LabelCommand, PageArgs,
+    Cli, Command, ConfigCommand, CopyArgs, DependencyArgs, FilterArgs, LabelCommand, PageArgs,
     ProjectCommand, SelectionArgs, ShowArgs, SourcesCommand, TaskCommand,
 };
 
@@ -170,6 +170,30 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
                 &args.paging,
                 "dependencies",
             )
+        }
+
+        Command::Task {
+            command: TaskCommand::Copy(args),
+        } => {
+            let request = copy_request(
+                args.id.iter().map(String::as_str),
+                ItemKind::Task,
+                &args.copy,
+                true,
+            )?;
+            copy(out, loaded, &request).await
+        }
+
+        Command::Project {
+            command: ProjectCommand::Copy(args),
+        } => {
+            let request = copy_request(
+                std::iter::once(args.id.as_str()),
+                ItemKind::Project,
+                &args.copy,
+                !args.no_tasks,
+            )?;
+            copy(out, loaded, &request).await
         }
 
         Command::Project {
@@ -347,6 +371,49 @@ fn show<T: Serialize>(
             Ok(report(&response.errors, args.allow_partial))
         }
     }
+}
+
+/// Drive the engine's own copy API and write what it did.
+///
+/// The command line has no copy path of its own: this builds the one public request type
+/// and calls the one public method, so a copy typed at a shell and a copy a Rust caller
+/// makes cannot answer differently.
+async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> Result<u8, String> {
+    let report = engine(loaded)
+        .copy(request)
+        .await
+        .map_err(|error| error.to_string())?;
+    let rendered = match loaded.config.output() {
+        OutputFormat::Text => render::copied(&report),
+        OutputFormat::Json => json(&report, "the copy")?,
+    };
+    emit(out, rendered.trim_end(), "the copy")?;
+    Ok(EXIT_OK)
+}
+
+/// One copy, as a verb that takes one reads it.
+fn copy_request<'a>(
+    ids: impl Iterator<Item = &'a str>,
+    kind: ItemKind,
+    args: &CopyArgs,
+    include_tasks: bool,
+) -> Result<CopyRequest, String> {
+    Ok(CopyRequest {
+        items: ids.map(qualified).collect::<Result<Vec<_>, _>>()?,
+        kind,
+        destination: SourceName::new(args.to.clone()).map_err(|error| {
+            format!(
+                "--to {}: {error}\n\
+                 next: name a configured source — `onetaskgraph sources list` reports \
+                 them.",
+                args.to
+            )
+        })?,
+        include_tasks,
+        match_by: args.match_by.as_deref().map(MatchBy::parse),
+        recreate: args.recreate,
+        dry_run: args.dry_run,
+    })
 }
 
 /// Name every source that could not answer, and say what the exit code will mean.
@@ -594,9 +661,11 @@ mod tests {
                 "task list",
                 "task show",
                 "task deps",
+                "task copy",
                 "project list",
                 "project show",
                 "project deps",
+                "project copy",
                 "label list",
                 "search"
             ])

@@ -2,7 +2,7 @@
 
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, ItemKind,
-    Label, NativeId, Project, Support, Task,
+    Label, NativeId, Project, Support, Task, WriteSupport,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, de::Error as _};
@@ -234,6 +234,21 @@ pub struct CapabilityConfig {
     /// and the field is the whole of what a user has to go and fix.
     #[serde(deserialize_with = "non_zero_page_size")]
     pub max_page_size: NonZeroU32,
+    /// Whether this source can be written through at all.
+    ///
+    /// Configuration for the same reason every other field here is: the one destination a
+    /// copy refuses is a source somebody configured with no write side, and that refusal
+    /// can only be driven end to end against a source whose write side a document can
+    /// take away. Defaults to [`WriteSupport::Supported`], so an ordinary in-memory
+    /// source is a destination without saying so.
+    pub writes: WriteSupport,
+    /// Metadata keys this source cannot carry, and refuses a write naming.
+    ///
+    /// Empty by default — this source holds arbitrary JSON under any key. It is
+    /// configurable for the same reason `writes` is: a destination that cannot carry a
+    /// key owes the caller a refusal naming the keys rather than a silent drop, and
+    /// proving that needs a source whose limits a document can choose.
+    pub unwritable_metadata_keys: Vec<String>,
 }
 
 /// Refuse a zero page ceiling, naming the setting a user has to correct.
@@ -260,6 +275,8 @@ impl Default for CapabilityConfig {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: DEFAULT_MAX_PAGE_SIZE,
+            writes: WriteSupport::Supported,
+            unwritable_metadata_keys: Vec::new(),
         }
     }
 }

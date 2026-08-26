@@ -24,6 +24,17 @@ pub struct GlobalId {
 }
 
 impl GlobalId {
+    /// The reserved metadata key a copied item records the id it was copied from under.
+    ///
+    /// The correspondence between an item and the one it came from lives on the item, in
+    /// the plugin that owns it, and nowhere else: nothing anywhere holds a mapping, so
+    /// the invariant that the engine keeps no state between calls is untouched.
+    ///
+    /// Spelled here rather than in the plugin contract because the value is a *qualified*
+    /// id, which no plugin ever constructs or interprets — a source stores this key's
+    /// value as it stores any other caller-defined one.
+    pub const ORIGIN_KEY: &'static str = "onetaskgraph.origin";
+
     /// Qualify `native` as belonging to `source`.
     #[must_use]
     pub fn new(source: SourceName, native: NativeId) -> Self {

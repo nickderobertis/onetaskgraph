@@ -5,8 +5,8 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Capabilities, DependencyEdge, Direction, Label, NativeId, Page, PageRequest, Project,
-    ProjectQuery, SourceError, SourceName, Task, TaskQuery,
+    Capabilities, DependencyEdge, Direction, ItemWrite, Label, NativeId, Page, PageRequest,
+    Project, ProjectQuery, SourceError, SourceName, Task, TaskQuery, WriteSupport, unwritable,
 };
 
 /// Whether a source is answering right now.
@@ -138,6 +138,46 @@ pub trait TaskSource: Send + Sync {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError>;
+
+    /// Whether this source can be written through at all.
+    ///
+    /// Defaulted to [`WriteSupport::Unsupported`], which is what keeps this a read
+    /// interface for every source that has nothing to write into: one that cannot be
+    /// written needs no edit and keeps working. Read before a write is attempted, so a
+    /// copy naming such a source as its destination is refused before anything is read.
+    fn writes(&self) -> WriteSupport {
+        WriteSupport::Unsupported
+    }
+
+    /// Create or update one task, answering with the native id the destination holds it
+    /// under.
+    ///
+    /// A source declaring [`WriteSupport::Supported`] owes three things here. It refuses,
+    /// naming the field, anything it cannot represent rather than dropping it — including
+    /// a metadata key it cannot carry, which it names. It writes every other field it was
+    /// given. And it never creates when [`ItemWrite::target`] names an item it does not
+    /// hold.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source has no write side, when a field
+    /// or a metadata key cannot be represented, or when `target` names nothing here; and
+    /// whatever else the source could not do the write for.
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        let _ = write;
+        Err(unwritable(self.kind()))
+    }
+
+    /// Create or update one project, on exactly the terms of
+    /// [`write_task`](Self::write_task).
+    ///
+    /// # Errors
+    ///
+    /// As [`write_task`](Self::write_task).
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        let _ = write;
+        Err(unwritable(self.kind()))
+    }
 }
 
 /// The factory that turns one configuration block into a live [`TaskSource`].
