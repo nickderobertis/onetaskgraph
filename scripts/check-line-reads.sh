@@ -331,6 +331,87 @@ expect_refused_naming "a spaced, CRLF-terminated plugin line, one element per re
 # Had the carriage return survived, every real name would have missed its expectation too.
 expect_absent "a spaced, CRLF-terminated plugin line" "expected onetaskgraph-linear"
 
+# 5. The array name read_lines is handed. It reaches an `eval` — bash 3.2 has no
+#    `declare -n` — so the name is checked against the shell-identifier grammar before it
+#    gets there, and that check is the only thing standing between a caller's typo and
+#    evaluated shell. A caller that mistypes the name must be told the NAME is the problem,
+#    or the report reads as the input having been wrong.
+run_read_lines_name() {
+  OUTPUT="$(read_lines "$1" < /dev/null 2>&1)" && STATUS=0 || STATUS=$?
+}
+
+expect_name_refused() {
+  local case_name="$1"
+  if [ "$STATUS" -eq 0 ]; then
+    echo "check-line-reads: $case_name — read_lines accepted a name it must refuse, so whatever" >&2
+    echo "check-line-reads: that name carried reached 'eval'." >&2
+    failures=$((failures + 1))
+    return
+  fi
+  if ! grep -qF -- "is not a shell variable name" <<<"$OUTPUT"; then
+    echo "check-line-reads: $case_name — read_lines failed without saying the name was the" >&2
+    echo "check-line-reads: problem, so a caller's typo reads as the input being wrong. It said:" >&2
+    report_output
+    failures=$((failures + 1))
+  fi
+}
+
+run_read_lines_name ""
+expect_name_refused "no array name at all"
+run_read_lines_name "9lives"
+expect_name_refused "an array name opening with a digit"
+run_read_lines_name "with-a-hyphen"
+expect_name_refused "an array name carrying a hyphen"
+# A name that is shell rather than a name. Nothing here asserts on the message alone: what
+# the case is for is that the command inside it never ran.
+run_read_lines_name "names=x; touch $scratch/evaluated #"
+expect_name_refused "an array name carrying shell of its own"
+if [ -e "$scratch/evaluated" ]; then
+  echo "check-line-reads: read_lines evaluated the name it was handed — the file that name" >&2
+  echo "check-line-reads: asked for now exists. The grammar check before the 'eval' in" >&2
+  echo "check-line-reads: scripts/read-lines.sh is what has to refuse this." >&2
+  failures=$((failures + 1))
+fi
+
+# 6. Each caller's report when scripts/read-lines.sh is not there to be loaded. All three
+#    source it before they do any work of their own, so this is the first thing a checkout
+#    missing that file hits — and bash's own "No such file or directory" names the sourcing
+#    line rather than the file to restore.
+severed="$scratch/severed"
+fixture mkdir -p "$severed"
+fixture cp -a "$ROOT/scripts" "$severed/scripts"
+fixture rm -f "$severed/scripts/read-lines.sh"
+
+expect_load_failure() {
+  local script="$1"
+  shift
+  OUTPUT="$(cd "$severed" && bash "scripts/$script" 2>&1)" && STATUS=0 || STATUS=$?
+  if [ "$STATUS" -eq 0 ]; then
+    echo "check-line-reads: scripts/$script passed with scripts/read-lines.sh removed, so it" >&2
+    echo "check-line-reads: cleared a tree without ever reading the set it checks." >&2
+    failures=$((failures + 1))
+    return
+  fi
+  local needle
+  for needle in "$@"; do
+    if ! grep -qF -- "$needle" <<<"$OUTPUT"; then
+      echo "check-line-reads: scripts/$script lost scripts/read-lines.sh without saying so: its" >&2
+      echo "check-line-reads: report never mentions '$needle', so it does not name the file to" >&2
+      echo "check-line-reads: put back. It said:" >&2
+      report_output
+      failures=$((failures + 1))
+      return
+    fi
+  done
+}
+
+expect_load_failure check-distribution-contract.sh \
+  "could not load scripts/read-lines.sh" "git checkout -- scripts/read-lines.sh"
+expect_load_failure check-plugin-isolation.sh \
+  "check-plugin-isolation: could not load" "git checkout -- scripts/read-lines.sh"
+expect_load_failure check-affected-selection.sh \
+  "check-affected-selection: could not load" "git checkout -- scripts/read-lines.sh"
+
 if [ "$failures" -ne 0 ]; then
   echo "check-line-reads: $failures case(s) failed." >&2
   echo "check-line-reads: one of the four reads no longer builds the array it used to. Compare" >&2

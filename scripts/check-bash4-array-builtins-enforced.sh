@@ -293,7 +293,19 @@ expect_refused "a script one directory down, named with forward slashes on every
   "scripts/nested/deep-helper.sh" "$BUILTIN is a bash 4 builtin"
 fixture rm -rf "$scratch/scripts/nested"
 
-# 11. The scan dying partway through, rather than refusing. Python exits 1 on an unhandled
+# 11. A file under scripts/ the scan cannot read as text. It reads every file before it
+#     decides which of them are shell scripts, so one it cannot decode is one it cannot
+#     clear — and a guard that passes silently over what it never read is the failure it
+#     exists to prevent.
+printf '#!/usr/bin/env bash\n# \377\376 not utf-8\n' > "$scratch/scripts/undecodable.sh" || fatal \
+  "could not write the undecodable fixture in $scratch/scripts, so this case was never put to the guard" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+run_guard
+expect_refused "a file under scripts/ that cannot be read as text" \
+  "scripts/undecodable.sh" "could not be read as text"
+fixture rm -f "$scratch/scripts/undecodable.sh"
+
+# 12. The scan dying partway through, rather than refusing. Python exits 1 on an unhandled
 #     exception, so while the refusal was also spelled 1 the two arrived at the same place:
 #     this check would have exited 1 on a bare traceback, having cleared every script the
 #     scan never reached, with none of the next action it gives for any other failure. The
