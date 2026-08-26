@@ -430,3 +430,249 @@ async fn a_destination_item_the_source_no_longer_holds_is_left_alone_and_reporte
         .expect("the show verb answers");
     assert_eq!(held.items[0].item.title, "T-2");
 }
+
+#[tokio::test]
+async fn the_edges_a_copy_read_are_written_and_a_far_end_that_leaves_the_set_is_qualified() {
+    // Three kinds of far end, in one copy: one inside the copied set, which becomes the
+    // destination's own id; one the source holds but the copy did not take, which is
+    // qualified to the source it stays in; and one already naming another source, which
+    // is left exactly as it is.
+    let member = |id: &str| {
+        json!({"id": id, "title": id, "status": {"category": "todo", "name": "Todo"},
+               "labels": []})
+    };
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "tasks": [member("T-1"), member("T-2"), member("T-3")],
+            "task_dependencies": [
+                {"from": "T-1", "to": "T-2", "kind": "blocks"},
+                {"from": "T-1", "to": "T-3", "kind": "related"},
+                {"from": {"id": "T-1", "kind": "task"},
+                 "to": {"id": "elsewhere:P-9", "kind": "project"}, "kind": "blocks"},
+            ],
+        }},
+        "into": {"plugin": "in-memory", "config": {}},
+    }));
+
+    let copied = engine
+        .copy(&CopyRequest {
+            items: vec![id("from:T-1"), id("from:T-2")],
+            ..one("from:T-1")
+        })
+        .await
+        .expect("the copy runs");
+    assert_eq!(copied.items.len(), 2);
+
+    let edges = engine
+        .task_dependencies(&onetaskgraph_core::DependencyRequest {
+            id: id("into:T-1"),
+            direction: onetaskgraph_plugin_api::Direction::DependsOn,
+            paging: Paging {
+                limit: NonZeroU32::new(50).expect("a non-zero limit"),
+                token: None,
+            },
+        })
+        .await
+        .expect("the dependency verb answers");
+    let mut ends: Vec<String> = edges
+        .items
+        .iter()
+        .map(|edge| edge.to.id.to_string())
+        .collect();
+    ends.sort();
+    assert_eq!(
+        ends,
+        vec![
+            // The member of the copied set, remapped to the id the destination gave it —
+            // and it was written *after* this item, so the second pass is what repaired
+            // this edge.
+            "into:T-2".to_owned(),
+            // The far end that leaves the copied set, and the one that already had.
+            "elsewhere:P-9".to_owned(),
+            "from:T-3".to_owned(),
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+    );
+
+    // Copying back the other way unqualifies the far end that names the destination's
+    // own source, because that is how a source names its own items.
+    let back = engine
+        .copy(&CopyRequest {
+            items: vec![id("into:T-1")],
+            destination: name("from"),
+            ..one("into:T-1")
+        })
+        .await
+        .expect("the copy runs");
+    assert_eq!(back.items[0].destination, Some(id("from:T-1")));
+    let edges = engine
+        .task_dependencies(&onetaskgraph_core::DependencyRequest {
+            id: id("from:T-1"),
+            direction: onetaskgraph_plugin_api::Direction::DependsOn,
+            paging: Paging {
+                limit: NonZeroU32::new(50).expect("a non-zero limit"),
+                token: None,
+            },
+        })
+        .await
+        .expect("the dependency verb answers");
+    assert!(
+        edges.items.iter().any(|edge| edge.to.id == id("from:T-3")),
+        "{edges:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_task_copied_on_its_own_is_filed_under_the_destinations_own_counterpart() {
+    let filed = json!({"id": "T-1", "title": "Alpha",
+                       "status": {"category": "todo", "name": "Todo"},
+                       "labels": [], "project": "P-1"});
+    let project = |id: &str, origin: Option<&str>| {
+        let mut project = json!({"id": id, "title": "Engine",
+                                 "status": {"category": "todo", "name": "Todo"}, "labels": []});
+        if let Some(origin) = origin {
+            project["metadata"] = json!({GlobalId::ORIGIN_KEY: origin});
+        }
+        project
+    };
+
+    // The destination holds the counterpart of the task's own project, so the copied task
+    // is filed under *that* rather than under an id of the source's the destination never
+    // issued.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "projects": [project("P-1", None)], "tasks": [filed],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "projects": [project("LOCAL-7", Some("from:P-1"))],
+        }},
+    }));
+    engine.copy(&one("from:T-1")).await.expect("the copy runs");
+    let copied = engine
+        .task(&id("into:T-1"))
+        .await
+        .expect("the show verb answers");
+    assert_eq!(
+        copied.items[0].item.project,
+        Some(onetaskgraph_plugin_api::NativeId::from("LOCAL-7"))
+    );
+
+    // With no counterpart there, the source's own opaque id is carried rather than
+    // dropped: this engine does not interpret it, and losing it would lose what the
+    // source said.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "projects": [project("P-1", None)], "tasks": [filed],
+        }},
+        "into": {"plugin": "in-memory", "config": {}},
+    }));
+    engine.copy(&one("from:T-1")).await.expect("the copy runs");
+    let copied = engine
+        .task(&id("into:T-1"))
+        .await
+        .expect("the show verb answers");
+    assert_eq!(
+        copied.items[0].item.project,
+        Some(onetaskgraph_plugin_api::NativeId::from("P-1"))
+    );
+}
+
+#[tokio::test]
+async fn a_project_origin_that_still_names_something_updates_that_project_directly() {
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {"projects": [{
+            "id": "P-1", "title": "Renamed", "status": {"category": "todo", "name": "Todo"},
+            "labels": [], "metadata": {GlobalId::ORIGIN_KEY: "into:BOARD"},
+        }]}},
+        "into": {"plugin": "in-memory", "config": {"projects": [{
+            "id": "BOARD", "title": "Engine", "status": {"category": "todo", "name": "Todo"},
+            "labels": [],
+        }]}},
+    }));
+
+    let copied = engine
+        .copy(&CopyRequest {
+            items: vec![id("from:P-1")],
+            kind: ItemKind::Project,
+            include_tasks: false,
+            ..one("from:P-1")
+        })
+        .await
+        .expect("the copy runs");
+    assert_eq!(copied.items[0].action, CopyAction::Updated);
+    assert_eq!(copied.items[0].destination, Some(id("into:BOARD")));
+    assert_eq!(
+        engine
+            .project(&id("into:BOARD"))
+            .await
+            .expect("the show verb answers")
+            .items[0]
+            .item
+            .title,
+        "Renamed"
+    );
+}
+
+#[tokio::test]
+async fn a_destination_that_could_not_be_built_and_a_source_that_could_not_be_read_both_refuse() {
+    // A source that is configured and did not build is not fatal to a *query* — it lands
+    // in that response's errors and the others still answer. A copy is one write into one
+    // destination, and half of one is not an answer, so both ends refuse by name.
+    let broken = json!({"plugin": "local-md", "config": {"root": "/onetaskgraph/not/a/folder"}});
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {"tasks": [task("T-1", "Alpha engine")]}},
+        "into": broken,
+    }));
+    let Err(unavailable) = engine.copy(&one("from:T-1")).await else {
+        panic!("a destination that could not be built must refuse");
+    };
+    assert!(
+        matches!(&unavailable, EngineError::DestinationUnavailable { name, .. } if name == "into"),
+        "{unavailable:?}"
+    );
+    assert!(
+        unavailable.to_string().contains("could not be built"),
+        "{unavailable}"
+    );
+
+    let engine = engine_over(json!({
+        "from": broken,
+        "into": {"plugin": "in-memory", "config": {}},
+    }));
+    let Err(unreadable) = engine.copy(&one("from:T-1")).await else {
+        panic!("a source that could not be built must refuse");
+    };
+    assert!(
+        matches!(&unreadable, EngineError::SourceRefused { name, .. } if name == "from"),
+        "{unreadable:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_scan_that_finds_a_counterpart_walks_the_destination_a_page_at_a_time() {
+    // One page at a time and nothing written down, which is the same bound every other
+    // compensation in this engine works under — so a destination that serves one row per
+    // page still finds the counterpart sitting at the end of it.
+    let held = |id: &str, origin: &str| {
+        json!({"id": id, "title": id, "status": {"category": "todo", "name": "Todo"},
+               "labels": [], "metadata": {GlobalId::ORIGIN_KEY: origin}})
+    };
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {"tasks": [task("T-1", "Alpha engine")]}},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"max_page_size": 1},
+            "tasks": [
+                held("A", "somewhere:1"),
+                held("B", "somewhere:2"),
+                held("C", "from:T-1"),
+            ],
+        }},
+    }));
+
+    let copied = engine.copy(&one("from:T-1")).await.expect("the copy runs");
+    assert_eq!(copied.items[0].action, CopyAction::Updated);
+    assert_eq!(copied.items[0].destination, Some(id("into:C")));
+}

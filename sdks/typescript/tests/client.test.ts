@@ -180,9 +180,7 @@ test("copy drives the real binary and reports what it did to each item", async (
     const copyClient = new OnetaskgraphClient({ binaryPath: binary, cwd: copyRoot });
 
     const planned = await copyClient.taskCopy(["from:T-1"], "into", { dryRun: true });
-    expect(planned.items).toEqual([
-      { source: "from:T-1", destination: null, action: "created" },
-    ]);
+    expect(planned.items).toEqual([{ source: "from:T-1", destination: null, action: "created" }]);
 
     const created = await copyClient.taskCopy(["from:T-1"], "into");
     expect(created.items).toEqual([
@@ -209,9 +207,7 @@ test("copy drives the real binary and reports what it did to each item", async (
     expect(readFileSync(resolve(copyRoot, "into/tasks/T-1.md"), "utf8")).toContain(
       "onetaskgraph.origin: from:T-1",
     );
-    await expect(copyClient.taskCopy(["from:T-1"], "sealed")).rejects.toThrow(
-      "cannot be written",
-    );
+    await expect(copyClient.taskCopy(["from:T-1"], "sealed")).rejects.toThrow("cannot be written");
   } finally {
     rmSync(copyRoot, { recursive: true, force: true });
   }

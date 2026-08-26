@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from onetaskgraph_sdk import Client, GlobalId, OnetaskgraphError, __version__
+from onetaskgraph_sdk._generated.copy_report import CopyOutcome
 from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
 
 WORKSPACE = Path(__file__).parents[3]
@@ -155,6 +156,12 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
     assert run(client.config_show()).settings
 
 
+def landed(outcome: CopyOutcome) -> str:
+    """The id a copy wrote to, absent only for a dry run that would have created one."""
+    assert outcome.destination is not None, "this copy wrote, so it reports where"
+    return outcome.destination.root
+
+
 def folders(tmp_path: Path) -> Path:
     """Configure two real Markdown folders, one holding a task and one empty."""
     source = tmp_path / "from" / "tasks"
@@ -200,9 +207,9 @@ def test_copy_drives_the_binary_and_reports_each_item(binary: Path, tmp_path: Pa
     assert not (tmp_path / "into" / "tasks").exists()
 
     created = run(client.task_copy(ids=[GlobalId(root="from:T-1")], to="into"))
-    assert [
-        (item.source.root, item.destination.root, item.action) for item in created.items
-    ] == [("from:T-1", "into:T-1", "created")]
+    assert [(item.source.root, landed(item), item.action) for item in created.items] == [
+        ("from:T-1", "into:T-1", "created")
+    ]
     # The destination really holds it, read back through the same binary.
     assert run(client.task_show(id="into:T-1")).items[0].item.metadata == {
         "caller.count": 3,
@@ -215,9 +222,7 @@ def test_copy_drives_the_binary_and_reports_each_item(binary: Path, tmp_path: Pa
         encoding="utf-8",
     )
     updated = run(client.task_copy(ids=["into:T-1"], to="from"))
-    assert [(item.destination.root, item.action) for item in updated.items] == [
-        ("from:T-1", "updated")
-    ]
+    assert [(landed(item), item.action) for item in updated.items] == [("from:T-1", "updated")]
     assert run(client.task_show(id="from:T-1")).items[0].item.title == "Alpha engine, edited"
 
     with pytest.raises(OnetaskgraphError) as refused:

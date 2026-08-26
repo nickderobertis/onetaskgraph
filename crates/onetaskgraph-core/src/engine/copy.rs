@@ -198,27 +198,23 @@ impl Engine {
     /// carry, which it names rather than dropping.
     pub async fn copy(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
         let destination = self.writable(&request.destination)?;
-        let mut items = Vec::new();
-        for id in &request.items {
-            match request.kind {
-                ItemKind::Task => {
-                    items.extend(
-                        self.copy_items(
-                            destination,
-                            request,
-                            ItemKind::Task,
-                            std::slice::from_ref(id),
-                            None,
-                        )
-                        .await?,
-                    );
-                }
-                ItemKind::Project => {
+        match request.kind {
+            // Every id at once, because the ids named together are the copied set: an
+            // edge between two of them is recreated at the destination, and one item at a
+            // time could not know that the far end was coming.
+            ItemKind::Task => Ok(CopyReport {
+                items: self
+                    .copy_items(destination, request, ItemKind::Task, &request.items, None)
+                    .await?,
+            }),
+            ItemKind::Project => {
+                let mut items = Vec::new();
+                for id in &request.items {
                     items.extend(self.copy_project(destination, request, id).await?);
                 }
+                Ok(CopyReport { items })
             }
         }
-        Ok(CopyReport { items })
     }
 
     /// The destination source, once it is established it exists and can be written.
@@ -387,6 +383,13 @@ impl Engine {
             }
         }
 
+        // Resolved once per item, and used by both passes: the second pass writes the
+        // same item again, and re-deriving this there could file it somewhere else.
+        let mut filed = Vec::new();
+        for item in &planned {
+            filed.push(self.filed(destination, item, project.clone()).await?);
+        }
+
         let mut outcomes = Vec::new();
         let mut deferred = Vec::new();
         for (index, item) in planned.iter().enumerate() {
@@ -401,7 +404,7 @@ impl Engine {
                 deferred.push(index);
             }
             let outcome = self
-                .land(destination, request, item, project.clone(), &edges)
+                .land(destination, request, item, filed[index].clone(), &edges)
                 .await?;
             if let Some(id) = &outcome.destination {
                 written.insert(item.source.to_string(), id.native.clone());
@@ -428,7 +431,7 @@ impl Engine {
                 destination,
                 item,
                 Some(id.native),
-                project.clone(),
+                filed[index].clone(),
                 &resolved(&edges),
             )
             .await?;
@@ -574,11 +577,6 @@ impl Engine {
             Target::Update(id) => Some(id.clone()),
             Target::Create => None,
         };
-        let project = match (&item.item, project) {
-            (Item::Task(task), None) => self.counterpart(destination, item, task).await?,
-            (Item::Task(_), filed) => filed,
-            (Item::Project(_), _) => None,
-        };
         let edges = resolved(edges);
         if let Some(id) = &target
             && !self
@@ -611,6 +609,23 @@ impl Engine {
             destination: Some(GlobalId::new(destination.name().clone(), written)),
             action,
         })
+    }
+
+    /// Which destination project this item is filed under, when it is filed at all.
+    ///
+    /// A task copied as part of a project copy is filed under that project's counterpart,
+    /// which the copy has just established. A task copied on its own has to find it.
+    async fn filed(
+        &self,
+        destination: &ResolvedSource,
+        item: &Planned,
+        project: Option<NativeId>,
+    ) -> Result<Option<NativeId>, EngineError> {
+        match (&item.item, project) {
+            (Item::Task(task), None) => self.counterpart(destination, item, task).await,
+            (Item::Task(_), filed) => Ok(filed),
+            (Item::Project(_), _) => Ok(None),
+        }
     }
 
     /// The destination project this task's own project corresponds to, when there is one.

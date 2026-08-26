@@ -911,3 +911,194 @@ async fn a_project_write_carries_its_own_fields_and_an_id_no_path_can_be_made_of
     };
     assert!(message.contains("no character a file name"), "{message}");
 }
+
+#[tokio::test]
+async fn a_status_this_folder_reads_as_another_category_names_both_in_its_refusal() {
+    // One refusal per category the folder would have read it as, because the message is
+    // what a user acts on and "not what you meant" is no help without saying what.
+    let (root, _source) = source();
+    let source = onetaskgraph_local_md::Plugin
+        .build(
+            &SourceName::new("notes").unwrap(),
+            &serde_json::json!({
+                "root": root.path(),
+                "status_mapping": {
+                    "later": "backlog",
+                    "queued": "todo",
+                    "doing": "in-progress",
+                    "dropped": "cancelled",
+                },
+            }),
+            &NoSecrets,
+        )
+        .expect("source builds");
+
+    for (name, reads_as, wanted, category) in [
+        ("later", "backlog", "todo", StatusCategory::Todo),
+        ("queued", "todo", "in-progress", StatusCategory::InProgress),
+        (
+            "doing",
+            "in-progress",
+            "cancelled",
+            StatusCategory::Cancelled,
+        ),
+        ("dropped", "cancelled", "backlog", StatusCategory::Backlog),
+    ] {
+        let Err(SourceError::Refused { message }) = source
+            .write_task(&ItemWrite {
+                target: None,
+                item: outgoing("T-9", "Alpha", name, category),
+                depends_on: Vec::new(),
+            })
+            .await
+        else {
+            panic!("{name} would be read as {reads_as} rather than {wanted}");
+        };
+        assert!(
+            message.contains(&format!("as {reads_as}, not {wanted}")),
+            "{message}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_written_edge_carries_its_kind_and_the_level_of_its_far_end() {
+    let (_root, source) = source();
+    let written = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: outgoing("T-8", "Alpha", "doing", StatusCategory::InProgress),
+            depends_on: vec![
+                DependencyEdge {
+                    from: DependencyEndpoint::from_native(NativeId("T-8".into()), ItemKind::Task),
+                    to: DependencyEndpoint::from_native(NativeId("b".into()), ItemKind::Task),
+                    kind: DependencyKind::Blocks,
+                },
+                DependencyEdge {
+                    from: DependencyEndpoint::from_native(NativeId("T-8".into()), ItemKind::Task),
+                    to: DependencyEndpoint::from_native(NativeId("p".into()), ItemKind::Project),
+                    kind: DependencyKind::Related,
+                },
+            ],
+        })
+        .await
+        .expect("the folder takes the write");
+
+    let edges = source
+        .task_dependencies(&written, Direction::DependsOn, &page(10))
+        .await
+        .expect("the folder answers")
+        .items;
+    assert_eq!(
+        edges
+            .iter()
+            .map(|edge| (edge.to.id().to_owned(), edge.to.kind, edge.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("b".to_owned(), ItemKind::Task, DependencyKind::Blocks),
+            ("p".to_owned(), ItemKind::Project, DependencyKind::Related),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_path_the_filesystem_will_not_take_is_reported_rather_than_silently_lost() {
+    let (root, source) = source();
+    // A file where the folder for a nested id has to go, so creating that folder fails.
+    fs::write(root.path().join("tasks/blocked"), "not a directory").expect("the blocker");
+    let Err(SourceError::Unavailable { message }) = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: outgoing(
+                "blocked/child",
+                "Alpha",
+                "doing",
+                StatusCategory::InProgress,
+            ),
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a folder the filesystem will not create must be reported");
+    };
+    assert!(message.contains("cannot create"), "{message}");
+
+    // A directory where the document has to go, so writing the document fails. It exists,
+    // so the update path reaches the write rather than refusing the target.
+    fs::create_dir(root.path().join("tasks/occupied.md")).expect("the occupying directory");
+    let Err(SourceError::Unavailable { message }) = source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("occupied".into())),
+            item: outgoing("occupied", "Alpha", "doing", StatusCategory::InProgress),
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a document the filesystem will not write must be reported");
+    };
+    assert!(message.contains("cannot write"), "{message}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_target_whose_document_is_a_link_out_of_the_root_is_refused() {
+    use std::os::unix::fs::symlink;
+    let (root, source) = source();
+    let outside = tempfile::tempdir().expect("a folder outside the root");
+    fs::write(
+        outside.path().join("elsewhere.md"),
+        "---\ntitle: Elsewhere\nstatus: doing\n---\nbody\n",
+    )
+    .expect("the document outside");
+    symlink(
+        outside.path().join("elsewhere.md"),
+        root.path().join("tasks/escape.md"),
+    )
+    .expect("the escaping link");
+
+    let Err(SourceError::Config { message }) = source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("escape".into())),
+            item: outgoing("escape", "Alpha", "doing", StatusCategory::InProgress),
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a write that would land outside the configured root must be refused");
+    };
+    assert!(message.contains("escapes configured root"), "{message}");
+}
+
+#[tokio::test]
+async fn a_folder_that_already_answers_to_every_name_a_create_could_take_refuses() {
+    let (root, source) = source();
+    // The create tries the id it was given and then a thousand suffixes; a folder holding
+    // all of them has no name left to give, and saying so beats writing over one.
+    fs::write(
+        root.path().join("tasks/taken.md"),
+        "---\ntitle: Taken\nstatus: doing\n---\nbody\n",
+    )
+    .expect("the first name");
+    for attempt in 2..=1_000 {
+        fs::write(
+            root.path().join(format!("tasks/taken-{attempt}.md")),
+            "---\ntitle: Taken\nstatus: doing\n---\nbody\n",
+        )
+        .expect("a taken name");
+    }
+
+    let Err(SourceError::Refused { message }) = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: outgoing("taken", "Alpha", "doing", StatusCategory::InProgress),
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a folder with no name left must refuse rather than write over one");
+    };
+    assert!(
+        message.contains("every name from taken to taken-1000"),
+        "{message}"
+    );
+}
