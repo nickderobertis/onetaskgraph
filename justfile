@@ -40,7 +40,7 @@ gate: script-check deny distribution-check distribution-test
     @{{nx}} run-many -t check --all
 
 # Nx maps no project to scripts/, so `nx affected` selects nothing at all for a change that
-# only edits one — exactly the change these three exist to catch. Hence a recipe rather than
+# only edits one — exactly the change these checks exist to catch. Hence a recipe rather than
 # an Nx target.
 
 # Prove the scripts still run on the bash 3.2 macos-latest ships. Seconds, so it goes first.
