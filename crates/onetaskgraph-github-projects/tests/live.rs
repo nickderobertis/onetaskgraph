@@ -48,24 +48,48 @@ async fn graphql_variables(
     Ok(response)
 }
 
-async fn live_write_status(token: &str, project_id: &str) -> Result<String, String> {
+async fn writable_fields(token: &str, project_id: &str) -> Result<Vec<Value>, String> {
     let response = graphql_variables(
         token,
-        "query($id:ID!){node(id:$id){... on ProjectV2{fields(first:100){nodes{... on ProjectV2SingleSelectField{name options{name}} ... on ProjectV2Field{name}}}}}}",
+        "query($id:ID!){node(id:$id){... on ProjectV2{fields(first:100){nodes{... on ProjectV2SingleSelectField{id name options{name}} ... on ProjectV2Field{id name}}}}}}",
         "writable field discovery",
         json!({"id":project_id}),
     )
     .await?;
-    let fields = response
+    response
         .pointer("/data/node/fields/nodes")
         .and_then(Value::as_array)
-        .ok_or_else(|| "writable field discovery returned no project fields".to_owned())?;
-    if !fields
+        .cloned()
+        .ok_or_else(|| "writable field discovery returned no project fields".to_owned())
+}
+
+async fn ensure_metadata_field(token: &str, project_id: &str) -> Result<bool, String> {
+    if writable_fields(token, project_id)
+        .await?
         .iter()
         .any(|field| field.get("name").and_then(Value::as_str) == Some("onetaskgraph.metadata"))
     {
-        return Err("live project has no onetaskgraph.metadata text field".to_owned());
+        return Ok(false);
     }
+    let response = graphql_variables(
+        token,
+        "mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){projectV2Field{... on ProjectV2Field{id name}}}}",
+        "live metadata field creation",
+        json!({"input":{"projectId":project_id,"dataType":"TEXT","name":"onetaskgraph.metadata"}}),
+    )
+    .await?;
+    if response
+        .pointer("/data/createProjectV2Field/projectV2Field/name")
+        .and_then(Value::as_str)
+        != Some("onetaskgraph.metadata")
+    {
+        return Err("GitHub did not confirm creation of the live metadata field".to_owned());
+    }
+    Ok(true)
+}
+
+async fn live_write_status(token: &str, project_id: &str) -> Result<String, String> {
+    let fields = writable_fields(token, project_id).await?;
     fields
         .iter()
         .find(|field| field.get("name").and_then(Value::as_str) == Some("Status"))
@@ -76,6 +100,39 @@ async fn live_write_status(token: &str, project_id: &str) -> Result<String, Stri
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| "live project has no selectable Status option".to_owned())
+}
+
+async fn remove_live_metadata_field(token: &str, project_id: &str) -> Result<(), String> {
+    for _ in 0..10 {
+        let field_ids = writable_fields(token, project_id)
+            .await?
+            .into_iter()
+            .filter(|field| {
+                field.get("name").and_then(Value::as_str) == Some("onetaskgraph.metadata")
+            })
+            .map(|field| {
+                field
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| "live metadata field has no id".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if field_ids.is_empty() {
+            return Ok(());
+        }
+        for field_id in field_ids {
+            graphql_variables(
+                token,
+                "mutation($input:DeleteProjectV2FieldInput!){deleteProjectV2Field(input:$input){projectV2Field{... on ProjectV2Field{id}}}}",
+                "live metadata field cleanup",
+                json!({"input":{"fieldId":field_id}}),
+            )
+            .await?;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    Err("live metadata field cleanup left the temporary field behind".to_owned())
 }
 
 async fn artifact_item_ids(
@@ -128,32 +185,56 @@ async fn artifact_item_ids(
 }
 
 async fn remove_live_artifacts(token: &str, project_id: &str, title: &str) -> Result<(), String> {
-    for item_id in artifact_item_ids(token, project_id, title).await? {
-        let response = graphql_variables(
-            token,
-            "mutation($input:DeleteProjectV2ItemInput!){deleteProjectV2Item(input:$input){deletedItemId}}",
-            "live artifact cleanup",
-            json!({"input":{"projectId":project_id,"itemId":item_id}}),
-        )
-        .await?;
-        if response
-            .pointer("/data/deleteProjectV2Item/deletedItemId")
-            .and_then(Value::as_str)
-            != Some(item_id.as_str())
-        {
-            return Err(format!(
-                "GitHub did not confirm deletion of project item {item_id}"
-            ));
+    for _ in 0..10 {
+        let item_ids = artifact_item_ids(token, project_id, title).await?;
+        if item_ids.is_empty() {
+            return Ok(());
         }
+        for item_id in item_ids {
+            let response = graphql_variables(
+                token,
+                "mutation($input:DeleteProjectV2ItemInput!){deleteProjectV2Item(input:$input){deletedItemId}}",
+                "live artifact cleanup",
+                json!({"input":{"projectId":project_id,"itemId":item_id}}),
+            )
+            .await?;
+            if response
+                .pointer("/data/deleteProjectV2Item/deletedItemId")
+                .and_then(Value::as_str)
+                != Some(item_id.as_str())
+            {
+                return Err(format!(
+                    "GitHub did not confirm deletion of project item {item_id}"
+                ));
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
-    let residue = artifact_item_ids(token, project_id, title).await?;
-    if residue.is_empty() {
-        Ok(())
+    Err(format!(
+        "live artifact cleanup left project items: {}",
+        artifact_item_ids(token, project_id, title)
+            .await?
+            .join(", ")
+    ))
+}
+
+async fn remove_live_state(
+    token: &str,
+    project_id: &str,
+    title: &str,
+    remove_metadata_field: bool,
+) -> Result<(), String> {
+    let item_result = remove_live_artifacts(token, project_id, title).await;
+    let field_result = if remove_metadata_field {
+        remove_live_metadata_field(token, project_id).await
     } else {
-        Err(format!(
-            "live artifact cleanup left project items: {}",
-            residue.join(", ")
-        ))
+        Ok(())
+    };
+    match (item_result, field_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(item), Ok(())) => Err(item),
+        (Ok(()), Err(field)) => Err(field),
+        (Err(item), Err(field)) => Err(format!("{item}; additionally, {field}")),
     }
 }
 
@@ -278,6 +359,16 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             "DeleteProjectV2ItemInput",
             "DeleteProjectV2ItemPayload",
         ),
+        (
+            "createProjectV2Field",
+            "CreateProjectV2FieldInput",
+            "CreateProjectV2FieldPayload",
+        ),
+        (
+            "deleteProjectV2Field",
+            "DeleteProjectV2FieldInput",
+            "DeleteProjectV2FieldPayload",
+        ),
         ("updateIssue", "UpdateIssueInput", "UpdateIssuePayload"),
         (
             "updateProjectV2",
@@ -362,6 +453,12 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             true,
             &["projectId", "itemId"][..],
         ),
+        (
+            "CreateProjectV2FieldInput",
+            true,
+            &["projectId", "dataType", "name"][..],
+        ),
+        ("DeleteProjectV2FieldInput", true, &["fieldId"][..]),
         ("AddProjectV2DraftIssuePayload", false, &["projectItem"][..]),
         (
             "UpdateProjectV2DraftIssuePayload",
@@ -386,6 +483,16 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             &["issue", "blockingIssue"][..],
         ),
         ("DeleteProjectV2ItemPayload", false, &["deletedItemId"][..]),
+        (
+            "CreateProjectV2FieldPayload",
+            false,
+            &["projectV2Field"][..],
+        ),
+        (
+            "DeleteProjectV2FieldPayload",
+            false,
+            &["projectV2Field"][..],
+        ),
     ] {
         let selection = if input { "inputFields" } else { "fields" };
         let document = format!(
@@ -622,9 +729,26 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     );
 
     let project_id = project.id.0.clone();
-    let status_name = live_write_status(&token, &project_id)
-        .await
-        .unwrap_or_else(|error| panic!("GitHub live project cannot exercise writes: {error}"));
+    let metadata_field_created = match ensure_metadata_field(&token, &project_id).await {
+        Ok(created) => created,
+        Err(error) => {
+            let cleanup = remove_live_metadata_field(&token, &project_id).await;
+            panic!("GitHub live metadata setup failed: {error}; cleanup result: {cleanup:?}");
+        }
+    };
+    let status_name = match live_write_status(&token, &project_id).await {
+        Ok(status) => status,
+        Err(error) => {
+            let cleanup = if metadata_field_created {
+                remove_live_metadata_field(&token, &project_id).await
+            } else {
+                Ok(())
+            };
+            panic!(
+                "GitHub live project cannot exercise writes: {error}; cleanup result: {cleanup:?}"
+            );
+        }
+    };
     let title = format!(
         "onetaskgraph live cleanup {}-{}",
         std::process::id(),
@@ -661,10 +785,18 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
                 })
                 .await
                 .map_err(|error| format!("live GitHub write failed: {error}"))?;
-            let written = source
-                .get_task(&id)
-                .await
-                .map_err(|error| format!("live GitHub write read-back failed: {error}"))?
+            let mut written = None;
+            for _ in 0..10 {
+                written = source
+                    .get_task(&id)
+                    .await
+                    .map_err(|error| format!("live GitHub write read-back failed: {error}"))?;
+                if written.is_some() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            let written = written
                 .ok_or_else(|| "live GitHub write was not readable after creation".to_owned())?;
             if written.title != written_title
                 || written.metadata.get("live.round_trip") != Some(&json!({"nested":[1,true,null]}))
@@ -673,7 +805,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
             }
             Ok(())
         },
-        || remove_live_artifacts(&token, &project_id, &cleanup_title),
+        || remove_live_state(&token, &project_id, &cleanup_title, metadata_field_created),
     )
     .await
     .unwrap_or_else(|error| panic!("GitHub live write journey failed: {error}"));
