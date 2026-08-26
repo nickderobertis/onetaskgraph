@@ -305,7 +305,19 @@ expect_refused "a file under scripts/ that cannot be read as text" \
   "scripts/undecodable.sh" "could not be read as text"
 fixture rm -f "$scratch/scripts/undecodable.sh"
 
-# 12. The scan dying partway through, rather than refusing. Python exits 1 on an unhandled
+# 12. Imported Python helpers create interpreter bytecode under this directory during the
+#     gate itself. That generated cache is not a shell script and must not make the scan
+#     fail merely because it is binary; the undecodable real-script case above proves the
+#     exclusion does not turn into a general skip for non-UTF-8 files.
+fixture mkdir -p "$scratch/scripts/__pycache__"
+printf '\377\376python bytecode fixture\n' > "$scratch/scripts/__pycache__/helper.cpython-312.pyc" || fatal \
+  "could not write the Python bytecode fixture in $scratch/scripts/__pycache__, so this case was never put to the guard" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+run_guard
+expect_passed "generated Python bytecode under scripts/__pycache__"
+fixture rm -rf "$scratch/scripts/__pycache__"
+
+# 13. The scan dying partway through, rather than refusing. Python exits 1 on an unhandled
 #     exception, so while the refusal was also spelled 1 the two arrived at the same place:
 #     this check would have exited 1 on a bare traceback, having cleared every script the
 #     scan never reached, with none of the next action it gives for any other failure. The
