@@ -193,8 +193,27 @@ chmod +x "$scratch/release-plz" || fatal \
   "could not make the release-plz stand-in executable" \
   "check the permissions of \$TMPDIR, then rerun"
 
-# Kept so the case that drives a PATH without release-plz on it can restore this one.
-readonly PATH_WITHOUT_RELEASE_PLZ="$PATH"
+# The PATH the "no release-plz installed" case runs under. The ambient PATH will not do:
+# a machine with release-plz installed would run the real tool against the scratch tree and
+# the case would prove the opposite of what it says. So every directory carrying one is
+# dropped, and the result is put to the question it is about to be trusted for.
+path_without_release_plz() {
+  local entry result=""
+  local IFS=:
+  for entry in $PATH; do
+    [ -n "$entry" ] || continue
+    ( PATH="$entry"; hash -r 2>/dev/null; command -v release-plz >/dev/null 2>&1 ) && continue
+    result="${result:+$result:}$entry"
+  done
+  printf '%s' "$result"
+}
+PATH_WITHOUT_RELEASE_PLZ="$(path_without_release_plz)"
+readonly PATH_WITHOUT_RELEASE_PLZ
+if ( PATH="$PATH_WITHOUT_RELEASE_PLZ"; hash -r 2>/dev/null; command -v release-plz >/dev/null 2>&1 ); then
+  fatal \
+    "release-plz is still reachable after dropping every directory that carries one, so the case for a machine without it would drive the real tool against the scratch tree" \
+    "run 'command -v release-plz' and take it off PATH — a shell function or an alias reaches past the directory scan above"
+fi
 export PATH="$scratch:$PATH"
 export RELEASE_PLZ_STUB_VERSION="$new_version"
 export RELEASE_PLZ_STUB_STATE="$state"
