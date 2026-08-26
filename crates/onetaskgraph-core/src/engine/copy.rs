@@ -38,13 +38,11 @@ use super::{Engine, EngineError, Filters, Paging, TaskRequest};
 #[derive(Debug, Clone)]
 pub struct CopyRequest {
     /// The qualified items to copy, in the order they were named.
-    pub items: Vec<GlobalId>,
-    /// Whether those ids name tasks or projects.
-    pub kind: ItemKind,
+    pub items: CopyItems,
+    /// What those ids name, and what comes with them.
+    pub scope: CopyScope,
     /// The configured source to copy into — a source name, never a qualified id.
     pub destination: SourceName,
-    /// For a project copy, whether the tasks in it are copied too.
-    pub include_tasks: bool,
     /// How to re-establish a correspondence the two origin rules cannot find.
     pub match_by: Option<MatchBy>,
     /// Whether an origin naming nothing at the destination falls through to the search
@@ -52,6 +50,45 @@ pub struct CopyRequest {
     pub recreate: bool,
     /// Whether to perform every read and no write.
     pub dry_run: bool,
+}
+
+/// The items one copy names: at least one, because a copy naming none is not a copy.
+///
+/// A newtype rather than a bare `Vec`, for the reason [`Repository`] is one: the empty
+/// list is not a copy of nothing, it is a caller mistake, and a type that can hold it
+/// leaves every reader to decide what it means — a report with no entries, an error, a
+/// silent success. None of those is better than not being able to say it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyItems(Vec<GlobalId>);
+
+impl CopyItems {
+    /// The items a caller named, or `None` when they named none.
+    #[must_use]
+    pub fn new(items: Vec<GlobalId>) -> Option<Self> {
+        (!items.is_empty()).then_some(Self(items))
+    }
+
+    /// The items, in the order they were named.
+    #[must_use]
+    pub fn as_slice(&self) -> &[GlobalId] {
+        &self.0
+    }
+}
+
+/// What the ids a copy names are, and what travels with them.
+///
+/// One value rather than a kind beside a flag, because three of the four combinations
+/// those two would make are real and the fourth — tasks, with the tasks of each also
+/// copied — means nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyScope {
+    /// The ids name tasks, and only those tasks are copied.
+    Tasks,
+    /// The ids name projects.
+    Projects {
+        /// Whether the tasks in each project are copied too.
+        tasks: bool,
+    },
 }
 
 /// The caller-named escape for a correspondence neither origin rule can find.
@@ -90,29 +127,81 @@ pub struct CopyReport {
 }
 
 /// What happened to one item.
+///
+/// `action` and `destination` are one value rather than two fields side by side: an
+/// updated item without a destination id, or an orphan without one, are states this type
+/// must not be able to say — the id *is* what those outcomes are about. The one outcome
+/// that legitimately has none is a dry run that would create, because nothing was
+/// created and there is no id to report.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CopyOutcome {
     /// The qualified id the item was read from.
     pub source: GlobalId,
-    /// The qualified id it was written to, or `null` for a dry run that would create.
-    pub destination: Option<GlobalId>,
-    /// Which of the four things happened.
+    /// What happened to it, and where.
+    #[serde(flatten)]
     pub action: CopyAction,
 }
 
-/// The four things a copy can do to one item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
+impl CopyOutcome {
+    /// The qualified id this outcome landed on, when it landed on one.
+    #[must_use]
+    pub fn destination(&self) -> Option<&GlobalId> {
+        self.action.destination()
+    }
+}
+
+/// The four things a copy can do to one item, and the id each of them is about.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "action", rename_all = "kebab-case")]
 pub enum CopyAction {
     /// The destination held no counterpart, so one was created.
-    Created,
+    Created {
+        /// The id it was created under, or `null` for a dry run that would have created
+        /// one — there is no id, because nothing was.
+        destination: Option<GlobalId>,
+    },
     /// The destination held a counterpart and it now reads as the source does.
-    Updated,
+    Updated {
+        /// The item that was updated.
+        destination: GlobalId,
+    },
     /// The destination held a counterpart that already read that way; nothing was written.
-    Unchanged,
+    Unchanged {
+        /// The item that already said it.
+        destination: GlobalId,
+    },
     /// The destination holds a counterpart the source no longer does. A copy never
     /// deletes, so it was left exactly as it is.
-    Orphaned,
+    Orphaned {
+        /// The item that was left alone.
+        destination: GlobalId,
+    },
+}
+
+impl CopyAction {
+    /// The qualified id this action is about, when there is one.
+    #[must_use]
+    pub fn destination(&self) -> Option<&GlobalId> {
+        match self {
+            Self::Created { destination } => destination.as_ref(),
+            Self::Updated { destination }
+            | Self::Unchanged { destination }
+            | Self::Orphaned { destination } => Some(destination),
+        }
+    }
+
+    /// The word this action serializes as, taken from its own `Serialize`.
+    ///
+    /// Read back off the wire form rather than written out again in a `match`, for the
+    /// reason `render::wire` gives: a second spelling of `unchanged` would be a second
+    /// place for it to drift from the one a caller reads.
+    #[must_use]
+    pub fn name(&self) -> String {
+        serde_json::to_value(self).expect("a contract enum serialises")["action"]
+            .as_str()
+            .expect("an internally tagged enum carries its tag")
+            .to_owned()
+    }
 }
 
 /// Where one item is going at the destination.
@@ -198,19 +287,25 @@ impl Engine {
     /// carry, which it names rather than dropping.
     pub async fn copy(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
         let destination = self.writable(&request.destination)?;
-        match request.kind {
+        match request.scope {
             // Every id at once, because the ids named together are the copied set: an
             // edge between two of them is recreated at the destination, and one item at a
             // time could not know that the far end was coming.
-            ItemKind::Task => Ok(CopyReport {
+            CopyScope::Tasks => Ok(CopyReport {
                 items: self
-                    .copy_items(destination, request, ItemKind::Task, &request.items, None)
+                    .copy_items(
+                        destination,
+                        request,
+                        ItemKind::Task,
+                        request.items.as_slice(),
+                        None,
+                    )
                     .await?,
             }),
-            ItemKind::Project => {
+            CopyScope::Projects { tasks } => {
                 let mut items = Vec::new();
-                for id in &request.items {
-                    items.extend(self.copy_project(destination, request, id).await?);
+                for id in request.items.as_slice() {
+                    items.extend(self.copy_project(destination, request, id, tasks).await?);
                 }
                 Ok(CopyReport { items })
             }
@@ -245,6 +340,7 @@ impl Engine {
         destination: &ResolvedSource,
         request: &CopyRequest,
         id: &GlobalId,
+        tasks: bool,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
         let mut outcomes = self
             .copy_items(
@@ -255,15 +351,13 @@ impl Engine {
                 None,
             )
             .await?;
-        if !request.include_tasks {
+        if !tasks {
             return Ok(outcomes);
         }
         // `None` when a dry run would have created the project: nothing was written, so
         // there is no destination project id to file the tasks under. Every task is still
         // read and still reported, because that is what a dry run is for.
-        let project = outcomes
-            .first()
-            .and_then(|outcome| outcome.destination.clone());
+        let project = outcomes.first().and_then(CopyOutcome::destination).cloned();
         let members = self.project_members(id).await?;
         outcomes.extend(
             self.copy_items(
@@ -343,8 +437,9 @@ impl Engine {
                 }
                 orphans.push(CopyOutcome {
                     source: origin,
-                    destination: Some(GlobalId::new(destination.name().clone(), task.id.clone())),
-                    action: CopyAction::Orphaned,
+                    action: CopyAction::Orphaned {
+                        destination: GlobalId::new(destination.name().clone(), task.id.clone()),
+                    },
                 });
             }
             match page.next {
@@ -406,7 +501,7 @@ impl Engine {
             let outcome = self
                 .land(destination, request, item, filed[index].clone(), &edges)
                 .await?;
-            if let Some(id) = &outcome.destination {
+            if let Some(id) = outcome.destination() {
                 written.insert(item.source.to_string(), id.native.clone());
             }
             outcomes.push(outcome);
@@ -417,7 +512,7 @@ impl Engine {
         }
         for index in deferred {
             let item = &planned[index];
-            let Some(id) = outcomes[index].destination.clone() else {
+            let Some(id) = outcomes[index].destination().cloned() else {
                 continue;
             };
             let edges = mapped_edges(
@@ -578,6 +673,7 @@ impl Engine {
             Target::Create => None,
         };
         let edges = resolved(edges);
+        let qualified = |native: NativeId| GlobalId::new(destination.name().clone(), native);
         if let Some(id) = &target
             && !self
                 .changes(destination, item, id, &project, &edges)
@@ -585,29 +681,39 @@ impl Engine {
         {
             return Ok(CopyOutcome {
                 source: item.source.clone(),
-                destination: Some(GlobalId::new(destination.name().clone(), id.clone())),
-                action: CopyAction::Unchanged,
+                action: CopyAction::Unchanged {
+                    destination: qualified(id.clone()),
+                },
             });
         }
-        let action = if target.is_some() {
-            CopyAction::Updated
-        } else {
-            CopyAction::Created
-        };
         if request.dry_run {
             return Ok(CopyOutcome {
                 source: item.source.clone(),
-                destination: target.map(|id| GlobalId::new(destination.name().clone(), id)),
-                action,
+                action: match target {
+                    Some(id) => CopyAction::Updated {
+                        destination: qualified(id),
+                    },
+                    // Null only here: nothing was created, so there is no id to report.
+                    None => CopyAction::Created { destination: None },
+                },
             });
         }
-        let written = self
-            .write(destination, item, target, project, &edges)
-            .await?;
+        let updating = target.is_some();
+        let written = qualified(
+            self.write(destination, item, target, project, &edges)
+                .await?,
+        );
         Ok(CopyOutcome {
             source: item.source.clone(),
-            destination: Some(GlobalId::new(destination.name().clone(), written)),
-            action,
+            action: if updating {
+                CopyAction::Updated {
+                    destination: written,
+                }
+            } else {
+                CopyAction::Created {
+                    destination: Some(written),
+                }
+            },
         })
     }
 

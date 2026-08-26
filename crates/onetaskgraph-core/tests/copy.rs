@@ -11,9 +11,10 @@
 use std::num::NonZeroU32;
 
 use onetaskgraph_core::{
-    Config, CopyAction, CopyRequest, Engine, EngineError, GlobalId, MatchBy, Paging, TaskRequest,
+    Config, CopyAction, CopyItems, CopyOutcome, CopyRequest, CopyScope, Engine, EngineError,
+    GlobalId, MatchBy, Paging, TaskRequest,
 };
-use onetaskgraph_plugin_api::{ItemKind, SecretResolver, SourceName};
+use onetaskgraph_plugin_api::{SecretResolver, SourceName};
 use secrecy::SecretString;
 use serde_json::{Value, json};
 
@@ -63,15 +64,28 @@ fn pair() -> Engine {
 
 /// A copy of one task into `into`, with every escape switched off.
 fn one(item: &str) -> CopyRequest {
+    many(&[item], CopyScope::Tasks)
+}
+
+/// A copy of several items into `into`, with every escape switched off.
+fn many(items: &[&str], scope: CopyScope) -> CopyRequest {
     CopyRequest {
-        items: vec![id(item)],
-        kind: ItemKind::Task,
+        items: CopyItems::new(items.iter().map(|item| id(item)).collect())
+            .expect("a copy names at least one item"),
+        scope,
         destination: name("into"),
-        include_tasks: true,
         match_by: None,
         recreate: false,
         dry_run: false,
     }
+}
+
+/// The destination id and the word an outcome reports, as a comparable pair.
+fn landed(outcome: &CopyOutcome) -> (Option<String>, String) {
+    (
+        outcome.destination().map(ToString::to_string),
+        outcome.action.name(),
+    )
 }
 
 /// Every task one source holds, by qualified id, through the engine's own list verb.
@@ -102,8 +116,10 @@ async fn a_rust_caller_creates_then_updates_the_same_destination_item() {
     let created = engine.copy(&one("from:T-1")).await.expect("the copy runs");
     assert_eq!(created.items.len(), 1);
     assert_eq!(created.items[0].source, id("from:T-1"));
-    assert_eq!(created.items[0].destination, Some(id("into:T-1")));
-    assert_eq!(created.items[0].action, CopyAction::Created);
+    assert_eq!(
+        landed(&created.items[0]),
+        (Some("into:T-1".to_owned()), "created".to_owned())
+    );
 
     // The destination really holds it, with the value and the JSON type of every
     // caller-defined key intact — read back through the engine, not through the write.
@@ -128,7 +144,10 @@ async fn a_rust_caller_creates_then_updates_the_same_destination_item() {
 
     // A second copy of the same item updates that one and creates nothing.
     let again = engine.copy(&one("from:T-1")).await.expect("the copy runs");
-    assert_eq!(again.items[0].action, CopyAction::Unchanged);
+    assert_eq!(
+        landed(&again.items[0]),
+        (Some("into:T-1".to_owned()), "unchanged".to_owned())
+    );
     assert_eq!(listed(&engine, "into").await, vec!["into:T-1".to_owned()]);
 
     // And a copy back the other way follows the origin the copied item carries, so the
@@ -140,8 +159,10 @@ async fn a_rust_caller_creates_then_updates_the_same_destination_item() {
         })
         .await
         .expect("the copy runs");
-    assert_eq!(back.items[0].destination, Some(id("from:T-1")));
-    assert_eq!(back.items[0].action, CopyAction::Updated);
+    assert_eq!(
+        landed(&back.items[0]),
+        (Some("from:T-1".to_owned()), "updated".to_owned())
+    );
     assert_eq!(listed(&engine, "from").await, vec!["from:T-1".to_owned()]);
 }
 
@@ -181,9 +202,11 @@ async fn a_dry_run_reads_everything_and_writes_nothing() {
         })
         .await
         .expect("the copy runs");
-    assert_eq!(planned.items[0].action, CopyAction::Created);
     // Null only for a dry run that would create: there is no id, because nothing was.
-    assert_eq!(planned.items[0].destination, None);
+    assert_eq!(
+        planned.items[0].action,
+        CopyAction::Created { destination: None }
+    );
     assert!(listed(&engine, "into").await.is_empty());
 }
 
@@ -245,8 +268,10 @@ async fn a_stale_origin_refuses_until_recreate_says_to_create_instead() {
         })
         .await
         .expect("--recreate falls through to the search rule");
-    assert_eq!(created.items[0].action, CopyAction::Created);
-    assert_eq!(created.items[0].destination, Some(id("into:T-1")));
+    assert_eq!(
+        landed(&created.items[0]),
+        (Some("into:T-1".to_owned()), "created".to_owned())
+    );
 }
 
 #[tokio::test]
@@ -261,8 +286,10 @@ async fn a_lost_origin_creates_a_second_item_until_match_by_re_establishes_it() 
         "into": {"plugin": "in-memory", "config": {"tasks": [task("T-1", "Alpha engine")]}},
     }));
     let duplicated = engine.copy(&one("from:T-1")).await.expect("the copy runs");
-    assert_eq!(duplicated.items[0].action, CopyAction::Created);
-    assert_eq!(duplicated.items[0].destination, Some(id("into:T-1-2")));
+    assert_eq!(
+        landed(&duplicated.items[0]),
+        (Some("into:T-1-2".to_owned()), "created".to_owned())
+    );
 
     // The caller-named escape re-establishes it without hand-editing ids.
     let engine = engine_over(json!({
@@ -276,8 +303,10 @@ async fn a_lost_origin_creates_a_second_item_until_match_by_re_establishes_it() 
         })
         .await
         .expect("the copy runs");
-    assert_eq!(matched.items[0].action, CopyAction::Updated);
-    assert_eq!(matched.items[0].destination, Some(id("into:OTHER")));
+    assert_eq!(
+        landed(&matched.items[0]),
+        (Some("into:OTHER".to_owned()), "updated".to_owned())
+    );
 
     // And on a metadata key of the caller's own choosing, for a title that moved.
     let engine = engine_over(json!({
@@ -291,8 +320,10 @@ async fn a_lost_origin_creates_a_second_item_until_match_by_re_establishes_it() 
         })
         .await
         .expect("the copy runs");
-    assert_eq!(matched.items[0].action, CopyAction::Updated);
-    assert_eq!(matched.items[0].destination, Some(id("into:OTHER")));
+    assert_eq!(
+        landed(&matched.items[0]),
+        (Some("into:OTHER".to_owned()), "updated".to_owned())
+    );
 }
 
 #[tokio::test]
@@ -335,22 +366,18 @@ async fn copying_a_project_carries_its_tasks_and_reports_one_the_source_no_longe
         "into": {"plugin": "in-memory", "config": {}},
     }));
 
-    let project = CopyRequest {
-        items: vec![id("from:P-1")],
-        kind: ItemKind::Project,
-        ..one("from:P-1")
-    };
+    let project = many(&["from:P-1"], CopyScope::Projects { tasks: true });
     let copied = engine.copy(&project).await.expect("the copy runs");
     assert_eq!(
         copied
             .items
             .iter()
-            .map(|outcome| (outcome.source.to_string(), outcome.action))
+            .map(|outcome| (outcome.source.to_string(), outcome.action.name()))
             .collect::<Vec<_>>(),
         vec![
-            ("from:P-1".to_owned(), CopyAction::Created),
-            ("from:T-1".to_owned(), CopyAction::Created),
-            ("from:T-2".to_owned(), CopyAction::Created),
+            ("from:P-1".to_owned(), "created".to_owned()),
+            ("from:T-1".to_owned(), "created".to_owned()),
+            ("from:T-2".to_owned(), "created".to_owned()),
         ]
     );
 
@@ -360,7 +387,7 @@ async fn copying_a_project_carries_its_tasks_and_reports_one_the_source_no_longe
         again
             .items
             .iter()
-            .all(|outcome| outcome.action == CopyAction::Unchanged),
+            .all(|outcome| outcome.action.name() == "unchanged"),
         "{again:?}"
     );
     assert_eq!(
@@ -370,10 +397,7 @@ async fn copying_a_project_carries_its_tasks_and_reports_one_the_source_no_longe
 
     // `--no-tasks` copies the project alone.
     let alone = engine
-        .copy(&CopyRequest {
-            include_tasks: false,
-            ..project
-        })
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: false }))
         .await
         .expect("the copy runs");
     assert_eq!(alone.items.len(), 1);
@@ -409,20 +433,16 @@ async fn a_destination_item_the_source_no_longer_holds_is_left_alone_and_reporte
     }));
 
     let report = engine
-        .copy(&CopyRequest {
-            items: vec![id("from:P-1")],
-            kind: ItemKind::Project,
-            ..one("from:P-1")
-        })
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
         .await
         .expect("the copy runs");
     let orphan = report
         .items
         .iter()
-        .find(|outcome| outcome.action == CopyAction::Orphaned)
+        .find(|outcome| outcome.action.name() == "orphaned")
         .unwrap_or_else(|| panic!("no orphan was reported: {report:?}"));
     assert_eq!(orphan.source, id("from:T-2"));
-    assert_eq!(orphan.destination, Some(id("into:T-2")));
+    assert_eq!(orphan.destination(), Some(&id("into:T-2")));
     // Left exactly as it is: still there, and still saying what it said.
     let held = engine
         .task(&id("into:T-2"))
@@ -455,10 +475,7 @@ async fn the_edges_a_copy_read_are_written_and_a_far_end_that_leaves_the_set_is_
     }));
 
     let copied = engine
-        .copy(&CopyRequest {
-            items: vec![id("from:T-1"), id("from:T-2")],
-            ..one("from:T-1")
-        })
+        .copy(&many(&["from:T-1", "from:T-2"], CopyScope::Tasks))
         .await
         .expect("the copy runs");
     assert_eq!(copied.items.len(), 2);
@@ -501,13 +518,12 @@ async fn the_edges_a_copy_read_are_written_and_a_far_end_that_leaves_the_set_is_
     // own source, because that is how a source names its own items.
     let back = engine
         .copy(&CopyRequest {
-            items: vec![id("into:T-1")],
             destination: name("from"),
             ..one("into:T-1")
         })
         .await
         .expect("the copy runs");
-    assert_eq!(back.items[0].destination, Some(id("from:T-1")));
+    assert_eq!(back.items[0].destination(), Some(&id("from:T-1")));
     let edges = engine
         .task_dependencies(&onetaskgraph_core::DependencyRequest {
             id: id("from:T-1"),
@@ -594,16 +610,13 @@ async fn a_project_origin_that_still_names_something_updates_that_project_direct
     }));
 
     let copied = engine
-        .copy(&CopyRequest {
-            items: vec![id("from:P-1")],
-            kind: ItemKind::Project,
-            include_tasks: false,
-            ..one("from:P-1")
-        })
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: false }))
         .await
         .expect("the copy runs");
-    assert_eq!(copied.items[0].action, CopyAction::Updated);
-    assert_eq!(copied.items[0].destination, Some(id("into:BOARD")));
+    assert_eq!(
+        landed(&copied.items[0]),
+        (Some("into:BOARD".to_owned()), "updated".to_owned())
+    );
     assert_eq!(
         engine
             .project(&id("into:BOARD"))
@@ -673,6 +686,8 @@ async fn the_scan_that_finds_a_counterpart_walks_the_destination_a_page_at_a_tim
     }));
 
     let copied = engine.copy(&one("from:T-1")).await.expect("the copy runs");
-    assert_eq!(copied.items[0].action, CopyAction::Updated);
-    assert_eq!(copied.items[0].destination, Some(id("into:C")));
+    assert_eq!(
+        landed(&copied.items[0]),
+        (Some("into:C".to_owned()), "updated".to_owned())
+    );
 }

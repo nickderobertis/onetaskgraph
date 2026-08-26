@@ -50,13 +50,47 @@ task_dependencies: ("both-directions" | "forward-only")
 export type Capabilities = GeneratedCapabilities.Capabilities;
 export namespace GeneratedCopyAction {
 /**
- * The four things a copy can do to one item.
+ * The four things a copy can do to one item, and the id each of them is about.
  */
-export type CopyAction = ("created" | "updated" | "unchanged" | "orphaned")
-
-}
-export type CopyAction = GeneratedCopyAction.CopyAction;
-export namespace GeneratedCopyOutcome {
+export type CopyAction = ({
+action: "created"
+/**
+ * The id it was created under, or `null` for a dry run that would have created
+ * one — there is no id, because nothing was.
+ */
+destination?: (GlobalId | null)
+[k: string]: any
+} | {
+action: "updated"
+/**
+ * One item, qualified by the source it came from.
+ * 
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+destination: string
+[k: string]: any
+} | {
+action: "unchanged"
+/**
+ * One item, qualified by the source it came from.
+ * 
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+destination: string
+[k: string]: any
+} | {
+action: "orphaned"
+/**
+ * One item, qualified by the source it came from.
+ * 
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+destination: string
+[k: string]: any
+})
 /**
  * One item, qualified by the source it came from.
  * 
@@ -65,18 +99,19 @@ export namespace GeneratedCopyOutcome {
  */
 export type GlobalId = string
 
+}
+export type CopyAction = GeneratedCopyAction.CopyAction;
+export namespace GeneratedCopyOutcome {
 /**
  * What happened to one item.
+ * 
+ * `action` and `destination` are one value rather than two fields side by side: an
+ * updated item without a destination id, or an orphan without one, are states this type
+ * must not be able to say — the id *is* what those outcomes are about. The one outcome
+ * that legitimately has none is a dry run that would create, because nothing was
+ * created and there is no id to report.
  */
-export interface CopyOutcome {
-/**
- * Which of the four things happened.
- */
-action: ("created" | "updated" | "unchanged" | "orphaned")
-/**
- * The qualified id it was written to, or `null` for a dry run that would create.
- */
-destination?: (GlobalId | null)
+export type CopyOutcome = ({
 /**
  * One item, qualified by the source it came from.
  * 
@@ -85,11 +120,114 @@ destination?: (GlobalId | null)
  */
 source: string
 [k: string]: any
-}
+} & ({
+action: "created"
+/**
+ * The id it was created under, or `null` for a dry run that would have created
+ * one — there is no id, because nothing was.
+ */
+destination?: (GlobalId | null)
+[k: string]: any
+} | {
+action: "updated"
+/**
+ * One item, qualified by the source it came from.
+ * 
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+destination: string
+[k: string]: any
+} | {
+action: "unchanged"
+/**
+ * One item, qualified by the source it came from.
+ * 
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+destination: string
+[k: string]: any
+} | {
+action: "orphaned"
+/**
+ * One item, qualified by the source it came from.
+ * 
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+destination: string
+[k: string]: any
+}))
+/**
+ * One item, qualified by the source it came from.
+ * 
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+export type GlobalId = string
 
 }
 export type CopyOutcome = GeneratedCopyOutcome.CopyOutcome;
 export namespace GeneratedCopyReport {
+/**
+ * What happened to one item.
+ * 
+ * `action` and `destination` are one value rather than two fields side by side: an
+ * updated item without a destination id, or an orphan without one, are states this type
+ * must not be able to say — the id *is* what those outcomes are about. The one outcome
+ * that legitimately has none is a dry run that would create, because nothing was
+ * created and there is no id to report.
+ */
+export type CopyOutcome = ({
+/**
+ * One item, qualified by the source it came from.
+ * 
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+source: string
+[k: string]: any
+} & CopyOutcome1)
+export type CopyOutcome1 = ({
+action: "created"
+/**
+ * The id it was created under, or `null` for a dry run that would have created
+ * one — there is no id, because nothing was.
+ */
+destination?: (GlobalId | null)
+[k: string]: any
+} | {
+action: "updated"
+/**
+ * One item, qualified by the source it came from.
+ * 
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+destination: string
+[k: string]: any
+} | {
+action: "unchanged"
+/**
+ * One item, qualified by the source it came from.
+ * 
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+destination: string
+[k: string]: any
+} | {
+action: "orphaned"
+/**
+ * One item, qualified by the source it came from.
+ * 
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+destination: string
+[k: string]: any
+})
 /**
  * One item, qualified by the source it came from.
  * 
@@ -109,27 +247,6 @@ export interface CopyReport {
  * One entry per item the copy considered, in the order it considered them.
  */
 items: CopyOutcome[]
-[k: string]: any
-}
-/**
- * What happened to one item.
- */
-export interface CopyOutcome {
-/**
- * Which of the four things happened.
- */
-action: ("created" | "updated" | "unchanged" | "orphaned")
-/**
- * The qualified id it was written to, or `null` for a dry run that would create.
- */
-destination?: (GlobalId | null)
-/**
- * One item, qualified by the source it came from.
- * 
- * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
- * so a native id may contain colons freely.
- */
-source: string
 [k: string]: any
 }
 

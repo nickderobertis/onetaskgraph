@@ -34,10 +34,10 @@ pub mod subprocess;
 
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
 pub use engine::{
-    ConfiguredSource, CopyAction, CopyOutcome, CopyReport, CopyRequest, DependencyRequest, Engine,
-    EngineError, Filters, LabelRequest, MatchBy, Paging, ProjectRequest, ProjectSelector,
-    Qualified, QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind, SearchRequest,
-    SourceListing, SourceState, TaskRequest,
+    ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyReport, CopyRequest, CopyScope,
+    DependencyRequest, Engine, EngineError, Filters, LabelRequest, MatchBy, Paging, ProjectRequest,
+    ProjectSelector, Qualified, QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind,
+    SearchRequest, SourceListing, SourceState, TaskRequest,
 };
 pub use environment::Environment;
 pub use global_id::GlobalId;

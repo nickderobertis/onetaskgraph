@@ -115,10 +115,9 @@ pub fn copied(report: &CopyReport) -> String {
                 vec![
                     outcome.source.to_string(),
                     outcome
-                        .destination
-                        .as_ref()
+                        .destination()
                         .map_or_else(|| "-".to_owned(), ToString::to_string),
-                    wire(&outcome.action),
+                    outcome.action.name(),
                 ]
             })
             .collect::<Vec<_>>(),

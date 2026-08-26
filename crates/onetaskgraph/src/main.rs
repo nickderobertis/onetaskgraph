@@ -15,11 +15,11 @@ use std::str::FromStr as _;
 use clap::{CommandFactory as _, Parser};
 use onetaskgraph_core::config::Layer;
 use onetaskgraph_core::{
-    CopyRequest, DependencyRequest, Engine, Environment, Filters, GlobalId, LabelRequest, Loaded,
-    MatchBy, OutputFormat, PageToken, Paging, ProjectRequest, ProjectSelector, QueryResponse,
-    SearchRequest, SourceFailure, TaskRequest,
+    CopyItems, CopyRequest, CopyScope, DependencyRequest, Engine, Environment, Filters, GlobalId,
+    LabelRequest, Loaded, MatchBy, OutputFormat, PageToken, Paging, ProjectRequest,
+    ProjectSelector, QueryResponse, SearchRequest, SourceFailure, TaskRequest,
 };
-use onetaskgraph_plugin_api::{ItemKind, LabelFilter, NativeId, SourceName, TextQuery};
+use onetaskgraph_plugin_api::{LabelFilter, NativeId, SourceName, TextQuery};
 use serde::Serialize;
 
 use crate::cli::{
@@ -177,9 +177,8 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
         } => {
             let request = copy_request(
                 args.id.iter().map(String::as_str),
-                ItemKind::Task,
+                CopyScope::Tasks,
                 &args.copy,
-                true,
             )?;
             copy(out, loaded, &request).await
         }
@@ -189,9 +188,10 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
         } => {
             let request = copy_request(
                 std::iter::once(args.id.as_str()),
-                ItemKind::Project,
+                CopyScope::Projects {
+                    tasks: !args.no_tasks,
+                },
                 &args.copy,
-                !args.no_tasks,
             )?;
             copy(out, loaded, &request).await
         }
@@ -394,13 +394,16 @@ async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> R
 /// One copy, as a verb that takes one reads it.
 fn copy_request<'a>(
     ids: impl Iterator<Item = &'a str>,
-    kind: ItemKind,
+    scope: CopyScope,
     args: &CopyArgs,
-    include_tasks: bool,
 ) -> Result<CopyRequest, String> {
+    let items = ids.map(qualified).collect::<Result<Vec<_>, _>>()?;
     Ok(CopyRequest {
-        items: ids.map(qualified).collect::<Result<Vec<_>, _>>()?,
-        kind,
+        items: CopyItems::new(items).ok_or(
+            "no id to copy\n\
+             next: name at least one qualified id — `onetaskgraph task list` reports them.",
+        )?,
+        scope,
         destination: SourceName::new(args.to.clone()).map_err(|error| {
             format!(
                 "--to {}: {error}\n\
@@ -409,7 +412,6 @@ fn copy_request<'a>(
                 args.to
             )
         })?,
-        include_tasks,
         match_by: args.match_by.as_deref().map(MatchBy::parse),
         recreate: args.recreate,
         dry_run: args.dry_run,

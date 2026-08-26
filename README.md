@@ -128,7 +128,7 @@ and reported as `orphaned`.
 `--json` gives one entry per item for a script to read:
 
 ```json
-{"items": [{"source": "notes:ENG-142", "destination": "work:ENG-142", "action": "updated"}]}
+{"items": [{"source": "notes:ENG-142", "action": "updated", "destination": "work:ENG-142"}]}
 ```
 
 `action` is `created`, `updated`, `unchanged` or `orphaned`, and `destination` is `null`

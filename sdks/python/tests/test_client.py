@@ -158,8 +158,9 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
 
 def landed(outcome: CopyOutcome) -> str:
     """The id a copy wrote to, absent only for a dry run that would have created one."""
-    assert outcome.destination is not None, "this copy wrote, so it reports where"
-    return outcome.destination.root
+    reported = outcome.root
+    assert reported.destination is not None, "this copy wrote, so it reports where"
+    return reported.destination.root
 
 
 def folders(tmp_path: Path) -> Path:
@@ -201,13 +202,13 @@ def test_copy_drives_the_binary_and_reports_each_item(binary: Path, tmp_path: Pa
     client = Client(binary, cwd=folders(tmp_path))
 
     planned = run(client.task_copy(ids=["from:T-1"], to="into", dry_run=True))
-    assert [(item.source.root, item.destination, item.action) for item in planned.items] == [
-        ("from:T-1", None, "created")
-    ]
+    assert [
+        (item.root.source.root, item.root.destination, item.root.action) for item in planned.items
+    ] == [("from:T-1", None, "created")]
     assert not (tmp_path / "into" / "tasks").exists()
 
     created = run(client.task_copy(ids=[GlobalId(root="from:T-1")], to="into"))
-    assert [(item.source.root, landed(item), item.action) for item in created.items] == [
+    assert [(item.root.source.root, landed(item), item.root.action) for item in created.items] == [
         ("from:T-1", "into:T-1", "created")
     ]
     # The destination really holds it, read back through the same binary.
@@ -222,7 +223,7 @@ def test_copy_drives_the_binary_and_reports_each_item(binary: Path, tmp_path: Pa
         encoding="utf-8",
     )
     updated = run(client.task_copy(ids=["into:T-1"], to="from"))
-    assert [(landed(item), item.action) for item in updated.items] == [("from:T-1", "updated")]
+    assert [(landed(item), item.root.action) for item in updated.items] == [("from:T-1", "updated")]
     assert run(client.task_show(id="from:T-1")).items[0].item.title == "Alpha engine, edited"
 
     with pytest.raises(OnetaskgraphError) as refused:
@@ -245,12 +246,12 @@ def test_project_copy_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     client = Client(binary, cwd=root)
 
     first = run(client.project_copy(id="from:P-1", to="into"))
-    assert [(item.source.root, item.action) for item in first.items] == [
+    assert [(item.root.source.root, item.root.action) for item in first.items] == [
         ("from:P-1", "created"),
         ("from:T-1", "created"),
     ]
     second = run(client.project_copy(id="from:P-1", to="into"))
-    assert [item.action for item in second.items] == ["unchanged", "unchanged"]
+    assert [item.root.action for item in second.items] == ["unchanged", "unchanged"]
     assert [item.id.root for item in run(client.task_list(source=["into"])).items] == ["into:T-1"]
 
 
