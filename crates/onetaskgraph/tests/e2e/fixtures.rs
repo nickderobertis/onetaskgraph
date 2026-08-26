@@ -291,6 +291,13 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
             let variables = &Value::Object(variables.clone());
             let data = if query.contains("addProjectV2DraftIssue(input:$input)") {
                 let input = &variables["input"];
+                assert_eq!(input["projectId"], "P-1");
+                assert!(
+                    input["title"]
+                        .as_str()
+                        .is_some_and(|value| !value.is_empty())
+                );
+                assert!(input["body"].is_string() || input["body"].is_null());
                 let mut rows = written.lock().unwrap();
                 let number = rows.len() + 1;
                 let content_id = format!("DRAFT-{number}");
@@ -303,6 +310,13 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 json!({"addProjectV2DraftIssue":{"projectItem":{"id":item_id,"content":{"id":content_id}}}})
             } else if query.contains("updateProjectV2DraftIssue(input:$input)") {
                 let input = &variables["input"];
+                assert!(
+                    input["draftIssueId"]
+                        .as_str()
+                        .is_some_and(|value| !value.is_empty())
+                );
+                assert!(input["title"].is_string());
+                assert!(input["body"].is_string() || input["body"].is_null());
                 let mut rows = written.lock().unwrap();
                 let row = rows
                     .iter_mut()
@@ -323,6 +337,18 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 json!({"updateIssue":{"issue":{"id":variables["input"]["id"]}}})
             } else if query.contains("updateProjectV2ItemFieldValue(input:$input)") {
                 let input = &variables["input"];
+                for key in ["projectId", "itemId", "fieldId"] {
+                    assert!(input[key].as_str().is_some_and(|value| !value.is_empty()));
+                }
+                assert!(
+                    input["value"]
+                        .as_object()
+                        .is_some_and(|value| value.len() == 1)
+                );
+                assert!(
+                    input["value"]["text"].is_string()
+                        || input["value"]["singleSelectOptionId"].is_string()
+                );
                 let mut rows = written.lock().unwrap();
                 let row = rows.iter_mut().find(|row| row["id"] == input["itemId"]);
                 if let Some(row) = row {
@@ -356,8 +382,28 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 *project_write.lock().unwrap() = Some(variables["input"].clone());
                 json!({"updateProjectV2":{"projectV2":{"id":"P-1"}}})
             } else if query.contains("addBlockedBy(input:$input)") {
+                assert!(
+                    variables["input"]["issueId"]
+                        .as_str()
+                        .is_some_and(|value| !value.is_empty())
+                );
+                assert!(
+                    variables["input"]["blockingIssueId"]
+                        .as_str()
+                        .is_some_and(|value| !value.is_empty())
+                );
                 json!({"addBlockedBy":{"issue":{"id":variables["input"]["issueId"]},"blockingIssue":{"id":variables["input"]["blockingIssueId"]}}})
             } else if query.contains("removeBlockedBy(input:$input)") {
+                assert!(
+                    variables["input"]["issueId"]
+                        .as_str()
+                        .is_some_and(|value| !value.is_empty())
+                );
+                assert!(
+                    variables["input"]["blockingIssueId"]
+                        .as_str()
+                        .is_some_and(|value| !value.is_empty())
+                );
                 json!({"removeBlockedBy":{"issue":{"id":variables["input"]["issueId"]},"blockingIssue":{"id":variables["input"]["blockingIssueId"]}}})
             } else if query.contains("node(id:$id)") {
                 let id = variables["id"].as_str().expect("dependency id");

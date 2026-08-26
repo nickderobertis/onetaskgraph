@@ -596,11 +596,10 @@ impl GitHubProjectsSource {
 
     fn task_metadata(
         write: &ItemWrite<Task>,
-        record_edges: bool,
-        record_repositories: bool,
+        repositories: RepositoryStorage,
     ) -> Result<BTreeMap<String, Value>, SourceError> {
         let mut metadata = write.item.metadata.clone();
-        if record_repositories && !write.item.repositories.is_empty() {
+        if repositories == RepositoryStorage::Recorded && !write.item.repositories.is_empty() {
             metadata.insert(
                 Repository::METADATA_KEY.into(),
                 Value::Array(
@@ -612,10 +611,10 @@ impl GitHubProjectsSource {
                         .collect(),
                 ),
             );
-        } else if !record_repositories || write.item.repositories.is_empty() {
+        } else {
             metadata.remove(Repository::METADATA_KEY);
         }
-        if record_edges && !write.depends_on.is_empty() {
+        if !write.depends_on.is_empty() {
             metadata.insert(
                 DependencyEdge::RECORDED_KEY.into(),
                 Value::Array(
@@ -821,6 +820,11 @@ impl GitHubProjectsSource {
 enum ContentKind {
     DraftIssue,
     Issue,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RepositoryStorage {
+    Native,
+    Recorded,
 }
 impl ContentKind {
     fn parse(content: &Value) -> Result<Self, SourceError> {
@@ -1275,8 +1279,12 @@ impl TaskSource for GitHubProjectsSource {
             item: write.item.clone(),
             depends_on: fallback,
         };
-        let metadata =
-            Self::task_metadata(&metadata_write, true, content_kind != ContentKind::Issue)?;
+        let storage = if content_kind == ContentKind::Issue {
+            RepositoryStorage::Native
+        } else {
+            RepositoryStorage::Recorded
+        };
+        let metadata = Self::task_metadata(&metadata_write, storage)?;
         self.set_item_field(
             project_id,
             &item_id.0,

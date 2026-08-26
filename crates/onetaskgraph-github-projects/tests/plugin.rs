@@ -737,6 +737,33 @@ async fn malformed_mutation_payloads_are_rejected_at_each_write_boundary() {
         Err(SourceError::Malformed { .. })
     ));
     handle.join().unwrap();
+
+    let project = project_response(false);
+    let (endpoint, handle) = sequence_server(vec![
+        project.clone(),
+        project,
+        mutation_data("updateIssue/issue", "I_task"),
+        json!({"data":{"node":{"blockedBy":{"nodes":[{"id":"I_task"}]}}}}),
+        json!({"data":{"removeBlockedBy":{}}}),
+    ]);
+    let source = build(&endpoint);
+    let task = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .unwrap()
+        .items
+        .remove(0);
+    assert!(matches!(
+        source
+            .write_task(&ItemWrite {
+                target: Some(task.id.clone()),
+                item: task,
+                depends_on: vec![]
+            })
+            .await,
+        Err(SourceError::Malformed { .. })
+    ));
+    handle.join().unwrap();
 }
 
 #[tokio::test]
