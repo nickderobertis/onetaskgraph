@@ -417,6 +417,18 @@ impl LinearSource {
         let limit = page.limit.min(250);
         let cursor = page.cursor.as_ref().map(|c| c.0.as_str());
         if let Some(offset) = cursor.and_then(|c| c.strip_prefix(RECORDED_CURSOR)) {
+            // This cursor resumes the *forward* tail and only a forward walk ever issues
+            // one, so a reverse read carrying it is resuming a walk it did not come from.
+            // Serving it would answer a reverse read with forward edges, which is the one
+            // thing a recorded edge must never do — its reverse is derived from the far
+            // end and is never written down here.
+            if direction != Direction::DependsOn {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "{RECORDED_CURSOR}{offset} resumes recorded forward edges, which a                          reverse dependency read never issues; resume it in the direction                          that reported it"
+                    ),
+                });
+            }
             let offset: usize = offset.parse().map_err(|_| SourceError::Malformed {
                 message: format!("{RECORDED_CURSOR}{offset} is not a recorded-edge cursor"),
             })?;

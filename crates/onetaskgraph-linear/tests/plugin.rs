@@ -792,6 +792,38 @@ async fn linear_records_the_far_end_no_relation_of_its_own_can_hold() {
 }
 
 #[tokio::test]
+async fn a_recorded_cursor_is_refused_in_the_direction_that_never_issued_it() {
+    // The recorded tail is forward-only: the reverse of a recorded edge is derived from
+    // the far end and is never written down here. So a reverse read handed the forward
+    // tail's cursor is resuming a walk it did not come from, and answering it would return
+    // forward edges to a caller who asked which items depend on this one.
+    let recorded = serde_json::json!([{"id":"elsewhere:P-9","kind":"project"}]);
+    for (projects, root) in [(false, "issue"), (true, "project")] {
+        let (endpoint, _) = server("200 OK", "", relations_recording(root, &recorded));
+        let request = PageRequest {
+            cursor: Some(onetaskgraph_plugin_api::Cursor(
+                "onetaskgraph.depends_on:0".into(),
+            )),
+            limit: 50,
+        };
+        let source = source(&endpoint);
+        let error = if projects {
+            source
+                .project_dependencies(&"p1".into(), Direction::DependedOnBy, &request)
+                .await
+        } else {
+            source
+                .task_dependencies(&"i1".into(), Direction::DependedOnBy, &request)
+                .await
+        }
+        .expect_err("a reverse read never issued a recorded cursor");
+        let message = format!("{error}");
+        assert!(message.contains("onetaskgraph.depends_on:0"), "{message}");
+        assert!(message.contains("reverse dependency read"), "{message}");
+    }
+}
+
+#[tokio::test]
 async fn a_reserved_dependency_entry_this_interface_cannot_read_is_refused_by_name() {
     for (recorded, expected) in [
         (

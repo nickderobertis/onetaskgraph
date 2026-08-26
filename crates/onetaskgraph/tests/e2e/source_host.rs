@@ -11,6 +11,8 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
+use crate::common::Sandbox;
+
 /// The shipped host, ready to be given a connection on its standard input.
 fn source_host() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
@@ -204,4 +206,97 @@ fn a_host_that_cannot_write_its_answer_exits_one_and_says_so_on_standard_error()
         "the program names itself: {complaint}"
     );
     assert!(!complaint.contains("panicked"), "{complaint}");
+}
+
+/// The shipped host, given the `linear` plugin over a fixture workspace whose `T-1`
+/// records one far end in a source that is not configured at all.
+///
+/// The credential travels in the handshake rather than through `sandbox`, which is here
+/// only because the fixture takes one; the listener it starts outlives it.
+///
+/// A plugin is reachable here without the engine in front of it, which is what makes this
+/// the journey for a cursor the engine would never have sent: over the protocol the host
+/// is handed whatever the peer wrote.
+fn linear_host(sandbox: &Sandbox, recorded: Value) -> (Command, Value) {
+    let block = crate::fixtures::linear_recording(sandbox, recorded);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+    command.args(["plugin-serve", "linear"]);
+    let handshake = json!({
+        "id": "0",
+        "method": "initialize",
+        "params": {
+            "protocol_version": 1,
+            "engine": {"name": "onetaskgraph", "version": "0.1.0"},
+            "source_name": "work",
+            "config": block,
+            "secrets": {"LINEAR_API_KEY": "fixture-key"}
+        }
+    });
+    (command, handshake)
+}
+
+/// Every answer the host wrote for `requests`, after the handshake.
+fn answers(mut command: Command, handshake: &Value, requests: &[Value]) -> Vec<Value> {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the host runs");
+    let mut input = child.stdin.take().expect("stdin was piped");
+    writeln!(input, "{handshake}").expect("the host is listening");
+    for request in requests {
+        writeln!(input, "{request}").expect("the host is listening");
+    }
+    drop(input);
+    let output = child.wait_with_output().expect("the host finishes");
+    assert_eq!(output.status.code(), Some(0), "the host exits cleanly");
+    let answered = String::from_utf8(output.stdout).expect("responses are UTF-8");
+    let lines: Vec<Value> = answered
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
+        .collect();
+    assert_eq!(lines.len(), requests.len() + 1, "{answered}");
+    assert!(lines[0]["result"]["protocol_version"] == 1, "{answered}");
+    lines[1..].to_vec()
+}
+
+/// One `task_dependencies` request resuming `cursor` in `direction`.
+fn resumed(direction: &str, cursor: &str) -> Value {
+    json!({
+        "id": "1",
+        "method": "task_dependencies",
+        "params": {
+            "id": "T-1",
+            "direction": direction,
+            "page": {"cursor": cursor, "limit": 50}
+        }
+    })
+}
+
+#[test]
+fn the_shipped_host_refuses_a_recorded_cursor_in_the_direction_that_never_issued_it() {
+    // The reserved key holds forward edges and nothing else: the reverse of a recorded
+    // edge is derived from the far end, never written down on the near item. So the tail
+    // cursor a forward walk reports is one no reverse walk can be resuming, and serving it
+    // would answer "what depends on T-1" with what T-1 depends on.
+    let recorded = json!([{"id": "elsewhere:P-9", "kind": "project"}]);
+    let cursor = "onetaskgraph.depends_on:0";
+
+    let sandbox = Sandbox::new();
+    let (command, handshake) = linear_host(&sandbox, recorded.clone());
+    let refusal = &answers(command, &handshake, &[resumed("depended-on-by", cursor)])[0];
+    assert_eq!(refusal["error"]["kind"], "malformed", "{refusal}");
+    let message = refusal["error"]["message"]
+        .as_str()
+        .expect("a message to read");
+    assert!(message.contains(cursor), "{message}");
+    assert!(message.contains("reverse dependency read"), "{message}");
+
+    // The same cursor in the direction that reported it still answers, so the refusal is
+    // about the direction rather than about a cursor this host cannot read.
+    let (command, handshake) = linear_host(&sandbox, recorded);
+    let answer = &answers(command, &handshake, &[resumed("depends-on", cursor)])[0];
+    assert_eq!(answer["result"]["items"][0]["to"]["id"], "elsewhere:P-9");
+    assert_eq!(answer["result"]["items"][0]["from"]["id"], "T-1");
 }
