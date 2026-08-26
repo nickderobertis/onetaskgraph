@@ -46,7 +46,20 @@ esac
 # every `check`, and cargo refuses an invalid package name loudly — that refusal is
 # the very failure the `tr` here exists to fix.
 # tr: see scripts/check-plugin-isolation.sh — python's stdout is CRLF on Windows.
-mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
+# The path is assembled from $ROOT at runtime, so shellcheck cannot resolve it. Naming
+# the file has it follow and check read-lines.sh (SC1091) rather than skip it unread.
+# shellcheck source=scripts/read-lines.sh
+# Tested before it is sourced, not merely guarded after: bash 3.2 ends the shell where
+# `source` cannot find its file, so the handler a later bash takes never runs there — and
+# macos-latest is a 3.2 runner. Without this the reader gets bash's own "No such file or
+# directory", which names the sourcing line rather than the file to put back.
+if [ ! -r "$ROOT/scripts/read-lines.sh" ] || ! source "$ROOT/scripts/read-lines.sh"; then
+  echo "check-affected-selection: could not load $ROOT/scripts/read-lines.sh, which reads the" >&2
+  echo "check-affected-selection: plugin set into an array." >&2
+  echo "check-affected-selection: restore it with 'git checkout -- scripts/read-lines.sh', then re-run." >&2
+  exit 1
+fi
+read_lines PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
