@@ -322,27 +322,23 @@ def test_metadata_and_repositories_survive_the_generated_models(
     """Read caller metadata and repository origins back through the validated models."""
     client = Client(binary, cwd=configured(tmp_path))
 
+    origins = ["github.com/nickderobertis/onetaskgraph"]
+
     task = run(client.task_show(id="memory:T-1")).items[0].item
     assert task.metadata == {
         "onepipeline.turn_budget": 12,
         "caller.flags": [True, None],
         "caller.shape": {"nested": "value"},
     }
-    assert [repository.root for repository in task.repositories] == [
-        "github.com/nickderobertis/onetaskgraph"
-    ]
+    assert [repository.root for repository in task.repositories or []] == origins
 
     project = run(client.project_show(id="memory:P-1")).items[0].item
     assert project.metadata == {"onepipeline.publication": {"mode": "review"}}
-    assert [repository.root for repository in project.repositories] == [
-        "github.com/nickderobertis/onetaskgraph"
-    ]
+    assert [repository.root for repository in project.repositories or []] == origins
 
     hit = run(client.search(text="Memory", kind="task")).items[0].root
-    assert hit.item.metadata["onepipeline.turn_budget"] == 12
-    assert [repository.root for repository in hit.item.repositories] == [
-        "github.com/nickderobertis/onetaskgraph"
-    ]
+    assert (hit.item.metadata or {})["onepipeline.turn_budget"] == 12
+    assert [repository.root for repository in hit.item.repositories or []] == origins
 
 
 def test_a_dependency_endpoint_carries_its_kind_and_may_leave_the_source(
