@@ -214,16 +214,74 @@ package. Add it when the application should link the engine, or add either subpr
 when it should drive the installed binary:
 
 ```bash
-cargo add onetaskgraph-core
+cargo add onetaskgraph-core onetaskgraph-plugin-api serde_json
+cargo add tokio --features macros,rt-multi-thread
 uv add onetaskgraph-sdk               # Python
 bun add @onetaskgraph/sdk             # TypeScript
 ```
 
-The compiled [Rust copy example](./crates/onetaskgraph-core/tests/copy.rs) constructs an
-`Engine`, sends a `CopyRequest` to `Engine::copy`, and reads the returned `CopyReport`. Its
-`a_rust_caller_creates_then_updates_the_same_destination_item` test makes the first copy,
-asserts that the outcome is `created`, confirms an identical second copy is `unchanged`,
-then copies it back and asserts that the original item was `updated` rather than duplicated.
+This complete example constructs an engine over two in-memory sources, copies a task through
+`Engine::copy`, inspects the outcome, and reads the destination back through the engine:
+
+```rust
+use onetaskgraph_core::{
+    Config, CopyItems, CopyRequest, CopyScope, Engine, Environment, GlobalId, Secrets,
+};
+use onetaskgraph_plugin_api::SourceName;
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::from_document(json!({
+        "sources": {
+            "drafts": {
+                "plugin": "in-memory",
+                "config": {"tasks": [{
+                    "id": "T-1",
+                    "title": "Ship the guide",
+                    "content": "Publish the Markdown workflow.",
+                    "status": {"category": "todo", "name": "Todo"},
+                    "labels": [],
+                    "metadata": {},
+                    "repositories": []
+                }]}
+            },
+            "work": {"plugin": "in-memory", "config": {}}
+        }
+    }))?;
+    let secrets = Secrets::load(Environment::default())?;
+    let engine = Engine::build(&config, &secrets);
+
+    let report = engine.copy(&CopyRequest {
+        items: CopyItems::new(vec!["drafts:T-1".parse::<GlobalId>()?])
+            .expect("a copy names at least one item"),
+        scope: CopyScope::Tasks,
+        destination: SourceName::new("work")?,
+        match_by: None,
+        recreate: false,
+        dry_run: false,
+    }).await?;
+
+    let outcome = &report.items[0];
+    println!("{} -> {} ({})", outcome.source,
+        outcome.destination().expect("the copy created a destination"),
+        outcome.action.name());
+
+    let copied = engine.task(outcome.destination().unwrap()).await?;
+    println!("{}", copied.items[0].item.title);
+    Ok(())
+}
+```
+
+It prints:
+
+```text
+drafts:T-1 -> work:T-1 (created)
+Ship the guide
+```
+
+The repository's [Rust copy test](./crates/onetaskgraph-core/tests/copy.rs) additionally proves
+that a second copy is unchanged and a copy back updates the original rather than duplicating it.
 
 Unlike the Python and TypeScript SDKs, which spawn the compiled binary, a Rust consumer
 links `onetaskgraph-core` and calls `Engine` in process. The engine and its copy semantics
