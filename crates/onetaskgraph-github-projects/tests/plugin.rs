@@ -456,7 +456,12 @@ async fn a_write_refuses_a_board_without_its_owned_field_or_status_option() {
         .as_array_mut()
         .unwrap()
         .retain(|value| value.get("name").and_then(Value::as_str) != Some("onetaskgraph.metadata"));
-    let (endpoint, handle) = sequence_server(vec![no_metadata, project_response(false)]);
+    let mut no_status = project_response(false);
+    no_status["data"]["owner"]["projectV2"]["fields"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|value| value.get("name").and_then(Value::as_str) != Some("Status"));
+    let (endpoint, handle) = sequence_server(vec![no_metadata, no_status, project_response(false)]);
     let source = build(&endpoint);
     let task = |status: &str| Task {
         id: NativeId("source".into()),
@@ -477,6 +482,10 @@ async fn a_write_refuses_a_board_without_its_owned_field_or_status_option() {
     assert!(
         matches!(source.write_task(&ItemWrite { target: None, item: task("Doing"), depends_on: vec![] }).await,
         Err(SourceError::Refused { message }) if message.contains("onetaskgraph.metadata"))
+    );
+    assert!(
+        matches!(source.write_task(&ItemWrite { target: None, item: task("Doing"), depends_on: vec![] }).await,
+        Err(SourceError::Refused { message }) if message.contains("no Status field"))
     );
     assert!(
         matches!(source.write_task(&ItemWrite { target: None, item: task("Impossible"), depends_on: vec![] }).await,

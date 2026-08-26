@@ -577,6 +577,10 @@ impl GitHubProjectsSource {
     }
 
     fn field<'a>(project: &'a Value, name: &str) -> Result<Option<&'a Value>, SourceError> {
+        complete_connection(
+            project.get("fields").unwrap_or(&Value::Null),
+            "project fields",
+        )?;
         let fields = project
             .pointer("/fields/nodes")
             .and_then(Value::as_array)
@@ -597,11 +601,14 @@ impl GitHubProjectsSource {
         if record_repositories && !write.item.repositories.is_empty() {
             metadata.insert(
                 Repository::METADATA_KEY.into(),
-                serde_json::to_value(&write.item.repositories).map_err(|error| {
-                    SourceError::Malformed {
-                        message: error.to_string(),
-                    }
-                })?,
+                Value::Array(
+                    write
+                        .item
+                        .repositories
+                        .iter()
+                        .map(|repository| Value::String(repository.as_str().to_owned()))
+                        .collect(),
+                ),
             );
         } else if !record_repositories || write.item.repositories.is_empty() {
             metadata.remove(Repository::METADATA_KEY);
@@ -613,9 +620,7 @@ impl GitHubProjectsSource {
                     write
                         .depends_on
                         .iter()
-                        .map(|edge| {
-                            serde_json::to_value(&edge.to).expect("dependency endpoints serialize")
-                        })
+                        .map(|edge| endpoint_value(&edge.to))
                         .collect(),
                 ),
             );
@@ -1040,7 +1045,12 @@ impl TaskSource for GitHubProjectsSource {
             Self::field(&project, METADATA_FIELD)?.ok_or_else(|| SourceError::Refused {
                 message: format!("GitHub project has no source-owned {METADATA_FIELD} text field"),
             })?;
-        let status_selection = Self::field(&project, "Status")?
+        let status_selection =
+            Some(
+                Self::field(&project, "Status")?.ok_or_else(|| SourceError::Refused {
+                    message: "GitHub project has no Status field".into(),
+                })?,
+            )
             .map(|field| {
                 let option = field
                     .get("options")
@@ -1233,7 +1243,7 @@ impl TaskSource for GitHubProjectsSource {
             project_id,
             &item_id.0,
             required_str(metadata_field, "id")?,
-            json!({"text":serde_json::to_string(&metadata).expect("metadata serializes")}),
+            json!({"text":Value::Object(metadata.clone().into_iter().collect()).to_string()}),
         )
         .await?;
 
@@ -1269,7 +1279,14 @@ impl TaskSource for GitHubProjectsSource {
         if !write.item.repositories.is_empty() {
             metadata.insert(
                 Repository::METADATA_KEY.into(),
-                serde_json::to_value(&write.item.repositories).expect("repositories serialize"),
+                Value::Array(
+                    write
+                        .item
+                        .repositories
+                        .iter()
+                        .map(|repository| Value::String(repository.as_str().to_owned()))
+                        .collect(),
+                ),
             );
         }
         if !write.depends_on.is_empty() {
@@ -1279,7 +1296,7 @@ impl TaskSource for GitHubProjectsSource {
                     write
                         .depends_on
                         .iter()
-                        .map(|edge| serde_json::to_value(&edge.to).expect("endpoint serializes"))
+                        .map(|edge| endpoint_value(&edge.to))
                         .collect(),
                 ),
             );
@@ -1409,6 +1426,10 @@ fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceErro
 
 const METADATA_FIELD: &str = "onetaskgraph.metadata";
 
+fn endpoint_value(endpoint: &DependencyEndpoint) -> Value {
+    json!({"id":endpoint.id(), "kind":match endpoint.kind { ItemKind::Task => "task", ItemKind::Project => "project" }})
+}
+
 fn metadata_field(field_values: &Value) -> Result<BTreeMap<String, Value>, SourceError> {
     let nodes = field_values
         .get("nodes")
@@ -1489,9 +1510,7 @@ fn project_metadata_description(
     if metadata.is_empty() {
         return Ok(content.filter(|value| !value.is_empty()).map(str::to_owned));
     }
-    let encoded = serde_json::to_string(metadata).map_err(|error| SourceError::Malformed {
-        message: format!("cannot encode GitHub project metadata: {error}"),
-    })?;
+    let encoded = Value::Object(metadata.clone().into_iter().collect()).to_string();
     Ok(Some(format!(
         "{}{}{}\n{}",
         content.unwrap_or_default(),

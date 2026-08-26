@@ -290,6 +290,7 @@ fn github_projects_is_a_permanent_destination_and_round_trips_draft_fields() {
     let copied = shown(&sandbox, "task", "board:DRAFT-1");
     assert_eq!(copied["title"], "Publish the plan");
     assert_eq!(copied["content"], "share this plan");
+    assert_eq!(copied["status"]["name"], "Todo");
     assert_eq!(copied["metadata"]["caller.count"], 3);
     assert_eq!(
         copied["metadata"]["caller.shape"],
@@ -335,7 +336,7 @@ fn a_project_copy_updates_the_configured_github_board_without_creating_one() {
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("plans");
     std::fs::create_dir_all(root.join("projects")).unwrap();
-    std::fs::write(root.join("projects/P-1.md"), "---\ntitle: Published roadmap\nstatus: Open\nmetadata: {caller.approved: true}\nrepositories: [github.com/nickderobertis/onetaskgraph]\n---\nThe permanent plan\n").unwrap();
+    std::fs::write(root.join("projects/P-1.md"), "---\ntitle: Published roadmap\nstatus: Open\nmetadata: {caller.approved: true}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [{id: 'elsewhere:P-9', item: project}]\n---\nThe permanent plan\n").unwrap();
     let github = ROWS
         .iter()
         .find(|row| row.plugin == "github-projects")
@@ -359,6 +360,24 @@ fn a_project_copy_updates_the_configured_github_board_without_creating_one() {
     assert_eq!(
         reported(&copied),
         vec![("plans:P-1".into(), json!("board:P-1"), "created".into())]
+    );
+    let shown = shown(&sandbox, "project", "board:P-1");
+    assert_eq!(shown["title"], "Published roadmap");
+    assert_eq!(shown["content"], "The permanent plan");
+    assert_eq!(shown["status"]["category"], "in-progress");
+    assert_eq!(shown["metadata"]["caller.approved"], true);
+    assert_eq!(
+        shown["repositories"],
+        json!(["github.com/nickderobertis/onetaskgraph"])
+    );
+    let dependencies: Value =
+        serde_json::from_str(&ok(&sandbox, &["project", "deps", "board:P-1", "--json"])).unwrap();
+    assert!(
+        dependencies["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|edge| edge["to"]["id"] == "elsewhere:P-9")
     );
 }
 

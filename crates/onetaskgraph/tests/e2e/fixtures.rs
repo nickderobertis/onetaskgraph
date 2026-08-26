@@ -278,6 +278,7 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
         listener.local_addr().expect("fixture address")
     );
     let written = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let project_write = Arc::new(Mutex::new(None::<Value>));
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
@@ -352,6 +353,7 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                         || variables["input"]["shortDescription"].is_null()
                 );
                 assert!(variables["input"]["closed"].is_boolean());
+                *project_write.lock().unwrap() = Some(variables["input"].clone());
                 json!({"updateProjectV2":{"projectV2":{"id":"P-1"}}})
             } else if query.contains("addBlockedBy(input:$input)") {
                 json!({"addBlockedBy":{"issue":{"id":variables["input"]["issueId"]},"blockingIssue":{"id":variables["input"]["blockingIssueId"]}}})
@@ -403,7 +405,12 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 assert_eq!(variables["owner"], "fixture-owner");
                 assert_eq!(variables["number"], 7);
                 assert_eq!(variables["nestedFirst"], 50);
-                github_project_page(variables, recorded.as_ref(), &written.lock().unwrap())
+                github_project_page(
+                    variables,
+                    recorded.as_ref(),
+                    &written.lock().unwrap(),
+                    project_write.lock().unwrap().as_ref(),
+                )
             } else {
                 panic!("fixture received an unknown GraphQL operation")
             };
@@ -460,7 +467,12 @@ fn read_http_json(stream: &mut impl Read) -> Value {
     serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
 }
 
-fn github_project_page(variables: &Value, recorded: Option<&Value>, written: &[Value]) -> Value {
+fn github_project_page(
+    variables: &Value,
+    recorded: Option<&Value>,
+    written: &[Value],
+    project_write: Option<&Value>,
+) -> Value {
     let tasks = [
         (
             "T-1",
@@ -531,14 +543,21 @@ fn github_project_page(variables: &Value, recorded: Option<&Value>, written: &[V
     if end == tasks.len() {
         nodes.extend_from_slice(written);
     }
+    let title = project_write
+        .and_then(|value| value["title"].as_str())
+        .unwrap_or("Engine");
+    let description = project_write.and_then(|value| value["shortDescription"].as_str()).map(str::to_owned).unwrap_or_else(|| format!("alpha engine project\n\n<!-- onetaskgraph.metadata\n{}\n-->", serde_json::to_string(&json!({
+        "onepipeline.publication":{"mode":"review"},
+        "onetaskgraph.repositories":["github.com/nickderobertis/onetaskgraph"],
+        "onetaskgraph.depends_on":recorded_far_ends("project_dependencies",&json!("P-1"))
+    })).unwrap()));
+    let closed = project_write
+        .and_then(|value| value["closed"].as_bool())
+        .unwrap_or(false);
     json!({
         "owner":{"projectV2":{
-            "id":"P-1","title":"Engine","shortDescription":format!("alpha engine project\n\n<!-- onetaskgraph.metadata\n{}\n-->", serde_json::to_string(&json!({
-                "onepipeline.publication":{"mode":"review"},
-                "onetaskgraph.repositories":["github.com/nickderobertis/onetaskgraph"],
-                "onetaskgraph.depends_on":recorded_far_ends("project_dependencies",&json!("P-1"))
-            })).unwrap()),
-            "url":"https://example.invalid/P-1","closed":false,
+            "id":"P-1","title":title,"shortDescription":description,
+            "url":"https://example.invalid/P-1","closed":closed,
             "fields":{"nodes":[{"id":"FIELD-status","name":"Status","options":[{"id":"OPT-todo","name":"Todo"},{"id":"OPT-doing","name":"Doing"},{"id":"OPT-shipped","name":"Shipped"}]},{"id":"FIELD-metadata","name":"onetaskgraph.metadata"}],"pageInfo":{"hasNextPage":false}},
             "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < tasks.len(),"endCursor":end.to_string()}}
         }},
