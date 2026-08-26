@@ -138,7 +138,6 @@ fn a_round_trip_edit_updates_the_item_it_came_from_rather_than_duplicating_it() 
     )
     .expect("the edit lands");
 
-    // And back again.
     let back = ok(
         &sandbox,
         &["task", "copy", "notes:ENG-1", "--to", "remote", "--json"],
@@ -259,6 +258,47 @@ fn every_source_kind_can_be_copied_into_a_folder_of_markdown_with_its_fields_int
             row.name
         );
     }
+}
+
+#[test]
+fn several_ids_in_one_command_are_one_copied_set_whose_edges_are_recreated() {
+    // The ids named together *are* the set: an edge between two of them is recreated at
+    // the destination, which one command per id could not do — the far end's own
+    // destination id is not known until the copy that creates it has run.
+    let row = &ROWS[0];
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&row.document_with_folder(&sandbox, NOTES));
+    let first = qualified(SOURCE, "T-1");
+    let second = qualified(SOURCE, "T-2");
+
+    let copied = ok(
+        &sandbox,
+        &["task", "copy", &first, &second, "--to", NOTES, "--json"],
+    );
+    assert_eq!(
+        reported(&copied),
+        vec![
+            (first.clone(), json!("notes:T-1"), "created".to_owned()),
+            (second.clone(), json!("notes:T-2"), "created".to_owned()),
+        ]
+    );
+
+    let edges = ok(&sandbox, &["task", "deps", "notes:T-1", "--json"]);
+    let edges: Value = serde_json::from_str(&edges).expect("deps emits JSON");
+    let ends: Vec<&str> = edges["items"]
+        .as_array()
+        .expect("an array of edges")
+        .iter()
+        .map(|edge| edge["to"]["id"].as_str().expect("a qualified id"))
+        .collect();
+    assert!(
+        ends.contains(&"notes:T-2"),
+        "the far end inside the copied set is the destination's own id: {ends:?}"
+    );
+    assert!(
+        ends.contains(&"elsewhere:P-9"),
+        "a far end already naming another source is left exactly as it is: {ends:?}"
+    );
 }
 
 #[test]
@@ -583,7 +623,6 @@ fn copying_a_project_carries_its_tasks_and_reports_one_the_source_no_longer_hold
     );
     assert_eq!(shown(&sandbox, "task", "notes:T-2")["title"], json!("Beta"));
 
-    // And `--no-tasks` copies the project alone.
     let alone = ok(
         &sandbox,
         &[
