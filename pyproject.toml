@@ -1,6 +1,6 @@
 [project]
 name = "onetaskgraph-cli"
-version = "0.2.0"
+version = "0.2.1"
 description = "The onetaskgraph command-line interface."
 requires-python = ">=3.9"
 
