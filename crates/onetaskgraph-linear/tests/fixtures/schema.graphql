@@ -105,15 +105,37 @@ type ProjectRelation {
   project: Project
   relatedProject: Project
 }
-type Team { id: ID! }
-type TeamConnection { nodes: [Team!]! }
-type WorkflowStateConnection { nodes: [WorkflowState!]! }
-type ProjectStatusConnection { nodes: [ProjectStatus!]! }
-type IssuePayload { success: Boolean! issue: Issue }
-type ProjectPayload { success: Boolean! project: Project }
-type IssueRelationPayload { success: Boolean! issueRelation: IssueRelation }
-type ProjectRelationPayload { success: Boolean! projectRelation: ProjectRelation }
-type DeletePayload { success: Boolean! }
+type Team {
+  id: ID!
+}
+type TeamConnection {
+  nodes: [Team!]!
+}
+type WorkflowStateConnection {
+  nodes: [WorkflowState!]!
+}
+type ProjectStatusConnection {
+  nodes: [ProjectStatus!]!
+}
+type IssuePayload {
+  success: Boolean!
+  issue: Issue
+}
+type ProjectPayload {
+  success: Boolean!
+  project: Project
+}
+type IssueRelationPayload {
+  success: Boolean!
+  issueRelation: IssueRelation
+}
+type ProjectRelationPayload {
+  success: Boolean!
+  projectRelation: ProjectRelation
+}
+type DeletePayload {
+  success: Boolean!
+}
 type PageInfo {
   hasNextPage: Boolean!
   endCursor: String
@@ -124,18 +146,67 @@ input IssueFilter {
 input ProjectFilter {
   and: [ProjectFilter!]
 }
-input TeamFilter { key: StringComparator }
-input WorkflowStateFilter { name: StringComparator team: IdComparator }
-input ProjectStatusFilter { name: StringComparator }
-input ProjectLabelFilter { name: StringComparator }
-input IssueLabelFilter { name: StringComparator }
-input StringComparator { eqIgnoreCase: String }
-input IdComparator { id: IdEquality }
-input IdEquality { eq: String }
-input IssueCreateInput { teamId: String! title: String! description: String stateId: String! labelIds: [String!]! projectId: String }
-input IssueUpdateInput { title: String! description: String stateId: String! labelIds: [String!]! projectId: String }
-input ProjectCreateInput { teamIds: [String!]! name: String! description: String statusId: String! labelIds: [String!]! }
-input ProjectUpdateInput { name: String! description: String statusId: String! labelIds: [String!]! }
-input IssueRelationCreateInput { issueId: String! relatedIssueId: String! type: String! }
-input ProjectRelationCreateInput { projectId: String! relatedProjectId: String! type: String! }
+input TeamFilter {
+  key: StringComparator
+}
+input WorkflowStateFilter {
+  name: StringComparator
+  team: IdComparator
+}
+input ProjectStatusFilter {
+  name: StringComparator
+}
+input ProjectLabelFilter {
+  name: StringComparator
+}
+input IssueLabelFilter {
+  name: StringComparator
+}
+input StringComparator {
+  eqIgnoreCase: String
+}
+input IdComparator {
+  id: IdEquality
+}
+input IdEquality {
+  eq: String
+}
+input IssueCreateInput {
+  teamId: String!
+  title: String!
+  description: String
+  stateId: String!
+  labelIds: [String!]!
+  projectId: String
+}
+input IssueUpdateInput {
+  title: String!
+  description: String
+  stateId: String!
+  labelIds: [String!]!
+  projectId: String
+}
+input ProjectCreateInput {
+  teamIds: [String!]!
+  name: String!
+  description: String
+  statusId: String!
+  labelIds: [String!]!
+}
+input ProjectUpdateInput {
+  name: String!
+  description: String
+  statusId: String!
+  labelIds: [String!]!
+}
+input IssueRelationCreateInput {
+  issueId: String!
+  relatedIssueId: String!
+  type: String!
+}
+input ProjectRelationCreateInput {
+  projectId: String!
+  relatedProjectId: String!
+  type: String!
+}
 scalar DateTime
