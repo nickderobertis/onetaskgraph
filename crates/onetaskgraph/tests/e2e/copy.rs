@@ -16,7 +16,7 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{ROWS, SOURCE, document, empty_folder, qualified};
+use crate::fixtures::{ROWS, SOURCE, document, empty_folder, linear_block, qualified};
 
 /// The folder every copy journey copies into, configured beside the source under test.
 const NOTES: &str = "notes";
@@ -107,6 +107,246 @@ fn folders(sandbox: &Sandbox) -> std::path::PathBuf {
         NOTES: {"plugin": "local-md", "config": empty_folder(sandbox, NOTES)},
     })));
     root
+}
+
+#[test]
+fn linear_is_a_permanent_task_destination_with_typed_metadata_and_repository_origins() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("linear-task-source");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(root.join("tasks/A.md"), "---\ntitle: Authored locally\nstatus: Todo\nlabels: [{id: local-bug, name: bug}]\nmetadata: {object: {a: 1}, array: [1, true], string: text, number: 3.5, boolean: true, null: null}\nrepositories: [github.com/acme/work]\n---\nvisible body\n").unwrap();
+    sandbox.project_document(&document(&json!({
+        "authored": {"plugin":"local-md","config":{"root":root,"status_mapping":{"Todo":"todo"}}},
+        "linear": {"plugin":"linear","config":linear_block(&sandbox)},
+    })));
+
+    let first = reported(&ok(
+        &sandbox,
+        &["task", "copy", "authored:A", "--to", "linear", "--json"],
+    ));
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].2, "created");
+    let destination = first[0].1.as_str().unwrap().to_owned();
+    let item = shown(&sandbox, "task", &destination);
+    assert_eq!(item["title"], "Authored locally");
+    assert_eq!(item["content"], "visible body");
+    assert_eq!(item["status"]["name"], "Todo");
+    assert_eq!(item["labels"][0]["name"], "bug");
+    assert_eq!(item["repositories"], json!(["github.com/acme/work"]));
+    for key in ["object", "array", "string", "number", "boolean", "null"] {
+        let source = shown(&sandbox, "task", "authored:A");
+        assert_eq!(
+            item["metadata"][key], source["metadata"][key],
+            "metadata key {key}"
+        );
+    }
+    let second = reported(&ok(
+        &sandbox,
+        &["task", "copy", "authored:A", "--to", "linear", "--json"],
+    ));
+    assert_eq!(second[0].1, destination);
+    assert!(matches!(second[0].2.as_str(), "updated" | "unchanged"));
+}
+
+#[test]
+fn linear_project_and_task_copies_write_native_relations_and_record_only_cross_source_edges() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("linear-graph-source");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::create_dir_all(root.join("projects")).unwrap();
+    for (path, title, dependencies) in [
+        ("tasks/FAR.md", "Far task", ""),
+        (
+            "tasks/NEAR.md",
+            "Near task",
+            "depends_on: [FAR, {id: \"elsewhere:P-9\", item: project}]\n",
+        ),
+        ("tasks/CHILD.md", "Project child", "project: NEAR\n"),
+        ("projects/FAR.md", "Far project", ""),
+        (
+            "projects/NEAR.md",
+            "Near project",
+            "labels: [{id: local-roadmap, name: roadmap}]\nmetadata: {caller.project: {enabled: true}}\nrepositories: [github.com/acme/project]\ndepends_on: [FAR, {id: \"elsewhere:T-9\", item: task}]\n",
+        ),
+    ] {
+        std::fs::write(
+            root.join(path),
+            format!("---\ntitle: {title}\nstatus: Todo\n{dependencies}---\nbody\n"),
+        )
+        .unwrap();
+    }
+    sandbox.project_document(&document(&json!({
+        "authored": {"plugin":"local-md","config":{"root":root,"status_mapping":{"Todo":"todo"}}},
+        "linear": {"plugin":"linear","config":linear_block(&sandbox)},
+    })));
+    let task_far = reported(&ok(
+        &sandbox,
+        &["task", "copy", "authored:FAR", "--to", "linear", "--json"],
+    ))[0]
+        .1
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let task_near = reported(&ok(
+        &sandbox,
+        &["task", "copy", "authored:NEAR", "--to", "linear", "--json"],
+    ))[0]
+        .1
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let project_far = reported(&ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "authored:FAR",
+            "--to",
+            "linear",
+            "--no-tasks",
+            "--json",
+        ],
+    ))[0]
+        .1
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let project_report = reported(&ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "authored:NEAR",
+            "--to",
+            "linear",
+            "--json",
+        ],
+    ));
+    assert_eq!(
+        project_report.len(),
+        2,
+        "the project copy includes its task"
+    );
+    let project_near = project_report[0].1.as_str().unwrap().to_owned();
+    let written_project = shown(&sandbox, "project", &project_near);
+    assert_eq!(written_project["content"], "body");
+    assert_eq!(written_project["status"]["name"], "Todo");
+    assert_eq!(written_project["labels"][0]["name"], "roadmap");
+    assert_eq!(
+        written_project["metadata"]["caller.project"]["enabled"],
+        true
+    );
+    assert_eq!(
+        written_project["repositories"],
+        json!(["github.com/acme/project"])
+    );
+    let child = shown(&sandbox, "task", project_report[1].1.as_str().unwrap());
+    assert_eq!(child["project"], project_near.split_once(':').unwrap().1);
+    let repeated = reported(&ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "authored:NEAR",
+            "--to",
+            "linear",
+            "--json",
+        ],
+    ));
+    assert_eq!(
+        repeated.iter().map(|item| &item.1).collect::<Vec<_>>(),
+        project_report
+            .iter()
+            .map(|item| &item.1)
+            .collect::<Vec<_>>()
+    );
+
+    let edges = |verb: &str, id: &str, reverse: bool| {
+        let mut args = vec![verb, "deps", id, "--json"];
+        if reverse {
+            args.splice(3..3, ["--direction", "depended-on-by"]);
+        }
+        serde_json::from_str::<Value>(&ok(&sandbox, &args)).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    let task_forward = edges("task", &task_near, false);
+    assert_eq!(
+        task_forward.len(),
+        2,
+        "the repeated write does not duplicate relations"
+    );
+    assert!(
+        task_forward.iter().any(|edge| edge["to"]["id"] == task_far),
+        "{task_forward:#?}"
+    );
+    assert!(
+        task_forward
+            .iter()
+            .any(|edge| edge["to"]["id"] == "elsewhere:P-9")
+    );
+    assert!(
+        edges("task", &task_far, true)
+            .iter()
+            .any(|edge| edge["from"]["id"] == task_near)
+    );
+    let project_forward = edges("project", &project_near, false);
+    assert_eq!(
+        project_forward.len(),
+        2,
+        "the repeated project write replaces its relation set"
+    );
+    assert!(
+        project_forward
+            .iter()
+            .any(|edge| edge["to"]["id"] == project_far)
+    );
+    assert!(
+        project_forward
+            .iter()
+            .any(|edge| edge["to"]["id"] == "elsewhere:T-9")
+    );
+    assert!(
+        edges("project", &project_far, true)
+            .iter()
+            .any(|edge| edge["from"]["id"] == project_near)
+    );
+
+    for (verb, id) in [("task", task_near.clone()), ("project", project_near)] {
+        let item = shown(&sandbox, verb, &id);
+        let recorded = item["metadata"]["onetaskgraph.depends_on"]
+            .as_array()
+            .unwrap();
+        assert_eq!(recorded.len(), 1, "only the cross-source edge is recorded");
+        assert!(
+            recorded[0]["id"]
+                .as_str()
+                .unwrap()
+                .starts_with("elsewhere:")
+        );
+    }
+    let near_file = root.join("tasks/NEAR.md");
+    let edited = std::fs::read_to_string(&near_file).unwrap().replace(
+        "[FAR, {id: \"elsewhere:P-9\", item: project}]",
+        &format!("[{{id: \"{project_far}\", item: project}}]"),
+    );
+    std::fs::write(&near_file, edited).unwrap();
+    ok(
+        &sandbox,
+        &["task", "copy", "authored:NEAR", "--to", "linear"],
+    );
+    let replaced = edges("task", &task_near, false);
+    assert_eq!(replaced.len(), 1);
+    assert_eq!(replaced[0]["to"]["id"], project_far);
+    let recorded = shown(&sandbox, "task", &task_near)["metadata"]["onetaskgraph.depends_on"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        recorded[0]["kind"], "project",
+        "a same-source cross-kind far end uses the fallback because an issue relation cannot name a project"
+    );
 }
 
 #[test]

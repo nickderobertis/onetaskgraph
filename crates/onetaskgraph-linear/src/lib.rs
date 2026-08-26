@@ -1,4 +1,4 @@
-//! A read-only source over Linear's published GraphQL API.
+//! A read/write source over Linear's published GraphQL API.
 //!
 //! Linear `Issue` maps to [`Task`], `Project` to [`Project`], `IssueLabel` and
 //! `ProjectLabel` to [`Label`], and `WorkflowState.name` is preserved while its
@@ -14,20 +14,23 @@
 //!
 //! Caller metadata is canonical JSON in a trailing
 //! `<!-- onetaskgraph.metadata ... -->` Markdown comment in the item's description. The
-//! visible description is returned unchanged without that slot. This node is read-only;
-//! the later Linear write-side node must write the same slot and preserve visible content.
+//! visible description is returned unchanged without that slot. Writes put the same
+//! canonical encoding back beside the visible description, and use Linear issue/project
+//! relations for same-source dependencies. Only cross-source far ends use the reserved
+//! `onetaskgraph.depends_on` metadata key.
 //!
-//! Fixture provenance is recorded in `tests/fixtures/README.md`. Live tests are
-//! non-destructive by construction: [`TaskSource`] exposes reads only, and no
-//! test uses GraphQL mutations for setup or teardown.
+//! Fixture provenance is recorded in `tests/fixtures/README.md`. The ignored live lane
+//! exercises reads by default; its mutation journey requires an explicitly named scratch
+//! team and immediately requests deletion of its scratch issue. A failed live cleanup is
+//! reported as a test failure and may require manual deletion from that scratch team.
 #![deny(missing_docs)]
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Health, ItemKind, Label, NativeId, Page, PageRequest, Project, ProjectFilter,
-    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskSource,
+    Direction, Health, ItemKind, ItemWrite, Label, NativeId, Page, PageRequest, Project,
+    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -54,11 +57,47 @@ pub mod graphql {
     /// List projects.
     pub const PROJECTS: &str = "query($first:Int!,$after:String,$filter:ProjectFilter){ projects(first:$first,after:$after,filter:$filter){ nodes{id name description url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } }";
     /// List issue labels.
-    pub const LABELS: &str = "query($first:Int!,$after:String){ issueLabels(first:$first,after:$after){ nodes{id name color} pageInfo{hasNextPage endCursor} } }";
+    pub const LABELS: &str = "query($first:Int,$after:String){ issueLabels(first:$first,after:$after){ nodes{id name color} pageInfo{hasNextPage endCursor} } }";
     /// Fetch issue dependency relations.
-    pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+    pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Fetch project dependency relations.
-    pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ description relations(first:$first,after:$after){nodes{type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type project{id}} pageInfo{hasNextPage endCursor}} } }";
+    pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ description relations(first:$first,after:$after){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type project{id}} pageInfo{hasNextPage endCursor}} } }";
+    /// Resolve the configured team key to Linear's backend id.
+    pub const TEAM: &str =
+        "query($key:String!){ teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id}} }";
+    /// Resolve an issue workflow-state display name.
+    pub const ISSUE_STATE: &str = "query($name:String!,$team:String!){ workflowStates(filter:{name:{eqIgnoreCase:$name},team:{id:{eq:$team}}}){nodes{id}} }";
+    /// Resolve a project status display name.
+    pub const PROJECT_STATUS: &str =
+        "query($name:String!){ projectStatuses(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
+    /// Resolve an issue-label display name.
+    pub const ISSUE_LABEL: &str =
+        "query($name:String!){ issueLabels(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
+    /// Resolve a project-label display name.
+    pub const PROJECT_LABEL: &str =
+        "query($name:String!){ projectLabels(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
+    /// Create an issue.
+    pub const ISSUE_CREATE: &str =
+        "mutation($input:IssueCreateInput!){ issueCreate(input:$input){success issue{id}} }";
+    /// Update an issue.
+    pub const ISSUE_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id}} }";
+    /// Create a project.
+    pub const PROJECT_CREATE: &str =
+        "mutation($input:ProjectCreateInput!){ projectCreate(input:$input){success project{id}} }";
+    /// Update a project.
+    pub const PROJECT_UPDATE: &str = "mutation($id:String!,$input:ProjectUpdateInput!){ projectUpdate(id:$id,input:$input){success project{id}} }";
+    /// Create a native issue dependency.
+    pub const ISSUE_RELATION_CREATE: &str = "mutation($input:IssueRelationCreateInput!){ issueRelationCreate(input:$input){success issueRelation{id}} }";
+    /// Create a native project dependency.
+    pub const PROJECT_RELATION_CREATE: &str = "mutation($input:ProjectRelationCreateInput!){ projectRelationCreate(input:$input){success projectRelation{id}} }";
+    /// Delete a native issue dependency before replacing its full edge set.
+    pub const ISSUE_RELATION_DELETE: &str =
+        "mutation($id:String!){ issueRelationDelete(id:$id){success} }";
+    /// Delete a native project dependency before replacing its full edge set.
+    pub const PROJECT_RELATION_DELETE: &str =
+        "mutation($id:String!){ projectRelationDelete(id:$id){success} }";
+    /// Delete an issue created only by the ignored live write journey.
+    pub const ISSUE_DELETE: &str = "mutation($id:String!){ issueDelete(id:$id){success} }";
 }
 
 use graphql::{
@@ -72,7 +111,7 @@ pub struct LinearConfig {
     /// Environment variable resolved by the host.
     #[schemars(with = "String")]
     api_key_env: EnvName,
-    /// Optional Linear team key/id narrowing task and project reads.
+    /// Linear team key/id used to narrow reads and required for item writes.
     #[schemars(with = "Option<String>")]
     team: Option<Team>,
     /// GraphQL endpoint override, primarily for fixture servers.
@@ -182,6 +221,80 @@ struct LinearSource {
     /// `<this name>:<native>` is a Linear item Linear itself relates, so the reserved key
     /// is refused for it exactly as a bare id of the same kind is.
     name: SourceName,
+}
+#[derive(Clone, Copy)]
+enum WriteKind {
+    Task,
+    Project,
+}
+enum Lookup<'a> {
+    Team(&'a str),
+    IssueState { name: &'a str, team: &'a NativeId },
+    ProjectStatus(&'a str),
+    IssueLabel(&'a str),
+    ProjectLabel(&'a str),
+}
+impl Lookup<'_> {
+    fn query(&self) -> &'static str {
+        match self {
+            Self::Team(_) => graphql::TEAM,
+            Self::IssueState { .. } => graphql::ISSUE_STATE,
+            Self::ProjectStatus(_) => graphql::PROJECT_STATUS,
+            Self::IssueLabel(_) => graphql::ISSUE_LABEL,
+            Self::ProjectLabel(_) => graphql::PROJECT_LABEL,
+        }
+    }
+    fn connection(&self) -> &'static str {
+        match self {
+            Self::Team(_) => "teams",
+            Self::IssueState { .. } => "workflowStates",
+            Self::ProjectStatus(_) => "projectStatuses",
+            Self::IssueLabel(_) => "issueLabels",
+            Self::ProjectLabel(_) => "projectLabels",
+        }
+    }
+    fn diagnostic(&self) -> String {
+        match self {
+            Self::Team(_) => "configured team".into(),
+            Self::IssueState { name, .. } => format!("workflow state {name:?}"),
+            Self::ProjectStatus(name) => format!("project status {name:?}"),
+            Self::IssueLabel(name) | Self::ProjectLabel(name) => format!("label {name:?}"),
+        }
+    }
+    fn variables(&self) -> Value {
+        match self {
+            Self::Team(key) => json!({"key":key}),
+            Self::IssueState { name, team } => json!({"name":name,"team":team.0}),
+            Self::ProjectStatus(name) | Self::IssueLabel(name) | Self::ProjectLabel(name) => {
+                json!({"name":name})
+            }
+        }
+    }
+}
+#[derive(Clone, Copy)]
+enum MutationRoot {
+    IssueCreate,
+    IssueUpdate,
+    ProjectCreate,
+    ProjectUpdate,
+    IssueRelationCreate,
+    ProjectRelationCreate,
+    IssueRelationDelete,
+    ProjectRelationDelete,
+}
+impl MutationRoot {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::IssueCreate => "issueCreate",
+            Self::IssueUpdate => "issueUpdate",
+            Self::ProjectCreate => "projectCreate",
+            Self::ProjectUpdate => "projectUpdate",
+            Self::IssueRelationCreate => "issueRelationCreate",
+            Self::ProjectRelationCreate => "projectRelationCreate",
+            Self::IssueRelationDelete => "issueRelationDelete",
+            Self::ProjectRelationDelete => "projectRelationDelete",
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -305,6 +418,268 @@ impl LinearSource {
         }
     }
     // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+    async fn one_id(&self, lookup: Lookup<'_>) -> Result<NativeId, SourceError> {
+        let data = self.send(lookup.query(), lookup.variables()).await?;
+        let connection = lookup.connection();
+        let nodes = data
+            .get(connection)
+            .and_then(|v| v.get("nodes"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("missing {connection}.nodes"),
+            })?;
+        if nodes.len() != 1 {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "source {} cannot resolve {} uniquely",
+                    self.name,
+                    lookup.diagnostic()
+                ),
+            });
+        }
+        Ok(NativeId(backend_id(&nodes[0], "id")?.to_owned()))
+    }
+    async fn team_id(&self) -> Result<NativeId, SourceError> {
+        let team = self.team.as_ref().ok_or_else(|| SourceError::Refused {
+            message: format!(
+                "source {} needs config.team before it can create Linear items",
+                self.name
+            ),
+        })?;
+        self.one_id(Lookup::Team(&team.0)).await
+    }
+    async fn label_ids(
+        &self,
+        labels: &[Label],
+        kind: WriteKind,
+    ) -> Result<Vec<NativeId>, SourceError> {
+        let mut ids = Vec::with_capacity(labels.len());
+        for label in labels {
+            ids.push(
+                self.one_id(if matches!(kind, WriteKind::Project) {
+                    Lookup::ProjectLabel(&label.name)
+                } else {
+                    Lookup::IssueLabel(&label.name)
+                })
+                .await?,
+            );
+        }
+        Ok(ids)
+    }
+    fn write_description(
+        &self,
+        content: Option<&str>,
+        metadata: &std::collections::BTreeMap<String, Value>,
+        repositories: &[Repository],
+        edges: &[DependencyEdge],
+        kind: WriteKind,
+    ) -> Result<Option<String>, SourceError> {
+        let mut metadata = metadata.clone();
+        if repositories.is_empty() {
+            metadata.remove(Repository::METADATA_KEY);
+        } else {
+            metadata.insert(Repository::METADATA_KEY.into(), json!(repositories));
+        }
+        let recorded = edges
+            .iter()
+            .filter(|edge| {
+                edge.to.kind
+                    != match kind {
+                        WriteKind::Task => ItemKind::Task,
+                        WriteKind::Project => ItemKind::Project,
+                    }
+                    || edge
+                        .to
+                        .id()
+                        .split_once(':')
+                        .is_some_and(|(source, _)| source != self.name.as_str())
+            })
+            .map(|edge| json!({"id":edge.to.id(),"kind":edge.to.kind}))
+            .collect::<Vec<_>>();
+        if recorded.is_empty() {
+            metadata.remove(DependencyEdge::RECORDED_KEY);
+        } else {
+            metadata.insert(DependencyEdge::RECORDED_KEY.into(), Value::Array(recorded));
+        }
+        let visible = content.unwrap_or_default();
+        if metadata.is_empty() {
+            return Ok((!visible.is_empty()).then(|| visible.to_owned()));
+        }
+        let encoded = serde_json::to_string(&metadata).map_err(|error| SourceError::Malformed {
+            message: error.to_string(),
+        })?;
+        Ok(Some(if visible.is_empty() {
+            format!("{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
+        } else {
+            format!("{visible}\n\n{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
+        }))
+    }
+    async fn write_relations(
+        &self,
+        near: &NativeId,
+        edges: &[DependencyEdge],
+        kind: WriteKind,
+    ) -> Result<(), SourceError> {
+        let mut cursor: Option<Cursor> = None;
+        loop {
+            let data = self
+                .send(
+                    if matches!(kind, WriteKind::Project) {
+                        PROJECT_RELATIONS
+                    } else {
+                        ISSUE_RELATIONS
+                    },
+                    json!({"id":near.0,"first":250,"after":cursor.as_ref().map(|cursor|&cursor.0)}),
+                )
+                .await?;
+            let root = data
+                .get(if matches!(kind, WriteKind::Project) {
+                    "project"
+                } else {
+                    "issue"
+                })
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing relation item".into(),
+                })?;
+            let relations = root
+                .get("relations")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing relations".into(),
+                })?;
+            for relation in relations
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing relations.nodes".into(),
+                })?
+            {
+                let id = backend_id(relation, "id")?;
+                let (query, mutation) = if matches!(kind, WriteKind::Project) {
+                    (
+                        graphql::PROJECT_RELATION_DELETE,
+                        MutationRoot::ProjectRelationDelete,
+                    )
+                } else {
+                    (
+                        graphql::ISSUE_RELATION_DELETE,
+                        MutationRoot::IssueRelationDelete,
+                    )
+                };
+                let deleted = self.send(query, json!({"id":id})).await?;
+                mutation_payload(&deleted, mutation)?;
+            }
+            let Some(next) = page_next(relations)? else {
+                break;
+            };
+            cursor = Some(next);
+        }
+        for edge in edges {
+            if edge.to.kind
+                != match kind {
+                    WriteKind::Task => ItemKind::Task,
+                    WriteKind::Project => ItemKind::Project,
+                }
+            {
+                continue;
+            }
+            let far = match edge.to.id().split_once(':') {
+                Some((source, native)) if source == self.name.as_str() => native,
+                Some(_) => continue,
+                None => edge.to.id(),
+            };
+            let relation_type = match edge.kind {
+                DependencyKind::Blocks => "blocks",
+                DependencyKind::Related => "related",
+            };
+            let (query, input) = if matches!(kind, WriteKind::Project) {
+                (
+                    graphql::PROJECT_RELATION_CREATE,
+                    json!({"projectId":near.0,"relatedProjectId":far,"type":relation_type}),
+                )
+            } else {
+                (
+                    graphql::ISSUE_RELATION_CREATE,
+                    json!({"issueId":near.0,"relatedIssueId":far,"type":relation_type}),
+                )
+            };
+            let data = self.send(query, json!({"input":input})).await?;
+            let mutation = if matches!(kind, WriteKind::Project) {
+                MutationRoot::ProjectRelationCreate
+            } else {
+                MutationRoot::IssueRelationCreate
+            };
+            let payload = mutation_payload(&data, mutation)?;
+            let relation = payload
+                .get(if matches!(kind, WriteKind::Project) {
+                    "projectRelation"
+                } else {
+                    "issueRelation"
+                })
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!("missing {} relation", mutation.as_str()),
+                })?;
+            backend_id(relation, "id")?;
+        }
+        Ok(())
+    }
+
+    async fn prepare_edges(
+        &self,
+        edges: &[DependencyEdge],
+        kind: WriteKind,
+    ) -> Result<Vec<DependencyEdge>, SourceError> {
+        let mut prepared = Vec::with_capacity(edges.len());
+        for edge in edges {
+            let mut edge = edge.clone();
+            if edge.to.kind
+                == match kind {
+                    WriteKind::Task => ItemKind::Task,
+                    WriteKind::Project => ItemKind::Project,
+                }
+                && edge
+                    .to
+                    .id()
+                    .split_once(':')
+                    .is_some_and(|(source, _)| source != self.name.as_str())
+            {
+                let mut cursor: Option<Cursor> = None;
+                loop {
+                    let data = self.send(if matches!(kind, WriteKind::Project) { PROJECTS } else { ISSUES }, json!({"first":250,"after":cursor.as_ref().map(|cursor|&cursor.0),"filter":{}})).await?;
+                    let (items, next) = if matches!(kind, WriteKind::Project) {
+                        let page = connection(&data, "projects", map_project)?;
+                        (
+                            page.items
+                                .into_iter()
+                                .map(|item| (item.id, item.metadata))
+                                .collect::<Vec<_>>(),
+                            page.next,
+                        )
+                    } else {
+                        let page = connection(&data, "issues", map_task)?;
+                        (
+                            page.items
+                                .into_iter()
+                                .map(|item| (item.id, item.metadata))
+                                .collect::<Vec<_>>(),
+                            page.next,
+                        )
+                    };
+                    if let Some((id, _)) = items.into_iter().find(|(_, metadata)| {
+                        metadata.get("onetaskgraph.origin").and_then(Value::as_str)
+                            == Some(edge.to.id())
+                    }) {
+                        edge.to = DependencyEndpoint::from_native(id, edge.to.kind);
+                        break;
+                    }
+                    let Some(next) = next else { break };
+                    cursor = Some(next);
+                }
+            }
+            prepared.push(edge);
+        }
+        Ok(prepared)
+    }
 }
 
 #[async_trait::async_trait]
@@ -324,6 +699,9 @@ impl TaskSource for LinearSource {
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: 250,
         }
+    }
+    fn writes(&self) -> WriteSupport {
+        WriteSupport::Supported
     }
     async fn health(&self) -> Result<Health, SourceError> {
         let data = self.send(VIEWER, json!({})).await?;
@@ -395,6 +773,99 @@ impl TaskSource for LinearSource {
             page,
         )
         .await
+    }
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        let edges = self
+            .prepare_edges(&write.depends_on, WriteKind::Task)
+            .await?;
+        let team = self.team_id().await?;
+        let state = self
+            .one_id(Lookup::IssueState {
+                name: &write.item.status.name,
+                team: &team,
+            })
+            .await?;
+        let labels = self.label_ids(&write.item.labels, WriteKind::Task).await?;
+        let description = self.write_description(
+            write.item.content.as_deref(),
+            &write.item.metadata,
+            &write.item.repositories,
+            &edges,
+            WriteKind::Task,
+        )?;
+        let input = json!({"title":write.item.title,"description":description,"stateId":state,"labelIds":labels,"projectId":write.item.project.as_ref().map(|id| id.0.clone())});
+        let (query, variables, root) = match &write.target {
+            Some(id) => (
+                graphql::ISSUE_UPDATE,
+                json!({"id":id.0,"input":input}),
+                MutationRoot::IssueUpdate,
+            ),
+            None => (
+                graphql::ISSUE_CREATE,
+                {
+                    let mut input = input;
+                    input["teamId"] = Value::String(team.0);
+                    json!({"input":input})
+                },
+                MutationRoot::IssueCreate,
+            ),
+        };
+        let data = self.send(query, variables).await?;
+        let issue =
+            mutation_payload(&data, root)?
+                .get("issue")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!("missing {}.issue", root.as_str()),
+                })?;
+        let id = NativeId(backend_id(issue, "id")?.into());
+        self.write_relations(&id, &edges, WriteKind::Task).await?;
+        Ok(id)
+    }
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        let edges = self
+            .prepare_edges(&write.depends_on, WriteKind::Project)
+            .await?;
+        let team = self.team_id().await?;
+        let status = self
+            .one_id(Lookup::ProjectStatus(&write.item.status.name))
+            .await?;
+        let labels = self
+            .label_ids(&write.item.labels, WriteKind::Project)
+            .await?;
+        let description = self.write_description(
+            write.item.content.as_deref(),
+            &write.item.metadata,
+            &write.item.repositories,
+            &edges,
+            WriteKind::Project,
+        )?;
+        let input = json!({"name":write.item.title,"description":description,"statusId":status,"labelIds":labels});
+        let (query, variables, root) = match &write.target {
+            Some(id) => (
+                graphql::PROJECT_UPDATE,
+                json!({"id":id.0,"input":input}),
+                MutationRoot::ProjectUpdate,
+            ),
+            None => (
+                graphql::PROJECT_CREATE,
+                {
+                    let mut input = input;
+                    input["teamIds"] = json!([team]);
+                    json!({"input":input})
+                },
+                MutationRoot::ProjectCreate,
+            ),
+        };
+        let data = self.send(query, variables).await?;
+        let project = mutation_payload(&data, root)?
+            .get("project")
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("missing {}.project", root.as_str()),
+            })?;
+        let id = NativeId(backend_id(project, "id")?.into());
+        self.write_relations(&id, &edges, WriteKind::Project)
+            .await?;
+        Ok(id)
     }
 }
 
@@ -785,6 +1256,29 @@ fn metadata_description(
 
 fn optional_string(v: &Value, k: &str) -> Result<Option<String>, SourceError> {
     Ok(optional_str(v, k)?.map(Into::into))
+}
+fn backend_id<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceError> {
+    let id = str_at(value, field)?;
+    (!id.is_empty())
+        .then_some(id)
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("field {field} is an empty backend id"),
+        })
+}
+fn mutation_payload(data: &Value, root: MutationRoot) -> Result<&Value, SourceError> {
+    let root = root.as_str();
+    let payload = data.get(root).ok_or_else(|| SourceError::Malformed {
+        message: format!("missing {root}"),
+    })?;
+    match payload.get("success").and_then(Value::as_bool) {
+        Some(true) => Ok(payload),
+        Some(false) => Err(SourceError::Refused {
+            message: format!("Linear reported {root} was unsuccessful"),
+        }),
+        None => Err(SourceError::Malformed {
+            message: format!("missing boolean {root}.success"),
+        }),
+    }
 }
 fn page_next(c: &Value) -> Result<Option<Cursor>, SourceError> {
     let info = c.get("pageInfo").ok_or_else(|| SourceError::Malformed {
