@@ -392,13 +392,13 @@ fn a_project_copy_updates_the_configured_github_board_without_creating_one() {
         reported(&copied),
         vec![("plans:P-1".into(), json!("board:P-1"), "created".into())]
     );
-    let shown = shown(&sandbox, "project", "board:P-1");
-    assert_eq!(shown["title"], "Published roadmap");
-    assert_eq!(shown["content"], "The permanent plan");
-    assert_eq!(shown["status"]["category"], "in-progress");
-    assert_eq!(shown["metadata"]["caller.approved"], true);
+    let written = shown(&sandbox, "project", "board:P-1");
+    assert_eq!(written["title"], "Published roadmap");
+    assert_eq!(written["content"], "The permanent plan");
+    assert_eq!(written["status"]["category"], "in-progress");
+    assert_eq!(written["metadata"]["caller.approved"], true);
     assert_eq!(
-        shown["repositories"],
+        written["repositories"],
         json!(["github.com/nickderobertis/onetaskgraph"])
     );
     let dependencies: Value =
@@ -409,6 +409,40 @@ fn a_project_copy_updates_the_configured_github_board_without_creating_one() {
             .unwrap()
             .iter()
             .any(|edge| edge["to"]["id"] == "elsewhere:P-9")
+    );
+
+    std::fs::write(
+        root.join("projects/P-1.md"),
+        "---\ntitle: Published roadmap\nstatus: Open\nmetadata: {caller.approved: true}\n---\nThe permanent plan\n",
+    )
+    .unwrap();
+    let cleared = ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plans:P-1",
+            "--to",
+            "board",
+            "--no-tasks",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        reported(&cleared),
+        vec![("plans:P-1".into(), json!("board:P-1"), "updated".into())]
+    );
+    let shown = shown(&sandbox, "project", "board:P-1");
+    assert_eq!(shown["repositories"], json!([]));
+    let dependencies: Value =
+        serde_json::from_str(&ok(&sandbox, &["project", "deps", "board:P-1", "--json"])).unwrap();
+    assert!(
+        dependencies["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|edge| edge["to"]["id"] != "elsewhere:P-9"),
+        "clearing recorded dependencies preserves only native issue relationships"
     );
 }
 

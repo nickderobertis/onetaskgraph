@@ -1345,31 +1345,27 @@ impl TaskSource for GitHubProjectsSource {
             });
         }
         let mut metadata = write.item.metadata.clone();
-        if !write.item.repositories.is_empty() {
-            metadata.insert(
-                Repository::METADATA_KEY.into(),
-                Value::Array(
-                    write
-                        .item
-                        .repositories
-                        .iter()
-                        .map(|repository| Value::String(repository.as_str().to_owned()))
-                        .collect(),
-                ),
-            );
-        }
-        if !write.depends_on.is_empty() {
-            metadata.insert(
-                DependencyEdge::RECORDED_KEY.into(),
-                Value::Array(
-                    write
-                        .depends_on
-                        .iter()
-                        .map(|edge| endpoint_value(&edge.to))
-                        .collect(),
-                ),
-            );
-        }
+        metadata.insert(
+            Repository::METADATA_KEY.into(),
+            Value::Array(
+                write
+                    .item
+                    .repositories
+                    .iter()
+                    .map(|repository| Value::String(repository.as_str().to_owned()))
+                    .collect(),
+            ),
+        );
+        metadata.insert(
+            DependencyEdge::RECORDED_KEY.into(),
+            Value::Array(
+                write
+                    .depends_on
+                    .iter()
+                    .map(|edge| endpoint_value(&edge.to))
+                    .collect(),
+            ),
+        );
         let description = project_metadata_description(write.item.content.as_deref(), &metadata)?;
         let data = self
             .graphql(
