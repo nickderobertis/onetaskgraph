@@ -53,6 +53,12 @@ def configured(tmp_path: Path, *, failing: bool = False) -> Path:
                         "status": {"category": "todo", "name": "Todo"},
                         "labels": [],
                         "project": "P-1",
+                        "metadata": {
+                            "onepipeline.turn_budget": 12,
+                            "caller.flags": [True, None],
+                            "caller.shape": {"nested": "value"},
+                        },
+                        "repositories": ["github.com/nickderobertis/onetaskgraph"],
                     }
                 ],
                 "projects": [
@@ -61,9 +67,25 @@ def configured(tmp_path: Path, *, failing: bool = False) -> Path:
                         "title": "Memory project",
                         "status": {"category": "todo", "name": "Todo"},
                         "labels": [],
+                        "metadata": {"onepipeline.publication": {"mode": "review"}},
+                        "repositories": ["github.com/nickderobertis/onetaskgraph"],
                     }
                 ],
                 "labels": [{"id": "L-1", "name": "sdk"}],
+                "task_dependencies": [
+                    {
+                        "from": "T-1",
+                        "to": {"id": "elsewhere:P-9", "kind": "project"},
+                        "kind": "blocks",
+                    }
+                ],
+                "project_dependencies": [
+                    {
+                        "from": "P-1",
+                        "to": {"id": "elsewhere:T-9", "kind": "task"},
+                        "kind": "blocks",
+                    }
+                ],
             },
         },
         "markdown": {
@@ -123,10 +145,10 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
         )
     ).items
     assert run(client.task_show(id=GlobalId(root="memory:T-1"))).items
-    assert run(client.task_deps(id="memory:T-1")).items == []
+    assert run(client.task_deps(id="memory:T-1")).items
     assert run(client.project_list(source=["memory"])).items
     assert run(client.project_show(id="memory:P-1")).items
-    assert run(client.project_deps(id="memory:P-1")).items == []
+    assert run(client.project_deps(id="memory:P-1")).items
     assert run(client.label_list(source=["memory"])).items
     assert run(client.search(text="Memory", kind="task")).items
     assert run(client.sources_list())
@@ -292,3 +314,55 @@ def test_generator_write_mode_uses_real_binary(tmp_path: Path) -> None:
 def test_distribution_version() -> None:
     """Keep the one public version aligned with the manifest."""
     assert __version__ == "0.1.0"
+
+
+def test_metadata_and_repositories_survive_the_generated_models(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Read caller metadata and repository origins back through the validated models."""
+    client = Client(binary, cwd=configured(tmp_path))
+
+    task = run(client.task_show(id="memory:T-1")).items[0].item
+    assert task.metadata == {
+        "onepipeline.turn_budget": 12,
+        "caller.flags": [True, None],
+        "caller.shape": {"nested": "value"},
+    }
+    assert [repository.root for repository in task.repositories] == [
+        "github.com/nickderobertis/onetaskgraph"
+    ]
+
+    project = run(client.project_show(id="memory:P-1")).items[0].item
+    assert project.metadata == {"onepipeline.publication": {"mode": "review"}}
+    assert [repository.root for repository in project.repositories] == [
+        "github.com/nickderobertis/onetaskgraph"
+    ]
+
+    hit = run(client.search(text="Memory", kind="task")).items[0].root
+    assert hit.item.metadata["onepipeline.turn_budget"] == 12
+    assert [repository.root for repository in hit.item.repositories] == [
+        "github.com/nickderobertis/onetaskgraph"
+    ]
+
+
+def test_a_dependency_endpoint_carries_its_kind_and_may_leave_the_source(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Read a typed, qualified endpoint of another source back through the models."""
+    client = Client(binary, cwd=configured(tmp_path))
+
+    edge = run(client.task_deps(id="memory:T-1")).items[0]
+    assert edge.from_.id.root == "memory:T-1"
+    assert edge.from_.kind == "task"
+    assert edge.to.id.root == "elsewhere:P-9"
+    assert edge.to.kind == "project"
+    assert edge.kind == "blocks"
+
+    across_levels = run(client.project_deps(id="memory:P-1")).items[0]
+    assert across_levels.from_.kind == "project"
+    assert across_levels.to.id.root == "elsewhere:T-9"
+    assert across_levels.to.kind == "task"
+
+    # The far source is not configured, so reporting the edge cannot have resolved it.
+    with pytest.raises(OnetaskgraphError, match="elsewhere"):
+        run(client.project_show(id="elsewhere:P-9"))

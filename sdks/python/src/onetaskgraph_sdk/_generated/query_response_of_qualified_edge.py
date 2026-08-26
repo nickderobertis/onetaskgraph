@@ -154,10 +154,16 @@ class SourcePlan(BaseModel):
 class QualifiedEdge(BaseModel):
     from_: Annotated[
         QualifiedEndpoint,
-        Field(alias="from", description="The item the edge starts at."),
+        Field(
+            alias="from",
+            description="The item the edge starts at, and the one that **depends on** the other.\n\nThe direction a caller asked in says which end they named, not which end the edge\nstarts at: a forward read and the matching reverse read report the same edge.",
+        ),
     ]
     kind: Annotated[DependencyKind, Field(description="What the edge means.")]
-    to: Annotated[QualifiedEndpoint, Field(description="The item the edge points at.")]
+    to: Annotated[
+        QualifiedEndpoint,
+        Field(description="The item the edge points at, and the one that must finish first."),
+    ]
 
 
 class QueryPlan(BaseModel):

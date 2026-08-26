@@ -63,9 +63,12 @@ pub struct Qualified<T> {
 /// engine reports it without resolving or fetching the far source, so it holds no index.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct QualifiedEdge {
-    /// The item the edge starts at.
+    /// The item the edge starts at, and the one that **depends on** the other.
+    ///
+    /// The direction a caller asked in says which end they named, not which end the edge
+    /// starts at: a forward read and the matching reverse read report the same edge.
     pub from: QualifiedEndpoint,
-    /// The item the edge points at.
+    /// The item the edge points at, and the one that must finish first.
     pub to: QualifiedEndpoint,
     /// What the edge means.
     pub kind: onetaskgraph_plugin_api::DependencyKind,

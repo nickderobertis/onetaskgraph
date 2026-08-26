@@ -486,6 +486,33 @@ STRUCT_SECTIONS = {
     "DependencyEndpoint": "### 4.8 `task_dependencies` and `project_dependencies`",
 }
 
+def wire_members(struct):
+    """The members a hand-written `Serialize` puts on the wire, which no field scan sees.
+
+    A struct that serialises itself keeps its own shape private and writes a local `Wire`
+    struct instead — `DependencyEndpoint` does, because its id is one of two variants and
+    the wire is one string. Reading only `pub` fields would reconcile the half of such a
+    type that happens to be public and silently ignore the rest, which is the drift this
+    gate exists to catch rather than an exception to it.
+    """
+    impl = re.search(
+        r"impl Serialize for %s \{(.*?)\n\}" % re.escape(struct),
+        source_rs + contract_rs,
+        re.DOTALL,
+    )
+    if impl is None:
+        return []
+    wire = re.search(r"struct Wire(?:<[^>]*>)? \{(.*?)\n\s*\}", impl.group(1), re.DOTALL)
+    if wire is None:
+        refuse(
+            f"`{struct}` writes its own `Serialize`, but this script cannot find the "
+            f"`Wire` struct that says what it puts on the wire.",
+            "restore it, or teach this script the shape it has now — otherwise the "
+            "serialized members of this type go unreconciled while the check still passes.",
+        )
+    return re.findall(r"^\s*(\w+):", wire.group(1), re.MULTILINE)
+
+
 for struct, heading in STRUCT_SECTIONS.items():
     # Across both, because `Health` is declared beside the trait that returns it while
     # the rest are in the contract modules.
@@ -501,6 +528,7 @@ for struct, heading in STRUCT_SECTIONS.items():
             "document specifies cannot go unreconciled.",
         )
     members = re.findall(r"^    pub (\w+):", declaration.group(1), re.MULTILINE)
+    members += wire_members(struct)
     if not members:
         refuse(
             f"read no fields from the `{struct}` struct of the api crate.",

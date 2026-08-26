@@ -1610,7 +1610,7 @@ export const runtimeSchemas = {
     "properties": {
       "from": {
         "$ref": "#/$defs/QualifiedEndpoint",
-        "description": "The item the edge starts at."
+        "description": "The item the edge starts at, and the one that **depends on** the other.\n\nThe direction a caller asked in says which end they named, not which end the edge\nstarts at: a forward read and the matching reverse read report the same edge."
       },
       "kind": {
         "$ref": "#/$defs/DependencyKind",
@@ -1618,7 +1618,7 @@ export const runtimeSchemas = {
       },
       "to": {
         "$ref": "#/$defs/QualifiedEndpoint",
-        "description": "The item the edge points at."
+        "description": "The item the edge points at, and the one that must finish first."
       }
     },
     "required": [
@@ -2307,7 +2307,7 @@ export const runtimeSchemas = {
         "properties": {
           "from": {
             "$ref": "#/$defs/QualifiedEndpoint",
-            "description": "The item the edge starts at."
+            "description": "The item the edge starts at, and the one that **depends on** the other.\n\nThe direction a caller asked in says which end they named, not which end the edge\nstarts at: a forward read and the matching reverse read report the same edge."
           },
           "kind": {
             "$ref": "#/$defs/DependencyKind",
@@ -2315,7 +2315,7 @@ export const runtimeSchemas = {
           },
           "to": {
             "$ref": "#/$defs/QualifiedEndpoint",
-            "description": "The item the edge points at."
+            "description": "The item the edge points at, and the one that must finish first."
           }
         },
         "required": [

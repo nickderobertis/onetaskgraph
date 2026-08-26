@@ -897,7 +897,10 @@ to: QualifiedEndpoint1
 [k: string]: any
 }
 /**
- * The item the edge starts at.
+ * The item the edge starts at, and the one that **depends on** the other.
+ * 
+ * The direction a caller asked in says which end they named, not which end the edge
+ * starts at: a forward read and the matching reverse read report the same edge.
  */
 export interface QualifiedEndpoint {
 /**
@@ -911,7 +914,7 @@ kind: ("task" | "project")
 [k: string]: any
 }
 /**
- * The item the edge points at.
+ * The item the edge points at, and the one that must finish first.
  */
 export interface QualifiedEndpoint1 {
 /**
@@ -1388,7 +1391,10 @@ to: QualifiedEndpoint1
 [k: string]: any
 }
 /**
- * The item the edge starts at.
+ * The item the edge starts at, and the one that **depends on** the other.
+ * 
+ * The direction a caller asked in says which end they named, not which end the edge
+ * starts at: a forward read and the matching reverse read report the same edge.
  */
 export interface QualifiedEndpoint {
 /**
@@ -1402,7 +1408,7 @@ kind: ("task" | "project")
 [k: string]: any
 }
 /**
- * The item the edge points at.
+ * The item the edge points at, and the one that must finish first.
  */
 export interface QualifiedEndpoint1 {
 /**
