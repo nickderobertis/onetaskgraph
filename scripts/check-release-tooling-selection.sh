@@ -17,6 +17,16 @@ finding() {
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
   "could not resolve the repository root" "run this from a checkout of this repository"
+# Git hooks export GIT_DIR, which overrides every `git -C "$repo"` below. Load the
+# repository's shared guard before constructing the scratch repository so this check runs
+# against the same fixture both by hand and from the pre-push gate.
+# shellcheck source=scripts/scratch-clone.sh
+if [ ! -r "$ROOT/scripts/scratch-clone.sh" ] || ! source "$ROOT/scripts/scratch-clone.sh"; then
+  fatal "could not load the git-environment guard" \
+    "restore scripts/scratch-clone.sh and rerun"
+fi
+scratch_clone_strip_git_env
+
 scratch="$(mktemp -d)" || fatal "could not create a scratch directory" \
   "check temporary-directory permissions and free space"
 trap 'rm -rf "$scratch"' EXIT
