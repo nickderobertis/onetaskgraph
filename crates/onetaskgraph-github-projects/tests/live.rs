@@ -357,6 +357,14 @@ fn named_type(value: &Value) -> Option<&str> {
         .or_else(|| value.get("ofType").and_then(named_type))
 }
 
+fn type_signature(value: &Value) -> Option<String> {
+    match value.get("kind").and_then(Value::as_str)? {
+        "NON_NULL" => Some(format!("{}!", type_signature(value.get("ofType")?)?)),
+        "LIST" => Some(format!("[{}]", type_signature(value.get("ofType")?)?)),
+        _ => value.get("name").and_then(Value::as_str).map(str::to_owned),
+    }
+}
+
 async fn verify_mutation_schema(token: &str) -> Result<(), String> {
     let response = graphql(
         token,
@@ -522,7 +530,7 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
     ] {
         let selection = if input { "inputFields" } else { "fields" };
         let document = format!(
-            "query TypeContract {{ __type(name:\"{type_name}\") {{ {selection} {{ name }} }} }}"
+            "query TypeContract {{ __type(name:\"{type_name}\") {{ {selection} {{ name type {{ kind name ofType {{ kind name ofType {{ kind name }} }} }} }} }} }}"
         );
         let response = graphql(token, &document, "mutation type introspection").await?;
         let fields = response
@@ -539,8 +547,74 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
                 ));
             }
         }
+        for (field_name, expected_type) in mutation_field_types(type_name) {
+            let field = fields
+                .iter()
+                .find(|field| field.get("name").and_then(Value::as_str) == Some(field_name))
+                .ok_or_else(|| {
+                    format!("GitHub mutation type {type_name} has no {field_name} field")
+                })?;
+            let actual = field.get("type").and_then(type_signature);
+            if actual.as_deref() != Some(expected_type) {
+                return Err(format!(
+                    "GitHub mutation type {type_name}.{field_name} changed: expected {expected_type}, got {actual:?}"
+                ));
+            }
+        }
     }
     Ok(())
+}
+
+fn mutation_field_types(type_name: &str) -> &'static [(&'static str, &'static str)] {
+    match type_name {
+        "AddProjectV2DraftIssueInput" => &[
+            ("projectId", "ID!"),
+            ("title", "String!"),
+            ("body", "String"),
+        ],
+        "UpdateProjectV2DraftIssueInput" => &[
+            ("draftIssueId", "ID!"),
+            ("title", "String"),
+            ("body", "String"),
+        ],
+        "UpdateIssueInput" => &[("id", "ID!"), ("title", "String"), ("body", "String")],
+        "UpdateProjectV2ItemFieldValueInput" => &[
+            ("projectId", "ID!"),
+            ("itemId", "ID!"),
+            ("fieldId", "ID!"),
+            ("value", "ProjectV2FieldValue!"),
+        ],
+        "ProjectV2FieldValue" => &[("text", "String"), ("singleSelectOptionId", "String")],
+        "UpdateProjectV2Input" => &[
+            ("projectId", "ID!"),
+            ("title", "String"),
+            ("shortDescription", "String"),
+            ("closed", "Boolean"),
+        ],
+        "AddBlockedByInput" | "RemoveBlockedByInput" => {
+            &[("issueId", "ID!"), ("blockingIssueId", "ID!")]
+        }
+        "DeleteProjectV2ItemInput" => &[("projectId", "ID!"), ("itemId", "ID!")],
+        "CreateProjectV2FieldInput" => &[
+            ("projectId", "ID!"),
+            ("dataType", "ProjectV2CustomFieldType!"),
+            ("name", "String!"),
+        ],
+        "DeleteProjectV2FieldInput" => &[("fieldId", "ID!")],
+        "AddProjectV2DraftIssuePayload" => &[("projectItem", "ProjectV2Item")],
+        "UpdateProjectV2DraftIssuePayload" => &[("draftIssue", "DraftIssue")],
+        "UpdateIssuePayload" => &[("issue", "Issue")],
+        "UpdateProjectV2ItemFieldValuePayload" => &[("projectV2Item", "ProjectV2Item")],
+        "UpdateProjectV2Payload" => &[("projectV2", "ProjectV2")],
+        "AddBlockedByPayload" | "RemoveBlockedByPayload" => {
+            &[("issue", "Issue"), ("blockingIssue", "Issue")]
+        }
+        "DeleteProjectV2ItemPayload" => &[("deletedItemId", "ID")],
+        "CreateProjectV2FieldPayload" | "DeleteProjectV2FieldPayload" => {
+            &[("projectV2Field", "ProjectV2FieldConfiguration")]
+        }
+        _ => &[],
+    }
 }
 
 fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
