@@ -195,6 +195,14 @@ Every item is qualified by the source it came from and rendered `<source>:<nativ
 `work:ENG-142`, `notes:2026-08-inbox`. Parsing splits on the **first** colon, so a native
 id may contain colons freely.
 
+## Custom metadata and repositories
+
+A task and a project each carry a caller-defined `metadata` map and the `repositories`
+they concern, and a dependency edge names both its ends by kind and qualified id — so an
+edge may cross projects, cross the task and project levels, and cross sources.
+[`docs/metadata.md`](./docs/metadata.md) says which keys are reserved, where each source
+keeps them, and what is read-only until the copy verb lands.
+
 ## Writing a source in another language
 
 A source that is not a Rust crate speaks a line-oriented JSON protocol over stdio:

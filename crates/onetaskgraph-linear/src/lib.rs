@@ -12,6 +12,11 @@
 //! three text predicates are deliberately unsupported and ignored here for
 //! sound engine compensation. Pagination uses Relay `first` and `after`.
 //!
+//! Caller metadata is canonical JSON in a trailing
+//! `<!-- onetaskgraph.metadata ... -->` Markdown comment in the item's description. The
+//! visible description is returned unchanged without that slot. This node is read-only;
+//! the later Linear write-side node must write the same slot and preserve visible content.
+//!
 //! Fixture provenance is recorded in `tests/fixtures/README.md`. Live tests are
 //! non-destructive by construction: [`TaskSource`] exposes reads only, and no
 //! test uses GraphQL mutations for setup or teardown.
@@ -19,10 +24,10 @@
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Health,
-    Label, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
-    TaskSource,
+    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
+    Direction, Health, ItemKind, Label, NativeId, Page, PageRequest, Project, ProjectFilter,
+    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
+    StatusCategory, Support, Task, TaskQuery, TaskSource,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -51,9 +56,9 @@ pub mod graphql {
     /// List issue labels.
     pub const LABELS: &str = "query($first:Int!,$after:String){ issueLabels(first:$first,after:$after){ nodes{id name color} pageInfo{hasNextPage endCursor} } }";
     /// Fetch issue dependency relations.
-    pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ relations(first:$first,after:$after){nodes{type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+    pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type issue{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Fetch project dependency relations.
-    pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ relations(first:$first,after:$after){nodes{type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type project{id}} pageInfo{hasNextPage endCursor}} } }";
+    pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ description relations(first:$first,after:$after){nodes{type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type project{id}} pageInfo{hasNextPage endCursor}} } }";
 }
 
 use graphql::{
@@ -163,6 +168,7 @@ impl SourcePlugin for Plugin {
             endpoint: config.endpoint,
             key,
             team: config.team,
+            name: name.clone(),
         }))
     }
 }
@@ -172,6 +178,10 @@ struct LinearSource {
     endpoint: Endpoint,
     key: SecretString,
     team: Option<Team>,
+    /// This source's configured name, kept for one comparison: a far end recorded as
+    /// `<this name>:<native>` is a Linear item Linear itself relates, so the reserved key
+    /// is refused for it exactly as a bare id of the same kind is.
+    name: SourceName,
 }
 
 #[derive(Deserialize)]
@@ -368,8 +378,8 @@ impl TaskSource for LinearSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        let d=self.send(ISSUE_RELATIONS,json!({"id":id.0,"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0)})).await?;
-        relation_page(&d, DependencyRoot::Issue, id, direction)
+        self.dependencies(ISSUE_RELATIONS, DependencyRoot::Issue, id, direction, page)
+            .await
     }
     async fn project_dependencies(
         &self,
@@ -377,8 +387,107 @@ impl TaskSource for LinearSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        let d=self.send(PROJECT_RELATIONS,json!({"id":id.0,"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0)})).await?;
-        relation_page(&d, DependencyRoot::Project, id, direction)
+        self.dependencies(
+            PROJECT_RELATIONS,
+            DependencyRoot::Project,
+            id,
+            direction,
+            page,
+        )
+        .await
+    }
+}
+
+/// Linear relates one Linear item to another and nothing else, so an edge whose far end
+/// is in a different source is the one edge no `relations` entry can hold. Those edges
+/// are read from the near item's own [`DependencyEdge::RECORDED_KEY`] metadata, and they
+/// are served *after* the native relations are spent: a page under this cursor is the
+/// recorded tail of the same walk, which keeps the native pages exactly what they were.
+const RECORDED_CURSOR: &str = "onetaskgraph.depends_on:";
+
+impl LinearSource {
+    async fn dependencies(
+        &self,
+        query: &str,
+        root: DependencyRoot,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        let limit = page.limit.min(250);
+        let cursor = page.cursor.as_ref().map(|c| c.0.as_str());
+        if let Some(offset) = cursor.and_then(|c| c.strip_prefix(RECORDED_CURSOR)) {
+            // This cursor resumes the *forward* tail and only a forward walk ever issues
+            // one, so a reverse read carrying it is resuming a walk it did not come from.
+            // Serving it would answer a reverse read with forward edges, which is the one
+            // thing a recorded edge must never do — its reverse is derived from the far
+            // end and is never written down here.
+            if direction != Direction::DependsOn {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "{RECORDED_CURSOR}{offset} resumes recorded forward edges, which a                          reverse dependency read never issues; resume it in the direction                          that reported it"
+                    ),
+                });
+            }
+            let offset: usize = offset.parse().map_err(|_| SourceError::Malformed {
+                message: format!("{RECORDED_CURSOR}{offset} is not a recorded-edge cursor"),
+            })?;
+            let d = self
+                .send(query, json!({"id":id.0,"first":1,"after":null}))
+                .await?;
+            return Ok(recorded_page(
+                recorded(&d, root, id, &self.name)?,
+                offset,
+                limit as usize,
+            ));
+        }
+        let d = self
+            .send(query, json!({"id":id.0,"first":limit,"after":cursor}))
+            .await?;
+        let mut answered = relation_page(&d, root, id, direction)?;
+        // Only forwards: the reverse of a recorded edge is derived from the far end, never
+        // written down on the near item.
+        if answered.next.is_none()
+            && direction == Direction::DependsOn
+            && !recorded(&d, root, id, &self.name)?.is_empty()
+        {
+            answered.next = Some(Cursor(format!("{RECORDED_CURSOR}0")));
+        }
+        Ok(answered)
+    }
+}
+
+fn recorded(
+    d: &Value,
+    root: DependencyRoot,
+    id: &NativeId,
+    name: &SourceName,
+) -> Result<Vec<DependencyEdge>, SourceError> {
+    let item = d.get(root.as_str()).ok_or_else(|| SourceError::Malformed {
+        message: format!("missing {}", root.as_str()),
+    })?;
+    let (_, metadata) = metadata_description(optional_string(item, "description")?)?;
+    // `relations` on an issue holds issues and on a project holds projects, both of this
+    // workspace — so a same-kind far end in this same source is one Linear itself was
+    // supposed to hold, and the key is refused rather than quietly read, whether the entry
+    // left the source out or spelled this one.
+    DependencyEdge::recorded(
+        &metadata,
+        id,
+        root.item_kind(),
+        name,
+        Some(root.item_kind()),
+    )
+    .map_err(|message| SourceError::Malformed { message })
+}
+
+fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Page<DependencyEdge> {
+    let total = edges.len();
+    let items: Vec<DependencyEdge> = edges.into_iter().skip(offset).take(limit.max(1)).collect();
+    let end = offset.saturating_add(items.len());
+    Page {
+        items,
+        next: (end < total).then(|| Cursor(format!("{RECORDED_CURSOR}{end}"))),
     }
 }
 
@@ -440,10 +549,13 @@ fn time(v: &Value, k: &str) -> Result<Option<DateTime<Utc>>, SourceError> {
         .transpose()
 }
 fn map_task(v: &Value) -> Result<Task, SourceError> {
+    let (content, metadata) = metadata_description(optional_string(v, "description")?)?;
+    let repositories = Repository::from_metadata(&metadata)
+        .map_err(|message| SourceError::Malformed { message })?;
     Ok(Task {
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "title")?.into(),
-        content: optional_string(v, "description")?,
+        content,
         status: status(v.get("state").ok_or_else(|| SourceError::Malformed {
             message: "missing state".into(),
         })?)?,
@@ -462,13 +574,18 @@ fn map_task(v: &Value) -> Result<Task, SourceError> {
         url: optional_string(v, "url")?,
         created_at: time(v, "createdAt")?,
         updated_at: time(v, "updatedAt")?,
+        metadata,
+        repositories,
     })
 }
 fn map_project(v: &Value) -> Result<Project, SourceError> {
+    let (content, metadata) = metadata_description(optional_string(v, "description")?)?;
+    let repositories = Repository::from_metadata(&metadata)
+        .map_err(|message| SourceError::Malformed { message })?;
     Ok(Project {
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "name")?.into(),
-        content: optional_string(v, "description")?,
+        content,
         status: status(v.get("status").ok_or_else(|| SourceError::Malformed {
             message: "missing status".into(),
         })?)?,
@@ -478,6 +595,8 @@ fn map_project(v: &Value) -> Result<Project, SourceError> {
         url: optional_string(v, "url")?,
         created_at: time(v, "createdAt")?,
         updated_at: time(v, "updatedAt")?,
+        metadata,
+        repositories,
     })
 }
 fn optional<T>(
@@ -519,6 +638,12 @@ enum DependencyRoot {
     Project,
 }
 impl DependencyRoot {
+    const fn item_kind(self) -> ItemKind {
+        match self {
+            Self::Issue => ItemKind::Task,
+            Self::Project => ItemKind::Project,
+        }
+    }
     const fn as_str(self) -> &'static str {
         match self {
             Self::Issue => "issue",
@@ -593,7 +718,12 @@ fn relation_page(
             RelationKind::Related => DependencyKind::Related,
         };
         // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-        items.push(DependencyEdge { from, to, kind });
+        let item_kind = root.item_kind();
+        items.push(DependencyEdge {
+            from: DependencyEndpoint::from_native(from, item_kind),
+            to: DependencyEndpoint::from_native(to, item_kind),
+            kind,
+        });
     }
     let next = page_next(c)?;
     Ok(Page { items, next })
@@ -613,6 +743,46 @@ fn optional_str<'a>(v: &'a Value, k: &str) -> Result<Option<&'a str>, SourceErro
             }),
     }
 }
+
+/// Linear has no caller-defined fields. The source owns an unobtrusive Markdown comment
+/// at the end of `description`; its later write side must use this exact encoding.
+const METADATA_OPEN: &str = "<!-- onetaskgraph.metadata\n";
+const METADATA_CLOSE: &str = "\n-->";
+
+fn metadata_description(
+    description: Option<String>,
+) -> Result<(Option<String>, std::collections::BTreeMap<String, Value>), SourceError> {
+    let Some(description) = description else {
+        return Ok((None, Default::default()));
+    };
+    let Some(start) = description.rfind(METADATA_OPEN) else {
+        return Ok((Some(description), Default::default()));
+    };
+    let encoded_start = start + METADATA_OPEN.len();
+    let Some(relative_end) = description[encoded_start..].find(METADATA_CLOSE) else {
+        return Err(SourceError::Malformed {
+            message: "unterminated onetaskgraph metadata slot in Linear description".into(),
+        });
+    };
+    let encoded_end = encoded_start + relative_end;
+    if !description[encoded_end + METADATA_CLOSE.len()..]
+        .trim()
+        .is_empty()
+    {
+        return Ok((Some(description), Default::default()));
+    }
+    let metadata =
+        serde_json::from_str(&description[encoded_start..encoded_end]).map_err(|error| {
+            SourceError::Malformed {
+                message: format!(
+                    "invalid canonical JSON in Linear onetaskgraph metadata slot: {error}"
+                ),
+            }
+        })?;
+    let visible = description[..start].trim_end();
+    Ok(((!visible.is_empty()).then(|| visible.to_owned()), metadata))
+}
+
 fn optional_string(v: &Value, k: &str) -> Result<Option<String>, SourceError> {
     Ok(optional_str(v, k)?.map(Into::into))
 }

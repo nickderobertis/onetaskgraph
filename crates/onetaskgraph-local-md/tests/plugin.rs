@@ -1,7 +1,7 @@
 use std::fs;
 
 use onetaskgraph_plugin_api::{
-    Cursor, DependencyKind, Direction, LabelFilter, NativeId, PageRequest, ProjectFilter,
+    Cursor, DependencyKind, Direction, ItemKind, LabelFilter, NativeId, PageRequest, ProjectFilter,
     ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, StatusCategory, TaskQuery,
     TaskSource, TextFields, TextQuery,
 };
@@ -87,7 +87,7 @@ async fn scans_real_markdown_filters_pages_and_walks_both_directions() {
         )
         .await
         .unwrap();
-    assert_eq!(forward.items[0].to.0, "b");
+    assert_eq!(forward.items[0].to.id(), "b");
     let reverse = source
         .task_dependencies(
             &NativeId("b".into()),
@@ -99,7 +99,7 @@ async fn scans_real_markdown_filters_pages_and_walks_both_directions() {
         )
         .await
         .unwrap();
-    assert_eq!(reverse.items[0].from.0, "nested/a");
+    assert_eq!(reverse.items[0].from.id(), "nested/a");
 }
 
 #[tokio::test]
@@ -127,6 +127,106 @@ async fn reads_windows_line_endings_from_a_real_markdown_file() {
     assert_eq!(tasks.items.len(), 1);
     assert_eq!(tasks.items[0].title, "Windows task");
     assert_eq!(tasks.items[0].content.as_deref(), Some("Body from disk"));
+}
+
+#[tokio::test]
+async fn front_matter_carries_typed_metadata_repositories_and_a_far_end_of_its_own() {
+    let root = tempfile::tempdir().expect("temporary notes");
+    fs::create_dir_all(root.path().join("tasks")).expect("task folder");
+    fs::create_dir_all(root.path().join("projects")).expect("project folder");
+    fs::write(
+        root.path().join("tasks/near.md"),
+        "---\nstatus: todo\nmetadata:\n  onepipeline.turn_budget: 12\n  caller.flags: [true, null]\n  caller.shape: {nested: \"value\"}\nrepositories: [github.com/acme/work, github.com/acme/docs]\ndepends_on:\n  - far\n  - id: \"elsewhere:P-9\"\n    item: project\n    kind: related\n---\nnear body\n",
+    )
+    .expect("task");
+    let source = onetaskgraph_local_md::Plugin
+        .build(
+            &SourceName::new("notes").unwrap(),
+            &serde_json::json!({"root":root.path()}),
+            &NoSecrets,
+        )
+        .expect("source builds");
+
+    let task = source
+        .get_task(&NativeId("near".into()))
+        .await
+        .unwrap()
+        .expect("the near task is read");
+    assert_eq!(
+        task.metadata["onepipeline.turn_budget"],
+        serde_json::json!(12)
+    );
+    assert_eq!(
+        task.metadata["caller.flags"],
+        serde_json::json!([true, null])
+    );
+    assert_eq!(
+        task.metadata["caller.shape"],
+        serde_json::json!({"nested":"value"})
+    );
+    assert_eq!(
+        task.repositories
+            .iter()
+            .map(onetaskgraph_plugin_api::Repository::as_str)
+            .collect::<Vec<_>>(),
+        ["github.com/acme/work", "github.com/acme/docs"]
+    );
+
+    let edges = source
+        .task_dependencies(&NativeId("near".into()), Direction::DependsOn, &page(10))
+        .await
+        .unwrap();
+    assert_eq!(edges.items[0].to.id(), "far");
+    assert!(!edges.items[0].to.is_qualified());
+    assert_eq!(edges.items[1].to.id(), "elsewhere:P-9");
+    assert!(edges.items[1].to.is_qualified());
+    assert_eq!(edges.items[1].to.kind, ItemKind::Project);
+    assert_eq!(edges.items[1].from.kind, ItemKind::Task);
+    assert_eq!(edges.items[1].kind, DependencyKind::Related);
+}
+
+#[tokio::test]
+async fn front_matter_that_repeats_a_repository_or_misnames_a_far_end_is_refused_by_path() {
+    for (name, front, expected) in [
+        (
+            "repeated",
+            "repositories: [github.com/acme/work, github.com/acme/work]",
+            "listed twice",
+        ),
+        (
+            "unnormalized",
+            "repositories: [https://github.com/acme/work]",
+            "normalized repository origin",
+        ),
+        (
+            "far",
+            "depends_on: [{id: \"bad source:P-9\", item: project}]",
+            "source name",
+        ),
+        ("unknown", "invented: true", "unknown field"),
+    ] {
+        let root = tempfile::tempdir().expect("temporary notes");
+        fs::create_dir_all(root.path().join("tasks")).expect("task folder");
+        fs::write(
+            root.path().join("tasks/near.md"),
+            format!("---\nstatus: todo\n{front}\n---\nbody\n"),
+        )
+        .expect("task");
+        let source = onetaskgraph_local_md::Plugin
+            .build(
+                &SourceName::new("notes").unwrap(),
+                &serde_json::json!({"root":root.path()}),
+                &NoSecrets,
+            )
+            .expect("source builds");
+        let error = source
+            .get_task(&NativeId("near".into()))
+            .await
+            .expect_err(name);
+        let message = format!("{error}");
+        assert!(message.contains(expected), "{name}: {message}");
+        assert!(message.contains("near.md"), "{name}: {message}");
+    }
 }
 
 #[tokio::test]
@@ -254,7 +354,7 @@ async fn public_queries_cover_fields_labels_statuses_projects_and_paging() {
         .project_dependencies(&NativeId("q".into()), Direction::DependedOnBy, &page(10))
         .await
         .unwrap();
-    assert_eq!(projects.items[0].from.0, "p");
+    assert_eq!(projects.items[0].from.id(), "p");
 }
 
 #[tokio::test]

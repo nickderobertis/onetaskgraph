@@ -1,7 +1,8 @@
 //! The configuration block this plugin builds a source from.
 
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, DependencySupport, Label, NativeId, Project, Support, Task,
+    Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, ItemKind,
+    Label, NativeId, Project, Support, Task,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, de::Error as _};
@@ -22,9 +23,74 @@ pub struct InMemoryConfig {
     /// Every label this source knows.
     pub labels: Vec<Label>,
     /// Forward task dependency edges: `from` depends on `to`.
+    ///
+    /// An endpoint written as a bare id is a task of this source; the expanded
+    /// `{"id": ..., "kind": ...}` form is what names another level or another source.
+    #[serde(deserialize_with = "task_edges")]
     pub task_dependencies: Vec<DependencyEdge>,
     /// Forward project dependency edges: `from` depends on `to`.
+    ///
+    /// A bare id here is a *project* of this source, because that is what this list is —
+    /// the shorthand takes its level from the field it is written under, exactly as a
+    /// local Markdown document's `depends_on` takes its level from the document.
+    #[serde(deserialize_with = "project_edges")]
     pub project_dependencies: Vec<DependencyEdge>,
+}
+
+fn task_edges<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<DependencyEdge>, D::Error> {
+    edges_at(deserializer, ItemKind::Task)
+}
+
+fn project_edges<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<DependencyEdge>, D::Error> {
+    edges_at(deserializer, ItemKind::Project)
+}
+
+/// The wire shape, read at the level of the list it was written under.
+///
+/// `DependencyEdge`'s own decoding cannot do this: it reads one edge with no idea which
+/// list it came from, so a bare id there can only mean the contract's default, a task.
+fn edges_at<'de, D: Deserializer<'de>>(
+    deserializer: D,
+    level: ItemKind,
+) -> Result<Vec<DependencyEdge>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct EdgeInput {
+        from: EndpointInput,
+        to: EndpointInput,
+        kind: DependencyKind,
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum EndpointInput {
+        // llmlint: ignore[invalid_states_unrepresentable] `NativeId` is deliberately an opaque, unvalidated string in the frozen plugin contract; this input shape preserves that contract until conversion.
+        Bare(String),
+        Typed { id: String, kind: ItemKind },
+    }
+    impl EndpointInput {
+        fn into_endpoint<E: serde::de::Error>(
+            self,
+            level: ItemKind,
+        ) -> Result<DependencyEndpoint, E> {
+            match self {
+                // llmlint: ignore[boundary_inputs_validated] A bare id is the frozen contract's deliberately opaque `NativeId`; rejecting a value here would narrow that public contract.
+                Self::Bare(id) => Ok(DependencyEndpoint::from_native(NativeId(id), level)),
+                Self::Typed { id, kind } => DependencyEndpoint::new(id, kind).map_err(E::custom),
+            }
+        }
+    }
+    Vec::<EdgeInput>::deserialize(deserializer)?
+        .into_iter()
+        .map(|edge| {
+            Ok(DependencyEdge {
+                from: edge.from.into_endpoint(level)?,
+                to: edge.to.into_endpoint(level)?,
+                kind: edge.kind,
+            })
+        })
+        .collect()
 }
 
 impl InMemoryConfig {
@@ -93,10 +159,14 @@ impl InMemoryConfig {
             ("project", &self.project_dependencies, &project_ids),
         ] {
             for edge in edges {
-                for (end, id) in [("from", &edge.from), ("to", &edge.to)] {
-                    if !known.contains(id) {
+                for (end, endpoint) in [("from", &edge.from), ("to", &edge.to)] {
+                    // A qualified endpoint deliberately names an item of another source,
+                    // which this one cannot hold and must not be asked to. A native id
+                    // containing a colon is still this source's own, so it is checked.
+                    let native = NativeId(endpoint.id().to_owned());
+                    if !endpoint.is_qualified() && !known.contains(&native) {
                         problems.push(format!(
-                            "a {noun} dependency edge's `{end}` names {id}, which this source \
+                            "a {noun} dependency edge's `{end}` names {endpoint}, which this source \
                              does not hold"
                         ));
                     }

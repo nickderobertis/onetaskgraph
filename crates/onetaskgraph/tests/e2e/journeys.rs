@@ -57,6 +57,15 @@ fn listed(rendered: &str) -> Vec<String> {
         .collect()
 }
 
+fn edge_starts(rendered: &str) -> Vec<String> {
+    rendered
+        .lines()
+        .take_while(|line| !line.trim().is_empty())
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The ids this row's source is expected to answer with.
 fn ours(natives: &[&str]) -> Vec<String> {
     natives
@@ -251,6 +260,258 @@ fn every_complete_dataset_source_lists_its_projects_and_shows_one_by_its_qualifi
             row.name
         );
     }
+}
+
+#[test]
+fn every_source_preserves_typed_metadata_and_repository_origins_through_the_binary() {
+    for row in ROWS {
+        let sandbox = host(row);
+        let task: serde_json::Value = serde_json::from_str(&ok(
+            row,
+            &sandbox,
+            &["task", "show", &qualified(SOURCE, "T-1"), "--json"],
+        ))
+        .expect("task show emits JSON");
+        let task = &task["items"][0]["item"];
+        assert_eq!(
+            task["metadata"]["onepipeline.turn_budget"],
+            json!(12),
+            "{}",
+            row.name
+        );
+        assert_eq!(
+            task["metadata"]["caller.flags"],
+            json!([true, null]),
+            "{}",
+            row.name
+        );
+        assert_eq!(
+            task["repositories"],
+            json!(["github.com/nickderobertis/onetaskgraph"]),
+            "{}",
+            row.name
+        );
+
+        let project: serde_json::Value = serde_json::from_str(&ok(
+            row,
+            &sandbox,
+            &["project", "show", &qualified(SOURCE, "P-1"), "--json"],
+        ))
+        .expect("project show emits JSON");
+        let project = &project["items"][0]["item"];
+        assert_eq!(
+            project["metadata"]["onepipeline.publication"],
+            json!({"mode":"review"}),
+            "{}",
+            row.name
+        );
+        assert_eq!(
+            project["repositories"],
+            json!(["github.com/nickderobertis/onetaskgraph"]),
+            "{}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn every_source_orients_a_native_edge_from_the_item_that_depends() {
+    // One orientation across every backend: `from` depends on `to`. Each source spells the
+    // relationship its own way — a `depends_on` list, a Linear relation, a GitHub
+    // `blockedBy` connection — and the whole point of one interface over them is that a
+    // caller cannot tell which by reading the answer. So the same edge has to come back
+    // identical whether it is asked for from the end that depends or the end that blocks.
+    let edge = |from: &str, to: &str, kind: &str| {
+        json!({
+            "from": {"id": qualified(SOURCE, from), "kind": kind},
+            "to": {"id": qualified(SOURCE, to), "kind": kind},
+            "kind": "blocks"
+        })
+    };
+    let items = |rendered: &str| -> Vec<serde_json::Value> {
+        serde_json::from_str::<serde_json::Value>(rendered).expect("dependency output is JSON")
+            ["items"]
+            .as_array()
+            .expect("an edge page is a list")
+            .clone()
+    };
+
+    for row in ROWS {
+        let sandbox = host(row);
+
+        // T-1 waits on T-2, read from T-1...
+        let forward = items(&ok(
+            row,
+            &sandbox,
+            &["task", "deps", &qualified(SOURCE, "T-1"), "--json"],
+        ));
+        assert!(
+            forward.contains(&edge("T-1", "T-2", "task")),
+            "{}: T-1 is what depends:\n{forward:#?}",
+            row.name
+        );
+
+        // ...and the same edge, unchanged, read from T-2.
+        let reverse = items(&ok(
+            row,
+            &sandbox,
+            &[
+                "task",
+                "deps",
+                &qualified(SOURCE, "T-2"),
+                "--direction",
+                "depended-on-by",
+                "--json",
+            ],
+        ));
+        assert!(
+            reverse.contains(&edge("T-1", "T-2", "task")),
+            "{}: the reverse read reports the same edge, not its mirror:\n{reverse:#?}",
+            row.name
+        );
+
+        let projects = items(&ok(
+            row,
+            &sandbox,
+            &["project", "deps", &qualified(SOURCE, "P-1"), "--json"],
+        ));
+        assert!(
+            projects.contains(&edge("P-1", "P-2", "project")),
+            "{}: P-1 is what depends:\n{projects:#?}",
+            row.name
+        );
+
+        // The reverse project read is asked of P-2, and one GitHub source is exactly one
+        // board, so that row cannot be asked about another. Its reverse orientation is
+        // covered where it can be: `project_dependencies_map_reverse_edges_and_page_them`
+        // in that crate's own suite, over a real socket.
+        if !row.fixture.complete_dataset {
+            continue;
+        }
+        let reverse_projects = items(&ok(
+            row,
+            &sandbox,
+            &[
+                "project",
+                "deps",
+                &qualified(SOURCE, "P-2"),
+                "--direction",
+                "depended-on-by",
+                "--json",
+            ],
+        ));
+        assert!(
+            reverse_projects.contains(&edge("P-1", "P-2", "project")),
+            "{}: the reverse read reports the same edge:\n{reverse_projects:#?}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn every_source_reports_a_cross_source_cross_level_edge_without_following_it() {
+    // The far ends are in a source called `elsewhere`, which no row configures. A read
+    // that resolved one would need the far plugin — the state this product does not hold —
+    // so the proof that it does not is that the read succeeds while the far source does
+    // not exist, and that asking for the far item is the caller's own next command.
+    for row in ROWS {
+        let sandbox = host(row);
+        for (verb, near, far, far_kind) in [
+            ("task", "T-1", "elsewhere:P-9", "project"),
+            ("project", "P-1", "elsewhere:T-9", "task"),
+        ] {
+            let forward: serde_json::Value = serde_json::from_str(&ok(
+                row,
+                &sandbox,
+                &[verb, "deps", &qualified(SOURCE, near), "--json"],
+            ))
+            .expect("dependency output is JSON");
+            let recorded = json!({
+                "from": {"id": qualified(SOURCE, near), "kind": if verb == "task" {"task"} else {"project"}},
+                "to": {"id": far, "kind": far_kind},
+                "kind": "blocks"
+            });
+            assert!(
+                forward["items"]
+                    .as_array()
+                    .expect("an edge page is a list")
+                    .contains(&recorded),
+                "{}: {verb} {near} names its far end by qualified id and kind:\n{forward:#}",
+                row.name
+            );
+
+            // The reverse of a recorded edge belongs to the far end and is never held here.
+            let reverse = ok(
+                row,
+                &sandbox,
+                &[
+                    verb,
+                    "deps",
+                    &qualified(SOURCE, near),
+                    "--direction",
+                    "depended-on-by",
+                ],
+            );
+            assert!(
+                !reverse.contains("elsewhere:"),
+                "{}: {verb} {near} reversed:\n{reverse}",
+                row.name
+            );
+        }
+
+        // Following the edge is the caller's next command, against a source they configure.
+        let unknown = run(&sandbox, &["project", "show", "elsewhere:P-9"]);
+        assert_ne!(unknown.status.code(), Some(0), "{}", row.name);
+        assert!(
+            stderr(&unknown).contains("elsewhere"),
+            "{}: {}",
+            row.name,
+            stderr(&unknown)
+        );
+    }
+}
+
+#[test]
+fn a_far_end_a_source_cannot_name_travels_with_its_kind_through_text_output() {
+    let row = &ROWS[0];
+    let sandbox = host(row);
+    let rendered = ok(row, &sandbox, &["task", "deps", &qualified(SOURCE, "T-1")]);
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.split_whitespace().collect::<Vec<_>>()
+                == ["task", "work:T-1", "blocks", "project", "elsewhere:P-9"]),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_colon_in_a_source_native_dependency_id_is_not_reinterpreted_as_a_source() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&document(&json!({
+        SOURCE: {
+            "plugin": "in-memory",
+            "config": {
+                "tasks": [
+                    {"id":"urn:task:7", "title":"Near", "status":{"category":"todo","name":"Todo"}, "labels":[]},
+                    {"id":"T-2", "title":"Far", "status":{"category":"todo","name":"Todo"}, "labels":[]}
+                ],
+                "task_dependencies": [{"from":"urn:task:7", "to":"T-2", "kind":"blocks"}]
+            }
+        }
+    })));
+    let row = ROWS
+        .iter()
+        .find(|row| row.plugin == "in-memory")
+        .expect("in-memory row");
+    let response: serde_json::Value = serde_json::from_str(&ok(
+        row,
+        &sandbox,
+        &["task", "deps", &qualified(SOURCE, "urn:task:7"), "--json"],
+    ))
+    .expect("dependency output is JSON");
+    assert_eq!(response["items"][0]["from"]["id"], "work:urn:task:7");
+    assert_eq!(response["items"][0]["to"]["id"], "work:T-2");
 }
 
 #[test]
@@ -496,10 +757,23 @@ fn complete_dataset_sources_walk_task_dependencies_forwards_and_backwards() {
             &sandbox,
             &["task", "deps", &qualified(SOURCE, "T-1"), "--explain"],
         );
-        assert_eq!(listed(&forward), ours(&["T-1"]), "{}", row.name);
+        assert_eq!(
+            edge_starts(&forward),
+            ours(&["T-1", "T-1"]),
+            "{}: T-1 depends on a task of this source and on a project of another",
+            row.name
+        );
         assert!(
-            forward.contains(&format!("blocks  {}", qualified(SOURCE, "T-2"))),
+            forward.contains("blocks") && forward.contains(&qualified(SOURCE, "T-2")),
             "{}: an edge names both ends and what it means:\n{forward}",
+            row.name
+        );
+        assert!(
+            forward
+                .lines()
+                .any(|line| line.split_whitespace().collect::<Vec<_>>()
+                    == ["task", "work:T-1", "blocks", "task", "work:T-2"]),
+            "{}: text edges render both endpoint kinds:\n{forward}",
             row.name
         );
 
@@ -516,7 +790,7 @@ fn complete_dataset_sources_walk_task_dependencies_forwards_and_backwards() {
             ],
         );
         assert_eq!(
-            listed(&reverse),
+            edge_starts(&reverse),
             ours(&["T-1", "T-3", "T-4"]),
             "{}: three tasks depend on T-2",
             row.name
@@ -563,7 +837,7 @@ fn complete_dataset_sources_walk_project_dependencies_forwards_and_backwards() {
                 "--explain",
             ],
         );
-        assert_eq!(listed(&reverse), ours(&["P-1"]), "{}", row.name);
+        assert_eq!(edge_starts(&reverse), ours(&["P-1"]), "{}", row.name);
         plan_says(
             row,
             &reverse,

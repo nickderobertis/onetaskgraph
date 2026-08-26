@@ -78,6 +78,8 @@ fn task() -> Task {
         url: None,
         created_at: None,
         updated_at: None,
+        metadata: Default::default(),
+        repositories: Vec::new(),
     }
 }
 
@@ -95,6 +97,8 @@ fn project() -> Project {
         url: None,
         created_at: None,
         updated_at: None,
+        metadata: Default::default(),
+        repositories: Vec::new(),
     }
 }
 

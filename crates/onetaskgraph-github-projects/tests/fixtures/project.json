@@ -4,7 +4,7 @@
       "projectV2": {
         "id": "PVT_project",
         "title": "Roadmap",
-        "shortDescription": "Delivery plan",
+        "shortDescription": "Delivery plan\n\n<!-- onetaskgraph.metadata\n{\"caller.enabled\":true,\"onetaskgraph.repositories\":[\"github.com/acme/work\"]}\n-->",
         "url": "https://github.example/projects/7",
         "createdAt": "2026-01-01T00:00:00Z",
         "updatedAt": "2026-02-01T00:00:00Z",
@@ -16,6 +16,7 @@
               "fieldValues": {
                 "nodes": [
                   { "name": "Doing", "field": { "name": "Status" } },
+                  { "text": "{\"caller.number\":7}", "field": { "name": "onetaskgraph.metadata" } },
                   {
                     "labels": {
                       "nodes": [{ "id": "L_field", "name": "team", "color": "00ff00" }],
@@ -33,6 +34,7 @@
                 "createdAt": "2026-01-02T00:00:00Z",
                 "updatedAt": "2026-01-03T00:00:00Z",
                 "state": "OPEN",
+                "repository": { "nameWithOwner": "acme/work" },
                 "labels": {
                   "nodes": [{ "id": "L_bug", "name": "bug", "color": "ff0000" }],
                   "pageInfo": { "hasNextPage": false }

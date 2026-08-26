@@ -116,7 +116,13 @@ pub fn edges(items: &[QualifiedEdge]) -> String {
     columns(
         &items
             .iter()
-            .map(|edge| vec![edge.from.to_string(), wire(&edge.kind), edge.to.to_string()])
+            .map(|edge| {
+                vec![
+                    format!("{} {}", wire(&edge.from.kind), edge.from.id),
+                    wire(&edge.kind),
+                    format!("{} {}", wire(&edge.to.kind), edge.to.id),
+                ]
+            })
             .collect::<Vec<_>>(),
     )
 }

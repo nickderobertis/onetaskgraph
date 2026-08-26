@@ -57,7 +57,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
 
 - **`onetaskgraph-plugin-api`** — exactly what a plugin author needs, and nothing else:
   the traits `TaskSource`, `SourcePlugin` and `SecretResolver`; the work types `Task`,
-  `Project`, `Label`, `Status`, `StatusCategory`, `DependencyEdge`, `DependencyKind`,
+  `Project`, `Label`, `Status`, `StatusCategory`, `Repository`, `DependencyEdge`,
+  `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
   `Direction`, `NativeId`, `SourceName`; the query and paging types `TaskQuery`,
   `ProjectQuery`, `TextQuery`, `TextFields`, `LabelFilter`, `ProjectFilter`, `PageRequest`,
   `Page`, `Cursor`; the capability types `Capabilities`, `Support`, `DependencySupport`;
@@ -182,7 +183,12 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 - **The live lane** is a uniform `test-live` target on every project, empty ones included.
   It is **not** a required check, and that is a decision: a required check a third party
   can turn red is a check that stops being trusted, and a Linear or GitHub outage must not
-  block an unrelated merge.
+  block an unrelated merge. **Every live test carries `#[ignore]`, and that is what makes
+  the decision true rather than stated.** `check` runs `cargo test -p <crate>`, which runs
+  every test target the crate has — so an un-ignored live test is part of a required check
+  on any machine exporting the credential, and part of a *cached* one, replaying a
+  third-party verdict against a tree that cannot describe it. The test stays compiled and
+  linted; `test-live` passes `--include-ignored`, which is the only place it runs.
 
 ### The journeys this repository owes
 
@@ -236,6 +242,17 @@ them do; this is the inventory of what is owed, not a status board.
 22. Failure and recovery: unknown source name, malformed configuration, unknown id, and an
     unreachable source each exit non-zero with the problem and a suggested next action on
     stderr.
+23. Caller-defined metadata and repository origins come back out of every source kind with
+    their JSON types intact, and the keys this product reserves are read while every other
+    key is passed through untouched.
+24. A dependency edge that leaves the source — across projects, across the task and project
+    levels, and across sources — is reported by qualified id and item kind, is never
+    reported in reverse, and is never followed to the far source.
+25. One relationship reads the same from either end: `from` is the item that depends,
+    whichever way a backend spells the relationship, so a source that stores it from the
+    blocking side reports the same edge rather than its mirror.
+26. A reserved-key far end the near item's own backend could have named is refused, naming
+    the entry and what to record instead; so is one this interface cannot represent.
 
 ## Recorded decisions
 
@@ -275,6 +292,27 @@ them do; this is the inventory of what is owed, not a status board.
 
 - **Scripts are context.** Quiet on success; on failure print the exact problem and a
   concrete next action.
+- **They run on bash 3.2.** macos-latest ships it, and every script here declares
+  `#!/usr/bin/env bash`, so on that runner each one IS a 3.2 script — which is why
+  `mapfile` and `readarray`, one bash 4 builtin under two names, are refused by
+  `scripts/check-bash4-array-builtins.sh`: reaching one there aborts the script with
+  `command not found`, which reads as whatever it was proving having gone wrong rather than
+  as a portability failure. Write `read_lines` from `scripts/read-lines.sh` instead.
+  `scripts/check-bash4-array-builtins-enforced.sh` watches that guard refuse both spellings
+  in every command position, and pass the name in a comment. Every path that guard names
+  goes through one spelling, forward slashes, on all three platforms — python renders a path
+  with the running platform's separator, so before it was normalised the same guard reported
+  `scripts\check-distribution-contract.sh` on the Windows runner and failed every assertion
+  written against the other two. `scripts/check-guard-path-spelling.sh` drives the guard and
+  that enforcement again through a python whose paths spell with a backslash, so the lane
+  that can fail on this is not the only lane that can catch it.
+  The other 3.2 difference that bites here: a `source` whose file is missing ends that
+  shell outright, so the handler after `||` never runs and the script says nothing about
+  what to restore. Test the file, then source it. `scripts/check-line-reads.sh` drives every
+  such load twice, the second under `set -o posix` — 3.2's behaviour in a bash the Linux and
+  Windows lanes have, so a defect only macOS could otherwise report fails all three.
+  `just script-check` runs them outside Nx, because Nx maps no project to `scripts/` and so
+  selects nothing for a change that only edits one.
 - **Suppress narrowly.** A diagnostic is an error or a suppression at that one site with a
   stated reason. `notignored` posts every suppression a PR adds, so they are read.
 - **`gh-secrets.json` is tracked and load-bearing.** It declares the repository secrets
