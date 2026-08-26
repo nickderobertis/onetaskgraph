@@ -10,9 +10,10 @@ mod common;
 use common::with_capabilities;
 use onetaskgraph_in_memory::{InMemoryConfig, Plugin};
 use onetaskgraph_plugin_api::{
-    Cursor, DependencyKind, DependencySupport, Direction, LabelFilter, NativeId, Page, PageRequest,
-    ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Support,
-    Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
+    ItemKind, ItemWrite, LabelFilter, NativeId, Page, PageRequest, ProjectFilter, ProjectQuery,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Support, Task, TaskQuery, TaskSource,
+    TextFields, TextQuery,
 };
 use secrecy::SecretString;
 use serde_json::json;
@@ -809,4 +810,211 @@ fn the_shared_fixture_is_a_coherent_graph() {
     let config: InMemoryConfig =
         serde_json::from_value(common::work()).expect("the fixture parses");
     assert_eq!(config.validate(), Ok(()));
+}
+
+/// A task on its way in, carrying a caller-defined key of every JSON type.
+fn outgoing(id: &str, title: &str) -> Task {
+    serde_json::from_value(json!({
+        "id": id,
+        "title": title,
+        "content": "written",
+        "status": {"category": "todo", "name": "Todo"},
+        "labels": [{"id": "l-9", "name": "written", "color": null}],
+        "metadata": {
+            "caller.count": 3,
+            "caller.text": "3",
+            "caller.flag": true,
+            "caller.absent": null,
+            "caller.shape": {"nested": [1, "two", false]}
+        },
+        "repositories": ["github.com/nickderobertis/onetaskgraph"]
+    }))
+    .expect("a task")
+}
+
+#[tokio::test]
+async fn a_written_task_reads_back_with_every_value_and_json_type_intact() {
+    let source = fully_capable();
+    assert!(source.writes().is_supported());
+
+    let written = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: outgoing("T-9", "Written"),
+            depends_on: vec![DependencyEdge {
+                from: DependencyEndpoint::from_native(NativeId("T-9".into()), ItemKind::Task),
+                to: DependencyEndpoint::from_native(NativeId("T-1".into()), ItemKind::Task),
+                kind: DependencyKind::Blocks,
+            }],
+        })
+        .await
+        .expect("this source takes the write");
+    assert_eq!(written, NativeId("T-9".into()));
+
+    let read = source
+        .get_task(&written)
+        .await
+        .expect("this source answers")
+        .expect("the task is there");
+    assert_eq!(read.title, "Written");
+    assert_eq!(read.metadata["caller.count"], json!(3));
+    assert_eq!(read.metadata["caller.text"], json!("3"));
+    assert_eq!(read.metadata["caller.flag"], json!(true));
+    assert_eq!(read.metadata["caller.absent"], serde_json::Value::Null);
+    assert_eq!(
+        read.metadata["caller.shape"],
+        json!({"nested": [1, "two", false]})
+    );
+    assert_eq!(
+        read.repositories[0].as_str(),
+        "github.com/nickderobertis/onetaskgraph"
+    );
+
+    // The edge landed as this source's own forward edge, at the id it was written under.
+    let edges = source
+        .task_dependencies(&written, Direction::DependsOn, &whole())
+        .await
+        .expect("this source answers")
+        .items;
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].from.id(), "T-9");
+    assert_eq!(edges[0].to.id(), "T-1");
+
+    // And a label the write brought with it is one this source now knows.
+    let labels = source
+        .labels(&whole())
+        .await
+        .expect("this source answers")
+        .items;
+    assert!(
+        labels.iter().any(|label| label.name == "written"),
+        "{labels:?}"
+    );
+
+    // A second write at the same target updates that item and adds nothing.
+    let updated = source
+        .write_task(&ItemWrite {
+            target: Some(written.clone()),
+            item: outgoing("T-9", "Renamed"),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("this source takes the write");
+    assert_eq!(updated, written);
+    assert_eq!(
+        source.get_task(&written).await.unwrap().unwrap().title,
+        "Renamed"
+    );
+    // The write said what it depends on now, so the edge it no longer carries is gone.
+    assert!(
+        source
+            .task_dependencies(&written, Direction::DependsOn, &whole())
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_written_project_reads_back_and_a_create_never_reuses_a_held_id() {
+    let source = fully_capable();
+    let written = source
+        .write_project(&ItemWrite {
+            target: None,
+            // `P-1` is already held, so the destination chooses its own id rather than
+            // making which item a lookup returns arbitrary.
+            item: serde_json::from_value(json!({
+                "id": "P-1", "title": "Second foundation",
+                "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                "metadata": {"caller.key": [1, null]}
+            }))
+            .expect("a project"),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("this source takes the write");
+    assert_eq!(written, NativeId("P-1-2".into()));
+    let read = source.get_project(&written).await.unwrap().unwrap();
+    assert_eq!(read.title, "Second foundation");
+    assert_eq!(read.metadata["caller.key"], json!([1, null]));
+    assert_eq!(
+        source
+            .get_project(&NativeId("P-1".into()))
+            .await
+            .unwrap()
+            .unwrap()
+            .title,
+        "Foundation",
+        "the project already held is left exactly as it is"
+    );
+
+    let Err(SourceError::Refused { message }) = source
+        .write_project(&ItemWrite {
+            target: Some(NativeId("absent".into())),
+            item: read,
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a target this source does not hold must be refused rather than created");
+    };
+    assert!(
+        message.contains("names no project this source holds"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn a_source_configured_with_no_write_side_refuses_both_writes() {
+    let source: Box<dyn TaskSource> = Box::new(
+        onetaskgraph_in_memory::InMemorySource::new(with_capabilities(json!({
+            "writes": "unsupported"
+        })))
+        .expect("the fixture graph is coherent"),
+    );
+    assert!(!source.writes().is_supported());
+    let Err(SourceError::Refused { message }) = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: outgoing("T-9", "Written"),
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a source with no write side must refuse");
+    };
+    assert_eq!(message, "the in-memory plugin cannot be written");
+}
+
+#[tokio::test]
+async fn a_key_this_source_cannot_carry_refuses_the_write_naming_every_one_of_them() {
+    let source: Box<dyn TaskSource> = Box::new(
+        onetaskgraph_in_memory::InMemorySource::new(with_capabilities(json!({
+            "unwritable_metadata_keys": ["caller.shape", "caller.count", "caller.unused"]
+        })))
+        .expect("the fixture graph is coherent"),
+    );
+    let Err(SourceError::Refused { message }) = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: outgoing("T-9", "Written"),
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a key this source cannot carry must refuse the write rather than drop it");
+    };
+    // Every key it could not carry, not the first: someone correcting a document wants
+    // the whole list rather than one round trip per key.
+    assert!(message.contains("caller.count, caller.shape"), "{message}");
+    assert!(!message.contains("caller.unused"), "{message}");
+    // And nothing landed.
+    assert!(
+        source
+            .get_task(&NativeId("T-9".into()))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

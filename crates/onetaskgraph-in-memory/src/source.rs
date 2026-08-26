@@ -449,13 +449,16 @@ impl InMemorySource {
         if !self.declared().writes.is_supported() {
             return Err(unwritable(KIND));
         }
-        let refused: Vec<&str> = self
+        // Sorted rather than in the order the configuration happened to list them, so the
+        // message a caller reads does not reshuffle when the document is reordered.
+        let mut refused: Vec<&str> = self
             .declared()
             .unwritable_metadata_keys
             .iter()
             .filter(|key| metadata.contains_key(key.as_str()))
             .map(String::as_str)
             .collect();
+        refused.sort_unstable();
         if refused.is_empty() {
             return Ok(());
         }

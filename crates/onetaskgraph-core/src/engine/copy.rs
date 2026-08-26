@@ -917,7 +917,7 @@ fn names(endpoint: &DependencyEndpoint, destination: &SourceName) -> Option<Stri
         return None;
     }
     let id: GlobalId = endpoint.id().parse().ok()?;
-    (&id.source == destination).then(|| id.native.0)
+    (&id.source == destination).then_some(id.native.0)
 }
 
 /// The edges that could be resolved, which is every one of them on the second pass.
