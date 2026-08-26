@@ -25,9 +25,10 @@ cd "$ROOT" || fatal \
   "could not enter $ROOT to scan its scripts" \
   "check that directory's permissions, then rerun"
 
-# Status 1 is the scan refusing, and it has already said why. Anything else is python3
-# failing to run at all, which would otherwise end this check on an interpreter error that
-# says nothing about what to do next.
+# The scan refuses with a status of its own rather than sharing python's. An unhandled
+# exception exits 1 too, so a refusal spelled 1 would be indistinguishable from the scan
+# having died partway through — and this check would then exit on a bare traceback, having
+# cleared every script it never reached, with none of the next action it gives otherwise.
 scan_status=0
 python3 - <<'PY' || scan_status=$?
 import re
@@ -45,6 +46,9 @@ from pathlib import Path
 # reads every shell script here, itself included: a literal alternation would sit in
 # command position on its own line and match itself.
 BUILTINS = ("mapfile", "readarray")
+# The status this scan exits with when it has something to report, kept away from 1 so an
+# unhandled exception cannot be read as a refusal that already explained itself.
+REFUSED = 2
 LOOKS_LIKE_A_CALL = re.compile(
     r"(?:^|[\s;&|(`])(" + "|".join(BUILTINS) + r")(?![\w])"
 )
@@ -118,14 +122,18 @@ if problems:
     print("check-bash4-array-builtins: which builds the same array, and runs on 3.2.",
           file=sys.stderr)
 
+# 2, not 1: see the case below. 1 is what python exits with when this scan raises, and the
+# two must not arrive at the same place.
 if problems or unreadable:
-    raise SystemExit(1)
+    raise SystemExit(REFUSED)
 PY
 
 case "$scan_status" in
   0) ;;
-  1) exit 1 ;;
+  2) exit 1 ;;
   *) fatal \
-    "python3 ended with status $scan_status, so the scripts were never scanned" \
-    "run 'python3 --version' to confirm a working python3 is on PATH, then rerun" ;;
+    "python3 ended with status $scan_status, so the scripts were not all scanned; any\
+ traceback above says where it stopped" \
+    "fix what the traceback names, or run 'python3 --version' to confirm a working python3\
+ is on PATH, then rerun" ;;
 esac

@@ -293,6 +293,37 @@ expect_refused "a script one directory down, named with forward slashes on every
   "scripts/nested/deep-helper.sh" "$BUILTIN is a bash 4 builtin"
 fixture rm -rf "$scratch/scripts/nested"
 
+# 11. The scan dying partway through, rather than refusing. Python exits 1 on an unhandled
+#     exception, so while the refusal was also spelled 1 the two arrived at the same place:
+#     this check would have exited 1 on a bare traceback, having cleared every script the
+#     scan never reached, with none of the next action it gives for any other failure. The
+#     refusal now carries a status of its own, and this is what proves the other branch is
+#     still reachable.
+substitute check-bash4-array-builtins.sh \
+  'LOOKS_LIKE_A_CALL = re.compile(' \
+  $'raise RuntimeError("the scan could not be built")\nLOOKS_LIKE_A_CALL = re.compile('
+run_guard
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "check-bash4-array-builtins-enforced: a scan that died partway through — the guard passed" >&2
+  echo "check-bash4-array-builtins-enforced: a tree it never finished reading, so every script in" >&2
+  echo "check-bash4-array-builtins-enforced: it is cleared by a scan that did not run." >&2
+  failures=$((failures + 1))
+else
+  for term in "the scripts were not all scanned" "next:"; do
+    if ! grep -qF -- "$term" <<<"$GUARD_OUTPUT"; then
+      echo "check-bash4-array-builtins-enforced: a scan that died partway through — the guard" >&2
+      echo "check-bash4-array-builtins-enforced: refused, but its diagnostic never mentions" >&2
+      echo "check-bash4-array-builtins-enforced: '$term', so it reads as a script using the" >&2
+      echo "check-bash4-array-builtins-enforced: builtin rather than as the scan itself having" >&2
+      echo "check-bash4-array-builtins-enforced: broken. It said:" >&2
+      report_guard_output
+      failures=$((failures + 1))
+      break
+    fi
+  done
+fi
+restore check-bash4-array-builtins.sh
+
 if [ "$failures" -ne 0 ]; then
   echo "check-bash4-array-builtins-enforced: $failures case(s) failed." >&2
   echo "check-bash4-array-builtins-enforced: repair scripts/check-bash4-array-builtins.sh rather" >&2
