@@ -288,9 +288,14 @@ them do; this is the inventory of what is owed, not a status board.
   `scripts\check-distribution-contract.sh` on the Windows runner and failed every assertion
   written against the other two. `scripts/check-guard-path-spelling.sh` drives the guard and
   that enforcement again through a python whose paths spell with a backslash, so the lane
-  that can fail on this is not the only lane that can catch it. `just script-check` runs them
-  outside Nx, because Nx maps no project to `scripts/` and so selects nothing for a change
-  that only edits one.
+  that can fail on this is not the only lane that can catch it.
+  The other 3.2 difference that bites here: a `source` whose file is missing ends that
+  shell outright, so the handler after `||` never runs and the script says nothing about
+  what to restore. Test the file, then source it. `scripts/check-line-reads.sh` drives every
+  such load twice, the second under `set -o posix` — 3.2's behaviour in a bash the Linux and
+  Windows lanes have, so a defect only macOS could otherwise report fails all three.
+  `just script-check` runs them outside Nx, because Nx maps no project to `scripts/` and so
+  selects nothing for a change that only edits one.
 - **Suppress narrowly.** A diagnostic is an error or a suppression at that one site with a
   stated reason. `notignored` posts every suppression a PR adds, so they are read.
 - **`gh-secrets.json` is tracked and load-bearing.** It declares the repository secrets
