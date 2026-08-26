@@ -362,6 +362,7 @@ assert_unregistered_version() {
   if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted unregistered $relative_path; next: inspect product-version discovery" >&2; exit 1; fi
   grep -q "$relative_path: carries a product version but is absent from RECONCILED_VERSION_FILES" "$tmp/error" || { cat "$tmp/error" >&2; echo "unregistered-version failure omitted $relative_path and recovery; next: inspect workspace diagnostics" >&2; exit 1; }
   unlink "$tmp/version-repo/$relative_path"
+  rmdir "$(dirname "$tmp/version-repo/$relative_path")" 2>/dev/null || true
 }
 assert_unregistered_version 'crates/unregistered/Cargo.toml' $'[package]\nname = "unregistered"\nversion = "0.1.1"'
 assert_unregistered_version 'unregistered/pyproject.toml' $'[project]\nname = "onetaskgraph-cli"\nversion = "0.1.1"'
