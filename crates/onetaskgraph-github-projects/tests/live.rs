@@ -110,16 +110,6 @@ fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
     PageRequest { cursor, limit: 25 }
 }
 
-/// `#[ignore]` is what keeps this out of the everyday gate, and it is the live lane's
-/// own decision rather than a way around a failing test. `check` runs `cargo test -p
-/// <crate>`, which builds and runs *every* test target of the crate — so without this the
-/// live lane is part of a required check on any machine that exports the credential, and
-/// AGENTS.md is explicit that it must not be: "a required check a third party can turn red
-/// is a check that stops being trusted". The cache makes it worse rather than better,
-/// because `test` is a cached target keyed on the tree, so a live verdict would be
-/// replayed for a service that has since changed. The test stays compiled, clippy and
-/// `cargo check --all-targets` still cover it, and `just test-live` runs it with
-/// `--include-ignored` — where `ONETASKGRAPH_LIVE_REQUIRED=1` demands the credential.
 #[ignore = "the live lane: run it with `just test-live onetaskgraph-github-projects`"]
 #[tokio::test]
 async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {

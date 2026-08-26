@@ -237,7 +237,6 @@ impl Hosted {
         ]
     }
 
-    /// The host process, and the `initialize` line that opens its connection.
     fn connection(&self) -> (Command, Value) {
         let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
         command.args(["plugin-serve", self.kind]);
@@ -256,7 +255,6 @@ impl Hosted {
     }
 }
 
-/// Every answer the host wrote for `requests`, after the handshake.
 fn answers(mut command: Command, handshake: &Value, requests: &[Value]) -> Vec<Value> {
     let mut child = command
         .stdin(Stdio::piped())
@@ -282,7 +280,6 @@ fn answers(mut command: Command, handshake: &Value, requests: &[Value]) -> Vec<V
     lines[1..].to_vec()
 }
 
-/// One `task_dependencies` request resuming `cursor` in `direction`.
 fn resumed(direction: &str, cursor: &str) -> Value {
     json!({
         "id": "1",
@@ -295,7 +292,6 @@ fn resumed(direction: &str, cursor: &str) -> Value {
     })
 }
 
-/// The error a host answered `request` with.
 fn refusal(hosted: &Hosted, request: Value) -> String {
     let (command, handshake) = hosted.connection();
     let answered = answers(command, &handshake, &[request]);
