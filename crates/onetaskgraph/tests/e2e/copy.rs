@@ -495,6 +495,36 @@ fn copying_a_project_carries_its_tasks_and_reports_one_the_source_no_longer_hold
         NOTES: {"plugin": "local-md", "config": empty_folder(&sandbox, NOTES)},
     })));
 
+    // A dry run of a project the destination does not hold yet still reads every task in
+    // it and reports what each would have got — there is simply no destination id for any
+    // of them, because nothing was written and the project they would be filed under does
+    // not exist.
+    let planned = ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "remote:P-1",
+            "--to",
+            NOTES,
+            "--dry-run",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        reported(&planned),
+        vec![
+            ("remote:P-1".to_owned(), Value::Null, "created".to_owned()),
+            ("remote:T-1".to_owned(), Value::Null, "created".to_owned()),
+            ("remote:T-2".to_owned(), Value::Null, "created".to_owned()),
+        ]
+    );
+    assert!(
+        !sandbox.project().join(NOTES).join("tasks").exists()
+            && !sandbox.project().join(NOTES).join("projects").exists(),
+        "a dry run writes nothing"
+    );
+
     let copied = ok(
         &sandbox,
         &["project", "copy", "remote:P-1", "--to", NOTES, "--json"],
