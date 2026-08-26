@@ -58,9 +58,9 @@ pub mod graphql {
     /// List issue labels.
     pub const LABELS: &str = "query($first:Int,$after:String){ issueLabels(first:$first,after:$after){ nodes{id name color} pageInfo{hasNextPage endCursor} } }";
     /// Fetch issue dependency relations.
-    pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+    pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Fetch project dependency relations.
-    pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ description relations(first:$first,after:$after){nodes{type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{type project{id}} pageInfo{hasNextPage endCursor}} } }";
+    pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ description relations(first:$first,after:$after){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type project{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Resolve the configured team key to Linear's backend id.
     pub const TEAM: &str =
         "query($key:String!){ teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id}} }";
@@ -89,6 +89,12 @@ pub mod graphql {
     pub const ISSUE_RELATION_CREATE: &str = "mutation($input:IssueRelationCreateInput!){ issueRelationCreate(input:$input){success issueRelation{id}} }";
     /// Create a native project dependency.
     pub const PROJECT_RELATION_CREATE: &str = "mutation($input:ProjectRelationCreateInput!){ projectRelationCreate(input:$input){success projectRelation{id}} }";
+    /// Delete a native issue dependency before replacing its full edge set.
+    pub const ISSUE_RELATION_DELETE: &str =
+        "mutation($id:String!){ issueRelationDelete(id:$id){success} }";
+    /// Delete a native project dependency before replacing its full edge set.
+    pub const PROJECT_RELATION_DELETE: &str =
+        "mutation($id:String!){ projectRelationDelete(id:$id){success} }";
     /// Delete an issue created only by the ignored live write journey.
     pub const ISSUE_DELETE: &str = "mutation($id:String!){ issueDelete(id:$id){success} }";
 }
@@ -220,6 +226,66 @@ enum WriteKind {
     Task,
     Project,
 }
+enum Lookup<'a> {
+    Team,
+    IssueState(&'a str),
+    ProjectStatus(&'a str),
+    IssueLabel(&'a str),
+    ProjectLabel(&'a str),
+}
+impl Lookup<'_> {
+    fn query(&self) -> &'static str {
+        match self {
+            Self::Team => graphql::TEAM,
+            Self::IssueState(_) => graphql::ISSUE_STATE,
+            Self::ProjectStatus(_) => graphql::PROJECT_STATUS,
+            Self::IssueLabel(_) => graphql::ISSUE_LABEL,
+            Self::ProjectLabel(_) => graphql::PROJECT_LABEL,
+        }
+    }
+    fn connection(&self) -> &'static str {
+        match self {
+            Self::Team => "teams",
+            Self::IssueState(_) => "workflowStates",
+            Self::ProjectStatus(_) => "projectStatuses",
+            Self::IssueLabel(_) => "issueLabels",
+            Self::ProjectLabel(_) => "projectLabels",
+        }
+    }
+    fn diagnostic(&self) -> String {
+        match self {
+            Self::Team => "configured team".into(),
+            Self::IssueState(name) => format!("workflow state {name:?}"),
+            Self::ProjectStatus(name) => format!("project status {name:?}"),
+            Self::IssueLabel(name) | Self::ProjectLabel(name) => format!("label {name:?}"),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+enum MutationRoot {
+    IssueCreate,
+    IssueUpdate,
+    ProjectCreate,
+    ProjectUpdate,
+    IssueRelationCreate,
+    ProjectRelationCreate,
+    IssueRelationDelete,
+    ProjectRelationDelete,
+}
+impl MutationRoot {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::IssueCreate => "issueCreate",
+            Self::IssueUpdate => "issueUpdate",
+            Self::ProjectCreate => "projectCreate",
+            Self::ProjectUpdate => "projectUpdate",
+            Self::IssueRelationCreate => "issueRelationCreate",
+            Self::ProjectRelationCreate => "projectRelationCreate",
+            Self::IssueRelationDelete => "issueRelationDelete",
+            Self::ProjectRelationDelete => "projectRelationDelete",
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct Envelope {
@@ -343,14 +409,9 @@ impl LinearSource {
     }
     // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
-    async fn one_id(
-        &self,
-        query: &str,
-        variables: Value,
-        connection: &str,
-        what: &str,
-    ) -> Result<String, SourceError> {
-        let data = self.send(query, variables).await?;
+    async fn one_id(&self, lookup: Lookup<'_>, variables: Value) -> Result<String, SourceError> {
+        let data = self.send(lookup.query(), variables).await?;
+        let connection = lookup.connection();
         let nodes = data
             .get(connection)
             .and_then(|v| v.get("nodes"))
@@ -360,7 +421,11 @@ impl LinearSource {
             })?;
         if nodes.len() != 1 {
             return Err(SourceError::Refused {
-                message: format!("source {} cannot resolve {what} uniquely", self.name),
+                message: format!(
+                    "source {} cannot resolve {} uniquely",
+                    self.name,
+                    lookup.diagnostic()
+                ),
             });
         }
         Ok(str_at(&nodes[0], "id")?.to_owned())
@@ -372,13 +437,7 @@ impl LinearSource {
                 self.name
             ),
         })?;
-        self.one_id(
-            graphql::TEAM,
-            json!({"key":team.0}),
-            "teams",
-            "configured team",
-        )
-        .await
+        self.one_id(Lookup::Team, json!({"key":team.0})).await
     }
     async fn label_ids(
         &self,
@@ -390,17 +449,11 @@ impl LinearSource {
             ids.push(
                 self.one_id(
                     if matches!(kind, WriteKind::Project) {
-                        graphql::PROJECT_LABEL
+                        Lookup::ProjectLabel(&label.name)
                     } else {
-                        graphql::ISSUE_LABEL
+                        Lookup::IssueLabel(&label.name)
                     },
                     json!({"name":label.name}),
-                    if matches!(kind, WriteKind::Project) {
-                        "projectLabels"
-                    } else {
-                        "issueLabels"
-                    },
-                    &format!("label {:?}", label.name),
                 )
                 .await?,
             );
@@ -454,6 +507,59 @@ impl LinearSource {
         edges: &[DependencyEdge],
         kind: WriteKind,
     ) -> Result<(), SourceError> {
+        let mut cursor: Option<Cursor> = None;
+        loop {
+            let data = self
+                .send(
+                    if matches!(kind, WriteKind::Project) {
+                        PROJECT_RELATIONS
+                    } else {
+                        ISSUE_RELATIONS
+                    },
+                    json!({"id":near.0,"first":250,"after":cursor.as_ref().map(|cursor|&cursor.0)}),
+                )
+                .await?;
+            let root = data
+                .get(if matches!(kind, WriteKind::Project) {
+                    "project"
+                } else {
+                    "issue"
+                })
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing relation item".into(),
+                })?;
+            let relations = root
+                .get("relations")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing relations".into(),
+                })?;
+            for relation in relations
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing relations.nodes".into(),
+                })?
+            {
+                let id = str_at(relation, "id")?;
+                let (query, mutation) = if matches!(kind, WriteKind::Project) {
+                    (
+                        graphql::PROJECT_RELATION_DELETE,
+                        MutationRoot::ProjectRelationDelete,
+                    )
+                } else {
+                    (
+                        graphql::ISSUE_RELATION_DELETE,
+                        MutationRoot::IssueRelationDelete,
+                    )
+                };
+                let deleted = self.send(query, json!({"id":id})).await?;
+                mutation_payload(&deleted, mutation)?;
+            }
+            let Some(next) = page_next(relations)? else {
+                break;
+            };
+            cursor = Some(next);
+        }
         for edge in edges {
             let far = match edge.to.id().split_once(':') {
                 Some((source, native)) if source == self.name.as_str() => native,
@@ -479,9 +585,9 @@ impl LinearSource {
             mutation_payload(
                 &data,
                 if matches!(kind, WriteKind::Project) {
-                    "projectRelationCreate"
+                    MutationRoot::ProjectRelationCreate
                 } else {
-                    "issueRelationCreate"
+                    MutationRoot::IssueRelationCreate
                 },
             )?;
         }
@@ -502,34 +608,37 @@ impl LinearSource {
                 .split_once(':')
                 .is_some_and(|(source, _)| source != self.name.as_str())
             {
-                let data = self
-                    .send(
-                        if matches!(kind, WriteKind::Project) {
-                            PROJECTS
-                        } else {
-                            ISSUES
-                        },
-                        json!({"first":250,"after":null,"filter":{}}),
-                    )
-                    .await?;
-                let page = if matches!(kind, WriteKind::Project) {
-                    connection(&data, "projects", map_project)?
-                        .items
-                        .into_iter()
-                        .map(|item| (item.id, item.metadata))
-                        .collect::<Vec<_>>()
-                } else {
-                    connection(&data, "issues", map_task)?
-                        .items
-                        .into_iter()
-                        .map(|item| (item.id, item.metadata))
-                        .collect::<Vec<_>>()
-                };
-                if let Some((id, _)) = page.into_iter().find(|(_, metadata)| {
-                    metadata.get("onetaskgraph.origin").and_then(Value::as_str)
-                        == Some(edge.to.id())
-                }) {
-                    edge.to = DependencyEndpoint::from_native(id, edge.to.kind);
+                let mut cursor: Option<Cursor> = None;
+                loop {
+                    let data = self.send(if matches!(kind, WriteKind::Project) { PROJECTS } else { ISSUES }, json!({"first":250,"after":cursor.as_ref().map(|cursor|&cursor.0),"filter":{}})).await?;
+                    let (items, next) = if matches!(kind, WriteKind::Project) {
+                        let page = connection(&data, "projects", map_project)?;
+                        (
+                            page.items
+                                .into_iter()
+                                .map(|item| (item.id, item.metadata))
+                                .collect::<Vec<_>>(),
+                            page.next,
+                        )
+                    } else {
+                        let page = connection(&data, "issues", map_task)?;
+                        (
+                            page.items
+                                .into_iter()
+                                .map(|item| (item.id, item.metadata))
+                                .collect::<Vec<_>>(),
+                            page.next,
+                        )
+                    };
+                    if let Some((id, _)) = items.into_iter().find(|(_, metadata)| {
+                        metadata.get("onetaskgraph.origin").and_then(Value::as_str)
+                            == Some(edge.to.id())
+                    }) {
+                        edge.to = DependencyEndpoint::from_native(id, edge.to.kind);
+                        break;
+                    }
+                    let Some(next) = next else { break };
+                    cursor = Some(next);
                 }
             }
             prepared.push(edge);
@@ -637,10 +746,8 @@ impl TaskSource for LinearSource {
         let team = self.team_id().await?;
         let state = self
             .one_id(
-                graphql::ISSUE_STATE,
+                Lookup::IssueState(&write.item.status.name),
                 json!({"name":write.item.status.name,"team":team}),
-                "workflowStates",
-                &format!("workflow state {:?}", write.item.status.name),
             )
             .await?;
         let labels = self.label_ids(&write.item.labels, WriteKind::Task).await?;
@@ -655,7 +762,7 @@ impl TaskSource for LinearSource {
             Some(id) => (
                 graphql::ISSUE_UPDATE,
                 json!({"id":id.0,"input":input}),
-                "issueUpdate",
+                MutationRoot::IssueUpdate,
             ),
             None => (
                 graphql::ISSUE_CREATE,
@@ -664,7 +771,7 @@ impl TaskSource for LinearSource {
                     input["teamId"] = team.into();
                     json!({"input":input})
                 },
-                "issueCreate",
+                MutationRoot::IssueCreate,
             ),
         };
         let data = self.send(query, variables).await?;
@@ -672,7 +779,7 @@ impl TaskSource for LinearSource {
             mutation_payload(&data, root)?
                 .get("issue")
                 .ok_or_else(|| SourceError::Malformed {
-                    message: format!("missing {root}.issue"),
+                    message: format!("missing {}.issue", root.as_str()),
                 })?;
         let id = NativeId(str_at(issue, "id")?.into());
         self.write_relations(&id, &edges, WriteKind::Task).await?;
@@ -685,10 +792,8 @@ impl TaskSource for LinearSource {
         let team = self.team_id().await?;
         let status = self
             .one_id(
-                graphql::PROJECT_STATUS,
+                Lookup::ProjectStatus(&write.item.status.name),
                 json!({"name":write.item.status.name}),
-                "projectStatuses",
-                &format!("project status {:?}", write.item.status.name),
             )
             .await?;
         let labels = self
@@ -705,7 +810,7 @@ impl TaskSource for LinearSource {
             Some(id) => (
                 graphql::PROJECT_UPDATE,
                 json!({"id":id.0,"input":input}),
-                "projectUpdate",
+                MutationRoot::ProjectUpdate,
             ),
             None => (
                 graphql::PROJECT_CREATE,
@@ -714,14 +819,14 @@ impl TaskSource for LinearSource {
                     input["teamIds"] = json!([team]);
                     json!({"input":input})
                 },
-                "projectCreate",
+                MutationRoot::ProjectCreate,
             ),
         };
         let data = self.send(query, variables).await?;
         let project = mutation_payload(&data, root)?
             .get("project")
             .ok_or_else(|| SourceError::Malformed {
-                message: format!("missing {root}.project"),
+                message: format!("missing {}.project", root.as_str()),
             })?;
         let id = NativeId(str_at(project, "id")?.into());
         self.write_relations(&id, &edges, WriteKind::Project)
@@ -1118,7 +1223,8 @@ fn metadata_description(
 fn optional_string(v: &Value, k: &str) -> Result<Option<String>, SourceError> {
     Ok(optional_str(v, k)?.map(Into::into))
 }
-fn mutation_payload<'a>(data: &'a Value, root: &str) -> Result<&'a Value, SourceError> {
+fn mutation_payload(data: &Value, root: MutationRoot) -> Result<&Value, SourceError> {
+    let root = root.as_str();
     let payload = data.get(root).ok_or_else(|| SourceError::Malformed {
         message: format!("missing {root}"),
     })?;

@@ -20,6 +20,8 @@ type Mutation {
   projectUpdate(id: String!, input: ProjectUpdateInput!): ProjectPayload!
   issueRelationCreate(input: IssueRelationCreateInput!): IssueRelationPayload!
   projectRelationCreate(input: ProjectRelationCreateInput!): ProjectRelationPayload!
+  issueRelationDelete(id: String!): DeletePayload!
+  projectRelationDelete(id: String!): DeletePayload!
   issueDelete(id: String!): DeletePayload!
 }
 

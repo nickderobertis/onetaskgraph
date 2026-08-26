@@ -667,6 +667,9 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
         | graphql::PROJECT_CREATE
         | graphql::ISSUE_RELATION_CREATE
         | graphql::PROJECT_RELATION_CREATE => variables.get("input").is_some_and(Value::is_object),
+        graphql::ISSUE_RELATION_DELETE | graphql::PROJECT_RELATION_DELETE => {
+            variables.get("id").is_some_and(Value::is_string)
+        }
         graphql::ISSUE_UPDATE | graphql::PROJECT_UPDATE => {
             variables.get("id").is_some_and(Value::is_string)
                 && variables.get("input").is_some_and(Value::is_object)
@@ -727,6 +730,8 @@ fn linear_response(
         graphql::PROJECT_UPDATE,
         graphql::ISSUE_RELATION_CREATE,
         graphql::PROJECT_RELATION_CREATE,
+        graphql::ISSUE_RELATION_DELETE,
+        graphql::PROJECT_RELATION_DELETE,
     ]
     .contains(&operation)
     {
@@ -760,6 +765,32 @@ fn linear_response(
         graphql::ISSUE_RELATION_CREATE | graphql::PROJECT_RELATION_CREATE
     ) {
         return linear_write_relation(data, &vars, operation == graphql::PROJECT_RELATION_CREATE);
+    }
+    if matches!(
+        operation,
+        graphql::ISSUE_RELATION_DELETE | graphql::PROJECT_RELATION_DELETE
+    ) {
+        let project = operation == graphql::PROJECT_RELATION_DELETE;
+        let index = vars["id"]
+            .as_str()
+            .and_then(|id| id.rsplit(':').next())
+            .and_then(|id| id.parse::<usize>().ok())
+            .ok_or("invalid relation fixture id")?;
+        let edges = data[if project {
+            "project_dependencies"
+        } else {
+            "task_dependencies"
+        }]
+        .as_array_mut()
+        .ok_or("fixture edges are not an array")?;
+        if index < edges.len() {
+            edges.remove(index);
+        }
+        return Ok(if project {
+            json!({"projectRelationDelete":{"success":true}})
+        } else {
+            json!({"issueRelationDelete":{"success":true}})
+        });
     }
     if operation == graphql::LABELS {
         return Ok(
@@ -1133,13 +1164,15 @@ fn linear_relations(
     // operation selects for exactly that reason.
     let forward = edges
         .iter()
-        .filter(|e| e["from"] == id && e["to"].is_string())
-        .map(|e| json!({"type":e["kind"],(format!("related{suffix}")):{"id":e["to"]}}))
+        .enumerate()
+        .filter(|(_,e)| e["from"] == id && e["to"].is_string())
+        .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":e["kind"],(format!("related{suffix}")):{"id":e["to"]}}))
         .collect::<Vec<_>>();
     let inverse = edges
         .iter()
-        .filter(|e| e["to"] == id && e["from"].is_string())
-        .map(|e| json!({"type":e["kind"],(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
+        .enumerate()
+        .filter(|(_,e)| e["to"] == id && e["from"].is_string())
+        .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":e["kind"],(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
         .collect::<Vec<_>>();
     let items = if suffix == "Issue" {
         "tasks"

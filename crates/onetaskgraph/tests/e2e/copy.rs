@@ -228,6 +228,8 @@ fn linear_project_and_task_copies_write_native_relations_and_record_only_cross_s
         "the project copy includes its task"
     );
     let project_near = project_report[0].1.as_str().unwrap().to_owned();
+    let child = shown(&sandbox, "task", project_report[1].1.as_str().unwrap());
+    assert_eq!(child["project"], project_near.split_once(':').unwrap().1);
     let repeated = reported(&ok(
         &sandbox,
         &[
@@ -258,6 +260,11 @@ fn linear_project_and_task_copies_write_native_relations_and_record_only_cross_s
             .clone()
     };
     let task_forward = edges("task", &task_near, false);
+    assert_eq!(
+        task_forward.len(),
+        2,
+        "the repeated write does not duplicate relations"
+    );
     assert!(
         task_forward.iter().any(|edge| edge["to"]["id"] == task_far),
         "{task_forward:#?}"
@@ -273,6 +280,11 @@ fn linear_project_and_task_copies_write_native_relations_and_record_only_cross_s
             .any(|edge| edge["from"]["id"] == task_near)
     );
     let project_forward = edges("project", &project_near, false);
+    assert_eq!(
+        project_forward.len(),
+        2,
+        "the repeated project write replaces its relation set"
+    );
     assert!(
         project_forward
             .iter()
@@ -289,7 +301,7 @@ fn linear_project_and_task_copies_write_native_relations_and_record_only_cross_s
             .any(|edge| edge["from"]["id"] == project_near)
     );
 
-    for (verb, id) in [("task", task_near), ("project", project_near)] {
+    for (verb, id) in [("task", task_near.clone()), ("project", project_near)] {
         let item = shown(&sandbox, verb, &id);
         let recorded = item["metadata"]["onetaskgraph.depends_on"]
             .as_array()
@@ -302,6 +314,19 @@ fn linear_project_and_task_copies_write_native_relations_and_record_only_cross_s
                 .starts_with("elsewhere:")
         );
     }
+    let near_file = root.join("tasks/NEAR.md");
+    let edited = std::fs::read_to_string(&near_file).unwrap().replace(
+        "[FAR, {id: \"elsewhere:P-9\", item: project}]",
+        "[{id: \"elsewhere:P-9\", item: project}]",
+    );
+    std::fs::write(&near_file, edited).unwrap();
+    ok(
+        &sandbox,
+        &["task", "copy", "authored:NEAR", "--to", "linear"],
+    );
+    let replaced = edges("task", &task_near, false);
+    assert_eq!(replaced.len(), 1);
+    assert_eq!(replaced[0]["to"]["id"], "elsewhere:P-9");
 }
 
 #[test]

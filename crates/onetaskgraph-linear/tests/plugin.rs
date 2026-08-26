@@ -338,6 +338,8 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::PROJECT_UPDATE, true),
         (graphql::ISSUE_RELATION_CREATE, true),
         (graphql::PROJECT_RELATION_CREATE, true),
+        (graphql::ISSUE_RELATION_DELETE, true),
+        (graphql::PROJECT_RELATION_DELETE, true),
         (graphql::ISSUE_DELETE, true),
     ] {
         let parsed = query::parse_query::<String>(document).unwrap();
@@ -389,18 +391,32 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         id_page("workflowStates", "STATE"),
         id_page("issueLabels", "LABEL"),
         serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
+        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
+        serde_json::json!({"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}),
         serde_json::json!({"issues":{"nodes":[{"id":"I-FAR","title":"far","description":"\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:FAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("teams", "TEAM"),
         id_page("workflowStates", "STATE"),
         id_page("issueLabels", "LABEL"),
         serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-NEW"}}}),
+        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[{"id":"OLD","type":"blocks","relatedIssue":{"id":"OLD-FAR"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"issueRelationDelete":{"success":true}}),
         serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I2"}}}),
+        serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("teams", "TEAM"),
         id_page("projectStatuses", "STATUS"),
         id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
+        serde_json::json!({"project":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P"}}}),
+        serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        id_page("teams", "TEAM"),
+        id_page("projectStatuses", "STATUS"),
+        id_page("projectLabels", "PLABEL"),
+        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-NEW"}}}),
+        serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P","type":"blocks","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"projectRelationDelete":{"success":true}}),
+        serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P2"}}}),
     ]);
     let writable = writable_source(&endpoint);
     let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:NEAR","title":"visible task","content":"body","status":{"category":"todo","name":"Todo"},"labels":[{"id":"old","name":"bug","color":null}],"project":null,"repositories":["github.com/acme/work"],"metadata":{"object":{"n":1},"null":null}})).unwrap();
@@ -466,13 +482,25 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
     let project: Project = serde_json::from_value(serde_json::json!({"id":"authored:P","title":"visible project","content":"project body","status":{"category":"todo","name":"Todo"},"labels":[{"id":"old","name":"roadmap","color":null}],"repositories":["github.com/acme/work"],"metadata":{"array":[true,null]}})).unwrap();
     let project_edge = DependencyEdge {
         from: DependencyEndpoint::new("authored:P".into(), ItemKind::Project).unwrap(),
-        to: DependencyEndpoint::from_native("P-FAR".into(), ItemKind::Project),
-        kind: DependencyKind::Blocks,
+        to: DependencyEndpoint::new("authored:PFAR".into(), ItemKind::Project).unwrap(),
+        kind: DependencyKind::Related,
     };
     assert_eq!(
         writable
             .write_project(&ItemWrite {
                 target: None,
+                item: project.clone(),
+                depends_on: vec![project_edge.clone()]
+            })
+            .await
+            .unwrap()
+            .0,
+        "P-NEW"
+    );
+    assert_eq!(
+        writable
+            .write_project(&ItemWrite {
+                target: Some("P-NEW".into()),
                 item: project,
                 depends_on: vec![project_edge]
             })
@@ -576,6 +604,27 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         assert!(format!("{error}").contains(expected), "{error}");
         drop(wire);
     }
+    let mut labeled = task();
+    labeled.labels.push(onetaskgraph_plugin_api::Label {
+        id: "old".into(),
+        name: "missing".into(),
+        color: None,
+    });
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        page("issueLabels", serde_json::json!([])),
+    ]);
+    let error = writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item: labeled,
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error}").contains("label \"missing\""));
+    drop(wire);
     let (endpoint, wire) = response_server(vec![
         page("teams", serde_json::json!([{"id":"TEAM"}])),
         page("projectStatuses", serde_json::json!([])),
@@ -599,6 +648,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         page("teams", serde_json::json!([{"id":"TEAM"}])),
         page("workflowStates", serde_json::json!([{"id":"STATE"}])),
         serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW"}}}),
+        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"issueRelationCreate":{"success":false,"issueRelation":null}}),
     ]);
     let error = writable_source(&endpoint)
