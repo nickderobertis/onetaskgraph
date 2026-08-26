@@ -5,8 +5,8 @@ One interface over the ticketing systems your work actually lives in.
 Tasks, projects, labels and the dependencies between them are spread across Linear, GitHub
 Projects and a folder of Markdown files, and every tool that wants to reach them ends up
 reimplementing all three. `onetaskgraph` implements them once, behind a single query
-surface, and exposes that surface four ways: a command-line tool, a Rust SDK, a Python
-SDK, and a TypeScript SDK. All four use the same engine, so they cannot drift apart.
+surface: a command-line tool, the Rust engine crate's library API, and SDKs for Python and
+TypeScript. Every consumer reaches the same engine, so their query semantics cannot drift.
 
 Two properties make it different from a lowest-common-denominator wrapper:
 
@@ -209,53 +209,21 @@ uv tool install onetaskgraph-cli      # from PyPI, no Rust toolchain needed
 npm install -g onetaskgraph-cli       # from npm, no Rust toolchain needed
 ```
 
-The SDKs are separate packages. Add the Rust engine when the application should link it,
-or add either subprocess SDK when it should drive the installed binary:
+For Rust, the SDK surface is the engine crate itself rather than a separate wrapper
+package. Add it when the application should link the engine, or add either subprocess SDK
+when it should drive the installed binary:
 
 ```bash
-cargo add onetaskgraph-core onetaskgraph-plugin-api secrecy serde_json
-cargo add tokio --features macros,rt-multi-thread
+cargo add onetaskgraph-core
 uv add onetaskgraph-sdk               # Python
 bun add @onetaskgraph/sdk             # TypeScript
 ```
 
-The Rust SDK calls the engine directly. This complete example makes a copy and reads the
-same per-item outcome the CLI renders:
-
-```rust
-use onetaskgraph_core::{Config, CopyItems, CopyRequest, CopyScope, Engine, GlobalId};
-use onetaskgraph_plugin_api::{SecretResolver, SourceName};
-use secrecy::SecretString;
-use serde_json::json;
-
-struct NoSecrets;
-impl SecretResolver for NoSecrets {
-    fn get(&self, _: &str) -> Option<SecretString> { None }
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::from_document(json!({"sources": {
-        "drafts": {"plugin": "in-memory", "config": {"tasks": [{
-            "id": "T-1", "title": "Ship it", "content": "",
-            "status": {"category": "todo", "name": "Todo"},
-            "labels": [], "metadata": {}, "repositories": []
-        }]}},
-        "work": {"plugin": "in-memory", "config": {}}
-    }}))?;
-    let engine = Engine::build(&config, &NoSecrets);
-    let report = engine.copy(&CopyRequest {
-        items: CopyItems::new(vec!["drafts:T-1".parse::<GlobalId>()?]).unwrap(),
-        scope: CopyScope::Tasks,
-        destination: SourceName::new("work")?,
-        match_by: None,
-        recreate: false,
-        dry_run: false,
-    }).await?;
-    println!("{}", report.items[0].action.name()); // created
-    Ok(())
-}
-```
+The compiled [Rust copy example](./crates/onetaskgraph-core/tests/copy.rs) constructs an
+`Engine`, sends a `CopyRequest` to `Engine::copy`, and reads the returned `CopyReport`. Its
+`a_rust_caller_creates_then_updates_the_same_destination_item` test makes the first copy,
+asserts that the outcome is `created`, makes the same copy again, and asserts that the
+same destination item was updated rather than duplicated.
 
 Unlike the Python and TypeScript SDKs, which spawn the compiled binary, a Rust consumer
 links `onetaskgraph-core` and calls `Engine` in process. The engine and its copy semantics
