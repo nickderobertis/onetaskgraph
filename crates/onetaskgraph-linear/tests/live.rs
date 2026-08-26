@@ -15,7 +15,7 @@ impl SecretResolver for Environment {
 
 #[ignore = "the live lane: run it with `just test-live onetaskgraph-linear`"]
 #[tokio::test]
-async fn real_linear_write_round_trips_then_deletes_its_scratch_issue() {
+async fn real_linear_write_round_trips_then_requests_scratch_issue_deletion() {
     // llmlint: ignore-block[live_tier_compiles_and_requires_credential,tests_assert_real_behavior] This non-required third-party lane deliberately reports an absent credential or explicit scratch team as a skip, matching every live target in this repository; required checks compile but never execute this ignored test.
     let Some(key) = std::env::var("LINEAR_API_KEY")
         .ok()

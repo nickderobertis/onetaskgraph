@@ -21,7 +21,8 @@
 //!
 //! Fixture provenance is recorded in `tests/fixtures/README.md`. The ignored live lane
 //! exercises reads by default; its mutation journey requires an explicitly named scratch
-//! team and deletes every item it creates before returning.
+//! team and immediately requests deletion of its scratch issue. A failed live cleanup is
+//! reported as a test failure and may require manual deletion from that scratch team.
 #![deny(missing_docs)]
 
 use chrono::{DateTime, Utc};

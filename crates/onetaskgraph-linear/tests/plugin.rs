@@ -567,6 +567,62 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         .unwrap_err();
     assert!(format!("{error}").contains("missing teams.nodes"));
     drop(wire);
+    let (endpoint, wire) = response_server(vec![page("teams", serde_json::json!([{"id":""}]))]);
+    assert!(
+        format!(
+            "{}",
+            writable_source(&endpoint)
+                .write_task(&ItemWrite {
+                    target: None,
+                    item: task(),
+                    depends_on: Vec::new()
+                })
+                .await
+                .unwrap_err()
+        )
+        .contains("empty backend id")
+    );
+    drop(wire);
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":""}}}),
+    ]);
+    assert!(
+        format!(
+            "{}",
+            writable_source(&endpoint)
+                .write_task(&ItemWrite {
+                    target: None,
+                    item: task(),
+                    depends_on: Vec::new()
+                })
+                .await
+                .unwrap_err()
+        )
+        .contains("empty backend id")
+    );
+    drop(wire);
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        serde_json::json!({"projectCreate":{"success":true,"project":{"id":""}}}),
+    ]);
+    assert!(
+        format!(
+            "{}",
+            writable_source(&endpoint)
+                .write_project(&ItemWrite {
+                    target: None,
+                    item: project(),
+                    depends_on: Vec::new()
+                })
+                .await
+                .unwrap_err()
+        )
+        .contains("empty backend id")
+    );
+    drop(wire);
     for (responses, item, expected) in [
         (
             vec![
