@@ -67,7 +67,7 @@ every selected source.
 
 `--explain` renders the plan the query ran, per source:
 
-```
+```console
 $ onetaskgraph task list --label bug --explain
 work:ENG-142   in-progress  Rate-limit the sync loop
 notes:2026-08  todo         Write up the migration
@@ -263,11 +263,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }).await?;
 
     let outcome = &report.items[0];
+    assert_eq!(outcome.source.to_string(), "drafts:T-1");
+    assert_eq!(outcome.destination().unwrap().to_string(), "work:T-1");
+    assert_eq!(outcome.action.name(), "created");
     println!("{} -> {} ({})", outcome.source,
         outcome.destination().expect("the copy created a destination"),
         outcome.action.name());
 
     let copied = engine.task(outcome.destination().unwrap()).await?;
+    assert_eq!(copied.items[0].item.title, "Ship the guide");
     println!("{}", copied.items[0].item.title);
     Ok(())
 }
