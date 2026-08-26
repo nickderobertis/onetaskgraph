@@ -166,7 +166,7 @@ fn linear_project_and_task_copies_write_native_relations_and_record_only_cross_s
         (
             "projects/NEAR.md",
             "Near project",
-            "depends_on: [FAR, {id: \"elsewhere:T-9\", item: task}]\n",
+            "labels: [{id: local-roadmap, name: roadmap}]\nmetadata: {caller.project: {enabled: true}}\nrepositories: [github.com/acme/project]\ndepends_on: [FAR, {id: \"elsewhere:T-9\", item: task}]\n",
         ),
     ] {
         std::fs::write(
@@ -228,6 +228,18 @@ fn linear_project_and_task_copies_write_native_relations_and_record_only_cross_s
         "the project copy includes its task"
     );
     let project_near = project_report[0].1.as_str().unwrap().to_owned();
+    let written_project = shown(&sandbox, "project", &project_near);
+    assert_eq!(written_project["content"], "body");
+    assert_eq!(written_project["status"]["name"], "Todo");
+    assert_eq!(written_project["labels"][0]["name"], "roadmap");
+    assert_eq!(
+        written_project["metadata"]["caller.project"]["enabled"],
+        true
+    );
+    assert_eq!(
+        written_project["repositories"],
+        json!(["github.com/acme/project"])
+    );
     let child = shown(&sandbox, "task", project_report[1].1.as_str().unwrap());
     assert_eq!(child["project"], project_near.split_once(':').unwrap().1);
     let repeated = reported(&ok(

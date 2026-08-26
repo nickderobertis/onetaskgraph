@@ -45,19 +45,14 @@ async fn real_linear_write_round_trips_then_deletes_its_scratch_issue() {
         cursor: None,
         limit: 1,
     };
-    let Some(mut template) = source
+    let mut template = source
         .query_tasks(&TaskQuery::default(), &request)
         .await
         .unwrap()
         .items
         .into_iter()
         .next()
-    else {
-        eprintln!(
-            "skipped live Linear write journey: the scratch team has no workflow state to reuse"
-        );
-        return;
-    };
+        .expect("LINEAR_WRITE_TEAM must contain a task whose workflow state the write journey can reuse");
     template.title = format!("onetaskgraph live write cleanup {}", std::process::id());
     template.content = Some("temporary live-lane item; deleted by the same test".into());
     template.labels.clear();
