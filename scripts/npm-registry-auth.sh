@@ -10,9 +10,15 @@ set -euo pipefail
 usage() { echo "usage: scripts/npm-registry-auth.sh [REGISTRY_URL]" >&2; echo "next: $1" >&2; exit 64; }
 [[ $# -le 1 ]] || usage "pass at most one registry URL, as .github/workflows/release.yml does"
 registry=${1:-https://registry.npmjs.org/}
-# The authority becomes npm's auth key, so a URL without one would key the token to
-# nothing and publish anonymously.
-[[ $registry =~ ^https?://[^/[:space:]]+(/[^[:space:]]*)?$ ]] || usage "invalid registry, which must be an http:// or https:// URL with a host: $registry"
+# The authority becomes npm's auth key, so a URL without a host would key the token to
+# nothing and publish anonymously. "everything up to the next slash" is not that check: it
+# reads `https://?registry=x`, `https://#registry` and `https://token@` as authorities,
+# though each has an empty host, and keys the token to the punctuation. So the host is
+# spelled out — a bracketed IPv6 literal, or a name of host characters bounded by
+# alphanumerics — with an optional numeric port. A pattern held in a variable because bash
+# 3.2 reads a quoted one on this operator's right as a literal string.
+registry_pattern='^https?://(\[[0-9A-Fa-f:.]+\]|[0-9A-Za-z]([0-9A-Za-z._-]*[0-9A-Za-z])?)(:[0-9]+)?(/[^[:space:]]*)?$'
+[[ $registry =~ $registry_pattern ]] || usage "invalid registry, which must be an http:// or https:// URL with a host: $registry"
 # npm keys auth by the registry's scheme-less URL, and matches it with a trailing slash.
 [[ $registry == */ ]] || registry="$registry/"
 directory=${ONETASKGRAPH_NPM_CONFIG_DIR:-${RUNNER_TEMP:-}}
