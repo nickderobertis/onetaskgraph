@@ -290,7 +290,7 @@ them do; this is the inventory of what is owed, not a status board.
 - **The release PR is prepared by `scripts/prepare-release-pr.sh`, never by
   `release-plz release-pr` alone.** release-plz writes the Cargo manifests and nothing
   else — no `package.json`, no `pyproject.toml`, not even the version under
-  `[workspace.package]` — and it has no hook that could: 0.3.160 refuses
+  `[workspace.package]` — and it has no hook that could: the pinned release-plz refuses
   `pre_release_hook` as an unknown field and its own `generate-schema` lists no other. So a
   pull request it opens by itself fails `distribution-check`, one of the required checks its
   own merge waits on, and no release is cut at all. The script bumps with `release-plz
