@@ -297,7 +297,10 @@ them do; this is the inventory of what is owed, not a status board.
   update`, brings every other manifest to the version it chose with `scripts/set-version.sh`,
   and hands the whole tree to `release-pr --allow-dirty`, whose uncommitted changes become
   the release commit. `scripts/check-release-pr-sync.sh` drives that end to end on every
-  `check` and refuses a workflow that goes around it.
+  `check` and refuses a workflow that goes around it. It stands in for release-plz rather
+  than installing it — a required check must not depend on crates.io — so the workflow pins
+  the release-plz version and that check fails when the pin and the version the stand-in was
+  recorded from part. Moving the pin means re-observing the real tool.
 
 ## Conventions
 
