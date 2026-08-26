@@ -28,9 +28,10 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Health,
-    Label, NativeId, Page, PageRequest, Project, ProjectQuery, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource,
+    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
+    Direction, Health, ItemKind, Label, NativeId, Page, PageRequest, Project, ProjectQuery,
+    Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
+    Support, Task, TaskQuery, TaskSource,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -60,10 +61,11 @@ pub mod graphql {
         ... on ProjectV2ItemFieldSingleSelectValue{name field{
           ... on ProjectV2SingleSelectField{name}
         }}
+        ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2Field{name}}}
         ... on ProjectV2ItemFieldLabelValue{labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
       }pageInfo{hasNextPage}} content{
-        ... on Issue{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
-        ... on PullRequest{id title body url createdAt updatedAt state labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on Issue{id title body url createdAt updatedAt state repository{nameWithOwner} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on PullRequest{id title body url createdAt updatedAt state repository{nameWithOwner} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
         ... on DraftIssue{id title body createdAt updatedAt}
       }} pageInfo{hasNextPage endCursor}}
     }"#;
@@ -122,21 +124,25 @@ impl SourcePlugin for Plugin {
             serde_json::from_value(config.clone()).map_err(|e| SourceError::Config {
                 message: format!("source {name}: {e}"),
             })?;
-        let source = GitHubProjectsSource::new(config, secrets).map_err(|error| match error {
-            SourceError::Config { message } => SourceError::Config {
-                message: format!("source {name}: {message}"),
-            },
-            SourceError::Auth { message } => SourceError::Auth {
-                message: format!("source {name}: {message}"),
-            },
-            other => other,
-        })?;
+        let source =
+            GitHubProjectsSource::new(name, config, secrets).map_err(|error| match error {
+                SourceError::Config { message } => SourceError::Config {
+                    message: format!("source {name}: {message}"),
+                },
+                SourceError::Auth { message } => SourceError::Auth {
+                    message: format!("source {name}: {message}"),
+                },
+                other => other,
+            })?;
         Ok(Box::new(source))
     }
 }
 
 /// A source which reads GitHub afresh for every operation.
 pub struct GitHubProjectsSource {
+    /// This source's configured name, so a recorded far end naming it can be told from
+    /// one naming a system this source knows nothing about.
+    name: SourceName,
     owner: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only by `new` after full GitHub-owner validation.
     project_number: u32, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only by `new` after GraphQL-Int validation.
     endpoint: Url,
@@ -148,7 +154,12 @@ pub struct GitHubProjectsSource {
 
 impl GitHubProjectsSource {
     /// Validate configuration and capture the named credential without exposing it.
+    ///
+    /// `name` is this source's configured name, kept for one comparison: a far end
+    /// recorded as `<name>:<native>` is an item of this same source, which its own
+    /// relationship was supposed to hold.
     pub fn new(
+        name: &SourceName,
         config: GitHubProjectsConfig,
         secrets: &dyn SecretResolver,
     ) -> Result<Self, SourceError> {
@@ -186,6 +197,7 @@ impl GitHubProjectsSource {
             message: format!("environment variable {} is missing or empty; set it to a GitHub token with read:project and repository Issues read access", config.token_env),
         })?;
         Ok(Self {
+            name: name.clone(),
             owner: config.owner,
             project_number: config.project_number,
             endpoint,
@@ -405,17 +417,20 @@ impl GitHubProjectsSource {
             url: optional_str(content, "url")?.map(str::to_owned),
             created_at: optional_time(content, "createdAt")?,
             updated_at: optional_time(content, "updatedAt")?,
+            metadata: metadata_field(field_values)?,
+            repositories: repositories(content, field_values)?,
         }))
     }
 
     fn project(&self, value: &Value) -> Result<Project, SourceError> {
         let id = required_str(value, "id")?;
+        let (content, metadata) =
+            metadata_description(optional_str(value, "shortDescription")?.map(str::to_owned))?;
+        let repositories = repositories_from_metadata(&metadata)?;
         Ok(Project {
             id: NativeId(id.into()),
             title: required_str(value, "title")?.into(),
-            content: optional_str(value, "shortDescription")?
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned),
+            content,
             status: Status {
                 category: if required_bool(value, "closed")? {
                     StatusCategory::Done
@@ -433,6 +448,8 @@ impl GitHubProjectsSource {
             url: optional_str(value, "url")?.map(str::to_owned),
             created_at: optional_time(value, "createdAt")?,
             updated_at: optional_time(value, "updatedAt")?,
+            metadata,
+            repositories,
         })
     }
 
@@ -476,7 +493,20 @@ impl GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         validate_page(page)?;
-        let data = self.graphql(graphql::TASK_DEPENDENCIES, json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c| c.0.as_str())})).await?;
+        let limit = page.limit.min(MAX_PAGE_SIZE) as usize;
+        let cursor = page.cursor.as_ref().map(|c| c.0.as_str());
+        let recorded = recorded_offset(cursor, direction)?;
+        // Asked for even in the recorded phase, whose page reads nothing from the
+        // connection: `__typename` is what says whether this item has a native
+        // relationship at all, and that is what decides which far ends the reserved key is
+        // allowed to hold.
+        let data = self
+            .graphql(
+                graphql::TASK_DEPENDENCIES,
+                json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),
+                       "after":if recorded.is_some() {None} else {cursor}}),
+            )
+            .await?;
         let node =
             data.get("node")
                 .filter(|v| !v.is_null())
@@ -490,11 +520,26 @@ impl GitHubProjectsSource {
             Direction::DependsOn => "blockedBy",
             Direction::DependedOnBy => "blocking",
         };
-        if required_str(node, "__typename")? != "Issue" {
-            return Ok(Page {
-                items: Vec::new(),
-                next: None,
-            });
+        // A draft or a pull request has neither `blockedBy` nor `blocking`, so nothing it
+        // depends on can be named natively and the reserved key may hold any far end. An
+        // issue's connections hold issues, so the key may not hold one of those.
+        let natively_names =
+            (required_str(node, "__typename")? == "Issue").then_some(ItemKind::Task);
+        if let Some(offset) = recorded {
+            return Ok(recorded_page(
+                self.recorded_task_edges(id, direction, natively_names)
+                    .await?,
+                offset,
+                limit,
+            ));
+        }
+        if natively_names.is_none() {
+            return Ok(recorded_page(
+                self.recorded_task_edges(id, direction, natively_names)
+                    .await?,
+                0,
+                limit,
+            ));
         }
         let connection = node
             .get(connection_name)
@@ -507,32 +552,73 @@ impl GitHubProjectsSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub dependency response nodes is not an array".into(),
             })?;
+        // `from` depends on `to`, always. GitHub spells the same relationship from either
+        // end — `blockedBy` lists what this item waits on, `blocking` lists what waits on
+        // it — so the near item is `from` in one direction and `to` in the other.
         let items = nodes
             .iter()
             .map(|value| {
                 let related = NativeId(required_str(value, "id")?.into());
-                Ok(match direction {
-                    Direction::DependsOn => DependencyEdge {
-                        from: related,
-                        to: id.clone(),
-                        kind: DependencyKind::Blocks,
-                    },
-                    Direction::DependedOnBy => DependencyEdge {
-                        from: id.clone(),
-                        to: related,
-                        kind: DependencyKind::Blocks,
-                    },
+                let (from, to) = match direction {
+                    Direction::DependsOn => (id.clone(), related),
+                    Direction::DependedOnBy => (related, id.clone()),
+                };
+                Ok(DependencyEdge {
+                    from: DependencyEndpoint::from_native(from, ItemKind::Task),
+                    to: DependencyEndpoint::from_native(to, ItemKind::Task),
+                    kind: DependencyKind::Blocks,
                 })
             })
             .collect::<Result<Vec<_>, SourceError>>()?;
-        let next = next_cursor(connection)?;
+        let mut next = next_cursor(connection)?;
         if let Some(next) = &next {
-            validate_cursor_progress(
-                page.cursor.as_ref().map(|cursor| cursor.0.as_str()),
-                &next.0,
-            )?;
+            validate_cursor_progress(cursor, &next.0)?;
+        }
+        if next.is_none()
+            && !self
+                .recorded_task_edges(id, direction, natively_names)
+                .await?
+                .is_empty()
+        {
+            next = Some(Cursor(format!("{RECORDED_CURSOR}0")));
         }
         Ok(Page { items, next })
+    }
+
+    /// The edges this item records under [`DependencyEdge::RECORDED_KEY`], which is where
+    /// a far end in another source has to live: no GitHub issue relationship can name one.
+    ///
+    /// Only forwards. The reverse of a recorded edge is derived from the far end, and this
+    /// source never writes one down.
+    ///
+    /// The metadata lives on the *project item*, not on the issue this method is given, so
+    /// reading it costs one board scan. That is why it happens once the native connection
+    /// is spent rather than on every page.
+    async fn recorded_task_edges(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        natively_names: Option<ItemKind>,
+    ) -> Result<Vec<DependencyEdge>, SourceError> {
+        if direction != Direction::DependsOn {
+            return Ok(Vec::new());
+        }
+        let Some(task) = self
+            .all_tasks()
+            .await?
+            .into_iter()
+            .find(|task| task.id == *id)
+        else {
+            return Ok(Vec::new());
+        };
+        DependencyEdge::recorded(
+            &task.metadata,
+            id,
+            ItemKind::Task,
+            &self.name,
+            natively_names,
+        )
+        .map_err(|message| SourceError::Malformed { message })
     }
 
     async fn related_issue_projects(&self, issue: &Value) -> Result<Vec<NativeId>, SourceError> {
@@ -742,17 +828,15 @@ impl TaskSource for GitHubProjectsSource {
                 for related_issue in related_issues {
                     for related in self.related_issue_projects(related_issue).await? {
                         if related != *id {
-                            edges.push(match direction {
-                                Direction::DependsOn => DependencyEdge {
-                                    from: related,
-                                    to: id.clone(),
-                                    kind: DependencyKind::Blocks,
-                                },
-                                Direction::DependedOnBy => DependencyEdge {
-                                    from: id.clone(),
-                                    to: related,
-                                    kind: DependencyKind::Blocks,
-                                },
+                            // Same orientation as the task level above, one level up.
+                            let (from, to) = match direction {
+                                Direction::DependsOn => (id.clone(), related),
+                                Direction::DependedOnBy => (related, id.clone()),
+                            };
+                            edges.push(DependencyEdge {
+                                from: DependencyEndpoint::from_native(from, ItemKind::Project),
+                                to: DependencyEndpoint::from_native(to, ItemKind::Project),
+                                kind: DependencyKind::Blocks,
                             });
                         }
                     }
@@ -770,9 +854,66 @@ impl TaskSource for GitHubProjectsSource {
                 }
             }
         }
+        if direction == Direction::DependsOn {
+            // A board's edges are aggregated from its issues, so another board is exactly
+            // what this source can relate it to — and exactly what the reserved key must
+            // not hold.
+            edges.extend(
+                DependencyEdge::recorded(
+                    &self.project(&project)?.metadata,
+                    id,
+                    ItemKind::Project,
+                    &self.name,
+                    Some(ItemKind::Project),
+                )
+                .map_err(|message| SourceError::Malformed { message })?,
+            );
+        }
         let offset = numeric_cursor(page.cursor.as_ref())?;
         Ok(offset_page(edges, offset, page.limit as usize))
     }
+}
+
+/// Where the recorded tail of a task-dependency walk resumes; see
+/// [`GitHubProjectsSource::recorded_task_edges`].
+const RECORDED_CURSOR: &str = "onetaskgraph.depends_on:";
+
+/// Where a recorded tail resumes, refusing a cursor no walk in `direction` reported.
+///
+/// The reserved key holds forward edges and nothing else — the reverse of a recorded edge
+/// is derived from the far end, never written down on the near item — so only a forward
+/// walk ever reports one of these cursors. A reverse read carrying one is resuming a walk
+/// it did not come from, and it is told so rather than answered with an empty page that
+/// reads as a walk which ended.
+fn recorded_offset(
+    cursor: Option<&str>,
+    direction: Direction,
+) -> Result<Option<usize>, SourceError> {
+    cursor
+        .and_then(|cursor| cursor.strip_prefix(RECORDED_CURSOR))
+        .map(|offset| {
+            if direction != Direction::DependsOn {
+                return Err(SourceError::Config {
+                    message: format!(
+                        "{RECORDED_CURSOR}{offset} resumes recorded forward edges, which a \
+                         reverse dependency read never issues; resume it in the direction \
+                         that reported it"
+                    ),
+                });
+            }
+            offset.parse().map_err(|_| SourceError::Config {
+                message: format!("{RECORDED_CURSOR}{offset} is not a recorded-edge cursor"),
+            })
+        })
+        .transpose()
+}
+
+fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Page<DependencyEdge> {
+    let mut page = offset_page(edges, offset, limit.max(1));
+    page.next = page
+        .next
+        .map(|cursor| Cursor(format!("{RECORDED_CURSOR}{}", cursor.0)));
+    page
 }
 
 fn normalize_status_mapping(
@@ -830,6 +971,87 @@ fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceErro
         .ok_or_else(|| SourceError::Malformed {
             message: format!("GitHub response is missing string field {field}"),
         })
+}
+
+const METADATA_FIELD: &str = "onetaskgraph.metadata";
+
+fn metadata_field(field_values: &Value) -> Result<BTreeMap<String, Value>, SourceError> {
+    let nodes = field_values
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "GitHub project item fieldValues.nodes is not an array".into(),
+        })?;
+    let Some(text) = nodes
+        .iter()
+        .find(|node| node.pointer("/field/name").and_then(Value::as_str) == Some(METADATA_FIELD))
+        .and_then(|node| node.get("text"))
+    else {
+        return Ok(BTreeMap::new());
+    };
+    text.as_str()
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("GitHub {METADATA_FIELD} field text is not a string"),
+        })
+        .and_then(|text| {
+            serde_json::from_str(text).map_err(|error| SourceError::Malformed {
+                message: format!(
+                    "GitHub {METADATA_FIELD} field is not canonical JSON metadata: {error}"
+                ),
+            })
+        })
+}
+
+fn repositories(content: &Value, field_values: &Value) -> Result<Vec<Repository>, SourceError> {
+    if let Some(origin) = content
+        .pointer("/repository/nameWithOwner")
+        .and_then(Value::as_str)
+    {
+        return Repository::try_from(format!("github.com/{origin}"))
+            .map(|repository| vec![repository])
+            .map_err(|message| SourceError::Malformed { message });
+    }
+    repositories_from_metadata(&metadata_field(field_values)?)
+}
+
+const PROJECT_METADATA_OPEN: &str = "<!-- onetaskgraph.metadata\n";
+const PROJECT_METADATA_CLOSE: &str = "\n-->";
+
+fn metadata_description(
+    description: Option<String>,
+) -> Result<(Option<String>, BTreeMap<String, Value>), SourceError> {
+    let Some(description) = description else {
+        return Ok((None, BTreeMap::new()));
+    };
+    let Some(start) = description.rfind(PROJECT_METADATA_OPEN) else {
+        return Ok((Some(description), BTreeMap::new()));
+    };
+    let value_start = start + PROJECT_METADATA_OPEN.len();
+    let Some(relative_end) = description[value_start..].find(PROJECT_METADATA_CLOSE) else {
+        return Err(SourceError::Malformed {
+            message: "unterminated onetaskgraph metadata slot in GitHub project description".into(),
+        });
+    };
+    let value_end = value_start + relative_end;
+    if !description[value_end + PROJECT_METADATA_CLOSE.len()..]
+        .trim()
+        .is_empty()
+    {
+        return Ok((Some(description), BTreeMap::new()));
+    }
+    let metadata = serde_json::from_str(&description[value_start..value_end]).map_err(|error| {
+        SourceError::Malformed {
+            message: format!("invalid canonical JSON in GitHub project metadata slot: {error}"),
+        }
+    })?;
+    let visible = description[..start].trim_end();
+    Ok(((!visible.is_empty()).then(|| visible.into()), metadata))
+}
+
+fn repositories_from_metadata(
+    metadata: &BTreeMap<String, Value>,
+) -> Result<Vec<Repository>, SourceError> {
+    Repository::from_metadata(metadata).map_err(|message| SourceError::Malformed { message })
 }
 fn required_bool(value: &Value, field: &str) -> Result<bool, SourceError> {
     value

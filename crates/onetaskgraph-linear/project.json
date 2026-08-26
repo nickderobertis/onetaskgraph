@@ -57,9 +57,9 @@
     "test-live": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo test --quiet -p onetaskgraph-linear --test live --all-features --locked"
+        "command": "cargo test --quiet -p onetaskgraph-linear --test live --all-features --locked -- --include-ignored"
       },
-      "//": "Uncached: a live test reaches a third-party API and reads a credential from the environment, neither of which is an input in this tree \u2014 a cache hit would report yesterday's verdict as today's."
+      "//": "Uncached: a live test reaches a third-party API and reads a credential from the environment, neither of which is an input in this tree \u2014 a cache hit would report yesterday's verdict as today's. `--include-ignored` because the live test is `#[ignore]`d for exactly that reason: this lane is the only one that may run it, so the cached `test` target cannot sweep it in."
     }
   }
 }

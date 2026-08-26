@@ -425,6 +425,342 @@ fn a_native_id_carries_whatever_the_source_says_including_colons() {
 }
 
 #[test]
+fn repository_origins_accept_only_the_normalized_public_identity() {
+    let repository =
+        onetaskgraph_plugin_api::Repository::try_from("github.com/example/work".to_owned())
+            .expect("normalized origin");
+    assert_eq!(repository.as_str(), "github.com/example/work");
+    assert_eq!(String::from(repository), "github.com/example/work");
+
+    for invalid in [
+        "",
+        "github.com/example",
+        "https://github.com/example/work",
+        "github.com/example/work.git",
+        "github.com/example/work tree",
+        "github.com//work",
+        "github.com/../work",
+    ] {
+        let error = onetaskgraph_plugin_api::Repository::try_from(invalid.to_owned())
+            .expect_err("non-normalized origin is rejected");
+        assert!(error.contains("normalized repository origin"), "{error}");
+    }
+}
+
+#[test]
+fn repository_origins_are_read_from_the_one_reserved_key_they_are_recorded_under() {
+    let metadata = [(
+        onetaskgraph_plugin_api::Repository::METADATA_KEY.to_owned(),
+        serde_json::json!(["github.com/example/work", "github.com/example/docs"]),
+    )]
+    .into();
+    let origins = onetaskgraph_plugin_api::Repository::from_metadata(&metadata)
+        .expect("a list of normalized origins");
+    assert_eq!(
+        origins
+            .iter()
+            .map(onetaskgraph_plugin_api::Repository::as_str)
+            .collect::<Vec<_>>(),
+        ["github.com/example/work", "github.com/example/docs"]
+    );
+
+    assert!(
+        onetaskgraph_plugin_api::Repository::from_metadata(&Default::default())
+            .expect("an item recording none")
+            .is_empty()
+    );
+
+    for (value, expected) in [
+        (serde_json::json!("github.com/example/work"), "not a list"),
+        (
+            serde_json::json!(["github.com/example/work", "github.com/example/work"]),
+            "listed twice",
+        ),
+        (serde_json::json!(["work"]), "normalized repository origin"),
+    ] {
+        let metadata = [(
+            onetaskgraph_plugin_api::Repository::METADATA_KEY.to_owned(),
+            value,
+        )]
+        .into();
+        let error = onetaskgraph_plugin_api::Repository::from_metadata(&metadata)
+            .expect_err("a repository list this interface cannot represent");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn a_repeated_repository_origin_is_refused_wherever_a_work_item_is_decoded() {
+    let repeated = serde_json::json!({
+        "id": "ENG-1", "title": "Ship", "content": null,
+        "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": null,
+        "url": null, "created_at": null, "updated_at": null,
+        "repositories": ["github.com/example/work", "github.com/example/work"]
+    });
+    let error = serde_json::from_value::<Task>(repeated.clone()).expect_err("a repeat is refused");
+    assert!(error.to_string().contains("listed twice"), "{error}");
+
+    let mut project = repeated;
+    project
+        .as_object_mut()
+        .expect("an object")
+        .remove("project");
+    assert!(serde_json::from_value::<Project>(project).is_err());
+}
+
+/// The name the source reading these near items is configured under.
+///
+/// A qualified far end is judged against it, so it has to be a real `SourceName` rather
+/// than a literal spelled into each assertion.
+fn near_source() -> SourceName {
+    SourceName::new("work").expect("a usable source name")
+}
+
+#[test]
+fn a_near_item_records_the_far_ends_its_backend_cannot_name() {
+    use onetaskgraph_plugin_api::ItemKind;
+
+    let metadata = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!(["T-2", {"id": "elsewhere:P-9", "kind": "project"}]),
+    )]
+    .into();
+    // A source with no relationship of its own may record anything, including a far end
+    // in this source.
+    let edges = DependencyEdge::recorded(
+        &metadata,
+        &NativeId::from("T-1"),
+        ItemKind::Task,
+        &near_source(),
+        None,
+    )
+    .expect("a list of endpoints");
+
+    assert_eq!(edges.len(), 2);
+    assert_eq!(edges[0].from.id(), "T-1");
+    assert_eq!(edges[0].to.id(), "T-2");
+    assert!(!edges[0].to.is_qualified());
+    assert_eq!(edges[0].kind, DependencyKind::Blocks);
+    assert_eq!(edges[1].to.id(), "elsewhere:P-9");
+    assert!(edges[1].to.is_qualified());
+    assert_eq!(edges[1].to.kind, ItemKind::Project);
+
+    assert!(
+        DependencyEdge::recorded(
+            &Default::default(),
+            &NativeId::from("T-1"),
+            ItemKind::Task,
+            &near_source(),
+            Some(ItemKind::Task)
+        )
+        .expect("an item recording nothing")
+        .is_empty()
+    );
+
+    let malformed = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!({"id": "elsewhere:P-9"}),
+    )]
+    .into();
+    let error = DependencyEdge::recorded(
+        &malformed,
+        &NativeId::from("T-1"),
+        ItemKind::Task,
+        &near_source(),
+        None,
+    )
+    .expect_err("a mapping is not a list of endpoints");
+    assert!(error.contains(DependencyEdge::RECORDED_KEY), "{error}");
+}
+
+#[test]
+fn a_far_end_the_near_backend_could_have_named_is_refused_rather_than_read() {
+    use onetaskgraph_plugin_api::ItemKind;
+
+    // The rule this key exists to serve is the backend's own relationship first, so an
+    // unqualified far end of the kind that backend relates is misplaced, not a shortcut.
+    let same_kind = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!(["T-2"]),
+    )]
+    .into();
+    let error = DependencyEdge::recorded(
+        &same_kind,
+        &NativeId::from("T-1"),
+        ItemKind::Task,
+        &near_source(),
+        Some(ItemKind::Task),
+    )
+    .expect_err("a task naming a task of this source is the backend's own edge");
+    assert!(error.contains("T-2"), "{error}");
+    assert!(error.contains("relate natively"), "{error}");
+    assert!(error.contains(DependencyEdge::RECORDED_KEY), "{error}");
+
+    // A far end in another source is never refused: no backend relates an id in a system
+    // it knows nothing about, which is the whole case this key is for.
+    let qualified = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!([{"id": "elsewhere:T-9", "kind": "task"}]),
+    )]
+    .into();
+    assert_eq!(
+        DependencyEdge::recorded(
+            &qualified,
+            &NativeId::from("T-1"),
+            ItemKind::Task,
+            &near_source(),
+            Some(ItemKind::Task)
+        )
+        .expect("a far end in another source")
+        .len(),
+        1
+    );
+
+    // Nor is a far end of the other kind, which the same backend cannot relate either.
+    let other_kind = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!([{"id": "P-9", "kind": "project"}]),
+    )]
+    .into();
+    assert_eq!(
+        DependencyEdge::recorded(
+            &other_kind,
+            &NativeId::from("T-1"),
+            ItemKind::Task,
+            &near_source(),
+            Some(ItemKind::Task)
+        )
+        .expect("a level this backend cannot relate across")
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn a_far_end_qualified_to_the_near_source_is_refused_like_a_bare_one() {
+    use onetaskgraph_plugin_api::ItemKind;
+
+    // Writing the near source out changes the spelling of the entry, not where the edge
+    // belongs: `work:T-2` on a `work` task is still an edge that backend relates itself.
+    let own_source = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!([{"id": "work:T-2", "kind": "task"}]),
+    )]
+    .into();
+    let error = DependencyEdge::recorded(
+        &own_source,
+        &NativeId::from("T-1"),
+        ItemKind::Task,
+        &near_source(),
+        Some(ItemKind::Task),
+    )
+    .expect_err("a task naming a task of its own source is the backend's own edge");
+    assert!(error.contains("work:T-2"), "{error}");
+    assert!(error.contains("relate natively"), "{error}");
+
+    // Another source named in full stays the case this key exists for, and a source whose
+    // name merely starts the same is another source like any other.
+    for far in ["elsewhere:T-9", "work-two:T-9"] {
+        let elsewhere = [(
+            DependencyEdge::RECORDED_KEY.to_owned(),
+            serde_json::json!([{"id": far, "kind": "task"}]),
+        )]
+        .into();
+        let edges = DependencyEdge::recorded(
+            &elsewhere,
+            &NativeId::from("T-1"),
+            ItemKind::Task,
+            &near_source(),
+            Some(ItemKind::Task),
+        )
+        .expect("a far end in another source");
+        assert_eq!(edges.len(), 1, "{far}");
+        assert_eq!(edges[0].to.id(), far);
+        assert_eq!(edges[0].to.source(), Some(far.split(':').next().unwrap()));
+    }
+
+    // The near source qualifies a level its own relationship cannot cross, so this one is
+    // the key's case even though it names this very source.
+    let other_level = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!([{"id": "work:P-9", "kind": "project"}]),
+    )]
+    .into();
+    let edges = DependencyEdge::recorded(
+        &other_level,
+        &NativeId::from("T-1"),
+        ItemKind::Task,
+        &near_source(),
+        Some(ItemKind::Task),
+    )
+    .expect("a level this backend cannot relate across");
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].to.source(), Some("work"));
+
+    // A backend with no relationship at all still records anything, its own source
+    // included: there is no native place for that edge to belong to.
+    assert_eq!(
+        DependencyEdge::recorded(
+            &own_source,
+            &NativeId::from("T-1"),
+            ItemKind::Task,
+            &near_source(),
+            None,
+        )
+        .expect("a backend with nothing to relate through")
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn the_two_reserved_keys_are_spelled_once_and_under_this_products_prefix() {
+    for key in [
+        onetaskgraph_plugin_api::Repository::METADATA_KEY,
+        DependencyEdge::RECORDED_KEY,
+    ] {
+        assert!(key.starts_with("onetaskgraph."), "{key}");
+    }
+}
+
+#[test]
+fn dependency_endpoints_validate_and_preserve_qualified_ids() {
+    let endpoint: onetaskgraph_plugin_api::DependencyEndpoint =
+        serde_json::from_value(serde_json::json!({"id":"other:P-9", "kind":"project"}))
+            .expect("qualified endpoint");
+    assert_eq!(endpoint.to_string(), "other:P-9");
+    assert_ne!(endpoint, NativeId::from("P-9"));
+
+    let native = onetaskgraph_plugin_api::DependencyEndpoint::from_native(
+        NativeId::from("urn:task:7"),
+        onetaskgraph_plugin_api::ItemKind::Task,
+    );
+    assert_eq!(native.id(), "urn:task:7");
+    assert_eq!(native.into_id(), "urn:task:7");
+
+    // An id built through the validating constructor without a colon stays this source's
+    // own, which is what keeps a bare far id a native one.
+    let unqualified = onetaskgraph_plugin_api::DependencyEndpoint::new(
+        "T-2".to_owned(),
+        onetaskgraph_plugin_api::ItemKind::Task,
+    )
+    .expect("an unqualified endpoint");
+    assert!(!unqualified.is_qualified());
+    assert_eq!(unqualified, NativeId::from("T-2"));
+
+    for invalid in [
+        serde_json::json!({"id":"", "kind":"task"}),
+        serde_json::json!({"id":"bad source:T-1", "kind":"task"}),
+        serde_json::json!({"id":"other:", "kind":"project"}),
+        serde_json::json!(""),
+    ] {
+        assert!(
+            serde_json::from_value::<onetaskgraph_plugin_api::DependencyEndpoint>(invalid).is_err()
+        );
+    }
+}
+
+#[test]
 fn a_task_round_trips_through_json_with_every_field_populated() {
     let task = Task {
         id: NativeId::from("ENG-1"),
@@ -443,6 +779,11 @@ fn a_task_round_trips_through_json_with_every_field_populated() {
         url: Some("https://example.invalid/ENG-1".to_owned()),
         created_at: Some(Utc.with_ymd_and_hms(2026, 8, 22, 9, 0, 0).unwrap()),
         updated_at: None,
+        metadata: [("onepipeline.turn_budget".to_owned(), serde_json::json!(12))].into(),
+        repositories: vec![
+            onetaskgraph_plugin_api::Repository::try_from("github.com/example/work".to_owned())
+                .expect("normalized origin"),
+        ],
     };
 
     let encoded = serde_json::to_string(&task).expect("encodes");
@@ -469,6 +810,8 @@ fn a_project_and_an_orphan_task_round_trip_through_json() {
         url: None,
         created_at: None,
         updated_at: Some(Utc.with_ymd_and_hms(2026, 8, 22, 9, 0, 0).unwrap()),
+        metadata: Default::default(),
+        repositories: Vec::new(),
     };
     let encoded = serde_json::to_string(&project).expect("encodes");
     assert_eq!(
@@ -555,8 +898,16 @@ fn the_normalised_vocabularies_serialise_as_kebab_case() {
 #[test]
 fn a_dependency_edge_round_trips_through_json() {
     let edge = DependencyEdge {
-        from: NativeId::from("A"),
-        to: NativeId::from("B"),
+        from: onetaskgraph_plugin_api::DependencyEndpoint::new(
+            "source:A".into(),
+            onetaskgraph_plugin_api::ItemKind::Task,
+        )
+        .expect("valid endpoint"),
+        to: onetaskgraph_plugin_api::DependencyEndpoint::new(
+            "other:B".into(),
+            onetaskgraph_plugin_api::ItemKind::Project,
+        )
+        .expect("valid endpoint"),
         kind: DependencyKind::Blocks,
     };
     let encoded = serde_json::to_string(&edge).expect("encodes");
@@ -564,6 +915,12 @@ fn a_dependency_edge_round_trips_through_json() {
         serde_json::from_str::<DependencyEdge>(&encoded).expect("decodes"),
         edge
     );
+    let legacy: DependencyEdge = serde_json::from_value(serde_json::json!({
+        "from":"A", "to":"B", "kind":"related"
+    }))
+    .expect("legacy native endpoints still decode");
+    assert_eq!(legacy.from.to_string(), "A");
+    assert_eq!(legacy.from.kind, onetaskgraph_plugin_api::ItemKind::Task);
 }
 
 #[test]

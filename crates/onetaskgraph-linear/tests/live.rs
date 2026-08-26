@@ -13,6 +13,7 @@ impl SecretResolver for Environment {
     }
 }
 
+#[ignore = "the live lane: run it with `just test-live onetaskgraph-linear`"]
 #[tokio::test]
 async fn real_linear_reads_obey_structural_invariants_when_data_exists() {
     // llmlint: ignore-block[live_tier_compiles_and_requires_credential,tests_assert_real_behavior] This repository's live lane is explicitly non-required and uniformly skips absent third-party credentials so an unavailable secret cannot block unrelated work; the printed skip is the required observable behavior and scripts/check-live-lane.sh enforces that contract.

@@ -8,10 +8,10 @@ use std::{
 };
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Health,
-    Label, LabelFilter, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery,
-    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
-    TaskQuery, TaskSource, TextFields, TextQuery,
+    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
+    Direction, Health, ItemKind, Label, LabelFilter, NativeId, Page, PageRequest, Project,
+    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
 };
 use schemars::{Schema, schema_for};
 use serde::Deserialize;
@@ -100,6 +100,10 @@ struct FrontMatter {
     depends_on: Vec<Dependency>,
     // llmlint: ignore[invalid_states_unrepresentable, boundary_inputs_validated] `Task::url` and `Project::url` are frozen as `Option<String>` in the plugin contract, which permits source-native URL-like values; parsing here would narrow that approved boundary and is the contract owner's decision.
     url: Option<String>,
+    #[serde(default)]
+    metadata: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    repositories: Vec<Repository>,
 }
 fn default_status() -> String {
     "todo".to_owned()
@@ -115,7 +119,24 @@ enum Dependency {
         id: String,
         #[serde(default)]
         kind: EdgeKind,
+        /// What the far end is, when it is not the same kind of item as the near one.
+        item: Option<EndpointKind>,
     },
+}
+/// What an expanded dependency endpoint names.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum EndpointKind {
+    Task,
+    Project,
+}
+impl From<EndpointKind> for ItemKind {
+    fn from(kind: EndpointKind) -> Self {
+        match kind {
+            EndpointKind::Task => Self::Task,
+            EndpointKind::Project => Self::Project,
+        }
+    }
 }
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -146,6 +167,8 @@ struct Document {
     project: Option<NativeId>,
     dependencies: Vec<DependencyEdge>,
     url: Option<String>,
+    metadata: BTreeMap<String, serde_json::Value>,
+    repositories: Vec<Repository>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -356,28 +379,38 @@ impl LocalMdSource {
             name: front.status,
         };
         let from = NativeId(id.clone());
+        let item_kind = match kind {
+            DocumentKind::Task => ItemKind::Task,
+            DocumentKind::Project => ItemKind::Project,
+        };
+        // A bare `depends_on: [b]` names this source's own item, colons and all, so it
+        // stays an opaque native id. The expanded form is where an author says otherwise:
+        // `{id: other:P-9, item: project}` names a far end this source cannot hold, and
+        // `DependencyEndpoint::new` is what validates that qualified id.
         let dependencies = front
             .depends_on
             .into_iter()
-            .map(|d| {
-                let (to, kind) = match d {
-                    Dependency::Id(id) => (id, DependencyKind::Blocks),
-                    Dependency::Detailed { id, kind } => (
-                        id,
-                        match kind {
-                            EdgeKind::Blocks => DependencyKind::Blocks,
-                            EdgeKind::Related => DependencyKind::Related,
+            .map(|d| match d {
+                // llmlint: ignore[boundary_inputs_validated] Dependency targets use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
+                Dependency::Id(id) => Ok(DependencyEdge {
+                    from: DependencyEndpoint::from_native(from.clone(), item_kind),
+                    to: DependencyEndpoint::from_native(NativeId(id), item_kind),
+                    kind: DependencyKind::Blocks,
+                }),
+                Dependency::Detailed { id, kind, item } => Ok(DependencyEdge {
+                    from: DependencyEndpoint::from_native(from.clone(), item_kind),
+                    to: DependencyEndpoint::new(id, item.map_or(item_kind, Into::into)).map_err(
+                        |message| SourceError::Malformed {
+                            message: format!("{}: {message}", path.display()),
                         },
-                    ),
-                };
-                DependencyEdge {
-                    from: from.clone(),
-                    // llmlint: ignore[boundary_inputs_validated] Dependency targets use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
-                    to: NativeId(to),
-                    kind,
-                }
+                    )?,
+                    kind: match kind {
+                        EdgeKind::Blocks => DependencyKind::Blocks,
+                        EdgeKind::Related => DependencyKind::Related,
+                    },
+                }),
             })
-            .collect();
+            .collect::<Result<Vec<_>, SourceError>>()?;
         Ok(Document {
             id: NativeId(id),
             title,
@@ -388,6 +421,12 @@ impl LocalMdSource {
             project: front.project.map(NativeId),
             dependencies,
             url: front.url,
+            metadata: front.metadata,
+            repositories: Repository::unique(front.repositories).map_err(|message| {
+                SourceError::Malformed {
+                    message: format!("{}: {message}", path.display()),
+                }
+            })?,
         })
     }
 
@@ -604,6 +643,8 @@ fn task(d: Document) -> Task {
         url: d.url,
         created_at: None,
         updated_at: None,
+        metadata: d.metadata,
+        repositories: d.repositories,
     }
 }
 fn project(d: Document) -> Project {
@@ -616,5 +657,7 @@ fn project(d: Document) -> Project {
         url: d.url,
         created_at: None,
         updated_at: None,
+        metadata: d.metadata,
+        repositories: d.repositories,
     }
 }

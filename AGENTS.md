@@ -57,7 +57,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
 
 - **`onetaskgraph-plugin-api`** — exactly what a plugin author needs, and nothing else:
   the traits `TaskSource`, `SourcePlugin` and `SecretResolver`; the work types `Task`,
-  `Project`, `Label`, `Status`, `StatusCategory`, `DependencyEdge`, `DependencyKind`,
+  `Project`, `Label`, `Status`, `StatusCategory`, `Repository`, `DependencyEdge`,
+  `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
   `Direction`, `NativeId`, `SourceName`; the query and paging types `TaskQuery`,
   `ProjectQuery`, `TextQuery`, `TextFields`, `LabelFilter`, `ProjectFilter`, `PageRequest`,
   `Page`, `Cursor`; the capability types `Capabilities`, `Support`, `DependencySupport`;
@@ -182,7 +183,12 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 - **The live lane** is a uniform `test-live` target on every project, empty ones included.
   It is **not** a required check, and that is a decision: a required check a third party
   can turn red is a check that stops being trusted, and a Linear or GitHub outage must not
-  block an unrelated merge.
+  block an unrelated merge. **Every live test carries `#[ignore]`, and that is what makes
+  the decision true rather than stated.** `check` runs `cargo test -p <crate>`, which runs
+  every test target the crate has — so an un-ignored live test is part of a required check
+  on any machine exporting the credential, and part of a *cached* one, replaying a
+  third-party verdict against a tree that cannot describe it. The test stays compiled and
+  linted; `test-live` passes `--include-ignored`, which is the only place it runs.
 
 ### The journeys this repository owes
 
@@ -236,6 +242,17 @@ them do; this is the inventory of what is owed, not a status board.
 22. Failure and recovery: unknown source name, malformed configuration, unknown id, and an
     unreachable source each exit non-zero with the problem and a suggested next action on
     stderr.
+23. Caller-defined metadata and repository origins come back out of every source kind with
+    their JSON types intact, and the keys this product reserves are read while every other
+    key is passed through untouched.
+24. A dependency edge that leaves the source — across projects, across the task and project
+    levels, and across sources — is reported by qualified id and item kind, is never
+    reported in reverse, and is never followed to the far source.
+25. One relationship reads the same from either end: `from` is the item that depends,
+    whichever way a backend spells the relationship, so a source that stores it from the
+    blocking side reports the same edge rather than its mirror.
+26. A reserved-key far end the near item's own backend could have named is refused, naming
+    the entry and what to record instead; so is one this interface cannot represent.
 
 ## Recorded decisions
 

@@ -233,6 +233,18 @@ pub const ROWS: &[Row] = &[
 ];
 
 fn github_projects_block(sandbox: &Sandbox) -> Value {
+    github_projects_server(sandbox, None)
+}
+
+/// The same board, with `T-1` recording `recorded` under the reserved dependency key.
+///
+/// The journeys that drive a key holding something it must not need a board that holds
+/// it, and the shared row cannot be that board — it is the one every other journey reads.
+pub fn github_projects_recording(sandbox: &Sandbox, recorded: Value) -> Value {
+    github_projects_server(sandbox, Some(recorded))
+}
+
+fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
     sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
     let endpoint = format!(
@@ -262,16 +274,33 @@ fn github_projects_block(sandbox: &Sandbox) -> Value {
                     variables["after"].is_null() || variables["after"].is_string(),
                     "dependency after must be null or a string"
                 );
+                // T-2 sits on a second board, so aggregating this board's issue edges
+                // yields a real project-level edge rather than one this board makes with
+                // itself, which the source drops.
                 let blockers = match id {
-                    "T-1" | "T-3" | "T-4" => vec![json!({"id":"T-2","projectItems":{"nodes":[]}})],
+                    "T-1" | "T-3" | "T-4" => vec![
+                        json!({"id":"T-2","projectItems":{"nodes":[{"project":{"id":"P-2"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+                    ],
                     _ => vec![],
                 };
-                json!({"node":{"__typename":"Issue","blockedBy":{"nodes":blockers,"pageInfo":{"hasNextPage":false,"endCursor":null}}}})
+                // The production document selects both connections, so the fixture answers
+                // both: T-2 is what the other three are blocked by, and so what it blocks.
+                let blocking = if id == "T-2" {
+                    ["T-1", "T-3", "T-4"]
+                        .into_iter()
+                        .map(|id| json!({"id":id,"projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}))
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![]
+                };
+                json!({"node":{"__typename":"Issue",
+                    "blockedBy":{"nodes":blockers,"pageInfo":{"hasNextPage":false,"endCursor":null}},
+                    "blocking":{"nodes":blocking,"pageInfo":{"hasNextPage":false,"endCursor":null}}}})
             } else if query.contains("owner:repositoryOwner") {
                 assert_eq!(variables["owner"], "fixture-owner");
                 assert_eq!(variables["number"], 7);
                 assert_eq!(variables["nestedFirst"], 50);
-                github_project_page(variables)
+                github_project_page(variables, recorded.as_ref())
             } else {
                 panic!("fixture received an unknown GraphQL operation")
             };
@@ -328,7 +357,7 @@ fn read_http_json(stream: &mut impl Read) -> Value {
     serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
 }
 
-fn github_project_page(variables: &Value) -> Value {
+fn github_project_page(variables: &Value, recorded: Option<&Value>) -> Value {
     let tasks = [
         (
             "T-1",
@@ -385,9 +414,11 @@ fn github_project_page(variables: &Value) -> Value {
         .iter()
         .map(|(id, title, body, status, state, labels)| json!({
             "id": format!("ITEM-{id}"),
-            "fieldValues":{"nodes":[{"name":status,"field":{"name":"Status"}}],"pageInfo":{"hasNextPage":false}},
+            "fieldValues":{"nodes":[{"name":status,"field":{"name":"Status"}},
+                {"text": if *id == "T-1" {serde_json::to_string(&json!({"onepipeline.turn_budget":12,"caller.flags":[true,null],
+                    "onetaskgraph.depends_on": recorded.cloned().unwrap_or_else(|| Value::Array(recorded_far_ends("task_dependencies",&json!("T-1"))))})).unwrap()} else {"{}".into()},"field":{"name":"onetaskgraph.metadata"}}],"pageInfo":{"hasNextPage":false}},
             "content":{
-                "id":id,"title":title,"body":body,"state":state,
+                "id":id,"title":title,"body":body,"state":state,"repository":{"nameWithOwner":"nickderobertis/onetaskgraph"},
                 "url":format!("https://example.invalid/{id}"),
                 "labels":{"nodes":labels.iter().map(|(id, name)| json!({"id":id,"name":name})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}
             }
@@ -395,7 +426,11 @@ fn github_project_page(variables: &Value) -> Value {
         .collect::<Vec<_>>();
     json!({
         "owner":{"projectV2":{
-            "id":"P-1","title":"Engine","shortDescription":"alpha engine project",
+            "id":"P-1","title":"Engine","shortDescription":format!("alpha engine project\n\n<!-- onetaskgraph.metadata\n{}\n-->", serde_json::to_string(&json!({
+                "onepipeline.publication":{"mode":"review"},
+                "onetaskgraph.repositories":["github.com/nickderobertis/onetaskgraph"],
+                "onetaskgraph.depends_on":recorded_far_ends("project_dependencies",&json!("P-1"))
+            })).unwrap()),
             "url":"https://example.invalid/P-1","closed":false,
             "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < tasks.len(),"endCursor":end.to_string()}}
         }},
@@ -405,6 +440,20 @@ fn github_project_page(variables: &Value) -> Value {
 
 /// A socket-level Linear GraphQL fixture used by the shared binary journeys.
 fn linear_block(sandbox: &Sandbox) -> Value {
+    linear_server(sandbox, None)
+}
+
+/// The same workspace, with the item a dependency read asks about recording `recorded`
+/// under the reserved dependency key.
+///
+/// The counterpart of [`github_projects_recording`], and it exists for the same reason:
+/// the shared row is the one every other journey reads, so a workspace holding a key it
+/// must not cannot be that row.
+pub fn linear_recording(sandbox: &Sandbox, recorded: Value) -> Value {
+    linear_server(sandbox, Some(recorded))
+}
+
+fn linear_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
     sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
@@ -496,7 +545,7 @@ fn linear_block(sandbox: &Sandbox) -> Value {
                 );
                 continue;
             }
-            let (status, response) = match linear_response(&request) {
+            let (status, response) = match linear_response(&request, recorded.as_ref()) {
                 Ok(body) => ("200 OK", json!({"data":body})),
                 Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
             };
@@ -606,7 +655,7 @@ fn valid_linear_filter(value: &Value) -> bool {
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
-fn linear_response(request: &Value) -> Result<Value, &'static str> {
+fn linear_response(request: &Value, recorded: Option<&Value>) -> Result<Value, &'static str> {
     let request: LinearRequest =
         serde_json::from_value(request.clone()).map_err(|_| "invalid GraphQL request")?;
     use onetaskgraph_linear::graphql;
@@ -661,7 +710,9 @@ fn linear_response(request: &Value) -> Result<Value, &'static str> {
             .iter()
             .find(|v| v["id"] == id);
         if operation == graphql::ISSUE_RELATIONS {
-            return Ok(json!({"issue":linear_relations(&data,"task_dependencies",id,"Issue")}));
+            return Ok(
+                json!({"issue":linear_relations(&data,"task_dependencies",id,"Issue",recorded)}),
+            );
         }
         return Ok(json!({"issue":item.map(linear_task)}));
     }
@@ -674,7 +725,7 @@ fn linear_response(request: &Value) -> Result<Value, &'static str> {
             .find(|v| v["id"] == id);
         if operation == graphql::PROJECT_RELATIONS {
             return Ok(
-                json!({"project":linear_relations(&data,"project_dependencies",id,"Project")}),
+                json!({"project":linear_relations(&data,"project_dependencies",id,"Project",recorded)}),
             );
         }
         return Ok(json!({"project":item.map(linear_project)}));
@@ -757,6 +808,17 @@ fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
     let _ = stream.read_to_string(&mut response);
     assert!(response.starts_with("HTTP/1.1 413 Content Too Large"));
 }
+/// The far ends `id` records under the reserved key, for a source with no native way to
+/// name one: every qualified endpoint the dataset gives that item at `key`.
+fn recorded_far_ends(key: &str, id: &Value) -> Vec<Value> {
+    dataset()[key]
+        .as_array()
+        .expect("the dataset lists edges")
+        .iter()
+        .filter(|edge| edge["from"].get("id") == Some(id))
+        .map(|edge| edge["to"].clone())
+        .collect()
+}
 fn linear_label(v: &Value) -> Value {
     json!({"id":v["id"],"name":v["name"],"color":null})
 }
@@ -766,10 +828,41 @@ fn linear_state(v: &Value) -> Value {
     json!({"name":v["name"],"type":match category{"todo"=>"unstarted","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
 }
 fn linear_task(v: &Value) -> Value {
-    json!({"id":v["id"],"title":v["title"],"description":v["content"],"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":v.get("url"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"title":v["title"],"description":linear_description(v,"task_dependencies"),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":v.get("url"),"createdAt":null,"updatedAt":null})
 }
 fn linear_project(v: &Value) -> Value {
-    json!({"id":v["id"],"name":v["title"],"description":v["content"],"status":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":v.get("url"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies"),"status":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":v.get("url"),"createdAt":null,"updatedAt":null})
+}
+fn linear_description(v: &Value, edges: &str) -> String {
+    let mut metadata = v
+        .get("metadata")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(repositories) = v.get("repositories") {
+        metadata.insert("onetaskgraph.repositories".into(), repositories.clone());
+    }
+    // No Linear relation can name an item of another source, so this is the one slot a
+    // far end like that can be in.
+    let far = recorded_far_ends(edges, &v["id"]);
+    if !far.is_empty() {
+        metadata.insert("onetaskgraph.depends_on".into(), Value::Array(far));
+    }
+    let content = v.get("content").and_then(Value::as_str).unwrap_or_default();
+    if metadata.is_empty() {
+        content.into()
+    } else {
+        linear_metadata_slot(content, &Value::Object(metadata))
+    }
+}
+
+/// The one slot a Linear item keeps caller-defined metadata in: an HTML comment appended
+/// to the description, which is what the source reads and what a person never sees.
+fn linear_metadata_slot(content: &str, metadata: &Value) -> String {
+    format!(
+        "{content}\n\n<!-- onetaskgraph.metadata\n{}\n-->",
+        serde_json::to_string(metadata).unwrap()
+    )
 }
 fn linear_connection(rows: Vec<Value>, vars: &Value) -> Value {
     let start = vars["after"]
@@ -830,19 +923,47 @@ fn linear_matches_fixture_subset(v: &Value, vars: &Value) -> bool {
     true
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-fn linear_relations(data: &Value, key: &str, id: &str, suffix: &str) -> Value {
+fn linear_relations(
+    data: &Value,
+    key: &str,
+    id: &str,
+    suffix: &str,
+    recorded: Option<&Value>,
+) -> Value {
     let edges = data[key].as_array().unwrap();
+    // A Linear relation names a Linear item, so only the edges whose ends are both plain
+    // native ids are here. The rest are in the item's own description slot, which this
+    // operation selects for exactly that reason.
     let forward = edges
         .iter()
-        .filter(|e| e["from"] == id)
+        .filter(|e| e["from"] == id && e["to"].is_string())
         .map(|e| json!({"type":e["kind"],(format!("related{suffix}")):{"id":e["to"]}}))
         .collect::<Vec<_>>();
     let inverse = edges
         .iter()
-        .filter(|e| e["to"] == id)
+        .filter(|e| e["to"] == id && e["from"].is_string())
         .map(|e| json!({"type":e["kind"],(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
         .collect::<Vec<_>>();
-    json!({"relations":{"nodes":forward,"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":inverse,"pageInfo":{"hasNextPage":false,"endCursor":null}}})
+    let items = if suffix == "Issue" {
+        "tasks"
+    } else {
+        "projects"
+    };
+    let item = data[items]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == id);
+    // The description slot is where this source reads a recorded far end from, so a
+    // workspace built to hold one puts it here and leaves every other operation alone.
+    let description = match recorded {
+        Some(recorded) => Some(linear_metadata_slot(
+            "",
+            &json!({"onetaskgraph.depends_on": recorded}),
+        )),
+        None => item.map(|item| linear_description(item, key)),
+    };
+    json!({"description":description,"relations":{"nodes":forward,"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":inverse,"pageInfo":{"hasNextPage":false,"endCursor":null}}})
 }
 
 fn local_md_block(sandbox: &Sandbox) -> Value {
@@ -851,7 +972,7 @@ fn local_md_block(sandbox: &Sandbox) -> Value {
         (
             "tasks",
             "T-1",
-            "title: Alpha engine\nstatus: Todo\nlabels: [{id: L-1, name: bug}, {id: L-3, name: core}]\nproject: P-1\nurl: https://example.invalid/T-1\ndepends_on: [T-2]",
+            "title: Alpha engine\nstatus: Todo\nlabels: [{id: L-1, name: bug}, {id: L-3, name: core}]\nproject: P-1\nurl: https://example.invalid/T-1\nmetadata: {onepipeline.turn_budget: 12, caller.flags: [true, null]}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [T-2, {id: \"elsewhere:P-9\", item: project}]",
             "the engine core",
         ),
         (
@@ -875,7 +996,7 @@ fn local_md_block(sandbox: &Sandbox) -> Value {
         (
             "projects",
             "P-1",
-            "title: Engine\nstatus: Doing\nlabels: [{id: L-3, name: core}]\nurl: https://example.invalid/P-1\ndepends_on: [P-2]",
+            "title: Engine\nstatus: Doing\nlabels: [{id: L-3, name: core}]\nurl: https://example.invalid/P-1\nmetadata: {onepipeline.publication: {mode: review}}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [P-2, {id: \"elsewhere:T-9\", item: task}]",
             "the engine",
         ),
         ("projects", "P-2", "title: Docs\nstatus: Todo", "alpha docs"),
@@ -944,13 +1065,22 @@ fn compensated_block(_sandbox: &Sandbox) -> Value {
 /// order — produce the *same sequence* a source answering natively does, rather than the
 /// same set in another order. A fixture that shuffled them would make the two answers
 /// compare unequal for a reason that has nothing to do with the engine.
+///
+/// Two of the edges leave this source altogether — one from a task to a project, one from
+/// a project to a task, both in a source called `elsewhere` that is not configured at all.
+/// They are here rather than in a journey of their own because *where* such an edge is
+/// held is each source's own business: a native relation that can name the far end, and
+/// the reserved key on the near item where none can. Every row below encodes these two in
+/// its own way, and one journey asserts that all of them report the same edge.
 pub fn dataset() -> Value {
     json!({
         "tasks": [
             {"id": "T-1", "title": "Alpha engine", "content": "the engine core",
              "status": {"category": "todo", "name": "Todo"},
              "labels": [{"id": "L-1", "name": "bug"}, {"id": "L-3", "name": "core"}],
-             "project": "P-1", "url": "https://example.invalid/T-1"},
+            "project": "P-1", "url": "https://example.invalid/T-1",
+            "metadata": {"onepipeline.turn_budget": 12, "caller.flags": [true, null]},
+            "repositories": ["github.com/nickderobertis/onetaskgraph"]},
             {"id": "T-2", "title": "Beta", "content": "alpha in the body",
              "status": {"category": "done", "name": "Shipped"},
              "labels": [{"id": "L-2", "name": "chore"}], "project": "P-1"},
@@ -965,7 +1095,9 @@ pub fn dataset() -> Value {
             {"id": "P-1", "title": "Engine", "content": "the engine",
              "status": {"category": "in-progress", "name": "Doing"},
              "labels": [{"id": "L-3", "name": "core"}],
-             "url": "https://example.invalid/P-1"},
+             "url": "https://example.invalid/P-1",
+             "metadata": {"onepipeline.publication": {"mode": "review"}},
+             "repositories": ["github.com/nickderobertis/onetaskgraph"]},
             {"id": "P-2", "title": "Docs", "content": "alpha docs",
              "status": {"category": "todo", "name": "Todo"}, "labels": []}
         ],
@@ -976,9 +1108,15 @@ pub fn dataset() -> Value {
         ],
         "task_dependencies": [
             {"from": "T-1", "to": "T-2", "kind": "blocks"},
+            {"from": {"id": "T-1", "kind": "task"},
+             "to": {"id": "elsewhere:P-9", "kind": "project"}, "kind": "blocks"},
             {"from": "T-3", "to": "T-2", "kind": "blocks"},
             {"from": "T-4", "to": "T-2", "kind": "related"}
         ],
-        "project_dependencies": [{"from": "P-1", "to": "P-2", "kind": "blocks"}]
+        "project_dependencies": [
+            {"from": "P-1", "to": "P-2", "kind": "blocks"},
+            {"from": {"id": "P-1", "kind": "project"},
+             "to": {"id": "elsewhere:T-9", "kind": "task"}, "kind": "blocks"}
+        ]
     })
 }

@@ -57,9 +57,13 @@ pub const SOURCE_NAME_PATTERN: &str = "^[a-z0-9][a-z0-9-]*$";
 
 /// The name a configuration document gives one configured source.
 ///
-/// A plugin never learns its own configured name; this type exists in the plugin
-/// contract only because [`SourcePlugin::build`](crate::SourcePlugin::build)
-/// takes one so a plugin can quote it in an error message.
+/// A plugin learns its own name from
+/// [`SourcePlugin::build`](crate::SourcePlugin::build) and nowhere else. It quotes it
+/// in an error message, and it compares it against the source segment of a qualified
+/// [`DependencyEndpoint`](crate::DependencyEndpoint) — which is how a plugin tells a far
+/// end its own backend could have related from one in a system it knows nothing about.
+/// Nothing else about a plugin's behaviour may depend on it: a source answers the same
+/// way whatever a document chose to call it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct SourceName(String);

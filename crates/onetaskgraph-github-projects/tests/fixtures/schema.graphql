@@ -48,8 +48,11 @@ type ProjectV2Item implements Node {
   content: ProjectV2ItemContent
 }
 union ProjectV2ItemContent = DraftIssue | Issue | PullRequest | RedactedProjectV2Item
-union ProjectV2ItemFieldValue = ProjectV2ItemFieldLabelValue | ProjectV2ItemFieldSingleSelectValue
-union ProjectV2FieldConfiguration = ProjectV2SingleSelectField
+union ProjectV2ItemFieldValue =
+  | ProjectV2ItemFieldLabelValue
+  | ProjectV2ItemFieldSingleSelectValue
+  | ProjectV2ItemFieldTextValue
+union ProjectV2FieldConfiguration = ProjectV2SingleSelectField | ProjectV2Field
 
 type ProjectV2ItemFieldValueConnection {
   nodes: [ProjectV2ItemFieldValue]
@@ -62,7 +65,14 @@ type ProjectV2ItemFieldSingleSelectValue {
 type ProjectV2ItemFieldLabelValue {
   labels(first: Int, after: String): LabelConnection!
 }
+type ProjectV2ItemFieldTextValue {
+  text: String
+  field: ProjectV2FieldConfiguration!
+}
 type ProjectV2SingleSelectField {
+  name: String!
+}
+type ProjectV2Field {
   name: String!
 }
 
@@ -74,6 +84,7 @@ type Issue implements Node {
   createdAt: DateTime!
   updatedAt: DateTime!
   state: IssueState!
+  repository: Repository!
   labels(first: Int, after: String): LabelConnection
   blockedBy(first: Int, after: String): IssueConnection!
   blocking(first: Int, after: String): IssueConnection!
@@ -87,7 +98,11 @@ type PullRequest implements Node {
   createdAt: DateTime!
   updatedAt: DateTime!
   state: PullRequestState!
+  repository: Repository!
   labels(first: Int, after: String): LabelConnection
+}
+type Repository {
+  nameWithOwner: String!
 }
 type DraftIssue implements Node {
   id: ID!
