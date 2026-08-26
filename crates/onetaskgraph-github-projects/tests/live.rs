@@ -116,7 +116,7 @@ fn named_type(value: &Value) -> Option<&str> {
 async fn verify_mutation_schema(token: &str) -> Result<(), String> {
     let response = graphql(
         token,
-        "query MutationContract { __type(name:\"Mutation\") { fields { name args { name type { name ofType { name } } } } } }",
+        "query MutationContract { __type(name:\"Mutation\") { fields { name type { name ofType { name } } args { name type { name ofType { name } } } } } }",
         "mutation contract introspection",
     )
     .await?;
@@ -124,19 +124,33 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
         .pointer("/data/__type/fields")
         .and_then(Value::as_array)
         .ok_or_else(|| "mutation contract introspection returned no fields".to_owned())?;
-    for (field_name, input_name) in [
-        ("addProjectV2DraftIssue", "AddProjectV2DraftIssueInput"),
-        ("addBlockedBy", "AddBlockedByInput"),
-        ("removeBlockedBy", "RemoveBlockedByInput"),
-        ("updateIssue", "UpdateIssueInput"),
-        ("updateProjectV2", "UpdateProjectV2Input"),
+    for (field_name, input_name, payload_name) in [
+        (
+            "addProjectV2DraftIssue",
+            "AddProjectV2DraftIssueInput",
+            "AddProjectV2DraftIssuePayload",
+        ),
+        ("addBlockedBy", "AddBlockedByInput", "AddBlockedByPayload"),
+        (
+            "removeBlockedBy",
+            "RemoveBlockedByInput",
+            "RemoveBlockedByPayload",
+        ),
+        ("updateIssue", "UpdateIssueInput", "UpdateIssuePayload"),
+        (
+            "updateProjectV2",
+            "UpdateProjectV2Input",
+            "UpdateProjectV2Payload",
+        ),
         (
             "updateProjectV2DraftIssue",
             "UpdateProjectV2DraftIssueInput",
+            "UpdateProjectV2DraftIssuePayload",
         ),
         (
             "updateProjectV2ItemFieldValue",
             "UpdateProjectV2ItemFieldValueInput",
+            "UpdateProjectV2ItemFieldValuePayload",
         ),
     ] {
         let field = fields
@@ -156,6 +170,93 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             return Err(format!(
                 "GitHub mutation {field_name} input changed: expected {input_name}, got {input:?}"
             ));
+        }
+        let payload = field.get("type").and_then(named_type);
+        if payload != Some(payload_name) {
+            return Err(format!(
+                "GitHub mutation {field_name} payload changed: expected {payload_name}, got {payload:?}"
+            ));
+        }
+    }
+    for (type_name, input, expected_fields) in [
+        (
+            "AddProjectV2DraftIssueInput",
+            true,
+            &["projectId", "title", "body"][..],
+        ),
+        (
+            "UpdateProjectV2DraftIssueInput",
+            true,
+            &["draftIssueId", "title", "body"][..],
+        ),
+        ("UpdateIssueInput", true, &["id", "title", "body"][..]),
+        (
+            "UpdateProjectV2ItemFieldValueInput",
+            true,
+            &["projectId", "itemId", "fieldId", "value"][..],
+        ),
+        (
+            "ProjectV2FieldValue",
+            true,
+            &["text", "singleSelectOptionId"][..],
+        ),
+        (
+            "UpdateProjectV2Input",
+            true,
+            &["projectId", "title", "shortDescription", "closed"][..],
+        ),
+        (
+            "AddBlockedByInput",
+            true,
+            &["issueId", "blockingIssueId"][..],
+        ),
+        (
+            "RemoveBlockedByInput",
+            true,
+            &["issueId", "blockingIssueId"][..],
+        ),
+        ("AddProjectV2DraftIssuePayload", false, &["projectItem"][..]),
+        (
+            "UpdateProjectV2DraftIssuePayload",
+            false,
+            &["draftIssue"][..],
+        ),
+        ("UpdateIssuePayload", false, &["issue"][..]),
+        (
+            "UpdateProjectV2ItemFieldValuePayload",
+            false,
+            &["projectV2Item"][..],
+        ),
+        ("UpdateProjectV2Payload", false, &["projectV2"][..]),
+        (
+            "AddBlockedByPayload",
+            false,
+            &["issue", "blockingIssue"][..],
+        ),
+        (
+            "RemoveBlockedByPayload",
+            false,
+            &["issue", "blockingIssue"][..],
+        ),
+    ] {
+        let selection = if input { "inputFields" } else { "fields" };
+        let document = format!(
+            "query TypeContract {{ __type(name:\"{type_name}\") {{ {selection} {{ name }} }} }}"
+        );
+        let response = graphql(token, &document, "mutation type introspection").await?;
+        let fields = response
+            .pointer(&format!("/data/__type/{selection}"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("GitHub mutation schema has no {type_name} {selection}"))?;
+        for expected in expected_fields {
+            if !fields
+                .iter()
+                .any(|field| field.get("name").and_then(Value::as_str) == Some(expected))
+            {
+                return Err(format!(
+                    "GitHub mutation type {type_name} has no {expected} field"
+                ));
+            }
         }
     }
     Ok(())
