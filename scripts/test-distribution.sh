@@ -319,11 +319,23 @@ assert_version_error 'unexpected extra arguments after --check' --check ignored
 # shellcheck source=scripts/scratch-clone.sh
 source "$root/scripts/scratch-clone.sh"
 scratch_clone "$root" "$tmp/version-repo"
+if (cd "$tmp/version-repo" && python3 scripts/product_versions.py) 2>"$tmp/error"; then helper_usage_status=0; else helper_usage_status=$?; fi
+[[ $helper_usage_status -eq 2 ]] || { echo "product-version helper usage failure exited $helper_usage_status, expected 2; next: inspect argument validation" >&2; exit 1; }
+grep -q 'usage: scripts/product_versions.py' "$tmp/error" || { cat "$tmp/error" >&2; echo "product-version helper usage failure omitted its reason; next: inspect argument diagnostics" >&2; exit 1; }
+if (cd "$tmp/version-repo" && python3 scripts/product_versions.py set 01.2.3) 2>"$tmp/error"; then helper_version_status=0; else helper_version_status=$?; fi
+[[ $helper_version_status -eq 2 ]] || { echo "product-version helper invalid version exited $helper_version_status, expected 2; next: inspect version validation" >&2; exit 1; }
+grep -q 'invalid semantic version' "$tmp/error" || { cat "$tmp/error" >&2; echo "product-version helper invalid version omitted its reason; next: inspect version diagnostics" >&2; exit 1; }
+cp "$tmp/version-repo/Cargo.toml" "$tmp/version-repo/Cargo.toml.valid"
+perl -pi -e 'if (/^\[workspace\.package\]/ .. /^version = /) { s/^version = "[^"]+"/version = "01.2.3"/ }' "$tmp/version-repo/Cargo.toml"
+if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.0) 2>"$tmp/error"; then echo "product-version helper accepted an invalid manifest version; next: inspect manifest validation" >&2; exit 1; fi
+grep -q 'Cargo.toml has None; expected 0.1.0' "$tmp/error" || { cat "$tmp/error" >&2; echo "invalid manifest version failure omitted its location; next: inspect version diagnostics" >&2; exit 1; }
+mv "$tmp/version-repo/Cargo.toml.valid" "$tmp/version-repo/Cargo.toml"
 node -e 'const fs=require("fs"),f=process.argv[1],p=JSON.parse(fs.readFileSync(f));p.version="9.9.9";fs.writeFileSync(f,JSON.stringify(p,null,2)+"\n")' "$tmp/version-repo/npm/cli/package.json"
 if "$tmp/version-repo/scripts/set-version.sh" --check 2>"$tmp/error"; then echo "version drift was accepted; next: inspect version checking" >&2; exit 1; fi
 grep -q 'version drift found' "$tmp/error" || { cat "$tmp/error" >&2; echo "version-drift failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
 git -C "$tmp/version-repo" restore npm/cli/package.json
 "$tmp/version-repo/scripts/set-version.sh" 0.1.1
+# llmlint: ignore[work_goes_through_command_surface] This acceptance journey must reconcile the scratch tree against this exact script; the just recipe addresses the outer working tree.
 if ! (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then
   cat "$tmp/error" >&2
   echo "version updater left the workspace version copies inconsistent; next: reconcile its version-file inventory with check-workspace-config.sh" >&2
@@ -333,6 +345,23 @@ grep -q '^version = "0.1.1"' "$tmp/version-repo/Cargo.toml" || { echo "version u
 grep -q '^__version__ = "0.1.1"' "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py" || { echo "version updater missed the Python SDK module version; next: inspect product-version mutation" >&2; exit 1; }
 grep -q 'onetaskgraph-cli==0.1.1' "$tmp/version-repo/sdks/python/pyproject.toml" || { echo "version updater missed the Python CLI pin; next: inspect dependency mutation" >&2; exit 1; }
 node -e 'const p=require(process.argv[1]); if(p.version!=="0.1.1" || Object.values(p.optionalDependencies).some(v=>v!=="0.1.1")) process.exit(1)' "$tmp/version-repo/npm/cli/package.json" || { echo "version updater missed npm metadata; next: inspect JSON mutation" >&2; exit 1; }
+printf '{\n' > "$tmp/version-repo/sdks/typescript/package.json"
+for version_command in '--check' '0.1.2'; do
+  if (cd "$tmp/version-repo" && scripts/set-version.sh $version_command) 2>"$tmp/error"; then
+    echo "version updater accepted malformed package JSON during '$version_command'; next: inspect manifest validation" >&2
+    exit 1
+  fi
+  grep -q 'product version files could not be processed' "$tmp/error" || { cat "$tmp/error" >&2; echo "malformed product manifest failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
+done
+if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted malformed product JSON; next: inspect workspace manifest validation" >&2; exit 1; fi
+grep -q 'product version files could not be read' "$tmp/error" || { cat "$tmp/error" >&2; echo "workspace check malformed-manifest failure omitted recovery guidance; next: inspect workspace diagnostics" >&2; exit 1; }
+printf '[]\n' > "$tmp/version-repo/sdks/typescript/package.json"
+if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a non-object package manifest; next: inspect JSON boundary validation" >&2; exit 1; fi
+grep -q 'package manifest must be a JSON object' "$tmp/error" || { cat "$tmp/error" >&2; echo "non-object manifest failure omitted its reason; next: inspect JSON diagnostics" >&2; exit 1; }
+printf '{}\n' > "$tmp/version-repo/sdks/typescript/package.json"
+if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a missing JSON version; next: inspect version-field validation" >&2; exit 1; fi
+grep -q 'sdks/typescript/package.json has None' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing JSON version failure omitted its location; next: inspect version diagnostics" >&2; exit 1; }
+git -C "$tmp/version-repo" restore sdks/typescript/package.json
 grep -q 'version = "0.1.1"' "$tmp/version-repo/Cargo.lock" || { echo "version updater missed Cargo.lock; next: inspect lock refresh" >&2; exit 1; }
 grep -q 'version = "0.1.1"' "$tmp/version-repo/uv.lock" || { echo "version updater missed uv.lock; next: inspect lock refresh" >&2; exit 1; }
 cat > "$tmp/registry-server.py" <<'PY'

@@ -129,7 +129,14 @@ else:
 # package that misreports its own version — and it belongs here, with the other three,
 # rather than in a test of that package: this is where a version disagreement is caught,
 # and one place that knows about all four beats two places that each know about some.
-declared = read_product_versions()
+try:
+    declared = read_product_versions()
+except (OSError, ValueError, json.JSONDecodeError) as error:
+    declared = {}
+    problems.append(
+        f"the product version files could not be read ({error}); restore the named "
+        "manifest and rerun this check"
+    )
 for path, version in declared.items():
     if version is None:
         problems.append(f"{path}: no product version could be read")
