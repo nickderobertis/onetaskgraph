@@ -45,16 +45,23 @@ class Client(GeneratedClient):
         match command:
             case ["search"]:
                 positional = "text"
-            case ["task" | "project", "show" | "deps"]:
+            case ["task", "copy"]:
+                positional = "ids"
+            case ["task" | "project", "show" | "deps" | "copy"]:
                 positional = "id"
             case _:
                 positional = None
         if positional is not None:
             try:
                 value = options.pop(positional)
-                arguments.append(str(value.root if isinstance(value, RootModel) else value))
             except KeyError as error:
                 raise TypeError(f"missing required argument: {positional}") from error
+            # `task copy` is the one command whose positional is variadic; every other
+            # takes exactly one, so a bare value is passed through as a list of one.
+            given = value if isinstance(value, (list, tuple)) else [value]
+            arguments.extend(
+                str(item.root if isinstance(item, RootModel) else item) for item in given
+            )
         for name, value in options.items():
             flag = f"--{name.removesuffix('_').replace('_', '-')}"
             match value:

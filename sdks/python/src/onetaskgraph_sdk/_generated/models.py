@@ -1,4 +1,5 @@
 # ruff: noqa: F401, I001  # Generated public re-exports are used by consumers.
+from .copy_report import CopyReport as CopyReport
 from .effective_config import EffectiveConfig as EffectiveConfig
 from .global_id import GlobalId as GlobalId
 from .query_plan import QueryPlan as QueryPlan

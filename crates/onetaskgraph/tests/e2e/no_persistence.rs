@@ -10,6 +10,12 @@
 //! So `HOME`, every `XDG_*` and the temporary directory are all redirected into one tree
 //! this run owns, unique strings are planted where a user's work would be, every verb is
 //! driven, and the tree is compared with itself.
+//!
+//! `copy` is driven too, and it is the one verb that writes — so this journey is where the
+//! difference between a destination write and a cache is *enforced* rather than stated. A
+//! destination write is at the user's explicit request, names its destination, and goes
+//! into that source's own store: exactly the files under the named destination's own root
+//! may change, and every other path in the sandbox is held to the same rule as before.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -64,10 +70,21 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     found
 }
 
+/// The one source a copy in this journey is allowed to write into.
+///
+/// A folder of Markdown under the sandbox, so the write really lands on this filesystem
+/// and this journey really has to tell it apart from a cache rather than being unable to
+/// see either.
+const DESTINATION: &str = "notes";
+
 /// The configuration this journey runs against: one source whose every field is a
-/// sentinel.
-fn planted(boundary: SourceBoundary) -> String {
+/// sentinel, and one writable folder to copy into.
+fn planted(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
     document(&json!({
+        DESTINATION: {"plugin": "local-md", "config": {
+            "root": sandbox.subdirectory(DESTINATION),
+            "status_mapping": {SENTINELS[4]: "todo"},
+        }},
         "work": boundary.source("in-memory", json!({
                 "capabilities": {"max_page_size": 2},
                 "tasks": [
@@ -78,8 +95,12 @@ fn planted(boundary: SourceBoundary) -> String {
                      "status": {"category": "done", "name": "Shipped"}, "labels": []}
                 ],
                 "projects": [
+                    // The sentinel status, at the one category this journey's destination
+                    // maps it to: a source that would read a written status back as
+                    // something else refuses the write, which is right and is not what
+                    // this journey is about.
                     {"id": "P-1", "title": SENTINELS[3], "content": SENTINELS[1],
-                     "status": {"category": "in-progress", "name": SENTINELS[4]},
+                     "status": {"category": "todo", "name": SENTINELS[4]},
                      "labels": []},
                     {"id": "P-2", "title": "second project", "content": SENTINELS[1],
                      "status": {"category": "todo", "name": "Todo"}, "labels": []}
@@ -97,6 +118,20 @@ fn every_verb() -> Vec<Vec<String>> {
     let project = qualified("work", "P-1");
     let owned = |arguments: &[&str]| arguments.iter().map(|part| (*part).to_owned()).collect();
     vec![
+        // The write, twice: once creating and once updating, so both halves of the verb
+        // are held to the rule below. `T-1` is the sentinel-bearing task, so what a copy
+        // writes is a user's work rather than a placeholder.
+        owned(&["task", "copy", &task, "--to", DESTINATION]),
+        owned(&["task", "copy", &task, "--to", DESTINATION]),
+        owned(&["task", "copy", &task, "--to", DESTINATION, "--dry-run"]),
+        owned(&[
+            "project",
+            "copy",
+            &project,
+            "--to",
+            DESTINATION,
+            "--no-tasks",
+        ]),
         owned(&["sources", "list"]),
         owned(&["task", "list"]),
         owned(&["task", "list", "--explain", "--json"]),
@@ -133,7 +168,7 @@ fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
         // output outside the observed tree so the assertion below retains its literal
         // meaning: every file created under the sandbox is an engine write.
         let coverage = tempfile::tempdir().expect("a directory for coverage runtime output");
-        let document = sandbox.project_document(&planted(boundary));
+        let document = sandbox.project_document(&planted(&sandbox, boundary));
         let root = document
             .parent()
             .and_then(Path::parent)
@@ -195,36 +230,51 @@ fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
         }
         assert_eq!(answered, every_verb().len());
 
+        // The one place a file may have changed: the store of the source the copy named.
+        // Everything else in the tree is held to exactly the rule it was held to before.
+        let store = sandbox.project().join(DESTINATION);
         let after = snapshot(&root);
         let mut offences = Vec::new();
+        let mut written = 0;
         for (path, contents) in &after {
             let text = String::from_utf8_lossy(contents);
-            match before.get(path) {
-                Some(original) if original == contents => {}
-                Some(_) => offences.push(format!("{} changed during the run", path.display())),
-                None => {
-                    let held: Vec<&str> = SENTINELS
-                        .iter()
-                        .copied()
-                        .filter(|sentinel| text.contains(sentinel))
-                        .collect();
-                    offences.push(format!(
-                        "{} was created during the run{}",
-                        path.display(),
-                        if held.is_empty() {
-                            String::new()
-                        } else {
-                            format!(", holding {}", held.join(", "))
-                        }
-                    ));
-                }
+            let changed = match before.get(path) {
+                Some(original) if original == contents => continue,
+                Some(_) => "changed",
+                None => "was created",
+            };
+            if path.starts_with(&store) {
+                written += 1;
+                continue;
             }
+            let held: Vec<&str> = SENTINELS
+                .iter()
+                .copied()
+                .filter(|sentinel| text.contains(sentinel))
+                .collect();
+            offences.push(format!(
+                "{} {changed} during the run{}",
+                path.display(),
+                if held.is_empty() {
+                    String::new()
+                } else {
+                    format!(", holding {}", held.join(", "))
+                }
+            ));
         }
 
         assert!(
             offences.is_empty(),
-            "the engine writes nothing down. These files say otherwise:\n  {}",
+            "nothing of a user's work is kept outside the plugin that owns it, and the \
+             only files a run may write are the named destination's own. These say \
+             otherwise:\n  {}",
             offences.join("\n  ")
+        );
+        // Not vacuous in the other direction either: the copy really did write into the
+        // destination's own store, so the exemption above is exempting something real.
+        assert!(
+            written > 0,
+            "the copy verb wrote nothing, so this journey proved nothing about writes"
         );
     }
 }

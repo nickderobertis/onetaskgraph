@@ -15,6 +15,7 @@
 //!
 //! Nothing here writes anything down. See [`fetch`] for the walk that makes that true.
 
+mod copy;
 mod fetch;
 mod join;
 mod local;
@@ -43,6 +44,7 @@ use local::{LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
+pub use copy::{CopyAction, CopyItems, CopyOutcome, CopyReport, CopyRequest, CopyScope, MatchBy};
 pub use local::ProjectSelector;
 
 /// One item, under the qualified id the engine addresses it by.
@@ -231,7 +233,10 @@ pub struct DependencyRequest {
 ///
 /// Distinct from a [`SourceFailure`], which is one source failing while the others
 /// answer: everything here means the request itself cannot be run at all.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+///
+/// `Eq` is deliberately absent: three variants carry the [`SourceError`] the source
+/// itself gave, which is what a user has to act on, and that type is `PartialEq` alone.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum EngineError {
     /// A `--source` named something no configuration configures.
     #[error(
@@ -264,6 +269,76 @@ pub enum EngineError {
          prints what each plugin accepts."
     )]
     NoSources,
+
+    /// A copy named a destination whose plugin has no write side.
+    #[error(
+        "source {name} cannot be written: its plugin is {kind}, which has no write \
+         side\n\
+         next: copy into a source whose plugin can be written — `onetaskgraph sources \
+         list` reports each one's plugin."
+    )]
+    NotWritable {
+        /// The configured name of the destination.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+    },
+
+    /// A copy named a destination that is configured but could not be built.
+    #[error(
+        "the destination source {name} could not be built: {error}\n\
+         next: fix that source — `onetaskgraph sources list` reports its state — then \
+         copy again."
+    )]
+    DestinationUnavailable {
+        /// The configured name of the destination.
+        name: String,
+        /// Why it did not build.
+        error: SourceError,
+    },
+
+    /// A copy named an id its own source does not hold.
+    #[error(
+        "no item with the id {id}\n\
+         next: check the id, or list what is there — `onetaskgraph task list` and \
+         `onetaskgraph project list` report what the configured sources hold."
+    )]
+    NoSuchItem {
+        /// The qualified id that named nothing.
+        id: String,
+    },
+
+    /// An item's recorded origin names an item the destination no longer holds.
+    ///
+    /// Refused rather than created: the destination item was deleted or moved on purpose,
+    /// and creating a second one there would duplicate work somebody removed.
+    #[error(
+        "{item} was copied from {origin}, which that destination no longer holds\n\
+         next: re-run with --recreate to create a new item there instead, or restore \
+         {origin}."
+    )]
+    StaleOrigin {
+        /// The item being copied.
+        item: String,
+        /// The origin it records.
+        origin: String,
+    },
+
+    /// A source refused something the copy asked of it.
+    ///
+    /// Distinct from a [`SourceFailure`], which leaves the other sources' results
+    /// standing: a copy is one write into one destination, and half of one is not an
+    /// answer.
+    #[error(
+        "source {name} could not do it: {error}\n\
+         next: fix what the source named above, then copy again."
+    )]
+    SourceRefused {
+        /// The source that refused.
+        name: String,
+        /// What it said.
+        error: SourceError,
+    },
 }
 
 /// One configured source, in exactly one of the two states a configured source has.

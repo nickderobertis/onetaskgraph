@@ -9,7 +9,16 @@
 use serde_json::Value;
 
 use crate::common::{SOURCE_BOUNDARIES, Sandbox, stdout};
-use crate::fixtures::{NATIVE, SCANNED, pair_at, qualified};
+use crate::fixtures::{NATIVE, SCANNED, empty_folder, pair_at, qualified};
+
+/// The capability pair, plus the writable folder a copy needs a destination for.
+fn with_a_destination(sandbox: &Sandbox, boundary: crate::common::SourceBoundary) -> String {
+    let mut document: Value =
+        serde_json::from_str(&pair_at(sandbox, boundary)).expect("a fixture document is JSON");
+    document["sources"]["notes"] =
+        serde_json::json!({"plugin": "local-md", "config": empty_folder(sandbox, "notes")});
+    serde_json::to_string(&document).expect("a document renders")
+}
 
 /// The bundle this binary emits, as a validator can read it.
 fn bundle(sandbox: &Sandbox) -> Value {
@@ -46,7 +55,7 @@ fn validates(bundle: &Value, root: &str, document: &Value, what: &str) {
 fn every_verbs_machine_readable_output_validates_against_the_emitted_schema() {
     for boundary in SOURCE_BOUNDARIES {
         let sandbox = Sandbox::new();
-        sandbox.project_document(&pair_at(&sandbox, boundary));
+        sandbox.project_document(&with_a_destination(&sandbox, boundary));
         let bundle = bundle(&sandbox);
 
         for (arguments, root) in [
@@ -121,6 +130,66 @@ fn every_verbs_machine_readable_output_validates_against_the_emitted_schema() {
                 "every machine-readable response carries the plan:\n{rendered}"
             );
         }
+
+        // A copy answers with what it did to each item rather than with rows and a plan,
+        // so it validates against its own root — and the same document is what an SDK is
+        // generated against, so a copy a script reads cannot be a shape nothing declared.
+        let copied = stdout(
+            sandbox
+                .command()
+                .args([
+                    "task",
+                    "copy",
+                    &qualified(NATIVE, "T-1"),
+                    "--to",
+                    "notes",
+                    "--json",
+                ])
+                .assert()
+                .success()
+                .get_output(),
+        );
+        let copied: Value = serde_json::from_str(&copied).expect("a copy emits JSON");
+        validates(&bundle, "CopyReport", &copied, "task copy --json");
+        assert_eq!(
+            copied["items"][0]["action"], "created",
+            "the copy has to have done something: {copied}"
+        );
+        validates(
+            &bundle,
+            "CopyOutcome",
+            &copied["items"][0],
+            "one entry of a copy report",
+        );
+
+        let copied_project = stdout(
+            sandbox
+                .command()
+                .args([
+                    "project",
+                    "copy",
+                    &qualified(NATIVE, "P-1"),
+                    "--to",
+                    "notes",
+                    "--no-tasks",
+                    "--json",
+                ])
+                .assert()
+                .success()
+                .get_output(),
+        );
+        let copied_project: Value =
+            serde_json::from_str(&copied_project).expect("a project copy emits JSON");
+        validates(
+            &bundle,
+            "CopyReport",
+            &copied_project,
+            "project copy --json",
+        );
+        assert_eq!(
+            copied_project["items"][0]["action"], "created",
+            "the project copy has to have done something: {copied_project}"
+        );
 
         // `config show --json` answers about the configuration rather than about work, so it
         // carries no items and no plan — but it is a verb with a machine-readable form, and a

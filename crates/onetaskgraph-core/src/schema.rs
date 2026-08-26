@@ -18,8 +18,9 @@ use crate::config::{EffectiveConfig, Origin, OutputFormat, Setting};
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::{
-    GlobalId, PageToken, Predicate, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan,
-    QueryResponse, SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan,
+    CopyAction, CopyOutcome, CopyReport, GlobalId, PageToken, Predicate, Qualified, QualifiedEdge,
+    QualifiedEndpoint, QueryPlan, QueryResponse, SearchHit, SearchKind, SourceFailure,
+    SourceListing, SourcePlan,
 };
 
 /// The bundle's own version, bumped whenever a root is added, removed or renamed.
@@ -30,7 +31,7 @@ use crate::{
 ///
 /// Which roots each version brought is what `git log` answers; what this number owes a
 /// reader is that it moves whenever [`schema_bundle`] below gains, loses or renames one.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 6;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 7;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -102,6 +103,10 @@ pub fn schema_bundle() -> Value {
         "QueryResponseOfSearchHit",
         schema_for!(QueryResponse<SearchHit>),
     );
+
+    roots.insert("CopyReport", schema_for!(CopyReport));
+    roots.insert("CopyOutcome", schema_for!(CopyOutcome));
+    roots.insert("CopyAction", schema_for!(CopyAction));
 
     roots.insert("EffectiveConfig", schema_for!(EffectiveConfig));
     roots.insert("Setting", schema_for!(Setting));

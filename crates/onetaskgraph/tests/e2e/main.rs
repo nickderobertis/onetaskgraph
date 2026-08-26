@@ -24,6 +24,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod copy;
 mod failures;
 mod fixtures;
 mod journeys;

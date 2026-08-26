@@ -7,9 +7,11 @@ export const binaryCommands = [
   "task list",
   "task show",
   "task deps",
+  "task copy",
   "project list",
   "project show",
   "project deps",
+  "project copy",
   "label list",
   "search"
 ] as const;

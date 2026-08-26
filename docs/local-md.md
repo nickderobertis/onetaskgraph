@@ -78,3 +78,23 @@ so the plugin holds no index or state between calls. The maximum page size is 20
 enough for interactive folder use while bounding one scan response. The configured root
 and every traversed path are canonicalized; a symlink or identifier escaping the root is
 rejected as a configuration error and is never read.
+
+## Being copied into
+
+This source has a write side, so it is a destination `onetaskgraph task copy --to` and
+`onetaskgraph project copy --to` can name. A copy writes one document per item, with the
+front matter above and the item's body beneath it, and reads back exactly what it wrote —
+every caller-defined `metadata` key with its value and its JSON type intact.
+
+Three things it refuses rather than doing quietly. A `target` naming a document this
+folder does not hold is refused instead of created, because the engine established that
+id before asking. A **status** this folder's `status_mapping` would read back as a
+different category is refused naming the field and the mapping to add, because writing it
+would quietly change what the item says. And a create never takes a name a document
+already answers to: it files the new item under the next free `<id>-2`, `<id>-3`, and so
+on, so nothing is written over.
+
+A created document is named after the id the item was read under at its source, with
+every character a path gives meaning to replaced — `..` cannot be spelled and no separator
+can reach outside the configured root. `url`, and the created and updated times, are the
+destination's own and are never written.

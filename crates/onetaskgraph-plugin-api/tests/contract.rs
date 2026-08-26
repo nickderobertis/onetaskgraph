@@ -7,9 +7,10 @@
 use chrono::{TimeZone as _, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Health,
-    Label, LabelFilter, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery,
-    SOURCE_NAME_PATTERN, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    ItemWrite, Label, LabelFilter, NativeId, Page, PageRequest, Project, ProjectFilter,
+    ProjectQuery, SOURCE_NAME_PATTERN, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -1214,4 +1215,108 @@ fn source_name_validation_agrees_with_the_pattern_it_publishes() {
              a configuration the published schema accepts is refused at load."
         );
     }
+}
+
+/// The task a write test hands a source. Its own `id` is the id it was read under at the
+/// source it came from, which is what a destination creating one may derive a name from.
+fn outgoing() -> Task {
+    Task {
+        id: NativeId::from("T-1"),
+        title: "Alpha engine".to_owned(),
+        content: None,
+        status: Status {
+            category: StatusCategory::Todo,
+            name: "Todo".to_owned(),
+        },
+        labels: Vec::new(),
+        project: None,
+        url: None,
+        created_at: None,
+        updated_at: None,
+        metadata: std::collections::BTreeMap::new(),
+        repositories: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn a_source_that_implements_only_the_read_methods_declares_no_write_side() {
+    // The whole point of defaulting the write seam: a source written before it existed —
+    // and one whose backend has nothing to write into — needs no edit and keeps working.
+    let source: Box<dyn TaskSource> = Box::new(Silent("read-only"));
+    assert_eq!(source.writes(), WriteSupport::Unsupported);
+    assert!(!source.writes().is_supported());
+    assert!(WriteSupport::Supported.is_supported());
+
+    for refusal in [
+        source
+            .write_task(&ItemWrite {
+                target: None,
+                item: outgoing(),
+                depends_on: Vec::new(),
+            })
+            .await,
+        source
+            .write_project(&ItemWrite {
+                target: Some(NativeId::from("P-1")),
+                item: Project {
+                    id: NativeId::from("P-1"),
+                    title: "Engine".to_owned(),
+                    content: None,
+                    status: Status {
+                        category: StatusCategory::Todo,
+                        name: "Todo".to_owned(),
+                    },
+                    labels: Vec::new(),
+                    url: None,
+                    created_at: None,
+                    updated_at: None,
+                    metadata: std::collections::BTreeMap::new(),
+                    repositories: Vec::new(),
+                },
+                depends_on: Vec::new(),
+            })
+            .await
+            .map(|_| NativeId::from("unreachable")),
+    ] {
+        let Err(SourceError::Refused { message }) = refusal else {
+            panic!("a source with no write side must refuse a write: {refusal:?}");
+        };
+        assert_eq!(message, "the read-only plugin cannot be written");
+    }
+}
+
+#[test]
+fn an_item_write_round_trips_through_json_with_its_edges_and_an_absent_target() {
+    let write = ItemWrite {
+        target: None,
+        item: outgoing(),
+        depends_on: vec![DependencyEdge {
+            from: onetaskgraph_plugin_api::DependencyEndpoint::from_native(
+                NativeId::from("T-1"),
+                onetaskgraph_plugin_api::ItemKind::Task,
+            ),
+            to: onetaskgraph_plugin_api::DependencyEndpoint::new(
+                "other:P-9".to_owned(),
+                onetaskgraph_plugin_api::ItemKind::Project,
+            )
+            .expect("a qualified endpoint"),
+            kind: DependencyKind::Blocks,
+        }],
+    };
+    let encoded = serde_json::to_value(&write).expect("encodes");
+    assert_eq!(encoded["target"], serde_json::Value::Null);
+    assert_eq!(encoded["depends_on"][0]["to"]["id"], "other:P-9");
+    assert_eq!(
+        serde_json::from_value::<ItemWrite<Task>>(encoded).expect("decodes"),
+        write
+    );
+
+    // `depends_on` defaults, so a peer that records no edges may omit it entirely — which
+    // is what lets §2.1 add a member without a version bump on either side.
+    let bare: ItemWrite<Task> = serde_json::from_value(
+        serde_json::json!({"target": "ENG-1", "item": serde_json::to_value(outgoing()).unwrap()}),
+    )
+    .expect("decodes without depends_on");
+    assert_eq!(bare.target, Some(NativeId::from("ENG-1")));
+    assert!(bare.depends_on.is_empty());
 }

@@ -1,9 +1,13 @@
 //! The source itself and the factory that builds one.
 
+use std::collections::BTreeMap;
+use std::sync::{Mutex, MutexGuard};
+
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencySupport, Direction, Health, Label, NativeId,
-    Page, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencySupport, Direction, Health,
+    ItemKind, ItemWrite, Label, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Task, TaskQuery, TaskSource, TextFields,
+    TextQuery, WriteSupport, unwritable,
 };
 use schemars::{Schema, schema_for};
 
@@ -49,10 +53,30 @@ impl SourcePlugin for Plugin {
     }
 }
 
-/// A source that serves exactly the work it was constructed with.
-#[derive(Debug, Clone)]
+/// The work this source serves, which a write to it changes.
+///
+/// Separate from the capability block on purpose: what a source *declares* is fixed by
+/// the configuration that built it and never moves, while the work behind it does. One
+/// mutex over the work alone means a read of the declaration never contends with a write,
+/// and means no lock is ever held while the declaration is being consulted.
+#[derive(Debug, Default)]
+struct Held {
+    tasks: Vec<Task>,
+    projects: Vec<Project>,
+    labels: Vec<Label>,
+    task_dependencies: Vec<DependencyEdge>,
+    project_dependencies: Vec<DependencyEdge>,
+}
+
+/// A source that serves exactly the work it was constructed with, plus whatever has been
+/// written into it since.
+///
+/// A write lands in this process and nowhere else, which is the whole of what an
+/// in-memory source is: it holds no file, so nothing of a user's work outlives the run.
+#[derive(Debug)]
 pub struct InMemorySource {
-    config: InMemoryConfig,
+    capabilities: CapabilityConfig,
+    held: Mutex<Held>,
 }
 
 impl InMemorySource {
@@ -66,12 +90,32 @@ impl InMemorySource {
         config
             .validate()
             .map_err(|message| SourceError::Config { message })?;
-        Ok(Self { config })
+        Ok(Self {
+            capabilities: config.capabilities,
+            held: Mutex::new(Held {
+                tasks: config.tasks,
+                projects: config.projects,
+                labels: config.labels,
+                task_dependencies: config.task_dependencies,
+                project_dependencies: config.project_dependencies,
+            }),
+        })
     }
 
     /// What this source declares, as its configuration set it.
     fn declared(&self) -> &CapabilityConfig {
-        &self.config.capabilities
+        &self.capabilities
+    }
+
+    /// The work behind this source.
+    ///
+    /// A poisoned mutex means a previous caller panicked mid-write, so what is behind it
+    /// may be half a write. Saying so is the contract's [`SourceError::Unavailable`]
+    /// rather than a second panic, which would take the whole query down with it.
+    fn held(&self) -> Result<MutexGuard<'_, Held>, SourceError> {
+        self.held.lock().map_err(|_| SourceError::Unavailable {
+            message: "this source's work was left half-written by an earlier panic".to_owned(),
+        })
     }
 
     /// Slice `items` into the page `page` asks for.
@@ -238,22 +282,23 @@ impl TaskSource for InMemorySource {
     }
 
     async fn health(&self) -> Result<Health, SourceError> {
+        let held = self.held()?;
         Ok(Health {
             reachable: true,
             detail: Some(format!(
                 "{} task(s), {} project(s) held in memory",
-                self.config.tasks.len(),
-                self.config.projects.len()
+                held.tasks.len(),
+                held.projects.len()
             )),
         })
     }
 
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
-        Ok(self.config.tasks.iter().find(|t| &t.id == id).cloned())
+        Ok(self.held()?.tasks.iter().find(|t| &t.id == id).cloned())
     }
 
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
-        Ok(self.config.projects.iter().find(|p| &p.id == id).cloned())
+        Ok(self.held()?.projects.iter().find(|p| &p.id == id).cloned())
     }
 
     async fn query_tasks(
@@ -262,7 +307,7 @@ impl TaskSource for InMemorySource {
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
         let matched: Vec<Task> = self
-            .config
+            .held()?
             .tasks
             .iter()
             .filter(|task| self.task_matches(task, query))
@@ -284,7 +329,7 @@ impl TaskSource for InMemorySource {
             return Ok(Page::last(Vec::new()));
         }
         let matched: Vec<Project> = self
-            .config
+            .held()?
             .projects
             .iter()
             .filter(|project| self.project_survives(project, query))
@@ -294,7 +339,8 @@ impl TaskSource for InMemorySource {
     }
 
     async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
-        self.paginate(&self.config.labels, page)
+        let labels = self.held()?.labels.clone();
+        self.paginate(&labels, page)
     }
 
     async fn task_dependencies(
@@ -304,7 +350,7 @@ impl TaskSource for InMemorySource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         let edges = Self::edges(
-            &self.config.task_dependencies,
+            &self.held()?.task_dependencies,
             id,
             direction,
             self.declared().task_dependencies,
@@ -320,12 +366,177 @@ impl TaskSource for InMemorySource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         let edges = Self::edges(
-            &self.config.project_dependencies,
+            &self.held()?.project_dependencies,
             id,
             direction,
             self.declared().project_dependencies,
             "project dependencies",
         )?;
         self.paginate(&edges, page)
+    }
+
+    fn writes(&self) -> WriteSupport {
+        self.declared().writes
+    }
+
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        self.writable(&write.item.metadata)?;
+        let mut held = self.held()?;
+        let id = match &write.target {
+            Some(target) => {
+                let position = position_of(held.tasks.iter().map(|task| &task.id), target)
+                    .ok_or_else(|| missing(target, "task"))?;
+                held.tasks[position] = Task {
+                    id: target.clone(),
+                    ..write.item.clone()
+                };
+                target.clone()
+            }
+            None => {
+                let id = unused(held.tasks.iter().map(|task| &task.id), &write.item.id);
+                held.tasks.push(Task {
+                    id: id.clone(),
+                    ..write.item.clone()
+                });
+                id
+            }
+        };
+        held.adopt_labels(&write.item.labels);
+        let edges = rooted(&write.depends_on, &id, ItemKind::Task);
+        replace_edges(&mut held.task_dependencies, &id, edges);
+        Ok(id)
+    }
+
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        self.writable(&write.item.metadata)?;
+        let mut held = self.held()?;
+        let id = match &write.target {
+            Some(target) => {
+                let position = position_of(held.projects.iter().map(|project| &project.id), target)
+                    .ok_or_else(|| missing(target, "project"))?;
+                held.projects[position] = Project {
+                    id: target.clone(),
+                    ..write.item.clone()
+                };
+                target.clone()
+            }
+            None => {
+                let id = unused(
+                    held.projects.iter().map(|project| &project.id),
+                    &write.item.id,
+                );
+                held.projects.push(Project {
+                    id: id.clone(),
+                    ..write.item.clone()
+                });
+                id
+            }
+        };
+        held.adopt_labels(&write.item.labels);
+        let edges = rooted(&write.depends_on, &id, ItemKind::Project);
+        replace_edges(&mut held.project_dependencies, &id, edges);
+        Ok(id)
+    }
+}
+
+impl InMemorySource {
+    /// Refuse a write this source's configuration says it cannot take.
+    ///
+    /// Both refusals name what a caller has to change: the plugin, when there is no write
+    /// side at all, and every key this source cannot carry rather than the first — someone
+    /// correcting a document wants the whole list, not one round trip per key.
+    fn writable(&self, metadata: &BTreeMap<String, serde_json::Value>) -> Result<(), SourceError> {
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        // Sorted rather than in the order the configuration happened to list them, so the
+        // message a caller reads does not reshuffle when the document is reordered.
+        let mut refused: Vec<&str> = self
+            .declared()
+            .unwritable_metadata_keys
+            .iter()
+            .filter(|key| metadata.contains_key(key.as_str()))
+            .map(String::as_str)
+            .collect();
+        refused.sort_unstable();
+        if refused.is_empty() {
+            return Ok(());
+        }
+        Err(SourceError::Refused {
+            message: format!(
+                "cannot carry the metadata key(s) {}; next: remove them from the item being \
+                 copied, or copy into a source that holds them",
+                refused.join(", ")
+            ),
+        })
+    }
+}
+
+/// Where `id` sits among the ids given, or `None` when it sits nowhere.
+fn position_of<'a>(ids: impl Iterator<Item = &'a NativeId>, id: &NativeId) -> Option<usize> {
+    ids.enumerate()
+        .find(|(_, held)| *held == id)
+        .map(|(position, _)| position)
+}
+
+/// The refusal for a `target` this source does not hold.
+fn missing(id: &NativeId, what: &str) -> SourceError {
+    SourceError::Refused {
+        message: format!(
+            "{id} names no {what} this source holds; next: copy with --recreate to create one \
+             instead of updating"
+        ),
+    }
+}
+
+/// `wanted` when nothing holds it, or the first `wanted-N` that is free.
+///
+/// A destination decides its own ids: the id an item was read under at its source is a
+/// suggestion, and taking it verbatim when something else already answers to it would make
+/// which item a lookup returns arbitrary.
+fn unused<'a>(ids: impl Iterator<Item = &'a NativeId>, wanted: &NativeId) -> NativeId {
+    let taken: Vec<&NativeId> = ids.collect();
+    if !taken.contains(&wanted) {
+        return wanted.clone();
+    }
+    (2_u32..)
+        .map(|attempt| NativeId(format!("{wanted}-{attempt}")))
+        .find(|candidate| !taken.contains(&candidate))
+        .expect("an unbounded suffix eventually clears a finite set of ids")
+}
+
+/// The written edges, with this source's own id as the near end of each.
+fn rooted(depends_on: &[DependencyEdge], near: &NativeId, kind: ItemKind) -> Vec<DependencyEdge> {
+    depends_on
+        .iter()
+        .map(|edge| DependencyEdge {
+            from: DependencyEndpoint::from_native(near.clone(), kind),
+            to: edge.to.clone(),
+            kind: edge.kind,
+        })
+        .collect()
+}
+
+/// Replace every forward edge at `near` with `edges`.
+///
+/// A write says what an item depends on now, so an edge the copy no longer carries is one
+/// the source no longer has — leaving it would make a second copy of an item whose
+/// dependency was removed keep depending on it.
+fn replace_edges(held: &mut Vec<DependencyEdge>, near: &NativeId, edges: Vec<DependencyEdge>) {
+    held.retain(|edge| &edge.from != near);
+    held.extend(edges);
+}
+
+impl Held {
+    /// Learn any label a written item carries that this source did not already know.
+    ///
+    /// Keyed by id, because that is what `labels` answers with and what a duplicate would
+    /// make ambiguous.
+    fn adopt_labels(&mut self, labels: &[Label]) {
+        for label in labels {
+            if !self.labels.iter().any(|held| held.id == label.id) {
+                self.labels.push(label.clone());
+            }
+        }
     }
 }

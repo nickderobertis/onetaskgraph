@@ -9,12 +9,13 @@ use std::{
 
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Health, ItemKind, Label, LabelFilter, NativeId, Page, PageRequest, Project,
-    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    Direction, Health, ItemKind, ItemWrite, Label, LabelFilter, NativeId, Page, PageRequest,
+    Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName,
+    SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
+    TextQuery, WriteSupport,
 };
 use schemars::{Schema, schema_for};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The registry name for this plugin.
 pub const KIND: &str = "local-md";
@@ -530,6 +531,9 @@ impl TaskSource for LocalMdSource {
             max_page_size: MAX_PAGE_SIZE,
         }
     }
+    fn writes(&self) -> WriteSupport {
+        WriteSupport::Supported
+    }
     async fn health(&self) -> Result<Health, SourceError> {
         self.paths(DocumentKind::Task)?;
         self.paths(DocumentKind::Project)?;
@@ -611,6 +615,42 @@ impl TaskSource for LocalMdSource {
     ) -> Result<Page<DependencyEdge>, SourceError> {
         self.edges(DocumentKind::Project, id, d, p)
     }
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        let task = &write.item;
+        self.write_document(
+            DocumentKind::Task,
+            write.target.as_ref(),
+            &Outgoing {
+                id: &task.id,
+                title: &task.title,
+                content: task.content.as_deref(),
+                status: &task.status,
+                labels: &task.labels,
+                project: task.project.as_ref(),
+                metadata: &task.metadata,
+                repositories: &task.repositories,
+            },
+            &write.depends_on,
+        )
+    }
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        let project = &write.item;
+        self.write_document(
+            DocumentKind::Project,
+            write.target.as_ref(),
+            &Outgoing {
+                id: &project.id,
+                title: &project.title,
+                content: project.content.as_deref(),
+                status: &project.status,
+                labels: &project.labels,
+                project: None,
+                metadata: &project.metadata,
+                repositories: &project.repositories,
+            },
+            &write.depends_on,
+        )
+    }
 }
 impl LocalMdSource {
     fn edges(
@@ -659,5 +699,248 @@ fn project(d: Document) -> Project {
         updated_at: None,
         metadata: d.metadata,
         repositories: d.repositories,
+    }
+}
+
+/// One item on its way into a Markdown document, whichever kind it is.
+///
+/// A task and a project differ by one field here, so the write path is written once over
+/// this rather than twice over the two contract types.
+struct Outgoing<'a> {
+    id: &'a NativeId,
+    title: &'a str,
+    content: Option<&'a str>,
+    status: &'a Status,
+    labels: &'a [Label],
+    project: Option<&'a NativeId>,
+    metadata: &'a BTreeMap<String, serde_json::Value>,
+    repositories: &'a [Repository],
+}
+
+/// The front matter this source writes, which is the subset of [`FrontMatter`] a copy
+/// carries: `url` is the destination's own and is never written.
+#[derive(Serialize)]
+struct WrittenFrontMatter {
+    title: String,
+    status: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    labels: Vec<WrittenLabel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    depends_on: Vec<WrittenDependency>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    metadata: BTreeMap<String, serde_json::Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    repositories: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct WrittenLabel {
+    id: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color: Option<String>,
+}
+
+/// Always the expanded form, so the level and the kind of every far end are written down
+/// rather than left to the shorthand's defaults.
+#[derive(Serialize)]
+struct WrittenDependency {
+    id: String,
+    kind: &'static str,
+    item: &'static str,
+}
+
+/// This vocabulary's own spelling of a category, for a message a user has to act on.
+fn category_name(category: StatusCategory) -> &'static str {
+    match category {
+        StatusCategory::Backlog => "backlog",
+        StatusCategory::Todo => "todo",
+        StatusCategory::InProgress => "in-progress",
+        StatusCategory::Done => "done",
+        StatusCategory::Cancelled => "cancelled",
+        StatusCategory::Unknown => "unknown",
+    }
+}
+
+/// The relative path, without its extension, a created document is filed under.
+///
+/// A native id is opaque and a path is not, so every character a path gives meaning to is
+/// replaced rather than obeyed: `..` cannot be spelled, a separator cannot escape the
+/// configured root, and a dot cannot make `a.b` and `a` name the same file once `.md` is
+/// appended.
+fn document_stem(id: &NativeId) -> Result<String, SourceError> {
+    let parts: Vec<String> = id
+        .as_str()
+        .split(['/', '\\'])
+        .map(|part| {
+            part.chars()
+                .map(|character| {
+                    if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                        character
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>()
+        })
+        .filter(|part| !part.trim_matches('-').is_empty())
+        .collect();
+    if parts.is_empty() {
+        return Err(SourceError::Refused {
+            message: format!(
+                "{id} has no character a file name can be made of; next: copy it under an id \
+                 carrying at least one letter, digit, underscore or dash"
+            ),
+        });
+    }
+    Ok(parts.join("/"))
+}
+
+impl LocalMdSource {
+    /// Create or update one document, answering with the id it is filed under.
+    fn write_document(
+        &self,
+        kind: DocumentKind,
+        target: Option<&NativeId>,
+        outgoing: &Outgoing<'_>,
+        depends_on: &[DependencyEdge],
+    ) -> Result<NativeId, SourceError> {
+        let (id, path) = match target {
+            Some(target) => (target.clone(), self.existing(kind, target)?),
+            None => self.unused(kind, outgoing.id)?,
+        };
+        let document = self.render(outgoing, depends_on)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| SourceError::Unavailable {
+                message: format!("cannot create {}: {e}", parent.display()),
+            })?;
+        }
+        fs::write(&path, document).map_err(|e| SourceError::Unavailable {
+            message: format!("cannot write {}: {e}", path.display()),
+        })?;
+        Ok(id)
+    }
+
+    /// The path of the document `id` names, refusing when this source holds no such one.
+    fn existing(&self, kind: DocumentKind, id: &NativeId) -> Result<PathBuf, SourceError> {
+        let base = self.directory(kind)?;
+        let candidate = base.join(&id.0).with_extension("md");
+        if !candidate.exists() {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "{id} names no {} document here; next: copy with --recreate to create one \
+                     instead of updating",
+                    kind.directory()
+                ),
+            });
+        }
+        let canonical = fs::canonicalize(&candidate).map_err(|e| SourceError::Malformed {
+            message: format!("{}: {e}", candidate.display()),
+        })?;
+        if !canonical.starts_with(&base) {
+            return Err(SourceError::Config {
+                message: format!(
+                    "{} escapes configured root {}",
+                    candidate.display(),
+                    self.root.display()
+                ),
+            });
+        }
+        Ok(canonical)
+    }
+
+    /// A path no document occupies, and the id it will be read back under.
+    fn unused(
+        &self,
+        kind: DocumentKind,
+        id: &NativeId,
+    ) -> Result<(NativeId, PathBuf), SourceError> {
+        let base = self.directory(kind)?;
+        let stem = document_stem(id)?;
+        for attempt in 1..=1_000_u32 {
+            let candidate = if attempt == 1 {
+                stem.clone()
+            } else {
+                format!("{stem}-{attempt}")
+            };
+            let path = base.join(format!("{candidate}.md"));
+            if !path.exists() {
+                return Ok((NativeId(candidate), path));
+            }
+        }
+        Err(SourceError::Refused {
+            message: format!(
+                "every name from {stem} to {stem}-1000 is taken under {}; next: tidy that \
+                 folder, or copy into a source whose ids this one does not already hold",
+                base.display()
+            ),
+        })
+    }
+
+    /// One document's whole text, or a refusal naming the field this source cannot hold.
+    fn render(
+        &self,
+        outgoing: &Outgoing<'_>,
+        depends_on: &[DependencyEdge],
+    ) -> Result<String, SourceError> {
+        let mapped = self
+            .statuses
+            .get(&outgoing.status.name.to_lowercase())
+            .copied()
+            .unwrap_or(StatusCategory::Unknown);
+        if mapped != outgoing.status.category {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "cannot represent the field `status`: this source reads {:?} as {}, not \
+                     {}; next: map {:?} to {} under this source's status_mapping",
+                    outgoing.status.name,
+                    category_name(mapped),
+                    category_name(outgoing.status.category),
+                    outgoing.status.name,
+                    category_name(outgoing.status.category),
+                ),
+            });
+        }
+        let front = WrittenFrontMatter {
+            title: outgoing.title.to_owned(),
+            status: outgoing.status.name.clone(),
+            labels: outgoing
+                .labels
+                .iter()
+                .map(|label| WrittenLabel {
+                    id: label.id.0.clone(),
+                    name: label.name.clone(),
+                    color: label.color.clone(),
+                })
+                .collect(),
+            project: outgoing.project.map(|id| id.0.clone()),
+            depends_on: depends_on
+                .iter()
+                .map(|edge| WrittenDependency {
+                    id: edge.to.id().to_owned(),
+                    kind: match edge.kind {
+                        DependencyKind::Blocks => "blocks",
+                        DependencyKind::Related => "related",
+                    },
+                    item: match edge.to.kind {
+                        ItemKind::Task => "task",
+                        ItemKind::Project => "project",
+                    },
+                })
+                .collect(),
+            metadata: outgoing.metadata.clone(),
+            repositories: outgoing
+                .repositories
+                .iter()
+                .map(|repository| repository.as_str().to_owned())
+                .collect(),
+        };
+        let yaml = serde_norway::to_string(&front).map_err(|e| SourceError::Malformed {
+            message: format!("cannot render front matter for {}: {e}", outgoing.id),
+        })?;
+        let body = outgoing.content.unwrap_or_default().trim();
+        Ok(format!("---\n{}\n---\n{body}\n", yaml.trim_end()))
     }
 }

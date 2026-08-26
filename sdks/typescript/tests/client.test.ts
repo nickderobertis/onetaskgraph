@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, resolve } from "node:path";
 import {
@@ -158,6 +158,100 @@ test("typed methods drive every real binary command", async () => {
       })
     ).items[0]?.kind,
   ).toBe("task");
+});
+
+test("copy drives the real binary and reports what it did to each item", async () => {
+  const copyRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-copy-"));
+  mkdirSync(resolve(copyRoot, "from/tasks"), { recursive: true });
+  mkdirSync(resolve(copyRoot, "from/projects"), { recursive: true });
+  mkdirSync(resolve(copyRoot, "into"), { recursive: true });
+  writeFileSync(
+    resolve(copyRoot, "from/projects/P-1.md"),
+    "---\ntitle: Engine\nstatus: todo\n---\nthe engine\n",
+  );
+  writeFileSync(
+    resolve(copyRoot, "from/tasks/T-1.md"),
+    "---\ntitle: Alpha engine\nstatus: todo\nproject: P-1\nmetadata: {caller.count: 3}\n---\nthe engine core\n",
+  );
+  const folder = (root: string) => ({
+    plugin: "local-md",
+    config: { root: resolve(copyRoot, root), status_mapping: { todo: "todo" } },
+  });
+  writeFileSync(
+    resolve(copyRoot, "onetaskgraph.yaml"),
+    JSON.stringify({ sources: { from: folder("from"), into: folder("into") } }),
+  );
+  try {
+    const copyClient = new OnetaskgraphClient({ binaryPath: binary, cwd: copyRoot });
+
+    const planned = await copyClient.taskCopy(["from:T-1"], "into", { dryRun: true });
+    // Null only for a dry run that would create: nothing was, so there is no id.
+    expect(planned.items).toEqual([{ source: "from:T-1", action: "created", destination: null }]);
+
+    const created = await copyClient.taskCopy(["from:T-1"], "into");
+    expect(created.items).toEqual([
+      { source: "from:T-1", action: "created", destination: "into:T-1" },
+    ]);
+    // The destination really holds it, read back through the same binary.
+    const copied = await copyClient.taskShow("into:T-1");
+    expect(copied.items[0]?.item.metadata).toMatchObject({ "caller.count": 3 });
+    expect(readFileSync(resolve(copyRoot, "into/tasks/T-1.md"), "utf8")).toContain(
+      "onetaskgraph.origin: from:T-1",
+    );
+
+    const again = await copyClient.taskCopy(["from:T-1"], "into");
+    expect(again.items[0]?.action).toBe("unchanged");
+
+    // A person deletes the origin key, so neither rule can find the counterpart; the
+    // caller-named escape re-establishes it rather than creating a second item.
+    writeFileSync(
+      resolve(copyRoot, "into/tasks/T-1.md"),
+      readFileSync(resolve(copyRoot, "into/tasks/T-1.md"), "utf8").replace(
+        /\n\s+onetaskgraph.origin: from:T-1/,
+        "",
+      ),
+    );
+    const matched = await copyClient.taskCopy(["from:T-1"], "into", { matchBy: "title" });
+    expect(matched.items).toEqual([
+      { source: "from:T-1", action: "updated", destination: "into:T-1" },
+    ]);
+
+    // An origin naming nothing at the destination refuses, and --recreate says to create.
+    rmSync(resolve(copyRoot, "from/tasks/T-1.md"));
+    await expect(copyClient.taskCopy(["into:T-1"], "from")).rejects.toThrow(
+      "which that destination no longer holds",
+    );
+    const recreated = await copyClient.taskCopy(["into:T-1"], "from", { recreate: true });
+    expect(recreated.items[0]?.action).toBe("created");
+
+    // A project, and the tasks in it, and then the project on its own.
+    const project = await copyClient.projectCopy("from:P-1", "into");
+    expect(project.items.map((item) => [item.source, item.action])).toEqual([
+      ["from:P-1", "created"],
+      // The task recreated above already corresponds to the one at the destination, so
+      // copying the project it belongs to matches it rather than duplicating it.
+      ["from:T-1", "unchanged"],
+    ]);
+    const alone = await copyClient.projectCopy("from:P-1", "into", { noTasks: true });
+    expect(alone.items).toEqual([
+      { source: "from:P-1", action: "unchanged", destination: "into:P-1" },
+    ]);
+
+    // A destination with no write side is refused, naming the source and its plugin.
+    writeFileSync(
+      resolve(copyRoot, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          from: folder("from"),
+          into: folder("into"),
+          sealed: { plugin: "in-memory", config: { capabilities: { writes: "unsupported" } } },
+        },
+      }),
+    );
+    await expect(copyClient.taskCopy(["from:T-1"], "sealed")).rejects.toThrow("cannot be written");
+  } finally {
+    rmSync(copyRoot, { recursive: true, force: true });
+  }
 });
 
 test("a source failure remains typed for partial and accepted-partial exits", async () => {

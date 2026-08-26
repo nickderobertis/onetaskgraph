@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, Direction, Health, Label, NativeId, Page, PageRequest, Project,
-    ProjectQuery, SourceError, SourceName, Task, TaskQuery, TaskSource,
+    Capabilities, DependencyEdge, Direction, Health, ItemWrite, Label, NativeId, Page, PageRequest,
+    Project, ProjectQuery, SourceError, SourceName, Task, TaskQuery, TaskSource, WriteSupport,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -23,7 +23,8 @@ use serde_json::{Value, json};
 use super::connection::{Connection, Peer};
 use super::wire::{
     DependencyParams, EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams,
-    PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, Request, TaskQueryParams, TaskResult,
+    PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request,
+    TaskQueryParams, TaskResult, TaskWriteParams, WriteResult,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -68,6 +69,12 @@ pub struct SubprocessSource {
     kind: &'static str,
     /// Read once at the handshake; §3 says the engine does not ask again.
     capabilities: Capabilities,
+    /// Whether the plugin said it can be written through, read at the same handshake.
+    ///
+    /// A plugin that said nothing is read as read-only, which is what §3.3 makes an
+    /// absent member mean and what every version-1 plugin written before there was a
+    /// write side is.
+    writes: WriteSupport,
     /// The live process.
     connection: Connection,
 }
@@ -189,6 +196,7 @@ impl SubprocessSource {
             protocol_version,
             kind,
             capabilities,
+            writes,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -213,6 +221,7 @@ impl SubprocessSource {
         Ok(Self {
             kind: String::leak(kind),
             capabilities,
+            writes: writes.unwrap_or(WriteSupport::Unsupported),
             connection: Connection::adopt(peer),
         })
     }
@@ -404,6 +413,34 @@ impl TaskSource for SubprocessSource {
             }),
         )
         .await
+    }
+
+    fn writes(&self) -> WriteSupport {
+        self.writes
+    }
+
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        let result: WriteResult = self
+            .ask(
+                "write_task",
+                params(&TaskWriteParams {
+                    write: write.clone(),
+                }),
+            )
+            .await?;
+        Ok(result.id)
+    }
+
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        let result: WriteResult = self
+            .ask(
+                "write_project",
+                params(&ProjectWriteParams {
+                    write: write.clone(),
+                }),
+            )
+            .await?;
+        Ok(result.id)
     }
 }
 

@@ -12,7 +12,8 @@
 //! to drift from the one a filter compares against.
 
 use onetaskgraph_core::{
-    Predicate, Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing, SourceState,
+    CopyReport, Predicate, Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing,
+    SourceState,
 };
 use onetaskgraph_plugin_api::{Capabilities, Label, Project, Support, Task};
 use serde::Serialize;
@@ -95,6 +96,28 @@ pub fn projects(items: &[Qualified<Project>]) -> String {
                     project.id.to_string(),
                     wire(&project.item.status.category),
                     project.item.title.clone(),
+                ]
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// One line per item a copy considered: where it came from, where it went, what happened.
+///
+/// A dry run that would create has no destination id to print, because nothing was
+/// created and inventing one would be a claim about an id the destination never issued.
+pub fn copied(report: &CopyReport) -> String {
+    columns(
+        &report
+            .items
+            .iter()
+            .map(|outcome| {
+                vec![
+                    outcome.source.to_string(),
+                    outcome
+                        .destination()
+                        .map_or_else(|| "-".to_owned(), ToString::to_string),
+                    outcome.action.name(),
                 ]
             })
             .collect::<Vec<_>>(),
