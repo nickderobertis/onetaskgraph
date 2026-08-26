@@ -443,6 +443,15 @@ the near item is plugin-owned work data, not the forbidden engine-side index or 
 what the invariant forbids is the engine holding a resolution from one source's id to
 another's, and reporting an id a plugin already owns holds nothing.
 
+**A cursor is resumed only in the direction that reported it.** Only a forward walk ever
+reaches the recorded fallback, so its tail cursor names a position no reverse walk has; a
+plugin handed one in the reverse direction refuses it, naming the cursor, rather than
+answering an empty page — which reads as a walk that ended — or, worse, serving the
+forward edges it points at. The engine never sends one: a dependency query's fingerprint
+carries its direction, so a token minted forwards is refused before it resumes a reverse
+walk. A peer writing the protocol by hand can, which is why the plugin refuses rather than
+trusting.
+
 A plugin that declared `"both-directions"` answers both directions itself, and must
 never return an empty page for a direction it declared.
 

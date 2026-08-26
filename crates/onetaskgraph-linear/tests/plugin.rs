@@ -797,29 +797,49 @@ async fn a_recorded_cursor_is_refused_in_the_direction_that_never_issued_it() {
     // the far end and is never written down here. So a reverse read handed the forward
     // tail's cursor is resuming a walk it did not come from, and answering it would return
     // forward edges to a caller who asked which items depend on this one.
-    let recorded = serde_json::json!([{"id":"elsewhere:P-9","kind":"project"}]);
-    for (projects, root) in [(false, "issue"), (true, "project")] {
-        let (endpoint, _) = server("200 OK", "", relations_recording(root, &recorded));
+    // An offset that is not a number resumes nothing at all, and is the other way to
+    // present a cursor this source never reported.
+    //
+    // Both refusals are decided from the cursor alone, so this source is pointed at a port
+    // nothing listens on: an answer at all would mean the request was made first.
+    let source = source("http://127.0.0.1:1/graphql");
+    for (projects, direction, cursor, expected) in [
+        (
+            false,
+            Direction::DependedOnBy,
+            "onetaskgraph.depends_on:0",
+            "reverse dependency read",
+        ),
+        (
+            true,
+            Direction::DependedOnBy,
+            "onetaskgraph.depends_on:0",
+            "reverse dependency read",
+        ),
+        (
+            false,
+            Direction::DependsOn,
+            "onetaskgraph.depends_on:x",
+            "is not a recorded-edge cursor",
+        ),
+    ] {
         let request = PageRequest {
-            cursor: Some(onetaskgraph_plugin_api::Cursor(
-                "onetaskgraph.depends_on:0".into(),
-            )),
+            cursor: Some(onetaskgraph_plugin_api::Cursor(cursor.to_owned())),
             limit: 50,
         };
-        let source = source(&endpoint);
         let error = if projects {
             source
-                .project_dependencies(&"p1".into(), Direction::DependedOnBy, &request)
+                .project_dependencies(&"p1".into(), direction, &request)
                 .await
         } else {
             source
-                .task_dependencies(&"i1".into(), Direction::DependedOnBy, &request)
+                .task_dependencies(&"i1".into(), direction, &request)
                 .await
         }
-        .expect_err("a reverse read never issued a recorded cursor");
+        .expect_err("a cursor no walk of this source reported");
         let message = format!("{error}");
-        assert!(message.contains("onetaskgraph.depends_on:0"), "{message}");
-        assert!(message.contains("reverse dependency read"), "{message}");
+        assert!(message.contains(cursor), "{message}");
+        assert!(message.contains(expected), "{message}");
     }
 }
 

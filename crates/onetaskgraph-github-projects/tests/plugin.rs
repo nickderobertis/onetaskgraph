@@ -739,6 +739,44 @@ async fn an_issue_may_not_record_a_far_end_its_own_relationship_can_name() {
 }
 
 #[tokio::test]
+async fn a_recorded_cursor_is_refused_before_this_source_asks_github_anything() {
+    // Both refusals are decided from the cursor alone, so this source is pointed at a port
+    // nothing listens on: an answer at all would mean the request was made first. The
+    // recorded tail is forward-only — the reverse of a recorded edge is derived from the
+    // far end and is never written down — so a reverse read carrying its cursor is
+    // resuming a walk it did not come from, and an offset that is not a number resumes
+    // nothing at all.
+    let source = build("http://127.0.0.1:1/graphql");
+    for (direction, cursor, expected) in [
+        (
+            Direction::DependedOnBy,
+            "onetaskgraph.depends_on:0",
+            "reverse dependency read",
+        ),
+        (
+            Direction::DependsOn,
+            "onetaskgraph.depends_on:x",
+            "is not a recorded-edge cursor",
+        ),
+    ] {
+        let error = source
+            .task_dependencies(
+                &NativeId("I_task".into()),
+                direction,
+                &PageRequest {
+                    cursor: Some(Cursor(cursor.to_owned())),
+                    limit: 10,
+                },
+            )
+            .await
+            .expect_err("a cursor no walk of this source reported");
+        let message = format!("{error}");
+        assert!(message.contains(cursor), "{message}");
+        assert!(message.contains(expected), "{message}");
+    }
+}
+
+#[tokio::test]
 async fn a_draft_may_record_the_far_end_an_issue_may_not() {
     // A draft has no `blockedBy` at all, so nothing it depends on can be named natively and
     // the reserved key is the only place any far end of its own can be.

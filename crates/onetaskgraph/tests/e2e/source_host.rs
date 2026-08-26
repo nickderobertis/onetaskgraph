@@ -208,31 +208,52 @@ fn a_host_that_cannot_write_its_answer_exits_one_and_says_so_on_standard_error()
     assert!(!complaint.contains("panicked"), "{complaint}");
 }
 
-/// The shipped host, given the `linear` plugin over a fixture workspace whose `T-1`
-/// records one far end in a source that is not configured at all.
+/// One plugin of this build, hosted over a fixture the shared journeys already use.
 ///
 /// The credential travels in the handshake rather than through `sandbox`, which is here
-/// only because the fixture takes one; the listener it starts outlives it.
-///
-/// A plugin is reachable here without the engine in front of it, which is what makes this
-/// the journey for a cursor the engine would never have sent: over the protocol the host
-/// is handed whatever the peer wrote.
-fn linear_host(sandbox: &Sandbox, recorded: Value) -> (Command, Value) {
-    let block = crate::fixtures::linear_recording(sandbox, recorded);
-    let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
-    command.args(["plugin-serve", "linear"]);
-    let handshake = json!({
-        "id": "0",
-        "method": "initialize",
-        "params": {
-            "protocol_version": 1,
-            "engine": {"name": "onetaskgraph", "version": "0.1.0"},
-            "source_name": "work",
-            "config": block,
-            "secrets": {"LINEAR_API_KEY": "fixture-key"}
-        }
-    });
-    (command, handshake)
+/// only because the fixtures take one; the listener each starts outlives it.
+struct Hosted {
+    kind: &'static str,
+    config: Value,
+    secrets: Value,
+}
+
+impl Hosted {
+    /// Both sources whose recorded tail is reachable by cursor, each over a `T-1` that
+    /// records one far end in a source nothing configures.
+    fn every_kind(sandbox: &Sandbox) -> Vec<Self> {
+        let far = json!([{"id": "elsewhere:P-9", "kind": "project"}]);
+        vec![
+            Self {
+                kind: "linear",
+                config: crate::fixtures::linear_recording(sandbox, far.clone()),
+                secrets: json!({"LINEAR_API_KEY": "fixture-key"}),
+            },
+            Self {
+                kind: "github-projects",
+                config: crate::fixtures::github_projects_recording(sandbox, far),
+                secrets: json!({"GITHUB_PROJECTS_FIXTURE_TOKEN": "test-token"}),
+            },
+        ]
+    }
+
+    /// The host process, and the `initialize` line that opens its connection.
+    fn connection(&self) -> (Command, Value) {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+        command.args(["plugin-serve", self.kind]);
+        let handshake = json!({
+            "id": "0",
+            "method": "initialize",
+            "params": {
+                "protocol_version": 1,
+                "engine": {"name": "onetaskgraph", "version": "0.1.0"},
+                "source_name": "work",
+                "config": self.config,
+                "secrets": self.secrets
+            }
+        });
+        (command, handshake)
+    }
 }
 
 /// Every answer the host wrote for `requests`, after the handshake.
@@ -257,7 +278,7 @@ fn answers(mut command: Command, handshake: &Value, requests: &[Value]) -> Vec<V
         .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
         .collect();
     assert_eq!(lines.len(), requests.len() + 1, "{answered}");
-    assert!(lines[0]["result"]["protocol_version"] == 1, "{answered}");
+    assert_eq!(lines[0]["result"]["protocol_version"], 1, "{answered}");
     lines[1..].to_vec()
 }
 
@@ -274,29 +295,61 @@ fn resumed(direction: &str, cursor: &str) -> Value {
     })
 }
 
+/// The error a host answered `request` with.
+fn refusal(hosted: &Hosted, request: Value) -> String {
+    let (command, handshake) = hosted.connection();
+    let answered = answers(command, &handshake, &[request]);
+    let answer = &answered[0];
+    assert!(
+        answer.get("result").is_none(),
+        "{}: this must not be answered: {answer}",
+        hosted.kind
+    );
+    answer["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{}: an error carries a message: {answer}", hosted.kind))
+        .to_owned()
+}
+
 #[test]
-fn the_shipped_host_refuses_a_recorded_cursor_in_the_direction_that_never_issued_it() {
+fn the_shipped_host_refuses_a_recorded_cursor_no_walk_of_its_own_reported() {
     // The reserved key holds forward edges and nothing else: the reverse of a recorded
     // edge is derived from the far end, never written down on the near item. So the tail
     // cursor a forward walk reports is one no reverse walk can be resuming, and serving it
-    // would answer "what depends on T-1" with what T-1 depends on.
-    let recorded = json!([{"id": "elsewhere:P-9", "kind": "project"}]);
-    let cursor = "onetaskgraph.depends_on:0";
-
+    // would answer "what depends on T-1" with what T-1 depends on. A cursor under that
+    // namespace which resumes nothing at all is the other way to get this wrong.
+    //
+    // The engine cannot reach either state — a dependency query's fingerprint carries its
+    // direction, and the engine only ever replays a cursor a source itself reported — so
+    // these journeys drive the host directly, the way a peer on the protocol does.
     let sandbox = Sandbox::new();
-    let (command, handshake) = linear_host(&sandbox, recorded.clone());
-    let refusal = &answers(command, &handshake, &[resumed("depended-on-by", cursor)])[0];
-    assert_eq!(refusal["error"]["kind"], "malformed", "{refusal}");
-    let message = refusal["error"]["message"]
-        .as_str()
-        .expect("a message to read");
-    assert!(message.contains(cursor), "{message}");
-    assert!(message.contains("reverse dependency read"), "{message}");
+    let cursor = "onetaskgraph.depends_on:0";
+    for hosted in Hosted::every_kind(&sandbox) {
+        let reversed = refusal(&hosted, resumed("depended-on-by", cursor));
+        assert!(reversed.contains(cursor), "{}: {reversed}", hosted.kind);
+        assert!(
+            reversed.contains("reverse dependency read"),
+            "{}: {reversed}",
+            hosted.kind
+        );
 
-    // The same cursor in the direction that reported it still answers, so the refusal is
-    // about the direction rather than about a cursor this host cannot read.
-    let (command, handshake) = linear_host(&sandbox, recorded);
-    let answer = &answers(command, &handshake, &[resumed("depends-on", cursor)])[0];
-    assert_eq!(answer["result"]["items"][0]["to"]["id"], "elsewhere:P-9");
-    assert_eq!(answer["result"]["items"][0]["from"]["id"], "T-1");
+        let unreadable = refusal(&hosted, resumed("depends-on", "onetaskgraph.depends_on:x"));
+        assert!(
+            unreadable.contains("is not a recorded-edge cursor"),
+            "{}: {unreadable}",
+            hosted.kind
+        );
+
+        // The same cursor in the direction that reported it still answers, so both
+        // refusals are about the request rather than about a cursor this host cannot read.
+        let (command, handshake) = hosted.connection();
+        let answered = answers(command, &handshake, &[resumed("depends-on", cursor)]);
+        let items = &answered[0]["result"]["items"];
+        assert_eq!(items[0]["from"]["id"], "T-1", "{}: {items}", hosted.kind);
+        assert_eq!(
+            items[0]["to"]["id"], "elsewhere:P-9",
+            "{}: {items}",
+            hosted.kind
+        );
+    }
 }

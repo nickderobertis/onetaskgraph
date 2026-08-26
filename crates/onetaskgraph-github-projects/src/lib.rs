@@ -495,7 +495,7 @@ impl GitHubProjectsSource {
         validate_page(page)?;
         let limit = page.limit.min(MAX_PAGE_SIZE) as usize;
         let cursor = page.cursor.as_ref().map(|c| c.0.as_str());
-        let recorded = recorded_offset(cursor)?;
+        let recorded = recorded_offset(cursor, direction)?;
         // Asked for even in the recorded phase, whose page reads nothing from the
         // connection: `__typename` is what says whether this item has a native
         // relationship at all, and that is what decides which far ends the reserved key is
@@ -878,10 +878,29 @@ impl TaskSource for GitHubProjectsSource {
 /// [`GitHubProjectsSource::recorded_task_edges`].
 const RECORDED_CURSOR: &str = "onetaskgraph.depends_on:";
 
-fn recorded_offset(cursor: Option<&str>) -> Result<Option<usize>, SourceError> {
+/// Where a recorded tail resumes, refusing a cursor no walk in `direction` reported.
+///
+/// The reserved key holds forward edges and nothing else — the reverse of a recorded edge
+/// is derived from the far end, never written down on the near item — so only a forward
+/// walk ever reports one of these cursors. A reverse read carrying one is resuming a walk
+/// it did not come from, and it is told so rather than answered with an empty page that
+/// reads as a walk which ended.
+fn recorded_offset(
+    cursor: Option<&str>,
+    direction: Direction,
+) -> Result<Option<usize>, SourceError> {
     cursor
         .and_then(|cursor| cursor.strip_prefix(RECORDED_CURSOR))
         .map(|offset| {
+            if direction != Direction::DependsOn {
+                return Err(SourceError::Config {
+                    message: format!(
+                        "{RECORDED_CURSOR}{offset} resumes recorded forward edges, which a \
+                         reverse dependency read never issues; resume it in the direction \
+                         that reported it"
+                    ),
+                });
+            }
             offset.parse().map_err(|_| SourceError::Config {
                 message: format!("{RECORDED_CURSOR}{offset} is not a recorded-edge cursor"),
             })
