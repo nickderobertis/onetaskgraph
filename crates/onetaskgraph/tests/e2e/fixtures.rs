@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
     net::TcpListener,
+    sync::{Arc, Mutex},
     thread,
 };
 
@@ -464,7 +465,7 @@ fn github_project_page(variables: &Value, recorded: Option<&Value>) -> Value {
 }
 
 /// A socket-level Linear GraphQL fixture used by the shared binary journeys.
-fn linear_block(sandbox: &Sandbox) -> Value {
+pub fn linear_block(sandbox: &Sandbox) -> Value {
     linear_server(sandbox, None)
 }
 
@@ -482,6 +483,7 @@ fn linear_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
     sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+    let state = Arc::new(Mutex::new(dataset()));
     thread::spawn(move || {
         for mut stream in listener.incoming().flatten() {
             let mut bytes = Vec::new();
@@ -570,10 +572,11 @@ fn linear_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 );
                 continue;
             }
-            let (status, response) = match linear_response(&request, recorded.as_ref()) {
-                Ok(body) => ("200 OK", json!({"data":body})),
-                Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
-            };
+            let (status, response) =
+                match linear_response(&request, recorded.as_ref(), &mut state.lock().unwrap()) {
+                    Ok(body) => ("200 OK", json!({"data":body})),
+                    Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
+                };
             let text = serde_json::to_string(&response).unwrap();
             let _ = write!(
                 stream,
@@ -582,7 +585,7 @@ fn linear_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
             );
         }
     });
-    json!({"endpoint":endpoint})
+    json!({"endpoint":endpoint,"team":"FIX"})
 }
 
 #[derive(Deserialize)]
@@ -653,9 +656,118 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     && variables.after.as_deref() != Some("")
             })
         }
+        graphql::TEAM => {
+            serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
+                .is_ok_and(|values| {
+                    values.len() == 1 && values.get("key").is_some_and(|value| !value.is_empty())
+                })
+        }
+        graphql::ISSUE_STATE => {
+            serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
+                .is_ok_and(|values| {
+                    values.len() == 2
+                        && ["name", "team"]
+                            .iter()
+                            .all(|key| values.get(*key).is_some_and(|value| !value.is_empty()))
+                })
+        }
+        graphql::PROJECT_STATUS | graphql::ISSUE_LABEL | graphql::PROJECT_LABEL => {
+            serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
+                .is_ok_and(|values| {
+                    values.len() == 1 && values.get("name").is_some_and(|value| !value.is_empty())
+                })
+        }
+        graphql::ISSUE_CREATE => {
+            exact_linear_variable_keys(variables, &["input"])
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &["teamId", "title", "stateId", "labelIds"],
+                    &["description", "projectId"],
+                )
+        }
+        graphql::PROJECT_CREATE => {
+            exact_linear_variable_keys(variables, &["input"])
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &["teamIds", "name", "statusId", "labelIds"],
+                    &["description"],
+                )
+        }
+        graphql::ISSUE_RELATION_CREATE => {
+            exact_linear_variable_keys(variables, &["input"])
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &["issueId", "relatedIssueId", "type"],
+                    &[],
+                )
+        }
+        graphql::PROJECT_RELATION_CREATE => {
+            exact_linear_variable_keys(variables, &["input"])
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &["projectId", "relatedProjectId", "type"],
+                    &[],
+                )
+        }
+        graphql::ISSUE_RELATION_DELETE | graphql::PROJECT_RELATION_DELETE => {
+            exact_linear_variable_keys(variables, &["id"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+        }
+        graphql::ISSUE_UPDATE | graphql::PROJECT_UPDATE => {
+            exact_linear_variable_keys(variables, &["id", "input"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    if operation == graphql::ISSUE_UPDATE {
+                        &["title", "stateId", "labelIds"]
+                    } else {
+                        &["name", "statusId", "labelIds"]
+                    },
+                    if operation == graphql::ISSUE_UPDATE {
+                        &["description", "projectId"]
+                    } else {
+                        &["description"]
+                    },
+                )
+        }
         _ => false,
     };
     valid.then_some(()).ok_or("invalid operation variables")
+}
+
+fn exact_linear_variable_keys(value: &Value, expected: &[&str]) -> bool {
+    value.as_object().is_some_and(|fields| {
+        fields.len() == expected.len() && expected.iter().all(|key| fields.contains_key(*key))
+    })
+}
+
+fn valid_linear_write_input(value: Option<&Value>, required: &[&str], optional: &[&str]) -> bool {
+    let Some(fields) = value.and_then(Value::as_object) else {
+        return false;
+    };
+    if fields
+        .keys()
+        .any(|key| !required.contains(&key.as_str()) && !optional.contains(&key.as_str()))
+        || required.iter().any(|key| !fields.contains_key(*key))
+    {
+        return false;
+    }
+    fields.iter().all(|(key, value)| match key.as_str() {
+        "labelIds" | "teamIds" => value.as_array().is_some_and(|values| {
+            values
+                .iter()
+                .all(|value| value.as_str().is_some_and(|id| !id.is_empty()))
+        }),
+        "description" => value.is_null() || value.is_string(),
+        "projectId" => value.is_null() || value.as_str().is_some_and(|id| !id.is_empty()),
+        _ => value.as_str().is_some_and(|text| !text.is_empty()),
+    })
 }
 
 fn valid_linear_filter(value: &Value) -> bool {
@@ -680,7 +792,11 @@ fn valid_linear_filter(value: &Value) -> bool {
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
-fn linear_response(request: &Value, recorded: Option<&Value>) -> Result<Value, &'static str> {
+fn linear_response(
+    request: &Value,
+    recorded: Option<&Value>,
+    data: &mut Value,
+) -> Result<Value, &'static str> {
     let request: LinearRequest =
         serde_json::from_value(request.clone()).map_err(|_| "invalid GraphQL request")?;
     use onetaskgraph_linear::graphql;
@@ -694,6 +810,19 @@ fn linear_response(request: &Value, recorded: Option<&Value>) -> Result<Value, &
         graphql::LABELS,
         graphql::ISSUE_RELATIONS,
         graphql::PROJECT_RELATIONS,
+        graphql::TEAM,
+        graphql::ISSUE_STATE,
+        graphql::PROJECT_STATUS,
+        graphql::ISSUE_LABEL,
+        graphql::PROJECT_LABEL,
+        graphql::ISSUE_CREATE,
+        graphql::ISSUE_UPDATE,
+        graphql::PROJECT_CREATE,
+        graphql::PROJECT_UPDATE,
+        graphql::ISSUE_RELATION_CREATE,
+        graphql::PROJECT_RELATION_CREATE,
+        graphql::ISSUE_RELATION_DELETE,
+        graphql::PROJECT_RELATION_DELETE,
     ]
     .contains(&operation)
     {
@@ -701,7 +830,59 @@ fn linear_response(request: &Value, recorded: Option<&Value>) -> Result<Value, &
     }
     let vars = Value::Object(request.variables);
     validate_linear_variables(operation, &vars)?;
-    let data = dataset();
+    if operation == graphql::TEAM {
+        return Ok(json!({"teams":{"nodes":[{"id":"TEAM-1"}]}}));
+    }
+    if operation == graphql::ISSUE_STATE {
+        return Ok(json!({"workflowStates":{"nodes":[{"id":vars["name"]}]}}));
+    }
+    if operation == graphql::PROJECT_STATUS {
+        return Ok(json!({"projectStatuses":{"nodes":[{"id":vars["name"]}]}}));
+    }
+    if operation == graphql::ISSUE_LABEL {
+        return Ok(json!({"issueLabels":{"nodes":[{"id":vars["name"]}]}}));
+    }
+    if operation == graphql::PROJECT_LABEL {
+        return Ok(json!({"projectLabels":{"nodes":[{"id":vars["name"]}]}}));
+    }
+    if matches!(operation, graphql::ISSUE_CREATE | graphql::ISSUE_UPDATE) {
+        return linear_write_item(data, &vars, operation == graphql::ISSUE_CREATE, false);
+    }
+    if matches!(operation, graphql::PROJECT_CREATE | graphql::PROJECT_UPDATE) {
+        return linear_write_item(data, &vars, operation == graphql::PROJECT_CREATE, true);
+    }
+    if matches!(
+        operation,
+        graphql::ISSUE_RELATION_CREATE | graphql::PROJECT_RELATION_CREATE
+    ) {
+        return linear_write_relation(data, &vars, operation == graphql::PROJECT_RELATION_CREATE);
+    }
+    if matches!(
+        operation,
+        graphql::ISSUE_RELATION_DELETE | graphql::PROJECT_RELATION_DELETE
+    ) {
+        let project = operation == graphql::PROJECT_RELATION_DELETE;
+        let index = vars["id"]
+            .as_str()
+            .and_then(|id| id.rsplit(':').next())
+            .and_then(|id| id.parse::<usize>().ok())
+            .ok_or("invalid relation fixture id")?;
+        let edges = data[if project {
+            "project_dependencies"
+        } else {
+            "task_dependencies"
+        }]
+        .as_array_mut()
+        .ok_or("fixture edges are not an array")?;
+        if index < edges.len() {
+            edges.remove(index);
+        }
+        return Ok(if project {
+            json!({"projectRelationDelete":{"success":true}})
+        } else {
+            json!({"issueRelationDelete":{"success":true}})
+        });
+    }
     if operation == graphql::LABELS {
         return Ok(
             json!({"issueLabels":linear_connection(data["labels"].as_array().unwrap().iter().map(linear_label).collect(),&vars)}),
@@ -713,7 +894,7 @@ fn linear_response(request: &Value, recorded: Option<&Value>) -> Result<Value, &
             .unwrap()
             .iter()
             .filter(|v| linear_matches_fixture_subset(v, &vars))
-            .map(linear_task)
+            .map(|v| linear_task(v, data))
             .collect();
         return Ok(json!({"issues":linear_connection(std::mem::take(&mut rows),&vars)}));
     }
@@ -723,7 +904,7 @@ fn linear_response(request: &Value, recorded: Option<&Value>) -> Result<Value, &
             .unwrap()
             .iter()
             .filter(|v| linear_matches_fixture_subset(v, &vars))
-            .map(linear_project)
+            .map(|v| linear_project(v, data))
             .collect();
         return Ok(json!({"projects":linear_connection(rows,&vars)}));
     }
@@ -736,10 +917,10 @@ fn linear_response(request: &Value, recorded: Option<&Value>) -> Result<Value, &
             .find(|v| v["id"] == id);
         if operation == graphql::ISSUE_RELATIONS {
             return Ok(
-                json!({"issue":linear_relations(&data,"task_dependencies",id,"Issue",recorded)}),
+                json!({"issue":linear_relations(data,"task_dependencies",id,"Issue",recorded)}),
             );
         }
-        return Ok(json!({"issue":item.map(linear_task)}));
+        return Ok(json!({"issue":item.map(|v|linear_task(v,data))}));
     }
     if matches!(operation, graphql::PROJECT | graphql::PROJECT_RELATIONS) {
         let id = vars["id"].as_str().unwrap_or("");
@@ -750,12 +931,113 @@ fn linear_response(request: &Value, recorded: Option<&Value>) -> Result<Value, &
             .find(|v| v["id"] == id);
         if operation == graphql::PROJECT_RELATIONS {
             return Ok(
-                json!({"project":linear_relations(&data,"project_dependencies",id,"Project",recorded)}),
+                json!({"project":linear_relations(data,"project_dependencies",id,"Project",recorded)}),
             );
         }
-        return Ok(json!({"project":item.map(linear_project)}));
+        return Ok(json!({"project":item.map(|v|linear_project(v,data))}));
     }
     Ok(json!({"viewer":{"id":"fixture-user"}}))
+}
+
+fn linear_write_item(
+    data: &mut Value,
+    vars: &Value,
+    create: bool,
+    project: bool,
+) -> Result<Value, &'static str> {
+    let input = vars["input"]
+        .as_object()
+        .ok_or("write input must be an object")?;
+    let collection = if project { "projects" } else { "tasks" };
+    let rows = data[collection]
+        .as_array_mut()
+        .ok_or("fixture collection is not an array")?;
+    let id = if create {
+        format!("{}-W{}", if project { "P" } else { "T" }, rows.len() + 1)
+    } else {
+        vars["id"]
+            .as_str()
+            .ok_or("update id must be a string")?
+            .to_owned()
+    };
+    let existing = rows.iter().position(|row| row["id"] == id);
+    if !create && existing.is_none() {
+        return Err("update target does not exist");
+    }
+    let title_key = if project { "name" } else { "title" };
+    let status_key = if project { "statusId" } else { "stateId" };
+    let labels = input
+        .get("labelIds")
+        .and_then(Value::as_array)
+        .ok_or("labelIds must be an array")?
+        .iter()
+        .map(|id| json!({"id":id,"name":id}))
+        .collect::<Vec<_>>();
+    let mut row = json!({
+        "id": id,
+        "title": input.get(title_key).and_then(Value::as_str).ok_or("title must be a string")?,
+        "content": "",
+        "status": {"name":input.get(status_key).and_then(Value::as_str).ok_or("status id must be a string")?,"category":"todo"},
+        "labels": labels,
+        "_linear_description": input.get("description").cloned().unwrap_or(Value::Null),
+    });
+    if !project && let Some(project_id) = input.get("projectId").filter(|v| !v.is_null()) {
+        row["project"] = project_id.clone();
+    }
+    if let Some(index) = existing {
+        rows[index] = row;
+    } else {
+        rows.push(row);
+    }
+    let payload = json!({"id":id});
+    Ok(if project {
+        if create {
+            json!({"projectCreate":{"success":true,"project":payload}})
+        } else {
+            json!({"projectUpdate":{"success":true,"project":payload}})
+        }
+    } else if create {
+        json!({"issueCreate":{"success":true,"issue":payload}})
+    } else {
+        json!({"issueUpdate":{"success":true,"issue":payload}})
+    })
+}
+
+fn linear_write_relation(
+    data: &mut Value,
+    vars: &Value,
+    project: bool,
+) -> Result<Value, &'static str> {
+    let input = vars["input"]
+        .as_object()
+        .ok_or("relation input must be an object")?;
+    let near_key = if project { "projectId" } else { "issueId" };
+    let far_key = if project {
+        "relatedProjectId"
+    } else {
+        "relatedIssueId"
+    };
+    let kind = input
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or("relation type must be a string")?;
+    if !matches!(kind, "blocks" | "related") {
+        return Err("undocumented relation type");
+    }
+    let edge = json!({"from":input.get(near_key).ok_or("missing near id")?,"to":input.get(far_key).ok_or("missing far id")?,"kind":kind});
+    data[if project {
+        "project_dependencies"
+    } else {
+        "task_dependencies"
+    }]
+    .as_array_mut()
+    .ok_or("fixture edges are not an array")?
+    .push(edge);
+    Ok(if project {
+        json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"PR-W"}}})
+    } else {
+        json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"IR-W"}}})
+    })
 }
 
 #[test]
@@ -852,13 +1134,16 @@ fn linear_state(v: &Value) -> Value {
     let category = v["category"].as_str().unwrap_or("");
     json!({"name":v["name"],"type":match category{"todo"=>"unstarted","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
 }
-fn linear_task(v: &Value) -> Value {
-    json!({"id":v["id"],"title":v["title"],"description":linear_description(v,"task_dependencies"),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":v.get("url"),"createdAt":null,"updatedAt":null})
+fn linear_task(v: &Value, data: &Value) -> Value {
+    json!({"id":v["id"],"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":v.get("url"),"createdAt":null,"updatedAt":null})
 }
-fn linear_project(v: &Value) -> Value {
-    json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies"),"status":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":v.get("url"),"createdAt":null,"updatedAt":null})
+fn linear_project(v: &Value, data: &Value) -> Value {
+    json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":v.get("url"),"createdAt":null,"updatedAt":null})
 }
-fn linear_description(v: &Value, edges: &str) -> String {
+fn linear_description(v: &Value, edges: &str, data: &Value) -> String {
+    if let Some(description) = v.get("_linear_description").and_then(Value::as_str) {
+        return description.to_owned();
+    }
     let mut metadata = v
         .get("metadata")
         .and_then(Value::as_object)
@@ -869,7 +1154,16 @@ fn linear_description(v: &Value, edges: &str) -> String {
     }
     // No Linear relation can name an item of another source, so this is the one slot a
     // far end like that can be in.
-    let far = recorded_far_ends(edges, &v["id"]);
+    let far = data[edges]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|edge| {
+            edge["from"].get("id") == Some(&v["id"])
+                && edge["to"]["id"].as_str().is_some_and(|id| id.contains(':'))
+        })
+        .map(|edge| edge["to"].clone())
+        .collect::<Vec<_>>();
     if !far.is_empty() {
         metadata.insert("onetaskgraph.depends_on".into(), Value::Array(far));
     }
@@ -961,13 +1255,15 @@ fn linear_relations(
     // operation selects for exactly that reason.
     let forward = edges
         .iter()
-        .filter(|e| e["from"] == id && e["to"].is_string())
-        .map(|e| json!({"type":e["kind"],(format!("related{suffix}")):{"id":e["to"]}}))
+        .enumerate()
+        .filter(|(_,e)| e["from"] == id && e["to"].is_string())
+        .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":e["kind"],(format!("related{suffix}")):{"id":e["to"]}}))
         .collect::<Vec<_>>();
     let inverse = edges
         .iter()
-        .filter(|e| e["to"] == id && e["from"].is_string())
-        .map(|e| json!({"type":e["kind"],(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
+        .enumerate()
+        .filter(|(_,e)| e["to"] == id && e["from"].is_string())
+        .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":e["kind"],(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
         .collect::<Vec<_>>();
     let items = if suffix == "Issue" {
         "tasks"
@@ -986,7 +1282,7 @@ fn linear_relations(
             "",
             &json!({"onetaskgraph.depends_on": recorded}),
         )),
-        None => item.map(|item| linear_description(item, key)),
+        None => item.map(|item| linear_description(item, key, data)),
     };
     json!({"description":description,"relations":{"nodes":forward,"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":inverse,"pageInfo":{"hasNextPage":false,"endCursor":null}}})
 }
