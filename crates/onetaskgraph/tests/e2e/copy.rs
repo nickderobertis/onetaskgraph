@@ -261,7 +261,7 @@ fn every_source_kind_can_be_copied_into_a_folder_of_markdown_with_its_fields_int
 }
 
 #[test]
-fn github_projects_is_a_permanent_destination_and_round_trips_draft_fields() {
+fn github_projects_is_a_permanent_destination_and_persists_draft_fields() {
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("authored");
     std::fs::create_dir_all(root.join("tasks")).unwrap();
