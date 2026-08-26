@@ -131,8 +131,11 @@ and reported as `orphaned`.
 {"items": [{"source": "notes:ENG-142", "action": "updated", "destination": "work:ENG-142"}]}
 ```
 
-`action` is `created`, `updated`, `unchanged` or `orphaned`, and `destination` is `null`
-only for a dry run that would have created something.
+`action` says which of the four things above happened to that item, and `destination` is
+`null` only for a dry run that would have created something. The vocabulary itself is
+published rather than restated here: it is the `CopyAction` root of `onetaskgraph schema`,
+which is what both SDKs are generated from and what the journeys validate this output
+against.
 
 ### Exit codes
 
