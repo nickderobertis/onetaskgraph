@@ -192,6 +192,9 @@ readonly ENFORCEMENT="check-bash4-array-builtins-enforced.sh"
 readonly PLANTED="scripts/nested/deep-helper.sh"
 readonly FOREIGN_PLANTED='scripts\nested\deep-helper.sh'
 
+# Counts the failure and returns 0: every case below calls this directly, so a non-zero
+# return would end the run under `set -e` — before the later cases, and before the closing
+# report that is where this check says what to go and fix.
 expect_naming() {
   local case_name="$1"
   shift
@@ -199,7 +202,7 @@ expect_naming() {
     echo "check-guard-path-spelling: $case_name — the guard passed a script that uses a bash 4" >&2
     echo "check-guard-path-spelling: array builtin, so this case reports on nothing." >&2
     failures=$((failures + 1))
-    return 1
+    return
   fi
   local needle
   for needle in "$@"; do
@@ -208,7 +211,7 @@ expect_naming() {
       echo "check-guard-path-spelling: mentions '$needle'. It said:" >&2
       report_output
       failures=$((failures + 1))
-      return 1
+      return
     fi
   done
 }
