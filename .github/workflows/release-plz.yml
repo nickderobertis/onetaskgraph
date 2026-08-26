@@ -31,19 +31,34 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+      # scripts/prepare-release-pr.sh runs scripts/set-version.sh, which relocks the Python
+      # side; without uv on PATH the release pull request could not carry a uv.lock that
+      # agrees with the version it proposes. v7 is the newest floating major tag this action
+      # publishes.
+      - uses: astral-sh/setup-uv@v7
+      # release-plz is pinned because scripts/check-release-pr-sync.sh stands in for it in
+      # the gate, and a stand-in models one version's behaviour. That check reconciles this
+      # pin against the version it was recorded from and fails when they part, so moving the
+      # pin means re-observing the real tool rather than hoping it still behaves the same.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-semver-checks,release-plz
+          tool: cargo-semver-checks,release-plz@0.3.160
       # llmlint: ignore-block[changed_behavior_has_e2e] Proving these steps requires publishing crates and a GitHub Release and auto-merging its pull request, which a pre-publication dispatch cannot perform.
       - name: Tag and cut the GitHub Release with the PAT
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: release-plz release --git-token "$GITHUB_TOKEN"
+      # Not `release-plz release-pr`: that writes the Cargo manifests and nothing else, so
+      # the pull request it opens carries npm/, sdks/ and pyproject.toml at the previous
+      # version and fails the `check` its own merge requires. The script bumps with
+      # release-plz, brings every other manifest to the version it chose, and only then opens
+      # the pull request. GIT_TOKEN rather than an argument: release-plz reads the token from
+      # there, and an argument list is readable by every process on the runner.
       - name: Open or update the release pull request
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-        run: release-plz release-pr --git-token "$GITHUB_TOKEN"
+          GIT_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: scripts/prepare-release-pr.sh
       - name: Enable auto-merge
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
