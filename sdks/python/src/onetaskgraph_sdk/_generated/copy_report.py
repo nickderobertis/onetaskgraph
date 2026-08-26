@@ -16,7 +16,7 @@ class GlobalId(RootModel[str]):
     ]
 
 
-class CopyOutcomeCreated(BaseModel):
+class CopyOutcomeCreatedOrWouldCreate(BaseModel):
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     action: Literal["created"]
     destination: Annotated[
@@ -46,10 +46,18 @@ class CopyOutcomeOrphaned(BaseModel):
 
 
 class CopyOutcome(
-    RootModel[CopyOutcomeCreated | CopyOutcomeUpdated | CopyOutcomeUnchanged | CopyOutcomeOrphaned]
+    RootModel[
+        CopyOutcomeCreatedOrWouldCreate
+        | CopyOutcomeUpdated
+        | CopyOutcomeUnchanged
+        | CopyOutcomeOrphaned
+    ]
 ):
     root: Annotated[
-        CopyOutcomeCreated | CopyOutcomeUpdated | CopyOutcomeUnchanged | CopyOutcomeOrphaned,
+        CopyOutcomeCreatedOrWouldCreate
+        | CopyOutcomeUpdated
+        | CopyOutcomeUnchanged
+        | CopyOutcomeOrphaned,
         Field(
             description="What happened to one item.\n\n`action` and `destination` are one value rather than two fields side by side: an\nupdated item without a destination id, or an orphan without one, are states this type\nmust not be able to say — the id *is* what those outcomes are about. The one outcome\nthat legitimately has none is a dry run that would create, because nothing was\ncreated and there is no id to report."
         ),

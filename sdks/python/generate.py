@@ -297,6 +297,11 @@ def add_variant_titles(value: JsonValue, hint: str) -> None:
                         break
             if isinstance(discriminant, str):
                 words = "".join(part.title() for part in discriminant.split("-"))
+                # The wire contract deliberately uses `created` for a real create and a
+                # dry run that would create. Keep the generated model's name truthful
+                # without changing the serialized action Rust and CLI consumers read.
+                if hint == "CopyOutcome" and discriminant == "created":
+                    words = "CreatedOrWouldCreate"
                 variant["title"] = f"{hint}{words}"
     for key, child in value.items():
         bare = key.removeprefix("$")

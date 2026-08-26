@@ -154,6 +154,9 @@ impl CopyOutcome {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum CopyAction {
+    // llmlint: ignore[names_match_behavior] `created` is Contract D's serialized action
+    // for both a completed create and a dry run that would create; the optional destination
+    // distinguishes those cases, and renaming this public variant would break Rust callers.
     /// The destination held no counterpart, so one was created.
     Created {
         /// The id it was created under, or `null` for a dry run that would have created
