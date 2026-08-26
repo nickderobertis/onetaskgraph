@@ -519,7 +519,11 @@ fn copying_a_project_carries_its_tasks_and_reports_one_the_source_no_longer_hold
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("remote");
     for (kind, id, front) in [
-        ("projects", "P-1", "title: Engine\nstatus: doing"),
+        (
+            "projects",
+            "P-1",
+            "title: Engine\nstatus: doing\ndepends_on: [{id: T-1, item: task}]",
+        ),
         ("tasks", "T-1", "title: Alpha\nstatus: todo\nproject: P-1"),
         ("tasks", "T-2", "title: Beta\nstatus: todo\nproject: P-1"),
     ] {
@@ -593,6 +597,20 @@ fn copying_a_project_carries_its_tasks_and_reports_one_the_source_no_longer_hold
     assert_eq!(
         shown(&sandbox, "task", "notes:T-1")["project"],
         json!("P-1")
+    );
+    let dependencies: Value =
+        serde_json::from_str(&ok(&sandbox, &["project", "deps", "notes:P-1", "--json"]))
+            .expect("project dependencies emit JSON");
+    assert!(
+        dependencies["items"]
+            .as_array()
+            .expect("dependency items")
+            .contains(&json!({
+                "from": {"id": "notes:P-1", "kind": "project"},
+                "to": {"id": "notes:T-1", "kind": "task"},
+                "kind": "blocks"
+            })),
+        "the copied project edge is recreated between destination items: {dependencies:#}"
     );
 
     // A second copy matches each task independently and duplicates nothing.

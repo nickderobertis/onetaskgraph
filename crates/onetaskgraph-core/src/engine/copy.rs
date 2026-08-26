@@ -345,6 +345,46 @@ impl Engine {
         id: &GlobalId,
         tasks: bool,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
+        let members = if tasks {
+            self.project_members(id).await?
+        } else {
+            Vec::new()
+        };
+        // On a repeat copy, compare the project with its final remapped edges before the
+        // first pass temporarily rewrites it. This preserves an `unchanged` outcome when
+        // the project and every copied member already have counterparts.
+        let project_plan = self
+            .plan(destination, request, ItemKind::Project, id)
+            .await?;
+        let mut copied = vec![id.clone()];
+        copied.extend(members.iter().cloned());
+        let mut known = BTreeMap::new();
+        if let Target::Update(target) = &project_plan.target {
+            known.insert(id.to_string(), target.clone());
+        }
+        for member in &members {
+            let member_plan = self
+                .plan(destination, request, ItemKind::Task, member)
+                .await?;
+            if let Target::Update(target) = member_plan.target {
+                known.insert(member.to_string(), target);
+            }
+        }
+        let project_was_unchanged = if let Target::Update(target) = &project_plan.target {
+            let edges = mapped_edges(
+                &project_plan.edges,
+                &id.source,
+                destination,
+                &copied,
+                &known,
+            );
+            !edges.iter().any(Option::is_none)
+                && !self
+                    .changes(destination, &project_plan, target, &None, &resolved(&edges))
+                    .await?
+        } else {
+            false
+        };
         let mut outcomes = self
             .copy_items(
                 destination,
@@ -361,18 +401,50 @@ impl Engine {
         // there is no destination project id to file the tasks under. Every task is still
         // read and still reported, because that is what a dry run is for.
         let project = outcomes.first().and_then(CopyOutcome::destination).cloned();
-        let members = self.project_members(id).await?;
-        outcomes.extend(
-            self.copy_items(
+        let task_outcomes = self
+            .copy_items(
                 destination,
                 request,
                 ItemKind::Task,
                 &members,
                 project.as_ref().map(|project| project.native.clone()),
             )
-            .await?,
-        );
+            .await?;
+        outcomes.extend(task_outcomes);
         if let Some(project) = project {
+            if !request.dry_run {
+                // The project was necessarily written before its members so they could
+                // be filed under it. Now every destination id is known, repair project
+                // edges whose far ends are tasks in the copied set.
+                let planned = self
+                    .plan(destination, request, ItemKind::Project, id)
+                    .await?;
+                let mut copied = vec![id.clone()];
+                copied.extend(members.iter().cloned());
+                let written: BTreeMap<String, NativeId> = outcomes
+                    .iter()
+                    .filter_map(|outcome| {
+                        outcome.destination().map(|destination| {
+                            (outcome.source.to_string(), destination.native.clone())
+                        })
+                    })
+                    .collect();
+                let edges =
+                    mapped_edges(&planned.edges, &id.source, destination, &copied, &written);
+                self.write(
+                    destination,
+                    &planned,
+                    Some(project.native.clone()),
+                    self.filed(destination, &planned, None).await?,
+                    &resolved(&edges),
+                )
+                .await?;
+            }
+            if project_was_unchanged {
+                outcomes[0].action = CopyAction::Unchanged {
+                    destination: project.clone(),
+                };
+            }
             outcomes.extend(
                 self.orphans(destination, id, &project.native, &members)
                     .await?,

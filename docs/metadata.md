@@ -41,9 +41,8 @@ from an issue-backed item's own repository. Every source reads it from
 
 One rule decides where an edge lives, and every source follows it: **the backend's own
 relationship wherever that relationship can name the far end, and the reserved key only
-where it cannot.** `docs/plugin-protocol.md` §4.8 is the normative text. A far end in
-another source is the reserved key's case everywhere, because no backend relates an id in
-a system it knows nothing about.
+where it cannot.** A far end in another source is the reserved key's case everywhere,
+because no backend relates an id in a system it knows nothing about.
 
 The rule is enforced, not just described. A source **refuses** an `onetaskgraph.depends_on`
 entry its own relationship could have held, naming the entry and saying to record it in the
