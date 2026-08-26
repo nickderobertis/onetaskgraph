@@ -311,6 +311,14 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 row["content"]["body"] = input["body"].clone();
                 json!({"updateProjectV2DraftIssue":{"draftIssue":{"id":input["draftIssueId"]}}})
             } else if query.contains("updateIssue(input:$input)") {
+                assert!(
+                    variables["input"]["title"]
+                        .as_str()
+                        .is_some_and(|title| !title.is_empty())
+                );
+                assert!(
+                    variables["input"]["body"].is_string() || variables["input"]["body"].is_null()
+                );
                 json!({"updateIssue":{"issue":{"id":variables["input"]["id"]}}})
             } else if query.contains("updateProjectV2ItemFieldValue(input:$input)") {
                 let input = &variables["input"];
@@ -333,6 +341,17 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 }
                 json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":input["itemId"]}}})
             } else if query.contains("updateProjectV2(input:$input)") {
+                assert_eq!(variables["input"]["projectId"], "P-1");
+                assert!(
+                    variables["input"]["title"]
+                        .as_str()
+                        .is_some_and(|title| !title.is_empty())
+                );
+                assert!(
+                    variables["input"]["shortDescription"].is_string()
+                        || variables["input"]["shortDescription"].is_null()
+                );
+                assert!(variables["input"]["closed"].is_boolean());
                 json!({"updateProjectV2":{"projectV2":{"id":"P-1"}}})
             } else if query.contains("addBlockedBy(input:$input)") {
                 json!({"addBlockedBy":{"issue":{"id":variables["input"]["issueId"]},"blockingIssue":{"id":variables["input"]["blockingIssueId"]}}})
@@ -520,6 +539,7 @@ fn github_project_page(variables: &Value, recorded: Option<&Value>, written: &[V
                 "onetaskgraph.depends_on":recorded_far_ends("project_dependencies",&json!("P-1"))
             })).unwrap()),
             "url":"https://example.invalid/P-1","closed":false,
+            "fields":{"nodes":[{"id":"FIELD-status","name":"Status","options":[{"id":"OPT-todo","name":"Todo"},{"id":"OPT-doing","name":"Doing"},{"id":"OPT-shipped","name":"Shipped"}]},{"id":"FIELD-metadata","name":"onetaskgraph.metadata"}],"pageInfo":{"hasNextPage":false}},
             "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < tasks.len(),"endCursor":end.to_string()}}
         }},
         "user":{"projectV2":null}

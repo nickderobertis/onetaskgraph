@@ -106,7 +106,12 @@ type ProjectV2 implements Node {
   createdAt: DateTime!
   updatedAt: DateTime!
   closed: Boolean!
+  fields(first: Int, after: String): ProjectV2FieldConfigurationConnection!
   items(first: Int, after: String): ProjectV2ItemConnection!
+}
+type ProjectV2FieldConfigurationConnection {
+  nodes: [ProjectV2FieldConfiguration]
+  pageInfo: PageInfo!
 }
 type ProjectV2Item implements Node {
   id: ID!

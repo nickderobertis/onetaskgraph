@@ -182,8 +182,10 @@ async fn creates_and_updates_drafts_and_updates_only_the_configured_project() {
     item["fieldValues"]["nodes"][0]["name"] = json!("Doing");
     let created = json!({"data":{"addProjectV2DraftIssue":{"projectItem":{"id":"PVTI-new","content":{"id":"DRAFT-new"}}}}});
     let ok_field = mutation_data("updateProjectV2ItemFieldValue/projectV2Item", "PVTI-new");
+    let mut empty = project_response(false);
+    empty["data"]["owner"]["projectV2"]["items"]["nodes"] = json!([]);
     let (endpoint, handle) = sequence_server(vec![
-        project_response(false),
+        empty,
         created,
         ok_field.clone(),
         ok_field.clone(),
@@ -450,12 +452,10 @@ async fn a_write_resolves_an_item_id_across_board_pages() {
 #[tokio::test]
 async fn a_write_refuses_a_board_without_its_owned_field_or_status_option() {
     let mut no_metadata = project_response(false);
-    no_metadata["data"]["owner"]["projectV2"]["items"]["nodes"][0]["fieldValues"]["nodes"]
+    no_metadata["data"]["owner"]["projectV2"]["fields"]["nodes"]
         .as_array_mut()
         .unwrap()
-        .retain(|value| {
-            value.pointer("/field/name").and_then(Value::as_str) != Some("onetaskgraph.metadata")
-        });
+        .retain(|value| value.get("name").and_then(Value::as_str) != Some("onetaskgraph.metadata"));
     let (endpoint, handle) = sequence_server(vec![no_metadata, project_response(false)]);
     let source = build(&endpoint);
     let task = |status: &str| Task {
@@ -602,7 +602,7 @@ fn source_task_for_write() -> Task {
 async fn malformed_mutation_payloads_are_rejected_at_each_write_boundary() {
     for pointer in [
         "/data/owner/projectV2/items/nodes",
-        "/data/owner/projectV2/items/nodes/0/fieldValues/nodes",
+        "/data/owner/projectV2/fields/nodes",
     ] {
         let mut malformed = project_response(false);
         *malformed.pointer_mut(pointer).unwrap() = json!("not-an-array");
@@ -789,6 +789,52 @@ async fn mutation_payload_ids_must_match_the_requested_items() {
         matches!(source.write_task(&ItemWrite { target: Some(task.id.clone()), item: task, depends_on: vec![edge] }).await, Err(SourceError::Malformed { message }) if message.contains("wrong issues"))
     );
     handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn dependency_writes_refuse_missing_and_unknown_same_source_items() {
+    for (far, expected) in [
+        (None, "not found"),
+        (Some("Mystery"), "unknown content type"),
+    ] {
+        let project = project_response(false);
+        let mut far_page = project_response(false);
+        if let Some(kind) = far {
+            far_page["data"]["owner"]["projectV2"]["items"]["nodes"][0]["content"]["id"] =
+                json!("FAR");
+            far_page["data"]["owner"]["projectV2"]["items"]["nodes"][0]["content"]["__typename"] =
+                json!(kind);
+        }
+        let (endpoint, handle) = sequence_server(vec![
+            project.clone(),
+            project,
+            mutation_data("updateIssue/issue", "I_task"),
+            far_page,
+        ]);
+        let source = build(&endpoint);
+        let task = source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .unwrap()
+            .items
+            .remove(0);
+        let edge = DependencyEdge {
+            from: DependencyEndpoint::from_native(task.id.clone(), ItemKind::Task),
+            to: DependencyEndpoint::from_native(NativeId("FAR".into()), ItemKind::Task),
+            kind: DependencyKind::Blocks,
+        };
+        let error = source
+            .write_task(&ItemWrite {
+                target: Some(task.id.clone()),
+                item: task,
+                depends_on: vec![edge],
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+        handle.join().unwrap();
+    }
 }
 
 #[tokio::test]

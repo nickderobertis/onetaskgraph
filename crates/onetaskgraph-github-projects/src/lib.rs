@@ -59,6 +59,10 @@ pub mod graphql {
         ... on ProjectV2Owner{projectV2(number:$number){...Project}}
       }
     } fragment Project on ProjectV2 { id title shortDescription url createdAt updatedAt closed
+      fields(first:$nestedFirst){nodes{
+        ... on ProjectV2SingleSelectField{id name options{id name}}
+        ... on ProjectV2Field{id name}
+      }pageInfo{hasNextPage}}
       items(first:$first,after:$after){nodes{id fieldValues(first:$nestedFirst){nodes{
         ... on ProjectV2ItemFieldSingleSelectValue{name field{
           ... on ProjectV2SingleSelectField{id name options{id name}}
@@ -318,7 +322,8 @@ impl GitHubProjectsSource {
         items_first: u32,
     ) -> Result<Value, SourceError> {
         let data = self.graphql(graphql::PROJECT, json!({"owner":self.owner,"number":self.project_number,"first":items_first.min(MAX_PAGE_SIZE),"after":items_after,"nestedFirst":NESTED_PAGE_SIZE})).await?;
-        data.pointer("/owner/projectV2")
+        let project = data
+            .pointer("/owner/projectV2")
             .filter(|v| !v.is_null())
             .cloned()
             .ok_or_else(|| SourceError::Refused {
@@ -326,7 +331,8 @@ impl GitHubProjectsSource {
                     "GitHub project {}/{} was not found or is not visible to the token",
                     self.owner, self.project_number
                 ),
-            })
+            })?;
+        Ok(project)
     }
 
     fn status(&self, item: &Value) -> Result<Status, SourceError> {
@@ -571,26 +577,15 @@ impl GitHubProjectsSource {
     }
 
     fn field<'a>(project: &'a Value, name: &str) -> Result<Option<&'a Value>, SourceError> {
-        let items = project
-            .pointer("/items/nodes")
+        let fields = project
+            .pointer("/fields/nodes")
             .and_then(Value::as_array)
-            .expect("board_and_item validates project items.nodes before field discovery");
-        for item in items {
-            let fields = item
-                .pointer("/fieldValues/nodes")
-                .and_then(Value::as_array)
-                .ok_or_else(|| SourceError::Malformed {
-                    message: "GitHub project item fieldValues.nodes is not an array".into(),
-                })?;
-            if let Some(field) = fields.iter().find_map(|value| {
-                (value.pointer("/field/name").and_then(Value::as_str) == Some(name))
-                    .then(|| value.get("field"))
-                    .flatten()
-            }) {
-                return Ok(Some(field));
-            }
-        }
-        Ok(None)
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub project fields.nodes is not an array".into(),
+            })?;
+        Ok(fields
+            .iter()
+            .find(|field| field.get("name").and_then(Value::as_str) == Some(name)))
     }
 
     fn task_metadata(
