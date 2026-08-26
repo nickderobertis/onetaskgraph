@@ -2,23 +2,8 @@
 # Reconcile AGENTS.md's plugin-contract inventory against what the api crate really
 # exports, so the two cannot drift apart in silence.
 #
-# Which crate a type lives in IS the contract here, and AGENTS.md is where a reader
-# looks it up. Prose and code agreeing on the day they were written is worth nothing;
-# the failure this catches is the ordinary one — a type added to
-# `onetaskgraph-plugin-api` and not written down, or written down and never added —
-# after which the document a plugin author trusts is quietly wrong.
-#
-# This gate deliberately does NOT resolve the one recorded disagreement between the two.
-# The approved enumeration is exhaustive and omits `Health`, while `TaskSource::health`
-# returns it and that trait is in this crate, so the enumeration and the trait as written
-# cannot both stand. Resolving that — adding `Health` to the enumeration, or redesigning
-# `health` so no such type crosses the boundary — is a change to an approved contract and
-# belongs to the contract's owner, not to this script and not to any worker. So the
-# disagreement is carried below as a named exception with its reason: the contradiction
-# stays exactly as recorded, and it stays MACHINE-CHECKED, which is the difference between
-# a known open question and undetected drift. Adding `Health` to AGENTS.md's inventory
-# fails this check until its exception is removed here too — deliberately, so that
-# settling the question is one visible act rather than a quiet edit to a bullet list.
+# `Health` remains the one named exception so resolving AGENTS.md's open contract question
+# requires removing the executable exception in the same change.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

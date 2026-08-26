@@ -317,7 +317,8 @@ export class OnetaskgraphClient {
 export function assertCompleteCommandSurface(): void {
   const missing = binaryCommands.filter((command) => {
     const method = command.replace(/ ([a-z])/g, (_, letter: string) => letter.toUpperCase());
-    // Indexing is necessary because method names originate in the emitted runtime contract.
+    // The emitted runtime contract supplies a dynamic string, so the assertion is the
+    // boundary that permits reflective lookup while this check verifies the method exists.
     return typeof OnetaskgraphClient.prototype[method as keyof OnetaskgraphClient] !== "function";
   });
   if (missing.length > 0)
