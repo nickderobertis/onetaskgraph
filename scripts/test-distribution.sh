@@ -324,7 +324,13 @@ if "$tmp/version-repo/scripts/set-version.sh" --check 2>"$tmp/error"; then echo 
 grep -q 'version drift found' "$tmp/error" || { cat "$tmp/error" >&2; echo "version-drift failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
 git -C "$tmp/version-repo" restore npm/cli/package.json
 "$tmp/version-repo/scripts/set-version.sh" 0.1.1
+if ! (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then
+  cat "$tmp/error" >&2
+  echo "version updater left the workspace version copies inconsistent; next: reconcile its version-file inventory with check-workspace-config.sh" >&2
+  exit 1
+fi
 grep -q '^version = "0.1.1"' "$tmp/version-repo/Cargo.toml" || { echo "version updater missed the workspace manifest; next: inspect manifest mutation" >&2; exit 1; }
+grep -q '^__version__ = "0.1.1"' "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py" || { echo "version updater missed the Python SDK module version; next: inspect product-version mutation" >&2; exit 1; }
 grep -q 'onetaskgraph-cli==0.1.1' "$tmp/version-repo/sdks/python/pyproject.toml" || { echo "version updater missed the Python CLI pin; next: inspect dependency mutation" >&2; exit 1; }
 node -e 'const p=require(process.argv[1]); if(p.version!=="0.1.1" || Object.values(p.optionalDependencies).some(v=>v!=="0.1.1")) process.exit(1)' "$tmp/version-repo/npm/cli/package.json" || { echo "version updater missed npm metadata; next: inspect JSON mutation" >&2; exit 1; }
 grep -q 'version = "0.1.1"' "$tmp/version-repo/Cargo.lock" || { echo "version updater missed Cargo.lock; next: inspect lock refresh" >&2; exit 1; }

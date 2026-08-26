@@ -16,6 +16,10 @@ import re
 import sys
 from pathlib import Path
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path("scripts").resolve()))
+from product_versions import read_product_versions
+
 # The uniform set. Every project declares all of these, spelled identically, or one root
 # command silently stops covering it.
 UNIFORM = {"bootstrap", "check", "format", "format-check", "lint", "typecheck", "test",
@@ -117,39 +121,17 @@ else:
         )
 
 # One product version spans three ecosystems and no manifest can derive it from another,
-# so they are reconciled here. The release tool writes all three through one script; this
-# is what catches a hand-edited one of N before it ships as a mismatched release.
+# so they are reconciled here. The release tool and this check read the same inventory;
+# this catches a hand-edited one of N without letting their file lists drift apart.
 #
 # The Python SDK's `__version__` is a fourth copy and is reconciled with them. It is the
 # value the generated surface reports, so a module constant left behind by a release is a
 # package that misreports its own version — and it belongs here, with the other three,
 # rather than in a test of that package: this is where a version disagreement is caught,
 # and one place that knows about all four beats two places that each know about some.
-versions = {
-    "Cargo.toml": re.search(
-        r'^\[workspace\.package\]\nversion\s*=\s*"([^"]+)"',
-        Path("Cargo.toml").read_text(),
-        re.M,
-    ),
-    "sdks/python/pyproject.toml": re.search(
-        r'^version\s*=\s*"([^"]+)"', Path("sdks/python/pyproject.toml").read_text(), re.M
-    ),
-    "sdks/python/src/onetaskgraph_sdk/__init__.py": re.search(
-        r'^__version__ = "([^"]+)"',
-        Path("sdks/python/src/onetaskgraph_sdk/__init__.py").read_text(),
-        re.M,
-    ),
-    "sdks/typescript/package.json": None,
-}
-package_json = json.loads(Path("sdks/typescript/package.json").read_text())
-
-declared = {}
-for path, match in versions.items():
-    if path.endswith("package.json"):
-        declared[path] = package_json.get("version")
-    elif match:
-        declared[path] = match.group(1)
-    else:
+declared = read_product_versions()
+for path, version in declared.items():
+    if version is None:
         problems.append(f"{path}: no product version could be read")
 
 if len(set(declared.values())) > 1:
