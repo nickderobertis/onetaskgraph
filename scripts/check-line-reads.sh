@@ -34,6 +34,8 @@ case "${OS:-}${OSTYPE:-}" in
     ;;
 esac
 
+# The path is assembled from $ROOT at runtime, so shellcheck cannot resolve it. Naming
+# the file has it follow and check read-lines.sh (SC1091) rather than skip it unread.
 # shellcheck source=scripts/read-lines.sh
 source "$ROOT/scripts/read-lines.sh" || fatal \
   "could not load $ROOT/scripts/read-lines.sh, the read every case below asserts about" \
@@ -297,6 +299,8 @@ fi
 #    It needs a git repository to clone from and a node_modules to copy, so the fixture is
 #    a scratch clone with the working tree's files committed on top of it.
 selection="$scratch/selection"
+# The path is assembled from $ROOT at runtime, so shellcheck cannot resolve it. Naming
+# the file has it follow and check scratch-clone.sh (SC1091) rather than skip it unread.
 # shellcheck source=scripts/scratch-clone.sh
 source "$ROOT/scripts/scratch-clone.sh" || fatal \
   "could not load $ROOT/scripts/scratch-clone.sh, which strips the git environment" \

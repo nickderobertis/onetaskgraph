@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 fail() { echo "distribution contract drift: $1" >&2; echo "next: update the release matrix, installer, launcher, and carrier manifests together" >&2; exit 1; }
+# The path is assembled from BASH_SOURCE at runtime, so shellcheck cannot resolve it.
+# Naming the file has it follow and check read-lines.sh (SC1091) rather than skip it unread.
 # shellcheck source=scripts/read-lines.sh
 source "$(dirname "${BASH_SOURCE[0]}")/read-lines.sh" || { echo "distribution contract drift: could not load scripts/read-lines.sh, which reads both inventories below into arrays" >&2; echo "next: restore it with 'git checkout -- scripts/read-lines.sh'" >&2; exit 1; }
 expected=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64)

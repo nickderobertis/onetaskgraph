@@ -46,6 +46,8 @@ esac
 # every `check`, and cargo refuses an invalid package name loudly — that refusal is
 # the very failure the `tr` here exists to fix.
 # tr: see scripts/check-plugin-isolation.sh — python's stdout is CRLF on Windows.
+# The path is assembled from $ROOT at runtime, so shellcheck cannot resolve it. Naming
+# the file has it follow and check read-lines.sh (SC1091) rather than skip it unread.
 # shellcheck source=scripts/read-lines.sh
 source "$ROOT/scripts/read-lines.sh" || {
   echo "check-affected-selection: could not load $ROOT/scripts/read-lines.sh, which reads the" >&2

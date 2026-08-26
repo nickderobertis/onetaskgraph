@@ -32,6 +32,8 @@ readonly ENGINE_CRATE="onetaskgraph-core"
 # arrives as "\r\n". read_lines strips the newline but not the carriage return, and a
 # crate name carrying a trailing CR matches no package in the graph — a failure no Linux
 # or macOS run can reproduce.
+# The path is assembled from $ROOT at runtime, so shellcheck cannot resolve it. Naming
+# the file has it follow and check read-lines.sh (SC1091) rather than skip it unread.
 # shellcheck source=scripts/read-lines.sh
 source "$ROOT/scripts/read-lines.sh" || {
   echo "check-plugin-isolation: could not load $ROOT/scripts/read-lines.sh, which reads the" >&2
