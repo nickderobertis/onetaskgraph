@@ -509,10 +509,14 @@ impl GitHubProjectsSource {
         let mut after = None;
         loop {
             let project = self.project_value(after.as_deref(), MAX_PAGE_SIZE).await?;
+            let nodes = project
+                .pointer("/items/nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub project items.nodes is not an array".into(),
+                })?;
             let found = content_id.and_then(|wanted| {
-                project
-                    .pointer("/items/nodes")
-                    .and_then(Value::as_array)?
+                nodes
                     .iter()
                     .find(|item| {
                         item.pointer("/content/id").and_then(Value::as_str)
@@ -545,32 +549,48 @@ impl GitHubProjectsSource {
         field_id: &str,
         value: Value,
     ) -> Result<(), SourceError> {
-        self.graphql(
-            graphql::UPDATE_FIELD,
-            json!({"input":{
-                "projectId":project_id,"itemId":item_id,"fieldId":field_id,"value":value
-            }}),
-        )
-        .await?;
+        let data = self
+            .graphql(
+                graphql::UPDATE_FIELD,
+                json!({"input":{
+                    "projectId":project_id,"itemId":item_id,"fieldId":field_id,"value":value
+                }}),
+            )
+            .await?;
+        let returned = data
+            .pointer("/updateProjectV2ItemFieldValue/projectV2Item")
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub field update returned no project item".into(),
+            })?;
+        if required_str(returned, "id")? != item_id {
+            return Err(SourceError::Malformed {
+                message: "GitHub field update returned the wrong project item".into(),
+            });
+        }
         Ok(())
     }
 
-    fn field<'a>(project: &'a Value, name: &str) -> Option<&'a Value> {
-        project
-            .pointer("/items/nodes")?
-            .as_array()?
-            .iter()
-            .flat_map(|item| {
-                item.pointer("/fieldValues/nodes")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-            })
-            .find_map(|value| {
+    fn field<'a>(project: &'a Value, name: &str) -> Result<Option<&'a Value>, SourceError> {
+        let items = project
+            .pointer("/items/nodes")
+            .and_then(Value::as_array)
+            .expect("board_and_item validates project items.nodes before field discovery");
+        for item in items {
+            let fields = item
+                .pointer("/fieldValues/nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub project item fieldValues.nodes is not an array".into(),
+                })?;
+            if let Some(field) = fields.iter().find_map(|value| {
                 (value.pointer("/field/name").and_then(Value::as_str) == Some(name))
                     .then(|| value.get("field"))
                     .flatten()
-            })
+            }) {
+                return Ok(Some(field));
+            }
+        }
+        Ok(None)
     }
 
     fn task_metadata(
@@ -795,6 +815,23 @@ impl GitHubProjectsSource {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContentKind {
+    DraftIssue,
+    Issue,
+}
+impl ContentKind {
+    fn parse(content: &Value) -> Result<Self, SourceError> {
+        match required_str(content, "__typename")? {
+            "DraftIssue" => Ok(Self::DraftIssue),
+            "Issue" => Ok(Self::Issue),
+            other => Err(SourceError::Refused {
+                message: format!("GitHub {other} items cannot be updated by this destination"),
+            }),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl TaskSource for GitHubProjectsSource {
     fn kind(&self) -> &'static str {
@@ -1005,10 +1042,10 @@ impl TaskSource for GitHubProjectsSource {
         let (project, existing) = self.board_and_item(write.target.as_ref()).await?;
         let project_id = required_str(&project, "id")?;
         let metadata_field =
-            Self::field(&project, METADATA_FIELD).ok_or_else(|| SourceError::Refused {
+            Self::field(&project, METADATA_FIELD)?.ok_or_else(|| SourceError::Refused {
                 message: format!("GitHub project has no source-owned {METADATA_FIELD} text field"),
             })?;
-        let status_selection = Self::field(&project, "Status")
+        let status_selection = Self::field(&project, "Status")?
             .map(|field| {
                 let option = field
                     .get("options")
@@ -1035,18 +1072,17 @@ impl TaskSource for GitHubProjectsSource {
                 ))
             })
             .transpose()?;
-        let (content_id, item_id, typename) = if let Some(target) = &write.target {
+        let (content_id, item_id, content_kind) = if let Some(target) = &write.target {
             let item = existing.ok_or_else(|| SourceError::Refused {
                 message: format!("GitHub destination item {} was not found", target.0),
             })?;
-            let typename =
-                required_str(item.get("content").unwrap_or(&Value::Null), "__typename")?.to_owned();
-            if typename == "DraftIssue" && !write.item.labels.is_empty() {
+            let content_kind = ContentKind::parse(item.get("content").unwrap_or(&Value::Null))?;
+            if content_kind == ContentKind::DraftIssue && !write.item.labels.is_empty() {
                 return Err(SourceError::Refused {
                     message: "GitHub draft items cannot represent labels".into(),
                 });
             }
-            if typename == "Issue" {
+            if content_kind == ContentKind::Issue {
                 let held = Self::labels(&item)?;
                 if held != write.item.labels {
                     return Err(SourceError::Refused {
@@ -1072,27 +1108,35 @@ impl TaskSource for GitHubProjectsSource {
                     });
                 }
             }
-            let operation = match typename.as_str() {
-                "DraftIssue" => graphql::UPDATE_DRAFT,
-                "Issue" => graphql::UPDATE_ISSUE,
-                other => {
-                    return Err(SourceError::Refused {
-                        message: format!(
-                            "GitHub {other} items cannot be updated by this destination"
-                        ),
-                    });
-                }
+            let operation = match content_kind {
+                ContentKind::DraftIssue => graphql::UPDATE_DRAFT,
+                ContentKind::Issue => graphql::UPDATE_ISSUE,
             };
-            let input = if typename == "DraftIssue" {
+            let input = if content_kind == ContentKind::DraftIssue {
                 json!({"draftIssueId":target.0,"title":write.item.title,"body":write.item.content})
             } else {
                 json!({"id":target.0,"title":write.item.title,"body":write.item.content})
             };
-            self.graphql(operation, json!({"input":input})).await?;
+            let data = self.graphql(operation, json!({"input":input})).await?;
+            let pointer = if content_kind == ContentKind::DraftIssue {
+                "/updateProjectV2DraftIssue/draftIssue"
+            } else {
+                "/updateIssue/issue"
+            };
+            let returned = data
+                .pointer(pointer)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub item update returned no item".into(),
+                })?;
+            if required_str(returned, "id")? != target.0 {
+                return Err(SourceError::Malformed {
+                    message: "GitHub item update returned the wrong item".into(),
+                });
+            }
             (
                 target.clone(),
                 NativeId(required_str(&item, "id")?.into()),
-                typename,
+                content_kind,
             )
         } else {
             if !write.item.labels.is_empty() {
@@ -1118,7 +1162,7 @@ impl TaskSource for GitHubProjectsSource {
                     required_str(created.pointer("/content").unwrap_or(&Value::Null), "id")?.into(),
                 ),
                 NativeId(required_str(created, "id")?.into()),
-                "DraftIssue".into(),
+                ContentKind::DraftIssue,
             )
         };
 
@@ -1146,12 +1190,30 @@ impl TaskSource for GitHubProjectsSource {
             } else {
                 false
             };
-            if typename == "Issue" && far_issue && edge.to.kind == ItemKind::Task {
-                self.graphql(
-                    graphql::ADD_BLOCKED_BY,
-                    json!({"input":{"issueId":content_id.0,"blockingIssueId":far_id}}),
-                )
-                .await?;
+            if content_kind == ContentKind::Issue && far_issue && edge.to.kind == ItemKind::Task {
+                let data = self
+                    .graphql(
+                        graphql::ADD_BLOCKED_BY,
+                        json!({"input":{"issueId":content_id.0,"blockingIssueId":far_id}}),
+                    )
+                    .await?;
+                let issue =
+                    data.pointer("/addBlockedBy/issue")
+                        .ok_or_else(|| SourceError::Malformed {
+                            message: "GitHub dependency update returned no issue".into(),
+                        })?;
+                let blocker = data.pointer("/addBlockedBy/blockingIssue").ok_or_else(|| {
+                    SourceError::Malformed {
+                        message: "GitHub dependency update returned no blocking issue".into(),
+                    }
+                })?;
+                if required_str(issue, "id")? != content_id.0
+                    || required_str(blocker, "id")? != far_id
+                {
+                    return Err(SourceError::Malformed {
+                        message: "GitHub dependency update returned the wrong issues".into(),
+                    });
+                }
             } else {
                 fallback.push(edge.clone());
             }
@@ -1161,7 +1223,8 @@ impl TaskSource for GitHubProjectsSource {
             item: write.item.clone(),
             depends_on: fallback,
         };
-        let metadata = Self::task_metadata(&metadata_write, true, typename != "Issue")?;
+        let metadata =
+            Self::task_metadata(&metadata_write, true, content_kind != ContentKind::Issue)?;
         self.set_item_field(
             project_id,
             &item_id.0,
@@ -1218,14 +1281,25 @@ impl TaskSource for GitHubProjectsSource {
             );
         }
         let description = project_metadata_description(write.item.content.as_deref(), &metadata)?;
-        self.graphql(
-            graphql::UPDATE_PROJECT,
-            json!({"input":{
-                "projectId":id.0,"title":write.item.title,"shortDescription":description,
-                "closed":write.item.status.category == StatusCategory::Done
-            }}),
-        )
-        .await?;
+        let data = self
+            .graphql(
+                graphql::UPDATE_PROJECT,
+                json!({"input":{
+                    "projectId":id.0,"title":write.item.title,"shortDescription":description,
+                    "closed":write.item.status.category == StatusCategory::Done
+                }}),
+            )
+            .await?;
+        let returned =
+            data.pointer("/updateProjectV2/projectV2")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub project update returned no project".into(),
+                })?;
+        if required_str(returned, "id")? != id.0 {
+            return Err(SourceError::Malformed {
+                message: "GitHub project update returned the wrong project".into(),
+            });
+        }
         Ok(id)
     }
 }

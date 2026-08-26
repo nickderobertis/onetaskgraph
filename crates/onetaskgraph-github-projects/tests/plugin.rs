@@ -282,7 +282,7 @@ async fn updates_issue_backed_items_and_writes_native_and_fallback_dependencies(
         project.clone(),
         mutation_data("updateIssue/issue", "I_task"),
         project,
-        mutation_data("addBlockedBy/issue", "I_task"),
+        json!({"data":{"addBlockedBy":{"issue":{"id":"I_task"},"blockingIssue":{"id":"I_task"}}}}),
         mutation_data("updateProjectV2ItemFieldValue/projectV2Item", "PVTI_1"),
         mutation_data("updateProjectV2ItemFieldValue/projectV2Item", "PVTI_1"),
     ]);
@@ -522,6 +522,209 @@ async fn malformed_write_responses_are_refused_before_they_can_be_mistaken_for_s
         matches!(source.write_task(&ItemWrite { target: None, item: task, depends_on: vec![] }).await,
         Err(SourceError::Malformed { message }) if message.contains("no project item"))
     );
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn write_refuses_unrepresentable_draft_and_issue_fields() {
+    let mut draft = project_response(false);
+    draft["data"]["owner"]["projectV2"]["items"]["nodes"][0]["content"]["__typename"] =
+        json!("DraftIssue");
+    let mut pull = project_response(false);
+    pull["data"]["owner"]["projectV2"]["items"]["nodes"][0]["content"]["__typename"] =
+        json!("PullRequest");
+    let (endpoint, handle) = sequence_server(vec![
+        project_response(false),
+        draft,
+        project_response(false),
+        project_response(false),
+        pull,
+    ]);
+    let source = build(&endpoint);
+    let mut task = source_task_for_write();
+    task.labels.push(onetaskgraph_plugin_api::Label {
+        id: NativeId("L".into()),
+        name: "label".into(),
+        color: None,
+    });
+    assert!(
+        matches!(source.write_task(&ItemWrite { target: None, item: task.clone(), depends_on: vec![] }).await, Err(SourceError::Refused { message }) if message.contains("draft") || message.contains("Draft"))
+    );
+    assert!(
+        matches!(source.write_task(&ItemWrite { target: Some(NativeId("I_task".into())), item: task.clone(), depends_on: vec![] }).await, Err(SourceError::Refused { message }) if message.contains("draft") || message.contains("Draft"))
+    );
+    task.labels.clear();
+    assert!(
+        matches!(source.write_task(&ItemWrite { target: Some(NativeId("I_task".into())), item: task.clone(), depends_on: vec![] }).await, Err(SourceError::Refused { message }) if message.contains("labels"))
+    );
+    task.labels = vec![
+        onetaskgraph_plugin_api::Label {
+            id: NativeId("L_bug".into()),
+            name: "bug".into(),
+            color: Some("ff0000".into()),
+        },
+        onetaskgraph_plugin_api::Label {
+            id: NativeId("L_field".into()),
+            name: "team".into(),
+            color: Some("00ff00".into()),
+        },
+    ];
+    task.repositories = vec![Repository::try_from("github.com/other/repo".to_owned()).unwrap()];
+    assert!(
+        matches!(source.write_task(&ItemWrite { target: Some(NativeId("I_task".into())), item: task.clone(), depends_on: vec![] }).await, Err(SourceError::Refused { message }) if message.contains("repository"))
+    );
+    assert!(
+        matches!(source.write_task(&ItemWrite { target: Some(NativeId("I_task".into())), item: task, depends_on: vec![] }).await, Err(SourceError::Refused { message }) if message.contains("PullRequest"))
+    );
+    handle.join().unwrap();
+}
+
+fn source_task_for_write() -> Task {
+    Task {
+        id: NativeId("source".into()),
+        title: "Title".into(),
+        content: None,
+        status: Status {
+            category: StatusCategory::InProgress,
+            name: "Doing".into(),
+        },
+        labels: vec![],
+        project: None,
+        url: None,
+        created_at: None,
+        updated_at: None,
+        metadata: BTreeMap::new(),
+        repositories: vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()],
+    }
+}
+
+#[tokio::test]
+async fn malformed_mutation_payloads_are_rejected_at_each_write_boundary() {
+    for pointer in [
+        "/data/owner/projectV2/items/nodes",
+        "/data/owner/projectV2/items/nodes/0/fieldValues/nodes",
+    ] {
+        let mut malformed = project_response(false);
+        *malformed.pointer_mut(pointer).unwrap() = json!("not-an-array");
+        let (endpoint, handle) = sequence_server(vec![malformed]);
+        assert!(matches!(
+            build(&endpoint)
+                .write_task(&ItemWrite {
+                    target: None,
+                    item: source_task_for_write(),
+                    depends_on: vec![]
+                })
+                .await,
+            Err(SourceError::Malformed { .. })
+        ));
+        handle.join().unwrap();
+    }
+    let mut draft = project_response(false);
+    draft["data"]["owner"]["projectV2"]["items"]["nodes"][0]["content"] = json!({"__typename":"DraftIssue","id":"DRAFT-1","title":"Old","body":null,"createdAt":null,"updatedAt":null});
+    let (endpoint, handle) = sequence_server(vec![
+        draft,
+        json!({"data":{"updateProjectV2DraftIssue":{}}}),
+    ]);
+    assert!(matches!(
+        build(&endpoint)
+            .write_task(&ItemWrite {
+                target: Some(NativeId("DRAFT-1".into())),
+                item: source_task_for_write(),
+                depends_on: vec![]
+            })
+            .await,
+        Err(SourceError::Malformed { .. })
+    ));
+    handle.join().unwrap();
+
+    let created = json!({"data":{"addProjectV2DraftIssue":{"projectItem":{"id":"PVTI-new","content":{"id":"DRAFT-new"}}}}});
+    let wrong_field = mutation_data("updateProjectV2ItemFieldValue/projectV2Item", "wrong-item");
+    let (endpoint, handle) = sequence_server(vec![project_response(false), created, wrong_field]);
+    assert!(
+        matches!(build(&endpoint).write_task(&ItemWrite { target: None, item: source_task_for_write(), depends_on: vec![] }).await, Err(SourceError::Malformed { message }) if message.contains("wrong project item"))
+    );
+    handle.join().unwrap();
+
+    let created = json!({"data":{"addProjectV2DraftIssue":{"projectItem":{"id":"PVTI-new","content":{"id":"DRAFT-new"}}}}});
+    let (endpoint, handle) = sequence_server(vec![
+        project_response(false),
+        created,
+        json!({"data":{"updateProjectV2ItemFieldValue":{}}}),
+    ]);
+    assert!(matches!(
+        build(&endpoint)
+            .write_task(&ItemWrite {
+                target: None,
+                item: source_task_for_write(),
+                depends_on: vec![]
+            })
+            .await,
+        Err(SourceError::Malformed { .. })
+    ));
+    handle.join().unwrap();
+
+    let (endpoint, handle) = sequence_server(vec![
+        project_response(false),
+        json!({"data":{"updateProjectV2":{}}}),
+    ]);
+    let project = Project {
+        id: NativeId("source".into()),
+        title: "Title".into(),
+        content: None,
+        status: Status {
+            category: StatusCategory::InProgress,
+            name: "Open".into(),
+        },
+        labels: vec![],
+        url: None,
+        created_at: None,
+        updated_at: None,
+        metadata: BTreeMap::new(),
+        repositories: vec![],
+    };
+    assert!(matches!(
+        build(&endpoint)
+            .write_project(&ItemWrite {
+                target: None,
+                item: project,
+                depends_on: vec![]
+            })
+            .await,
+        Err(SourceError::Malformed { .. })
+    ));
+    handle.join().unwrap();
+
+    let project = project_response(false);
+    let (endpoint, handle) = sequence_server(vec![
+        project.clone(),
+        project.clone(),
+        mutation_data("updateIssue/issue", "I_task"),
+        project,
+        json!({"data":{"addBlockedBy":{"issue":{"id":"I_task"}}}}),
+    ]);
+    let source = build(&endpoint);
+    let mut task = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .unwrap()
+        .items
+        .remove(0);
+    task.title = "Changed".into();
+    let edge = DependencyEdge {
+        from: DependencyEndpoint::from_native(task.id.clone(), ItemKind::Task),
+        to: DependencyEndpoint::from_native(task.id.clone(), ItemKind::Task),
+        kind: DependencyKind::Blocks,
+    };
+    assert!(matches!(
+        source
+            .write_task(&ItemWrite {
+                target: Some(task.id.clone()),
+                item: task,
+                depends_on: vec![edge]
+            })
+            .await,
+        Err(SourceError::Malformed { .. })
+    ));
     handle.join().unwrap();
 }
 
