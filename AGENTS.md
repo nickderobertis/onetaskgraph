@@ -282,7 +282,13 @@ them do; this is the inventory of what is owed, not a status board.
   `command not found`, which reads as whatever it was proving having gone wrong rather than
   as a portability failure. Write `read_lines` from `scripts/read-lines.sh` instead.
   `scripts/check-bash4-array-builtins-enforced.sh` watches that guard refuse both spellings
-  in every command position, and pass the name in a comment. `just script-check` runs them
+  in every command position, and pass the name in a comment. Every path that guard names
+  goes through one spelling, forward slashes, on all three platforms — python renders a path
+  with the running platform's separator, so before it was normalised the same guard reported
+  `scripts\check-distribution-contract.sh` on the Windows runner and failed every assertion
+  written against the other two. `scripts/check-guard-path-spelling.sh` drives the guard and
+  that enforcement again through a python whose paths spell with a backslash, so the lane
+  that can fail on this is not the only lane that can catch it. `just script-check` runs them
   outside Nx, because Nx maps no project to `scripts/` and so selects nothing for a change
   that only edits one.
 - **Suppress narrowly.** A diagnostic is an error or a suppression at that one site with a

@@ -47,6 +47,7 @@ gate: script-check deny distribution-check distribution-test
 script-check:
     @scripts/check-bash4-array-builtins.sh
     @scripts/check-bash4-array-builtins-enforced.sh
+    @scripts/check-guard-path-spelling.sh
     @scripts/check-line-reads.sh
 
 distribution-check:
