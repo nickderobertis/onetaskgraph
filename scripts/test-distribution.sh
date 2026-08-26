@@ -333,6 +333,11 @@ grep -q 'Cargo.toml has None; expected 0.1.0' "$tmp/error" || { cat "$tmp/error"
 if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted an invalid semantic product version; next: inspect workspace version validation" >&2; exit 1; fi
 grep -q 'Cargo.toml: no product version could be read' "$tmp/error" || { cat "$tmp/error" >&2; echo "workspace invalid-version failure omitted its location; next: inspect workspace diagnostics" >&2; exit 1; }
 mv "$tmp/version-repo/Cargo.toml.valid" "$tmp/version-repo/Cargo.toml"
+cp "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py" "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py.valid"
+perl -pi -e 's/^__version__ = "[^"]+"/__version__ = "9.9.9"/' "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py"
+if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.0) 2>"$tmp/error"; then echo "product-version helper accepted a mismatched module version; next: inspect version comparison" >&2; exit 1; fi
+grep -q 'sdks/python/src/onetaskgraph_sdk/__init__.py has 9.9.9; expected 0.1.0' "$tmp/error" || { cat "$tmp/error" >&2; echo "module-version mismatch omitted its location and values; next: inspect version diagnostics" >&2; exit 1; }
+mv "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py.valid" "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py"
 node -e 'const fs=require("fs"),f=process.argv[1],p=JSON.parse(fs.readFileSync(f));p.version="9.9.9";fs.writeFileSync(f,JSON.stringify(p,null,2)+"\n")' "$tmp/version-repo/npm/cli/package.json"
 if "$tmp/version-repo/scripts/set-version.sh" --check 2>"$tmp/error"; then echo "version drift was accepted; next: inspect version checking" >&2; exit 1; fi
 grep -q 'version drift found' "$tmp/error" || { cat "$tmp/error" >&2; echo "version-drift failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
