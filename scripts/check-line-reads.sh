@@ -310,36 +310,41 @@ fi
 #
 #    It needs a git repository to clone from and a node_modules to copy, so the fixture is
 #    a scratch clone with the working tree's files committed on top of it.
-selection="$scratch/selection"
-scratch_clone "$ROOT" "$selection" || fatal \
-  "could not clone $ROOT into $selection" \
-  "see the scratch-clone diagnostic above, then rerun"
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$selection" || fatal \
-  "could not copy $ROOT's tracked files over the clone at $selection" \
-  "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
+if [ ! -d "$ROOT/node_modules" ]; then
+  echo "check-line-reads: case 4 could not run without $ROOT/node_modules, so the affected-selection plugin read was not checked" >&2
+  echo "check-line-reads: next: run 'just bootstrap', then rerun 'just script-check' for the full check" >&2
+else
+  selection="$scratch/selection"
+  scratch_clone "$ROOT" "$selection" || fatal \
+    "could not clone $ROOT into $selection" \
+    "see the scratch-clone diagnostic above, then rerun"
+  (cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$selection" || fatal \
+    "could not copy $ROOT's tracked files over the clone at $selection" \
+    "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 
-write_plugin_stub "$selection/scripts/plugin-crates.sh" '\r\n' \
-  "${PLUGIN_NAMES[@]}" 'phantom  plugin'
+  write_plugin_stub "$selection/scripts/plugin-crates.sh" '\r\n' \
+    "${PLUGIN_NAMES[@]}" 'phantom  plugin'
 
-# The check clones its own scratch tree from this one and Nx reads git history there, so
-# the fixture has to be committed rather than merely written.
-fixture git -C "$selection" config user.email "check-line-reads@invalid"
-fixture git -C "$selection" config user.name "check-line-reads"
-fixture git -C "$selection" add -A
-fixture git -C "$selection" commit --quiet --no-verify -m "test: plugin set fixture"
-# A real copy rather than a symlink, for the reason that check gives at its own copy: Nx
-# locates its workspace root from where it is installed as well as from the directory it
-# runs in, and a symlink here would resolve back to this worktree.
-cp -a "$ROOT/node_modules" "$selection/node_modules" || fatal \
-  "could not copy node_modules into $selection" \
-  "run 'just bootstrap' so node_modules exists, then rerun"
+  # The check clones its own scratch tree from this one and Nx reads git history there, so
+  # the fixture has to be committed rather than merely written.
+  fixture git -C "$selection" config user.email "check-line-reads@invalid"
+  fixture git -C "$selection" config user.name "check-line-reads"
+  fixture git -C "$selection" add -A
+  fixture git -C "$selection" commit --quiet --no-verify -m "test: plugin set fixture"
+  # A real copy rather than a symlink, for the reason that check gives at its own copy: Nx
+  # locates its workspace root from where it is installed as well as from the directory it
+  # runs in, and a symlink here would resolve back to this worktree.
+  cp -a "$ROOT/node_modules" "$selection/node_modules" || fatal \
+    "could not copy node_modules into $selection" \
+    "run 'just bootstrap' so node_modules exists, then rerun"
 
-OUTPUT="$(bash "$selection/scripts/check-affected-selection.sh" 2>&1)" \
-  && STATUS=0 || STATUS=$?
-expect_refused_naming "a spaced, CRLF-terminated plugin line, one element per report line" \
-  "expected phantom  plugin to be selected, but it was not."
-# Had the carriage return survived, every real name would have missed its expectation too.
-expect_absent "a spaced, CRLF-terminated plugin line" "expected onetaskgraph-linear"
+  OUTPUT="$(bash "$selection/scripts/check-affected-selection.sh" 2>&1)" \
+    && STATUS=0 || STATUS=$?
+  expect_refused_naming "a spaced, CRLF-terminated plugin line, one element per report line" \
+    "expected phantom  plugin to be selected, but it was not."
+  # Had the carriage return survived, every real name would have missed its expectation too.
+  expect_absent "a spaced, CRLF-terminated plugin line" "expected onetaskgraph-linear"
+fi
 
 # 5. The array name read_lines is handed. It reaches an `eval` — bash 3.2 has no
 #    `declare -n` — so the name is checked against the shell-identifier grammar before it
