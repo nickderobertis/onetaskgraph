@@ -284,6 +284,7 @@ async fn updates_issue_backed_items_and_writes_native_and_fallback_dependencies(
         project.clone(),
         mutation_data("updateIssue/issue", "I_task"),
         project,
+        json!({"data":{"node":{"blockedBy":{"nodes":[]}}}}),
         json!({"data":{"addBlockedBy":{"issue":{"id":"I_task"},"blockingIssue":{"id":"I_task"}}}}),
         mutation_data("updateProjectV2ItemFieldValue/projectV2Item", "PVTI_1"),
         mutation_data("updateProjectV2ItemFieldValue/projectV2Item", "PVTI_1"),
@@ -709,6 +710,7 @@ async fn malformed_mutation_payloads_are_rejected_at_each_write_boundary() {
         project.clone(),
         mutation_data("updateIssue/issue", "I_task"),
         project,
+        json!({"data":{"node":{"blockedBy":{"nodes":[]}}}}),
         json!({"data":{"addBlockedBy":{"issue":{"id":"I_task"}}}}),
     ]);
     let source = build(&endpoint);
@@ -780,6 +782,7 @@ async fn mutation_payload_ids_must_match_the_requested_items() {
         project.clone(),
         mutation_data("updateIssue/issue", "I_task"),
         project,
+        json!({"data":{"node":{"blockedBy":{"nodes":[]}}}}),
         json!({"data":{"addBlockedBy":{"issue":{"id":"WRONG"},"blockingIssue":{"id":"I_task"}}}}),
     ]);
     let source = build(&endpoint);

@@ -357,6 +357,8 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 json!({"updateProjectV2":{"projectV2":{"id":"P-1"}}})
             } else if query.contains("addBlockedBy(input:$input)") {
                 json!({"addBlockedBy":{"issue":{"id":variables["input"]["issueId"]},"blockingIssue":{"id":variables["input"]["blockingIssueId"]}}})
+            } else if query.contains("removeBlockedBy(input:$input)") {
+                json!({"removeBlockedBy":{"issue":{"id":variables["input"]["issueId"]},"blockingIssue":{"id":variables["input"]["blockingIssueId"]}}})
             } else if query.contains("node(id:$id)") {
                 let id = variables["id"].as_str().expect("dependency id");
                 let first = variables["first"]

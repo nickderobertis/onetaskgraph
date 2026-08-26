@@ -95,6 +95,8 @@ pub mod graphql {
         r#"mutation($input:UpdateProjectV2Input!){updateProjectV2(input:$input){projectV2{id}}}"#;
     /// Adds GitHub's native issue blocked-by relationship.
     pub const ADD_BLOCKED_BY: &str = r#"mutation($input:AddBlockedByInput!){addBlockedBy(input:$input){issue{id} blockingIssue{id}}}"#;
+    /// Removes one native issue blocked-by relationship.
+    pub const REMOVE_BLOCKED_BY: &str = r#"mutation($input:RemoveBlockedByInput!){removeBlockedBy(input:$input){issue{id} blockingIssue{id}}}"#;
 }
 
 fn default_token_env() -> String {
@@ -1172,6 +1174,7 @@ impl TaskSource for GitHubProjectsSource {
         };
 
         let mut fallback = Vec::new();
+        let mut native = Vec::new();
         for edge in &write.depends_on {
             let same_source = edge
                 .to
@@ -1205,22 +1208,59 @@ impl TaskSource for GitHubProjectsSource {
                 false
             };
             if content_kind == ContentKind::Issue && far_issue && edge.to.kind == ItemKind::Task {
+                native.push(far_id.to_owned());
+            } else {
+                fallback.push(edge.clone());
+            }
+        }
+        if content_kind == ContentKind::Issue {
+            let data = self
+                .graphql(
+                    graphql::TASK_DEPENDENCIES,
+                    json!({"id":content_id.0,"first":MAX_PAGE_SIZE,"after":null}),
+                )
+                .await?;
+            let current = data
+                .pointer("/node/blockedBy/nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub dependency response nodes is not an array".into(),
+                })?
+                .iter()
+                .map(|value| required_str(value, "id").map(str::to_owned))
+                .collect::<Result<Vec<_>, _>>()?;
+            for (operation, far_id) in current
+                .iter()
+                .filter(|id| !native.contains(id))
+                .map(|id| (graphql::REMOVE_BLOCKED_BY, id))
+                .chain(
+                    native
+                        .iter()
+                        .filter(|id| !current.contains(id))
+                        .map(|id| (graphql::ADD_BLOCKED_BY, id)),
+                )
+            {
                 let data = self
                     .graphql(
-                        graphql::ADD_BLOCKED_BY,
+                        operation,
                         json!({"input":{"issueId":content_id.0,"blockingIssueId":far_id}}),
                     )
                     .await?;
-                let issue =
-                    data.pointer("/addBlockedBy/issue")
-                        .ok_or_else(|| SourceError::Malformed {
-                            message: "GitHub dependency update returned no issue".into(),
-                        })?;
-                let blocker = data.pointer("/addBlockedBy/blockingIssue").ok_or_else(|| {
+                let root = if operation == graphql::ADD_BLOCKED_BY {
+                    "addBlockedBy"
+                } else {
+                    "removeBlockedBy"
+                };
+                let issue = data.pointer(&format!("/{root}/issue")).ok_or_else(|| {
                     SourceError::Malformed {
-                        message: "GitHub dependency update returned no blocking issue".into(),
+                        message: "GitHub dependency update returned no issue".into(),
                     }
                 })?;
+                let blocker = data
+                    .pointer(&format!("/{root}/blockingIssue"))
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "GitHub dependency update returned no blocking issue".into(),
+                    })?;
                 if required_str(issue, "id")? != content_id.0
                     || required_str(blocker, "id")? != far_id
                 {
@@ -1228,8 +1268,6 @@ impl TaskSource for GitHubProjectsSource {
                         message: "GitHub dependency update returned the wrong issues".into(),
                     });
                 }
-            } else {
-                fallback.push(edge.clone());
             }
         }
         let metadata_write = ItemWrite {

@@ -251,6 +251,7 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         (graphql::UPDATE_FIELD, None, None),
         (graphql::UPDATE_PROJECT, None, None),
         (graphql::ADD_BLOCKED_BY, None, None),
+        (graphql::REMOVE_BLOCKED_BY, None, None),
     ] {
         let document = query::parse_query::<String>(operation).unwrap();
         let fragments = document

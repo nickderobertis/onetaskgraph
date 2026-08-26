@@ -25,6 +25,7 @@ type Mutation {
   ): UpdateProjectV2ItemFieldValuePayload
   updateProjectV2(input: UpdateProjectV2Input!): UpdateProjectV2Payload
   addBlockedBy(input: AddBlockedByInput!): AddBlockedByPayload
+  removeBlockedBy(input: RemoveBlockedByInput!): RemoveBlockedByPayload
 }
 input AddProjectV2DraftIssueInput {
   projectId: ID!
@@ -61,6 +62,10 @@ input AddBlockedByInput {
   issueId: ID!
   blockingIssueId: ID!
 }
+input RemoveBlockedByInput {
+  issueId: ID!
+  blockingIssueId: ID!
+}
 type AddProjectV2DraftIssuePayload {
   projectItem: ProjectV2Item
 }
@@ -77,6 +82,10 @@ type UpdateProjectV2Payload {
   projectV2: ProjectV2
 }
 type AddBlockedByPayload {
+  issue: Issue
+  blockingIssue: Issue
+}
+type RemoveBlockedByPayload {
   issue: Issue
   blockingIssue: Issue
 }
