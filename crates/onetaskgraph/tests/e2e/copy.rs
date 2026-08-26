@@ -149,6 +149,162 @@ fn linear_is_a_permanent_task_destination_with_typed_metadata_and_repository_ori
 }
 
 #[test]
+fn linear_project_and_task_copies_write_native_relations_and_record_only_cross_source_edges() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("linear-graph-source");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::create_dir_all(root.join("projects")).unwrap();
+    for (path, title, dependencies) in [
+        ("tasks/FAR.md", "Far task", ""),
+        (
+            "tasks/NEAR.md",
+            "Near task",
+            "depends_on: [FAR, {id: \"elsewhere:P-9\", item: project}]\n",
+        ),
+        ("tasks/CHILD.md", "Project child", "project: NEAR\n"),
+        ("projects/FAR.md", "Far project", ""),
+        (
+            "projects/NEAR.md",
+            "Near project",
+            "depends_on: [FAR, {id: \"elsewhere:T-9\", item: task}]\n",
+        ),
+    ] {
+        std::fs::write(
+            root.join(path),
+            format!("---\ntitle: {title}\nstatus: Todo\n{dependencies}---\nbody\n"),
+        )
+        .unwrap();
+    }
+    sandbox.project_document(&document(&json!({
+        "authored": {"plugin":"local-md","config":{"root":root,"status_mapping":{"Todo":"todo"}}},
+        "linear": {"plugin":"linear","config":linear_block(&sandbox)},
+    })));
+    let task_far = reported(&ok(
+        &sandbox,
+        &["task", "copy", "authored:FAR", "--to", "linear", "--json"],
+    ))[0]
+        .1
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let task_near = reported(&ok(
+        &sandbox,
+        &["task", "copy", "authored:NEAR", "--to", "linear", "--json"],
+    ))[0]
+        .1
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let project_far = reported(&ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "authored:FAR",
+            "--to",
+            "linear",
+            "--no-tasks",
+            "--json",
+        ],
+    ))[0]
+        .1
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let project_report = reported(&ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "authored:NEAR",
+            "--to",
+            "linear",
+            "--json",
+        ],
+    ));
+    assert_eq!(
+        project_report.len(),
+        2,
+        "the project copy includes its task"
+    );
+    let project_near = project_report[0].1.as_str().unwrap().to_owned();
+    let repeated = reported(&ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "authored:NEAR",
+            "--to",
+            "linear",
+            "--json",
+        ],
+    ));
+    assert_eq!(
+        repeated.iter().map(|item| &item.1).collect::<Vec<_>>(),
+        project_report
+            .iter()
+            .map(|item| &item.1)
+            .collect::<Vec<_>>()
+    );
+
+    let edges = |verb: &str, id: &str, reverse: bool| {
+        let mut args = vec![verb, "deps", id, "--json"];
+        if reverse {
+            args.splice(3..3, ["--direction", "depended-on-by"]);
+        }
+        serde_json::from_str::<Value>(&ok(&sandbox, &args)).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    let task_forward = edges("task", &task_near, false);
+    assert!(
+        task_forward.iter().any(|edge| edge["to"]["id"] == task_far),
+        "{task_forward:#?}"
+    );
+    assert!(
+        task_forward
+            .iter()
+            .any(|edge| edge["to"]["id"] == "elsewhere:P-9")
+    );
+    assert!(
+        edges("task", &task_far, true)
+            .iter()
+            .any(|edge| edge["from"]["id"] == task_near)
+    );
+    let project_forward = edges("project", &project_near, false);
+    assert!(
+        project_forward
+            .iter()
+            .any(|edge| edge["to"]["id"] == project_far)
+    );
+    assert!(
+        project_forward
+            .iter()
+            .any(|edge| edge["to"]["id"] == "elsewhere:T-9")
+    );
+    assert!(
+        edges("project", &project_far, true)
+            .iter()
+            .any(|edge| edge["from"]["id"] == project_near)
+    );
+
+    for (verb, id) in [("task", task_near), ("project", project_near)] {
+        let item = shown(&sandbox, verb, &id);
+        let recorded = item["metadata"]["onetaskgraph.depends_on"]
+            .as_array()
+            .unwrap();
+        assert_eq!(recorded.len(), 1, "only the cross-source edge is recorded");
+        assert!(
+            recorded[0]["id"]
+                .as_str()
+                .unwrap()
+                .starts_with("elsewhere:")
+        );
+    }
+}
+
+#[test]
 fn a_round_trip_edit_updates_the_item_it_came_from_rather_than_duplicating_it() {
     let sandbox = Sandbox::new();
     folders(&sandbox);

@@ -468,6 +468,51 @@ impl LinearSource {
         }
         Ok(())
     }
+
+    async fn prepare_edges(
+        &self,
+        edges: &[DependencyEdge],
+        project: bool,
+    ) -> Result<Vec<DependencyEdge>, SourceError> {
+        let mut prepared = Vec::with_capacity(edges.len());
+        for edge in edges {
+            let mut edge = edge.clone();
+            if edge
+                .to
+                .id()
+                .split_once(':')
+                .is_some_and(|(source, _)| source != self.name.as_str())
+            {
+                let data = self
+                    .send(
+                        if project { PROJECTS } else { ISSUES },
+                        json!({"first":250,"after":null,"filter":{}}),
+                    )
+                    .await?;
+                let page = if project {
+                    connection(&data, "projects", map_project)?
+                        .items
+                        .into_iter()
+                        .map(|item| (item.id, item.metadata))
+                        .collect::<Vec<_>>()
+                } else {
+                    connection(&data, "issues", map_task)?
+                        .items
+                        .into_iter()
+                        .map(|item| (item.id, item.metadata))
+                        .collect::<Vec<_>>()
+                };
+                if let Some((id, _)) = page.into_iter().find(|(_, metadata)| {
+                    metadata.get("onetaskgraph.origin").and_then(Value::as_str)
+                        == Some(edge.to.id())
+                }) {
+                    edge.to = DependencyEndpoint::from_native(id, edge.to.kind);
+                }
+            }
+            prepared.push(edge);
+        }
+        Ok(prepared)
+    }
 }
 
 #[async_trait::async_trait]
@@ -563,6 +608,7 @@ impl TaskSource for LinearSource {
         .await
     }
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        let edges = self.prepare_edges(&write.depends_on, false).await?;
         let team = self.team_id().await?;
         let state = self
             .one_id(
@@ -577,7 +623,7 @@ impl TaskSource for LinearSource {
             write.item.content.as_deref(),
             &write.item.metadata,
             &write.item.repositories,
-            &write.depends_on,
+            &edges,
         )?;
         let input = json!({"title":write.item.title,"description":description,"stateId":state,"labelIds":labels,"projectId":write.item.project.as_ref().map(|id| id.0.clone())});
         let (query, variables, root) = match &write.target {
@@ -604,10 +650,11 @@ impl TaskSource for LinearSource {
                     message: format!("missing {root}.issue"),
                 })?;
         let id = NativeId(str_at(issue, "id")?.into());
-        self.write_relations(&id, &write.depends_on, false).await?;
+        self.write_relations(&id, &edges, false).await?;
         Ok(id)
     }
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        let edges = self.prepare_edges(&write.depends_on, true).await?;
         let team = self.team_id().await?;
         let status = self
             .one_id(
@@ -622,7 +669,7 @@ impl TaskSource for LinearSource {
             write.item.content.as_deref(),
             &write.item.metadata,
             &write.item.repositories,
-            &write.depends_on,
+            &edges,
         )?;
         let input = json!({"name":write.item.title,"description":description,"statusId":status,"labelIds":labels});
         let (query, variables, root) = match &write.target {
@@ -649,7 +696,7 @@ impl TaskSource for LinearSource {
                 message: format!("missing {root}.project"),
             })?;
         let id = NativeId(str_at(project, "id")?.into());
-        self.write_relations(&id, &write.depends_on, true).await?;
+        self.write_relations(&id, &edges, true).await?;
         Ok(id)
     }
 }
