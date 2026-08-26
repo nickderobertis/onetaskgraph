@@ -1,8 +1,9 @@
-# Authoritative GitHub.com GraphQL read-contract subset, introspected 2026-08-24.
+# Authoritative GitHub.com GraphQL read/write contract subset.
 # The full schema is intentionally reduced to the types and fields selected by this plugin;
 # tests validate every production document against this artifact.
 schema {
   query: Query
+  mutation: Mutation
 }
 scalar String
 scalar ID
@@ -12,6 +13,81 @@ scalar Boolean
 type Query {
   repositoryOwner(login: String!): RepositoryOwner
   node(id: ID!): Node
+}
+type Mutation {
+  addProjectV2DraftIssue(input: AddProjectV2DraftIssueInput!): AddProjectV2DraftIssuePayload
+  updateProjectV2DraftIssue(
+    input: UpdateProjectV2DraftIssueInput!
+  ): UpdateProjectV2DraftIssuePayload
+  updateIssue(input: UpdateIssueInput!): UpdateIssuePayload
+  updateProjectV2ItemFieldValue(
+    input: UpdateProjectV2ItemFieldValueInput!
+  ): UpdateProjectV2ItemFieldValuePayload
+  updateProjectV2(input: UpdateProjectV2Input!): UpdateProjectV2Payload
+  addBlockedBy(input: AddBlockedByInput!): AddBlockedByPayload
+  removeBlockedBy(input: RemoveBlockedByInput!): RemoveBlockedByPayload
+}
+input AddProjectV2DraftIssueInput {
+  projectId: ID!
+  title: String!
+  body: String
+}
+input UpdateProjectV2DraftIssueInput {
+  draftIssueId: ID!
+  title: String
+  body: String
+}
+input UpdateIssueInput {
+  id: ID!
+  title: String
+  body: String
+}
+input UpdateProjectV2ItemFieldValueInput {
+  projectId: ID!
+  itemId: ID!
+  fieldId: ID!
+  value: ProjectV2FieldValue!
+}
+input ProjectV2FieldValue {
+  text: String
+  singleSelectOptionId: String
+}
+input UpdateProjectV2Input {
+  projectId: ID!
+  title: String
+  shortDescription: String
+  closed: Boolean
+}
+input AddBlockedByInput {
+  issueId: ID!
+  blockingIssueId: ID!
+}
+input RemoveBlockedByInput {
+  issueId: ID!
+  blockingIssueId: ID!
+}
+type AddProjectV2DraftIssuePayload {
+  projectItem: ProjectV2Item
+}
+type UpdateProjectV2DraftIssuePayload {
+  draftIssue: DraftIssue
+}
+type UpdateIssuePayload {
+  issue: Issue
+}
+type UpdateProjectV2ItemFieldValuePayload {
+  projectV2Item: ProjectV2Item
+}
+type UpdateProjectV2Payload {
+  projectV2: ProjectV2
+}
+type AddBlockedByPayload {
+  issue: Issue
+  blockingIssue: Issue
+}
+type RemoveBlockedByPayload {
+  issue: Issue
+  blockingIssue: Issue
 }
 interface Node {
   id: ID!
@@ -39,7 +115,12 @@ type ProjectV2 implements Node {
   createdAt: DateTime!
   updatedAt: DateTime!
   closed: Boolean!
+  fields(first: Int, after: String): ProjectV2FieldConfigurationConnection!
   items(first: Int, after: String): ProjectV2ItemConnection!
+}
+type ProjectV2FieldConfigurationConnection {
+  nodes: [ProjectV2FieldConfiguration]
+  pageInfo: PageInfo!
 }
 type ProjectV2Item implements Node {
   id: ID!
@@ -70,9 +151,16 @@ type ProjectV2ItemFieldTextValue {
   field: ProjectV2FieldConfiguration!
 }
 type ProjectV2SingleSelectField {
+  id: ID!
   name: String!
+  options: [ProjectV2SingleSelectFieldOption!]!
 }
 type ProjectV2Field {
+  id: ID!
+  name: String!
+}
+type ProjectV2SingleSelectFieldOption {
+  id: ID!
   name: String!
 }
 

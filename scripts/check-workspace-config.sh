@@ -36,28 +36,123 @@ if not project_files:
     problems.append("no project.json files found — Nx has nothing to orchestrate")
 
 names = {}
+projects_by_path = {}
+targets_by_path = {}
 for path in project_files:
+    # Diagnostics are asserted by the cross-platform distribution journey. Keep one
+    # repository-relative spelling instead of leaking pathlib's host separator on Windows.
+    display_path = path.as_posix()
     try:
         project = json.loads(path.read_text())
     except json.JSONDecodeError as error:
-        problems.append(f"{path}: is not valid JSON ({error})")
+        problems.append(f"{display_path}: is not valid JSON ({error})")
         continue
+    if not isinstance(project, dict):
+        problems.append(f"{display_path}: must contain a JSON object")
+        continue
+    projects_by_path[path] = project
+
+    targets = project.get("targets", {})
+    if not isinstance(targets, dict):
+        problems.append(f'{display_path}: "targets" must contain a JSON object')
+        targets = {}
+    for target_name, target in targets.items():
+        if not isinstance(target, dict):
+            problems.append(
+                f'{display_path}: target {target_name!r} must contain a JSON object'
+            )
+    targets_by_path[path] = {
+        name: target for name, target in targets.items() if isinstance(target, dict)
+    }
 
     name = project.get("name")
-    if not name:
-        problems.append(f"{path}: has no \"name\", so Nx cannot address it")
+    if not isinstance(name, str) or not name:
+        problems.append(f'{display_path}: "name" must be a non-empty string, so Nx can address it')
         continue
     if name in names:
-        problems.append(f"{path}: reuses the project name {name!r}, already used by {names[name]}")
+        problems.append(
+            f"{display_path}: reuses the project name {name!r}, already used by "
+            f"{names[name].as_posix()}"
+        )
     names[name] = path
 
-    declared = set(project.get("targets", {}))
+    declared = set(targets)
     for missing in sorted(UNIFORM - declared):
         problems.append(
-            f"{path}: is missing the {missing!r} target. Target names are uniform across "
+            f"{display_path}: is missing the {missing!r} target. Target names are uniform across "
             "projects because `nx affected` fans out by name — a project missing one is "
             "silently dropped from that root command."
         )
+
+# These two targets execute the same onetaskgraph binary. They must share one completed
+# build: independent Cargo build/test processes can replace the executable between
+# assert_cmd resolving CARGO_BIN_EXE_onetaskgraph and spawning it (observed on macOS).
+# Keep this assertion beside the project-shape checks so a future consumer cannot quietly
+# reintroduce that race by embedding another `cargo build` in its own command.
+binary_project_path = Path("crates/onetaskgraph/project.json")
+typescript_project_path = Path("sdks/typescript/project.json")
+binary_targets = targets_by_path.get(binary_project_path, {})
+typescript_targets = targets_by_path.get(typescript_project_path, {})
+if "build" not in binary_targets:
+    problems.append(
+        "crates/onetaskgraph/project.json: is missing the shared binary build target; "
+        "restore it so executable consumers cannot race independent Cargo builds"
+    )
+binary_test = binary_targets.get("test", {})
+binary_test_dependencies = binary_test.get("dependsOn", [])
+if not isinstance(binary_test_dependencies, list) or not all(
+    isinstance(name, str) for name in binary_test_dependencies
+):
+    problems.append(
+        'crates/onetaskgraph/project.json: test "dependsOn" must contain a JSON list of target names'
+    )
+    binary_test_dependencies = []
+if "build" not in binary_test_dependencies:
+    problems.append(
+        "crates/onetaskgraph/project.json: test does not depend on build; add that dependency "
+        "so integration tests start with the executable present"
+    )
+binary_test_options = binary_test.get("options", {})
+if not isinstance(binary_test_options, dict):
+    problems.append('crates/onetaskgraph/project.json: test "options" must contain a JSON object')
+    binary_test_options = {}
+binary_test_command = binary_test_options.get("command", "")
+if not isinstance(binary_test_command, str):
+    problems.append('crates/onetaskgraph/project.json: test command must be a string')
+    binary_test_command = ""
+if "--target-dir target/tests/onetaskgraph" not in binary_test_command:
+    problems.append(
+        "crates/onetaskgraph/project.json: test does not use its private Cargo target directory; "
+        "restore '--target-dir target/tests/onetaskgraph' so concurrent gate targets cannot "
+        "replace the binary while integration tests are spawning it"
+    )
+generator = typescript_targets.get("generate-check", {})
+generator_dependencies = generator.get("dependsOn", [])
+if not isinstance(generator_dependencies, list) or not all(
+    isinstance(name, str) for name in generator_dependencies
+):
+    problems.append(
+        'sdks/typescript/project.json: generate-check "dependsOn" must contain a JSON list of target names'
+    )
+    generator_dependencies = []
+if "onetaskgraph:build" not in generator_dependencies:
+    problems.append(
+        "sdks/typescript/project.json: generate-check does not depend on onetaskgraph:build; "
+        "share that build rather than relinking the binary beside integration tests"
+    )
+generator_options = generator.get("options", {})
+if not isinstance(generator_options, dict):
+    problems.append('sdks/typescript/project.json: generate-check "options" must contain a JSON object')
+    generator_options = {}
+generator_command = generator_options.get("command", "")
+if not isinstance(generator_command, str):
+    problems.append('sdks/typescript/project.json: generate-check command must be a string')
+    generator_command = ""
+if "cargo build" in generator_command:
+    problems.append(
+        "sdks/typescript/project.json: generate-check runs its own cargo build; remove it and "
+        "depend on onetaskgraph:build so the generator cannot replace a binary under test"
+    )
 
 # The `workspace` project depends on every other project so the cross-cutting checks run
 # whenever anything they check can change. That list is a hand-mirrored inventory of the
@@ -67,7 +162,12 @@ for path in project_files:
 # Nx graphs are reconciled in check-nx-graph.sh.
 WORKSPACE_PROJECT = Path("workspace/project.json")
 if WORKSPACE_PROJECT in project_files and "workspace" in names:
-    inventory = json.loads(WORKSPACE_PROJECT.read_text()).get("implicitDependencies", [])
+    inventory = projects_by_path[WORKSPACE_PROJECT].get("implicitDependencies", [])
+    if not isinstance(inventory, list) or not all(isinstance(name, str) for name in inventory):
+        problems.append(
+            f'{WORKSPACE_PROJECT}: "implicitDependencies" must contain a JSON list of project names'
+        )
+        inventory = []
     expected = set(names) - {"workspace"}
     for absent in sorted(expected - set(inventory)):
         problems.append(

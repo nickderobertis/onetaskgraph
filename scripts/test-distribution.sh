@@ -323,6 +323,47 @@ scratch_clone "$root" "$tmp/version-repo"
 # supplies a real repository for mutation, but HEAD may not contain the repair being tested.
 cp "$root/scripts/product_versions.py" "$tmp/version-repo/scripts/product_versions.py"
 cp "$root/scripts/check-workspace-config.sh" "$tmp/version-repo/scripts/check-workspace-config.sh"
+cp "$tmp/version-repo/crates/onetaskgraph/project.json" "$tmp/version-repo/crates/onetaskgraph/project.json.valid"
+printf '{\n' > "$tmp/version-repo/crates/onetaskgraph/project.json"
+# llmlint: ignore[work_goes_through_command_surface] This failure journey must run the workspace validator against its deliberately malformed scratch project.
+if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted malformed project JSON; next: inspect project validation" >&2; exit 1; fi
+grep -q 'crates/onetaskgraph/project.json: is not valid JSON' "$tmp/error" || { cat "$tmp/error" >&2; echo "malformed project failure omitted its location and reason; next: inspect workspace diagnostics" >&2; exit 1; }
+if grep -q 'Traceback' "$tmp/error"; then cat "$tmp/error" >&2; echo "malformed project failure leaked a Python traceback; next: reuse the workspace validator's guarded project parse" >&2; exit 1; fi
+mv "$tmp/version-repo/crates/onetaskgraph/project.json.valid" "$tmp/version-repo/crates/onetaskgraph/project.json"
+cp "$tmp/version-repo/crates/onetaskgraph/project.json" "$tmp/version-repo/crates/onetaskgraph/project.json.valid"
+python3 - "$tmp/version-repo/crates/onetaskgraph/project.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path) as stream:
+    project = json.load(stream)
+project["targets"] = []
+with open(path, "w") as stream:
+    json.dump(project, stream)
+PY
+# llmlint: ignore[work_goes_through_command_surface] This failure journey drives the workspace validator against a scratch project with a valid JSON value of the wrong type at a trust boundary.
+if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted a non-object targets value; next: inspect nested project validation" >&2; exit 1; fi
+grep -q 'crates/onetaskgraph/project.json: "targets" must contain a JSON object' "$tmp/error" || { cat "$tmp/error" >&2; echo "malformed targets failure omitted its location and reason; next: inspect workspace diagnostics" >&2; exit 1; }
+if grep -q 'Traceback' "$tmp/error"; then cat "$tmp/error" >&2; echo "malformed targets failure leaked a Python traceback; next: guard nested project values before using them" >&2; exit 1; fi
+mv "$tmp/version-repo/crates/onetaskgraph/project.json.valid" "$tmp/version-repo/crates/onetaskgraph/project.json"
+python3 - "$tmp/version-repo/crates/onetaskgraph/project.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path) as stream:
+    project = json.load(stream)
+project["targets"]["test"]["options"]["command"] = (
+    "cargo test --quiet -p onetaskgraph --all-features --locked"
+)
+with open(path, "w") as stream:
+    json.dump(project, stream)
+PY
+# llmlint: ignore[work_goes_through_command_surface] This failure journey drives the workspace validator against a scratch project whose test target has lost its binary-isolation guarantee.
+if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted integration tests sharing Cargo's target directory; next: inspect binary isolation validation" >&2; exit 1; fi
+grep -q 'test does not use its private Cargo target directory' "$tmp/error" || { cat "$tmp/error" >&2; echo "shared test target-directory failure omitted its reason; next: inspect workspace diagnostics" >&2; exit 1; }
+cp "$root/crates/onetaskgraph/project.json" "$tmp/version-repo/crates/onetaskgraph/project.json"
 if (cd "$tmp/version-repo" && python3 scripts/product_versions.py) 2>"$tmp/error"; then helper_usage_status=0; else helper_usage_status=$?; fi
 [[ $helper_usage_status -eq 2 ]] || { echo "product-version helper usage failure exited $helper_usage_status, expected 2; next: inspect argument validation" >&2; exit 1; }
 grep -q 'usage: scripts/product_versions.py' "$tmp/error" || { cat "$tmp/error" >&2; echo "product-version helper usage failure omitted its reason; next: inspect argument diagnostics" >&2; exit 1; }

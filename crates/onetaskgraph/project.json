@@ -16,6 +16,13 @@
     "check": {
       "executor": "nx:noop"
     },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo build --quiet -p onetaskgraph --bin onetaskgraph --locked"
+      },
+      "//": "Integration tests and both SDK generators execute this binary. Making it an Nx target lets every consumer depend on one completed build instead of racing independent Cargo commands that replace the executable on macOS."
+    },
     "format": {
       "executor": "nx:run-commands",
       "options": {
@@ -44,9 +51,11 @@
     },
     "test": {
       "executor": "nx:run-commands",
+      "dependsOn": ["build"],
       "options": {
-        "command": "cargo test --quiet -p onetaskgraph --all-features --locked"
-      }
+        "command": "cargo test --quiet -p onetaskgraph --all-features --locked --target-dir target/tests/onetaskgraph"
+      },
+      "//": "Cargo builds CARGO_BIN_EXE_onetaskgraph once in this target's private directory before starting any integration-test executable. Gate targets run concurrently, so sharing target/debug lets another Cargo invocation replace the binary between a test resolving and spawning it on macOS."
     },
     "coverage": {
       "executor": "nx:run-commands",

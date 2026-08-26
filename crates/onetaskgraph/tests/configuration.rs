@@ -197,8 +197,8 @@ fn all_three_layers_at_once_leave_the_flag_on_top_and_each_other_setting_with_it
 
 #[test]
 fn the_project_document_layers_over_the_user_level_one() {
+    let sandbox = Sandbox::new();
     for boundary in SOURCE_BOUNDARIES {
-        let sandbox = Sandbox::new();
         let user = sandbox.user_document(
             &serde_json::to_string(&serde_json::json!({
                 "page_size": 11,

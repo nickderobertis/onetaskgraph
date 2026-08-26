@@ -28,9 +28,11 @@
     },
     "generate-check": {
       "executor": "nx:run-commands",
+      "dependsOn": ["onetaskgraph:build"],
       "options": {
-        "command": "cargo build --quiet -p onetaskgraph --bin onetaskgraph && bun run --cwd sdks/typescript generate:check"
-      }
+        "command": "bun run --cwd sdks/typescript generate:check"
+      },
+      "//": "The generator executes target/debug/onetaskgraph. Depend on the binary's shared build target so this target cannot relink it while Rust integration tests are spawning it."
     },
     "build": {
       "executor": "nx:run-commands",

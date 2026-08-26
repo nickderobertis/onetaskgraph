@@ -501,6 +501,240 @@ fn every_source_kind_can_be_copied_into_a_folder_of_markdown_with_its_fields_int
 }
 
 #[test]
+fn github_projects_is_a_permanent_destination_and_persists_draft_fields() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("authored");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(root.join("tasks/PLAN-1.md"), "---\ntitle: Publish the plan\nstatus: Todo\nmetadata: {caller.count: 3, caller.shape: {nested: [1, true, null]}}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [PLAN-2, {id: 'elsewhere:T-9', item: task}]\n---\nshare this plan\n").unwrap();
+    std::fs::write(
+        root.join("tasks/PLAN-2.md"),
+        "---\ntitle: Supporting plan\nstatus: Todo\n---\nsupport it\n",
+    )
+    .unwrap();
+    let github = ROWS
+        .iter()
+        .find(|row| row.plugin == "github-projects")
+        .unwrap();
+    sandbox.project_document(&document(&json!({
+        "authored":{"plugin":"local-md","config":{"root":root}},
+        "board":{"plugin":"github-projects","config":(github.fixture.block)(&sandbox)}
+    })));
+
+    let first = ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "authored:PLAN-1",
+            "authored:PLAN-2",
+            "--to",
+            "board",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        reported(&first),
+        vec![
+            (
+                "authored:PLAN-1".into(),
+                json!("board:DRAFT-1"),
+                "created".into()
+            ),
+            (
+                "authored:PLAN-2".into(),
+                json!("board:DRAFT-2"),
+                "created".into()
+            )
+        ]
+    );
+    let copied = shown(&sandbox, "task", "board:DRAFT-1");
+    assert_eq!(copied["title"], "Publish the plan");
+    assert_eq!(copied["content"], "share this plan");
+    assert_eq!(copied["status"]["name"], "Todo");
+    assert_eq!(copied["metadata"]["caller.count"], 3);
+    assert_eq!(
+        copied["metadata"]["caller.shape"],
+        json!({"nested":[1,true,null]})
+    );
+    assert_eq!(
+        copied["repositories"],
+        json!(["github.com/nickderobertis/onetaskgraph"])
+    );
+    assert_eq!(
+        copied["metadata"]["onetaskgraph.depends_on"],
+        json!([
+            {"id":"DRAFT-2","kind":"task"},
+            {"id":"elsewhere:T-9","kind":"task"}
+        ])
+    );
+    let dependencies: Value =
+        serde_json::from_str(&ok(&sandbox, &["task", "deps", "board:DRAFT-1", "--json"])).unwrap();
+    assert_eq!(
+        dependencies["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|edge| edge["to"].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            json!({"id":"board:DRAFT-2","kind":"task"}),
+            json!({"id":"elsewhere:T-9","kind":"task"})
+        ]
+    );
+
+    let second = ok(
+        &sandbox,
+        &["task", "copy", "authored:PLAN-1", "--to", "board", "--json"],
+    );
+    assert_eq!(
+        reported(&second),
+        vec![(
+            "authored:PLAN-1".into(),
+            json!("board:DRAFT-1"),
+            "updated".into()
+        )]
+    );
+    assert_eq!(
+        ok(&sandbox, &["task", "list", "--source", "board"])
+            .lines()
+            .count(),
+        6
+    );
+}
+
+#[test]
+fn a_project_copy_updates_the_configured_github_board_without_creating_one() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("projects")).unwrap();
+    std::fs::write(root.join("projects/P-1.md"), "---\ntitle: Published roadmap\nstatus: Open\nmetadata: {caller.approved: true}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [{id: 'elsewhere:P-9', item: project}]\n---\nThe permanent plan\n").unwrap();
+    let github = ROWS
+        .iter()
+        .find(|row| row.plugin == "github-projects")
+        .unwrap();
+    sandbox.project_document(&document(&json!({
+        "plans":{"plugin":"local-md","config":{"root":root}},
+        "board":{"plugin":"github-projects","config":(github.fixture.block)(&sandbox)}
+    })));
+    let copied = ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plans:P-1",
+            "--to",
+            "board",
+            "--no-tasks",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        reported(&copied),
+        vec![("plans:P-1".into(), json!("board:P-1"), "created".into())]
+    );
+    let written = shown(&sandbox, "project", "board:P-1");
+    assert_eq!(written["title"], "Published roadmap");
+    assert_eq!(written["content"], "The permanent plan");
+    assert_eq!(written["status"]["category"], "in-progress");
+    assert_eq!(written["metadata"]["caller.approved"], true);
+    assert_eq!(
+        written["repositories"],
+        json!(["github.com/nickderobertis/onetaskgraph"])
+    );
+    let dependencies: Value =
+        serde_json::from_str(&ok(&sandbox, &["project", "deps", "board:P-1", "--json"])).unwrap();
+    assert!(
+        dependencies["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|edge| edge["to"]["id"] == "elsewhere:P-9")
+    );
+
+    for status in ["Todo", "Waiting"] {
+        std::fs::write(
+            root.join("projects/P-1.md"),
+            format!(
+                "---\ntitle: Published roadmap\nstatus: {status}\nmetadata: {{caller.approved: true}}\nrepositories: [github.com/nickderobertis/onetaskgraph]\n---\nThe permanent plan\n"
+            ),
+        )
+        .unwrap();
+        ok(
+            &sandbox,
+            &[
+                "project",
+                "copy",
+                "plans:P-1",
+                "--to",
+                "board",
+                "--no-tasks",
+            ],
+        );
+        assert_eq!(
+            shown(&sandbox, "project", "board:P-1")["status"]["category"],
+            "in-progress",
+            "{status} keeps the configured GitHub project open"
+        );
+    }
+
+    std::fs::write(
+        root.join("projects/P-1.md"),
+        "---\ntitle: Published roadmap\nstatus: Done\nmetadata: {caller.approved: true}\n---\nThe permanent plan\n",
+    )
+    .unwrap();
+    let cleared = ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plans:P-1",
+            "--to",
+            "board",
+            "--no-tasks",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        reported(&cleared),
+        vec![("plans:P-1".into(), json!("board:P-1"), "updated".into())]
+    );
+    let shown = shown(&sandbox, "project", "board:P-1");
+    assert_eq!(shown["status"]["category"], "done");
+    assert_eq!(shown["repositories"], json!([]));
+    let dependencies: Value =
+        serde_json::from_str(&ok(&sandbox, &["project", "deps", "board:P-1", "--json"])).unwrap();
+    assert!(
+        dependencies["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|edge| edge["to"]["id"] != "elsewhere:P-9"),
+        "clearing recorded dependencies preserves only native issue relationships"
+    );
+}
+
+#[test]
+fn copying_an_issue_back_updates_fields_and_replaces_a_native_dependency() {
+    let sandbox = Sandbox::new();
+    let github = ROWS
+        .iter()
+        .find(|row| row.plugin == "github-projects")
+        .unwrap();
+    sandbox.project_document(&github.document_with_folder(&sandbox, NOTES));
+    ok(&sandbox, &["task", "copy", "work:T-1", "--to", NOTES]);
+    let file = sandbox.project().join(NOTES).join("tasks/T-1.md");
+    std::fs::write(&file, "---\ntitle: Alpha engine revised\nstatus: Todo\nlabels: [{id: L-1, name: bug}, {id: L-3, name: core}]\nmetadata: {onetaskgraph.origin: 'work:T-1'}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [{id: 'work:T-3', item: task}]\n---\nthe engine core\n").unwrap();
+    let copied = ok(
+        &sandbox,
+        &["task", "copy", "notes:T-1", "--to", "work", "--json"],
+    );
+    assert_eq!(
+        reported(&copied),
+        vec![("notes:T-1".into(), json!("work:T-1"), "updated".into())]
+    );
+}
+
+#[test]
 fn several_ids_in_one_command_are_one_copied_set_whose_edges_are_recreated() {
     // The ids named together *are* the set: an edge between two of them is recreated at
     // the destination, which one command per id could not do — the far end's own

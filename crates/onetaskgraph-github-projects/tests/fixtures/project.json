@@ -9,14 +9,40 @@
         "createdAt": "2026-01-01T00:00:00Z",
         "updatedAt": "2026-02-01T00:00:00Z",
         "closed": false,
+        "fields": {
+          "nodes": [
+            {
+              "__typename": "ProjectV2SingleSelectField",
+              "id": "FIELD_status",
+              "name": "Status",
+              "options": [{ "id": "OPT_doing", "name": "Doing" }]
+            },
+            {
+              "__typename": "ProjectV2Field",
+              "id": "FIELD_metadata",
+              "name": "onetaskgraph.metadata"
+            }
+          ],
+          "pageInfo": { "hasNextPage": false }
+        },
         "items": {
           "nodes": [
             {
               "id": "PVTI_1",
               "fieldValues": {
                 "nodes": [
-                  { "name": "Doing", "field": { "name": "Status" } },
-                  { "text": "{\"caller.number\":7}", "field": { "name": "onetaskgraph.metadata" } },
+                  {
+                    "name": "Doing",
+                    "field": {
+                      "id": "FIELD_status",
+                      "name": "Status",
+                      "options": [{ "id": "OPT_doing", "name": "Doing" }]
+                    }
+                  },
+                  {
+                    "text": "{\"caller.number\":7}",
+                    "field": { "id": "FIELD_metadata", "name": "onetaskgraph.metadata" }
+                  },
                   {
                     "labels": {
                       "nodes": [{ "id": "L_field", "name": "team", "color": "00ff00" }],
@@ -27,6 +53,7 @@
                 "pageInfo": { "hasNextPage": false }
               },
               "content": {
+                "__typename": "Issue",
                 "id": "I_task",
                 "title": "Ship it",
                 "body": "details",
