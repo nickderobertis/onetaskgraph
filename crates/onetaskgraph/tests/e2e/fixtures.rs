@@ -795,7 +795,7 @@ fn linear_response(
             .find(|v| v["id"] == id);
         if operation == graphql::ISSUE_RELATIONS {
             return Ok(
-                json!({"issue":linear_relations(&data,"task_dependencies",id,"Issue",recorded)}),
+                json!({"issue":linear_relations(data,"task_dependencies",id,"Issue",recorded)}),
             );
         }
         return Ok(json!({"issue":item.map(|v|linear_task(v,data))}));
@@ -809,7 +809,7 @@ fn linear_response(
             .find(|v| v["id"] == id);
         if operation == graphql::PROJECT_RELATIONS {
             return Ok(
-                json!({"project":linear_relations(&data,"project_dependencies",id,"Project",recorded)}),
+                json!({"project":linear_relations(data,"project_dependencies",id,"Project",recorded)}),
             );
         }
         return Ok(json!({"project":item.map(|v|linear_project(v,data))}));
@@ -859,10 +859,8 @@ fn linear_write_item(
         "labels": labels,
         "_linear_description": input.get("description").cloned().unwrap_or(Value::Null),
     });
-    if !project {
-        if let Some(project_id) = input.get("projectId").filter(|v| !v.is_null()) {
-            row["project"] = project_id.clone();
-        }
+    if !project && let Some(project_id) = input.get("projectId").filter(|v| !v.is_null()) {
+        row["project"] = project_id.clone();
     }
     if let Some(index) = existing {
         rows[index] = row;

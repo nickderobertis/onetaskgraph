@@ -1,8 +1,9 @@
 //! Public factory and real-HTTP fixture journeys.
 
 use onetaskgraph_plugin_api::{
-    Direction, ItemKind, LabelFilter, PageRequest, ProjectFilter, ProjectQuery, SecretResolver,
-    SourceError, SourceName, SourcePlugin, StatusCategory, TaskQuery, TaskSource,
+    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, ItemKind, ItemWrite,
+    LabelFilter, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
+    SourceName, SourcePlugin, StatusCategory, Task, TaskQuery, TaskSource,
 };
 use secrecy::SecretString;
 use std::{
@@ -34,6 +35,34 @@ fn source(endpoint: &str) -> Box<dyn TaskSource> {
             &Secrets(Some(SecretString::from("fixture-key"))),
         )
         .unwrap()
+}
+
+fn writable_source(endpoint: &str) -> Box<dyn TaskSource> {
+    onetaskgraph_linear::Plugin
+        .build(
+            &SourceName::new("work").unwrap(),
+            &serde_json::json!({"endpoint":endpoint,"team":"ENG"}),
+            &Secrets(Some("fixture-key".into())),
+        )
+        .unwrap()
+}
+
+fn response_server(responses: Vec<serde_json::Value>) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for response in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = vec![0; 65536];
+            let n = stream.read(&mut bytes).unwrap();
+            bytes.truncate(n);
+            let _ = tx.send(String::from_utf8_lossy(&bytes).into_owned());
+            let body = serde_json::to_string(&serde_json::json!({"data":response})).unwrap();
+            write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+        }
+    });
+    (format!("http://{addr}/graphql"), rx)
 }
 
 fn server(
@@ -292,6 +321,145 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
             root.name
         );
     }
+}
+
+#[tokio::test]
+async fn writes_create_update_and_route_task_and_project_edges_over_real_http() {
+    let empty_page = |root: &str| serde_json::json!({(root):{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}});
+    let id_page = |root: &str, id: &str| serde_json::json!({(root):{"nodes":[{"id":id}]}});
+    let (endpoint, wire) = response_server(vec![
+        empty_page("issues"),
+        id_page("teams", "TEAM"),
+        id_page("workflowStates", "STATE"),
+        id_page("issueLabels", "LABEL"),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
+        serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
+        serde_json::json!({"issues":{"nodes":[{"id":"I-FAR","title":"far","description":"\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:FAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        id_page("teams", "TEAM"),
+        id_page("workflowStates", "STATE"),
+        id_page("issueLabels", "LABEL"),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-NEW"}}}),
+        serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I2"}}}),
+        id_page("teams", "TEAM"),
+        id_page("projectStatuses", "STATUS"),
+        id_page("projectLabels", "PLABEL"),
+        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
+        serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P"}}}),
+    ]);
+    let writable = writable_source(&endpoint);
+    let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:NEAR","title":"visible task","content":"body","status":{"category":"todo","name":"Todo"},"labels":[{"id":"old","name":"bug","color":null}],"project":null,"repositories":["github.com/acme/work"],"metadata":{"object":{"n":1},"null":null}})).unwrap();
+    let missing_team = source("http://127.0.0.1:1")
+        .write_task(&ItemWrite {
+            target: None,
+            item: task.clone(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{missing_team}").contains("config.team"));
+    let (unresolved_endpoint, unresolved_wire) = response_server(vec![empty_page("teams")]);
+    let unresolved_team = writable_source(&unresolved_endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task.clone(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{unresolved_team}").contains("cannot resolve configured team uniquely"));
+    drop(unresolved_wire);
+    let native_task = DependencyEdge {
+        from: DependencyEndpoint::new("authored:NEAR".into(), ItemKind::Task).unwrap(),
+        to: DependencyEndpoint::from_native("I-FAR".into(), ItemKind::Task),
+        kind: DependencyKind::Blocks,
+    };
+    let cross_task = DependencyEdge {
+        from: native_task.from.clone(),
+        to: DependencyEndpoint::new("elsewhere:P-9".into(), ItemKind::Project).unwrap(),
+        kind: DependencyKind::Related,
+    };
+    assert_eq!(
+        writable
+            .write_task(&ItemWrite {
+                target: None,
+                item: task.clone(),
+                depends_on: vec![native_task.clone(), cross_task]
+            })
+            .await
+            .unwrap()
+            .0,
+        "I-NEW"
+    );
+    let unresolved = DependencyEdge {
+        to: DependencyEndpoint::new("authored:FAR".into(), ItemKind::Task).unwrap(),
+        ..native_task
+    };
+    assert_eq!(
+        writable
+            .write_task(&ItemWrite {
+                target: Some("I-NEW".into()),
+                item: task,
+                depends_on: vec![unresolved]
+            })
+            .await
+            .unwrap()
+            .0,
+        "I-NEW"
+    );
+
+    let project: Project = serde_json::from_value(serde_json::json!({"id":"authored:P","title":"visible project","content":"project body","status":{"category":"todo","name":"Todo"},"labels":[{"id":"old","name":"roadmap","color":null}],"repositories":["github.com/acme/work"],"metadata":{"array":[true,null]}})).unwrap();
+    let project_edge = DependencyEdge {
+        from: DependencyEndpoint::new("authored:P".into(), ItemKind::Project).unwrap(),
+        to: DependencyEndpoint::from_native("P-FAR".into(), ItemKind::Project),
+        kind: DependencyKind::Blocks,
+    };
+    assert_eq!(
+        writable
+            .write_project(&ItemWrite {
+                target: None,
+                item: project,
+                depends_on: vec![project_edge]
+            })
+            .await
+            .unwrap()
+            .0,
+        "P-NEW"
+    );
+    let requests = wire.iter().collect::<Vec<_>>();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains(onetaskgraph_linear::graphql::ISSUE_CREATE))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains(onetaskgraph_linear::graphql::ISSUE_UPDATE))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("relatedIssueId") && request.contains("I-FAR"))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains(onetaskgraph_linear::graphql::PROJECT_CREATE))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("relatedProjectId") && request.contains("P-FAR"))
+    );
+    let create = requests
+        .iter()
+        .find(|request| request.contains(onetaskgraph_linear::graphql::ISSUE_CREATE))
+        .unwrap();
+    assert!(
+        create.contains("visible task")
+            && create.contains("onetaskgraph.repositories")
+            && create.contains("elsewhere:P-9")
+    );
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
