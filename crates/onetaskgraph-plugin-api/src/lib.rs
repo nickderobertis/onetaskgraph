@@ -20,6 +20,7 @@ mod id;
 mod query;
 mod source;
 mod work;
+mod write;
 
 pub use capability::{Capabilities, DependencySupport, Support};
 pub use error::SourceError;
@@ -33,3 +34,4 @@ pub use work::{
     DependencyEdge, DependencyEndpoint, DependencyKind, Direction, ItemKind, Label, Project,
     Repository, Status, StatusCategory, Task,
 };
+pub use write::{ItemWrite, WriteSupport, unwritable};

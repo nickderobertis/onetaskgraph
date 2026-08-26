@@ -90,6 +90,315 @@ export const runtimeSchemas = {
     "title": "Capabilities",
     "type": "object"
   },
+  "CopyAction": {
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The four things a copy can do to one item, and the id each of them is about.",
+    "oneOf": [
+      {
+        "description": "The destination held no counterpart, so one was created.",
+        "properties": {
+          "action": {
+            "const": "created",
+            "type": "string"
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GlobalId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The id it was created under, or `null` for a dry run that would have created\none — there is no id, because nothing was."
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The destination held a counterpart and it now reads as the source does.",
+        "properties": {
+          "action": {
+            "const": "updated",
+            "type": "string"
+          },
+          "destination": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The item that was updated."
+          }
+        },
+        "required": [
+          "action",
+          "destination"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The destination held a counterpart that already read that way; nothing was written.",
+        "properties": {
+          "action": {
+            "const": "unchanged",
+            "type": "string"
+          },
+          "destination": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The item that already said it."
+          }
+        },
+        "required": [
+          "action",
+          "destination"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The destination holds a counterpart the source no longer does. A copy never\ndeletes, so it was left exactly as it is.",
+        "properties": {
+          "action": {
+            "const": "orphaned",
+            "type": "string"
+          },
+          "destination": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The item that was left alone."
+          }
+        },
+        "required": [
+          "action",
+          "destination"
+        ],
+        "type": "object"
+      }
+    ],
+    "title": "CopyAction"
+  },
+  "CopyOutcome": {
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What happened to one item.\n\n`action` and `destination` are one value rather than two fields side by side: an\nupdated item without a destination id, or an orphan without one, are states this type\nmust not be able to say — the id *is* what those outcomes are about. The one outcome\nthat legitimately has none is a dry run that would create, because nothing was\ncreated and there is no id to report.",
+    "oneOf": [
+      {
+        "description": "The destination held no counterpart, so one was created.",
+        "properties": {
+          "action": {
+            "const": "created",
+            "type": "string"
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GlobalId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The id it was created under, or `null` for a dry run that would have created\none — there is no id, because nothing was."
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The destination held a counterpart and it now reads as the source does.",
+        "properties": {
+          "action": {
+            "const": "updated",
+            "type": "string"
+          },
+          "destination": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The item that was updated."
+          }
+        },
+        "required": [
+          "action",
+          "destination"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The destination held a counterpart that already read that way; nothing was written.",
+        "properties": {
+          "action": {
+            "const": "unchanged",
+            "type": "string"
+          },
+          "destination": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The item that already said it."
+          }
+        },
+        "required": [
+          "action",
+          "destination"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The destination holds a counterpart the source no longer does. A copy never\ndeletes, so it was left exactly as it is.",
+        "properties": {
+          "action": {
+            "const": "orphaned",
+            "type": "string"
+          },
+          "destination": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The item that was left alone."
+          }
+        },
+        "required": [
+          "action",
+          "destination"
+        ],
+        "type": "object"
+      }
+    ],
+    "properties": {
+      "source": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The qualified id the item was read from."
+      }
+    },
+    "required": [
+      "source"
+    ],
+    "title": "CopyOutcome",
+    "type": "object"
+  },
+  "CopyReport": {
+    "$defs": {
+      "CopyOutcome": {
+        "description": "What happened to one item.\n\n`action` and `destination` are one value rather than two fields side by side: an\nupdated item without a destination id, or an orphan without one, are states this type\nmust not be able to say — the id *is* what those outcomes are about. The one outcome\nthat legitimately has none is a dry run that would create, because nothing was\ncreated and there is no id to report.",
+        "oneOf": [
+          {
+            "description": "The destination held no counterpart, so one was created.",
+            "properties": {
+              "action": {
+                "const": "created",
+                "type": "string"
+              },
+              "destination": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GlobalId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The id it was created under, or `null` for a dry run that would have created\none — there is no id, because nothing was."
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The destination held a counterpart and it now reads as the source does.",
+            "properties": {
+              "action": {
+                "const": "updated",
+                "type": "string"
+              },
+              "destination": {
+                "$ref": "#/$defs/GlobalId",
+                "description": "The item that was updated."
+              }
+            },
+            "required": [
+              "action",
+              "destination"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The destination held a counterpart that already read that way; nothing was written.",
+            "properties": {
+              "action": {
+                "const": "unchanged",
+                "type": "string"
+              },
+              "destination": {
+                "$ref": "#/$defs/GlobalId",
+                "description": "The item that already said it."
+              }
+            },
+            "required": [
+              "action",
+              "destination"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The destination holds a counterpart the source no longer does. A copy never\ndeletes, so it was left exactly as it is.",
+            "properties": {
+              "action": {
+                "const": "orphaned",
+                "type": "string"
+              },
+              "destination": {
+                "$ref": "#/$defs/GlobalId",
+                "description": "The item that was left alone."
+              }
+            },
+            "required": [
+              "action",
+              "destination"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The qualified id the item was read from."
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "type": "object"
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What a copy did, one entry per item.\n\nThe same per-item outcomes reach every consumer: the machine-readable output renders\nthis, the rendered output renders this, and a Rust caller is handed it.",
+    "properties": {
+      "items": {
+        "description": "One entry per item the copy considered, in the order it considered them.",
+        "items": {
+          "$ref": "#/$defs/CopyOutcome"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "title": "CopyReport",
+    "type": "object"
+  },
   "CredentialLayer": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "Which layer answered for one credential name.",

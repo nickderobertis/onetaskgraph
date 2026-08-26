@@ -62,7 +62,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `Direction`, `NativeId`, `SourceName`; the query and paging types `TaskQuery`,
   `ProjectQuery`, `TextQuery`, `TextFields`, `LabelFilter`, `ProjectFilter`, `PageRequest`,
   `Page`, `Cursor`; the capability types `Capabilities`, `Support`, `DependencySupport`;
-  and `SourceError`. **It depends on no other crate of this workspace.**
+  the write types `ItemWrite` and `WriteSupport`; and `SourceError`.
+  **It depends on no other crate of this workspace.**
 - **`onetaskgraph-core`** — the engine, plus the reporting types `QueryResponse`,
   `QueryPlan`, `SourcePlan`, `Predicate`, `PageToken`, `SourceFailure` and `GlobalId`.
 
@@ -118,13 +119,26 @@ Nothing of a user's work is stored, cached, indexed or mirrored outside the plug
 owns it. The engine compensates transiently and writes nothing down. Extend these three
 mechanisms rather than rediscovering the rule; each says how it fails, not how it works.
 
+**A destination write is not a cache, and the difference is stated rather than assumed.**
+A destination write is at the user's explicit request, names its destination, goes through
+that source's own write interface into that source's own store, and is never read back to
+answer a query. A cache is a write nobody asked for that the engine reads back. The
+invariant above does not move: `copy` writes *into a plugin*, which is the one place a
+user's work is allowed to be. The same terms settle a cross-source dependency edge —
+storing the far end's qualified id on the near item, inside the plugin that owns it, at
+the user's explicit request, is not the state `DependencyEdge`'s own documentation
+forbids, because the engine holds nothing between calls and reads nothing back to answer a
+later query.
+
 1. `deny.toml` refuses every embedded store, index and cache crate, and `deny` is a
    required check — so reaching for one cannot merge.
 2. `crates/onetaskgraph/tests/e2e/no_persistence.rs` sandboxes `HOME`, every `XDG_*` and
    `TMPDIR` into one tree, plants sentinels in a source's work, drives every verb, and
    compares the tree with itself: it fails, naming the path, if any file was created or
    changed during the run, and says which sentinels a new file held. It asserts on the
-   effect, so it catches caching by any technique.
+   effect, so it catches caching by any technique. It drives `copy` too, which is the one
+   verb that writes: the named destination's own store is the only place a file may
+   change, and every other path in the tree is held to exactly the rule above.
 3. `crates/onetaskgraph-core/tests/no_reuse.rs` catches the half a filesystem scan cannot
    see: one query asked twice must reach the source twice.
 
@@ -174,6 +188,11 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 
 - **Never mock the layer under test.** Every journey drives the compiled binary as a
   subprocess and asserts on exit code, stdout and stderr.
+- **The copy verb is proven twice, deliberately.** The journeys drive the binary the way a
+  user does, and `crates/onetaskgraph-core/tests/copy.rs` drives the engine's own
+  `Engine::copy` as a library call. The second is not a duplicate: this product is exposed
+  three ways from one engine, and the consumer a command-line-only copy would strand is
+  the Rust caller that links the crate.
 - **Coverage: 95% lines, per project, and each project measures only its own crate.**
   A workspace average lets a weak crate hide behind a strong one — and, decisively, a
   workspace-wide pass runs every crate's tests on every change, which is what affected
@@ -253,6 +272,20 @@ them do; this is the inventory of what is owed, not a status board.
     blocking side reports the same edge rather than its mirror.
 26. A reserved-key far end the near item's own backend could have named is refused, naming
     the entry and what to record instead; so is one this interface cannot represent.
+27. A task copies out of every source kind into a folder of Markdown with every field it
+    read intact, and a second copy of the same item updates that one rather than
+    duplicating it.
+28. The round trip: a task is copied out of a destination, the Markdown is edited, and the
+    copy back updates the item it came from — exactly one item where there was one before,
+    the edited field changed, and every field the edit did not touch byte-for-byte what it
+    was.
+29. Every refusal a copy owes: a destination configured with no write side, one that
+    cannot carry a metadata key, an origin naming an item the destination no longer holds,
+    and an id or a destination nothing configures. Plus the escapes — `--recreate`,
+    `--match-by` — and `--dry-run`, which reads everything and writes nothing.
+30. A project copy carries the tasks in it, matches each independently on a second copy,
+    and reports a destination item the source no longer holds as orphaned rather than
+    deleting it.
 
 ## Recorded decisions
 

@@ -14,8 +14,8 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Direction, NativeId, PageRequest, Project, ProjectQuery, SourceError, Task,
-    TaskQuery,
+    Capabilities, Direction, ItemWrite, NativeId, PageRequest, Project, ProjectQuery, SourceError,
+    Task, TaskQuery, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -124,6 +124,14 @@ pub(crate) struct InitializeResult {
     pub(crate) kind: HandshakePluginKind,
     /// Read once; the engine does not ask again.
     pub(crate) capabilities: Capabilities,
+    /// Whether this plugin can be written through (§3.3).
+    ///
+    /// Optional, and absent means [`WriteSupport::Unsupported`]: §2.1 lets a later
+    /// version add a member without a version bump, and a plugin written against version
+    /// 1 before there was a write side says nothing here and is read as the read-only
+    /// source it is.
+    #[serde(default)]
+    pub(crate) writes: Option<WriteSupport>,
 }
 
 /// A plugin's non-empty, open-vocabulary kind from the handshake.
@@ -219,4 +227,25 @@ pub(crate) struct DependencyParams {
     pub(crate) direction: Direction,
     /// Where to resume and how much to return.
     pub(crate) page: PageRequest,
+}
+
+/// `write_task` parameters (§4.9).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TaskWriteParams {
+    /// The item to create or update, and what to write into it.
+    pub(crate) write: ItemWrite<Task>,
+}
+
+/// `write_project` parameters (§4.9).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProjectWriteParams {
+    /// The item to create or update, and what to write into it.
+    pub(crate) write: ItemWrite<Project>,
+}
+
+/// The result of either write method (§4.9): the id the destination holds the item under.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct WriteResult {
+    /// The destination's own id for the item that was written.
+    pub(crate) id: NativeId,
 }

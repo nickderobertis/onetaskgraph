@@ -70,10 +70,35 @@ impl Row {
         }))
     }
 
+    /// This row as a document naming `work` and one writable Markdown folder beside it.
+    ///
+    /// The copy journeys need a destination, and a folder of Markdown is the one every
+    /// row can be copied into: it is the source this plan makes writable, and it is what
+    /// the user's own flow writes into and edits.
+    pub fn document_with_folder(&self, sandbox: &Sandbox, folder: &str) -> String {
+        let block = (self.fixture.block)(sandbox);
+        document(&json!({
+            SOURCE: {"plugin": self.plugin, "config": block},
+            folder: {"plugin": "local-md", "config": empty_folder(sandbox, folder)},
+        }))
+    }
+
     /// What this row declares.
     pub fn declared(&self) -> &Declared {
         &self.fixture.declared
     }
+}
+
+/// An empty Markdown folder, ready to be copied into.
+///
+/// The status mapping covers every status name the shared dataset spells, because a
+/// destination that would read a written status back as something else refuses the write
+/// rather than narrowing it — which is right, and is not what these journeys are about.
+pub fn empty_folder(sandbox: &Sandbox, relative: &str) -> Value {
+    json!({
+        "root": sandbox.subdirectory(relative),
+        "status_mapping": {"todo": "todo", "doing": "in-progress", "shipped": "done"},
+    })
 }
 
 pub fn document(sources: &Value) -> String {

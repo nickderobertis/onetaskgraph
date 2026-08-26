@@ -192,6 +192,7 @@ the source can do natively, and what configuration it is being built with.
 | `protocol_version` | integer | The version the plugin is speaking. See §6. |
 | `kind` | string | The plugin kind, matching the `plugin:` field a configuration names it by. |
 | `capabilities` | object | A `Capabilities` (§4.2). Read **once**; the engine does not ask again. |
+| `writes` | string | Whether this plugin can be written through. Optional; see §3.3. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -233,6 +234,20 @@ chose to call it.
 A `NativeId` is any non-empty string, colons included: the engine splits a qualified
 id on its **first** colon precisely so that stays true.
 
+### 3.3 `writes`
+
+A `WriteSupport`, and the whole of what a plugin says about its write side. It is
+`"supported"` when this plugin implements §4.9, and `"unsupported"` when it does not.
+
+The member is **optional**, and an absent one means `"unsupported"`. That is §2.1 doing
+its job: a plugin written before there was a write side says nothing here and is read as
+the read-only source it is, with no version bump on either side.
+
+The engine reads this once, at the handshake, exactly as it reads `capabilities`. A copy
+naming a plugin that answered `"unsupported"` as its destination is refused before
+anything is read, naming the configured source and this plugin kind — so a plugin never
+receives a write it would only have to refuse.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -250,9 +265,11 @@ its `result`; the JSON shape of every contract type in them is what
 | `labels` | `TaskSource::labels` |
 | `task_dependencies` | `TaskSource::task_dependencies` |
 | `project_dependencies` | `TaskSource::project_dependencies` |
+| `write_task` | `TaskSource::write_task` |
+| `write_project` | `TaskSource::write_project` |
 
-`kind` and `capabilities` are not methods of their own: both are settled by the
-handshake, and the engine reads capabilities once per connection.
+`kind`, `capabilities` and `writes` are not methods of their own: all three are settled
+by the handshake, and the engine reads capabilities once per connection.
 
 ### 4.1 Common parameter shapes
 
@@ -464,6 +481,50 @@ saying the direction is not served — because a silently empty page there is
 indistinguishable from "nothing depends on this", which is the one wrong answer this
 method can give.
 
+### 4.9 `write_task` and `write_project`
+
+Only a plugin that answered `"supported"` to §3.3 is ever sent either of these.
+
+```json
+{
+  "id": "6",
+  "method": "write_task",
+  "params": {
+    "write": {
+      "target": "ENG-1",
+      "item": { "id": "T-1", "title": "Rate-limit the sync loop", "…": "…" },
+      "depends_on": [
+        {
+          "from": { "id": "T-1", "kind": "task" },
+          "to": { "id": "other:P-9", "kind": "project" },
+          "kind": "blocks"
+        }
+      ]
+    }
+  }
+}
+```
+
+`write` is an `ItemWrite`, and it carries three members. `target` is the id of the item
+at **this** source to update, or `null` to create one. `item` is a `Task` for
+`write_task` and a `Project` for `write_project`, holding the item as this source should
+hold it once the write lands; its own `id` is the id it was read under at the *source* it
+came from, which a create may derive a name from and an update ignores. `depends_on` is
+the forward edges to record, each one's `from` naming the item as its source named it, so
+a plugin reads the `to` and the `kind` of each and supplies its own near end. It defaults
+to the empty list.
+
+`result` is `{"id": …}`, carrying the `NativeId` this source now holds the item under. A
+create is free to choose an id other than the one `item` suggested; an update answers
+with `target`.
+
+`url`, `created_at` and `updated_at` are the destination's own and are never written.
+Everything else `item` carries is, and **nothing is silently dropped**: a field this
+source cannot represent, and a metadata key it cannot carry, are each a
+`{"kind": "refused"}` naming the field or the keys. A `target` this source does not hold
+is refused the same way rather than created, because the engine established that id
+before asking.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every
@@ -586,4 +647,7 @@ simply held one task, which is the failure no test above the plugin can catch.
 - **Persisting anything.** No work data may be stored, cached, indexed or mirrored
   outside the plugin that owns it. The engine compensates transiently and writes
   nothing down; a plugin that caches is caching its own source's data, which is the
-  one place that is allowed.
+  one place that is allowed. §4.9 is not an exception to this: a destination write is
+  at the user's explicit request, names its destination, goes through that source's own
+  write interface into that source's own store, and is never read back to answer a
+  query. A cache is a write nobody asked for that the engine reads back.

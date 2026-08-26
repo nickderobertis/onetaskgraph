@@ -22,7 +22,8 @@ use serde_json::{Value, json};
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
     DependencyParams, HandshakePluginKind, IdParams, InitializeParams, InitializeResult,
-    LabelParams, PROTOCOL_VERSION, ProjectQueryParams, Request, Response, TaskQueryParams,
+    LabelParams, PROTOCOL_VERSION, ProjectQueryParams, ProjectWriteParams, Request, Response,
+    TaskQueryParams, TaskWriteParams,
 };
 use crate::registry::PluginKind;
 
@@ -223,6 +224,7 @@ fn initialize(
                 protocol_version: Some(PROTOCOL_VERSION),
                 kind,
                 capabilities: built.capabilities(),
+                writes: Some(built.writes()),
             };
             *source = Some(built);
             // An `InitializeResult` is a string, an integer and a `Capabilities`.
@@ -326,6 +328,14 @@ async fn dispatch(
                     .project_dependencies(&params.id, params.direction, &params.page)
                     .await?,
             )
+        }
+        "write_task" => {
+            let params: TaskWriteParams = decode(method, params)?;
+            encode(json!({ "id": source.write_task(&params.write).await? }))
+        }
+        "write_project" => {
+            let params: ProjectWriteParams = decode(method, params)?;
+            encode(json!({ "id": source.write_project(&params.write).await? }))
         }
         other => Err(SourceError::Malformed {
             message: format!("protocol version {PROTOCOL_VERSION} has no method called {other:?}"),

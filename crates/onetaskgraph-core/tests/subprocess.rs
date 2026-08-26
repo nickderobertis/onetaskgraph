@@ -16,8 +16,8 @@ use onetaskgraph_core::{
     MAX_LINE, RequestDeadline, SubprocessConfig, SubprocessSource, plugin_for, serve,
 };
 use onetaskgraph_plugin_api::{
-    Direction, LabelFilter, NativeId, PageRequest, ProjectFilter, ProjectQuery, SecretResolver,
-    SourceError, SourceName, TaskQuery, TaskSource,
+    Direction, ItemWrite, LabelFilter, NativeId, PageRequest, ProjectFilter, ProjectQuery,
+    SecretResolver, SourceError, SourceName, Task, TaskQuery, TaskSource, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -212,6 +212,95 @@ async fn a_source_a_process_away_answers_what_the_same_source_answers_in_process
         here.get_project(&NativeId("P-1".to_owned())).await
     );
     assert_eq!(there.health().await, here.health().await);
+}
+
+#[tokio::test]
+async fn a_write_crosses_the_wire_and_lands_in_the_source_on_the_other_side() {
+    let there = a_process_away(hosted_settings()).expect("the handshake succeeds");
+    // Read at the handshake, exactly as capabilities are, so the engine refuses a copy
+    // into an unwritable plugin before it reads anything.
+    assert_eq!(there.writes(), WriteSupport::Supported);
+
+    let item: Task = serde_json::from_value(json!({
+        "id": "T-9", "title": "Written across a pipe", "content": "body",
+        "status": {"category": "todo", "name": "Todo"}, "labels": [],
+        "metadata": {"caller.count": 3, "caller.shape": {"nested": [true, null]}},
+        "repositories": ["github.com/nickderobertis/onetaskgraph"]
+    }))
+    .expect("a task");
+    let written = there
+        .write_task(&ItemWrite {
+            target: None,
+            item: item.clone(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("the plugin takes the write");
+    assert_eq!(written, NativeId("T-9".to_owned()));
+
+    // What a source can do must not change because it is a process away: the value and
+    // the JSON type of every caller-defined key survive the boundary in both directions.
+    let read = there
+        .get_task(&written)
+        .await
+        .expect("the plugin answers")
+        .expect("the task is there");
+    assert_eq!(read.title, "Written across a pipe");
+    assert_eq!(read.metadata["caller.count"], json!(3));
+    assert_eq!(
+        read.metadata["caller.shape"],
+        json!({"nested": [true, null]})
+    );
+
+    let updated = there
+        .write_project(&ItemWrite {
+            target: Some(NativeId("P-1".to_owned())),
+            item: serde_json::from_value(json!({
+                "id": "P-1", "title": "Renamed across a pipe",
+                "status": {"category": "todo", "name": "Todo"}, "labels": []
+            }))
+            .expect("a project"),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("the plugin takes the write");
+    assert_eq!(updated, NativeId("P-1".to_owned()));
+    assert_eq!(
+        there.get_project(&updated).await.unwrap().unwrap().title,
+        "Renamed across a pipe"
+    );
+
+    // And a refusal is the plugin's own, carried whole rather than flattened.
+    let Err(SourceError::Refused { message }) = there
+        .write_task(&ItemWrite {
+            target: Some(NativeId("absent".to_owned())),
+            item,
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a target the hosted source does not hold must be refused");
+    };
+    assert!(
+        message.contains("names no task this source holds"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn a_plugin_that_says_nothing_about_writing_is_read_as_one_that_cannot() {
+    // §3.3: the member is optional, and absent means unsupported — which is what a
+    // version-1 plugin written before there was a write side sends.
+    let silent = scripted(vec![
+        json!({"id":"0","result":{"protocol_version":1,"kind":"ancient","capabilities":{
+            "projects":"native","orphan_tasks":"native","filter_by_label":"native",
+            "filter_by_status":"native","search_title":"native","search_content":"native",
+            "task_dependencies":"both-directions","project_dependencies":"both-directions",
+            "max_page_size":10}}})
+        .to_string(),
+    ])
+    .expect("the handshake succeeds");
+    assert_eq!(silent.writes(), WriteSupport::Unsupported);
 }
 
 #[tokio::test]

@@ -14,11 +14,19 @@ Two properties make it different from a lowest-common-denominator wrapper:
   do natively. The engine pushes those predicates down and compensates in memory for the
   rest — and every response carries the plan it ran, so `--explain` shows you which source
   filtered server-side and which one the engine narrowed for.
-- **Nothing of your work is kept.** No cache, no index, no local mirror. The engine holds
-  at most one source page at a time and writes nothing down — enforced by a supply-chain
-  gate that refuses every embedded store and cache crate, a sandboxed journey that fails
-  if any file written during a run contains your data, and an assertion that the same
-  query asked twice reaches the source twice.
+- **Nothing of your work is kept outside the system that owns it.** No cache, no index,
+  no local mirror. The engine holds at most one source page at a time and writes nothing
+  down — enforced by a supply-chain gate that refuses every embedded store and cache
+  crate, a sandboxed journey that fails if any file written during a run contains your
+  data, and an assertion that the same query asked twice reaches the source twice.
+
+  `copy` is not an exception to that, and the difference is worth stating plainly. A
+  destination write is at your explicit request, names its destination, goes through that
+  source's own write interface into that source's own store, and is never read back to
+  answer a query. A cache is a write nobody asked for that the engine reads back. Copying
+  a task into a folder of Markdown puts it in the plugin that now owns it; nothing is
+  kept anywhere else, and the sandboxed journey above drives `copy` and fails, naming the
+  path, if any file outside that destination's own store changes.
 
 > **Status.** The plugin contract, the workspace, the gate, the configuration layer and the
 > query engine are in place, and the binary answers every verb below. The `in-memory`
@@ -37,8 +45,11 @@ onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--limit N] [--page TOKEN] [--explain] [--allow-partial] [--json]
 onetaskgraph task show <ID>
 onetaskgraph task deps <ID> [--direction depends-on|depended-on-by]
+onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dry-run]
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
+onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks] [--match-by KEY] [--recreate]
+                                                 [--dry-run]
 onetaskgraph label list [--source S]...
 onetaskgraph search <TEXT> [--in ...] [--kind task|project|both]
 
@@ -70,6 +81,61 @@ plan:
 Linear filtered server-side; the folder of Markdown could not, so the engine pulled pages
 and narrowed them itself. Both answers are correct and you can see which you got.
 `--json` carries the same plan as a field, so a script does not have to parse the prose.
+
+### Writing tasks: Markdown in, ticket out
+
+Authoring against a ticketing API is not something a person or an agent does well, and a
+folder of Markdown files is. So that is how work is created here: write the files, read
+them back through the CLI to be sure they parse, then copy them where your team works.
+
+```bash
+$EDITOR notes/tasks/rate-limit.md      # front matter and a body
+onetaskgraph task list --source notes  # they parse, and this is what they say
+onetaskgraph task copy notes:rate-limit --to work
+```
+
+Editing is the same road in reverse — copy out, edit, copy back:
+
+```bash
+onetaskgraph task copy work:ENG-142 --to notes
+$EDITOR notes/tasks/ENG-142.md
+onetaskgraph task copy notes:ENG-142 --to work   # updates ENG-142; does not duplicate it
+```
+
+The copy back **updates** rather than duplicating because the copied file carries the id
+it came from, under the reserved metadata key `onetaskgraph.origin`. Nothing anywhere
+holds a mapping: the correspondence lives on the item, inside the plugin that owns it.
+
+Two rules find the counterpart, in this order. If the item's origin names the destination,
+that origin *is* the destination item and the copy updates it. Otherwise the destination
+is searched for an item whose origin is the id being copied; found, it is updated, and not
+found, one is created carrying that origin.
+
+| Flag | What it is for |
+| --- | --- |
+| `--dry-run` | Every read, no write, and the action each item would have got. |
+| `--recreate` | An origin naming an item the destination no longer holds refuses by default, because creating there would duplicate work somebody deleted. This says create instead. |
+| `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy creates a second item. This re-establishes it by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
+| `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it, matching each task independently. |
+
+Every field a copy read is written — title, content, status, labels, project,
+repositories, metadata and the edges — except `url`, `created_at` and `updated_at`, which
+are the destination's own. Nothing is silently dropped: a field the destination cannot
+represent, or a metadata key it cannot carry, refuses the write and names it. A copy never
+deletes either, so a destination item the source no longer holds is left exactly as it is
+and reported as `orphaned`.
+
+`--json` gives one entry per item for a script to read:
+
+```json
+{"items": [{"source": "notes:ENG-142", "action": "updated", "destination": "work:ENG-142"}]}
+```
+
+`action` says which of the four things above happened to that item, and `destination` is
+`null` only for a dry run that would have created something. The vocabulary itself is
+published rather than restated here: it is the `CopyAction` root of `onetaskgraph schema`,
+which is what both SDKs are generated from and what the journeys validate this output
+against.
 
 ### Exit codes
 
