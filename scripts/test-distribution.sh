@@ -329,6 +329,8 @@ cp "$tmp/version-repo/Cargo.toml" "$tmp/version-repo/Cargo.toml.valid"
 perl -pi -e 'if (/^\[workspace\.package\]/ .. /^version = /) { s/^version = "[^"]+"/version = "01.2.3"/ }' "$tmp/version-repo/Cargo.toml"
 if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.0) 2>"$tmp/error"; then echo "product-version helper accepted an invalid manifest version; next: inspect manifest validation" >&2; exit 1; fi
 grep -q 'Cargo.toml has None; expected 0.1.0' "$tmp/error" || { cat "$tmp/error" >&2; echo "invalid manifest version failure omitted its location; next: inspect version diagnostics" >&2; exit 1; }
+if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted an invalid semantic product version; next: inspect workspace version validation" >&2; exit 1; fi
+grep -q 'Cargo.toml: no product version could be read' "$tmp/error" || { cat "$tmp/error" >&2; echo "workspace invalid-version failure omitted its location; next: inspect workspace diagnostics" >&2; exit 1; }
 mv "$tmp/version-repo/Cargo.toml.valid" "$tmp/version-repo/Cargo.toml"
 node -e 'const fs=require("fs"),f=process.argv[1],p=JSON.parse(fs.readFileSync(f));p.version="9.9.9";fs.writeFileSync(f,JSON.stringify(p,null,2)+"\n")' "$tmp/version-repo/npm/cli/package.json"
 if "$tmp/version-repo/scripts/set-version.sh" --check 2>"$tmp/error"; then echo "version drift was accepted; next: inspect version checking" >&2; exit 1; fi
@@ -370,6 +372,14 @@ if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/er
 grep -q 'product version files could not be read' "$tmp/error" || { cat "$tmp/error" >&2; echo "workspace missing-manifest failure omitted recovery guidance; next: inspect workspace diagnostics" >&2; exit 1; }
 mv "$tmp/version-repo/sdks/typescript/package.json.missing" "$tmp/version-repo/sdks/typescript/package.json"
 git -C "$tmp/version-repo" restore sdks/typescript/package.json
+for readonly_manifest in Cargo.toml sdks/typescript/package.json; do
+  chmod 444 "$tmp/version-repo/$readonly_manifest"
+  if (cd "$tmp/version-repo" && python3 scripts/product_versions.py set 0.1.2) 2>"$tmp/error"; then echo "product-version helper rewrote read-only $readonly_manifest; next: inspect write error handling" >&2; exit 1; fi
+  grep -q 'product version files could not be processed' "$tmp/error" || { cat "$tmp/error" >&2; echo "read-only manifest failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
+  chmod 644 "$tmp/version-repo/$readonly_manifest"
+  git -C "$tmp/version-repo" restore .
+  "$tmp/version-repo/scripts/set-version.sh" 0.1.1
+done
 grep -q 'version = "0.1.1"' "$tmp/version-repo/Cargo.lock" || { echo "version updater missed Cargo.lock; next: inspect lock refresh" >&2; exit 1; }
 grep -q 'version = "0.1.1"' "$tmp/version-repo/uv.lock" || { echo "version updater missed uv.lock; next: inspect lock refresh" >&2; exit 1; }
 cat > "$tmp/registry-server.py" <<'PY'
