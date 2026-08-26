@@ -413,7 +413,7 @@ fn a_project_copy_updates_the_configured_github_board_without_creating_one() {
 }
 
 #[test]
-fn copying_an_issue_back_updates_fields_and_removes_a_native_dependency() {
+fn copying_an_issue_back_updates_fields_and_replaces_a_native_dependency() {
     let sandbox = Sandbox::new();
     let github = ROWS
         .iter()
@@ -422,7 +422,7 @@ fn copying_an_issue_back_updates_fields_and_removes_a_native_dependency() {
     sandbox.project_document(&github.document_with_folder(&sandbox, NOTES));
     ok(&sandbox, &["task", "copy", "work:T-1", "--to", NOTES]);
     let file = sandbox.project().join(NOTES).join("tasks/T-1.md");
-    std::fs::write(&file, "---\ntitle: Alpha engine revised\nstatus: Todo\nlabels: [{id: L-1, name: bug}, {id: L-3, name: core}]\nmetadata: {onetaskgraph.origin: 'work:T-1'}\nrepositories: [github.com/nickderobertis/onetaskgraph]\n---\nthe engine core\n").unwrap();
+    std::fs::write(&file, "---\ntitle: Alpha engine revised\nstatus: Todo\nlabels: [{id: L-1, name: bug}, {id: L-3, name: core}]\nmetadata: {onetaskgraph.origin: 'work:T-1'}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [{id: 'work:T-3', item: task}]\n---\nthe engine core\n").unwrap();
     let copied = ok(
         &sandbox,
         &["task", "copy", "notes:T-1", "--to", "work", "--json"],

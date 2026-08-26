@@ -15,4 +15,5 @@ GitHub.com's GraphQL introspection endpoint on 2026-08-24, and the mutation inpu
 were derived from GitHub's published Projects and Issues references on 2026-08-26. The
 pinned-schema test validates every production operation's
 selected fields, arguments, variable types, fragment type conditions, and fixture keys against it;
-the credentialed live lane provides the freshness check against GitHub's current schema.
+the credentialed live lane introspects the current mutation fields and input types as its mutation
+freshness check, then exercises reads without changing the configured board.

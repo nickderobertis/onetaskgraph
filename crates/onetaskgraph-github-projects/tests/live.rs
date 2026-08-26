@@ -106,6 +106,61 @@ async fn discover_project(token: &str) -> Result<Option<(String, u32)>, String> 
     }))
 }
 
+fn named_type(value: &Value) -> Option<&str> {
+    value
+        .get("name")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("ofType").and_then(named_type))
+}
+
+async fn verify_mutation_schema(token: &str) -> Result<(), String> {
+    let response = graphql(
+        token,
+        "query MutationContract { __type(name:\"Mutation\") { fields { name args { name type { name ofType { name } } } } } }",
+        "mutation contract introspection",
+    )
+    .await?;
+    let fields = response
+        .pointer("/data/__type/fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "mutation contract introspection returned no fields".to_owned())?;
+    for (field_name, input_name) in [
+        ("addProjectV2DraftIssue", "AddProjectV2DraftIssueInput"),
+        ("addBlockedBy", "AddBlockedByInput"),
+        ("removeBlockedBy", "RemoveBlockedByInput"),
+        ("updateIssue", "UpdateIssueInput"),
+        ("updateProjectV2", "UpdateProjectV2Input"),
+        (
+            "updateProjectV2DraftIssue",
+            "UpdateProjectV2DraftIssueInput",
+        ),
+        (
+            "updateProjectV2ItemFieldValue",
+            "UpdateProjectV2ItemFieldValueInput",
+        ),
+    ] {
+        let field = fields
+            .iter()
+            .find(|field| field.get("name").and_then(Value::as_str) == Some(field_name))
+            .ok_or_else(|| format!("GitHub mutation schema has no {field_name} field"))?;
+        let input = field
+            .get("args")
+            .and_then(Value::as_array)
+            .and_then(|args| {
+                args.iter()
+                    .find(|argument| argument.get("name").and_then(Value::as_str) == Some("input"))
+            })
+            .and_then(|argument| argument.get("type"))
+            .and_then(named_type);
+        if input != Some(input_name) {
+            return Err(format!(
+                "GitHub mutation {field_name} input changed: expected {input_name}, got {input:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
     PageRequest { cursor, limit: 25 }
 }
@@ -141,6 +196,9 @@ async fn real_projects_v2_contract_is_structurally_sound_and_read_only() {
              GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER to a visible project containing at least \
              one Issue",
         );
+    verify_mutation_schema(&token)
+        .await
+        .unwrap_or_else(|error| panic!("GitHub mutation schema drifted: {error}"));
     let source = onetaskgraph_github_projects::Plugin
         .build(
             &SourceName::new("github-live").unwrap(),

@@ -404,6 +404,8 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                         .as_str()
                         .is_some_and(|value| !value.is_empty())
                 );
+                assert_eq!(variables["input"]["issueId"], "T-1");
+                assert_eq!(variables["input"]["blockingIssueId"], "T-3");
                 json!({"addBlockedBy":{"issue":{"id":variables["input"]["issueId"]},"blockingIssue":{"id":variables["input"]["blockingIssueId"]}}})
             } else if query.contains("removeBlockedBy(input:$input)") {
                 assert!(
