@@ -226,6 +226,73 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         );
     }
 }
+
+#[test]
+fn pinned_schema_names_every_write_operation_the_plugin_sends() {
+    use graphql_parser::{query, schema};
+    use onetaskgraph_linear::graphql;
+    let schema = schema::parse_schema::<String>(include_str!("fixtures/schema.graphql")).unwrap();
+    let fields = |root: &str| {
+        schema
+            .definitions
+            .iter()
+            .find_map(|definition| match definition {
+                schema::Definition::TypeDefinition(schema::TypeDefinition::Object(object))
+                    if object.name == root =>
+                {
+                    Some(
+                        object
+                            .fields
+                            .iter()
+                            .map(|field| field.name.as_str())
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let query_fields = fields("Query");
+    let mutation_fields = fields("Mutation");
+    for (document, mutation) in [
+        (graphql::TEAM, false),
+        (graphql::ISSUE_STATE, false),
+        (graphql::PROJECT_STATUS, false),
+        (graphql::ISSUE_LABEL, false),
+        (graphql::PROJECT_LABEL, false),
+        (graphql::ISSUE_CREATE, true),
+        (graphql::ISSUE_UPDATE, true),
+        (graphql::PROJECT_CREATE, true),
+        (graphql::PROJECT_UPDATE, true),
+        (graphql::ISSUE_RELATION_CREATE, true),
+        (graphql::PROJECT_RELATION_CREATE, true),
+        (graphql::ISSUE_DELETE, true),
+    ] {
+        let parsed = query::parse_query::<String>(document).unwrap();
+        let selection = match &parsed.definitions[0] {
+            query::Definition::Operation(query::OperationDefinition::Query(operation)) => {
+                &operation.selection_set.items[0]
+            }
+            query::Definition::Operation(query::OperationDefinition::Mutation(operation)) => {
+                &operation.selection_set.items[0]
+            }
+            _ => panic!("production document is an explicit query or mutation"),
+        };
+        let query::Selection::Field(root) = selection else {
+            panic!("operation has a root field")
+        };
+        assert!(
+            (if mutation {
+                &mutation_fields
+            } else {
+                &query_fields
+            })
+            .contains(&root.name.as_str()),
+            "pinned schema lacks {}",
+            root.name
+        );
+    }
+}
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 #[test]
