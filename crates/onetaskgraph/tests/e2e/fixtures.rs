@@ -658,47 +658,70 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
         }
         graphql::TEAM => {
             serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
-                .is_ok_and(|values| values.len() == 1 && values.contains_key("key"))
+                .is_ok_and(|values| {
+                    values.len() == 1 && values.get("key").is_some_and(|value| !value.is_empty())
+                })
         }
         graphql::ISSUE_STATE => {
             serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
                 .is_ok_and(|values| {
-                    values.len() == 2 && values.contains_key("name") && values.contains_key("team")
+                    values.len() == 2
+                        && ["name", "team"]
+                            .iter()
+                            .all(|key| values.get(*key).is_some_and(|value| !value.is_empty()))
                 })
         }
         graphql::PROJECT_STATUS | graphql::ISSUE_LABEL | graphql::PROJECT_LABEL => {
             serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
-                .is_ok_and(|values| values.len() == 1 && values.contains_key("name"))
+                .is_ok_and(|values| {
+                    values.len() == 1 && values.get("name").is_some_and(|value| !value.is_empty())
+                })
         }
-        graphql::ISSUE_CREATE => valid_linear_write_input(
-            variables.get("input"),
-            &["teamId", "title", "stateId", "labelIds"],
-            &["description", "projectId"],
-        ),
-        graphql::PROJECT_CREATE => valid_linear_write_input(
-            variables.get("input"),
-            &["teamIds", "name", "statusId", "labelIds"],
-            &["description"],
-        ),
-        graphql::ISSUE_RELATION_CREATE => valid_linear_write_input(
-            variables.get("input"),
-            &["issueId", "relatedIssueId", "type"],
-            &[],
-        ),
-        graphql::PROJECT_RELATION_CREATE => valid_linear_write_input(
-            variables.get("input"),
-            &["projectId", "relatedProjectId", "type"],
-            &[],
-        ),
-        graphql::ISSUE_RELATION_DELETE | graphql::PROJECT_RELATION_DELETE => variables
-            .get("id")
-            .and_then(Value::as_str)
-            .is_some_and(|id| !id.is_empty()),
+        graphql::ISSUE_CREATE => {
+            exact_linear_variable_keys(variables, &["input"])
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &["teamId", "title", "stateId", "labelIds"],
+                    &["description", "projectId"],
+                )
+        }
+        graphql::PROJECT_CREATE => {
+            exact_linear_variable_keys(variables, &["input"])
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &["teamIds", "name", "statusId", "labelIds"],
+                    &["description"],
+                )
+        }
+        graphql::ISSUE_RELATION_CREATE => {
+            exact_linear_variable_keys(variables, &["input"])
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &["issueId", "relatedIssueId", "type"],
+                    &[],
+                )
+        }
+        graphql::PROJECT_RELATION_CREATE => {
+            exact_linear_variable_keys(variables, &["input"])
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &["projectId", "relatedProjectId", "type"],
+                    &[],
+                )
+        }
+        graphql::ISSUE_RELATION_DELETE | graphql::PROJECT_RELATION_DELETE => {
+            exact_linear_variable_keys(variables, &["id"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+        }
         graphql::ISSUE_UPDATE | graphql::PROJECT_UPDATE => {
-            variables
-                .get("id")
-                .and_then(Value::as_str)
-                .is_some_and(|id| !id.is_empty())
+            exact_linear_variable_keys(variables, &["id", "input"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
                 && valid_linear_write_input(
                     variables.get("input"),
                     if operation == graphql::ISSUE_UPDATE {
@@ -718,6 +741,12 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
     valid.then_some(()).ok_or("invalid operation variables")
 }
 
+fn exact_linear_variable_keys(value: &Value, expected: &[&str]) -> bool {
+    value.as_object().is_some_and(|fields| {
+        fields.len() == expected.len() && expected.iter().all(|key| fields.contains_key(*key))
+    })
+}
+
 fn valid_linear_write_input(value: Option<&Value>, required: &[&str], optional: &[&str]) -> bool {
     let Some(fields) = value.and_then(Value::as_object) else {
         return false;
@@ -735,7 +764,8 @@ fn valid_linear_write_input(value: Option<&Value>, required: &[&str], optional: 
                 .iter()
                 .all(|value| value.as_str().is_some_and(|id| !id.is_empty()))
         }),
-        "description" | "projectId" => value.is_null() || value.is_string(),
+        "description" => value.is_null() || value.is_string(),
+        "projectId" => value.is_null() || value.as_str().is_some_and(|id| !id.is_empty()),
         _ => value.as_str().is_some_and(|text| !text.is_empty()),
     })
 }

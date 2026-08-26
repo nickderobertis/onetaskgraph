@@ -400,7 +400,6 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-NEW"}}}),
         serde_json::json!({"issue":{"description":null,"relations":{"nodes":[{"id":"OLD","type":"blocks","relatedIssue":{"id":"OLD-FAR"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"issueRelationDelete":{"success":true}}),
-        serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I2"}}}),
         serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("teams", "TEAM"),
         id_page("projectStatuses", "STATUS"),
@@ -464,7 +463,7 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         "I-NEW"
     );
     let unresolved = DependencyEdge {
-        to: DependencyEndpoint::new("authored:FAR".into(), ItemKind::Task).unwrap(),
+        to: DependencyEndpoint::new("missing:FAR".into(), ItemKind::Task).unwrap(),
         ..native_task
     };
     assert_eq!(
@@ -545,6 +544,45 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
             && create.contains("onetaskgraph.repositories")
             && create.contains("elsewhere:P-9")
     );
+    let unresolved_update = requests
+        .iter()
+        .find(|request| {
+            request.contains(onetaskgraph_linear::graphql::ISSUE_UPDATE)
+                && request.contains("missing:FAR")
+        })
+        .expect("an unresolved same-source origin remains in recorded dependency metadata");
+    assert!(unresolved_update.contains("onetaskgraph.depends_on"));
+}
+
+#[tokio::test]
+async fn a_write_with_no_visible_description_or_metadata_sends_null_over_real_http() {
+    let page = |root: &str, nodes: serde_json::Value| serde_json::json!({(root):{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}});
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW"}}}),
+        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+    ]);
+    let item = serde_json::from_value::<Task>(serde_json::json!({
+        "id":"from:T", "title":"task", "content":null,
+        "status":{"category":"todo","name":"Todo"}, "labels":[], "project":null,
+        "repositories":[], "metadata":{}
+    }))
+    .unwrap();
+    writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item,
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let requests = wire.iter().collect::<Vec<_>>();
+    let create = requests
+        .iter()
+        .find(|request| request.contains(onetaskgraph_linear::graphql::ISSUE_CREATE))
+        .unwrap();
+    assert!(create.contains("\"description\":null"), "{create}");
 }
 
 #[tokio::test]
