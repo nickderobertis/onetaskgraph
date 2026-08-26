@@ -14,10 +14,12 @@ trip through the ticketing system the user already works in.
 
 Keys are free-form, with two prefixes reserved:
 
-- `onetaskgraph.` belongs to this product. It defines exactly two keys, and both are
-  spelled once in the contract crate so no source can invent its own:
-  `onetaskgraph.repositories` (`Repository::METADATA_KEY`) and
-  `onetaskgraph.depends_on` (`DependencyEdge::RECORDED_KEY`).
+- `onetaskgraph.` belongs to this product. It defines exactly three keys, each spelled
+  once so no source can invent its own: `onetaskgraph.repositories`
+  (`Repository::METADATA_KEY`) and `onetaskgraph.depends_on`
+  (`DependencyEdge::RECORDED_KEY`) in the contract crate, and `onetaskgraph.origin`
+  (`GlobalId::ORIGIN_KEY`) in the engine — that last one carries a *qualified* id, which
+  no plugin ever constructs or interprets.
 - `onepipeline.` belongs to that consumer.
 
 Every other key is the caller's. A source returns it exactly as it holds it — the same
@@ -105,8 +107,25 @@ with no representation for caller-defined metadata at all returns it empty and n
 fabricates one — a rule kept for a source somebody else writes, since no source this
 repository ships is that case.
 
-**Writing is not this product's yet.** No source here is writable: the write seam arrives
-with the **copy verb**, and each remote source's own write side lands after that. Those
-nodes carry the write obligations — a faithful round trip, and a destination refusing a
-key it cannot carry rather than dropping it — and Linear's write side writes back to the
-slot described above.
+**On write, every writable source round-trips exactly.** Reading back a value a copy wrote
+returns what was written, value and JSON type alike. A source with only a text slot stores
+the canonical JSON encoding and decodes it on read. A destination that cannot carry a key
+**refuses the write, naming the source and the keys it could not carry**, rather than
+dropping them — and so does one handed a field it cannot represent, naming the field.
+
+The write seam arrived with the **copy verb**: `TaskSource::writes` says whether a source
+has a write side at all, and `write_task` and `write_project` are how a destination is
+reached. Both are defaulted to refusing, so a source with nothing to write into needs no
+edit. `local-md` and `in-memory` are writable today; each remote source's own write side
+lands with its own node, and Linear's writes back to the slot described above.
+
+Two keys never travel as metadata even though a source may store them that way.
+`onetaskgraph.repositories` and `onetaskgraph.depends_on` are the *encoding* a source
+without a native slot uses; the truth is the typed `repositories` field and the item's own
+edges, and those are what a copy carries. Writing the encoding beside them would have a
+destination hold one thing twice and disagree with itself the moment one changed.
+
+A copy adds one reserved key of its own, `onetaskgraph.origin`, whose value is the
+qualified id the item was copied from. It is what makes a second copy an update rather
+than a duplicate, and it lives on the item inside the plugin that owns it — nothing
+anywhere holds a mapping.

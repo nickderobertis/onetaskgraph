@@ -188,6 +188,11 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 
 - **Never mock the layer under test.** Every journey drives the compiled binary as a
   subprocess and asserts on exit code, stdout and stderr.
+- **The copy verb is proven twice, deliberately.** The journeys drive the binary the way a
+  user does, and `crates/onetaskgraph-core/tests/copy.rs` drives the engine's own
+  `Engine::copy` as a library call. The second is not a duplicate: this product is exposed
+  three ways from one engine, and the consumer a command-line-only copy would strand is
+  the Rust caller that links the crate.
 - **Coverage: 95% lines, per project, and each project measures only its own crate.**
   A workspace average lets a weak crate hide behind a strong one — and, decisively, a
   workspace-wide pass runs every crate's tests on every change, which is what affected
@@ -267,6 +272,20 @@ them do; this is the inventory of what is owed, not a status board.
     blocking side reports the same edge rather than its mirror.
 26. A reserved-key far end the near item's own backend could have named is refused, naming
     the entry and what to record instead; so is one this interface cannot represent.
+27. A task copies out of every source kind into a folder of Markdown with every field it
+    read intact, and a second copy of the same item updates that one rather than
+    duplicating it.
+28. The round trip: a task is copied out of a destination, the Markdown is edited, and the
+    copy back updates the item it came from — exactly one item where there was one before,
+    the edited field changed, and every field the edit did not touch byte-for-byte what it
+    was.
+29. Every refusal a copy owes: a destination configured with no write side, one that
+    cannot carry a metadata key, an origin naming an item the destination no longer holds,
+    and an id or a destination nothing configures. Plus the escapes — `--recreate`,
+    `--match-by` — and `--dry-run`, which reads everything and writes nothing.
+30. A project copy carries the tasks in it, matches each independently on a second copy,
+    and reports a destination item the source no longer holds as orphaned rather than
+    deleting it.
 
 ## Recorded decisions
 
