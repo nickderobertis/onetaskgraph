@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-use crate::NativeId;
+use crate::{NativeId, SourceName};
 
 /// One unit of work as a source reports it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -247,11 +247,16 @@ impl DependencyEdge {
     ///
     /// `natively_names` is the kind of item the near item's **own backend** can relate it
     /// to — `Some(ItemKind::Task)` for a GitHub issue, whose `blockedBy` connection holds
-    /// issues; `None` for a GitHub draft, which has no such connection at all. An
-    /// unqualified endpoint of that kind is refused, because it names an item the backend
-    /// itself could hold, and the rule this key exists to serve is the backend's own
-    /// relationship first. A qualified endpoint is never refused: no backend relates an id
-    /// in a system it knows nothing about, which is the whole case this key is for.
+    /// issues; `None` for a GitHub draft, which has no such connection at all. An endpoint
+    /// of that kind naming an item of `near_source` is refused, because it names an item
+    /// the backend itself could hold, and the rule this key exists to serve is the
+    /// backend's own relationship first. Naming one's own source is what an unqualified id
+    /// does implicitly and what `<near_source>:<native>` does in writing, so both are
+    /// refused: which of the two spellings a plan happened to use says nothing about where
+    /// the edge belongs.
+    ///
+    /// An endpoint qualified to a *different* source is never refused. That is the whole
+    /// case this key is for: no backend relates an id in a system it knows nothing about.
     ///
     /// # Errors
     ///
@@ -261,6 +266,7 @@ impl DependencyEdge {
         metadata: &BTreeMap<String, Value>,
         near: &NativeId,
         near_kind: ItemKind,
+        near_source: &SourceName,
         natively_names: Option<ItemKind>,
     ) -> Result<Vec<Self>, String> {
         let Some(value) = metadata.get(Self::RECORDED_KEY) else {
@@ -275,7 +281,10 @@ impl DependencyEdge {
             })?;
         far.into_iter()
             .map(|to| {
-                if !to.is_qualified() && natively_names == Some(to.kind) {
+                let names_this_source = to
+                    .source()
+                    .is_none_or(|source| source == near_source.as_str());
+                if names_this_source && natively_names == Some(to.kind) {
                     return Err(format!(
                         "{key} on {near} records {to}, which this source can relate \
                          natively; record it as this backend's own dependency and keep \
@@ -409,6 +418,18 @@ impl DependencyEndpoint {
     #[must_use]
     pub fn is_qualified(&self) -> bool {
         matches!(self.id, EndpointIdentity::Qualified(_))
+    }
+
+    /// The source segment of a qualified id, or `None` for a native one.
+    ///
+    /// A native id belongs to whichever source reports it, so `None` reads as "this
+    /// source" rather than "no source".
+    #[must_use]
+    pub fn source(&self) -> Option<&str> {
+        match &self.id {
+            EndpointIdentity::Qualified(id) => id.split_once(':').map(|(source, _)| source),
+            EndpointIdentity::Native(_) => None,
+        }
     }
 }
 

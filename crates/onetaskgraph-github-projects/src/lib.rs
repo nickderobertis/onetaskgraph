@@ -124,21 +124,25 @@ impl SourcePlugin for Plugin {
             serde_json::from_value(config.clone()).map_err(|e| SourceError::Config {
                 message: format!("source {name}: {e}"),
             })?;
-        let source = GitHubProjectsSource::new(config, secrets).map_err(|error| match error {
-            SourceError::Config { message } => SourceError::Config {
-                message: format!("source {name}: {message}"),
-            },
-            SourceError::Auth { message } => SourceError::Auth {
-                message: format!("source {name}: {message}"),
-            },
-            other => other,
-        })?;
+        let source =
+            GitHubProjectsSource::new(name, config, secrets).map_err(|error| match error {
+                SourceError::Config { message } => SourceError::Config {
+                    message: format!("source {name}: {message}"),
+                },
+                SourceError::Auth { message } => SourceError::Auth {
+                    message: format!("source {name}: {message}"),
+                },
+                other => other,
+            })?;
         Ok(Box::new(source))
     }
 }
 
 /// A source which reads GitHub afresh for every operation.
 pub struct GitHubProjectsSource {
+    /// This source's configured name, so a recorded far end naming it can be told from
+    /// one naming a system this source knows nothing about.
+    name: SourceName,
     owner: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only by `new` after full GitHub-owner validation.
     project_number: u32, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only by `new` after GraphQL-Int validation.
     endpoint: Url,
@@ -150,7 +154,12 @@ pub struct GitHubProjectsSource {
 
 impl GitHubProjectsSource {
     /// Validate configuration and capture the named credential without exposing it.
+    ///
+    /// `name` is this source's configured name, kept for one comparison: a far end
+    /// recorded as `<name>:<native>` is an item of this same source, which its own
+    /// relationship was supposed to hold.
     pub fn new(
+        name: &SourceName,
         config: GitHubProjectsConfig,
         secrets: &dyn SecretResolver,
     ) -> Result<Self, SourceError> {
@@ -188,6 +197,7 @@ impl GitHubProjectsSource {
             message: format!("environment variable {} is missing or empty; set it to a GitHub token with read:project and repository Issues read access", config.token_env),
         })?;
         Ok(Self {
+            name: name.clone(),
             owner: config.owner,
             project_number: config.project_number,
             endpoint,
@@ -601,8 +611,14 @@ impl GitHubProjectsSource {
         else {
             return Ok(Vec::new());
         };
-        DependencyEdge::recorded(&task.metadata, id, ItemKind::Task, natively_names)
-            .map_err(|message| SourceError::Malformed { message })
+        DependencyEdge::recorded(
+            &task.metadata,
+            id,
+            ItemKind::Task,
+            &self.name,
+            natively_names,
+        )
+        .map_err(|message| SourceError::Malformed { message })
     }
 
     async fn related_issue_projects(&self, issue: &Value) -> Result<Vec<NativeId>, SourceError> {
@@ -847,6 +863,7 @@ impl TaskSource for GitHubProjectsSource {
                     &self.project(&project)?.metadata,
                     id,
                     ItemKind::Project,
+                    &self.name,
                     Some(ItemKind::Project),
                 )
                 .map_err(|message| SourceError::Malformed { message })?,

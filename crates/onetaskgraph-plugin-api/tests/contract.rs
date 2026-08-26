@@ -508,6 +508,14 @@ fn a_repeated_repository_origin_is_refused_wherever_a_work_item_is_decoded() {
     assert!(serde_json::from_value::<Project>(project).is_err());
 }
 
+/// The name the source reading these near items is configured under.
+///
+/// A qualified far end is judged against it, so it has to be a real `SourceName` rather
+/// than a literal spelled into each assertion.
+fn near_source() -> SourceName {
+    SourceName::new("work").expect("a usable source name")
+}
+
 #[test]
 fn a_near_item_records_the_far_ends_its_backend_cannot_name() {
     use onetaskgraph_plugin_api::ItemKind;
@@ -519,8 +527,14 @@ fn a_near_item_records_the_far_ends_its_backend_cannot_name() {
     .into();
     // A source with no relationship of its own may record anything, including a far end
     // in this source.
-    let edges = DependencyEdge::recorded(&metadata, &NativeId::from("T-1"), ItemKind::Task, None)
-        .expect("a list of endpoints");
+    let edges = DependencyEdge::recorded(
+        &metadata,
+        &NativeId::from("T-1"),
+        ItemKind::Task,
+        &near_source(),
+        None,
+    )
+    .expect("a list of endpoints");
 
     assert_eq!(edges.len(), 2);
     assert_eq!(edges[0].from.id(), "T-1");
@@ -536,6 +550,7 @@ fn a_near_item_records_the_far_ends_its_backend_cannot_name() {
             &Default::default(),
             &NativeId::from("T-1"),
             ItemKind::Task,
+            &near_source(),
             Some(ItemKind::Task)
         )
         .expect("an item recording nothing")
@@ -547,8 +562,14 @@ fn a_near_item_records_the_far_ends_its_backend_cannot_name() {
         serde_json::json!({"id": "elsewhere:P-9"}),
     )]
     .into();
-    let error = DependencyEdge::recorded(&malformed, &NativeId::from("T-1"), ItemKind::Task, None)
-        .expect_err("a mapping is not a list of endpoints");
+    let error = DependencyEdge::recorded(
+        &malformed,
+        &NativeId::from("T-1"),
+        ItemKind::Task,
+        &near_source(),
+        None,
+    )
+    .expect_err("a mapping is not a list of endpoints");
     assert!(error.contains(DependencyEdge::RECORDED_KEY), "{error}");
 }
 
@@ -567,6 +588,7 @@ fn a_far_end_the_near_backend_could_have_named_is_refused_rather_than_read() {
         &same_kind,
         &NativeId::from("T-1"),
         ItemKind::Task,
+        &near_source(),
         Some(ItemKind::Task),
     )
     .expect_err("a task naming a task of this source is the backend's own edge");
@@ -586,6 +608,7 @@ fn a_far_end_the_near_backend_could_have_named_is_refused_rather_than_read() {
             &qualified,
             &NativeId::from("T-1"),
             ItemKind::Task,
+            &near_source(),
             Some(ItemKind::Task)
         )
         .expect("a far end in another source")
@@ -604,9 +627,87 @@ fn a_far_end_the_near_backend_could_have_named_is_refused_rather_than_read() {
             &other_kind,
             &NativeId::from("T-1"),
             ItemKind::Task,
+            &near_source(),
             Some(ItemKind::Task)
         )
         .expect("a level this backend cannot relate across")
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn a_far_end_qualified_to_the_near_source_is_refused_like_a_bare_one() {
+    use onetaskgraph_plugin_api::ItemKind;
+
+    // Writing the near source out changes the spelling of the entry, not where the edge
+    // belongs: `work:T-2` on a `work` task is still an edge that backend relates itself.
+    let own_source = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!([{"id": "work:T-2", "kind": "task"}]),
+    )]
+    .into();
+    let error = DependencyEdge::recorded(
+        &own_source,
+        &NativeId::from("T-1"),
+        ItemKind::Task,
+        &near_source(),
+        Some(ItemKind::Task),
+    )
+    .expect_err("a task naming a task of its own source is the backend's own edge");
+    assert!(error.contains("work:T-2"), "{error}");
+    assert!(error.contains("relate natively"), "{error}");
+
+    // Another source named in full stays the case this key exists for, and a source whose
+    // name merely starts the same is another source like any other.
+    for far in ["elsewhere:T-9", "work-two:T-9"] {
+        let elsewhere = [(
+            DependencyEdge::RECORDED_KEY.to_owned(),
+            serde_json::json!([{"id": far, "kind": "task"}]),
+        )]
+        .into();
+        let edges = DependencyEdge::recorded(
+            &elsewhere,
+            &NativeId::from("T-1"),
+            ItemKind::Task,
+            &near_source(),
+            Some(ItemKind::Task),
+        )
+        .expect("a far end in another source");
+        assert_eq!(edges.len(), 1, "{far}");
+        assert_eq!(edges[0].to.id(), far);
+        assert_eq!(edges[0].to.source(), Some(far.split(':').next().unwrap()));
+    }
+
+    // The near source qualifies a level its own relationship cannot cross, so this one is
+    // the key's case even though it names this very source.
+    let other_level = [(
+        DependencyEdge::RECORDED_KEY.to_owned(),
+        serde_json::json!([{"id": "work:P-9", "kind": "project"}]),
+    )]
+    .into();
+    let edges = DependencyEdge::recorded(
+        &other_level,
+        &NativeId::from("T-1"),
+        ItemKind::Task,
+        &near_source(),
+        Some(ItemKind::Task),
+    )
+    .expect("a level this backend cannot relate across");
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].to.source(), Some("work"));
+
+    // A backend with no relationship at all still records anything, its own source
+    // included: there is no native place for that edge to belong to.
+    assert_eq!(
+        DependencyEdge::recorded(
+            &own_source,
+            &NativeId::from("T-1"),
+            ItemKind::Task,
+            &near_source(),
+            None,
+        )
+        .expect("a backend with nothing to relate through")
         .len(),
         1
     );

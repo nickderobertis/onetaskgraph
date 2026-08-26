@@ -440,6 +440,20 @@ fn github_project_page(variables: &Value, recorded: Option<&Value>) -> Value {
 
 /// A socket-level Linear GraphQL fixture used by the shared binary journeys.
 fn linear_block(sandbox: &Sandbox) -> Value {
+    linear_server(sandbox, None)
+}
+
+/// The same workspace, with the item a dependency read asks about recording `recorded`
+/// under the reserved dependency key.
+///
+/// The counterpart of [`github_projects_recording`], and it exists for the same reason:
+/// the shared row is the one every other journey reads, so a workspace holding a key it
+/// must not cannot be that row.
+pub fn linear_recording(sandbox: &Sandbox, recorded: Value) -> Value {
+    linear_server(sandbox, Some(recorded))
+}
+
+fn linear_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
     sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
@@ -531,7 +545,7 @@ fn linear_block(sandbox: &Sandbox) -> Value {
                 );
                 continue;
             }
-            let (status, response) = match linear_response(&request) {
+            let (status, response) = match linear_response(&request, recorded.as_ref()) {
                 Ok(body) => ("200 OK", json!({"data":body})),
                 Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
             };
@@ -641,7 +655,7 @@ fn valid_linear_filter(value: &Value) -> bool {
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
-fn linear_response(request: &Value) -> Result<Value, &'static str> {
+fn linear_response(request: &Value, recorded: Option<&Value>) -> Result<Value, &'static str> {
     let request: LinearRequest =
         serde_json::from_value(request.clone()).map_err(|_| "invalid GraphQL request")?;
     use onetaskgraph_linear::graphql;
@@ -696,7 +710,9 @@ fn linear_response(request: &Value) -> Result<Value, &'static str> {
             .iter()
             .find(|v| v["id"] == id);
         if operation == graphql::ISSUE_RELATIONS {
-            return Ok(json!({"issue":linear_relations(&data,"task_dependencies",id,"Issue")}));
+            return Ok(
+                json!({"issue":linear_relations(&data,"task_dependencies",id,"Issue",recorded)}),
+            );
         }
         return Ok(json!({"issue":item.map(linear_task)}));
     }
@@ -709,7 +725,7 @@ fn linear_response(request: &Value) -> Result<Value, &'static str> {
             .find(|v| v["id"] == id);
         if operation == graphql::PROJECT_RELATIONS {
             return Ok(
-                json!({"project":linear_relations(&data,"project_dependencies",id,"Project")}),
+                json!({"project":linear_relations(&data,"project_dependencies",id,"Project",recorded)}),
             );
         }
         return Ok(json!({"project":item.map(linear_project)}));
@@ -836,11 +852,17 @@ fn linear_description(v: &Value, edges: &str) -> String {
     if metadata.is_empty() {
         content.into()
     } else {
-        format!(
-            "{content}\n\n<!-- onetaskgraph.metadata\n{}\n-->",
-            serde_json::to_string(&metadata).unwrap()
-        )
+        linear_metadata_slot(content, &Value::Object(metadata))
     }
+}
+
+/// The one slot a Linear item keeps caller-defined metadata in: an HTML comment appended
+/// to the description, which is what the source reads and what a person never sees.
+fn linear_metadata_slot(content: &str, metadata: &Value) -> String {
+    format!(
+        "{content}\n\n<!-- onetaskgraph.metadata\n{}\n-->",
+        serde_json::to_string(metadata).unwrap()
+    )
 }
 fn linear_connection(rows: Vec<Value>, vars: &Value) -> Value {
     let start = vars["after"]
@@ -901,7 +923,13 @@ fn linear_matches_fixture_subset(v: &Value, vars: &Value) -> bool {
     true
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-fn linear_relations(data: &Value, key: &str, id: &str, suffix: &str) -> Value {
+fn linear_relations(
+    data: &Value,
+    key: &str,
+    id: &str,
+    suffix: &str,
+    recorded: Option<&Value>,
+) -> Value {
     let edges = data[key].as_array().unwrap();
     // A Linear relation names a Linear item, so only the edges whose ends are both plain
     // native ids are here. The rest are in the item's own description slot, which this
@@ -926,7 +954,16 @@ fn linear_relations(data: &Value, key: &str, id: &str, suffix: &str) -> Value {
         .unwrap()
         .iter()
         .find(|item| item["id"] == id);
-    json!({"description":item.map(|item| linear_description(item, key)),"relations":{"nodes":forward,"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":inverse,"pageInfo":{"hasNextPage":false,"endCursor":null}}})
+    // The description slot is where this source reads a recorded far end from, so a
+    // workspace built to hold one puts it here and leaves every other operation alone.
+    let description = match recorded {
+        Some(recorded) => Some(linear_metadata_slot(
+            "",
+            &json!({"onetaskgraph.depends_on": recorded}),
+        )),
+        None => item.map(|item| linear_description(item, key)),
+    };
+    json!({"description":description,"relations":{"nodes":forward,"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":inverse,"pageInfo":{"hasNextPage":false,"endCursor":null}}})
 }
 
 fn local_md_block(sandbox: &Sandbox) -> Value {

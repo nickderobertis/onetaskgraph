@@ -168,6 +168,7 @@ impl SourcePlugin for Plugin {
             endpoint: config.endpoint,
             key,
             team: config.team,
+            name: name.clone(),
         }))
     }
 }
@@ -177,6 +178,10 @@ struct LinearSource {
     endpoint: Endpoint,
     key: SecretString,
     team: Option<Team>,
+    /// This source's configured name, kept for one comparison: a far end recorded as
+    /// `<this name>:<native>` is a Linear item Linear itself relates, so the reserved key
+    /// is refused for it exactly as a bare id of the same kind is.
+    name: SourceName,
 }
 
 #[derive(Deserialize)]
@@ -419,7 +424,7 @@ impl LinearSource {
                 .send(query, json!({"id":id.0,"first":1,"after":null}))
                 .await?;
             return Ok(recorded_page(
-                recorded(&d, root, id)?,
+                recorded(&d, root, id, &self.name)?,
                 offset,
                 limit as usize,
             ));
@@ -432,7 +437,7 @@ impl LinearSource {
         // written down on the near item.
         if answered.next.is_none()
             && direction == Direction::DependsOn
-            && !recorded(&d, root, id)?.is_empty()
+            && !recorded(&d, root, id, &self.name)?.is_empty()
         {
             answered.next = Some(Cursor(format!("{RECORDED_CURSOR}0")));
         }
@@ -444,16 +449,24 @@ fn recorded(
     d: &Value,
     root: DependencyRoot,
     id: &NativeId,
+    name: &SourceName,
 ) -> Result<Vec<DependencyEdge>, SourceError> {
     let item = d.get(root.as_str()).ok_or_else(|| SourceError::Malformed {
         message: format!("missing {}", root.as_str()),
     })?;
     let (_, metadata) = metadata_description(optional_string(item, "description")?)?;
     // `relations` on an issue holds issues and on a project holds projects, both of this
-    // workspace — so a same-kind far end without a source is one Linear itself was
-    // supposed to hold, and the key is refused rather than quietly read.
-    DependencyEdge::recorded(&metadata, id, root.item_kind(), Some(root.item_kind()))
-        .map_err(|message| SourceError::Malformed { message })
+    // workspace — so a same-kind far end in this same source is one Linear itself was
+    // supposed to hold, and the key is refused rather than quietly read, whether the entry
+    // left the source out or spelled this one.
+    DependencyEdge::recorded(
+        &metadata,
+        id,
+        root.item_kind(),
+        name,
+        Some(root.item_kind()),
+    )
+    .map_err(|message| SourceError::Malformed { message })
 }
 
 fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Page<DependencyEdge> {

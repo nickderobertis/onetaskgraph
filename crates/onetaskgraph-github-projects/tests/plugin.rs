@@ -716,19 +716,26 @@ async fn a_far_end_no_issue_relationship_can_name_is_read_from_the_reserved_key(
 async fn an_issue_may_not_record_a_far_end_its_own_relationship_can_name() {
     // The rule is the backend's relationship first. An issue's `blockedBy` holds issues of
     // this source, so recording one there is a plan GitHub itself would not draw — refused,
-    // naming the entry and what to do with it instead.
-    let native = json!({"data":{"node":{"__typename":"Issue","blockedBy":{
-        "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
-    }}}});
-    let (endpoint, handle) = sequence_server(vec![native, recording(json!(["I_sibling"]))]);
-    let error = build(&endpoint)
-        .task_dependencies(&NativeId("I_task".into()), Direction::DependsOn, &page(10))
-        .await
-        .expect_err("an issue naming an issue of this source is GitHub's own edge");
-    let message = format!("{error}");
-    assert!(message.contains("I_sibling"), "{message}");
-    assert!(message.contains("relate natively"), "{message}");
-    handle.join().unwrap();
+    // naming the entry and what to do with it instead. Qualifying the entry with this
+    // source's own configured name changes its spelling and not where the edge belongs, so
+    // that entry is refused on the same terms.
+    for far in [
+        json!(["I_sibling"]),
+        json!([{"id":"work:I_sibling","kind":"task"}]),
+    ] {
+        let native = json!({"data":{"node":{"__typename":"Issue","blockedBy":{
+            "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+        }}}});
+        let (endpoint, handle) = sequence_server(vec![native, recording(far.clone())]);
+        let error = build(&endpoint)
+            .task_dependencies(&NativeId("I_task".into()), Direction::DependsOn, &page(10))
+            .await
+            .expect_err("an issue naming an issue of this source is GitHub's own edge");
+        let message = format!("{error}");
+        assert!(message.contains("I_sibling"), "{far}: {message}");
+        assert!(message.contains("relate natively"), "{far}: {message}");
+        handle.join().unwrap();
+    }
 }
 
 #[tokio::test]
@@ -769,6 +776,32 @@ async fn a_board_may_not_record_a_far_end_its_aggregated_edges_can_name() {
         .await
         .expect_err("a board relates to another board through its issues");
     assert!(format!("{error}").contains("PVT_other"), "{error}");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn a_board_may_not_record_another_board_of_this_source_by_qualified_id_either() {
+    // `work:PVT_other` names a board of the very source reading it, which its aggregated
+    // issue edges relate; only a board of another source belongs under the reserved key.
+    let mut board = project_response(false);
+    board["data"]["owner"]["projectV2"]["shortDescription"] = json!(
+        "Delivery plan\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":[{\"id\":\"work:PVT_other\",\"kind\":\"project\"}]}\n-->"
+    );
+    let no_edges = json!({"data":{"node":{"__typename":"Issue",
+        "blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+        "blocking":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}});
+    let (endpoint, handle) = sequence_server(vec![board.clone(), board, no_edges]);
+    let error = build(&endpoint)
+        .project_dependencies(
+            &NativeId("PVT_project".into()),
+            Direction::DependsOn,
+            &page(10),
+        )
+        .await
+        .expect_err("a board of this source is not a far end this source cannot name");
+    let message = format!("{error}");
+    assert!(message.contains("work:PVT_other"), "{message}");
+    assert!(message.contains("relate natively"), "{message}");
     handle.join().unwrap();
 }
 

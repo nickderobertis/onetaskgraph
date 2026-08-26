@@ -92,7 +92,8 @@ pub(crate) struct InitializeParams {
     pub(crate) protocol_version: u32,
     /// For the plugin's diagnostics only.
     pub(crate) engine: EngineIdentity,
-    /// The configured name — for error messages only (§3.2).
+    /// The configured name — for error messages, and for recognising itself in a
+    /// recorded qualified id (§3.2).
     pub(crate) source_name: String,
     /// This source's settings, verbatim.
     pub(crate) config: Value,

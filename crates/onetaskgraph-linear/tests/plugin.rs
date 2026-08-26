@@ -688,6 +688,8 @@ async fn linear_may_not_record_a_far_end_its_own_relations_can_name() {
     // `relations` on an issue holds issues and on a project holds projects, all of this
     // workspace. Recording one of those is a plan Linear itself would have drawn, so it is
     // refused rather than read — that is the native-first rule, enforced at the boundary.
+    // Writing this source's own name out is the same entry spelled differently, so it is
+    // refused on the same terms: `work` is what this source is configured as.
     for (projects, root, misplaced) in [
         (false, "issue", serde_json::json!(["ENG-2"])),
         (
@@ -696,9 +698,19 @@ async fn linear_may_not_record_a_far_end_its_own_relations_can_name() {
             serde_json::json!([{"id":"ENG-2","kind":"task"}]),
         ),
         (
+            false,
+            "issue",
+            serde_json::json!([{"id":"work:ENG-2","kind":"task"}]),
+        ),
+        (
             true,
             "project",
             serde_json::json!([{"id":"PRJ-2","kind":"project"}]),
+        ),
+        (
+            true,
+            "project",
+            serde_json::json!([{"id":"work:PRJ-2","kind":"project"}]),
         ),
     ] {
         let (endpoint, _) = server("200 OK", "", relations_recording(root, &misplaced));
@@ -726,7 +738,8 @@ async fn linear_may_not_record_a_far_end_its_own_relations_can_name() {
 #[tokio::test]
 async fn linear_records_the_far_end_no_relation_of_its_own_can_hold() {
     // The two cases no Linear relation can express: an item of another source, and one at
-    // the other level of this one.
+    // the other level of this one — which this source's own name may qualify, because
+    // naming the source says nothing about a level `relations` cannot cross.
     for (recorded, expected) in [
         (
             serde_json::json!([{"id":"elsewhere:P-9","kind":"project"}]),
@@ -735,6 +748,10 @@ async fn linear_records_the_far_end_no_relation_of_its_own_can_hold() {
         (
             serde_json::json!([{"id":"PRJ-9","kind":"project"}]),
             "PRJ-9",
+        ),
+        (
+            serde_json::json!([{"id":"work:PRJ-9","kind":"project"}]),
+            "work:PRJ-9",
         ),
     ] {
         let (endpoint, _) = server("200 OK", "", relations_recording("issue", &recorded));

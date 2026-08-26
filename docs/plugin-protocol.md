@@ -160,7 +160,7 @@ the source can do natively, and what configuration it is being built with.
 | `protocol_version` | integer | The version the engine is speaking. See §6. |
 | `engine.name` | string | For the plugin's diagnostics only. |
 | `engine.version` | string | The engine's own version. Advisory. |
-| `source_name` | string | The configured name, matching `^[a-z0-9][a-z0-9-]*$`. **For error messages only** — see §3.2. |
+| `source_name` | string | The configured name, matching `^[a-z0-9][a-z0-9-]*$`. **For error messages and for recognising itself in a qualified id** — see §3.2. |
 | `config` | object | This source's `config:` block, verbatim. |
 | `secrets` | object | String to string. Only the variables this plugin asked for; see §3.1. |
 
@@ -217,12 +217,18 @@ is no second spelling of either, anywhere, and nothing translates between spelli
 A plugin must not echo a secret value into a response, into an error message, or onto
 standard error.
 
-### 3.2 A plugin never learns its own address
+### 3.2 A plugin never speaks in qualified ids
 
-`source_name` is in the handshake so a plugin can quote it in an error message and
-for nothing else. Inside the plugin every identifier is a bare `NativeId` — the
-source's own opaque string. Qualifying one into `<source>:<native>` is the engine's
-job. A plugin that returns a qualified id has returned a wrong id.
+Inside the plugin every identifier it *reports* is a bare `NativeId` — the source's own
+opaque string. Qualifying one into `<source>:<native>` is the engine's job. A plugin that
+returns a qualified id has returned a wrong id.
+
+`source_name` is in the handshake for two uses and no others: quoting the source in an
+error message, and recognising itself in a qualified id a *near item recorded* under
+`onetaskgraph.depends_on` (§4.8), which is how a plugin tells a far end its own backend
+could have related from one in a system it knows nothing about. Nothing else about a
+plugin's behaviour may depend on it: a source answers the same way whatever a document
+chose to call it.
 
 A `NativeId` is any non-empty string, colons included: the engine splits a qualified
 id on its **first** colon precisely so that stays true.
@@ -416,13 +422,20 @@ from the far end, exactly as a `"forward-only"` plugin's reverse is, so a plugin
 returns a recorded edge for `"depended-on-by"`.
 
 **The fallback is refused where the backend could have answered.** A plugin rejects a
-recorded endpoint its own relationship can name — an unqualified id of the kind that
-relationship holds — with `{"kind": "malformed"}` naming the entry, because such an edge
-belongs in the backend where its own interface can draw it. A *qualified* endpoint is
-never refused: that is the case this key exists for. Neither is an endpoint at a level the
-backend cannot relate across, which is a gap of the same shape. So a GitHub issue refuses
-a bare issue id and accepts a board or another source; a GitHub draft, having no
-relationship at all, accepts anything.
+recorded endpoint its own relationship can name — an id of the kind that relationship
+holds, naming an item of the plugin's own source — with `{"kind": "malformed"}` naming the
+entry, because such an edge belongs in the backend where its own interface can draw it.
+An unqualified id names the plugin's own source implicitly and `<own name>:<native>` names
+it in writing, so **both spellings are refused**: which one a plan happened to use says
+nothing about where the edge belongs. An endpoint qualified to a *different* source is
+never refused — that is the case this key exists for — and neither is an endpoint at a
+level the backend cannot relate across, which is a gap of the same shape and stays the
+key's case however it is qualified. So a GitHub issue refuses `I_sibling` and
+`<own name>:I_sibling` alike, and accepts a board or another source; a GitHub draft, having
+no relationship at all, accepts anything.
+
+Comparing against its own name is the one thing a plugin's configured name decides, and it
+learns that name from the handshake and nowhere else (§3.2).
 
 The engine reports such an edge and never follows it: the read names the far end, and
 fetching it is the caller's next command against that qualified id. Keeping the far id on

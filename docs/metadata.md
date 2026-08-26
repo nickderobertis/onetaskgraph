@@ -46,7 +46,10 @@ a system it knows nothing about.
 The rule is enforced, not just described. A source **refuses** an `onetaskgraph.depends_on`
 entry its own relationship could have held, naming the entry and saying to record it in the
 backend instead — otherwise a plan would drift into a text field the backend cannot read
-and a person cannot follow, one entry at a time. What each source will and will not accept:
+and a person cannot follow, one entry at a time. "Another source" below means another
+source *by name*: an entry qualified with the reading source's own configured name is an
+item of that source, and is refused exactly as the bare id would be. What each source will
+and will not accept:
 
 | near item | its native relationship holds | the key may hold |
 | --- | --- | --- |
