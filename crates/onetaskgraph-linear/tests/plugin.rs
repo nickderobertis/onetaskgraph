@@ -713,6 +713,101 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         .unwrap_err();
     assert!(format!("{error}").contains("missing projectCreate.project"));
     drop(wire);
+    for response in [
+        serde_json::json!({"issueUpdate":{"success":false,"issue":null}}),
+        serde_json::json!({"issueUpdate":{"success":true}}),
+    ] {
+        let (endpoint, wire) = response_server(vec![
+            page("teams", serde_json::json!([{"id":"TEAM"}])),
+            page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+            response,
+        ]);
+        assert!(
+            writable_source(&endpoint)
+                .write_task(&ItemWrite {
+                    target: Some("I".into()),
+                    item: task(),
+                    depends_on: Vec::new()
+                })
+                .await
+                .is_err()
+        );
+        drop(wire);
+    }
+    for response in [
+        serde_json::json!({"projectUpdate":{"success":false,"project":null}}),
+        serde_json::json!({"projectUpdate":{"success":true}}),
+    ] {
+        let (endpoint, wire) = response_server(vec![
+            page("teams", serde_json::json!([{"id":"TEAM"}])),
+            page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+            response,
+        ]);
+        assert!(
+            writable_source(&endpoint)
+                .write_project(&ItemWrite {
+                    target: Some("P".into()),
+                    item: project(),
+                    depends_on: Vec::new()
+                })
+                .await
+                .is_err()
+        );
+        drop(wire);
+    }
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I"}}}),
+        serde_json::json!({"issue":{"relations":{"nodes":[{"id":"R"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"issueRelationDelete":{"success":false}}),
+    ]);
+    assert!(
+        writable_source(&endpoint)
+            .write_task(&ItemWrite {
+                target: Some("I".into()),
+                item: task(),
+                depends_on: Vec::new()
+            })
+            .await
+            .is_err()
+    );
+    drop(wire);
+}
+
+#[tokio::test]
+async fn replacing_more_than_one_full_relation_page_deletes_every_existing_edge() {
+    let task: Task = serde_json::from_value(serde_json::json!({"id":"from:T","title":"task","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"repositories":[],"metadata":{}})).unwrap();
+    let page = |nodes: Vec<serde_json::Value>, more: bool| serde_json::json!({"issue":{"relations":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":if more {Some("next")} else {None}}}}});
+    let mut responses = vec![
+        serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
+        serde_json::json!({"workflowStates":{"nodes":[{"id":"STATE"}]}}),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I"}}}),
+    ];
+    responses.push(page(
+        (0..250)
+            .map(|index| serde_json::json!({"id":format!("R{index}")}))
+            .collect(),
+        true,
+    ));
+    responses.extend((0..250).map(|_| serde_json::json!({"issueRelationDelete":{"success":true}})));
+    responses.push(page(vec![serde_json::json!({"id":"R250"})], false));
+    responses.push(serde_json::json!({"issueRelationDelete":{"success":true}}));
+    let (endpoint, wire) = response_server(responses);
+    writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: Some("I".into()),
+            item: task,
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        wire.iter()
+            .filter(|request| request.contains(onetaskgraph_linear::graphql::ISSUE_RELATION_DELETE))
+            .count(),
+        251
+    );
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 

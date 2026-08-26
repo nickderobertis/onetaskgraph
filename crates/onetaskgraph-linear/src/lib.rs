@@ -428,7 +428,7 @@ impl LinearSource {
                 ),
             });
         }
-        Ok(str_at(&nodes[0], "id")?.to_owned())
+        Ok(backend_id(&nodes[0], "id")?.to_owned())
     }
     async fn team_id(&self) -> Result<String, SourceError> {
         let team = self.team.as_ref().ok_or_else(|| SourceError::Refused {
@@ -802,7 +802,7 @@ impl TaskSource for LinearSource {
                 .ok_or_else(|| SourceError::Malformed {
                     message: format!("missing {}.issue", root.as_str()),
                 })?;
-        let id = NativeId(str_at(issue, "id")?.into());
+        let id = NativeId(backend_id(issue, "id")?.into());
         self.write_relations(&id, &edges, WriteKind::Task).await?;
         Ok(id)
     }
@@ -850,7 +850,7 @@ impl TaskSource for LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {}.project", root.as_str()),
             })?;
-        let id = NativeId(str_at(project, "id")?.into());
+        let id = NativeId(backend_id(project, "id")?.into());
         self.write_relations(&id, &edges, WriteKind::Project)
             .await?;
         Ok(id)
@@ -1244,6 +1244,14 @@ fn metadata_description(
 
 fn optional_string(v: &Value, k: &str) -> Result<Option<String>, SourceError> {
     Ok(optional_str(v, k)?.map(Into::into))
+}
+fn backend_id<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceError> {
+    let id = str_at(value, field)?;
+    (!id.is_empty())
+        .then_some(id)
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("field {field} is an empty backend id"),
+        })
 }
 fn mutation_payload(data: &Value, root: MutationRoot) -> Result<&Value, SourceError> {
     let root = root.as_str();
