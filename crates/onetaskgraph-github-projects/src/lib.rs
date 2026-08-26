@@ -60,8 +60,8 @@ pub mod graphql {
       }
     } fragment Project on ProjectV2 { id title shortDescription url createdAt updatedAt closed
       fields(first:$nestedFirst){nodes{
-        ... on ProjectV2SingleSelectField{id name options{id name}}
-        ... on ProjectV2Field{id name}
+        ... on ProjectV2SingleSelectField{__typename id name options{id name}}
+        ... on ProjectV2Field{__typename id name}
       }pageInfo{hasNextPage}}
       items(first:$first,after:$after){nodes{id fieldValues(first:$nestedFirst){nodes{
         ... on ProjectV2ItemFieldSingleSelectValue{name field{
@@ -1088,6 +1088,13 @@ impl TaskSource for GitHubProjectsSource {
             Self::field(&project, METADATA_FIELD)?.ok_or_else(|| SourceError::Refused {
                 message: format!("GitHub project has no source-owned {METADATA_FIELD} text field"),
             })?;
+        if required_str(metadata_field, "__typename")? != "ProjectV2Field" {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "GitHub project source-owned {METADATA_FIELD} field is not a text field"
+                ),
+            });
+        }
         let status_selection =
             Some(
                 Self::field(&project, "Status")?.ok_or_else(|| SourceError::Refused {
@@ -1095,6 +1102,11 @@ impl TaskSource for GitHubProjectsSource {
                 })?,
             )
             .map(|field| {
+                if required_str(field, "__typename")? != "ProjectV2SingleSelectField" {
+                    return Err(SourceError::Refused {
+                        message: "GitHub project Status field is not a single-select field".into(),
+                    });
+                }
                 let option = field
                     .get("options")
                     .and_then(Value::as_array)

@@ -12,11 +12,16 @@
         "fields": {
           "nodes": [
             {
+              "__typename": "ProjectV2SingleSelectField",
               "id": "FIELD_status",
               "name": "Status",
               "options": [{ "id": "OPT_doing", "name": "Doing" }]
             },
-            { "id": "FIELD_metadata", "name": "onetaskgraph.metadata" }
+            {
+              "__typename": "ProjectV2Field",
+              "id": "FIELD_metadata",
+              "name": "onetaskgraph.metadata"
+            }
           ],
           "pageInfo": { "hasNextPage": false }
         },

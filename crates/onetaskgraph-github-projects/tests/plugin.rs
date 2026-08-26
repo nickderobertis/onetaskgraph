@@ -462,7 +462,19 @@ async fn a_write_refuses_a_board_without_its_owned_field_or_status_option() {
         .as_array_mut()
         .unwrap()
         .retain(|value| value.get("name").and_then(Value::as_str) != Some("Status"));
-    let (endpoint, handle) = sequence_server(vec![no_metadata, no_status, project_response(false)]);
+    let mut wrong_metadata_type = project_response(false);
+    wrong_metadata_type["data"]["owner"]["projectV2"]["fields"]["nodes"][1]["__typename"] =
+        json!("ProjectV2SingleSelectField");
+    let mut wrong_status_type = project_response(false);
+    wrong_status_type["data"]["owner"]["projectV2"]["fields"]["nodes"][0]["__typename"] =
+        json!("ProjectV2Field");
+    let (endpoint, handle) = sequence_server(vec![
+        no_metadata,
+        no_status,
+        wrong_metadata_type,
+        wrong_status_type,
+        project_response(false),
+    ]);
     let source = build(&endpoint);
     let task = |status: &str| Task {
         id: NativeId("source".into()),
@@ -487,6 +499,14 @@ async fn a_write_refuses_a_board_without_its_owned_field_or_status_option() {
     assert!(
         matches!(source.write_task(&ItemWrite { target: None, item: task("Doing"), depends_on: vec![] }).await,
         Err(SourceError::Refused { message }) if message.contains("no Status field"))
+    );
+    assert!(
+        matches!(source.write_task(&ItemWrite { target: None, item: task("Doing"), depends_on: vec![] }).await,
+        Err(SourceError::Refused { message }) if message.contains("not a text field"))
+    );
+    assert!(
+        matches!(source.write_task(&ItemWrite { target: None, item: task("Doing"), depends_on: vec![] }).await,
+        Err(SourceError::Refused { message }) if message.contains("not a single-select field"))
     );
     assert!(
         matches!(source.write_task(&ItemWrite { target: None, item: task("Impossible"), depends_on: vec![] }).await,

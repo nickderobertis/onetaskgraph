@@ -622,7 +622,7 @@ fn github_project_page(
         "owner":{"projectV2":{
             "id":"P-1","title":title,"shortDescription":description,
             "url":"https://example.invalid/P-1","closed":closed,
-            "fields":{"nodes":[{"id":"FIELD-status","name":"Status","options":[{"id":"OPT-todo","name":"Todo"},{"id":"OPT-doing","name":"Doing"},{"id":"OPT-shipped","name":"Shipped"}]},{"id":"FIELD-metadata","name":"onetaskgraph.metadata"}],"pageInfo":{"hasNextPage":false}},
+            "fields":{"nodes":[{"__typename":"ProjectV2SingleSelectField","id":"FIELD-status","name":"Status","options":[{"id":"OPT-todo","name":"Todo"},{"id":"OPT-doing","name":"Doing"},{"id":"OPT-shipped","name":"Shipped"}]},{"__typename":"ProjectV2Field","id":"FIELD-metadata","name":"onetaskgraph.metadata"}],"pageInfo":{"hasNextPage":false}},
             "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < tasks.len(),"endCursor":end.to_string()}}
         }},
         "user":{"projectV2":null}
