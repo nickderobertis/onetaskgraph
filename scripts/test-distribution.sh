@@ -329,6 +329,7 @@ cp "$tmp/version-repo/Cargo.toml" "$tmp/version-repo/Cargo.toml.valid"
 perl -pi -e 'if (/^\[workspace\.package\]/ .. /^version = /) { s/^version = "[^"]+"/version = "01.2.3"/ }' "$tmp/version-repo/Cargo.toml"
 if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.0) 2>"$tmp/error"; then echo "product-version helper accepted an invalid manifest version; next: inspect manifest validation" >&2; exit 1; fi
 grep -q 'Cargo.toml has None; expected 0.1.0' "$tmp/error" || { cat "$tmp/error" >&2; echo "invalid manifest version failure omitted its location; next: inspect version diagnostics" >&2; exit 1; }
+# llmlint: ignore[work_goes_through_command_surface] This journey must check the scratch tree directly; the just recipe addresses the outer working tree.
 if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted an invalid semantic product version; next: inspect workspace version validation" >&2; exit 1; fi
 grep -q 'Cargo.toml: no product version could be read' "$tmp/error" || { cat "$tmp/error" >&2; echo "workspace invalid-version failure omitted its location; next: inspect workspace diagnostics" >&2; exit 1; }
 mv "$tmp/version-repo/Cargo.toml.valid" "$tmp/version-repo/Cargo.toml"
@@ -355,6 +356,7 @@ for version_command in '--check' '0.1.2'; do
   fi
   grep -q 'product version files could not be processed' "$tmp/error" || { cat "$tmp/error" >&2; echo "malformed product manifest failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
 done
+# llmlint: ignore[work_goes_through_command_surface] This failure journey must run reconciliation inside its deliberately malformed scratch tree.
 if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted malformed product JSON; next: inspect workspace manifest validation" >&2; exit 1; fi
 grep -q 'product version files could not be read' "$tmp/error" || { cat "$tmp/error" >&2; echo "workspace check malformed-manifest failure omitted recovery guidance; next: inspect workspace diagnostics" >&2; exit 1; }
 printf '[]\n' > "$tmp/version-repo/sdks/typescript/package.json"
@@ -368,6 +370,7 @@ grep -q 'no valid semantic product version could be read' "$tmp/error" || { cat 
 mv "$tmp/version-repo/sdks/typescript/package.json" "$tmp/version-repo/sdks/typescript/package.json.missing"
 if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a missing product manifest; next: inspect filesystem error handling" >&2; exit 1; fi
 grep -q 'product version files could not be processed' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing-manifest helper failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
+# llmlint: ignore[work_goes_through_command_surface] The missing-manifest state exists only in the scratch tree, which the outer just recipe cannot address.
 if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted a missing product manifest; next: inspect filesystem error handling" >&2; exit 1; fi
 grep -q 'product version files could not be read' "$tmp/error" || { cat "$tmp/error" >&2; echo "workspace missing-manifest failure omitted recovery guidance; next: inspect workspace diagnostics" >&2; exit 1; }
 mv "$tmp/version-repo/sdks/typescript/package.json.missing" "$tmp/version-repo/sdks/typescript/package.json"
