@@ -8,16 +8,23 @@
 # behaviour the stand-in reproduces was observed from the pinned release-plz, driven against
 # this repository; the pin and this file are reconciled in case 10. What is under test is
 # this repository's own scripts, which are real here.
+#
+# Exit status: 0, the preparation carries what it must; 1, a case below failed and the
+# release pull request would not pass its own checks; 2, this check could not be run at all
+# — a scratch tree it could not build, a toolchain it could not find — which is a different
+# thing from a finding and reads differently in a gate log.
 set -euo pipefail
 
 # The release-plz the stand-in below was recorded from. The workflow installs exactly this
 # version, and case 10 fails when the two part: a stand-in models one version's behaviour.
 readonly RECORDED_RELEASE_PLZ=0.3.160
 
+# The journey could not be run. Distinct from a case failing, which is a finding about the
+# tree and exits 1 at the end.
 fatal() {
   echo "check-release-pr-sync: $1" >&2
   echo "check-release-pr-sync: next: $2" >&2
-  exit 1
+  exit 2
 }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
@@ -204,13 +211,18 @@ report() {
 case_log="$scratch/case.log"
 quote_case_log() { sed 's/^/    /' "$case_log" >&2; }
 
-# Run the preparation script and require it to refuse, saying the named thing. The command
-# is given in full so a case can vary the environment it runs under.
+# Run the preparation script and require it to refuse with the status its own contract gives
+# that class of failure, saying the named thing. The command is given in full so a case can
+# vary the environment it runs under.
 expect_refusal() {
-  local case_name="$1" phrase="$2"
-  shift 2
-  if (cd "$repo" && "$@") > "$case_log" 2>&1; then
+  local case_name="$1" phrase="$2" expected_status="$3" status=0
+  shift 3
+  (cd "$repo" && "$@") > "$case_log" 2>&1 || status=$?
+  if [ "$status" -eq 0 ]; then
     report "$case_name — the preparation ACCEPTED it, so a release pull request would be opened over a tree nothing has checked. It said:"
+    quote_case_log
+  elif [ "$status" -ne "$expected_status" ]; then
+    report "$case_name — it refused with status $status, but its own contract gives that failure $expected_status, so a workflow reading the status cannot tell a wrong call from a failed phase. It said:"
     quote_case_log
   elif ! grep -qF "$phrase" "$case_log"; then
     report "$case_name — it refused, but its diagnostic never says '$phrase', so it does not say what to go and fix. It said:"
@@ -286,22 +298,22 @@ restore_scratch
 # 5. Every way the preparation can fail is a way a release stalls, so each one has to say
 #    which phase stopped and what to do — and none may end with a pull request opened.
 expect_refusal "release-plz missing from PATH" \
-  "release-plz is not on PATH" \
+  "release-plz is not on PATH" 2 \
   env PATH="$PATH_WITHOUT_RELEASE_PLZ" scripts/prepare-release-pr.sh
 expect_refusal "no git token in the environment" \
-  "GIT_TOKEN is empty" \
+  "GIT_TOKEN is empty" 2 \
   env GIT_TOKEN= scripts/prepare-release-pr.sh
 expect_refusal "a token passed as an argument, where every process on the runner can read it" \
-  "takes no arguments" \
+  "takes no arguments" 2 \
   scripts/prepare-release-pr.sh --git-token from-the-command-line
 expect_refusal "release-plz failing to decide the next version" \
-  "release-plz could not decide the next version" \
+  "release-plz could not decide the next version" 1 \
   env RELEASE_PLZ_STUB_FAIL=update scripts/prepare-release-pr.sh
 expect_refusal "an update that leaves no version to read in the binary's manifest" \
-  "no valid semantic version" \
+  "no valid semantic version" 1 \
   env RELEASE_PLZ_STUB_INHERIT_VERSION=yes scripts/prepare-release-pr.sh
 expect_refusal "release-plz failing to open the pull request" \
-  "could not open or update the release pull request" \
+  "could not open or update the release pull request" 1 \
   env RELEASE_PLZ_STUB_FAIL=release-pr scripts/prepare-release-pr.sh
 
 # A failing phase has to arrive with what the tool itself said, or the diagnostic names a
@@ -326,13 +338,13 @@ STUB
 }
 sync_stub 'echo "set-version stand-in: could not write npm/cli/package.json" >&2; exit 1'
 expect_refusal "the sync failing outright" \
-  "could not bring every manifest to $new_version" \
+  "could not bring every manifest to $new_version" 1 \
   scripts/prepare-release-pr.sh
 sync_stub '[ "${1:-}" = --check ] || exit 0
 echo "npm/cli/package.json has '"$old_version"'; expected '"$new_version"'" >&2
 exit 1'
 expect_refusal "drift the sync did not resolve" \
-  "the manifests still disagree after the sync" \
+  "the manifests still disagree after the sync" 1 \
   scripts/prepare-release-pr.sh
 
 # 7. The workflow has to open its pull request through the script above; the mechanism

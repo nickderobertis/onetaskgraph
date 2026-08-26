@@ -11,47 +11,51 @@
 # into the release commit: release-plz builds that commit from what differs from HEAD, and
 # refuses the tree outright without the flag. scripts/check-release-pr-sync.sh drives all of
 # this end to end on every `just check`.
+#
+# Exit status, which the release workflow reads and a reader of its log has to be able to
+# tell apart: 0, the release pull request is open and its manifests agree; 2, this script
+# was called wrongly or the environment it needs is missing, and nothing was attempted; 1, a
+# phase failed, with everything that phase printed above the diagnostic. The split follows
+# scripts/set-version.sh, where 2 is likewise "the call was wrong".
 set -euo pipefail
 
+# fail <problem> <next action> [exit status, 1 by default]
 fail() {
   echo "prepare-release-pr: $1" >&2
   echo "prepare-release-pr: next: $2" >&2
-  exit 1
+  exit "${3:-1}"
 }
 
 # The git token is read from the environment rather than an argument: an argument list is
 # readable by every process on the runner. Nothing here ever prints the value.
 [ $# -eq 0 ] || fail \
   "this script takes no arguments and received $#" \
-  "pass the token as GIT_TOKEN in the environment, which is where release-plz reads it from"
+  "pass the token as GIT_TOKEN in the environment, which is where release-plz reads it from" 2
 [ -n "${GIT_TOKEN:-}" ] || fail \
   "GIT_TOKEN is empty, so release-plz could not open a pull request" \
-  "set it from this repository's RELEASE_PLZ_TOKEN secret, as .github/workflows/release-plz.yml does"
+  "set it from this repository's RELEASE_PLZ_TOKEN secret, as .github/workflows/release-plz.yml does" 2
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd) || fail \
-  "could not resolve this repository's root from ${BASH_SOURCE[0]}" \
-  "run this from a checkout of this repository, as .github/workflows/release-plz.yml does"
-cd "$root" || fail "could not enter $root" "check that the checkout is readable, then rerun"
-
-phase_log="$(mktemp)" || fail \
-  "could not create the log each phase below writes to" \
-  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
-trap 'rm -f "$phase_log"' EXIT
+# llmlint: ignore[changed_behavior_has_e2e] Driving this refusal means a checkout whose own
+# directory cannot be entered, which no case can arrange without breaking the runner it runs on.
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || fail \
+  "could not enter this repository's root from ${BASH_SOURCE[0]}" \
+  "run this from a checkout of this repository, as .github/workflows/release-plz.yml does" 2
 
 # Quiet on success, and everything the tool said when it fails: release-plz narrates every
-# crate it considers, which is noise beside the one line that says what went wrong.
+# crate it considers, which is noise beside the one line that says what went wrong. A
+# variable rather than a temporary file, so there is no log to fail to create or clean up.
 quietly() {
-  local problem="$1" next="$2"
+  local problem="$1" next="$2" output
   shift 2
-  if ! "$@" > "$phase_log" 2>&1; then
-    cat "$phase_log" >&2
+  if ! output="$("$@" 2>&1)"; then
+    printf '%s\n' "$output" >&2
     fail "$problem" "$next"
   fi
 }
 
 command -v release-plz >/dev/null 2>&1 || fail \
   "release-plz is not on PATH, so no version can be decided" \
-  "install it — the release workflow does, with taiki-e/install-action — then rerun"
+  "install it — the release workflow does, with taiki-e/install-action — then rerun" 2
 
 quietly \
   "release-plz could not decide the next version" \
