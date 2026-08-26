@@ -386,7 +386,6 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
     let empty_page = |root: &str| serde_json::json!({(root):{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}});
     let id_page = |root: &str, id: &str| serde_json::json!({(root):{"nodes":[{"id":id}]}});
     let (endpoint, wire) = response_server(vec![
-        empty_page("issues"),
         id_page("teams", "TEAM"),
         id_page("workflowStates", "STATE"),
         id_page("issueLabels", "LABEL"),

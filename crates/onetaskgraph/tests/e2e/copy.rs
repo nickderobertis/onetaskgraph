@@ -317,7 +317,7 @@ fn linear_project_and_task_copies_write_native_relations_and_record_only_cross_s
     let near_file = root.join("tasks/NEAR.md");
     let edited = std::fs::read_to_string(&near_file).unwrap().replace(
         "[FAR, {id: \"elsewhere:P-9\", item: project}]",
-        "[{id: \"elsewhere:P-9\", item: project}]",
+        &format!("[{{id: \"{project_far}\", item: project}}]"),
     );
     std::fs::write(&near_file, edited).unwrap();
     ok(
@@ -326,7 +326,15 @@ fn linear_project_and_task_copies_write_native_relations_and_record_only_cross_s
     );
     let replaced = edges("task", &task_near, false);
     assert_eq!(replaced.len(), 1);
-    assert_eq!(replaced[0]["to"]["id"], "elsewhere:P-9");
+    assert_eq!(replaced[0]["to"]["id"], project_far);
+    let recorded = shown(&sandbox, "task", &task_near)["metadata"]["onetaskgraph.depends_on"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        recorded[0]["kind"], "project",
+        "a same-source cross-kind far end uses the fallback because an issue relation cannot name a project"
+    );
 }
 
 #[test]

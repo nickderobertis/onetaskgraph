@@ -73,8 +73,13 @@ async fn real_linear_write_round_trips_then_deletes_its_scratch_issue() {
         .await
         .unwrap();
     let read_back = source.get_task(&id).await.unwrap();
-    let response = reqwest::Client::new().post("https://api.linear.app/graphql").header("Authorization", key).json(&serde_json::json!({"query":onetaskgraph_linear::graphql::ISSUE_DELETE,"variables":{"id":id.0}})).send().await.unwrap();
+    let response = reqwest::Client::new().post("https://api.linear.app/graphql").header("Authorization", key).json(&serde_json::json!({"query":onetaskgraph_linear::graphql::ISSUE_DELETE,"variables":{"id":id.0}})).send().await.unwrap().error_for_status().unwrap();
     let body: serde_json::Value = response.json().await.unwrap();
+    assert!(
+        body.get("errors")
+            .is_none_or(|errors| errors.as_array().is_some_and(Vec::is_empty)),
+        "scratch cleanup returned GraphQL errors: {body}"
+    );
     assert_eq!(
         body["data"]["issueDelete"]["success"], true,
         "scratch issue cleanup failed: {body}"

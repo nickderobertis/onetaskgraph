@@ -466,6 +466,7 @@ impl LinearSource {
         metadata: &std::collections::BTreeMap<String, Value>,
         repositories: &[Repository],
         edges: &[DependencyEdge],
+        kind: WriteKind,
     ) -> Result<Option<String>, SourceError> {
         let mut metadata = metadata.clone();
         if repositories.is_empty() {
@@ -476,10 +477,16 @@ impl LinearSource {
         let recorded = edges
             .iter()
             .filter(|edge| {
-                edge.to
-                    .id()
-                    .split_once(':')
-                    .is_some_and(|(source, _)| source != self.name.as_str())
+                edge.to.kind
+                    != match kind {
+                        WriteKind::Task => ItemKind::Task,
+                        WriteKind::Project => ItemKind::Project,
+                    }
+                    || edge
+                        .to
+                        .id()
+                        .split_once(':')
+                        .is_some_and(|(source, _)| source != self.name.as_str())
             })
             .map(|edge| json!({"id":edge.to.id(),"kind":edge.to.kind}))
             .collect::<Vec<_>>();
@@ -561,6 +568,14 @@ impl LinearSource {
             cursor = Some(next);
         }
         for edge in edges {
+            if edge.to.kind
+                != match kind {
+                    WriteKind::Task => ItemKind::Task,
+                    WriteKind::Project => ItemKind::Project,
+                }
+            {
+                continue;
+            }
             let far = match edge.to.id().split_once(':') {
                 Some((source, native)) if source == self.name.as_str() => native,
                 Some(_) => continue,
@@ -602,11 +617,16 @@ impl LinearSource {
         let mut prepared = Vec::with_capacity(edges.len());
         for edge in edges {
             let mut edge = edge.clone();
-            if edge
-                .to
-                .id()
-                .split_once(':')
-                .is_some_and(|(source, _)| source != self.name.as_str())
+            if edge.to.kind
+                == match kind {
+                    WriteKind::Task => ItemKind::Task,
+                    WriteKind::Project => ItemKind::Project,
+                }
+                && edge
+                    .to
+                    .id()
+                    .split_once(':')
+                    .is_some_and(|(source, _)| source != self.name.as_str())
             {
                 let mut cursor: Option<Cursor> = None;
                 loop {
@@ -756,6 +776,7 @@ impl TaskSource for LinearSource {
             &write.item.metadata,
             &write.item.repositories,
             &edges,
+            WriteKind::Task,
         )?;
         let input = json!({"title":write.item.title,"description":description,"stateId":state,"labelIds":labels,"projectId":write.item.project.as_ref().map(|id| id.0.clone())});
         let (query, variables, root) = match &write.target {
@@ -804,6 +825,7 @@ impl TaskSource for LinearSource {
             &write.item.metadata,
             &write.item.repositories,
             &edges,
+            WriteKind::Project,
         )?;
         let input = json!({"name":write.item.title,"description":description,"statusId":status,"labelIds":labels});
         let (query, variables, root) = match &write.target {

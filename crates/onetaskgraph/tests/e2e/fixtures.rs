@@ -656,13 +656,20 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     && variables.after.as_deref() != Some("")
             })
         }
-        graphql::TEAM
-        | graphql::ISSUE_STATE
-        | graphql::PROJECT_STATUS
-        | graphql::ISSUE_LABEL
-        | graphql::PROJECT_LABEL => variables
-            .as_object()
-            .is_some_and(|values| values.values().all(Value::is_string)),
+        graphql::TEAM => {
+            serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
+                .is_ok_and(|values| values.len() == 1 && values.contains_key("key"))
+        }
+        graphql::ISSUE_STATE => {
+            serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
+                .is_ok_and(|values| {
+                    values.len() == 2 && values.contains_key("name") && values.contains_key("team")
+                })
+        }
+        graphql::PROJECT_STATUS | graphql::ISSUE_LABEL | graphql::PROJECT_LABEL => {
+            serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
+                .is_ok_and(|values| values.len() == 1 && values.contains_key("name"))
+        }
         graphql::ISSUE_CREATE
         | graphql::PROJECT_CREATE
         | graphql::ISSUE_RELATION_CREATE
