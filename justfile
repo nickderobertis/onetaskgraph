@@ -59,6 +59,7 @@ distribution-check:
         fi
     @scripts/check-distribution-contract.sh
     @scripts/check-distribution-contract-enforced.sh
+    @scripts/check-release-pr-sync.sh
 
 distribution-test:
     @task_log="$$(mktemp)" || { echo "distribution journey could not create its log; next: inspect temporary-directory permissions and free space" >&2; exit 1; }; trap 'rm -f "$$task_log"' EXIT; \
