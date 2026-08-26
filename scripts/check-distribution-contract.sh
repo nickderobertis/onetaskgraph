@@ -63,6 +63,41 @@ npm_job=$(sed -n '/^  publish-npm:/,$p' .github/workflows/release.yml) || { echo
 grep -Fq 'NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh https://registry.npmjs.org/)' <<< "$npm_job" || fail_npm_auth "npm publication must configure registry authentication with scripts/npm-registry-auth.sh; NODE_AUTH_TOKEN alone leaves the npm client logged out"
 grep -Fq 'export NPM_CONFIG_USERCONFIG' <<< "$npm_job" || fail_npm_auth "the npm configuration must be exported as NPM_CONFIG_USERCONFIG, which is how the npm client finds it"
 grep -Fq ':_authToken=${NODE_AUTH_TOKEN}' scripts/npm-registry-auth.sh || fail_npm_auth "the npm configuration must name NODE_AUTH_TOKEN rather than carry a token value"
+if ! python3 <<'PY'
+import pathlib
+import shlex
+
+workflow = pathlib.Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+expected = {
+    "@onetaskgraph/cli@$cli_version": pathlib.Path("./npm/cli"),
+    "@onetaskgraph/sdk@$sdk_version": pathlib.Path("./sdks/typescript"),
+}
+found = {}
+for line in workflow.splitlines():
+    stripped = line.strip()
+    if not stripped.startswith("publish_if_absent "):
+        continue
+    arguments = shlex.split(stripped)
+    if len(arguments) == 3 and arguments[1] in expected:
+        found[arguments[1]] = arguments[2]
+
+for spec, expected_path in expected.items():
+    argument = found.get(spec)
+    if argument is None:
+        raise SystemExit(f"{spec} has no publish_if_absent call")
+    if not argument.startswith("./"):
+        raise SystemExit(
+            f"{spec} publish argument {argument!r} is not an explicit checkout-local path"
+        )
+    path = pathlib.Path(argument)
+    if path != expected_path or not path.is_dir():
+        raise SystemExit(
+            f"{spec} publish argument {argument!r} is not its local package directory"
+        )
+PY
+then
+  fail_npm_auth "installable npm packages must publish from explicit local directories in this checkout"
+fi
 if ! node <<'NODE'
 const fs = require("fs");
 function fail(message) {

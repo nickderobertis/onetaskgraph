@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Prove that scripts/check-distribution-contract.sh REFUSES a release workflow whose
-# crates.io existence query does not identify the caller to the registry.
+# Prove that scripts/check-distribution-contract.sh REFUSES release publication calls
+# whose registry query or package operand does not meet the distribution contract.
 #
 # crates.io answers curl's default user agent with 403 — an answer that says nothing about
 # whether a crate is published — so an unidentified query leaves publish-crates unable to
@@ -143,9 +143,9 @@ expect_refused() {
   shift
   if [ "$GUARD_STATUS" -eq 0 ]; then
     echo "check-distribution-contract-enforced: $case_name — check-distribution-contract.sh" >&2
-    echo "check-distribution-contract-enforced: PASSED a release workflow whose crates.io query does" >&2
-    echo "check-distribution-contract-enforced: not identify the caller. The registry answers that" >&2
-    echo "check-distribution-contract-enforced: query with 403, so publish-crates would publish nothing." >&2
+    echo "check-distribution-contract-enforced: PASSED a release workflow that violates the" >&2
+    echo "check-distribution-contract-enforced: publication contract, so the defect would reach a" >&2
+    echo "check-distribution-contract-enforced: live registry before anyone discovered it." >&2
     failures=$((failures + 1))
     return
   fi
@@ -214,6 +214,16 @@ run_guard
 expect_refused "an agent naming no release and no contact URL" \
   "must name this release and a contact URL"
 restore scripts/crate-publication-status.sh
+
+# 5. The npm defect itself: without the explicit ./ prefix npm interprets npm/cli as the
+#    GitHub shorthand for npm's own CLI repository and tries to publish that remote package.
+substitute .github/workflows/release.yml \
+  'publish_if_absent "@onetaskgraph/cli@$cli_version" ./npm/cli' \
+  'publish_if_absent "@onetaskgraph/cli@$cli_version" npm/cli'
+run_guard
+expect_refused "a bare owner/name operand in place of the local CLI directory" \
+  "installable npm packages must publish from explicit local directories"
+restore .github/workflows/release.yml
 
 if [ "$failures" -ne 0 ]; then
   echo "check-distribution-contract-enforced: $failures case(s) failed." >&2

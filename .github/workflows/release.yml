@@ -149,6 +149,6 @@ jobs:
           sdk_version=$(node -p "require('./sdks/typescript/package.json').version")
           printf '%s\n' "$cli_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || { echo "invalid CLI version: $cli_version" >&2; exit 64; }
           printf '%s\n' "$sdk_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || { echo "invalid TypeScript SDK version: $sdk_version" >&2; exit 64; }
-          publish_if_absent "@onetaskgraph/cli@$cli_version" npm/cli
-          publish_if_absent "@onetaskgraph/sdk@$sdk_version" sdks/typescript
+          publish_if_absent "@onetaskgraph/cli@$cli_version" ./npm/cli
+          publish_if_absent "@onetaskgraph/sdk@$sdk_version" ./sdks/typescript
 # llmlint: ignore-end[changed_behavior_has_e2e]
