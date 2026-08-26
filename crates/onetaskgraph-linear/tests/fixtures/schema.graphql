@@ -96,11 +96,13 @@ type ProjectRelationConnection {
   pageInfo: PageInfo!
 }
 type IssueRelation {
+  id: ID!
   type: String!
   issue: Issue
   relatedIssue: Issue
 }
 type ProjectRelation {
+  id: ID!
   type: String!
   project: Project
   relatedProject: Project

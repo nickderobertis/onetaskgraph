@@ -283,6 +283,49 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
     };
     let query_fields = fields("Query");
     let mutation_fields = fields("Mutation");
+    let objects = schema
+        .definitions
+        .iter()
+        .filter_map(|definition| match definition {
+            schema::Definition::TypeDefinition(schema::TypeDefinition::Object(object)) => {
+                Some((object.name.as_str(), object))
+            }
+            _ => None,
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    fn named<'a>(kind: &'a schema::Type<'a, String>) -> &'a str {
+        match kind {
+            schema::Type::NamedType(name) => name,
+            schema::Type::ListType(inner) | schema::Type::NonNullType(inner) => named(inner),
+        }
+    }
+    fn validate<'a>(
+        objects: &std::collections::HashMap<&str, &'a schema::ObjectType<'a, String>>,
+        type_name: &str,
+        selections: &query::SelectionSet<'_, String>,
+    ) {
+        let object = objects[type_name];
+        for selection in &selections.items {
+            let query::Selection::Field(selected) = selection else {
+                panic!("no fragments")
+            };
+            let field = object
+                .fields
+                .iter()
+                .find(|field| field.name == selected.name)
+                .unwrap_or_else(|| panic!("{type_name} lacks {}", selected.name));
+            for (argument, _) in &selected.arguments {
+                assert!(
+                    field.arguments.iter().any(|input| input.name == *argument),
+                    "{type_name}.{} lacks {argument}",
+                    field.name
+                );
+            }
+            if !selected.selection_set.items.is_empty() {
+                validate(objects, named(&field.field_type), &selected.selection_set);
+            }
+        }
+    }
     for (document, mutation) in [
         (graphql::TEAM, false),
         (graphql::ISSUE_STATE, false),
@@ -319,6 +362,19 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
             .contains(&root.name.as_str()),
             "pinned schema lacks {}",
             root.name
+        );
+        validate(
+            &objects,
+            if mutation { "Mutation" } else { "Query" },
+            match &parsed.definitions[0] {
+                query::Definition::Operation(query::OperationDefinition::Query(operation)) => {
+                    &operation.selection_set
+                }
+                query::Definition::Operation(query::OperationDefinition::Mutation(operation)) => {
+                    &operation.selection_set
+                }
+                _ => unreachable!(),
+            },
         );
     }
 }
@@ -460,6 +516,101 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
             && create.contains("onetaskgraph.repositories")
             && create.contains("elsewhere:P-9")
     );
+}
+
+#[tokio::test]
+async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_boundary() {
+    let task = || {
+        serde_json::from_value::<Task>(serde_json::json!({"id":"from:T","title":"task","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"repositories":[],"metadata":{}})).unwrap()
+    };
+    let project = || {
+        serde_json::from_value::<Project>(serde_json::json!({"id":"from:P","title":"project","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"repositories":[],"metadata":{}})).unwrap()
+    };
+    let page = |root: &str, nodes: serde_json::Value| serde_json::json!({(root):{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}});
+    for (responses, item, expected) in [
+        (
+            vec![
+                page("teams", serde_json::json!([{"id":"TEAM"}])),
+                page("workflowStates", serde_json::json!([])),
+            ],
+            task(),
+            "workflow state",
+        ),
+        (
+            vec![
+                page("teams", serde_json::json!([{"id":"TEAM"}])),
+                page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+                serde_json::json!({"issueCreate":{"success":false,"issue":null}}),
+            ],
+            task(),
+            "unsuccessful",
+        ),
+        (
+            vec![
+                page("teams", serde_json::json!([{"id":"TEAM"}])),
+                page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+                serde_json::json!({"issueCreate":{"success":true}}),
+            ],
+            task(),
+            "missing issueCreate.issue",
+        ),
+        (
+            vec![
+                page("teams", serde_json::json!([{"id":"TEAM"}])),
+                page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+                serde_json::json!({"issueCreate":{"issue":{"id":"NEW"}}}),
+            ],
+            task(),
+            "missing boolean issueCreate.success",
+        ),
+    ] {
+        let (endpoint, wire) = response_server(responses);
+        let error = writable_source(&endpoint)
+            .write_task(&ItemWrite {
+                target: None,
+                item,
+                depends_on: Vec::new(),
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{error}").contains(expected), "{error}");
+        drop(wire);
+    }
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("projectStatuses", serde_json::json!([])),
+    ]);
+    let error = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error}").contains("project status"));
+    drop(wire);
+    let relation = DependencyEdge {
+        from: DependencyEndpoint::from_native("T".into(), ItemKind::Task),
+        to: DependencyEndpoint::from_native("FAR".into(), ItemKind::Task),
+        kind: DependencyKind::Blocks,
+    };
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW"}}}),
+        serde_json::json!({"issueRelationCreate":{"success":false,"issueRelation":null}}),
+    ]);
+    let error = writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task(),
+            depends_on: vec![relation],
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error}").contains("issueRelationCreate"));
+    drop(wire);
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 

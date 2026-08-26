@@ -215,6 +215,11 @@ struct LinearSource {
     /// is refused for it exactly as a bare id of the same kind is.
     name: SourceName,
 }
+#[derive(Clone, Copy)]
+enum WriteKind {
+    Task,
+    Project,
+}
 
 #[derive(Deserialize)]
 struct Envelope {
@@ -375,18 +380,22 @@ impl LinearSource {
         )
         .await
     }
-    async fn label_ids(&self, labels: &[Label], project: bool) -> Result<Vec<String>, SourceError> {
+    async fn label_ids(
+        &self,
+        labels: &[Label],
+        kind: WriteKind,
+    ) -> Result<Vec<String>, SourceError> {
         let mut ids = Vec::with_capacity(labels.len());
         for label in labels {
             ids.push(
                 self.one_id(
-                    if project {
+                    if matches!(kind, WriteKind::Project) {
                         graphql::PROJECT_LABEL
                     } else {
                         graphql::ISSUE_LABEL
                     },
                     json!({"name":label.name}),
-                    if project {
+                    if matches!(kind, WriteKind::Project) {
                         "projectLabels"
                     } else {
                         "issueLabels"
@@ -443,7 +452,7 @@ impl LinearSource {
         &self,
         near: &NativeId,
         edges: &[DependencyEdge],
-        project: bool,
+        kind: WriteKind,
     ) -> Result<(), SourceError> {
         for edge in edges {
             let far = match edge.to.id().split_once(':') {
@@ -455,7 +464,7 @@ impl LinearSource {
                 DependencyKind::Blocks => "blocks",
                 DependencyKind::Related => "related",
             };
-            let (query, input) = if project {
+            let (query, input) = if matches!(kind, WriteKind::Project) {
                 (
                     graphql::PROJECT_RELATION_CREATE,
                     json!({"projectId":near.0,"relatedProjectId":far,"type":relation_type}),
@@ -466,7 +475,15 @@ impl LinearSource {
                     json!({"issueId":near.0,"relatedIssueId":far,"type":relation_type}),
                 )
             };
-            self.send(query, json!({"input":input})).await?;
+            let data = self.send(query, json!({"input":input})).await?;
+            mutation_payload(
+                &data,
+                if matches!(kind, WriteKind::Project) {
+                    "projectRelationCreate"
+                } else {
+                    "issueRelationCreate"
+                },
+            )?;
         }
         Ok(())
     }
@@ -474,7 +491,7 @@ impl LinearSource {
     async fn prepare_edges(
         &self,
         edges: &[DependencyEdge],
-        project: bool,
+        kind: WriteKind,
     ) -> Result<Vec<DependencyEdge>, SourceError> {
         let mut prepared = Vec::with_capacity(edges.len());
         for edge in edges {
@@ -487,11 +504,15 @@ impl LinearSource {
             {
                 let data = self
                     .send(
-                        if project { PROJECTS } else { ISSUES },
+                        if matches!(kind, WriteKind::Project) {
+                            PROJECTS
+                        } else {
+                            ISSUES
+                        },
                         json!({"first":250,"after":null,"filter":{}}),
                     )
                     .await?;
-                let page = if project {
+                let page = if matches!(kind, WriteKind::Project) {
                     connection(&data, "projects", map_project)?
                         .items
                         .into_iter()
@@ -610,7 +631,9 @@ impl TaskSource for LinearSource {
         .await
     }
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
-        let edges = self.prepare_edges(&write.depends_on, false).await?;
+        let edges = self
+            .prepare_edges(&write.depends_on, WriteKind::Task)
+            .await?;
         let team = self.team_id().await?;
         let state = self
             .one_id(
@@ -620,7 +643,7 @@ impl TaskSource for LinearSource {
                 &format!("workflow state {:?}", write.item.status.name),
             )
             .await?;
-        let labels = self.label_ids(&write.item.labels, false).await?;
+        let labels = self.label_ids(&write.item.labels, WriteKind::Task).await?;
         let description = self.write_description(
             write.item.content.as_deref(),
             &write.item.metadata,
@@ -646,17 +669,19 @@ impl TaskSource for LinearSource {
         };
         let data = self.send(query, variables).await?;
         let issue =
-            data.get(root)
-                .and_then(|v| v.get("issue"))
+            mutation_payload(&data, root)?
+                .get("issue")
                 .ok_or_else(|| SourceError::Malformed {
                     message: format!("missing {root}.issue"),
                 })?;
         let id = NativeId(str_at(issue, "id")?.into());
-        self.write_relations(&id, &edges, false).await?;
+        self.write_relations(&id, &edges, WriteKind::Task).await?;
         Ok(id)
     }
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
-        let edges = self.prepare_edges(&write.depends_on, true).await?;
+        let edges = self
+            .prepare_edges(&write.depends_on, WriteKind::Project)
+            .await?;
         let team = self.team_id().await?;
         let status = self
             .one_id(
@@ -666,7 +691,9 @@ impl TaskSource for LinearSource {
                 &format!("project status {:?}", write.item.status.name),
             )
             .await?;
-        let labels = self.label_ids(&write.item.labels, true).await?;
+        let labels = self
+            .label_ids(&write.item.labels, WriteKind::Project)
+            .await?;
         let description = self.write_description(
             write.item.content.as_deref(),
             &write.item.metadata,
@@ -691,14 +718,14 @@ impl TaskSource for LinearSource {
             ),
         };
         let data = self.send(query, variables).await?;
-        let project = data
-            .get(root)
-            .and_then(|v| v.get("project"))
+        let project = mutation_payload(&data, root)?
+            .get("project")
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {root}.project"),
             })?;
         let id = NativeId(str_at(project, "id")?.into());
-        self.write_relations(&id, &edges, true).await?;
+        self.write_relations(&id, &edges, WriteKind::Project)
+            .await?;
         Ok(id)
     }
 }
@@ -1090,6 +1117,20 @@ fn metadata_description(
 
 fn optional_string(v: &Value, k: &str) -> Result<Option<String>, SourceError> {
     Ok(optional_str(v, k)?.map(Into::into))
+}
+fn mutation_payload<'a>(data: &'a Value, root: &str) -> Result<&'a Value, SourceError> {
+    let payload = data.get(root).ok_or_else(|| SourceError::Malformed {
+        message: format!("missing {root}"),
+    })?;
+    match payload.get("success").and_then(Value::as_bool) {
+        Some(true) => Ok(payload),
+        Some(false) => Err(SourceError::Refused {
+            message: format!("Linear reported {root} was unsuccessful"),
+        }),
+        None => Err(SourceError::Malformed {
+            message: format!("missing boolean {root}.success"),
+        }),
+    }
 }
 fn page_next(c: &Value) -> Result<Option<Cursor>, SourceError> {
     let info = c.get("pageInfo").ok_or_else(|| SourceError::Malformed {
