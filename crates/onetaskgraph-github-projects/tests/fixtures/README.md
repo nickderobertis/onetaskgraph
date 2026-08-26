@@ -10,7 +10,9 @@ the official GraphQL references at <https://docs.github.com/en/graphql/reference
 <https://docs.github.com/en/graphql/reference/issues>. Tests serve these files through an actual
 loopback HTTP server and exercise request construction, authentication, parsing, and mapping.
 
-`schema.graphql` is the authoritative read-contract subset obtained from GitHub.com's GraphQL
-introspection endpoint on 2026-08-24. The pinned-schema test validates every production operation's
+`schema.graphql` is the authoritative contract subset: the read surface was obtained from
+GitHub.com's GraphQL introspection endpoint on 2026-08-24, and the mutation inputs and payloads
+were derived from GitHub's published Projects and Issues references on 2026-08-26. The
+pinned-schema test validates every production operation's
 selected fields, arguments, variable types, fragment type conditions, and fixture keys against it;
 the credentialed live lane provides the freshness check against GitHub's current schema.

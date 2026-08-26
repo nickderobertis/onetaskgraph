@@ -15,8 +15,18 @@
               "id": "PVTI_1",
               "fieldValues": {
                 "nodes": [
-                  { "name": "Doing", "field": { "name": "Status" } },
-                  { "text": "{\"caller.number\":7}", "field": { "name": "onetaskgraph.metadata" } },
+                  {
+                    "name": "Doing",
+                    "field": {
+                      "id": "FIELD_status",
+                      "name": "Status",
+                      "options": [{ "id": "OPT_doing", "name": "Doing" }]
+                    }
+                  },
+                  {
+                    "text": "{\"caller.number\":7}",
+                    "field": { "id": "FIELD_metadata", "name": "onetaskgraph.metadata" }
+                  },
                   {
                     "labels": {
                       "nodes": [{ "id": "L_field", "name": "team", "color": "00ff00" }],
@@ -27,6 +37,7 @@
                 "pageInfo": { "hasNextPage": false }
               },
               "content": {
+                "__typename": "Issue",
                 "id": "I_task",
                 "title": "Ship it",
                 "body": "details",

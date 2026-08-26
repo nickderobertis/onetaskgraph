@@ -20,8 +20,10 @@
 //! the configured project's issue edges. Projects v2 has no native project-to-project relationship,
 //! so those aggregate edges use the related issues' `projectItems.project.id`.
 //!
-//! Live verification is non-destructive by construction: [`TaskSource`] has read operations only
-//! and this crate sends GraphQL `query` operations only, with no mutation for setup or teardown.
+//! Writes update the configured board, create draft items (never another board), update existing
+//! draft items, set the source-owned metadata field, and use GitHub's native issue dependency
+//! mutation when both ends are issues. The ignored live lane creates a draft, reads it back, and
+//! restores the board by deleting that item; required checks use only the local fixture server.
 #![deny(missing_docs)]
 
 use std::collections::BTreeMap;
@@ -29,9 +31,9 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Health, ItemKind, Label, NativeId, Page, PageRequest, Project, ProjectQuery,
-    Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
-    Support, Task, TaskQuery, TaskSource,
+    Direction, Health, ItemKind, ItemWrite, Label, NativeId, Page, PageRequest, Project,
+    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
+    StatusCategory, Support, Task, TaskQuery, TaskSource, WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -59,14 +61,14 @@ pub mod graphql {
     } fragment Project on ProjectV2 { id title shortDescription url createdAt updatedAt closed
       items(first:$first,after:$after){nodes{id fieldValues(first:$nestedFirst){nodes{
         ... on ProjectV2ItemFieldSingleSelectValue{name field{
-          ... on ProjectV2SingleSelectField{name}
+          ... on ProjectV2SingleSelectField{id name options{id name}}
         }}
-        ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2Field{name}}}
+        ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2Field{id name}}}
         ... on ProjectV2ItemFieldLabelValue{labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
       }pageInfo{hasNextPage}} content{
-        ... on Issue{id title body url createdAt updatedAt state repository{nameWithOwner} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
-        ... on PullRequest{id title body url createdAt updatedAt state repository{nameWithOwner} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
-        ... on DraftIssue{id title body createdAt updatedAt}
+        ... on Issue{__typename id title body url createdAt updatedAt state repository{nameWithOwner} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on PullRequest{__typename id title body url createdAt updatedAt state repository{nameWithOwner} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on DraftIssue{__typename id title body createdAt updatedAt}
       }} pageInfo{hasNextPage endCursor}}
     }"#;
     /// Reads both dependency directions for one issue.
@@ -75,6 +77,20 @@ pub mod graphql {
     pub const RELATED_PROJECTS: &str = r#"query($id:ID!,$first:Int!,$after:String!){node(id:$id){... on Issue{projectItems(first:$first,after:$after){nodes{project{id}}pageInfo{hasNextPage endCursor}}}}}"#;
     /// Reads issue dependencies and the projects containing each related issue.
     pub const PROJECT_DEPENDENCIES: &str = r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){node(id:$id){... on Issue{blockedBy(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}blocking(first:$first,after:$after){nodes{id projectItems(first:$nestedFirst){nodes{project{id}}pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}}}}"#;
+    /// Creates a draft in the configured project.
+    pub const CREATE_DRAFT: &str = r#"mutation($input:AddProjectV2DraftIssueInput!){addProjectV2DraftIssue(input:$input){projectItem{id content{... on DraftIssue{id}}}}}"#;
+    /// Updates an existing draft's user-visible fields.
+    pub const UPDATE_DRAFT: &str = r#"mutation($input:UpdateProjectV2DraftIssueInput!){updateProjectV2DraftIssue(input:$input){draftIssue{id}}}"#;
+    /// Updates the visible fields of an issue-backed project item.
+    pub const UPDATE_ISSUE: &str =
+        r#"mutation($input:UpdateIssueInput!){updateIssue(input:$input){issue{id}}}"#;
+    /// Updates a text or single-select value on one project item.
+    pub const UPDATE_FIELD: &str = r#"mutation($input:UpdateProjectV2ItemFieldValueInput!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id}}}"#;
+    /// Updates the one configured project; it never creates a board.
+    pub const UPDATE_PROJECT: &str =
+        r#"mutation($input:UpdateProjectV2Input!){updateProjectV2(input:$input){projectV2{id}}}"#;
+    /// Adds GitHub's native issue blocked-by relationship.
+    pub const ADD_BLOCKED_BY: &str = r#"mutation($input:AddBlockedByInput!){addBlockedBy(input:$input){issue{id} blockingIssue{id}}}"#;
 }
 
 fn default_token_env() -> String {
@@ -486,6 +502,114 @@ impl GitHubProjectsSource {
         Ok(tasks)
     }
 
+    async fn board_and_item(
+        &self,
+        content_id: Option<&NativeId>,
+    ) -> Result<(Value, Option<Value>), SourceError> {
+        let mut after = None;
+        loop {
+            let project = self.project_value(after.as_deref(), MAX_PAGE_SIZE).await?;
+            let found = content_id.and_then(|wanted| {
+                project
+                    .pointer("/items/nodes")
+                    .and_then(Value::as_array)?
+                    .iter()
+                    .find(|item| {
+                        item.pointer("/content/id").and_then(Value::as_str)
+                            == Some(wanted.0.as_str())
+                    })
+                    .cloned()
+            });
+            if found.is_some() || content_id.is_none() {
+                return Ok((project, found));
+            }
+            let page =
+                project
+                    .pointer("/items/pageInfo")
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "GitHub project items have no pageInfo".into(),
+                    })?;
+            if !required_bool(page, "hasNextPage")? {
+                return Ok((project, None));
+            }
+            let next = required_str(page, "endCursor")?;
+            validate_cursor_progress(after.as_deref(), next)?;
+            after = Some(next.to_owned());
+        }
+    }
+
+    async fn set_item_field(
+        &self,
+        project_id: &str,
+        item_id: &str,
+        field_id: &str,
+        value: Value,
+    ) -> Result<(), SourceError> {
+        self.graphql(
+            graphql::UPDATE_FIELD,
+            json!({"input":{
+                "projectId":project_id,"itemId":item_id,"fieldId":field_id,"value":value
+            }}),
+        )
+        .await?;
+        Ok(())
+    }
+
+    fn field<'a>(project: &'a Value, name: &str) -> Option<&'a Value> {
+        project
+            .pointer("/items/nodes")?
+            .as_array()?
+            .iter()
+            .flat_map(|item| {
+                item.pointer("/fieldValues/nodes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .find_map(|value| {
+                (value.pointer("/field/name").and_then(Value::as_str) == Some(name))
+                    .then(|| value.get("field"))
+                    .flatten()
+            })
+    }
+
+    fn task_metadata(
+        write: &ItemWrite<Task>,
+        record_edges: bool,
+        record_repositories: bool,
+    ) -> Result<BTreeMap<String, Value>, SourceError> {
+        let mut metadata = write.item.metadata.clone();
+        if record_repositories && !write.item.repositories.is_empty() {
+            metadata.insert(
+                Repository::METADATA_KEY.into(),
+                serde_json::to_value(&write.item.repositories).map_err(|error| {
+                    SourceError::Malformed {
+                        message: error.to_string(),
+                    }
+                })?,
+            );
+        } else if !record_repositories || write.item.repositories.is_empty() {
+            metadata.remove(Repository::METADATA_KEY);
+        }
+        if record_edges && !write.depends_on.is_empty() {
+            metadata.insert(
+                DependencyEdge::RECORDED_KEY.into(),
+                Value::Array(
+                    write
+                        .depends_on
+                        .iter()
+                        .map(|edge| {
+                            serde_json::to_value(&edge.to).expect("dependency endpoints serialize")
+                        })
+                        .collect(),
+                ),
+            );
+        } else {
+            metadata.remove(DependencyEdge::RECORDED_KEY);
+        }
+        Ok(metadata)
+    }
+
     async fn dependencies(
         &self,
         id: &NativeId,
@@ -872,6 +996,227 @@ impl TaskSource for GitHubProjectsSource {
         let offset = numeric_cursor(page.cursor.as_ref())?;
         Ok(offset_page(edges, offset, page.limit as usize))
     }
+
+    fn writes(&self) -> WriteSupport {
+        WriteSupport::Supported
+    }
+
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        let (project, existing) = self.board_and_item(write.target.as_ref()).await?;
+        let project_id = required_str(&project, "id")?;
+        let (content_id, item_id, typename) = if let Some(target) = &write.target {
+            let item = existing.ok_or_else(|| SourceError::Refused {
+                message: format!("GitHub destination item {} was not found", target.0),
+            })?;
+            let typename =
+                required_str(item.get("content").unwrap_or(&Value::Null), "__typename")?.to_owned();
+            if typename == "DraftIssue" && !write.item.labels.is_empty() {
+                return Err(SourceError::Refused {
+                    message: "GitHub draft items cannot represent labels".into(),
+                });
+            }
+            if typename == "Issue" {
+                let held = Self::labels(&item)?;
+                if held != write.item.labels {
+                    return Err(SourceError::Refused {
+                        message: "GitHub issue labels differ from the labels being written".into(),
+                    });
+                }
+                let native = item
+                    .pointer("/content/repository/nameWithOwner")
+                    .and_then(Value::as_str)
+                    .map(|value| format!("github.com/{value}"));
+                if write
+                    .item
+                    .repositories
+                    .iter()
+                    .map(Repository::as_str)
+                    .collect::<Vec<_>>()
+                    != native.iter().map(String::as_str).collect::<Vec<_>>()
+                {
+                    return Err(SourceError::Refused {
+                        message:
+                            "GitHub issue repository differs from the repositories being written"
+                                .into(),
+                    });
+                }
+            }
+            let operation = match typename.as_str() {
+                "DraftIssue" => graphql::UPDATE_DRAFT,
+                "Issue" => graphql::UPDATE_ISSUE,
+                other => {
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "GitHub {other} items cannot be updated by this destination"
+                        ),
+                    });
+                }
+            };
+            let input = if typename == "DraftIssue" {
+                json!({"draftIssueId":target.0,"title":write.item.title,"body":write.item.content})
+            } else {
+                json!({"id":target.0,"title":write.item.title,"body":write.item.content})
+            };
+            self.graphql(operation, json!({"input":input})).await?;
+            (
+                target.clone(),
+                NativeId(required_str(&item, "id")?.into()),
+                typename,
+            )
+        } else {
+            if !write.item.labels.is_empty() {
+                return Err(SourceError::Refused {
+                    message: "GitHub draft items cannot represent labels".into(),
+                });
+            }
+            let data = self
+                .graphql(
+                    graphql::CREATE_DRAFT,
+                    json!({"input":{
+                        "projectId":project_id,"title":write.item.title,"body":write.item.content
+                    }}),
+                )
+                .await?;
+            let created = data
+                .pointer("/addProjectV2DraftIssue/projectItem")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub draft creation returned no project item".into(),
+                })?;
+            (
+                NativeId(
+                    required_str(created.pointer("/content").unwrap_or(&Value::Null), "id")?.into(),
+                ),
+                NativeId(required_str(created, "id")?.into()),
+                "DraftIssue".into(),
+            )
+        };
+
+        let mut fallback = Vec::new();
+        for edge in &write.depends_on {
+            let same_source = edge
+                .to
+                .source()
+                .is_none_or(|source| source == self.name.as_str());
+            let far_id = edge
+                .to
+                .id()
+                .rsplit_once(':')
+                .map_or(edge.to.id(), |(_, id)| id);
+            let far_issue = if same_source {
+                self.board_and_item(Some(&NativeId(far_id.into())))
+                    .await?
+                    .1
+                    .and_then(|item| {
+                        item.pointer("/content/__typename")
+                            .and_then(Value::as_str)
+                            .map(|name| name == "Issue")
+                    })
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if typename == "Issue" && far_issue && edge.to.kind == ItemKind::Task {
+                self.graphql(
+                    graphql::ADD_BLOCKED_BY,
+                    json!({"input":{"issueId":content_id.0,"blockingIssueId":far_id}}),
+                )
+                .await?;
+            } else {
+                fallback.push(edge.clone());
+            }
+        }
+        let metadata_write = ItemWrite {
+            target: write.target.clone(),
+            item: write.item.clone(),
+            depends_on: fallback,
+        };
+        let metadata = Self::task_metadata(&metadata_write, true, typename != "Issue")?;
+        let field = Self::field(&project, METADATA_FIELD).ok_or_else(|| SourceError::Refused {
+            message: format!("GitHub project has no source-owned {METADATA_FIELD} text field"),
+        })?;
+        self.set_item_field(
+            project_id,
+            &item_id.0,
+            required_str(field, "id")?,
+            json!({"text":serde_json::to_string(&metadata).expect("metadata serializes")}),
+        )
+        .await?;
+
+        if let Some(field) = Self::field(&project, "Status") {
+            let option = field
+                .get("options")
+                .and_then(Value::as_array)
+                .and_then(|options| {
+                    options.iter().find(|option| {
+                        option
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .is_some_and(|name| name.eq_ignore_ascii_case(&write.item.status.name))
+                    })
+                })
+                .ok_or_else(|| SourceError::Refused {
+                    message: format!(
+                        "GitHub Status field cannot represent status {}",
+                        write.item.status.name
+                    ),
+                })?;
+            self.set_item_field(
+                project_id,
+                &item_id.0,
+                required_str(field, "id")?,
+                json!({"singleSelectOptionId":required_str(option, "id")?}),
+            )
+            .await?;
+        }
+        Ok(content_id)
+    }
+
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        let project = self.project_value(None, 1).await?;
+        let id = NativeId(required_str(&project, "id")?.into());
+        if write.target.as_ref().is_some_and(|target| target != &id) {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "GitHub project {} was not found",
+                    write.target.as_ref().unwrap().0
+                ),
+            });
+        }
+        if !write.item.labels.is_empty() {
+            return Err(SourceError::Refused {
+                message: "GitHub Projects v2 cannot represent project labels".into(),
+            });
+        }
+        let mut metadata = write.item.metadata.clone();
+        if !write.item.repositories.is_empty() {
+            metadata.insert(
+                Repository::METADATA_KEY.into(),
+                serde_json::to_value(&write.item.repositories).expect("repositories serialize"),
+            );
+        }
+        if !write.depends_on.is_empty() {
+            metadata.insert(
+                DependencyEdge::RECORDED_KEY.into(),
+                Value::Array(
+                    write
+                        .depends_on
+                        .iter()
+                        .map(|edge| serde_json::to_value(&edge.to).expect("endpoint serializes"))
+                        .collect(),
+                ),
+            );
+        }
+        let description = project_metadata_description(write.item.content.as_deref(), &metadata)?;
+        self.graphql(
+            graphql::UPDATE_PROJECT,
+            json!({"input":{
+                "projectId":id.0,"title":write.item.title,"shortDescription":description,
+                "closed":write.item.status.category == StatusCategory::Done
+            }}),
+        )
+        .await?;
+        Ok(id)
+    }
 }
 
 /// Where the recorded tail of a task-dependency walk resumes; see
@@ -1046,6 +1391,29 @@ fn metadata_description(
     })?;
     let visible = description[..start].trim_end();
     Ok(((!visible.is_empty()).then(|| visible.into()), metadata))
+}
+
+fn project_metadata_description(
+    content: Option<&str>,
+    metadata: &BTreeMap<String, Value>,
+) -> Result<Option<String>, SourceError> {
+    if metadata.is_empty() {
+        return Ok(content.filter(|value| !value.is_empty()).map(str::to_owned));
+    }
+    let encoded = serde_json::to_string(metadata).map_err(|error| SourceError::Malformed {
+        message: format!("cannot encode GitHub project metadata: {error}"),
+    })?;
+    Ok(Some(format!(
+        "{}{}{}\n{}",
+        content.unwrap_or_default(),
+        if content.is_some_and(|value| !value.is_empty()) {
+            "\n\n"
+        } else {
+            ""
+        },
+        PROJECT_METADATA_OPEN,
+        format_args!("{encoded}\n-->")
+    )))
 }
 
 fn repositories_from_metadata(

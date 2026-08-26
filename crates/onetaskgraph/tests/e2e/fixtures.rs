@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
     net::TcpListener,
+    sync::{Arc, Mutex},
     thread,
 };
 
@@ -276,6 +277,7 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
         "http://{}/graphql",
         listener.local_addr().expect("fixture address")
     );
+    let written = Arc::new(Mutex::new(Vec::<Value>::new()));
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
@@ -286,7 +288,55 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 .as_object()
                 .expect("GraphQL variables object");
             let variables = &Value::Object(variables.clone());
-            let data = if query.contains("node(id:$id)") {
+            let data = if query.contains("addProjectV2DraftIssue(input:$input)") {
+                let input = &variables["input"];
+                let mut rows = written.lock().unwrap();
+                let number = rows.len() + 1;
+                let content_id = format!("DRAFT-{number}");
+                let item_id = format!("ITEM-DRAFT-{number}");
+                rows.push(json!({"id":item_id,"fieldValues":{"nodes":[
+                    {"name":"Todo","field":{"id":"FIELD-status","name":"Status","options":[{"id":"OPT-todo","name":"Todo"},{"id":"OPT-doing","name":"Doing"},{"id":"OPT-shipped","name":"Shipped"}]}},
+                    {"text":"{}","field":{"id":"FIELD-metadata","name":"onetaskgraph.metadata"}}
+                ],"pageInfo":{"hasNextPage":false}},"content":{"__typename":"DraftIssue","id":content_id,
+                    "title":input["title"],"body":input["body"],"createdAt":null,"updatedAt":null}}));
+                json!({"addProjectV2DraftIssue":{"projectItem":{"id":item_id,"content":{"id":content_id}}}})
+            } else if query.contains("updateProjectV2DraftIssue(input:$input)") {
+                let input = &variables["input"];
+                let mut rows = written.lock().unwrap();
+                let row = rows
+                    .iter_mut()
+                    .find(|row| row["content"]["id"] == input["draftIssueId"])
+                    .expect("updated fixture draft exists");
+                row["content"]["title"] = input["title"].clone();
+                row["content"]["body"] = input["body"].clone();
+                json!({"updateProjectV2DraftIssue":{"draftIssue":{"id":input["draftIssueId"]}}})
+            } else if query.contains("updateIssue(input:$input)") {
+                json!({"updateIssue":{"issue":{"id":variables["input"]["id"]}}})
+            } else if query.contains("updateProjectV2ItemFieldValue(input:$input)") {
+                let input = &variables["input"];
+                let mut rows = written.lock().unwrap();
+                let row = rows.iter_mut().find(|row| row["id"] == input["itemId"]);
+                if let Some(row) = row {
+                    if input["fieldId"] == "FIELD-metadata" {
+                        row["fieldValues"]["nodes"][1]["text"] = input["value"]["text"].clone();
+                    }
+                    if input["fieldId"] == "FIELD-status" {
+                        let option = input["value"]["singleSelectOptionId"].as_str().unwrap();
+                        row["fieldValues"]["nodes"][0]["name"] = json!(match option {
+                            "OPT-doing" => "Doing",
+                            "OPT-shipped" => "Shipped",
+                            _ => "Todo",
+                        });
+                    }
+                } else {
+                    assert!(input["itemId"].as_str().unwrap().starts_with("ITEM-T-"));
+                }
+                json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":input["itemId"]}}})
+            } else if query.contains("updateProjectV2(input:$input)") {
+                json!({"updateProjectV2":{"projectV2":{"id":"P-1"}}})
+            } else if query.contains("addBlockedBy(input:$input)") {
+                json!({"addBlockedBy":{"issue":{"id":variables["input"]["issueId"]},"blockingIssue":{"id":variables["input"]["blockingIssueId"]}}})
+            } else if query.contains("node(id:$id)") {
                 let id = variables["id"].as_str().expect("dependency id");
                 let first = variables["first"]
                     .as_u64()
@@ -299,33 +349,42 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                     variables["after"].is_null() || variables["after"].is_string(),
                     "dependency after must be null or a string"
                 );
-                // T-2 sits on a second board, so aggregating this board's issue edges
-                // yields a real project-level edge rather than one this board makes with
-                // itself, which the source drops.
-                let blockers = match id {
-                    "T-1" | "T-3" | "T-4" => vec![
-                        json!({"id":"T-2","projectItems":{"nodes":[{"project":{"id":"P-2"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
-                    ],
-                    _ => vec![],
-                };
-                // The production document selects both connections, so the fixture answers
-                // both: T-2 is what the other three are blocked by, and so what it blocks.
-                let blocking = if id == "T-2" {
-                    ["T-1", "T-3", "T-4"]
+                if written
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["content"]["id"] == id)
+                {
+                    json!({"node":{"__typename":"DraftIssue"}})
+                } else {
+                    // T-2 sits on a second board, so aggregating this board's issue edges
+                    // yields a real project-level edge rather than one this board makes with
+                    // itself, which the source drops.
+                    let blockers = match id {
+                        "T-1" | "T-3" | "T-4" => vec![
+                            json!({"id":"T-2","projectItems":{"nodes":[{"project":{"id":"P-2"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+                        ],
+                        _ => vec![],
+                    };
+                    // The production document selects both connections, so the fixture answers
+                    // both: T-2 is what the other three are blocked by, and so what it blocks.
+                    let blocking = if id == "T-2" {
+                        ["T-1", "T-3", "T-4"]
                         .into_iter()
                         .map(|id| json!({"id":id,"projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}))
                         .collect::<Vec<_>>()
-                } else {
-                    vec![]
-                };
-                json!({"node":{"__typename":"Issue",
+                    } else {
+                        vec![]
+                    };
+                    json!({"node":{"__typename":"Issue",
                     "blockedBy":{"nodes":blockers,"pageInfo":{"hasNextPage":false,"endCursor":null}},
                     "blocking":{"nodes":blocking,"pageInfo":{"hasNextPage":false,"endCursor":null}}}})
+                }
             } else if query.contains("owner:repositoryOwner") {
                 assert_eq!(variables["owner"], "fixture-owner");
                 assert_eq!(variables["number"], 7);
                 assert_eq!(variables["nestedFirst"], 50);
-                github_project_page(variables, recorded.as_ref())
+                github_project_page(variables, recorded.as_ref(), &written.lock().unwrap())
             } else {
                 panic!("fixture received an unknown GraphQL operation")
             };
@@ -382,7 +441,7 @@ fn read_http_json(stream: &mut impl Read) -> Value {
     serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
 }
 
-fn github_project_page(variables: &Value, recorded: Option<&Value>) -> Value {
+fn github_project_page(variables: &Value, recorded: Option<&Value>, written: &[Value]) -> Value {
     let tasks = [
         (
             "T-1",
@@ -435,20 +494,24 @@ fn github_project_page(variables: &Value, recorded: Option<&Value>) -> Value {
         "GraphQL after cursor is out of range"
     );
     let end = (offset + first).min(tasks.len());
-    let nodes = tasks[offset..end]
+    let mut nodes = tasks[offset..end]
         .iter()
         .map(|(id, title, body, status, state, labels)| json!({
             "id": format!("ITEM-{id}"),
-            "fieldValues":{"nodes":[{"name":status,"field":{"name":"Status"}},
+            "fieldValues":{"nodes":[{"name":status,"field":{"id":"FIELD-status","name":"Status","options":[
+                {"id":"OPT-todo","name":"Todo"},{"id":"OPT-doing","name":"Doing"},{"id":"OPT-shipped","name":"Shipped"}]}},
                 {"text": if *id == "T-1" {serde_json::to_string(&json!({"onepipeline.turn_budget":12,"caller.flags":[true,null],
-                    "onetaskgraph.depends_on": recorded.cloned().unwrap_or_else(|| Value::Array(recorded_far_ends("task_dependencies",&json!("T-1"))))})).unwrap()} else {"{}".into()},"field":{"name":"onetaskgraph.metadata"}}],"pageInfo":{"hasNextPage":false}},
+                    "onetaskgraph.depends_on": recorded.cloned().unwrap_or_else(|| Value::Array(recorded_far_ends("task_dependencies",&json!("T-1"))))})).unwrap()} else {"{}".into()},"field":{"id":"FIELD-metadata","name":"onetaskgraph.metadata"}}],"pageInfo":{"hasNextPage":false}},
             "content":{
-                "id":id,"title":title,"body":body,"state":state,"repository":{"nameWithOwner":"nickderobertis/onetaskgraph"},
+                "__typename":"Issue","id":id,"title":title,"body":body,"state":state,"repository":{"nameWithOwner":"nickderobertis/onetaskgraph"},
                 "url":format!("https://example.invalid/{id}"),
                 "labels":{"nodes":labels.iter().map(|(id, name)| json!({"id":id,"name":name})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}
             }
         }))
         .collect::<Vec<_>>();
+    if end == tasks.len() {
+        nodes.extend_from_slice(written);
+    }
     json!({
         "owner":{"projectV2":{
             "id":"P-1","title":"Engine","shortDescription":format!("alpha engine project\n\n<!-- onetaskgraph.metadata\n{}\n-->", serde_json::to_string(&json!({

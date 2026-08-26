@@ -245,6 +245,12 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
             Some("/data/node"),
             Some(include_str!("fixtures/dependencies.json")),
         ),
+        (graphql::CREATE_DRAFT, None, None),
+        (graphql::UPDATE_DRAFT, None, None),
+        (graphql::UPDATE_ISSUE, None, None),
+        (graphql::UPDATE_FIELD, None, None),
+        (graphql::UPDATE_PROJECT, None, None),
+        (graphql::ADD_BLOCKED_BY, None, None),
     ] {
         let document = query::parse_query::<String>(operation).unwrap();
         let fragments = document
@@ -255,26 +261,33 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
                 _ => None,
             })
             .collect::<HashMap<_, _>>();
-        let query::Definition::Operation(query::OperationDefinition::Query(operation)) =
-            &document.definitions[0]
-        else {
-            panic!("production document must begin with a query")
+        let (root, variable_definitions, selection_set) = match &document.definitions[0] {
+            query::Definition::Operation(query::OperationDefinition::Query(operation)) => (
+                "Query",
+                &operation.variable_definitions,
+                &operation.selection_set,
+            ),
+            query::Definition::Operation(query::OperationDefinition::Mutation(operation)) => (
+                "Mutation",
+                &operation.variable_definitions,
+                &operation.selection_set,
+            ),
+            _ => panic!("production document must begin with a named query or mutation"),
         };
-        for variable in &operation.variable_definitions {
+        for variable in variable_definitions {
             assert!(
                 known_types.contains(named_type(&variable.var_type)),
                 "pinned schema lacks variable type {}",
                 named_type(&variable.var_type)
             );
         }
-        let variables = operation
-            .variable_definitions
+        let variables = variable_definitions
             .iter()
             .map(|variable| (variable.name.as_str(), &variable.var_type))
             .collect::<HashMap<_, _>>();
         validate(
-            "Query",
-            &operation.selection_set,
+            root,
+            selection_set,
             &fragments,
             &fields,
             &known_types,
@@ -285,7 +298,7 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         if let (Some(pointer), Some(fixture)) = (fixture_pointer, fixture) {
             let fixture: serde_json::Value = serde_json::from_str(fixture).unwrap();
             let mut keys = HashSet::new();
-            selected_keys(&operation.selection_set, &mut keys);
+            selected_keys(selection_set, &mut keys);
             for fragment in fragments.values() {
                 selected_keys(&fragment.selection_set, &mut keys);
             }
