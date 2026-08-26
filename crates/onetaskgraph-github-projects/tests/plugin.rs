@@ -456,14 +456,7 @@ async fn a_write_refuses_a_board_without_its_owned_field_or_status_option() {
         .retain(|value| {
             value.pointer("/field/name").and_then(Value::as_str) != Some("onetaskgraph.metadata")
         });
-    let created = json!({"data":{"addProjectV2DraftIssue":{"projectItem":{"id":"PVTI-new","content":{"id":"DRAFT-new"}}}}});
-    let (endpoint, handle) = sequence_server(vec![
-        no_metadata,
-        created.clone(),
-        project_response(false),
-        created,
-        mutation_data("updateProjectV2ItemFieldValue/projectV2Item", "PVTI-new"),
-    ]);
+    let (endpoint, handle) = sequence_server(vec![no_metadata, project_response(false)]);
     let source = build(&endpoint);
     let task = |status: &str| Task {
         id: NativeId("source".into()),

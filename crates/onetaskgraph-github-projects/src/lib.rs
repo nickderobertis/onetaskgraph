@@ -1004,6 +1004,37 @@ impl TaskSource for GitHubProjectsSource {
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         let (project, existing) = self.board_and_item(write.target.as_ref()).await?;
         let project_id = required_str(&project, "id")?;
+        let metadata_field =
+            Self::field(&project, METADATA_FIELD).ok_or_else(|| SourceError::Refused {
+                message: format!("GitHub project has no source-owned {METADATA_FIELD} text field"),
+            })?;
+        let status_selection = Self::field(&project, "Status")
+            .map(|field| {
+                let option = field
+                    .get("options")
+                    .and_then(Value::as_array)
+                    .and_then(|options| {
+                        options.iter().find(|option| {
+                            option
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .is_some_and(|name| {
+                                    name.eq_ignore_ascii_case(&write.item.status.name)
+                                })
+                        })
+                    })
+                    .ok_or_else(|| SourceError::Refused {
+                        message: format!(
+                            "GitHub Status field cannot represent status {}",
+                            write.item.status.name
+                        ),
+                    })?;
+                Ok::<_, SourceError>((
+                    required_str(field, "id")?.to_owned(),
+                    required_str(option, "id")?.to_owned(),
+                ))
+            })
+            .transpose()?;
         let (content_id, item_id, typename) = if let Some(target) = &write.target {
             let item = existing.ok_or_else(|| SourceError::Refused {
                 message: format!("GitHub destination item {} was not found", target.0),
@@ -1131,40 +1162,20 @@ impl TaskSource for GitHubProjectsSource {
             depends_on: fallback,
         };
         let metadata = Self::task_metadata(&metadata_write, true, typename != "Issue")?;
-        let field = Self::field(&project, METADATA_FIELD).ok_or_else(|| SourceError::Refused {
-            message: format!("GitHub project has no source-owned {METADATA_FIELD} text field"),
-        })?;
         self.set_item_field(
             project_id,
             &item_id.0,
-            required_str(field, "id")?,
+            required_str(metadata_field, "id")?,
             json!({"text":serde_json::to_string(&metadata).expect("metadata serializes")}),
         )
         .await?;
 
-        if let Some(field) = Self::field(&project, "Status") {
-            let option = field
-                .get("options")
-                .and_then(Value::as_array)
-                .and_then(|options| {
-                    options.iter().find(|option| {
-                        option
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .is_some_and(|name| name.eq_ignore_ascii_case(&write.item.status.name))
-                    })
-                })
-                .ok_or_else(|| SourceError::Refused {
-                    message: format!(
-                        "GitHub Status field cannot represent status {}",
-                        write.item.status.name
-                    ),
-                })?;
+        if let Some((field_id, option_id)) = status_selection {
             self.set_item_field(
                 project_id,
                 &item_id.0,
-                required_str(field, "id")?,
-                json!({"singleSelectOptionId":required_str(option, "id")?}),
+                &field_id,
+                json!({"singleSelectOptionId":option_id}),
             )
             .await?;
         }
