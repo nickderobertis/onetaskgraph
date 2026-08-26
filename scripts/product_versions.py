@@ -47,6 +47,7 @@ VERSION_FILES: Tuple[VersionFile, ...] = (
 )
 
 
+# llmlint: ignore[async_typed_clients_at_boundaries] This local manifest read is part of the short-lived synchronous release transaction and has no concurrent work.
 def read_json_manifest(path: Path) -> Dict[str, object]:
     """Decode a package manifest only after validating its object boundary."""
     decoded = json.loads(path.read_text())
@@ -55,8 +56,7 @@ def read_json_manifest(path: Path) -> Dict[str, object]:
     return decoded
 
 
-# llmlint: ignore[async_typed_clients_at_boundaries] This short-lived release command must finish each local manifest read before comparing or rewriting the tree; there is no concurrent work to preserve.
-# llmlint: ignore[structural_pattern_matching] Python 3.8 is a supported distribution-test runtime, so match/case syntax cannot parse here.
+# llmlint: ignore[async_typed_clients_at_boundaries, structural_pattern_matching] This short-lived release command has no concurrent work, and Python 3.8 support precludes match/case syntax.
 def read_product_versions() -> Dict[str, Optional[SemanticVersion]]:
     """Return every version-bearing path and its declared version."""
     versions = {}
@@ -81,8 +81,7 @@ def read_product_versions() -> Dict[str, Optional[SemanticVersion]]:
     return versions
 
 
-# llmlint: ignore[async_typed_clients_at_boundaries] Version updates are an ordered local transaction followed immediately by synchronous Cargo and uv lock refreshes.
-# llmlint: ignore[structural_pattern_matching] Python 3.8 is a supported distribution-test runtime, so explicit variant checks preserve compatibility.
+# llmlint: ignore[async_typed_clients_at_boundaries, structural_pattern_matching] This ordered local transaction is synchronous by design, and Python 3.8 support requires explicit variant checks.
 def set_product_versions(version: SemanticVersion) -> None:
     """Set every published product version, preserving each file's format."""
     # Validate the whole boundary before changing the first file, so malformed input cannot

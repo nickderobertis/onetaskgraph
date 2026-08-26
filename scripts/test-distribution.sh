@@ -361,6 +361,14 @@ grep -q 'package manifest must be a JSON object' "$tmp/error" || { cat "$tmp/err
 printf '{}\n' > "$tmp/version-repo/sdks/typescript/package.json"
 if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a missing JSON version; next: inspect version-field validation" >&2; exit 1; fi
 grep -q 'sdks/typescript/package.json has None' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing JSON version failure omitted its location; next: inspect version diagnostics" >&2; exit 1; }
+if (cd "$tmp/version-repo" && python3 scripts/product_versions.py set 0.1.2) 2>"$tmp/error"; then echo "product-version helper rewrote a tree with a missing JSON version; next: inspect pre-write validation" >&2; exit 1; fi
+grep -q 'no valid semantic product version could be read' "$tmp/error" || { cat "$tmp/error" >&2; echo "set failure for a missing version omitted its reason; next: inspect version diagnostics" >&2; exit 1; }
+mv "$tmp/version-repo/sdks/typescript/package.json" "$tmp/version-repo/sdks/typescript/package.json.missing"
+if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a missing product manifest; next: inspect filesystem error handling" >&2; exit 1; fi
+grep -q 'product version files could not be processed' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing-manifest helper failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
+if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted a missing product manifest; next: inspect filesystem error handling" >&2; exit 1; fi
+grep -q 'product version files could not be read' "$tmp/error" || { cat "$tmp/error" >&2; echo "workspace missing-manifest failure omitted recovery guidance; next: inspect workspace diagnostics" >&2; exit 1; }
+mv "$tmp/version-repo/sdks/typescript/package.json.missing" "$tmp/version-repo/sdks/typescript/package.json"
 git -C "$tmp/version-repo" restore sdks/typescript/package.json
 grep -q 'version = "0.1.1"' "$tmp/version-repo/Cargo.lock" || { echo "version updater missed Cargo.lock; next: inspect lock refresh" >&2; exit 1; }
 grep -q 'version = "0.1.1"' "$tmp/version-repo/uv.lock" || { echo "version updater missed uv.lock; next: inspect lock refresh" >&2; exit 1; }
