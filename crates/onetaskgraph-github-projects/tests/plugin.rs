@@ -729,6 +729,69 @@ async fn malformed_mutation_payloads_are_rejected_at_each_write_boundary() {
 }
 
 #[tokio::test]
+async fn mutation_payload_ids_must_match_the_requested_items() {
+    let mut draft = project_response(false);
+    draft["data"]["owner"]["projectV2"]["items"]["nodes"][0]["content"] = json!({"__typename":"DraftIssue","id":"DRAFT-1","title":"Old","body":null,"createdAt":null,"updatedAt":null});
+    let (endpoint, handle) = sequence_server(vec![
+        draft,
+        mutation_data("updateProjectV2DraftIssue/draftIssue", "WRONG"),
+    ]);
+    assert!(
+        matches!(build(&endpoint).write_task(&ItemWrite { target: Some(NativeId("DRAFT-1".into())), item: source_task_for_write(), depends_on: vec![] }).await, Err(SourceError::Malformed { message }) if message.contains("wrong item"))
+    );
+    handle.join().unwrap();
+
+    let (endpoint, handle) = sequence_server(vec![
+        project_response(false),
+        mutation_data("updateProjectV2/projectV2", "WRONG"),
+    ]);
+    let project = Project {
+        id: NativeId("source".into()),
+        title: "Title".into(),
+        content: None,
+        status: Status {
+            category: StatusCategory::InProgress,
+            name: "Open".into(),
+        },
+        labels: vec![],
+        url: None,
+        created_at: None,
+        updated_at: None,
+        metadata: BTreeMap::new(),
+        repositories: vec![],
+    };
+    assert!(
+        matches!(build(&endpoint).write_project(&ItemWrite { target: None, item: project, depends_on: vec![] }).await, Err(SourceError::Malformed { message }) if message.contains("wrong project"))
+    );
+    handle.join().unwrap();
+
+    let project = project_response(false);
+    let (endpoint, handle) = sequence_server(vec![
+        project.clone(),
+        project.clone(),
+        mutation_data("updateIssue/issue", "I_task"),
+        project,
+        json!({"data":{"addBlockedBy":{"issue":{"id":"WRONG"},"blockingIssue":{"id":"I_task"}}}}),
+    ]);
+    let source = build(&endpoint);
+    let task = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .unwrap()
+        .items
+        .remove(0);
+    let edge = DependencyEdge {
+        from: DependencyEndpoint::from_native(task.id.clone(), ItemKind::Task),
+        to: DependencyEndpoint::from_native(task.id.clone(), ItemKind::Task),
+        kind: DependencyKind::Blocks,
+    };
+    assert!(
+        matches!(source.write_task(&ItemWrite { target: Some(task.id.clone()), item: task, depends_on: vec![edge] }).await, Err(SourceError::Malformed { message }) if message.contains("wrong issues"))
+    );
+    handle.join().unwrap();
+}
+
+#[tokio::test]
 async fn reads_and_normalizes_a_synthetic_graphql_response_through_http() {
     let (endpoint, handle) = server(
         "200 OK",

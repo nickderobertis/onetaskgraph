@@ -22,8 +22,8 @@
 //!
 //! Writes update the configured board, create draft items (never another board), update existing
 //! draft items, set the source-owned metadata field, and use GitHub's native issue dependency
-//! mutation when both ends are issues. The ignored live lane creates a draft, reads it back, and
-//! restores the board by deleting that item; required checks use only the local fixture server.
+//! mutation when both ends are issues. Required checks use only the local fixture server; the
+//! ignored credentialed lane verifies GitHub's current read schema without changing a real board.
 #![deny(missing_docs)]
 
 use std::collections::BTreeMap;
@@ -108,7 +108,7 @@ pub struct GitHubProjectsConfig {
     pub owner: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates GitHub's owner grammar before private construction.
     /// The project number shown in its GitHub URL.
     pub project_number: u32, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` bounds this to a positive GraphQL Int.
-    /// Environment variable containing a GitHub token with project read access.
+    /// Environment variable containing a GitHub token with Projects and Issues read/write access.
     #[serde(default = "default_token_env")]
     pub token_env: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates the environment-variable grammar.
     /// GraphQL endpoint. GitHub Enterprise installations may override it.
@@ -210,7 +210,7 @@ impl GitHubProjectsSource {
             });
         }
         let token = secrets.get(&config.token_env).filter(|token| !token.expose_secret().trim().is_empty()).ok_or_else(|| SourceError::Auth {
-            message: format!("environment variable {} is missing or empty; set it to a GitHub token with read:project and repository Issues read access", config.token_env),
+            message: format!("environment variable {} is missing or empty; set it to a GitHub token with Projects and Issues read/write access", config.token_env),
         })?;
         Ok(Self {
             name: name.clone(),
@@ -259,7 +259,7 @@ impl GitHubProjectsSource {
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
             return Err(SourceError::Auth {
                 message: format!(
-                    "GitHub rejected the configured credential with HTTP {status}; grant it read:project and repository Issues read access"
+                    "GitHub rejected the configured credential with HTTP {status}; grant it Projects and Issues read/write access"
                 ),
             });
         }
@@ -294,7 +294,7 @@ impl GitHubProjectsSource {
             if normalized.contains("resource not accessible") || normalized.contains("scope") {
                 return Err(SourceError::Auth {
                     message: format!(
-                        "{message}; grant {} read:project and repository Issues read access",
+                        "{message}; grant {} Projects and Issues read/write access",
                         self.credential_name
                     ),
                 });
@@ -1178,15 +1178,24 @@ impl TaskSource for GitHubProjectsSource {
                 .rsplit_once(':')
                 .map_or(edge.to.id(), |(_, id)| id);
             let far_issue = if same_source {
-                self.board_and_item(Some(&NativeId(far_id.into())))
+                let far = self
+                    .board_and_item(Some(&NativeId(far_id.into())))
                     .await?
                     .1
-                    .and_then(|item| {
-                        item.pointer("/content/__typename")
-                            .and_then(Value::as_str)
-                            .map(|name| name == "Issue")
-                    })
-                    .unwrap_or(false)
+                    .ok_or_else(|| SourceError::Refused {
+                        message: format!("GitHub dependency item {far_id} was not found"),
+                    })?;
+                match required_str(far.get("content").unwrap_or(&Value::Null), "__typename")? {
+                    "Issue" => true,
+                    "DraftIssue" | "PullRequest" => false,
+                    other => {
+                        return Err(SourceError::Malformed {
+                            message: format!(
+                                "GitHub dependency item has unknown content type {other}"
+                            ),
+                        });
+                    }
+                }
             } else {
                 false
             };
