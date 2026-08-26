@@ -53,8 +53,9 @@
       "executor": "nx:run-commands",
       "dependsOn": ["build"],
       "options": {
-        "command": "cargo test --quiet -p onetaskgraph --all-features --locked"
-      }
+        "command": "cargo test --quiet -p onetaskgraph --all-features --locked --target-dir target/tests/onetaskgraph"
+      },
+      "//": "Cargo builds CARGO_BIN_EXE_onetaskgraph once in this target's private directory before starting any integration-test executable. Gate targets run concurrently, so sharing target/debug lets another Cargo invocation replace the binary between a test resolving and spawning it on macOS."
     },
     "coverage": {
       "executor": "nx:run-commands",
