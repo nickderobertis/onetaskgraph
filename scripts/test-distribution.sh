@@ -376,6 +376,7 @@ for readonly_manifest in Cargo.toml sdks/typescript/package.json; do
   chmod 444 "$tmp/version-repo/$readonly_manifest"
   if (cd "$tmp/version-repo" && python3 scripts/product_versions.py set 0.1.2) 2>"$tmp/error"; then echo "product-version helper rewrote read-only $readonly_manifest; next: inspect write error handling" >&2; exit 1; fi
   grep -q 'product version files could not be processed' "$tmp/error" || { cat "$tmp/error" >&2; echo "read-only manifest failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
+  grep -q '^version = "0.1.1"' "$tmp/version-repo/Cargo.toml" || { echo "failed product-version update partially rewrote the workspace manifest; next: inspect write preflight" >&2; exit 1; }
   chmod 644 "$tmp/version-repo/$readonly_manifest"
   git -C "$tmp/version-repo" restore .
   "$tmp/version-repo/scripts/set-version.sh" 0.1.1

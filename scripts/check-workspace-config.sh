@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path("scripts").resolve()))
-from product_versions import read_product_versions
+from product_versions import read_reconciled_versions
 
 # The uniform set. Every project declares all of these, spelled identically, or one root
 # command silently stops covering it.
@@ -130,7 +130,7 @@ else:
 # rather than in a test of that package: this is where a version disagreement is caught,
 # and one place that knows about all four beats two places that each know about some.
 try:
-    declared = read_product_versions()
+    declared = read_reconciled_versions()
 except (OSError, ValueError, json.JSONDecodeError) as error:
     declared = {}
     problems.append(

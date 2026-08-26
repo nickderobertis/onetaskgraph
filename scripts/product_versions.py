@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read and update every published copy of the product version."""
+"""Read and update the cross-ecosystem product versions reconciled by workspace checks."""
 
 import json
 import re
@@ -30,7 +30,7 @@ class JsonVersionFile:
 
 
 VersionFile = Union[RegexVersionFile, JsonVersionFile]
-VERSION_FILES: Tuple[VersionFile, ...] = (
+RECONCILED_VERSION_FILES: Tuple[VersionFile, ...] = (
     RegexVersionFile(
         Path("Cargo.toml"),
         re.compile(r'(?m)^(\[workspace\.package\]\nversion\s*=\s*")([^"]+)(")'),
@@ -56,11 +56,19 @@ def read_json_manifest(path: Path) -> Dict[str, object]:
     return decoded
 
 
+# llmlint: ignore[async_typed_clients_at_boundaries] This preflight is part of the ordered synchronous release transaction and must finish before mutation begins.
+def require_writable_manifests() -> None:
+    """Refuse the update before mutation when any reconciled file is not writable."""
+    for version_file in RECONCILED_VERSION_FILES:
+        with version_file.path.open("r+"):
+            pass
+
+
 # llmlint: ignore[async_typed_clients_at_boundaries, structural_pattern_matching] This short-lived release command has no concurrent work, and Python 3.8 support precludes match/case syntax.
-def read_product_versions() -> Dict[str, Optional[SemanticVersion]]:
-    """Return every version-bearing path and its declared version."""
+def read_reconciled_versions() -> Dict[str, Optional[SemanticVersion]]:
+    """Return the cross-ecosystem versions checked for mutual agreement."""
     versions = {}
-    for version_file in VERSION_FILES:
+    for version_file in RECONCILED_VERSION_FILES:
         path = version_file.path
         if isinstance(version_file, JsonVersionFile):
             package = read_json_manifest(path)
@@ -82,18 +90,19 @@ def read_product_versions() -> Dict[str, Optional[SemanticVersion]]:
 
 
 # llmlint: ignore[async_typed_clients_at_boundaries, structural_pattern_matching] This ordered local transaction is synchronous by design, and Python 3.8 support requires explicit variant checks.
-def set_product_versions(version: SemanticVersion) -> None:
-    """Set every published product version, preserving each file's format."""
+def set_reconciled_versions(version: SemanticVersion) -> None:
+    """Set the cross-ecosystem versions checked for mutual agreement."""
     # Validate the whole boundary before changing the first file, so malformed input cannot
     # leave the version set partially updated.
-    existing = read_product_versions()
+    existing = read_reconciled_versions()
     invalid = [path for path, value in existing.items() if value is None]
     if invalid:
         raise ValueError(
             f"{', '.join(invalid)}: no valid semantic product version could be read; "
             "next: restore its version field and rerun scripts/set-version.sh"
         )
-    for version_file in VERSION_FILES:
+    require_writable_manifests()
+    for version_file in RECONCILED_VERSION_FILES:
         path = version_file.path
         if isinstance(version_file, JsonVersionFile):
             package = read_json_manifest(path)
@@ -122,11 +131,11 @@ def main() -> int:
 
     try:
         if operation == "set":
-            set_product_versions(validated)
+            set_reconciled_versions(validated)
             return 0
 
         failed = False
-        for path, actual in read_product_versions().items():
+        for path, actual in read_reconciled_versions().items():
             if actual != validated:
                 print(
                     f"{path} has {actual}; expected {expected}; next: run "
