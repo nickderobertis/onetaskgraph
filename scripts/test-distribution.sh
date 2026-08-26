@@ -495,18 +495,25 @@ assert_npm_auth_refuses() {
   grep -Fq 'usage: scripts/npm-registry-auth.sh [REGISTRY_URL]' "$tmp/error" || { cat "$tmp/error" >&2; echo "npm registry configuration refusal omitted its usage line; next: inspect its diagnostics" >&2; exit 1; }
   grep -Fq "next: $expected_reason" "$tmp/error" || { cat "$tmp/error" >&2; echo "npm registry configuration refusal omitted its next action; next: inspect its diagnostics" >&2; exit 1; }
 }
-assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL with a host: file:///etc' file:///etc
+assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL naming a host, with an optional port: file:///etc' file:///etc
 assert_npm_auth_refuses 'pass at most one registry URL' https://registry.npmjs.org/ extra
-assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL with a host: http:///' http:///
+assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL naming a host, with an optional port: http:///' http:///
 # An authority is not whatever follows the scheme: a query or a fragment there leaves no
 # host at all, and npm would key the token to that punctuation and publish anonymously.
-assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL with a host: https://?registry=x' 'https://?registry=x'
-assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL with a host: https://#registry' 'https://#registry'
-assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL with a host: https://token@' 'https://token@'
-# A host is a name or a bracketed IPv6 literal, either one with an optional port, so the
-# spelling that refuses the three above still accepts every registry that has one.
-ONETASKGRAPH_NPM_CONFIG_DIR="$tmp/npm-config-ipv6" "$root/scripts/npm-registry-auth.sh" 'http://[::1]:8080' >/dev/null
-grep -Fq '//[::1]:8080/:_authToken=${NODE_AUTH_TOKEN}' "$tmp/npm-config-ipv6/.npmrc" || { cat "$tmp/npm-config-ipv6/.npmrc" >&2; echo "the npm configuration did not key the token to a bracketed IPv6 host and its port; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
+assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL naming a host, with an optional port: https://?registry=x' 'https://?registry=x'
+assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL naming a host, with an optional port: https://#registry' 'https://#registry'
+assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL naming a host, with an optional port: https://token@' 'https://token@'
+# A bracketed address literal is refused rather than half-checked, so the refusal is
+# asserted here: what would otherwise pass is a grammar this validation cannot judge.
+assert_npm_auth_refuses 'invalid registry, which must be an http:// or https:// URL naming a host, with an optional port: http://[::1]:8080' 'http://[::1]:8080'
+# A port is judged as a number, which no pattern above it can do, and every port refused
+# here would otherwise have keyed the token to a port nothing can listen on.
+assert_npm_auth_refuses 'invalid registry port, which must be between 1 and 65535: http://127.0.0.1:0' 'http://127.0.0.1:0'
+assert_npm_auth_refuses 'invalid registry port, which must be between 1 and 65535: http://127.0.0.1:70000' 'http://127.0.0.1:70000'
+assert_npm_auth_refuses 'invalid registry port, which must be between 1 and 65535: http://127.0.0.1:99999999999999999999' 'http://127.0.0.1:99999999999999999999'
+# The bound is inclusive at the top, so the highest usable port is still a registry.
+ONETASKGRAPH_NPM_CONFIG_DIR="$tmp/npm-config-high-port" "$root/scripts/npm-registry-auth.sh" 'http://127.0.0.1:65535' >/dev/null
+grep -Fq '//127.0.0.1:65535/:_authToken=${NODE_AUTH_TOKEN}' "$tmp/npm-config-high-port/.npmrc" || { cat "$tmp/npm-config-high-port/.npmrc" >&2; echo "the npm configuration did not key the token to the highest usable port; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
 if ONETASKGRAPH_NPM_CONFIG_DIR="$tmp/npm-config-unreportable" "$root/scripts/npm-registry-auth.sh" "$npm_registry" >&- 2>"$tmp/error"; then echo "the npm configuration reported a path over a standard output it could not write; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; fi
 grep -Fq 'could not report the npm configuration path' "$tmp/error" || { cat "$tmp/error" >&2; echo "an unreportable npm configuration path omitted its reason; next: inspect its diagnostics" >&2; exit 1; }
 grep -q '^next: ' "$tmp/error" || { cat "$tmp/error" >&2; echo "an unreportable npm configuration path omitted a next action; next: inspect its diagnostics" >&2; exit 1; }
@@ -560,6 +567,18 @@ restore_contract_repo() {
 }
 restore_contract_repo
 (cd "$tmp/contract-repo" && ./scripts/check-distribution-contract.sh) || { echo "the distribution contract refused the release path it is meant to accept; next: rerun scripts/check-distribution-contract.sh" >&2; exit 1; }
+# The workflow read is judged rather than trusted: under `set -e` a sed that cannot open it
+# would end the contract on sed's own diagnostic, before the refusal that carries the next
+# action. A sed that fails for that one read and no other is what forces the handler.
+mkdir -p "$tmp/contract-shims"
+printf '#!/bin/sh\ncase "$*" in *publish-npm*) echo "sed: simulated read failure" >&2; exit 2;; esac\nexec %s "$@"\n' "$(command -v sed)" > "$tmp/contract-shims/sed"
+chmod +x "$tmp/contract-shims/sed"
+if (cd "$tmp/contract-repo" && PATH="$tmp/contract-shims:$PATH" ./scripts/check-distribution-contract.sh) >"$tmp/contract-output" 2>"$tmp/error"; then
+  echo "the distribution contract accepted a release workflow it could not read; next: inspect scripts/check-distribution-contract.sh" >&2
+  exit 1
+fi
+grep -Fq 'could not read .github/workflows/release.yml' "$tmp/error" || { cat "$tmp/error" >&2; echo "the distribution contract did not name the file it could not read; next: inspect its diagnostics" >&2; exit 1; }
+grep -q '^next: ' "$tmp/error" || { cat "$tmp/error" >&2; echo "the distribution contract read failure omitted a next action; next: inspect its diagnostics" >&2; exit 1; }
 assert_contract_refuses() {
   expected_reason=$1
   relative=$2

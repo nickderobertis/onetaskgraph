@@ -55,7 +55,10 @@ grep -Fq 'NPM_TOKEN is required (received ${#NODE_AUTH_TOKEN} characters)' .gith
 # npm authentication drift is repaired in the publication path rather than in the
 # manifests the generic next action names, so it reports its own.
 fail_npm_auth() { echo "distribution contract drift: $1" >&2; echo "next: restore the npm registry authentication in .github/workflows/release.yml and scripts/npm-registry-auth.sh together" >&2; exit 1; }
-npm_job=$(sed -n '/^  publish-npm:/,$p' .github/workflows/release.yml)
+# Read before it is judged: under `set -e` a sed that cannot open the workflow would end
+# the script here on sed's own diagnostic, and the refusal below — which is where the next
+# action lives — would never run.
+npm_job=$(sed -n '/^  publish-npm:/,$p' .github/workflows/release.yml) || { echo "distribution contract drift: could not read .github/workflows/release.yml, which carries the publish-npm job" >&2; echo "next: restore it with 'git checkout -- .github/workflows/release.yml'" >&2; exit 1; }
 [[ -n $npm_job ]] || fail_npm_auth "the release workflow has no publish-npm job to authenticate"
 grep -Fq 'NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh https://registry.npmjs.org/)' <<< "$npm_job" || fail_npm_auth "npm publication must configure registry authentication with scripts/npm-registry-auth.sh; NODE_AUTH_TOKEN alone leaves the npm client logged out"
 grep -Fq 'export NPM_CONFIG_USERCONFIG' <<< "$npm_job" || fail_npm_auth "the npm configuration must be exported as NPM_CONFIG_USERCONFIG, which is how the npm client finds it"
