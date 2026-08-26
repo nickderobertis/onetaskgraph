@@ -29,10 +29,23 @@ readonly ENGINE_CRATE="onetaskgraph-core"
 # every `check`, and a name matching no package of this workspace is reported below by
 # name — that report is the very failure the `tr` here exists to fix.
 # `tr -d '\r'`: python opens stdout in text mode, so on Windows every "\n" it prints
-# arrives as "\r\n". `mapfile -t` strips the newline but not the carriage return, and a
+# arrives as "\r\n". read_lines strips the newline but not the carriage return, and a
 # crate name carrying a trailing CR matches no package in the graph — a failure no Linux
 # or macOS run can reproduce.
-mapfile -t PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
+# The path is assembled from $ROOT at runtime, so shellcheck cannot resolve it. Naming
+# the file has it follow and check read-lines.sh (SC1091) rather than skip it unread.
+# shellcheck source=scripts/read-lines.sh
+# Tested before it is sourced, not merely guarded after: bash 3.2 ends the shell where
+# `source` cannot find its file, so the handler a later bash takes never runs there — and
+# macos-latest is a 3.2 runner. Without this the reader gets bash's own "No such file or
+# directory", which names the sourcing line rather than the file to put back.
+if [ ! -r "$ROOT/scripts/read-lines.sh" ] || ! source "$ROOT/scripts/read-lines.sh"; then
+  echo "check-plugin-isolation: could not load $ROOT/scripts/read-lines.sh, which reads the" >&2
+  echo "check-plugin-isolation: plugin set into an array." >&2
+  echo "check-plugin-isolation: restore it with 'git checkout -- scripts/read-lines.sh', then re-run." >&2
+  exit 1
+fi
+read_lines PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
 
 # Direct edges are only half the rule: an indirect path reaches the engine just as surely.
 #

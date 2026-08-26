@@ -35,9 +35,15 @@ trap 'rm -rf "$scratch"' EXIT
 # whether scratch_clone_strip_git_env is defined; the directive names the file it resolves
 # to so that check keeps working.
 # shellcheck source=scripts/scratch-clone.sh
-source "$ROOT/scripts/scratch-clone.sh" || fatal \
-  "could not load $ROOT/scripts/scratch-clone.sh, which strips the git environment" \
-  "restore that file with 'git checkout -- scripts/scratch-clone.sh' and rerun"
+# Tested before it is sourced, not merely guarded after: bash 3.2 ends the shell where
+# `source` cannot find its file, so the handler a later bash takes never runs there — and
+# macos-latest is a 3.2 runner. Without this the reader gets bash's own "No such file or
+# directory", which names the sourcing line rather than the file to put back.
+if [ ! -r "$ROOT/scripts/scratch-clone.sh" ] || ! source "$ROOT/scripts/scratch-clone.sh"; then
+  fatal \
+    "could not load $ROOT/scripts/scratch-clone.sh, which strips the git environment" \
+    "restore that file with 'git checkout -- scripts/scratch-clone.sh' and rerun"
+fi
 scratch_clone_strip_git_env
 
 # The WORKING tree's tracked files, not HEAD's: what is under test is the pin as it is
