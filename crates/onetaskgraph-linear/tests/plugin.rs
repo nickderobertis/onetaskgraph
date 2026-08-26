@@ -414,7 +414,9 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         id_page("projectStatuses", "STATUS"),
         id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-NEW"}}}),
-        serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P","type":"blocks","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P","type":"blocks","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"projectRelationDelete":{"success":true}}),
+        serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P2","type":"related","relatedProject":{"id":"P-OTHER"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationDelete":{"success":true}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P2"}}}),
     ]);
