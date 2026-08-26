@@ -73,7 +73,7 @@ def read_reconciled_versions() -> Dict[str, Optional[SemanticVersion]]:
         if isinstance(version_file, JsonVersionFile):
             package = read_json_manifest(path)
             value = package.get("version")
-            versions[str(path)] = (
+            versions[path.as_posix()] = (
                 SemanticVersion(value)
                 if isinstance(value, str) and SEMANTIC_VERSION_RE.fullmatch(value)
                 else None
@@ -81,7 +81,7 @@ def read_reconciled_versions() -> Dict[str, Optional[SemanticVersion]]:
             continue
         match = version_file.pattern.search(path.read_text())
         value = match.group(2) if match else None
-        versions[str(path)] = (
+        versions[path.as_posix()] = (
             SemanticVersion(value)
             if value is not None and SEMANTIC_VERSION_RE.fullmatch(value)
             else None
