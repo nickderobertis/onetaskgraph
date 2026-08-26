@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.1.0...onetaskgraph-plugin-api-v0.2.0) - 2026-08-26
+
+### Added
+
+- *(copy)* add the copy verb and the plugin write seam across the engine, CLI, and both SDKs ([#29](https://github.com/nickderobertis/onetaskgraph/pull/29))
+- *(api)* [**breaking**] carry custom metadata, repositories, and edges that leave the project ([#25](https://github.com/nickderobertis/onetaskgraph/pull/25))
+
 ## [0.1.0](https://github.com/nickderobertis/onetaskgraph/releases/tag/onetaskgraph-plugin-api-v0.1.0) - 2026-08-25
 
 ### Added
