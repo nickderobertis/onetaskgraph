@@ -1,4 +1,4 @@
-# Authoritative GitHub.com GraphQL read-contract subset, introspected 2026-08-24.
+# Authoritative GitHub.com GraphQL read/write contract subset.
 # The full schema is intentionally reduced to the types and fields selected by this plugin;
 # tests validate every production document against this artifact.
 schema {

@@ -413,7 +413,7 @@ fn a_project_copy_updates_the_configured_github_board_without_creating_one() {
 
     std::fs::write(
         root.join("projects/P-1.md"),
-        "---\ntitle: Published roadmap\nstatus: Open\nmetadata: {caller.approved: true}\n---\nThe permanent plan\n",
+        "---\ntitle: Published roadmap\nstatus: Done\nmetadata: {caller.approved: true}\n---\nThe permanent plan\n",
     )
     .unwrap();
     let cleared = ok(
@@ -433,6 +433,7 @@ fn a_project_copy_updates_the_configured_github_board_without_creating_one() {
         vec![("plans:P-1".into(), json!("board:P-1"), "updated".into())]
     );
     let shown = shown(&sandbox, "project", "board:P-1");
+    assert_eq!(shown["status"]["category"], "done");
     assert_eq!(shown["repositories"], json!([]));
     let dependencies: Value =
         serde_json::from_str(&ok(&sandbox, &["project", "deps", "board:P-1", "--json"])).unwrap();
