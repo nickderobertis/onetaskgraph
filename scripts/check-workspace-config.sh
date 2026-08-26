@@ -36,12 +36,17 @@ if not project_files:
     problems.append("no project.json files found — Nx has nothing to orchestrate")
 
 names = {}
+projects_by_path = {}
 for path in project_files:
     try:
         project = json.loads(path.read_text())
     except json.JSONDecodeError as error:
         problems.append(f"{path}: is not valid JSON ({error})")
         continue
+    if not isinstance(project, dict):
+        problems.append(f"{path}: must contain a JSON object")
+        continue
+    projects_by_path[path] = project
 
     name = project.get("name")
     if not name:
@@ -64,10 +69,10 @@ for path in project_files:
 # assert_cmd resolving CARGO_BIN_EXE_onetaskgraph and spawning it (observed on macOS).
 # Keep this assertion beside the project-shape checks so a future consumer cannot quietly
 # reintroduce that race by embedding another `cargo build` in its own command.
-binary_project = json.loads(Path("crates/onetaskgraph/project.json").read_text())
-typescript_project = json.loads(Path("sdks/typescript/project.json").read_text())
-binary_targets = binary_project.get("targets", {})
-typescript_targets = typescript_project.get("targets", {})
+binary_project_path = Path("crates/onetaskgraph/project.json")
+typescript_project_path = Path("sdks/typescript/project.json")
+binary_targets = projects_by_path.get(binary_project_path, {}).get("targets", {})
+typescript_targets = projects_by_path.get(typescript_project_path, {}).get("targets", {})
 if "build" not in binary_targets:
     problems.append(
         "crates/onetaskgraph/project.json: is missing the shared binary build target; "
