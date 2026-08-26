@@ -271,6 +271,28 @@ expect_refused "the name reached after a space inside a quoted string" \
   "scripts/quoted-midline.sh" "$BUILTIN is a bash 4 builtin"
 fixture rm -f "$scratch/scripts/quoted-midline.sh"
 
+# 10. A script one directory down, whose path therefore carries more than one separator.
+#     The scan walks scripts/ recursively, so it finds this; what this case pins is how it
+#     SPELLS what it found. Python renders a path with the running platform's separator, so
+#     before scripts/check-bash4-array-builtins.sh normalised it this same guard reported
+#     'scripts\check-distribution-contract.sh' on the Windows runner — the right file, the
+#     right line, in a spelling no assertion here matched and no reader could paste back
+#     into the bash `just` runs there. That turned a guard doing its job into 'check
+#     (windows-latest)' failing on a check the other two lanes passed.
+fixture mkdir -p "$scratch/scripts/nested"
+{
+  echo '#!/usr/bin/env bash'
+  echo 'set -euo pipefail'
+  echo "$BUILTIN -t names < /dev/null"
+  echo 'printf "%s\n" "${names[@]}"'
+} > "$scratch/scripts/nested/deep-helper.sh" || fatal \
+  "could not write the nested fixture in $scratch/scripts/nested, so this case was never put to the guard" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+run_guard
+expect_refused "a script one directory down, named with forward slashes on every platform" \
+  "scripts/nested/deep-helper.sh" "$BUILTIN is a bash 4 builtin"
+fixture rm -rf "$scratch/scripts/nested"
+
 if [ "$failures" -ne 0 ]; then
   echo "check-bash4-array-builtins-enforced: $failures case(s) failed." >&2
   echo "check-bash4-array-builtins-enforced: repair scripts/check-bash4-array-builtins.sh rather" >&2

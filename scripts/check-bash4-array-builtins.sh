@@ -52,6 +52,15 @@ LOOKS_LIKE_A_CALL = re.compile(
 unreadable = []
 
 
+# str(Path) joins with os.sep, so this same scan names a file "scripts/x.sh" on Linux and
+# macOS and "scripts\x.sh" on Windows, and every check here is required on all three. The
+# separator is not cosmetic: `just` runs bash on Windows too, so a backslash path is not
+# one the reader can paste back into the shell they are standing in — and a check that
+# asserts on this report would have to spell every path twice to stay platform-blind.
+def display_path(path):
+    return path.as_posix()
+
+
 # Every shell script here, found by extension or by shebang, so a new one that arrives
 # without a .sh suffix is still covered.
 def shell_scripts():
@@ -81,7 +90,8 @@ for path, text in shell_scripts():
             problems.append((path, number, found.group(1), line.strip()))
 
 for path, error in unreadable:
-    print(f"check-bash4-array-builtins: {path}: could not be read as text, so it was not",
+    shown = display_path(path)
+    print(f"check-bash4-array-builtins: {shown}: could not be read as text, so it was not",
           file=sys.stderr)
     print(f"check-bash4-array-builtins: scanned: {error}", file=sys.stderr)
     print("check-bash4-array-builtins: next: restore it as readable UTF-8, or move it out",
@@ -90,7 +100,8 @@ for path, error in unreadable:
 
 if problems:
     for path, number, builtin, line in problems:
-        print(f"check-bash4-array-builtins: {path}:{number}: {builtin} is a bash 4 builtin:",
+        location = f"{display_path(path)}:{number}"
+        print(f"check-bash4-array-builtins: {location}: {builtin} is a bash 4 builtin:",
               file=sys.stderr)
         print(f"check-bash4-array-builtins:     {line}", file=sys.stderr)
     print("check-bash4-array-builtins: macos-latest ships bash 3.2, where that line ends the",
