@@ -382,7 +382,7 @@ fn a_project_copy_updates_the_configured_github_board_without_creating_one() {
 }
 
 #[test]
-fn copying_an_issue_back_uses_githubs_native_dependency_relationship() {
+fn copying_an_issue_back_updates_fields_and_removes_a_native_dependency() {
     let sandbox = Sandbox::new();
     let github = ROWS
         .iter()

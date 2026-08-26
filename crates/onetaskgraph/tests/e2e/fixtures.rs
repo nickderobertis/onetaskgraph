@@ -334,6 +334,10 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 assert!(
                     variables["input"]["body"].is_string() || variables["input"]["body"].is_null()
                 );
+                if variables["input"]["id"] == "T-1" {
+                    assert_eq!(variables["input"]["title"], "Alpha engine revised");
+                    assert_eq!(variables["input"]["body"], "the engine core");
+                }
                 json!({"updateIssue":{"issue":{"id":variables["input"]["id"]}}})
             } else if query.contains("updateProjectV2ItemFieldValue(input:$input)") {
                 let input = &variables["input"];
@@ -365,6 +369,14 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                     }
                 } else {
                     assert!(input["itemId"].as_str().unwrap().starts_with("ITEM-T-"));
+                    if input["itemId"] == "ITEM-T-1" && input["fieldId"] == "FIELD-metadata" {
+                        let metadata: Value =
+                            serde_json::from_str(input["value"]["text"].as_str().unwrap()).unwrap();
+                        assert_eq!(metadata["onetaskgraph.origin"], "notes:T-1");
+                    }
+                    if input["itemId"] == "ITEM-T-1" && input["fieldId"] == "FIELD-status" {
+                        assert_eq!(input["value"]["singleSelectOptionId"], "OPT-todo");
+                    }
                 }
                 json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":input["itemId"]}}})
             } else if query.contains("updateProjectV2(input:$input)") {
@@ -404,6 +416,8 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                         .as_str()
                         .is_some_and(|value| !value.is_empty())
                 );
+                assert_eq!(variables["input"]["issueId"], "T-1");
+                assert_eq!(variables["input"]["blockingIssueId"], "T-2");
                 json!({"removeBlockedBy":{"issue":{"id":variables["input"]["issueId"]},"blockingIssue":{"id":variables["input"]["blockingIssueId"]}}})
             } else if query.contains("node(id:$id)") {
                 let id = variables["id"].as_str().expect("dependency id");
