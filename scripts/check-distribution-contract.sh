@@ -52,6 +52,17 @@ grep -Fq 'absent) RUSTFLAGS=' <<< "$crate_job" || fail "a crate absent from crat
 grep -Fq -- '--user-agent "$agent"' scripts/crate-publication-status.sh || fail "the crates.io existence query must send an explicit user agent; the registry answers curl's default with 403"
 grep -Fq 'agent="onetaskgraph-release (https://github.com/nickderobertis/onetaskgraph)"' scripts/crate-publication-status.sh || fail "the crates.io user agent must name this release and a contact URL for it"
 grep -Fq 'NPM_TOKEN is required (received ${#NODE_AUTH_TOKEN} characters)' .github/workflows/release.yml || fail "the npm token guard must report only the received token length"
+# npm authentication drift is repaired in the publication path rather than in the
+# manifests the generic next action names, so it reports its own.
+fail_npm_auth() { echo "distribution contract drift: $1" >&2; echo "next: restore the npm registry authentication in .github/workflows/release.yml and scripts/npm-registry-auth.sh together" >&2; exit 1; }
+# Read before it is judged: under `set -e` a sed that cannot open the workflow would end
+# the script here on sed's own diagnostic, and the refusal below — which is where the next
+# action lives — would never run.
+npm_job=$(sed -n '/^  publish-npm:/,$p' .github/workflows/release.yml) || { echo "distribution contract drift: could not read .github/workflows/release.yml, which carries the publish-npm job" >&2; echo "next: restore it with 'git checkout -- .github/workflows/release.yml'" >&2; exit 1; }
+[[ -n $npm_job ]] || fail_npm_auth "the release workflow has no publish-npm job to authenticate"
+grep -Fq 'NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh https://registry.npmjs.org/)' <<< "$npm_job" || fail_npm_auth "npm publication must configure registry authentication with scripts/npm-registry-auth.sh; NODE_AUTH_TOKEN alone leaves the npm client logged out"
+grep -Fq 'export NPM_CONFIG_USERCONFIG' <<< "$npm_job" || fail_npm_auth "the npm configuration must be exported as NPM_CONFIG_USERCONFIG, which is how the npm client finds it"
+grep -Fq ':_authToken=${NODE_AUTH_TOKEN}' scripts/npm-registry-auth.sh || fail_npm_auth "the npm configuration must name NODE_AUTH_TOKEN rather than carry a token value"
 if ! node <<'NODE'
 const fs = require("fs");
 function fail(message) {
