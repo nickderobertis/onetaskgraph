@@ -34,12 +34,24 @@ case "${OS:-}${OSTYPE:-}" in
     ;;
 esac
 
-# The path is assembled from $ROOT at runtime, so shellcheck cannot resolve it. Naming
-# the file has it follow and check read-lines.sh (SC1091) rather than skip it unread.
+# Tested before it is sourced, not merely guarded after: bash 3.2 ends the shell where
+# `source` cannot find its file, so the handler a later bash takes never runs there — and
+# macos-latest is a 3.2 runner. Case 6 below drives exactly that, on every platform.
+# The paths are assembled from $ROOT at runtime, so shellcheck cannot resolve them. Naming
+# each file has it follow and check that file (SC1091) rather than skip it unread.
 # shellcheck source=scripts/read-lines.sh
-source "$ROOT/scripts/read-lines.sh" || fatal \
-  "could not load $ROOT/scripts/read-lines.sh, the read every case below asserts about" \
-  "restore it with 'git checkout -- scripts/read-lines.sh', then rerun"
+if [ ! -r "$ROOT/scripts/read-lines.sh" ] || ! source "$ROOT/scripts/read-lines.sh"; then
+  fatal \
+    "could not load $ROOT/scripts/read-lines.sh, the read every case below asserts about" \
+    "restore it with 'git checkout -- scripts/read-lines.sh', then rerun"
+fi
+# shellcheck source=scripts/scratch-clone.sh
+if [ ! -r "$ROOT/scripts/scratch-clone.sh" ] || ! source "$ROOT/scripts/scratch-clone.sh"; then
+  fatal \
+    "could not load $ROOT/scripts/scratch-clone.sh, which strips the git environment case 4 \
+would otherwise clone in" \
+    "restore that file with 'git checkout -- scripts/scratch-clone.sh', then rerun"
+fi
 
 scratch="$(mktemp -d)" || fatal \
   "could not create the scratch tree these cases mutate" \
@@ -299,12 +311,6 @@ fi
 #    It needs a git repository to clone from and a node_modules to copy, so the fixture is
 #    a scratch clone with the working tree's files committed on top of it.
 selection="$scratch/selection"
-# The path is assembled from $ROOT at runtime, so shellcheck cannot resolve it. Naming
-# the file has it follow and check scratch-clone.sh (SC1091) rather than skip it unread.
-# shellcheck source=scripts/scratch-clone.sh
-source "$ROOT/scripts/scratch-clone.sh" || fatal \
-  "could not load $ROOT/scripts/scratch-clone.sh, which strips the git environment" \
-  "restore that file with 'git checkout -- scripts/scratch-clone.sh' and rerun"
 scratch_clone "$ROOT" "$selection" || fatal \
   "could not clone $ROOT into $selection" \
   "see the scratch-clone diagnostic above, then rerun"
@@ -377,44 +383,72 @@ if [ -e "$scratch/evaluated" ]; then
   failures=$((failures + 1))
 fi
 
-# 6. Each caller's report when scripts/read-lines.sh is not there to be loaded. All three
-#    source it before they do any work of their own, so this is the first thing a checkout
+# 6. Each caller's report when the helper it sources is not there to be loaded. Every one of
+#    them sources before it does any work of its own, so this is the first thing a checkout
 #    missing that file hits — and bash's own "No such file or directory" names the sourcing
 #    line rather than the file to restore.
-severed="$scratch/severed"
-fixture mkdir -p "$severed"
-fixture cp -a "$ROOT/scripts" "$severed/scripts"
-fixture rm -f "$severed/scripts/read-lines.sh"
+#
+#    Each is driven twice, and the second run is the one that matters. bash 3.2 ends the
+#    shell outright where `source` cannot find its file: the handler bash 5 takes never runs
+#    there, so a caller that guards its load AFTER the fact says nothing on macos-latest,
+#    which is a 3.2 runner. `set -o posix` is that behaviour in a bash this repository's
+#    Linux and Windows lanes actually have — which is what puts a defect only macOS could
+#    otherwise report in front of all three.
+sever() {
+  local tree="$scratch/$1" helper="$2"
+  fixture mkdir -p "$tree"
+  fixture rm -rf "$tree/scripts"
+  fixture cp -a "$ROOT/scripts" "$tree/scripts"
+  fixture rm -f "$tree/scripts/$helper"
+}
+
+sever severed read-lines.sh
+sever severed-clone scratch-clone.sh
 
 expect_load_failure() {
-  local script="$1"
-  shift
-  OUTPUT="$(cd "$severed" && bash "scripts/$script" 2>&1)" && STATUS=0 || STATUS=$?
-  if [ "$STATUS" -eq 0 ]; then
-    echo "check-line-reads: scripts/$script passed with scripts/read-lines.sh removed, so it" >&2
-    echo "check-line-reads: cleared a tree without ever reading the set it checks." >&2
-    failures=$((failures + 1))
-    return
-  fi
-  local needle
-  for needle in "$@"; do
-    if ! grep -qF -- "$needle" <<<"$OUTPUT"; then
-      echo "check-line-reads: scripts/$script lost scripts/read-lines.sh without saying so: its" >&2
-      echo "check-line-reads: report never mentions '$needle', so it does not name the file to" >&2
-      echo "check-line-reads: put back. It said:" >&2
-      report_output
+  local tree="$1" helper="$2" script="$3"
+  shift 3
+  local mode
+  for mode in "" "-o posix"; do
+    local label="scripts/$script"
+    [ -z "$mode" ] || label="$label under 'set $mode'"
+    # shellcheck disable=SC2086 # $mode is this check's own literal, and it is two words
+    # when it is set at all — quoting it would hand bash one option named "-o posix".
+    OUTPUT="$(cd "$scratch/$tree" && bash $mode "scripts/$script" 2>&1)" \
+      && STATUS=0 || STATUS=$?
+    if [ "$STATUS" -eq 0 ]; then
+      echo "check-line-reads: $label passed with scripts/$helper removed, so it" >&2
+      echo "check-line-reads: cleared a tree without ever reading the set it checks." >&2
       failures=$((failures + 1))
-      return
+      continue
     fi
+    local needle
+    for needle in "$@"; do
+      if ! grep -qF -- "$needle" <<<"$OUTPUT"; then
+        echo "check-line-reads: $label lost scripts/$helper without saying so: its" >&2
+        echo "check-line-reads: report never mentions '$needle', so it does not name the file to" >&2
+        echo "check-line-reads: put back. It said:" >&2
+        report_output
+        failures=$((failures + 1))
+        break
+      fi
+    done
   done
 }
 
-expect_load_failure check-distribution-contract.sh \
+expect_load_failure severed read-lines.sh check-distribution-contract.sh \
   "could not load scripts/read-lines.sh" "git checkout -- scripts/read-lines.sh"
-expect_load_failure check-plugin-isolation.sh \
+expect_load_failure severed read-lines.sh check-plugin-isolation.sh \
   "check-plugin-isolation: could not load" "git checkout -- scripts/read-lines.sh"
-expect_load_failure check-affected-selection.sh \
+expect_load_failure severed read-lines.sh check-affected-selection.sh \
   "check-affected-selection: could not load" "git checkout -- scripts/read-lines.sh"
+# This check's own two loads, which are the same shape and would regress the same way.
+expect_load_failure severed read-lines.sh check-line-reads.sh \
+  "check-line-reads: could not load" "git checkout -- scripts/read-lines.sh"
+expect_load_failure severed-clone scratch-clone.sh check-line-reads.sh \
+  "check-line-reads: could not load" "git checkout -- scripts/scratch-clone.sh"
+expect_load_failure severed-clone scratch-clone.sh check-distribution-contract-enforced.sh \
+  "could not load" "git checkout -- scripts/scratch-clone.sh"
 
 if [ "$failures" -ne 0 ]; then
   echo "check-line-reads: $failures case(s) failed." >&2

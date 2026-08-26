@@ -4,7 +4,12 @@ fail() { echo "distribution contract drift: $1" >&2; echo "next: update the rele
 # The path is assembled from BASH_SOURCE at runtime, so shellcheck cannot resolve it.
 # Naming the file has it follow and check read-lines.sh (SC1091) rather than skip it unread.
 # shellcheck source=scripts/read-lines.sh
-source "$(dirname "${BASH_SOURCE[0]}")/read-lines.sh" || { echo "distribution contract drift: could not load scripts/read-lines.sh, which reads both inventories below into arrays" >&2; echo "next: restore it with 'git checkout -- scripts/read-lines.sh'" >&2; exit 1; }
+# Tested before it is sourced, not merely guarded after: bash 3.2 ends the shell where
+# `source` cannot find its file, so the handler a later bash takes never runs there — and
+# macos-latest is a 3.2 runner. Without this the reader gets bash's own "No such file or
+# directory", which names the sourcing line rather than the file to put back.
+read_lines_path="$(dirname "${BASH_SOURCE[0]}")/read-lines.sh"
+if [ ! -r "$read_lines_path" ] || ! source "$read_lines_path"; then echo "distribution contract drift: could not load scripts/read-lines.sh, which reads both inventories below into arrays" >&2; echo "next: restore it with 'git checkout -- scripts/read-lines.sh'" >&2; exit 1; fi
 expected=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64)
 packages_file="$(mktemp)" || fail "could not create a temporary carrier inventory"
 trap 'rm -f "$packages_file"' EXIT
