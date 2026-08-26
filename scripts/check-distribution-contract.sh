@@ -96,7 +96,9 @@ for spec, expected_path in expected.items():
         )
 PY
 then
-  fail_npm_auth "installable npm packages must publish from explicit local directories in this checkout"
+  echo "distribution contract drift: installable npm packages must publish from explicit local directories in this checkout" >&2
+  echo "next: restore the ./npm/cli and ./sdks/typescript publish operands in .github/workflows/release.yml" >&2
+  exit 1
 fi
 if ! node <<'NODE'
 const fs = require("fs");

@@ -165,7 +165,7 @@ expect_refused() {
 }
 
 # 0. The control. Without it, a pin that refused every tree — including this one — would
-#    satisfy all four cases below and look like the strictest check in the repository.
+#    satisfy every case below and look like the strictest check in the repository.
 run_guard
 if [ "$GUARD_STATUS" -ne 0 ]; then
   echo "check-distribution-contract-enforced: the pin refuses the tree under test, so the cases" >&2
@@ -225,11 +225,21 @@ expect_refused "a bare owner/name operand in place of the local CLI directory" \
   "installable npm packages must publish from explicit local directories"
 restore .github/workflows/release.yml
 
+# 6. The same ambiguity applies to the SDK package: sdks/typescript can also be parsed as
+#    an owner/name remote spec unless the workflow marks it as a local directory.
+substitute .github/workflows/release.yml \
+  'publish_if_absent "@onetaskgraph/sdk@$sdk_version" ./sdks/typescript' \
+  'publish_if_absent "@onetaskgraph/sdk@$sdk_version" sdks/typescript'
+run_guard
+expect_refused "a bare owner/name operand in place of the local SDK directory" \
+  "installable npm packages must publish from explicit local directories"
+restore .github/workflows/release.yml
+
 if [ "$failures" -ne 0 ]; then
   echo "check-distribution-contract-enforced: $failures case(s) failed." >&2
-  echo "check-distribution-contract-enforced: a release whose crates.io query the registry declines" >&2
-  echo "check-distribution-contract-enforced: now merges unnoticed, and it fails a full release cycle" >&2
-  echo "check-distribution-contract-enforced: later as what reads like a credentials problem. Repair" >&2
+  echo "check-distribution-contract-enforced: a release with an invalid registry query or package" >&2
+  echo "check-distribution-contract-enforced: operand now merges unnoticed and fails a full release" >&2
+  echo "check-distribution-contract-enforced: cycle later, after the version is already cut. Repair" >&2
   echo "check-distribution-contract-enforced: the pin in scripts/check-distribution-contract.sh rather" >&2
   echo "check-distribution-contract-enforced: than relaxing the case above." >&2
   exit 1
