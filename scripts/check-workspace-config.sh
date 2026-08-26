@@ -59,6 +59,38 @@ for path in project_files:
             "silently dropped from that root command."
         )
 
+# These two targets execute the same onetaskgraph binary. They must share one completed
+# build: independent Cargo build/test processes can replace the executable between
+# assert_cmd resolving CARGO_BIN_EXE_onetaskgraph and spawning it (observed on macOS).
+# Keep this assertion beside the project-shape checks so a future consumer cannot quietly
+# reintroduce that race by embedding another `cargo build` in its own command.
+binary_project = json.loads(Path("crates/onetaskgraph/project.json").read_text())
+typescript_project = json.loads(Path("sdks/typescript/project.json").read_text())
+binary_targets = binary_project.get("targets", {})
+typescript_targets = typescript_project.get("targets", {})
+if "build" not in binary_targets:
+    problems.append(
+        "crates/onetaskgraph/project.json: is missing the shared binary build target; "
+        "restore it so executable consumers cannot race independent Cargo builds"
+    )
+if "build" not in binary_targets.get("test", {}).get("dependsOn", []):
+    problems.append(
+        "crates/onetaskgraph/project.json: test does not depend on build; add that dependency "
+        "so integration tests start with the executable present"
+    )
+generator = typescript_targets.get("generate-check", {})
+if "onetaskgraph:build" not in generator.get("dependsOn", []):
+    problems.append(
+        "sdks/typescript/project.json: generate-check does not depend on onetaskgraph:build; "
+        "share that build rather than relinking the binary beside integration tests"
+    )
+generator_command = generator.get("options", {}).get("command", "")
+if "cargo build" in generator_command:
+    problems.append(
+        "sdks/typescript/project.json: generate-check runs its own cargo build; remove it and "
+        "depend on onetaskgraph:build so the generator cannot replace a binary under test"
+    )
+
 # The `workspace` project depends on every other project so the cross-cutting checks run
 # whenever anything they check can change. That list is a hand-mirrored inventory of the
 # projects discovered above, and nothing derives it — so add a project, forget the entry,
