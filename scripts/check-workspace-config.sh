@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path("scripts").resolve()))
-from product_versions import read_reconciled_versions
+from product_versions import read_reconciled_versions, unregistered_product_version_files
 
 # The uniform set. Every project declares all of these, spelled identically, or one root
 # command silently stops covering it.
@@ -120,19 +120,15 @@ else:
             "Cargo.toml promises; the workspace cannot build with its own toolchain"
         )
 
-# One product version spans three ecosystems and no manifest can derive it from another,
-# so they are reconciled here. The release tool and this check read the same inventory;
-# this catches a hand-edited one of N without letting their file lists drift apart.
-#
-# The Python SDK's `__version__` is a fourth copy and is reconciled with them. It is the
-# value the generated surface reports, so a module constant left behind by a release is a
-# package that misreports its own version — and it belongs here, with the other three,
-# rather than in a test of that package: this is where a version disagreement is caught,
-# and one place that knows about all four beats two places that each know about some.
+# One product version spans every publishable manifest, internal package pin and public SDK
+# version constant. The release tool and this check read the same inventory, while structural
+# discovery below refuses a newly added version-bearing surface until that inventory owns it.
 try:
     declared = read_reconciled_versions()
+    unregistered = unregistered_product_version_files()
 except (OSError, ValueError, json.JSONDecodeError) as error:
     declared = {}
+    unregistered = ()
     problems.append(
         f"the product version files could not be read ({error}); restore the named "
         "manifest and rerun this check"
@@ -141,10 +137,17 @@ for path, version in declared.items():
     if version is None:
         problems.append(f"{path}: no product version could be read")
 
+for path in unregistered:
+    problems.append(
+        f"{path.as_posix()}: carries a product version but is absent from "
+        "RECONCILED_VERSION_FILES; register it in scripts/product_versions.py so release "
+        "updates cannot leave it behind"
+    )
+
 if len(set(declared.values())) > 1:
     listed = ", ".join(f"{path} = {value}" for path, value in sorted(declared.items()))
     problems.append(
-        "the published distributions and the Python SDK's __version__ disagree "
+        "the published distributions and their public version constants disagree "
         f"({listed}); one product version spans them all and the release tool writes "
         "them together, so a mismatch here ships as a broken release"
     )

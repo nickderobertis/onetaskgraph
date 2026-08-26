@@ -64,12 +64,6 @@ if [[ ${1:-} == --check ]]; then
 fi
 
 python3 scripts/product_versions.py set "$expected"
-perl -pi -e 's/^version = "[^"]+"/version = "'$expected'"/' crates/*/Cargo.toml pyproject.toml
-perl -pi -e 's/(path = "crates\/[^" ]+", version = ")[^"]+/${1}'$expected'/g' Cargo.toml
-perl -pi -e 's/(onetaskgraph-cli==)[^" ]+/${1}'$expected'/' sdks/python/pyproject.toml
-for manifest in npm/cli/package.json npm/platforms/*/package.json; do
-  node -e 'const fs=require("fs"),f=process.argv[1],v=process.argv[2],p=JSON.parse(fs.readFileSync(f)); p.version=v; for(const n of Object.keys(p.optionalDependencies||{}))p.optionalDependencies[n]=v; fs.writeFileSync(f,JSON.stringify(p,null,2)+"\n")' "$manifest" "$expected"
-done
 # Refresh workspace package versions without re-resolving unrelated dependencies.
 cargo_metadata --format-version 1
 uv lock --project . --quiet

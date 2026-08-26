@@ -69,7 +69,10 @@ def display_path(path):
 # without a .sh suffix is still covered.
 def shell_scripts():
     for path in sorted(Path("scripts").rglob("*")):
-        if not path.is_file():
+        # Python creates bytecode here when another gate script imports a helper module.
+        # It is generated interpreter state rather than a script, while every other file
+        # remains fail-closed below until the scan can decode and classify it.
+        if "__pycache__" in path.parts or not path.is_file():
             continue
         try:
             text = path.read_text(encoding="utf-8")
