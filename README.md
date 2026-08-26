@@ -222,8 +222,8 @@ bun add @onetaskgraph/sdk             # TypeScript
 The compiled [Rust copy example](./crates/onetaskgraph-core/tests/copy.rs) constructs an
 `Engine`, sends a `CopyRequest` to `Engine::copy`, and reads the returned `CopyReport`. Its
 `a_rust_caller_creates_then_updates_the_same_destination_item` test makes the first copy,
-asserts that the outcome is `created`, makes the same copy again, and asserts that the
-same destination item was updated rather than duplicated.
+asserts that the outcome is `created`, confirms an identical second copy is `unchanged`,
+then copies it back and asserts that the original item was `updated` rather than duplicated.
 
 Unlike the Python and TypeScript SDKs, which spawn the compiled binary, a Rust consumer
 links `onetaskgraph-core` and calls `Engine` in process. The engine and its copy semantics
