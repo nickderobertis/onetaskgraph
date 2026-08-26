@@ -38,28 +38,34 @@ if not project_files:
 names = {}
 projects_by_path = {}
 for path in project_files:
+    # Diagnostics are asserted by the cross-platform distribution journey. Keep one
+    # repository-relative spelling instead of leaking pathlib's host separator on Windows.
+    display_path = path.as_posix()
     try:
         project = json.loads(path.read_text())
     except json.JSONDecodeError as error:
-        problems.append(f"{path}: is not valid JSON ({error})")
+        problems.append(f"{display_path}: is not valid JSON ({error})")
         continue
     if not isinstance(project, dict):
-        problems.append(f"{path}: must contain a JSON object")
+        problems.append(f"{display_path}: must contain a JSON object")
         continue
     projects_by_path[path] = project
 
     name = project.get("name")
     if not name:
-        problems.append(f"{path}: has no \"name\", so Nx cannot address it")
+        problems.append(f"{display_path}: has no \"name\", so Nx cannot address it")
         continue
     if name in names:
-        problems.append(f"{path}: reuses the project name {name!r}, already used by {names[name]}")
+        problems.append(
+            f"{display_path}: reuses the project name {name!r}, already used by "
+            f"{names[name].as_posix()}"
+        )
     names[name] = path
 
     declared = set(project.get("targets", {}))
     for missing in sorted(UNIFORM - declared):
         problems.append(
-            f"{path}: is missing the {missing!r} target. Target names are uniform across "
+            f"{display_path}: is missing the {missing!r} target. Target names are uniform across "
             "projects because `nx affected` fans out by name — a project missing one is "
             "silently dropped from that root command."
         )
