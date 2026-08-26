@@ -351,8 +351,28 @@ if ! (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/
 fi
 grep -q '^version = "0.1.1"' "$tmp/version-repo/Cargo.toml" || { echo "version updater missed the workspace manifest; next: inspect manifest mutation" >&2; exit 1; }
 grep -q '^__version__ = "0.1.1"' "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py" || { echo "version updater missed the Python SDK module version; next: inspect product-version mutation" >&2; exit 1; }
+grep -q '^export const VERSION = "0.1.1";' "$tmp/version-repo/sdks/typescript/src/index.ts" || { echo "version updater missed the TypeScript SDK exported version; next: inspect product-version mutation" >&2; exit 1; }
 grep -q 'onetaskgraph-cli==0.1.1' "$tmp/version-repo/sdks/python/pyproject.toml" || { echo "version updater missed the Python CLI pin; next: inspect dependency mutation" >&2; exit 1; }
 node -e 'const p=require(process.argv[1]); if(p.version!=="0.1.1" || Object.values(p.optionalDependencies).some(v=>v!=="0.1.1")) process.exit(1)' "$tmp/version-repo/npm/cli/package.json" || { echo "version updater missed npm metadata; next: inspect JSON mutation" >&2; exit 1; }
+assert_unregistered_version() {
+  relative_path=$1
+  mkdir -p "$(dirname "$tmp/version-repo/$relative_path")"
+  printf '%s\n' "$2" > "$tmp/version-repo/$relative_path"
+  # llmlint: ignore[work_goes_through_command_surface] This failure journey must run discovery inside its deliberately incomplete scratch tree.
+  if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted unregistered $relative_path; next: inspect product-version discovery" >&2; exit 1; fi
+  grep -q "$relative_path: carries a product version but is absent from RECONCILED_VERSION_FILES" "$tmp/error" || { cat "$tmp/error" >&2; echo "unregistered-version failure omitted $relative_path and recovery; next: inspect workspace diagnostics" >&2; exit 1; }
+  unlink "$tmp/version-repo/$relative_path"
+}
+assert_unregistered_version 'crates/unregistered/Cargo.toml' $'[package]\nname = "unregistered"\nversion = "0.1.1"'
+assert_unregistered_version 'unregistered/pyproject.toml' $'[project]\nname = "onetaskgraph-cli"\nversion = "0.1.1"'
+assert_unregistered_version 'unregistered/package.json' '{"name":"@onetaskgraph/unregistered","version":"0.1.1"}'
+assert_unregistered_version 'sdks/python/src/unregistered_version.py' '__version__ = "0.1.1"'
+assert_unregistered_version 'sdks/typescript/src/unregistered-version.ts' 'export const VERSION = "0.1.1";'
+mkdir -p "$tmp/version-repo/node_modules/unregistered" "$tmp/version-repo/sdks/typescript/src/generated"
+printf '%s\n' '{"name":"@onetaskgraph/unregistered","version":"0.1.1"}' > "$tmp/version-repo/node_modules/unregistered/package.json"
+printf '%s\n' 'export const VERSION = "0.1.1";' > "$tmp/version-repo/sdks/typescript/src/generated/unregistered-version.ts"
+# llmlint: ignore[work_goes_through_command_surface] This exclusion journey must run discovery against scratch-only dependency and generated files.
+if ! (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then cat "$tmp/error" >&2; echo "workspace check treated dependency or generated versions as product declarations; next: inspect discovery exclusions" >&2; exit 1; fi
 printf '{\n' > "$tmp/version-repo/sdks/typescript/package.json"
 for version_command in '--check' '0.1.2'; do
   if (cd "$tmp/version-repo" && scripts/set-version.sh $version_command) 2>"$tmp/error"; then
