@@ -287,6 +287,17 @@ them do; this is the inventory of what is owed, not a status board.
   unreleased commits into a PR, merging it cuts the release, and the tag fires build and
   publish. It must authenticate with `RELEASE_PLZ_TOKEN` — a tag pushed by the default
   `GITHUB_TOKEN` fires no workflow, so the release would silently ship nothing.
+- **The release PR is prepared by `scripts/prepare-release-pr.sh`, never by
+  `release-plz release-pr` alone.** release-plz writes the Cargo manifests and nothing
+  else — no `package.json`, no `pyproject.toml`, not even the version under
+  `[workspace.package]` — and it has no hook that could: 0.3.160 refuses
+  `pre_release_hook` as an unknown field and its own `generate-schema` lists no other. So a
+  pull request it opens by itself fails `distribution-check`, one of the required checks its
+  own merge waits on, and no release is cut at all. The script bumps with `release-plz
+  update`, brings every other manifest to the version it chose with `scripts/set-version.sh`,
+  and hands the whole tree to `release-pr --allow-dirty`, whose uncommitted changes become
+  the release commit. `scripts/check-release-pr-sync.sh` drives that end to end on every
+  `check` and refuses a workflow that goes around it.
 
 ## Conventions
 

@@ -31,6 +31,11 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+      # scripts/prepare-release-pr.sh runs scripts/set-version.sh, which relocks the Python
+      # side; without uv on PATH the release pull request could not carry a uv.lock that
+      # agrees with the version it proposes. v7 is the newest floating major tag this action
+      # publishes.
+      - uses: astral-sh/setup-uv@v7
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-semver-checks,release-plz
@@ -40,10 +45,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: release-plz release --git-token "$GITHUB_TOKEN"
+      # Not `release-plz release-pr`: that writes the Cargo manifests and nothing else, so
+      # the pull request it opens carries npm/, sdks/ and pyproject.toml at the previous
+      # version and fails the `check` its own merge requires. The script bumps with
+      # release-plz, brings every other manifest to the version it chose, and hands the whole
+      # tree to release-pr. release-plz has no hook that could do this: 0.3.160 refuses
+      # `pre_release_hook` as an unknown field, and its own generate-schema lists no other.
       - name: Open or update the release pull request
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-        run: release-plz release-pr --git-token "$GITHUB_TOKEN"
+        run: scripts/prepare-release-pr.sh --git-token "$GITHUB_TOKEN"
       - name: Enable auto-merge
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
