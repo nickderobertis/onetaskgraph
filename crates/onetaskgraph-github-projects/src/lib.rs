@@ -115,7 +115,8 @@ pub struct GitHubProjectsConfig {
     pub owner: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates GitHub's owner grammar before private construction.
     /// The project number shown in its GitHub URL.
     pub project_number: u32, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` bounds this to a positive GraphQL Int.
-    /// Environment variable containing a GitHub token with Projects and Issues read/write access.
+    /// Environment variable containing a fine-grained token with Projects and Issues read/write
+    /// plus Pull requests read-only access for every repository represented on the board.
     #[serde(default = "default_token_env")]
     pub token_env: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates the environment-variable grammar.
     /// GraphQL endpoint. GitHub Enterprise installations may override it.
@@ -217,7 +218,7 @@ impl GitHubProjectsSource {
             });
         }
         let token = secrets.get(&config.token_env).filter(|token| !token.expose_secret().trim().is_empty()).ok_or_else(|| SourceError::Auth {
-            message: format!("environment variable {} is missing or empty; set it to a GitHub token with Projects and Issues read/write access", config.token_env),
+            message: format!("environment variable {} is missing or empty; set it to a fine-grained GitHub token granting Projects and Issues read/write plus Pull requests read-only access for every repository represented on the board", config.token_env),
         })?;
         Ok(Self {
             name: name.clone(),
@@ -266,7 +267,7 @@ impl GitHubProjectsSource {
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
             return Err(SourceError::Auth {
                 message: format!(
-                    "GitHub rejected the configured credential with HTTP {status}; grant it Projects and Issues read/write access"
+                    "GitHub rejected the configured credential with HTTP {status}; grant it Projects and Issues read/write plus Pull requests read-only access for every repository represented on the board"
                 ),
             });
         }
@@ -301,7 +302,7 @@ impl GitHubProjectsSource {
             if normalized.contains("resource not accessible") || normalized.contains("scope") {
                 return Err(SourceError::Auth {
                     message: format!(
-                        "{message}; grant {} Projects and Issues read/write access",
+                        "{message}; grant {} Projects and Issues read/write plus Pull requests read-only access for every repository represented on the board",
                         self.credential_name
                     ),
                 });

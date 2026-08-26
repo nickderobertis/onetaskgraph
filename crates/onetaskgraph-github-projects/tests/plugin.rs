@@ -1047,7 +1047,7 @@ fn config_schema_is_strict_and_build_validates_inputs_and_secret() {
         &Empty,
     );
     assert!(
-        matches!(result, Err(SourceError::Auth { ref message }) if message.contains("GH_PROJECTS_TOKEN") && message.contains("work") && message.contains("Projects and Issues read/write access"))
+        matches!(result, Err(SourceError::Auth { ref message }) if message.contains("GH_PROJECTS_TOKEN") && message.contains("work") && message.contains("Projects and Issues read/write") && message.contains("Pull requests read-only"))
     );
     struct EmptyValue;
     impl SecretResolver for EmptyValue {
@@ -1085,7 +1085,8 @@ async fn maps_authentication_failure_without_disclosing_the_token() {
     let error = build(&endpoint).health().await.unwrap_err();
     let message = error.to_string();
     assert!(matches!(error, SourceError::Auth { .. }));
-    assert!(message.contains("Projects and Issues read/write access"));
+    assert!(message.contains("Projects and Issues read/write"));
+    assert!(message.contains("Pull requests read-only"));
     assert!(!message.contains("test-token"));
     handle.join().unwrap();
 }
@@ -2014,7 +2015,8 @@ async fn maps_transport_http_json_and_graphql_failures() {
     let error = source.health().await.unwrap_err().to_string();
     assert!(error.contains("CUSTOM_GITHUB_TOKEN"), "{error}");
     assert!(
-        error.contains("Projects and Issues read/write access"),
+        error.contains("Projects and Issues read/write")
+            && error.contains("Pull requests read-only"),
         "{error}"
     );
     assert!(!error.contains("GH_PROJECTS_TOKEN"), "{error}");

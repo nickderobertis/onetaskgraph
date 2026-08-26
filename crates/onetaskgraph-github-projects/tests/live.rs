@@ -49,18 +49,43 @@ async fn graphql_variables(
 }
 
 async fn writable_fields(token: &str, project_id: &str) -> Result<Vec<Value>, String> {
-    let response = graphql_variables(
-        token,
-        "query($id:ID!){node(id:$id){... on ProjectV2{fields(first:100){nodes{... on ProjectV2SingleSelectField{id name options{name}} ... on ProjectV2Field{id name}}}}}}",
-        "writable field discovery",
-        json!({"id":project_id}),
-    )
-    .await?;
-    response
-        .pointer("/data/node/fields/nodes")
-        .and_then(Value::as_array)
-        .cloned()
-        .ok_or_else(|| "writable field discovery returned no project fields".to_owned())
+    let mut after = Value::Null;
+    let mut fields = Vec::new();
+    loop {
+        let response = graphql_variables(
+            token,
+            "query($id:ID!,$after:String){node(id:$id){... on ProjectV2{fields(first:100,after:$after){nodes{... on ProjectV2SingleSelectField{id name options{name}} ... on ProjectV2Field{id name}}pageInfo{hasNextPage endCursor}}}}}",
+            "writable field discovery",
+            json!({"id":project_id,"after":after}),
+        )
+        .await?;
+        let connection = response
+            .pointer("/data/node/fields")
+            .ok_or_else(|| "writable field discovery returned no fields connection".to_owned())?;
+        fields.extend(
+            connection
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "writable field discovery nodes is not an array".to_owned())?
+                .iter()
+                .cloned(),
+        );
+        if connection
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Ok(fields);
+        }
+        let next = connection
+            .pointer("/pageInfo/endCursor")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "writable field discovery has no advancing cursor".to_owned())?;
+        if after.as_str() == Some(next) {
+            return Err("writable field discovery cursor did not advance".to_owned());
+        }
+        after = Value::String(next.to_owned());
+    }
 }
 
 async fn ensure_metadata_field(token: &str, project_id: &str) -> Result<bool, String> {
@@ -174,13 +199,14 @@ async fn artifact_item_ids(
         {
             return Ok(matches);
         }
-        after = Value::String(
-            connection
-                .pointer("/pageInfo/endCursor")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "live artifact lookup has no advancing cursor".to_owned())?
-                .to_owned(),
-        );
+        let next = connection
+            .pointer("/pageInfo/endCursor")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "live artifact lookup has no advancing cursor".to_owned())?;
+        if after.as_str() == Some(next) {
+            return Err("live artifact lookup cursor did not advance".to_owned());
+        }
+        after = Value::String(next.to_owned());
     }
 }
 

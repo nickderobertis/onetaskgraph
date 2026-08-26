@@ -411,6 +411,32 @@ fn a_project_copy_updates_the_configured_github_board_without_creating_one() {
             .any(|edge| edge["to"]["id"] == "elsewhere:P-9")
     );
 
+    for status in ["Todo", "Waiting"] {
+        std::fs::write(
+            root.join("projects/P-1.md"),
+            format!(
+                "---\ntitle: Published roadmap\nstatus: {status}\nmetadata: {{caller.approved: true}}\nrepositories: [github.com/nickderobertis/onetaskgraph]\n---\nThe permanent plan\n"
+            ),
+        )
+        .unwrap();
+        ok(
+            &sandbox,
+            &[
+                "project",
+                "copy",
+                "plans:P-1",
+                "--to",
+                "board",
+                "--no-tasks",
+            ],
+        );
+        assert_eq!(
+            shown(&sandbox, "project", "board:P-1")["status"]["category"],
+            "in-progress",
+            "{status} keeps the configured GitHub project open"
+        );
+    }
+
     std::fs::write(
         root.join("projects/P-1.md"),
         "---\ntitle: Published roadmap\nstatus: Done\nmetadata: {caller.approved: true}\n---\nThe permanent plan\n",
