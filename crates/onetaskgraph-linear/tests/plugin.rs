@@ -1,8 +1,9 @@
 //! Public factory and real-HTTP fixture journeys.
 
 use onetaskgraph_plugin_api::{
-    Direction, ItemKind, LabelFilter, PageRequest, ProjectFilter, ProjectQuery, SecretResolver,
-    SourceError, SourceName, SourcePlugin, StatusCategory, TaskQuery, TaskSource,
+    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, ItemKind, ItemWrite,
+    LabelFilter, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
+    SourceName, SourcePlugin, StatusCategory, Task, TaskQuery, TaskSource,
 };
 use secrecy::SecretString;
 use std::{
@@ -34,6 +35,34 @@ fn source(endpoint: &str) -> Box<dyn TaskSource> {
             &Secrets(Some(SecretString::from("fixture-key"))),
         )
         .unwrap()
+}
+
+fn writable_source(endpoint: &str) -> Box<dyn TaskSource> {
+    onetaskgraph_linear::Plugin
+        .build(
+            &SourceName::new("work").unwrap(),
+            &serde_json::json!({"endpoint":endpoint,"team":"ENG"}),
+            &Secrets(Some("fixture-key".into())),
+        )
+        .unwrap()
+}
+
+fn response_server(responses: Vec<serde_json::Value>) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for response in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = vec![0; 65536];
+            let n = stream.read(&mut bytes).unwrap();
+            bytes.truncate(n);
+            let _ = tx.send(String::from_utf8_lossy(&bytes).into_owned());
+            let body = serde_json::to_string(&serde_json::json!({"data":response})).unwrap();
+            write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+        }
+    });
+    (format!("http://{addr}/graphql"), rx)
 }
 
 fn server(
@@ -105,6 +134,56 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
             _ => None,
         })
         .collect::<std::collections::HashMap<_, _>>();
+    let inputs = schema
+        .definitions
+        .iter()
+        .filter_map(|definition| match definition {
+            schema::Definition::TypeDefinition(schema::TypeDefinition::InputObject(input)) => {
+                Some((input.name.as_str(), input))
+            }
+            _ => None,
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    for (name, expected) in [
+        (
+            "IssueCreateInput",
+            &[
+                "teamId",
+                "title",
+                "description",
+                "stateId",
+                "labelIds",
+                "projectId",
+            ][..],
+        ),
+        (
+            "IssueUpdateInput",
+            &["title", "description", "stateId", "labelIds", "projectId"][..],
+        ),
+        (
+            "ProjectCreateInput",
+            &["teamIds", "name", "description", "statusId", "labelIds"][..],
+        ),
+        (
+            "ProjectUpdateInput",
+            &["name", "description", "statusId", "labelIds"][..],
+        ),
+        (
+            "IssueRelationCreateInput",
+            &["issueId", "relatedIssueId", "type"][..],
+        ),
+        (
+            "ProjectRelationCreateInput",
+            &["projectId", "relatedProjectId", "type"][..],
+        ),
+    ] {
+        let actual = inputs[name]
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "pinned {name} fields drifted");
+    }
     fn named_type<'a>(kind: &'a schema::Type<'a, String>) -> &'a str {
         match kind {
             schema::Type::NamedType(name) => name,
@@ -225,6 +304,728 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
             fixture.as_ref().map(|fixture| &fixture["data"]),
         );
     }
+}
+
+#[test]
+fn pinned_schema_names_every_write_operation_the_plugin_sends() {
+    use graphql_parser::{query, schema};
+    use onetaskgraph_linear::graphql;
+    let schema = schema::parse_schema::<String>(include_str!("fixtures/schema.graphql")).unwrap();
+    let fields = |root: &str| {
+        schema
+            .definitions
+            .iter()
+            .find_map(|definition| match definition {
+                schema::Definition::TypeDefinition(schema::TypeDefinition::Object(object))
+                    if object.name == root =>
+                {
+                    Some(
+                        object
+                            .fields
+                            .iter()
+                            .map(|field| field.name.as_str())
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let query_fields = fields("Query");
+    let mutation_fields = fields("Mutation");
+    let objects = schema
+        .definitions
+        .iter()
+        .filter_map(|definition| match definition {
+            schema::Definition::TypeDefinition(schema::TypeDefinition::Object(object)) => {
+                Some((object.name.as_str(), object))
+            }
+            _ => None,
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    fn named<'a>(kind: &'a schema::Type<'a, String>) -> &'a str {
+        match kind {
+            schema::Type::NamedType(name) => name,
+            schema::Type::ListType(inner) | schema::Type::NonNullType(inner) => named(inner),
+        }
+    }
+    fn same_type(schema: &schema::Type<'_, String>, query: &query::Type<'_, String>) -> bool {
+        match (schema, query) {
+            (schema::Type::NamedType(left), query::Type::NamedType(right)) => left == right,
+            (schema::Type::ListType(left), query::Type::ListType(right))
+            | (schema::Type::NonNullType(left), query::Type::NonNullType(right)) => {
+                same_type(left, right)
+            }
+            _ => false,
+        }
+    }
+    fn validate<'a>(
+        objects: &std::collections::HashMap<&str, &'a schema::ObjectType<'a, String>>,
+        type_name: &str,
+        selections: &query::SelectionSet<'_, String>,
+    ) {
+        let object = objects[type_name];
+        for selection in &selections.items {
+            let query::Selection::Field(selected) = selection else {
+                panic!("no fragments")
+            };
+            let field = object
+                .fields
+                .iter()
+                .find(|field| field.name == selected.name)
+                .unwrap_or_else(|| panic!("{type_name} lacks {}", selected.name));
+            for (argument, _) in &selected.arguments {
+                assert!(
+                    field.arguments.iter().any(|input| input.name == *argument),
+                    "{type_name}.{} lacks {argument}",
+                    field.name
+                );
+            }
+            if !selected.selection_set.items.is_empty() {
+                validate(objects, named(&field.field_type), &selected.selection_set);
+            }
+        }
+    }
+    for (document, mutation) in [
+        (graphql::TEAM, false),
+        (graphql::ISSUE_STATE, false),
+        (graphql::PROJECT_STATUS, false),
+        (graphql::ISSUE_LABEL, false),
+        (graphql::PROJECT_LABEL, false),
+        (graphql::ISSUE_CREATE, true),
+        (graphql::ISSUE_UPDATE, true),
+        (graphql::PROJECT_CREATE, true),
+        (graphql::PROJECT_UPDATE, true),
+        (graphql::ISSUE_RELATION_CREATE, true),
+        (graphql::PROJECT_RELATION_CREATE, true),
+        (graphql::ISSUE_RELATION_DELETE, true),
+        (graphql::PROJECT_RELATION_DELETE, true),
+        (graphql::ISSUE_DELETE, true),
+    ] {
+        let parsed = query::parse_query::<String>(document).unwrap();
+        let (selection_set, variables) = match &parsed.definitions[0] {
+            query::Definition::Operation(query::OperationDefinition::Query(operation)) => {
+                (&operation.selection_set, &operation.variable_definitions)
+            }
+            query::Definition::Operation(query::OperationDefinition::Mutation(operation)) => {
+                (&operation.selection_set, &operation.variable_definitions)
+            }
+            _ => panic!("production document is an explicit query or mutation"),
+        };
+        let selection = &selection_set.items[0];
+        let query::Selection::Field(root) = selection else {
+            panic!("operation has a root field")
+        };
+        assert!(
+            (if mutation {
+                &mutation_fields
+            } else {
+                &query_fields
+            })
+            .contains(&root.name.as_str()),
+            "pinned schema lacks {}",
+            root.name
+        );
+        let schema_root = objects[if mutation { "Mutation" } else { "Query" }]
+            .fields
+            .iter()
+            .find(|field| field.name == root.name)
+            .unwrap();
+        for (argument_name, value) in &root.arguments {
+            let query::Value::Variable(variable_name) = value else {
+                continue;
+            };
+            let variable = variables
+                .iter()
+                .find(|variable| variable.name == *variable_name)
+                .unwrap();
+            let argument = schema_root
+                .arguments
+                .iter()
+                .find(|argument| argument.name == *argument_name)
+                .unwrap();
+            assert!(
+                same_type(&argument.value_type, &variable.var_type),
+                "{}.{} variable ${variable_name} type or nullability drifted",
+                if mutation { "Mutation" } else { "Query" },
+                root.name
+            );
+        }
+        validate(
+            &objects,
+            if mutation { "Mutation" } else { "Query" },
+            selection_set,
+        );
+    }
+}
+
+#[tokio::test]
+async fn writes_create_update_and_route_task_and_project_edges_over_real_http() {
+    let empty_page = |root: &str| serde_json::json!({(root):{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}});
+    let id_page = |root: &str, id: &str| serde_json::json!({(root):{"nodes":[{"id":id}]}});
+    let (endpoint, wire) = response_server(vec![
+        id_page("teams", "TEAM"),
+        id_page("workflowStates", "STATE"),
+        id_page("issueLabels", "LABEL"),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
+        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
+        serde_json::json!({"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}),
+        serde_json::json!({"issues":{"nodes":[{"id":"I-FAR","title":"far","description":"\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:FAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        id_page("teams", "TEAM"),
+        id_page("workflowStates", "STATE"),
+        id_page("issueLabels", "LABEL"),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-NEW"}}}),
+        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[{"id":"OLD","type":"blocks","relatedIssue":{"id":"OLD-FAR"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"issueRelationDelete":{"success":true}}),
+        serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        id_page("teams", "TEAM"),
+        id_page("projectStatuses", "STATUS"),
+        id_page("projectLabels", "PLABEL"),
+        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
+        serde_json::json!({"project":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P"}}}),
+        serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        id_page("teams", "TEAM"),
+        id_page("projectStatuses", "STATUS"),
+        id_page("projectLabels", "PLABEL"),
+        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-NEW"}}}),
+        serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P","type":"blocks","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"projectRelationDelete":{"success":true}}),
+        serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P2","type":"related","relatedProject":{"id":"P-OTHER"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"projectRelationDelete":{"success":true}}),
+        serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P2"}}}),
+    ]);
+    let writable = writable_source(&endpoint);
+    let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:NEAR","title":"visible task","content":"body","status":{"category":"todo","name":"Todo"},"labels":[{"id":"old","name":"bug","color":null}],"project":null,"repositories":["github.com/acme/work"],"metadata":{"object":{"n":1},"null":null}})).unwrap();
+    let missing_team = source("http://127.0.0.1:1")
+        .write_task(&ItemWrite {
+            target: None,
+            item: task.clone(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{missing_team}").contains("config.team"));
+    let (unresolved_endpoint, unresolved_wire) = response_server(vec![empty_page("teams")]);
+    let unresolved_team = writable_source(&unresolved_endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task.clone(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{unresolved_team}").contains("cannot resolve configured team uniquely"));
+    drop(unresolved_wire);
+    let native_task = DependencyEdge {
+        from: DependencyEndpoint::new("authored:NEAR".into(), ItemKind::Task).unwrap(),
+        to: DependencyEndpoint::from_native("I-FAR".into(), ItemKind::Task),
+        kind: DependencyKind::Blocks,
+    };
+    let cross_task = DependencyEdge {
+        from: native_task.from.clone(),
+        to: DependencyEndpoint::new("elsewhere:P-9".into(), ItemKind::Project).unwrap(),
+        kind: DependencyKind::Related,
+    };
+    assert_eq!(
+        writable
+            .write_task(&ItemWrite {
+                target: None,
+                item: task.clone(),
+                depends_on: vec![native_task.clone(), cross_task]
+            })
+            .await
+            .unwrap()
+            .0,
+        "I-NEW"
+    );
+    let unresolved = DependencyEdge {
+        to: DependencyEndpoint::new("missing:FAR".into(), ItemKind::Task).unwrap(),
+        ..native_task
+    };
+    assert_eq!(
+        writable
+            .write_task(&ItemWrite {
+                target: Some("I-NEW".into()),
+                item: task,
+                depends_on: vec![unresolved]
+            })
+            .await
+            .unwrap()
+            .0,
+        "I-NEW"
+    );
+
+    let project: Project = serde_json::from_value(serde_json::json!({"id":"authored:P","title":"visible project","content":"project body","status":{"category":"todo","name":"Todo"},"labels":[{"id":"old","name":"roadmap","color":null}],"repositories":["github.com/acme/work"],"metadata":{"array":[true,null]}})).unwrap();
+    let project_edge = DependencyEdge {
+        from: DependencyEndpoint::new("authored:P".into(), ItemKind::Project).unwrap(),
+        to: DependencyEndpoint::new("authored:PFAR".into(), ItemKind::Project).unwrap(),
+        kind: DependencyKind::Related,
+    };
+    assert_eq!(
+        writable
+            .write_project(&ItemWrite {
+                target: None,
+                item: project.clone(),
+                depends_on: vec![project_edge.clone()]
+            })
+            .await
+            .unwrap()
+            .0,
+        "P-NEW"
+    );
+    assert_eq!(
+        writable
+            .write_project(&ItemWrite {
+                target: Some("P-NEW".into()),
+                item: project,
+                depends_on: vec![project_edge]
+            })
+            .await
+            .unwrap()
+            .0,
+        "P-NEW"
+    );
+    let requests = wire.iter().collect::<Vec<_>>();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains(onetaskgraph_linear::graphql::ISSUE_CREATE))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains(onetaskgraph_linear::graphql::ISSUE_UPDATE))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("relatedIssueId") && request.contains("I-FAR"))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains(onetaskgraph_linear::graphql::PROJECT_CREATE))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("relatedProjectId") && request.contains("P-FAR"))
+    );
+    let create = requests
+        .iter()
+        .find(|request| request.contains(onetaskgraph_linear::graphql::ISSUE_CREATE))
+        .unwrap();
+    assert!(
+        create.contains("visible task")
+            && create.contains("onetaskgraph.repositories")
+            && create.contains("elsewhere:P-9")
+    );
+    let unresolved_update = requests
+        .iter()
+        .find(|request| {
+            request.contains(onetaskgraph_linear::graphql::ISSUE_UPDATE)
+                && request.contains("missing:FAR")
+        })
+        .expect("an unresolved same-source origin remains in recorded dependency metadata");
+    assert!(unresolved_update.contains("onetaskgraph.depends_on"));
+}
+
+#[tokio::test]
+async fn a_write_with_no_visible_description_or_metadata_sends_null_over_real_http() {
+    let page = |root: &str, nodes: serde_json::Value| serde_json::json!({(root):{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}});
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW"}}}),
+        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+    ]);
+    let item = serde_json::from_value::<Task>(serde_json::json!({
+        "id":"from:T", "title":"task", "content":null,
+        "status":{"category":"todo","name":"Todo"}, "labels":[], "project":null,
+        "repositories":[], "metadata":{}
+    }))
+    .unwrap();
+    writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item,
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let requests = wire.iter().collect::<Vec<_>>();
+    let create = requests
+        .iter()
+        .find(|request| request.contains(onetaskgraph_linear::graphql::ISSUE_CREATE))
+        .unwrap();
+    assert!(create.contains("\"description\":null"), "{create}");
+}
+
+#[tokio::test]
+async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_boundary() {
+    let task = || {
+        serde_json::from_value::<Task>(serde_json::json!({"id":"from:T","title":"task","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"repositories":[],"metadata":{}})).unwrap()
+    };
+    let project = || {
+        serde_json::from_value::<Project>(serde_json::json!({"id":"from:P","title":"project","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"repositories":[],"metadata":{}})).unwrap()
+    };
+    let page = |root: &str, nodes: serde_json::Value| serde_json::json!({(root):{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}});
+    let (endpoint, wire) = response_server(vec![serde_json::json!({"teams":{}})]);
+    let error = writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error}").contains("missing teams.nodes"));
+    drop(wire);
+    let (endpoint, wire) = response_server(vec![page("teams", serde_json::json!([{"id":""}]))]);
+    assert!(
+        format!(
+            "{}",
+            writable_source(&endpoint)
+                .write_task(&ItemWrite {
+                    target: None,
+                    item: task(),
+                    depends_on: Vec::new()
+                })
+                .await
+                .unwrap_err()
+        )
+        .contains("empty backend id")
+    );
+    drop(wire);
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":""}}}),
+    ]);
+    assert!(
+        format!(
+            "{}",
+            writable_source(&endpoint)
+                .write_task(&ItemWrite {
+                    target: None,
+                    item: task(),
+                    depends_on: Vec::new()
+                })
+                .await
+                .unwrap_err()
+        )
+        .contains("empty backend id")
+    );
+    drop(wire);
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        serde_json::json!({"projectCreate":{"success":true,"project":{"id":""}}}),
+    ]);
+    assert!(
+        format!(
+            "{}",
+            writable_source(&endpoint)
+                .write_project(&ItemWrite {
+                    target: None,
+                    item: project(),
+                    depends_on: Vec::new()
+                })
+                .await
+                .unwrap_err()
+        )
+        .contains("empty backend id")
+    );
+    drop(wire);
+    for (responses, item, expected) in [
+        (
+            vec![
+                page("teams", serde_json::json!([{"id":"TEAM"}])),
+                page("workflowStates", serde_json::json!([])),
+            ],
+            task(),
+            "workflow state",
+        ),
+        (
+            vec![
+                page("teams", serde_json::json!([{"id":"TEAM"}])),
+                page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+                serde_json::json!({"issueCreate":{"success":false,"issue":null}}),
+            ],
+            task(),
+            "unsuccessful",
+        ),
+        (
+            vec![
+                page("teams", serde_json::json!([{"id":"TEAM"}])),
+                page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+                serde_json::json!({"issueCreate":{"success":true}}),
+            ],
+            task(),
+            "missing issueCreate.issue",
+        ),
+        (
+            vec![
+                page("teams", serde_json::json!([{"id":"TEAM"}])),
+                page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+                serde_json::json!({"issueCreate":{"issue":{"id":"NEW"}}}),
+            ],
+            task(),
+            "missing boolean issueCreate.success",
+        ),
+    ] {
+        let (endpoint, wire) = response_server(responses);
+        let error = writable_source(&endpoint)
+            .write_task(&ItemWrite {
+                target: None,
+                item,
+                depends_on: Vec::new(),
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{error}").contains(expected), "{error}");
+        drop(wire);
+    }
+    let mut labeled = task();
+    labeled.labels.push(onetaskgraph_plugin_api::Label {
+        id: "old".into(),
+        name: "missing".into(),
+        color: None,
+    });
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        page("issueLabels", serde_json::json!([])),
+    ]);
+    let error = writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item: labeled,
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error}").contains("label \"missing\""));
+    drop(wire);
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("projectStatuses", serde_json::json!([])),
+    ]);
+    let error = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error}").contains("project status"));
+    drop(wire);
+    let relation = DependencyEdge {
+        from: DependencyEndpoint::from_native("T".into(), ItemKind::Task),
+        to: DependencyEndpoint::from_native("FAR".into(), ItemKind::Task),
+        kind: DependencyKind::Blocks,
+    };
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW"}}}),
+        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"issueRelationCreate":{"success":false,"issueRelation":null}}),
+    ]);
+    let error = writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task(),
+            depends_on: vec![relation],
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error}").contains("issueRelationCreate"));
+    drop(wire);
+    let project_relation = DependencyEdge {
+        from: DependencyEndpoint::from_native("P".into(), ItemKind::Project),
+        to: DependencyEndpoint::from_native("FAR".into(), ItemKind::Project),
+        kind: DependencyKind::Blocks,
+    };
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"NEW"}}}),
+        serde_json::json!({"project":{"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":""}}}),
+    ]);
+    let error = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project(),
+            depends_on: vec![project_relation],
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error}").contains("empty backend id"), "{error}");
+    drop(wire);
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P"}}}),
+        serde_json::json!({"project":{"relations":{"nodes":[{"id":"R"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"projectRelationDelete":{"success":false}}),
+    ]);
+    let error = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: Some("P".into()),
+            item: project(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error}").contains("projectRelationDelete"),
+        "{error}"
+    );
+    drop(wire);
+    for (relation_response, expected) in [
+        (serde_json::json!({}), "missing relation item"),
+        (serde_json::json!({"issue":{}}), "missing relations"),
+        (
+            serde_json::json!({"issue":{"relations":{"nodes":7,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+            "missing relations.nodes",
+        ),
+        (
+            serde_json::json!({"issue":{"relations":{"nodes":[{"id":""}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+            "empty backend id",
+        ),
+    ] {
+        let (endpoint, wire) = response_server(vec![
+            page("teams", serde_json::json!([{"id":"TEAM"}])),
+            page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+            serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW"}}}),
+            relation_response,
+        ]);
+        let error = writable_source(&endpoint)
+            .write_task(&ItemWrite {
+                target: None,
+                item: task(),
+                depends_on: Vec::new(),
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{error}").contains(expected), "{error}");
+        drop(wire);
+    }
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        serde_json::json!({"projectCreate":{"success":true}}),
+    ]);
+    let error = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error}").contains("missing projectCreate.project"));
+    drop(wire);
+    for response in [
+        serde_json::json!({"issueUpdate":{"success":false,"issue":null}}),
+        serde_json::json!({"issueUpdate":{"success":true}}),
+    ] {
+        let (endpoint, wire) = response_server(vec![
+            page("teams", serde_json::json!([{"id":"TEAM"}])),
+            page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+            response,
+        ]);
+        assert!(
+            writable_source(&endpoint)
+                .write_task(&ItemWrite {
+                    target: Some("I".into()),
+                    item: task(),
+                    depends_on: Vec::new()
+                })
+                .await
+                .is_err()
+        );
+        drop(wire);
+    }
+    for response in [
+        serde_json::json!({"projectUpdate":{"success":false,"project":null}}),
+        serde_json::json!({"projectUpdate":{"success":true}}),
+    ] {
+        let (endpoint, wire) = response_server(vec![
+            page("teams", serde_json::json!([{"id":"TEAM"}])),
+            page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+            response,
+        ]);
+        assert!(
+            writable_source(&endpoint)
+                .write_project(&ItemWrite {
+                    target: Some("P".into()),
+                    item: project(),
+                    depends_on: Vec::new()
+                })
+                .await
+                .is_err()
+        );
+        drop(wire);
+    }
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I"}}}),
+        serde_json::json!({"issue":{"relations":{"nodes":[{"id":"R"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"issueRelationDelete":{"success":false}}),
+    ]);
+    assert!(
+        writable_source(&endpoint)
+            .write_task(&ItemWrite {
+                target: Some("I".into()),
+                item: task(),
+                depends_on: Vec::new()
+            })
+            .await
+            .is_err()
+    );
+    drop(wire);
+}
+
+#[tokio::test]
+async fn replacing_more_than_one_full_relation_page_deletes_every_existing_edge() {
+    let task: Task = serde_json::from_value(serde_json::json!({"id":"from:T","title":"task","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"repositories":[],"metadata":{}})).unwrap();
+    let page = |nodes: Vec<serde_json::Value>, more: bool| serde_json::json!({"issue":{"relations":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":if more {Some("next")} else {None}}}}});
+    let mut responses = vec![
+        serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
+        serde_json::json!({"workflowStates":{"nodes":[{"id":"STATE"}]}}),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I"}}}),
+    ];
+    responses.push(page(
+        (0..250)
+            .map(|index| serde_json::json!({"id":format!("R{index}")}))
+            .collect(),
+        true,
+    ));
+    responses.extend((0..250).map(|_| serde_json::json!({"issueRelationDelete":{"success":true}})));
+    responses.push(page(vec![serde_json::json!({"id":"R250"})], false));
+    responses.push(serde_json::json!({"issueRelationDelete":{"success":true}}));
+    let (endpoint, wire) = response_server(responses);
+    writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: Some("I".into()),
+            item: task,
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        wire.iter()
+            .filter(|request| request.contains(onetaskgraph_linear::graphql::ISSUE_RELATION_DELETE))
+            .count(),
+        251
+    );
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 

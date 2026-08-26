@@ -5,6 +5,7 @@
       "relations": {
         "nodes": [
           {
+            "id": "r1",
             "type": "blocks",
             "relatedIssue": {
               "id": "i2"
@@ -19,6 +20,7 @@
       "inverseRelations": {
         "nodes": [
           {
+            "id": "r2",
             "type": "blocks",
             "issue": {
               "id": "i3"
