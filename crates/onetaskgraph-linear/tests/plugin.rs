@@ -774,6 +774,10 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
             serde_json::json!({"issue":{"relations":{"nodes":7,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
             "missing relations.nodes",
         ),
+        (
+            serde_json::json!({"issue":{"relations":{"nodes":[{"id":""}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+            "empty backend id",
+        ),
     ] {
         let (endpoint, wire) = response_server(vec![
             page("teams", serde_json::json!([{"id":"TEAM"}])),

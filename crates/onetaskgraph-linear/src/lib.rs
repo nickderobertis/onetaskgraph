@@ -548,7 +548,7 @@ impl LinearSource {
                     message: "missing relations.nodes".into(),
                 })?
             {
-                let id = str_at(relation, "id")?;
+                let id = backend_id(relation, "id")?;
                 let (query, mutation) = if matches!(kind, WriteKind::Project) {
                     (
                         graphql::PROJECT_RELATION_DELETE,
