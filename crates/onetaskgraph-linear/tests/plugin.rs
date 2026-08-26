@@ -556,6 +556,17 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         serde_json::from_value::<Project>(serde_json::json!({"id":"from:P","title":"project","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"repositories":[],"metadata":{}})).unwrap()
     };
     let page = |root: &str, nodes: serde_json::Value| serde_json::json!({(root):{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}});
+    let (endpoint, wire) = response_server(vec![serde_json::json!({"teams":{}})]);
+    let error = writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error}").contains("missing teams.nodes"));
+    drop(wire);
     for (responses, item, expected) in [
         (
             vec![
@@ -661,6 +672,46 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         .await
         .unwrap_err();
     assert!(format!("{error}").contains("issueRelationCreate"));
+    drop(wire);
+    for (relation_response, expected) in [
+        (serde_json::json!({}), "missing relation item"),
+        (serde_json::json!({"issue":{}}), "missing relations"),
+        (
+            serde_json::json!({"issue":{"relations":{"nodes":7,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+            "missing relations.nodes",
+        ),
+    ] {
+        let (endpoint, wire) = response_server(vec![
+            page("teams", serde_json::json!([{"id":"TEAM"}])),
+            page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+            serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW"}}}),
+            relation_response,
+        ]);
+        let error = writable_source(&endpoint)
+            .write_task(&ItemWrite {
+                target: None,
+                item: task(),
+                depends_on: Vec::new(),
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{error}").contains(expected), "{error}");
+        drop(wire);
+    }
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        serde_json::json!({"projectCreate":{"success":true}}),
+    ]);
+    let error = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error}").contains("missing projectCreate.project"));
     drop(wire);
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
