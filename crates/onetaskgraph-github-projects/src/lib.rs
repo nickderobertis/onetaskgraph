@@ -578,6 +578,43 @@ impl GitHubProjectsSource {
         Ok(())
     }
 
+    async fn native_dependency_ids(&self, id: &NativeId) -> Result<Vec<String>, SourceError> {
+        let mut after = None;
+        let mut ids = Vec::new();
+        loop {
+            let data = self
+                .graphql(
+                    graphql::TASK_DEPENDENCIES,
+                    json!({"id":id.0,"first":MAX_PAGE_SIZE,"after":after}),
+                )
+                .await?;
+            let connection =
+                data.pointer("/node/blockedBy")
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "GitHub dependency response has no blockedBy connection".into(),
+                    })?;
+            ids.extend(
+                connection
+                    .get("nodes")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "GitHub dependency response nodes is not an array".into(),
+                    })?
+                    .iter()
+                    .map(|value| required_str(value, "id").map(str::to_owned))
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+            let next = next_cursor(connection)?;
+            if let Some(next) = &next {
+                validate_cursor_progress(after.as_deref(), &next.0)?;
+            }
+            after = next.map(|cursor| cursor.0);
+            if after.is_none() {
+                return Ok(ids);
+            }
+        }
+    }
+
     fn field<'a>(project: &'a Value, name: &str) -> Result<Option<&'a Value>, SourceError> {
         complete_connection(
             project.get("fields").unwrap_or(&Value::Null),
@@ -1218,21 +1255,7 @@ impl TaskSource for GitHubProjectsSource {
             }
         }
         if content_kind == ContentKind::Issue {
-            let data = self
-                .graphql(
-                    graphql::TASK_DEPENDENCIES,
-                    json!({"id":content_id.0,"first":MAX_PAGE_SIZE,"after":null}),
-                )
-                .await?;
-            let current = data
-                .pointer("/node/blockedBy/nodes")
-                .and_then(Value::as_array)
-                .ok_or_else(|| SourceError::Malformed {
-                    message: "GitHub dependency response nodes is not an array".into(),
-                })?
-                .iter()
-                .map(|value| required_str(value, "id").map(str::to_owned))
-                .collect::<Result<Vec<_>, _>>()?;
+            let current = self.native_dependency_ids(&content_id).await?;
             for (operation, far_id) in current
                 .iter()
                 .filter(|id| !native.contains(id))

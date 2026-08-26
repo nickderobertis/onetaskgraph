@@ -265,7 +265,12 @@ fn github_projects_is_a_permanent_destination_and_round_trips_draft_fields() {
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("authored");
     std::fs::create_dir_all(root.join("tasks")).unwrap();
-    std::fs::write(root.join("tasks/PLAN-1.md"), "---\ntitle: Publish the plan\nstatus: Todo\nmetadata: {caller.count: 3, caller.shape: {nested: [1, true, null]}}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [{id: 'elsewhere:T-9', item: task}]\n---\nshare this plan\n").unwrap();
+    std::fs::write(root.join("tasks/PLAN-1.md"), "---\ntitle: Publish the plan\nstatus: Todo\nmetadata: {caller.count: 3, caller.shape: {nested: [1, true, null]}}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [PLAN-2, {id: 'elsewhere:T-9', item: task}]\n---\nshare this plan\n").unwrap();
+    std::fs::write(
+        root.join("tasks/PLAN-2.md"),
+        "---\ntitle: Supporting plan\nstatus: Todo\n---\nsupport it\n",
+    )
+    .unwrap();
     let github = ROWS
         .iter()
         .find(|row| row.plugin == "github-projects")
@@ -277,15 +282,30 @@ fn github_projects_is_a_permanent_destination_and_round_trips_draft_fields() {
 
     let first = ok(
         &sandbox,
-        &["task", "copy", "authored:PLAN-1", "--to", "board", "--json"],
+        &[
+            "task",
+            "copy",
+            "authored:PLAN-1",
+            "authored:PLAN-2",
+            "--to",
+            "board",
+            "--json",
+        ],
     );
     assert_eq!(
         reported(&first),
-        vec![(
-            "authored:PLAN-1".into(),
-            json!("board:DRAFT-1"),
-            "created".into()
-        )]
+        vec![
+            (
+                "authored:PLAN-1".into(),
+                json!("board:DRAFT-1"),
+                "created".into()
+            ),
+            (
+                "authored:PLAN-2".into(),
+                json!("board:DRAFT-2"),
+                "created".into()
+            )
+        ]
     );
     let copied = shown(&sandbox, "task", "board:DRAFT-1");
     assert_eq!(copied["title"], "Publish the plan");
@@ -302,13 +322,24 @@ fn github_projects_is_a_permanent_destination_and_round_trips_draft_fields() {
     );
     assert_eq!(
         copied["metadata"]["onetaskgraph.depends_on"],
-        json!([{"id":"elsewhere:T-9","kind":"task"}])
+        json!([
+            {"id":"DRAFT-2","kind":"task"},
+            {"id":"elsewhere:T-9","kind":"task"}
+        ])
     );
     let dependencies: Value =
         serde_json::from_str(&ok(&sandbox, &["task", "deps", "board:DRAFT-1", "--json"])).unwrap();
     assert_eq!(
-        dependencies["items"][0]["to"],
-        json!({"id":"elsewhere:T-9","kind":"task"})
+        dependencies["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|edge| edge["to"].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            json!({"id":"board:DRAFT-2","kind":"task"}),
+            json!({"id":"elsewhere:T-9","kind":"task"})
+        ]
     );
 
     let second = ok(
@@ -327,7 +358,7 @@ fn github_projects_is_a_permanent_destination_and_round_trips_draft_fields() {
         ok(&sandbox, &["task", "list", "--source", "board"])
             .lines()
             .count(),
-        5
+        6
     );
 }
 
