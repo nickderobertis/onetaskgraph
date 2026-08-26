@@ -16,6 +16,13 @@
     "check": {
       "executor": "nx:noop"
     },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo build --quiet -p onetaskgraph --bin onetaskgraph --locked"
+      },
+      "//": "Integration tests and both SDK generators execute this binary. Making it an Nx target lets every consumer depend on one completed build instead of racing independent Cargo commands that replace the executable on macOS."
+    },
     "format": {
       "executor": "nx:run-commands",
       "options": {
@@ -44,6 +51,7 @@
     },
     "test": {
       "executor": "nx:run-commands",
+      "dependsOn": ["build"],
       "options": {
         "command": "cargo test --quiet -p onetaskgraph --all-features --locked"
       }
