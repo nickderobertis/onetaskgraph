@@ -481,6 +481,7 @@ pub enum ItemKind {
 #[serde(rename_all = "kebab-case")]
 pub enum DependencyKind {
     /// `from` depends on `to`, and `to` must finish before `from` can.
+    // llmlint: ignore[names_match_behavior] `"blocks"` is the approved serialized value, spelled in docs/plugin-protocol.md §4.8 and both generated SDKs; the variant names the kind of dependency, and `from`/`to` carry the direction. Renaming it is a wire change and the contract owner's call.
     Blocks,
     /// `from` and `to` are linked without an ordering.
     Related,
