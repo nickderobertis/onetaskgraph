@@ -284,9 +284,6 @@ drafts:T-1 -> work:T-1 (created)
 Ship the guide
 ```
 
-The repository's [Rust copy test](./crates/onetaskgraph-core/tests/copy.rs) additionally proves
-that a second copy is unchanged and a copy back updates the original rather than duplicating it.
-
 Unlike the Python and TypeScript SDKs, which spawn the compiled binary, a Rust consumer
 links `onetaskgraph-core` and calls `Engine` in process. The engine and its copy semantics
 remain the single implementation in either case.
