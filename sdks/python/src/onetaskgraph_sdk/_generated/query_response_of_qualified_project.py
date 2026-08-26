@@ -5,7 +5,7 @@
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, Field, RootModel
+from pydantic import AwareDatetime, BaseModel, Field, JsonValue, RootModel
 
 
 class GlobalId(RootModel[str]):
@@ -42,6 +42,15 @@ class Predicate(StrEnum):
     PredicateSearchContent = "search-content"
     PredicateProject = "project"
     PredicateReverseDependencies = "reverse-dependencies"
+
+
+class Repository(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="A repository identified by its normalized origin, without a URL scheme or `.git` suffix."
+        ),
+    ]
 
 
 class SourceErrorConfig(BaseModel):
@@ -192,6 +201,19 @@ class Project(BaseModel):
         list[Label],
         Field(description="Inline rather than by id, for the same reason as on [`Task`]."),
     ]
+    metadata: Annotated[
+        dict[str, JsonValue] | None,
+        Field(
+            description="Caller-defined attributes, preserving their JSON types, on the same terms as\n[`Task::metadata`]."
+        ),
+    ] = {}
+    repositories: Annotated[
+        list[Repository] | None,
+        Field(
+            description="Normalized repository origins this project concerns, in source order and without\nrepeats.",
+            validate_default=True,
+        ),
+    ] = []
     status: Annotated[Status, Field(description="The source's status, normalised and preserved.")]
     title: Annotated[
         str, Field(description="The one-line summary a user recognises the project by.")

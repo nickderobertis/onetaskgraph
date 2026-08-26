@@ -1,8 +1,8 @@
 //! Public factory and real-HTTP fixture journeys.
 
 use onetaskgraph_plugin_api::{
-    Direction, LabelFilter, PageRequest, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
-    SourceName, SourcePlugin, StatusCategory, TaskQuery, TaskSource,
+    Direction, ItemKind, LabelFilter, PageRequest, ProjectFilter, ProjectQuery, SecretResolver,
+    SourceError, SourceName, SourcePlugin, StatusCategory, TaskQuery, TaskSource,
 };
 use secrecy::SecretString;
 use std::{
@@ -283,6 +283,14 @@ async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
     assert_eq!(page.items[0].title, "Fixture issue");
     assert_eq!(page.items[0].status.name, "In Progress");
     assert_eq!(page.items[0].content.as_deref(), Some("Recorded body"));
+    assert_eq!(
+        page.items[0].metadata["caller.number"],
+        serde_json::json!(7)
+    );
+    assert_eq!(
+        page.items[0].repositories[0].as_str(),
+        "github.com/acme/work"
+    );
     assert_eq!(page.items[0].project.as_ref().unwrap().0, "p1");
     assert_eq!(page.items[0].labels[0].color.as_deref(), Some("#ff0000"));
     assert_eq!(
@@ -306,6 +314,96 @@ async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
 }
 
 #[tokio::test]
+async fn the_metadata_slot_changes_nothing_else_the_item_carries() {
+    // The slot lives inside the description, so the field it could plausibly disturb is
+    // the content — and the ones a reader would never think to check are the rest. This
+    // reads the same issue twice, once with the slot and once without, and asserts that
+    // the only difference between the two is the metadata and the origins read out of it.
+    async fn read(description: &str) -> onetaskgraph_plugin_api::Task {
+        let mut body: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/issues.json")).unwrap();
+        body["data"]["issues"]["nodes"][0]["description"] = serde_json::json!(description);
+        let (endpoint, _) = server("200 OK", "", body.to_string());
+        source(&endpoint)
+            .query_tasks(
+                &TaskQuery::default(),
+                &PageRequest {
+                    cursor: None,
+                    limit: 1,
+                },
+            )
+            .await
+            .expect("the fixture issue reads")
+            .items
+            .remove(0)
+    }
+
+    let bare = read("Recorded body").await;
+    let with_slot = read(
+        "Recorded body\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":7,\"onetaskgraph.repositories\":[\"github.com/acme/work\"]}\n-->",
+    )
+    .await;
+
+    assert!(bare.metadata.is_empty());
+    assert!(bare.repositories.is_empty());
+    assert_eq!(with_slot.metadata["caller.number"], serde_json::json!(7));
+    assert_eq!(with_slot.repositories[0].as_str(), "github.com/acme/work");
+    assert_eq!(
+        onetaskgraph_plugin_api::Task {
+            metadata: Default::default(),
+            repositories: Vec::new(),
+            ..with_slot
+        },
+        bare,
+        "the slot must leave the title, the content, the labels, the state and the rest alone"
+    );
+}
+
+#[tokio::test]
+async fn linear_metadata_slot_rejects_malformed_values_and_preserves_non_trailing_markers() {
+    for description in [
+        "visible\n<!-- onetaskgraph.metadata\n{}",
+        "visible\n<!-- onetaskgraph.metadata\n{bad}\n-->",
+        "visible\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.repositories\":7}\n-->",
+    ] {
+        let mut body: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/issues.json")).unwrap();
+        body["data"]["issues"]["nodes"][0]["description"] = serde_json::json!(description);
+        let (endpoint, _) = server("200 OK", "", body.to_string());
+        assert!(matches!(
+            source(&endpoint)
+                .query_tasks(
+                    &TaskQuery::default(),
+                    &PageRequest {
+                        cursor: None,
+                        limit: 1
+                    }
+                )
+                .await,
+            Err(SourceError::Malformed { .. })
+        ));
+    }
+
+    let description = "visible\n<!-- onetaskgraph.metadata\n{}\n-->\ntrailing content";
+    let mut body: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/issues.json")).unwrap();
+    body["data"]["issues"]["nodes"][0]["description"] = serde_json::json!(description);
+    let (endpoint, _) = server("200 OK", "", body.to_string());
+    let page = source(&endpoint)
+        .query_tasks(
+            &TaskQuery::default(),
+            &PageRequest {
+                cursor: None,
+                limit: 1,
+            },
+        )
+        .await
+        .expect("a non-trailing marker is visible content, not a reserved slot");
+    assert_eq!(page.items[0].content.as_deref(), Some(description));
+    assert!(page.items[0].metadata.is_empty());
+}
+
+#[tokio::test]
 async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
     let (endpoint, _) = server("200 OK", "", include_str!("fixtures/projects.json"));
     let projects = source(&endpoint)
@@ -320,6 +418,14 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
         .unwrap();
     assert_eq!(projects.items[0].title, "Fixture project");
     assert_eq!(projects.items[0].content.as_deref(), Some("Project body"));
+    assert_eq!(
+        projects.items[0].metadata["caller.enabled"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        projects.items[0].repositories[0].as_str(),
+        "github.com/acme/work"
+    );
     assert_eq!(
         projects.items[0].labels[0].color.as_deref(),
         Some("#00ff00")
@@ -354,7 +460,7 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
         )
         .await
         .unwrap();
-    assert_eq!(edges.items[0].to.0, "i2");
+    assert_eq!(edges.items[0].to.id(), "i2");
     let (endpoint, _) = server("200 OK", "", include_str!("fixtures/issue-relations.json"));
     let edges = source(&endpoint)
         .task_dependencies(
@@ -367,7 +473,7 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
         )
         .await
         .unwrap();
-    assert_eq!(edges.items[0].from.0, "i3");
+    assert_eq!(edges.items[0].from.id(), "i3");
     let (endpoint, _) = server(
         "200 OK",
         "",
@@ -387,7 +493,7 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
             .unwrap()
             .items[0]
             .to
-            .0,
+            .id(),
         "p2"
     );
 }
@@ -471,6 +577,331 @@ async fn graphql_rate_limit_uses_http_hint_and_viewer_id_is_validated() {
 }
 
 #[tokio::test]
+async fn a_far_end_in_another_source_is_read_from_the_reserved_key_at_both_levels() {
+    // `relatedIssue` and `relatedProject` hold a Linear id and nothing else, so an edge
+    // into another source is the one edge no Linear relation can name. It is read from the
+    // near item's own reserved key and served after the native relations are spent.
+    for projects in [false, true] {
+        let (root, fixture) = if projects {
+            ("project", include_str!("fixtures/project-relations.json"))
+        } else {
+            ("issue", include_str!("fixtures/issue-relations.json"))
+        };
+        let request = PageRequest {
+            cursor: None,
+            limit: 50,
+        };
+        let (endpoint, _) = server("200 OK", "", fixture);
+        let native = if projects {
+            source(&endpoint)
+                .project_dependencies(&"p1".into(), Direction::DependsOn, &request)
+                .await
+                .unwrap()
+        } else {
+            source(&endpoint)
+                .task_dependencies(&"i1".into(), Direction::DependsOn, &request)
+                .await
+                .unwrap()
+        };
+        assert_eq!(
+            native.items.len(),
+            1,
+            "{root}: the native relation is first"
+        );
+        let tail = native
+            .next
+            .expect("a recorded far end still owes the walk a page");
+
+        let (endpoint, _) = server("200 OK", "", fixture);
+        let recorded = if projects {
+            source(&endpoint)
+                .project_dependencies(
+                    &"p1".into(),
+                    Direction::DependsOn,
+                    &PageRequest {
+                        cursor: Some(tail),
+                        limit: 50,
+                    },
+                )
+                .await
+                .unwrap()
+        } else {
+            source(&endpoint)
+                .task_dependencies(
+                    &"i1".into(),
+                    Direction::DependsOn,
+                    &PageRequest {
+                        cursor: Some(tail),
+                        limit: 50,
+                    },
+                )
+                .await
+                .unwrap()
+        };
+        assert_eq!(recorded.items.len(), 1, "{root}");
+        assert_eq!(recorded.items[0].to.id(), "elsewhere:P-9", "{root}");
+        assert_eq!(recorded.items[0].to.kind, ItemKind::Project, "{root}");
+        assert_eq!(
+            recorded.items[0].from.id(),
+            if projects { "p1" } else { "i1" },
+            "{root}"
+        );
+        assert!(recorded.next.is_none(), "{root}");
+
+        // The reverse of a recorded edge is derived from the far end, never recorded here.
+        let (endpoint, _) = server("200 OK", "", fixture);
+        let reverse = if projects {
+            source(&endpoint)
+                .project_dependencies(&"p1".into(), Direction::DependedOnBy, &request)
+                .await
+                .unwrap()
+        } else {
+            source(&endpoint)
+                .task_dependencies(&"i1".into(), Direction::DependedOnBy, &request)
+                .await
+                .unwrap()
+        };
+        assert!(reverse.next.is_none(), "{root}");
+        assert!(
+            reverse.items.iter().all(|edge| !edge.from.is_qualified()),
+            "{root}"
+        );
+    }
+}
+
+/// One Linear relations response for `root`, whose description records `recorded`.
+fn relations_recording(root: &str, recorded: &serde_json::Value) -> String {
+    let slot = format!(
+        "body\n\n<!-- onetaskgraph.metadata\n{}\n-->",
+        serde_json::json!({ "onetaskgraph.depends_on": recorded })
+    );
+    serde_json::json!({"data":{(root):{
+        "description": slot,
+        "relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+        "inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+    }}})
+    .to_string()
+}
+
+#[tokio::test]
+async fn linear_may_not_record_a_far_end_its_own_relations_can_name() {
+    // `relations` on an issue holds issues and on a project holds projects, all of this
+    // workspace. Recording one of those is a plan Linear itself would have drawn, so it is
+    // refused rather than read — that is the native-first rule, enforced at the boundary.
+    // Writing this source's own name out is the same entry spelled differently, so it is
+    // refused on the same terms: `work` is what this source is configured as.
+    for (projects, root, misplaced) in [
+        (false, "issue", serde_json::json!(["ENG-2"])),
+        (
+            false,
+            "issue",
+            serde_json::json!([{"id":"ENG-2","kind":"task"}]),
+        ),
+        (
+            false,
+            "issue",
+            serde_json::json!([{"id":"work:ENG-2","kind":"task"}]),
+        ),
+        (
+            true,
+            "project",
+            serde_json::json!([{"id":"PRJ-2","kind":"project"}]),
+        ),
+        (
+            true,
+            "project",
+            serde_json::json!([{"id":"work:PRJ-2","kind":"project"}]),
+        ),
+    ] {
+        let (endpoint, _) = server("200 OK", "", relations_recording(root, &misplaced));
+        let request = PageRequest {
+            cursor: None,
+            limit: 50,
+        };
+        let source = source(&endpoint);
+        let error = if projects {
+            source
+                .project_dependencies(&"p1".into(), Direction::DependsOn, &request)
+                .await
+        } else {
+            source
+                .task_dependencies(&"i1".into(), Direction::DependsOn, &request)
+                .await
+        }
+        .expect_err("a same-source far end of the kind Linear relates");
+        let message = format!("{error}");
+        assert!(message.contains("relate natively"), "{message}");
+        assert!(message.contains("onetaskgraph.depends_on"), "{message}");
+    }
+}
+
+#[tokio::test]
+async fn linear_records_the_far_end_no_relation_of_its_own_can_hold() {
+    // The two cases no Linear relation can express: an item of another source, and one at
+    // the other level of this one — which this source's own name may qualify, because
+    // naming the source says nothing about a level `relations` cannot cross.
+    for (recorded, expected) in [
+        (
+            serde_json::json!([{"id":"elsewhere:P-9","kind":"project"}]),
+            "elsewhere:P-9",
+        ),
+        (
+            serde_json::json!([{"id":"PRJ-9","kind":"project"}]),
+            "PRJ-9",
+        ),
+        (
+            serde_json::json!([{"id":"work:PRJ-9","kind":"project"}]),
+            "work:PRJ-9",
+        ),
+    ] {
+        let (endpoint, _) = server("200 OK", "", relations_recording("issue", &recorded));
+        let first = source(&endpoint)
+            .task_dependencies(
+                &"i1".into(),
+                Direction::DependsOn,
+                &PageRequest {
+                    cursor: None,
+                    limit: 50,
+                },
+            )
+            .await
+            .expect("the native page is answered");
+        let tail = first.next.expect("a recorded far end still owes a page");
+
+        let (endpoint, _) = server("200 OK", "", relations_recording("issue", &recorded));
+        let recorded_page = source(&endpoint)
+            .task_dependencies(
+                &"i1".into(),
+                Direction::DependsOn,
+                &PageRequest {
+                    cursor: Some(tail),
+                    limit: 50,
+                },
+            )
+            .await
+            .expect("the recorded tail is answered");
+        assert_eq!(recorded_page.items.len(), 1, "{recorded}");
+        assert_eq!(recorded_page.items[0].from.id(), "i1", "{recorded}");
+        assert_eq!(recorded_page.items[0].to.id(), expected, "{recorded}");
+        assert_eq!(
+            recorded_page.items[0].to.kind,
+            ItemKind::Project,
+            "{recorded}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_recorded_cursor_is_refused_in_the_direction_that_never_issued_it() {
+    // The recorded tail is forward-only: the reverse of a recorded edge is derived from
+    // the far end and is never written down here. So a reverse read handed the forward
+    // tail's cursor is resuming a walk it did not come from, and answering it would return
+    // forward edges to a caller who asked which items depend on this one.
+    // An offset that is not a number resumes nothing at all, and is the other way to
+    // present a cursor this source never reported.
+    //
+    // Both refusals are decided from the cursor alone, so this source is pointed at a port
+    // nothing listens on: an answer at all would mean the request was made first.
+    let source = source("http://127.0.0.1:1/graphql");
+    for (projects, direction, cursor, expected) in [
+        (
+            false,
+            Direction::DependedOnBy,
+            "onetaskgraph.depends_on:0",
+            "reverse dependency read",
+        ),
+        (
+            true,
+            Direction::DependedOnBy,
+            "onetaskgraph.depends_on:0",
+            "reverse dependency read",
+        ),
+        (
+            false,
+            Direction::DependsOn,
+            "onetaskgraph.depends_on:x",
+            "is not a recorded-edge cursor",
+        ),
+    ] {
+        let request = PageRequest {
+            cursor: Some(onetaskgraph_plugin_api::Cursor(cursor.to_owned())),
+            limit: 50,
+        };
+        let error = if projects {
+            source
+                .project_dependencies(&"p1".into(), direction, &request)
+                .await
+        } else {
+            source
+                .task_dependencies(&"i1".into(), direction, &request)
+                .await
+        }
+        .expect_err("a cursor no walk of this source reported");
+        let message = format!("{error}");
+        assert!(message.contains(cursor), "{message}");
+        assert!(message.contains(expected), "{message}");
+    }
+}
+
+#[tokio::test]
+async fn a_reserved_dependency_entry_this_interface_cannot_read_is_refused_by_name() {
+    for (recorded, expected) in [
+        (
+            serde_json::json!([{"id":"","kind":"project"}]),
+            "cannot be empty",
+        ),
+        (
+            serde_json::json!([{"id":"bad source:P-9","kind":"project"}]),
+            "source name",
+        ),
+        (
+            serde_json::json!([{"id":"elsewhere:","kind":"project"}]),
+            "native id",
+        ),
+        (
+            serde_json::json!("elsewhere:P-9"),
+            "not a list of dependency endpoints",
+        ),
+    ] {
+        let (endpoint, _) = server("200 OK", "", relations_recording("issue", &recorded));
+        let error = source(&endpoint)
+            .task_dependencies(
+                &"i1".into(),
+                Direction::DependsOn,
+                &PageRequest {
+                    cursor: None,
+                    limit: 50,
+                },
+            )
+            .await
+            .expect_err("an entry this interface cannot represent");
+        let message = format!("{error}");
+        assert!(message.contains(expected), "{recorded}: {message}");
+    }
+}
+
+#[tokio::test]
+async fn a_reserved_dependency_key_holding_the_wrong_shape_is_refused_by_name() {
+    let body = r#"{"data":{"issue":{"description":"body\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":7}\n-->","relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}"#;
+    let (endpoint, _) = server("200 OK", "", body);
+    let error = source(&endpoint)
+        .task_dependencies(
+            &"i1".into(),
+            Direction::DependsOn,
+            &PageRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
+        .await
+        .expect_err("a number is not a list of endpoints");
+    assert!(
+        format!("{error}").contains("onetaskgraph.depends_on"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
 async fn dependency_cursors_are_sent_on_second_task_and_project_requests() {
     let request = PageRequest {
         cursor: None,
@@ -484,7 +915,7 @@ async fn dependency_cursors_are_sent_on_second_task_and_project_requests() {
             "relatedIssue"
         };
         let body = format!(
-            r#"{{"data":{{"{root}":{{"relations":{{"nodes":[{{"type":"blocks","{related}":{{"id":"other"}}}}],"pageInfo":{{"hasNextPage":true,"endCursor":"next-edge"}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
+            r#"{{"data":{{"{root}":{{"description":null,"relations":{{"nodes":[{{"type":"blocks","{related}":{{"id":"other"}}}}],"pageInfo":{{"hasNextPage":true,"endCursor":"next-edge"}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
         );
         let (endpoint, _) = server("200 OK", "", body);
         let first = if projects {
@@ -500,7 +931,7 @@ async fn dependency_cursors_are_sent_on_second_task_and_project_requests() {
         };
         let cursor = first.next.unwrap();
         let body = format!(
-            r#"{{"data":{{"{root}":{{"relations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
+            r#"{{"data":{{"{root}":{{"description":null,"relations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
         );
         let (endpoint, wire) = server("200 OK", "", body);
         let second = PageRequest {
@@ -707,7 +1138,7 @@ async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
         .unwrap()
         .items
         .remove(0);
-    assert_eq!(edge.from.0, "p3");
+    assert_eq!(edge.from.id(), "p3");
     let (endpoint, wire) = server("200 OK", "", include_str!("fixtures/projects.json"));
     source(&endpoint)
         .query_projects(

@@ -1,13 +1,34 @@
 {
   "data": {
     "project": {
+      "description": "A near item whose far end lives in another source.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":[{\"id\":\"elsewhere:P-9\",\"kind\":\"project\"}]}\n-->",
       "relations": {
-        "nodes": [{ "type": "blocks", "relatedProject": { "id": "p2" } }],
-        "pageInfo": { "hasNextPage": false, "endCursor": null }
+        "nodes": [
+          {
+            "type": "blocks",
+            "relatedProject": {
+              "id": "p2"
+            }
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        }
       },
       "inverseRelations": {
-        "nodes": [{ "type": "blocks", "project": { "id": "p3" } }],
-        "pageInfo": { "hasNextPage": false, "endCursor": null }
+        "nodes": [
+          {
+            "type": "blocks",
+            "project": {
+              "id": "p3"
+            }
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        }
       }
     }
   }

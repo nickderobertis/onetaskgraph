@@ -160,7 +160,7 @@ the source can do natively, and what configuration it is being built with.
 | `protocol_version` | integer | The version the engine is speaking. See §6. |
 | `engine.name` | string | For the plugin's diagnostics only. |
 | `engine.version` | string | The engine's own version. Advisory. |
-| `source_name` | string | The configured name, matching `^[a-z0-9][a-z0-9-]*$`. **For error messages only** — see §3.2. |
+| `source_name` | string | The configured name, matching `^[a-z0-9][a-z0-9-]*$`. **For error messages and for recognising itself in a qualified id** — see §3.2. |
 | `config` | object | This source's `config:` block, verbatim. |
 | `secrets` | object | String to string. Only the variables this plugin asked for; see §3.1. |
 
@@ -217,12 +217,18 @@ is no second spelling of either, anywhere, and nothing translates between spelli
 A plugin must not echo a secret value into a response, into an error message, or onto
 standard error.
 
-### 3.2 A plugin never learns its own address
+### 3.2 A plugin never speaks in qualified ids
 
-`source_name` is in the handshake so a plugin can quote it in an error message and
-for nothing else. Inside the plugin every identifier is a bare `NativeId` — the
-source's own opaque string. Qualifying one into `<source>:<native>` is the engine's
-job. A plugin that returns a qualified id has returned a wrong id.
+Inside the plugin every identifier it *reports* is a bare `NativeId` — the source's own
+opaque string. Qualifying one into `<source>:<native>` is the engine's job. A plugin that
+returns a qualified id has returned a wrong id.
+
+`source_name` is in the handshake for two uses and no others: quoting the source in an
+error message, and recognising itself in a qualified id a *near item recorded* under
+`onetaskgraph.depends_on` (§4.8), which is how a plugin tells a far end its own backend
+could have related from one in a system it knows nothing about. Nothing else about a
+plugin's behaviour may depend on it: a source answers the same way whatever a document
+chose to call it.
 
 A `NativeId` is any non-empty string, colons included: the engine splits a qualified
 id on its **first** colon precisely so that stays true.
@@ -386,12 +392,65 @@ carries it.
 ```
 
 `direction` is `"depends-on"` or `"depended-on-by"`. `result` is a
-`Page<DependencyEdge>`, each edge being
-`{"from": "<native id>", "to": "<native id>", "kind": "blocks"}` where `kind` is
-`"blocks"` or `"related"`, and `from` **depends on** `to`.
+`Page<DependencyEdge>`, each edge being `{"from":{"id":"<qualified id>",
+"kind":"task"},"to":{"id":"<qualified id>","kind":"project"},"kind":"blocks"}`.
+An endpoint kind is `"task"` or `"project"`; an edge kind is `"blocks"` or
+`"related"`, and `from` **depends on** `to`.
 
-Both edge ends are ids **within this source**. A cross-source edge would need state
-the engine is forbidden to hold, so there is no way to express one.
+**`from` depends on `to` in both directions**, which is the part worth reading twice: the
+direction says which end the caller asked about, not which end the edge starts at. A
+backend that spells the relationship from the blocking side — GitHub's `blockedBy` and
+`blocking` are one relationship read from either end — reports the *same* edge for both,
+with the item that waits as `from`. A plugin that mirrored the edge for
+`"depended-on-by"` would make one relationship read as two contradictory ones.
+
+An endpoint may be in another source. One rule decides where each edge lives, and every
+plugin follows it: **the backend's own relationship wherever that relationship can name
+the far end, and the reserved key only where it cannot.** A plugin reads and writes its
+edges natively for every far end its backend can hold, so the backend knows the graph and
+its own interface draws it.
+
+A far end in another source is the case no backend can hold — nothing relates an id in a
+system it knows nothing about — so every plugin falls back for that one, and none falls
+back for a far end its own relationship can name. The fallback is the near item's
+`onetaskgraph.depends_on` metadata: a list of endpoints, each either a bare native id
+naming a task or `{"id": "<source>:<native>", "kind": "project"}`, and each read as one
+`"blocks"` edge from the near item to that endpoint.
+
+Only the forward direction is ever recorded. The reverse of a recorded edge is derived
+from the far end, exactly as a `"forward-only"` plugin's reverse is, so a plugin never
+returns a recorded edge for `"depended-on-by"`.
+
+**The fallback is refused where the backend could have answered.** A plugin rejects a
+recorded endpoint its own relationship can name — an id of the kind that relationship
+holds, naming an item of the plugin's own source — with `{"kind": "malformed"}` naming the
+entry, because such an edge belongs in the backend where its own interface can draw it.
+An unqualified id names the plugin's own source implicitly and `<own name>:<native>` names
+it in writing, so **both spellings are refused**: which one a plan happened to use says
+nothing about where the edge belongs. An endpoint qualified to a *different* source is
+never refused — that is the case this key exists for — and neither is an endpoint at a
+level the backend cannot relate across, which is a gap of the same shape and stays the
+key's case however it is qualified. So a GitHub issue refuses `I_sibling` and
+`<own name>:I_sibling` alike, and accepts a board or another source; a GitHub draft, having
+no relationship at all, accepts anything.
+
+Comparing against its own name is the one thing a plugin's configured name decides, and it
+learns that name from the handshake and nowhere else (§3.2).
+
+The engine reports such an edge and never follows it: the read names the far end, and
+fetching it is the caller's next command against that qualified id. Keeping the far id on
+the near item is plugin-owned work data, not the forbidden engine-side index or mirror —
+what the invariant forbids is the engine holding a resolution from one source's id to
+another's, and reporting an id a plugin already owns holds nothing.
+
+**A cursor is resumed only in the direction that reported it.** Only a forward walk ever
+reaches the recorded fallback, so its tail cursor names a position no reverse walk has; a
+plugin handed one in the reverse direction refuses it, naming the cursor, rather than
+answering an empty page — which reads as a walk that ended — or, worse, serving the
+forward edges it points at. The engine never sends one: a dependency query's fingerprint
+carries its direction, so a token minted forwards is refused before it resumes a reverse
+walk. A peer writing the protocol by hand can, which is why the plugin refuses rather than
+trusting.
 
 A plugin that declared `"both-directions"` answers both directions itself, and must
 never return an empty page for a direction it declared.

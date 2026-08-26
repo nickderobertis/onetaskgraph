@@ -3,9 +3,11 @@
 #
 # It has no credentialed tests of its own — the live journeys belong to the two hosted
 # plugin crates. What it does own is the shape of the lane: `just test-live` is only a
-# sweep if every project actually declares the target, and `.github/workflows/live.yml`
+# sweep if every project actually declares the target, `.github/workflows/live.yml`
 # is only a signal if each job carries exactly one credential under the one name the
-# product reads. Both are asserted here so neither can be quietly removed.
+# product reads, and the lane is only non-required while its tests carry `#[ignore]` and
+# its target passes `--include-ignored`. All three are asserted here so none can be
+# quietly removed.
 # llmlint: ignore-file[live_tier_compiles_and_requires_credential] empty live lane passes by design
 set -euo pipefail
 
@@ -71,6 +73,35 @@ for project_file in sorted(
         )
     if "test-live" not in targets:
         problems.append(f"{project_file}: has no test-live target, so `just test-live` skips it")
+        continue
+
+    # The live lane is non-required by decision, and `#[ignore]` is what makes that true
+    # rather than stated: `check` runs `cargo test -p <crate>`, which runs every test
+    # target the crate has, so an un-ignored live test is part of a required — and cached —
+    # check on any machine exporting the credential. Both halves are asserted, because
+    # either one alone silently stops the lane running at all.
+    live_test = project_file.parent / "tests" / "live.rs"
+    if not live_test.exists():
+        continue
+    source = read(live_test, "that crate's live lane")
+    # Attributes only: the doc comments beside them explain the rule, and a check that
+    # could not tell those apart would make the explanation impossible to write down.
+    attributes = [line.strip() for line in source.splitlines() if line.lstrip().startswith("#[")]
+    declared = sum(attribute.startswith(("#[test]", "#[tokio::test")) for attribute in attributes)
+    ignored = sum(attribute.startswith("#[ignore") for attribute in attributes)
+    if declared and ignored < declared:
+        problems.append(
+            f"{live_test}: declares {declared} live test(s) but only {ignored} carry "
+            "`#[ignore]`, so `cargo test -p <crate>` runs them inside the everyday gate"
+        )
+    target = targets["test-live"] if isinstance(targets["test-live"], dict) else {}
+    options = target.get("options", {})
+    command = options.get("command", "") if isinstance(options, dict) else ""
+    if declared and "--include-ignored" not in command:
+        problems.append(
+            f"{project_file}: its test-live command does not pass `--include-ignored`, "
+            "so the ignored live tests never run anywhere"
+        )
 
 workflow = Path(".github/workflows/live.yml")
 if not workflow.exists():
@@ -113,9 +144,10 @@ if problems:
         print(f"  {problem}", file=sys.stderr)
     print(
         "check-live-lane: add the missing test-live target to the project.json named above, "
-        "or restore the credential line in .github/workflows/live.yml under the name the "
-        "product reads; then re-run 'just test-live' to confirm the sweep reaches every "
-        "project again.",
+        "restore the credential line in .github/workflows/live.yml under the name the "
+        "product reads, or put `#[ignore]` back on the live test and `--include-ignored` "
+        "back on the target that runs it; then re-run 'just test-live' to confirm the "
+        "sweep reaches every project again.",
         file=sys.stderr,
     )
     sys.exit(1)

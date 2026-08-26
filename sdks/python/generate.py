@@ -235,6 +235,16 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
                 )
                 for line in generated
             ]
+        if any("dict[str, Any]" in line for line in generated):
+            generated = [
+                line.replace("from pydantic import ", "from pydantic import JsonValue, ")
+                .replace("dict[str, Any]", "dict[str, JsonValue]")
+                .replace(
+                    "JsonValue, AwareDatetime, BaseModel, Field, RootModel",
+                    "AwareDatetime, BaseModel, Field, JsonValue, RootModel",
+                )
+                for line in generated
+            ]
         source.write_text(
             "# ruff: noqa: E501  # Generated descriptions preserve the schema's text.\n"
             + "\n".join(generated)

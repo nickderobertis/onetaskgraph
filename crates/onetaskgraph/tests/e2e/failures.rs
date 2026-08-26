@@ -7,7 +7,9 @@
 use std::process::Output;
 
 use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
-use crate::fixtures::{ROWS, dataset, document, qualified};
+use crate::fixtures::{
+    ROWS, dataset, document, github_projects_recording, linear_recording, qualified,
+};
 use serde_json::{Value, json};
 
 fn host_at(boundary: SourceBoundary) -> Sandbox {
@@ -406,4 +408,56 @@ fn a_configuration_with_no_sources_at_all_says_what_to_add() {
         "no sources",
         "onetaskgraph.yaml",
     );
+}
+
+/// A workspace whose `T-1` records `recorded`, built for the plugin named alongside it.
+type Recording = fn(&Sandbox, Value) -> Value;
+
+#[test]
+fn a_reserved_dependency_key_holding_what_it_must_not_is_refused_with_a_next_action() {
+    // The reserved key is a fallback for a far end no backend can name, and every way of
+    // getting that wrong reaches a user the same way: through the binary, non-zero, with
+    // the offending entry quoted and something to do about it.
+    //
+    // Both sources whose backend has a relationship of its own answer for themselves. A
+    // rule one plugin enforces and the other only documents is a rule half this product
+    // follows, and a caller cannot tell which half answered by reading the answer.
+    for (plugin, recording) in [
+        ("github-projects", github_projects_recording as Recording),
+        ("linear", linear_recording as Recording),
+    ] {
+        for (recorded, problem) in [
+            // Misplaced: this source's own relationship holds tasks of this source, so
+            // recording one there is a plan the backend itself would have drawn.
+            (json!(["T-2"]), "relate natively"),
+            // The same entry with this source's own name written out. Which spelling a
+            // plan happened to use says nothing about where the edge belongs.
+            (
+                json!([{"id": "work:T-2", "kind": "task"}]),
+                "relate natively",
+            ),
+            // Invalid: neither of these is an endpoint this interface can represent.
+            (
+                json!({"id": "elsewhere:P-9"}),
+                "not a list of dependency endpoints",
+            ),
+            (
+                json!([{"id": "bad source:P-9", "kind": "project"}]),
+                "source name",
+            ),
+        ] {
+            let sandbox = Sandbox::new();
+            let block = recording(&sandbox, recorded.clone());
+            sandbox.project_document(&document(
+                &json!({"work": {"plugin": plugin, "config": block}}),
+            ));
+            let output = run(&sandbox, &["task", "deps", &qualified("work", "T-1")]);
+            refused(&output, problem, "sources list");
+            assert!(
+                stderr(&output).contains("onetaskgraph.depends_on"),
+                "{plugin} {recorded}: the message must name the key it is about:\n{}",
+                stderr(&output)
+            );
+        }
+    }
 }

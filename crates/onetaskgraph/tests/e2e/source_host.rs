@@ -11,6 +11,8 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
+use crate::common::Sandbox;
+
 /// The shipped host, ready to be given a connection on its standard input.
 fn source_host() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
@@ -204,4 +206,146 @@ fn a_host_that_cannot_write_its_answer_exits_one_and_says_so_on_standard_error()
         "the program names itself: {complaint}"
     );
     assert!(!complaint.contains("panicked"), "{complaint}");
+}
+
+/// One plugin of this build, hosted over a fixture the shared journeys already use.
+///
+/// The credential travels in the handshake rather than through `sandbox`, which is here
+/// only because the fixtures take one; the listener each starts outlives it.
+struct Hosted {
+    kind: &'static str,
+    config: Value,
+    secrets: Value,
+}
+
+impl Hosted {
+    /// Both sources whose recorded tail is reachable by cursor, each over a `T-1` that
+    /// records one far end in a source nothing configures.
+    fn every_kind(sandbox: &Sandbox) -> Vec<Self> {
+        let far = json!([{"id": "elsewhere:P-9", "kind": "project"}]);
+        vec![
+            Self {
+                kind: "linear",
+                config: crate::fixtures::linear_recording(sandbox, far.clone()),
+                secrets: json!({"LINEAR_API_KEY": "fixture-key"}),
+            },
+            Self {
+                kind: "github-projects",
+                config: crate::fixtures::github_projects_recording(sandbox, far),
+                secrets: json!({"GITHUB_PROJECTS_FIXTURE_TOKEN": "test-token"}),
+            },
+        ]
+    }
+
+    fn connection(&self) -> (Command, Value) {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+        command.args(["plugin-serve", self.kind]);
+        let handshake = json!({
+            "id": "0",
+            "method": "initialize",
+            "params": {
+                "protocol_version": 1,
+                "engine": {"name": "onetaskgraph", "version": "0.1.0"},
+                "source_name": "work",
+                "config": self.config,
+                "secrets": self.secrets
+            }
+        });
+        (command, handshake)
+    }
+}
+
+fn answers(mut command: Command, handshake: &Value, requests: &[Value]) -> Vec<Value> {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the host runs");
+    let mut input = child.stdin.take().expect("stdin was piped");
+    writeln!(input, "{handshake}").expect("the host is listening");
+    for request in requests {
+        writeln!(input, "{request}").expect("the host is listening");
+    }
+    drop(input);
+    let output = child.wait_with_output().expect("the host finishes");
+    assert_eq!(output.status.code(), Some(0), "the host exits cleanly");
+    let answered = String::from_utf8(output.stdout).expect("responses are UTF-8");
+    let lines: Vec<Value> = answered
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
+        .collect();
+    assert_eq!(lines.len(), requests.len() + 1, "{answered}");
+    assert_eq!(lines[0]["result"]["protocol_version"], 1, "{answered}");
+    lines[1..].to_vec()
+}
+
+fn resumed(direction: &str, cursor: &str) -> Value {
+    json!({
+        "id": "1",
+        "method": "task_dependencies",
+        "params": {
+            "id": "T-1",
+            "direction": direction,
+            "page": {"cursor": cursor, "limit": 50}
+        }
+    })
+}
+
+fn refusal(hosted: &Hosted, request: Value) -> String {
+    let (command, handshake) = hosted.connection();
+    let answered = answers(command, &handshake, &[request]);
+    let answer = &answered[0];
+    assert!(
+        answer.get("result").is_none(),
+        "{}: this must not be answered: {answer}",
+        hosted.kind
+    );
+    answer["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{}: an error carries a message: {answer}", hosted.kind))
+        .to_owned()
+}
+
+#[test]
+fn the_shipped_host_refuses_a_recorded_cursor_no_walk_of_its_own_reported() {
+    // The reserved key holds forward edges and nothing else: the reverse of a recorded
+    // edge is derived from the far end, never written down on the near item. So the tail
+    // cursor a forward walk reports is one no reverse walk can be resuming, and serving it
+    // would answer "what depends on T-1" with what T-1 depends on. A cursor under that
+    // namespace which resumes nothing at all is the other way to get this wrong.
+    //
+    // The engine cannot reach either state — a dependency query's fingerprint carries its
+    // direction, and the engine only ever replays a cursor a source itself reported — so
+    // these journeys drive the host directly, the way a peer on the protocol does.
+    let sandbox = Sandbox::new();
+    let cursor = "onetaskgraph.depends_on:0";
+    for hosted in Hosted::every_kind(&sandbox) {
+        let reversed = refusal(&hosted, resumed("depended-on-by", cursor));
+        assert!(reversed.contains(cursor), "{}: {reversed}", hosted.kind);
+        assert!(
+            reversed.contains("reverse dependency read"),
+            "{}: {reversed}",
+            hosted.kind
+        );
+
+        let unreadable = refusal(&hosted, resumed("depends-on", "onetaskgraph.depends_on:x"));
+        assert!(
+            unreadable.contains("is not a recorded-edge cursor"),
+            "{}: {unreadable}",
+            hosted.kind
+        );
+
+        // The same cursor in the direction that reported it still answers, so both
+        // refusals are about the request rather than about a cursor this host cannot read.
+        let (command, handshake) = hosted.connection();
+        let answered = answers(command, &handshake, &[resumed("depends-on", cursor)]);
+        let items = &answered[0]["result"]["items"];
+        assert_eq!(items[0]["from"]["id"], "T-1", "{}: {items}", hosted.kind);
+        assert_eq!(
+            items[0]["to"]["id"], "elsewhere:P-9",
+            "{}: {items}",
+            hosted.kind
+        );
+    }
 }
