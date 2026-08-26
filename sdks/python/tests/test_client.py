@@ -155,6 +155,100 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
     assert run(client.config_show()).settings
 
 
+def folders(tmp_path: Path) -> Path:
+    """Configure two real Markdown folders, one holding a task and one empty."""
+    source = tmp_path / "from" / "tasks"
+    source.mkdir(parents=True)
+    (source / "T-1.md").write_text(
+        "---\ntitle: Alpha engine\nstatus: todo\nmetadata: {caller.count: 3}\n---\nthe core\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "into").mkdir()
+    folder = {"status_mapping": {"todo": "todo"}}
+    (tmp_path / "onetaskgraph.yaml").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "from": {
+                        "plugin": "local-md",
+                        "config": {"root": str(tmp_path / "from"), **folder},
+                    },
+                    "into": {
+                        "plugin": "local-md",
+                        "config": {"root": str(tmp_path / "into"), **folder},
+                    },
+                    "sealed": {
+                        "plugin": "in-memory",
+                        "config": {"capabilities": {"writes": "unsupported"}},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_copy_drives_the_binary_and_reports_each_item(binary: Path, tmp_path: Path) -> None:
+    """Copy through the real binary: a dry run, a create, an update, and a refusal."""
+    client = Client(binary, cwd=folders(tmp_path))
+
+    planned = run(client.task_copy(ids=["from:T-1"], to="into", dry_run=True))
+    assert [(item.source.root, item.destination, item.action) for item in planned.items] == [
+        ("from:T-1", None, "created")
+    ]
+    assert not (tmp_path / "into" / "tasks").exists()
+
+    created = run(client.task_copy(ids=[GlobalId(root="from:T-1")], to="into"))
+    assert [
+        (item.source.root, item.destination.root, item.action) for item in created.items
+    ] == [("from:T-1", "into:T-1", "created")]
+    # The destination really holds it, read back through the same binary.
+    assert run(client.task_show(id="into:T-1")).items[0].item.metadata == {
+        "caller.count": 3,
+        "onetaskgraph.origin": "from:T-1",
+    }
+
+    (tmp_path / "into" / "tasks" / "T-1.md").write_text(
+        "---\ntitle: Alpha engine, edited\nstatus: todo\n"
+        "metadata: {caller.count: 3, onetaskgraph.origin: from:T-1}\n---\nthe core\n",
+        encoding="utf-8",
+    )
+    updated = run(client.task_copy(ids=["into:T-1"], to="from"))
+    assert [(item.destination.root, item.action) for item in updated.items] == [
+        ("from:T-1", "updated")
+    ]
+    assert run(client.task_show(id="from:T-1")).items[0].item.title == "Alpha engine, edited"
+
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.task_copy(ids=["from:T-1"], to="sealed"))
+    assert refused.value.exit_code == 1
+    assert "sealed cannot be written" in str(refused.value)
+
+
+def test_project_copy_drives_the_binary(binary: Path, tmp_path: Path) -> None:
+    """Copy a project and the tasks in it, then copy it again without duplicating them."""
+    root = folders(tmp_path)
+    (root / "from" / "projects").mkdir()
+    (root / "from" / "projects" / "P-1.md").write_text(
+        "---\ntitle: Engine\nstatus: todo\n---\nthe engine\n", encoding="utf-8"
+    )
+    (root / "from" / "tasks" / "T-1.md").write_text(
+        "---\ntitle: Alpha engine\nstatus: todo\nproject: P-1\n---\nthe core\n",
+        encoding="utf-8",
+    )
+    client = Client(binary, cwd=root)
+
+    first = run(client.project_copy(id="from:P-1", to="into"))
+    assert [(item.source.root, item.action) for item in first.items] == [
+        ("from:P-1", "created"),
+        ("from:T-1", "created"),
+    ]
+    second = run(client.project_copy(id="from:P-1", to="into"))
+    assert [item.action for item in second.items] == ["unchanged", "unchanged"]
+    assert [item.id.root for item in run(client.task_list(source=["into"])).items] == ["into:T-1"]
+
+
 def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
     """Use environment before the packaged PATH fallback and reject no executable."""
     config = configured(tmp_path)

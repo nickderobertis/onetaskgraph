@@ -19,9 +19,11 @@ RESPONSE_ROOTS = {
     "task_list": "QueryResponseOfQualifiedTask",
     "task_show": "QueryResponseOfQualifiedTask",
     "task_deps": "QueryResponseOfQualifiedEdge",
+    "task_copy": "CopyReport",
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
     "project_deps": "QueryResponseOfQualifiedEdge",
+    "project_copy": "CopyReport",
     "label_list": "QueryResponseOfQualifiedLabel",
     "search": "QueryResponseOfSearchHit",
     "sources_list": "SourceListing",
@@ -30,6 +32,7 @@ RESPONSE_ROOTS = {
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
     "allow_partial": "bool",
+    "dry_run": "bool",
     "default_sources": "list[str] | tuple[str, ...]",
     "direction": "choices",
     "explain": "bool",
@@ -37,18 +40,23 @@ OPTION_TYPES = {
     "kind": "choices",
     "label": "list[str] | tuple[str, ...]",
     "limit": "int",
+    "match_by": "str",
     "no_project": "bool",
+    "no_tasks": "bool",
     "not_label": "list[str] | tuple[str, ...]",
     "page": "str",
     "page_size": "int",
     "project": "str",
+    "recreate": "bool",
     "search": "str",
     "set": "list[str] | tuple[str, ...]",
     "source": "list[str] | tuple[str, ...]",
     "status": "choice_list",
+    "to": "str",
 }
 OPTION_PLACEHOLDERS = {
     "allow_partial": None,
+    "dry_run": None,
     "default_sources": "NAMES",
     "direction": "DIRECTION",
     "explain": None,
@@ -56,15 +64,19 @@ OPTION_PLACEHOLDERS = {
     "kind": "KIND",
     "label": "L",
     "limit": "N",
+    "match_by": "KEY",
     "no_project": None,
+    "no_tasks": None,
     "not_label": "L",
     "page": "TOKEN",
     "page_size": "N",
     "project": "P",
+    "recreate": None,
     "search": "TEXT",
     "set": "PATH=VALUE",
     "source": "S",
     "status": "S",
+    "to": "SOURCE",
 }
 
 
@@ -378,12 +390,19 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         match command:
             case ("search",):
                 positional = "text"
-            case ("task" | "project", "show" | "deps"):
+            case ("task", "copy"):
+                positional = "ids"
+            case ("task" | "project", "show" | "deps" | "copy"):
                 positional = "id"
             case _:
                 positional = None
         keywords = [item for item in option_names(command) if item != positional]
-        positional_type = "GlobalId | str" if positional == "id" else "str"
+        positional_type = {
+            "id": "GlobalId | str",
+            # `task copy` takes one or more ids, which is the one variadic positional the
+            # command surface has; the client passes each of them through.
+            "ids": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
+        }.get(positional, "str")
         parameters = (
             ([f"{positional}: {positional_type}"] if positional else [])
             + ["*"]

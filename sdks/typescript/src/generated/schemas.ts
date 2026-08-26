@@ -90,6 +90,173 @@ export const runtimeSchemas = {
     "title": "Capabilities",
     "type": "object"
   },
+  "CopyAction": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The four things a copy can do to one item.",
+    "oneOf": [
+      {
+        "const": "created",
+        "description": "The destination held no counterpart, so one was created.",
+        "type": "string"
+      },
+      {
+        "const": "updated",
+        "description": "The destination held a counterpart and it now reads as the source does.",
+        "type": "string"
+      },
+      {
+        "const": "unchanged",
+        "description": "The destination held a counterpart that already read that way; nothing was written.",
+        "type": "string"
+      },
+      {
+        "const": "orphaned",
+        "description": "The destination holds a counterpart the source no longer does. A copy never\ndeletes, so it was left exactly as it is.",
+        "type": "string"
+      }
+    ],
+    "title": "CopyAction"
+  },
+  "CopyOutcome": {
+    "$defs": {
+      "CopyAction": {
+        "description": "The four things a copy can do to one item.",
+        "oneOf": [
+          {
+            "const": "created",
+            "description": "The destination held no counterpart, so one was created.",
+            "type": "string"
+          },
+          {
+            "const": "updated",
+            "description": "The destination held a counterpart and it now reads as the source does.",
+            "type": "string"
+          },
+          {
+            "const": "unchanged",
+            "description": "The destination held a counterpart that already read that way; nothing was written.",
+            "type": "string"
+          },
+          {
+            "const": "orphaned",
+            "description": "The destination holds a counterpart the source no longer does. A copy never\ndeletes, so it was left exactly as it is.",
+            "type": "string"
+          }
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What happened to one item.",
+    "properties": {
+      "action": {
+        "$ref": "#/$defs/CopyAction",
+        "description": "Which of the four things happened."
+      },
+      "destination": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GlobalId"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The qualified id it was written to, or `null` for a dry run that would create."
+      },
+      "source": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The qualified id the item was read from."
+      }
+    },
+    "required": [
+      "source",
+      "action"
+    ],
+    "title": "CopyOutcome",
+    "type": "object"
+  },
+  "CopyReport": {
+    "$defs": {
+      "CopyAction": {
+        "description": "The four things a copy can do to one item.",
+        "oneOf": [
+          {
+            "const": "created",
+            "description": "The destination held no counterpart, so one was created.",
+            "type": "string"
+          },
+          {
+            "const": "updated",
+            "description": "The destination held a counterpart and it now reads as the source does.",
+            "type": "string"
+          },
+          {
+            "const": "unchanged",
+            "description": "The destination held a counterpart that already read that way; nothing was written.",
+            "type": "string"
+          },
+          {
+            "const": "orphaned",
+            "description": "The destination holds a counterpart the source no longer does. A copy never\ndeletes, so it was left exactly as it is.",
+            "type": "string"
+          }
+        ]
+      },
+      "CopyOutcome": {
+        "description": "What happened to one item.",
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/CopyAction",
+            "description": "Which of the four things happened."
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GlobalId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The qualified id it was written to, or `null` for a dry run that would create."
+          },
+          "source": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The qualified id the item was read from."
+          }
+        },
+        "required": [
+          "source",
+          "action"
+        ],
+        "type": "object"
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What a copy did, one entry per item.\n\nThe same per-item outcomes reach every consumer: the machine-readable output renders\nthis, the rendered output renders this, and a Rust caller is handed it.",
+    "properties": {
+      "items": {
+        "description": "One entry per item the copy considered, in the order it considered them.",
+        "items": {
+          "$ref": "#/$defs/CopyOutcome"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "title": "CopyReport",
+    "type": "object"
+  },
   "CredentialLayer": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "Which layer answered for one credential name.",

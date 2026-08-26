@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from .models import (
+    CopyReport,
     EffectiveConfig,
     GlobalId,
     QueryResponseOfQualifiedEdge,
@@ -62,6 +63,34 @@ class GeneratedClient:
             page_size=page_size,
             set=set,
             source=source,
+        )
+
+    async def project_copy(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        match_by: str | None = None,
+        no_tasks: bool | None = None,
+        page_size: int | None = None,
+        recreate: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        to: str | None = None,
+    ) -> CopyReport:
+        """Run ``onetaskgraph project copy``."""
+        return await self._invoke(
+            ["project", "copy"],
+            CopyReport,
+            id=id,
+            default_sources=default_sources,
+            dry_run=dry_run,
+            match_by=match_by,
+            no_tasks=no_tasks,
+            page_size=page_size,
+            recreate=recreate,
+            set=set,
+            to=to,
         )
 
     async def project_deps(
@@ -198,6 +227,32 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             set=set,
+        )
+
+    async def task_copy(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        match_by: str | None = None,
+        page_size: int | None = None,
+        recreate: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        to: str | None = None,
+    ) -> CopyReport:
+        """Run ``onetaskgraph task copy``."""
+        return await self._invoke(
+            ["task", "copy"],
+            CopyReport,
+            ids=ids,
+            default_sources=default_sources,
+            dry_run=dry_run,
+            match_by=match_by,
+            page_size=page_size,
+            recreate=recreate,
+            set=set,
+            to=to,
         )
 
     async def task_deps(

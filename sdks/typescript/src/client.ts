@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
 import { binaryCommands } from "./generated/commands.ts";
 import type {
+  CopyReport,
   EffectiveConfig,
   QueryResponseOfQualifiedEdge,
   QueryResponseOfQualifiedLabel,
@@ -30,6 +31,11 @@ export type FilterOptions = QueryOptions & {
   statuses?: string[];
   search?: string;
   fields?: "title" | "content" | "both";
+};
+export type CopyOptions = {
+  matchBy?: string;
+  recreate?: boolean;
+  dryRun?: boolean;
 };
 export type ClientOptions = {
   binaryPath?: string;
@@ -67,16 +73,24 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   "task list": "QueryResponseOfQualifiedTask",
   "task show": "QueryResponseOfQualifiedTask",
   "task deps": "QueryResponseOfQualifiedEdge",
+  "task copy": "CopyReport",
   "project list": "QueryResponseOfQualifiedProject",
   "project show": "QueryResponseOfQualifiedProject",
   "project deps": "QueryResponseOfQualifiedEdge",
+  "project copy": "CopyReport",
   "label list": "QueryResponseOfQualifiedLabel",
   search: "QueryResponseOfSearchHit",
 };
 
+// A copy is one write into one destination, so exit 4 — some sources answered and some
+// did not — is not a code it can produce and not one this client accepts from it.
 const partialResponseCommands = new Set(
   Object.keys(responseRoots).filter(
-    (command) => command !== "config show" && command !== "sources list",
+    (command) =>
+      command !== "config show" &&
+      command !== "sources list" &&
+      command !== "task copy" &&
+      command !== "project copy",
   ),
 );
 
@@ -118,6 +132,14 @@ function addFilters(args: string[], options: FilterOptions): void {
   for (const status of options.statuses ?? []) args.push("--status", status);
   if (options.search !== undefined) args.push("--search", options.search);
   if (options.fields !== undefined) args.push("--in", options.fields);
+}
+
+function copyFlags(options: CopyOptions): string[] {
+  const args: string[] = [];
+  if (options.matchBy !== undefined) args.push("--match-by", options.matchBy);
+  if (options.recreate) args.push("--recreate");
+  if (options.dryRun) args.push("--dry-run");
+  return args;
 }
 
 export class OnetaskgraphClient {
@@ -167,6 +189,9 @@ export class OnetaskgraphClient {
     if (options.direction) args.push("--direction", options.direction);
     return this.run("task deps", args);
   }
+  taskCopy(ids: string[], to: string, options: CopyOptions = {}): Promise<CopyReport> {
+    return this.run("task copy", [...ids, "--to", to, ...copyFlags(options)]);
+  }
   projectList(options: FilterOptions = {}): Promise<QueryResponseOfQualifiedProject> {
     const args: string[] = [];
     addFilters(args, options);
@@ -183,6 +208,15 @@ export class OnetaskgraphClient {
     addPage(args, options);
     if (options.direction) args.push("--direction", options.direction);
     return this.run("project deps", args);
+  }
+  projectCopy(
+    id: string,
+    to: string,
+    options: CopyOptions & { noTasks?: boolean } = {},
+  ): Promise<CopyReport> {
+    const args = [id, "--to", to, ...copyFlags(options)];
+    if (options.noTasks) args.push("--no-tasks");
+    return this.run("project copy", args);
   }
   labelList(options: QueryOptions = {}): Promise<QueryResponseOfQualifiedLabel> {
     const args: string[] = [];
