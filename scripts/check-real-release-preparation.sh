@@ -10,6 +10,19 @@ fail() {
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fail \
   "could not resolve the repository root" "run this from a checkout of the repository"
+
+# Both production jobs that run release preparation use ubuntu-latest. On Windows, Git
+# applies this hermetic fixture's insteadOf transport rewrite before release-plz chooses a
+# forge, so the pinned tool sees the local bare repository rather than the deliberately
+# GitHub-shaped public origin and refuses it. Linux and macOS retain the real-checkout,
+# real-release-plz journey below; Windows has no production release path for it to model.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-real-release-preparation: skipped on Windows (release preparation runs only on ubuntu-latest, and Git rewrites this hermetic fixture's GitHub-shaped origin before release-plz detects its forge there); the Linux and macOS lanes gate both real release decisions" >&2
+    exit 0
+    ;;
+esac
+
 [ -f "$ROOT/scripts/scratch-clone.sh" ] || fail \
   "scripts/scratch-clone.sh is missing, so hook-exported git state cannot be cleared" \
   "restore scripts/scratch-clone.sh and rerun"
