@@ -69,4 +69,11 @@ jobs:
           # can exist in both CI and the local secrets file — and a single name is
           # preferred over a translation. Do not "correct" this into a break.
           GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
+          # The board this lane writes to, named here rather than discovered. The lane refuses
+          # to pick a board itself — "whichever project was updated most recently" once walked a
+          # credentialed write lane onto the board plans are authored on — so without these two
+          # it skips. They are not secret: they are the fixture board this lane's own items live
+          # on, and naming them in the open is what makes the blast radius reviewable.
+          GH_PROJECTS_OWNER: nickderobertis
+          GH_PROJECTS_NUMBER: "1"
         run: just test-live onetaskgraph-github-projects

@@ -25,6 +25,14 @@
 //! mutation when both ends are issues. Required checks use only the local fixture server; the
 //! ignored credentialed lane verifies the current schema, creates and reads back one uniquely
 //! named draft, then deletes every matching project item and verifies that no residue remains.
+//!
+//! That lane writes only to the board `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` name, and
+//! skips — as it does without `GH_PROJECTS_TOKEN` — when they are absent. Requiring the board to
+//! be nominated is what keeps a credentialed write lane off a board nobody nominated; it never
+//! asks GitHub which project was updated most recently. Before it starts, the lane also clears
+//! any item titled the way it titles its own artifacts, which is self-healing after an
+//! interrupted run: a process killed between its write and its cleanup leaves an artifact the
+//! next run removes.
 #![deny(missing_docs)]
 
 use std::collections::BTreeMap;

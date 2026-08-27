@@ -1,4 +1,12 @@
 //! Structural and residue-free write verification against GitHub's real Projects v2 API.
+//!
+//! This lane holds a credential and writes to a real board, so it writes only to the board
+//! `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` name. Nothing here asks GitHub which project was
+//! updated most recently: requiring the board to be nominated is what keeps the lane off a board
+//! nobody nominated, and without those two names the lane skips exactly as it does without the
+//! credential. Separately, and for a different reason, each run clears residue matching the title
+//! pattern it writes its own artifacts under before it starts — that is self-healing after an
+//! interrupted run, so an artifact outliving a killed process is removed by the next run.
 
 use std::{collections::BTreeMap, env, future::Future};
 
@@ -160,13 +168,36 @@ async fn remove_live_metadata_field(token: &str, project_id: &str) -> Result<(),
     Err("live metadata field cleanup left the temporary field behind".to_owned())
 }
 
+/// The prefix of every board item this lane writes.
+///
+/// The rest of a title is `<process id>-<microsecond timestamp>`, which makes one run's artifact
+/// unique and makes any run's artifact recognisable to the next run.
+const ARTIFACT_PREFIX: &str = "onetaskgraph live cleanup ";
+
+fn artifact_title(process_id: u32, stamp_micros: i64) -> String {
+    format!("{ARTIFACT_PREFIX}{process_id}-{stamp_micros}")
+}
+
+/// Whether a board item is one this lane wrote, in this run or in an earlier one.
+fn is_artifact_title(title: &str) -> bool {
+    let Some(suffix) = title.strip_prefix(ARTIFACT_PREFIX) else {
+        return false;
+    };
+    let Some((process_id, stamp_micros)) = suffix.split_once('-') else {
+        return false;
+    };
+    [process_id, stamp_micros]
+        .iter()
+        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
 async fn artifact_item_ids(
     token: &str,
     project_id: &str,
-    title: &str,
+    matches: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<String>, String> {
     let mut after = Value::Null;
-    let mut matches = Vec::new();
+    let mut found = Vec::new();
     loop {
         let response = graphql_variables(
             token,
@@ -183,8 +214,11 @@ async fn artifact_item_ids(
             .and_then(Value::as_array)
             .ok_or_else(|| "live artifact lookup nodes is not an array".to_owned())?;
         for node in nodes {
-            if node.pointer("/content/title").and_then(Value::as_str) == Some(title) {
-                matches.push(
+            let Some(title) = node.pointer("/content/title").and_then(Value::as_str) else {
+                continue;
+            };
+            if matches(title) {
+                found.push(
                     node.get("id")
                         .and_then(Value::as_str)
                         .ok_or_else(|| "live artifact has no project item id".to_owned())?
@@ -197,7 +231,7 @@ async fn artifact_item_ids(
             .and_then(Value::as_bool)
             != Some(true)
         {
-            return Ok(matches);
+            return Ok(found);
         }
         let next = connection
             .pointer("/pageInfo/endCursor")
@@ -210,9 +244,13 @@ async fn artifact_item_ids(
     }
 }
 
-async fn remove_live_artifacts(token: &str, project_id: &str, title: &str) -> Result<(), String> {
+async fn remove_live_artifacts(
+    token: &str,
+    project_id: &str,
+    matches: &dyn Fn(&str) -> bool,
+) -> Result<(), String> {
     for _ in 0..10 {
-        let item_ids = artifact_item_ids(token, project_id, title).await?;
+        let item_ids = artifact_item_ids(token, project_id, matches).await?;
         if item_ids.is_empty() {
             return Ok(());
         }
@@ -238,7 +276,7 @@ async fn remove_live_artifacts(token: &str, project_id: &str, title: &str) -> Re
     }
     Err(format!(
         "live artifact cleanup left project items: {}",
-        artifact_item_ids(token, project_id, title)
+        artifact_item_ids(token, project_id, matches)
             .await?
             .join(", ")
     ))
@@ -250,7 +288,8 @@ async fn remove_live_state(
     title: &str,
     remove_metadata_field: bool,
 ) -> Result<(), String> {
-    let item_result = remove_live_artifacts(token, project_id, title).await;
+    let item_result =
+        remove_live_artifacts(token, project_id, &|candidate| candidate == title).await;
     let field_result = if remove_metadata_field {
         remove_live_metadata_field(token, project_id).await
     } else {
@@ -283,71 +322,111 @@ where
     }
 }
 
-async fn discover_project(token: &str) -> Result<Option<(String, u32)>, String> {
-    let configured_owner = env::var("GH_PROJECTS_OWNER").ok();
-    let configured_number = env::var("GH_PROJECTS_NUMBER").ok();
-    if configured_owner.is_some() || configured_number.is_some() {
-        let owner = configured_owner.expect("GH_PROJECTS_OWNER must accompany GH_PROJECTS_NUMBER");
-        let number = configured_number
-            .expect("GH_PROJECTS_NUMBER must accompany GH_PROJECTS_OWNER")
-            .parse::<u32>()
-            .expect("GH_PROJECTS_NUMBER must be an unsigned integer");
-        if !owner.trim().is_empty() && number > 0 && number <= i32::MAX as u32 {
-            return Ok(Some((owner, number)));
+/// What the environment says about running this lane.
+#[derive(Debug, PartialEq, Eq)]
+enum LiveLane {
+    /// Every input the lane needs: the credential, and the board named by whoever ran it.
+    Run {
+        token: String,
+        owner: String,
+        project_number: u32,
+    },
+    /// An input is absent. The lane is non-required, so it prints this reason and returns.
+    Skip(String),
+}
+
+/// Decides whether this lane may run, and against which board.
+///
+/// The board comes from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` or the lane does not run.
+/// Nothing here asks GitHub which project was updated most recently, for the viewer or for any
+/// organization: a credentialed lane that writes and deletes must reach only a board somebody
+/// nominated by name, and that requirement — rather than any cleanup — is what keeps it off a
+/// board nobody nominated. `required` is `ONETASKGRAPH_LIVE_REQUIRED=1`, which turns a skip into
+/// a failure, the same pairing an absent credential already has. `Err` is a misconfiguration,
+/// which fails whether or not the lane is required.
+fn live_lane(
+    token: Option<&str>,
+    owner: Option<&str>,
+    project_number: Option<&str>,
+    required: bool,
+) -> Result<LiveLane, String> {
+    let skip = |reason: String| -> Result<LiveLane, String> {
+        if required {
+            return Err(format!(
+                "{reason}, and ONETASKGRAPH_LIVE_REQUIRED=1 requires the GitHub Projects live \
+                 lane to run"
+            ));
         }
-        panic!(
-            "GH_PROJECTS_OWNER must be non-blank and GH_PROJECTS_NUMBER must be a positive GraphQL Int"
-        );
+        Ok(LiveLane::Skip(reason))
+    };
+    let Some(token) = token else {
+        return skip("GH_PROJECTS_TOKEN is not set".to_owned());
+    };
+    if token.trim().is_empty() {
+        return skip("GH_PROJECTS_TOKEN is empty".to_owned());
     }
-    let response = graphql(
+    let owner = owner.map(str::trim).filter(|owner| !owner.is_empty());
+    let project_number = project_number
+        .map(str::trim)
+        .filter(|number| !number.is_empty());
+    let (owner, project_number) = match (owner, project_number) {
+        (Some(owner), Some(project_number)) => (owner, project_number),
+        (None, None) => {
+            return skip(
+                "GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER are not set, and this lane writes only \
+                 to the board those two name rather than discovering one"
+                    .to_owned(),
+            );
+        }
+        (present, _) => {
+            return Err(format!(
+                "GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER name one board together: {} is missing",
+                if present.is_some() {
+                    "GH_PROJECTS_NUMBER"
+                } else {
+                    "GH_PROJECTS_OWNER"
+                }
+            ));
+        }
+    };
+    let number = project_number
+        .parse::<u32>()
+        .ok()
+        .filter(|number| *number > 0 && *number <= i32::MAX as u32)
+        .ok_or_else(|| {
+            format!("GH_PROJECTS_NUMBER must be a positive GraphQL Int, not {project_number:?}")
+        })?;
+    Ok(LiveLane::Run {
+        token: token.to_owned(),
+        owner: owner.to_owned(),
+        project_number: number,
+    })
+}
+
+/// Reads the node id of the one nominated board, so residue can be cleared before the journey
+/// builds the source it later reads the same board through.
+async fn nominated_project_id(
+    token: &str,
+    owner: &str,
+    project_number: u32,
+) -> Result<String, String> {
+    let response = graphql_variables(
         token,
-        "query { viewer { login projectsV2(first:1, orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { number } } } }",
-        "viewer project discovery",
+        "query($owner:String!,$number:Int!){repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id}}}}",
+        "nominated board lookup",
+        json!({"owner":owner,"number":project_number}),
     )
     .await?;
-    if let (Some(owner), Some(number)) = (
-        response
-            .pointer("/data/viewer/login")
-            .and_then(Value::as_str),
-        response
-            .pointer("/data/viewer/projectsV2/nodes/0/number")
-            .and_then(Value::as_u64),
-    ) {
-        return Ok(Some((
-            owner.to_owned(),
-            u32::try_from(number)
-                .map_err(|_| "viewer project number does not fit in a u32".to_owned())?,
-        )));
-    }
-    let response = graphql(
-        token,
-        "query { viewer { organizations(first:100) { nodes { login projectsV2(first:1, orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { number } } } } } }",
-        "organization project discovery",
-    )
-    .await
-    .map_err(|error| {
-        format!(
-            "the viewer owns no visible project, and {error}; set GH_PROJECTS_OWNER and \
-             GH_PROJECTS_NUMBER when organization enumeration is unavailable"
-        )
-    })?;
-    let organizations = response
-        .pointer("/data/viewer/organizations/nodes")
-        .and_then(Value::as_array)
+    response
+        .pointer("/data/repositoryOwner/projectV2/id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
         .ok_or_else(|| {
-            "organization project discovery returned no organizations connection".to_owned()
-        })?;
-    Ok(organizations.iter().find_map(|organization| {
-        Some((
-            organization.get("login")?.as_str()?.to_owned(),
-            u32::try_from(
-                organization
-                    .pointer("/projectsV2/nodes/0/number")?
-                    .as_u64()?,
+            format!(
+                "GH_PROJECTS_OWNER={owner} with GH_PROJECTS_NUMBER={project_number} names no \
+                 project this credential can see"
             )
-            .ok()?,
-        ))
-    }))
+        })
 }
 
 fn named_type(value: &Value) -> Option<&str> {
@@ -624,37 +703,44 @@ fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
 #[ignore = "the live lane: run it with `just test-live onetaskgraph-github-projects`"]
 #[tokio::test]
 async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
-    // llmlint: ignore-block[live_tier_compiles_and_requires_credential] This lane is non-required by decision (AGENTS.md), so an absent credential skips; `ONETASKGRAPH_LIVE_REQUIRED=1` demands one.
-    let Ok(token) = env::var("GH_PROJECTS_TOKEN") else {
-        assert_ne!(
-            env::var("ONETASKGRAPH_LIVE_REQUIRED").as_deref(),
-            Ok("1"),
-            "GH_PROJECTS_TOKEN is required by the GitHub Projects live lane"
-        );
-        eprintln!("skipped live GitHub Projects journey: GH_PROJECTS_TOKEN is not set");
-        return;
+    // llmlint: ignore-block[live_tier_compiles_and_requires_credential] This lane is non-required by decision (AGENTS.md), so an absent credential or an unnamed board skips; `ONETASKGRAPH_LIVE_REQUIRED=1` demands both.
+    let lane = live_lane(
+        env::var("GH_PROJECTS_TOKEN").ok().as_deref(),
+        env::var("GH_PROJECTS_OWNER").ok().as_deref(),
+        env::var("GH_PROJECTS_NUMBER").ok().as_deref(),
+        env::var("ONETASKGRAPH_LIVE_REQUIRED").as_deref() == Ok("1"),
+    )
+    .unwrap_or_else(|error| panic!("GitHub Projects live lane is misconfigured: {error}"));
+    let (token, owner, project_number) = match lane {
+        LiveLane::Run {
+            token,
+            owner,
+            project_number,
+        } => (token, owner, project_number),
+        LiveLane::Skip(reason) => {
+            eprintln!("skipped live GitHub Projects journey: {reason}");
+            return;
+        }
     };
-    if token.trim().is_empty() {
-        assert_ne!(
-            env::var("ONETASKGRAPH_LIVE_REQUIRED").as_deref(),
-            Ok("1"),
-            "GH_PROJECTS_TOKEN is empty in the GitHub Projects live lane"
-        );
-        eprintln!("skipped live GitHub Projects journey: GH_PROJECTS_TOKEN is empty");
-        return;
-    }
     // llmlint: ignore-end[live_tier_compiles_and_requires_credential]
-    let (owner, project_number) = discover_project(&token)
-        .await
-        .unwrap_or_else(|error| panic!("GitHub Projects discovery failed: {error}"))
-        .expect(
-            "GH_PROJECTS_TOKEN can enumerate projects, but none are visible; set \
-             GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER to a visible project containing at least \
-             one Issue",
-        );
     verify_mutation_schema(&token)
         .await
         .unwrap_or_else(|error| panic!("GitHub mutation schema drifted: {error}"));
+    let project_id = nominated_project_id(&token, &owner, project_number)
+        .await
+        .unwrap_or_else(|error| panic!("GitHub Projects live board lookup failed: {error}"));
+    // Self-healing after an interrupted run: `run_then_cleanup` removes this run's artifact
+    // whether the journey passes or fails, but a killed or timed-out process never reaches it,
+    // and the artifact it wrote would then sit on the board forever. So each run first clears
+    // every item titled the way this lane titles its own. This recovers from an interruption
+    // and nothing more — what keeps the lane off a board nobody nominated is `live_lane`
+    // requiring the board to be named, since a sweep of this lane's own prefix could not help a
+    // board the lane should never have been writing to.
+    remove_live_artifacts(&token, &project_id, &is_artifact_title)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("live residue left by an earlier interrupted run could not be cleared: {error}")
+        });
     let source = onetaskgraph_github_projects::Plugin
         .build(
             &SourceName::new("github-live").unwrap(),
@@ -828,7 +914,10 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         "every reverse issue dependency must resolve through projectItems to a visible project"
     );
 
-    let project_id = project.id.0.clone();
+    assert_eq!(
+        project.id.0, project_id,
+        "the source must read the board GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER name"
+    );
     let metadata_field_created = match ensure_metadata_field(&token, &project_id).await {
         Ok(created) => created,
         Err(error) => {
@@ -849,11 +938,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
             );
         }
     };
-    let title = format!(
-        "onetaskgraph live cleanup {}-{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_micros()
-    );
+    let title = artifact_title(std::process::id(), chrono::Utc::now().timestamp_micros());
     let written_title = title.clone();
     let cleanup_title = title.clone();
     run_then_cleanup(
@@ -945,4 +1030,100 @@ async fn cleanup_runs_after_a_failed_live_journey() {
         Err("injected mutation failure".to_owned())
     );
     assert!(cleaned.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+// The board and credential decision is a function of the environment alone, so these drive the
+// same `live_lane` the journey above drives, with the values the journey passes it. Nothing here
+// reaches GitHub: that is the point — after this change no code path in this crate's tests can
+// choose a board except from the two names.
+
+#[test]
+fn the_lane_takes_its_board_only_from_the_two_names() {
+    assert_eq!(
+        live_lane(Some("live-token"), Some("nickderobertis"), Some("1"), false),
+        Ok(LiveLane::Run {
+            token: "live-token".to_owned(),
+            owner: "nickderobertis".to_owned(),
+            project_number: 1,
+        })
+    );
+}
+
+#[test]
+fn an_unnamed_board_skips_the_lane_and_says_which_two_names_it_needs() {
+    let Ok(LiveLane::Skip(reason)) = live_lane(Some("live-token"), None, None, false) else {
+        panic!("a credential without a named board must skip rather than discover one");
+    };
+    assert!(
+        reason.contains("GH_PROJECTS_OWNER") && reason.contains("GH_PROJECTS_NUMBER"),
+        "the skip must name both variables, not just report a skip: {reason}"
+    );
+}
+
+#[test]
+fn an_unnamed_board_fails_the_lane_when_the_live_tier_is_required() {
+    let error = live_lane(Some("live-token"), None, None, true)
+        .expect_err("ONETASKGRAPH_LIVE_REQUIRED=1 must turn the unnamed-board skip into a failure");
+    assert!(
+        error.contains("GH_PROJECTS_OWNER")
+            && error.contains("GH_PROJECTS_NUMBER")
+            && error.contains("ONETASKGRAPH_LIVE_REQUIRED"),
+        "the failure must name both variables and what demanded them: {error}"
+    );
+}
+
+#[test]
+fn an_absent_credential_keeps_its_own_skip_or_fail_pairing() {
+    let Ok(LiveLane::Skip(reason)) = live_lane(None, Some("nickderobertis"), Some("1"), false)
+    else {
+        panic!("an absent credential must skip");
+    };
+    assert!(reason.contains("GH_PROJECTS_TOKEN"), "{reason}");
+    let error = live_lane(None, Some("nickderobertis"), Some("1"), true).expect_err(
+        "ONETASKGRAPH_LIVE_REQUIRED=1 must turn the absent-credential skip into a failure",
+    );
+    assert!(error.contains("GH_PROJECTS_TOKEN"), "{error}");
+    let Ok(LiveLane::Skip(empty)) = live_lane(Some("  "), Some("nickderobertis"), Some("1"), false)
+    else {
+        panic!("an empty credential must skip");
+    };
+    assert!(empty.contains("GH_PROJECTS_TOKEN"), "{empty}");
+}
+
+#[test]
+fn half_a_board_and_an_unusable_number_are_misconfigurations_rather_than_skips() {
+    for (owner, number) in [
+        (Some("nickderobertis"), None),
+        (None, Some("1")),
+        (Some("nickderobertis"), Some("0")),
+        (Some("nickderobertis"), Some("not-a-number")),
+        (Some("nickderobertis"), Some("4294967295")),
+    ] {
+        live_lane(Some("live-token"), owner, number, false).expect_err(&format!(
+            "GH_PROJECTS_OWNER={owner:?} with GH_PROJECTS_NUMBER={number:?} must fail rather than \
+             skip or select a board"
+        ));
+    }
+}
+
+#[test]
+fn residue_recovery_matches_this_lanes_own_artifacts_and_nothing_else() {
+    // The stale item this lane's recovery exists for: another run's process id and timestamp.
+    assert!(is_artifact_title(
+        "onetaskgraph live cleanup 2533-1787816134627361"
+    ));
+    assert!(is_artifact_title(&artifact_title(std::process::id(), 1)));
+    for foreign in [
+        "AI Orchestrator plan",
+        "onetaskgraph live cleanup",
+        "onetaskgraph live cleanup 2533",
+        "onetaskgraph live cleanup abc-1787816134627361",
+        "onetaskgraph live cleanup 2533-",
+        "copy of onetaskgraph live cleanup 2533-1787816134627361",
+    ] {
+        assert!(
+            !is_artifact_title(foreign),
+            "residue recovery must not match {foreign:?}"
+        );
+    }
 }
