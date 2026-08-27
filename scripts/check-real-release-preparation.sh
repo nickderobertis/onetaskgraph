@@ -181,13 +181,16 @@ printf '\n' >> "$repo/crates/onetaskgraph-core/src/lib.rs" || fail "could not mo
 git -C "$repo" add crates/onetaskgraph-core/src/lib.rs || fail "could not stage the partial-publish fixture" "check the scratch repository and rerun"
 git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet -m "fix(core): partial-publish recovery fixture" || fail \
   "could not commit the partial-publish fixture" "check the scratch repository and rerun"
+# The earlier cases leave an open fixture PR. Remove only that scratch state so registry
+# recovery proves its fresh-proposal branch as well as the update branch exercised above.
+: > "$scratch/state/proposals" || fail "could not clear the scratch proposal state" "check scratch-directory permissions and rerun"
 case_log="$scratch/partial-publish.log"
 if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
   sed 's/^/    /' "$case_log" >&2
   fail "the real preparation failed for the partly published head" "fix the phase named above and rerun"
 fi
-grep -qF "updated release pull request #41" "$case_log" || fail \
-  "the partly published run did not propose registry recovery" "advance beyond the tagged version when release-plz reports registry lag"
+grep -qF "proposed release pull request" "$case_log" || fail \
+  "the partly published run did not create a registry-recovery proposal" "advance beyond the tagged version and open its release pull request"
 recovery_version="${released_version%.*}.$((${released_version##*.} + 1))"
 [ "$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" = "$recovery_version" ] || fail \
   "the partly published run did not select $recovery_version" "advance every crate to the patch after the attempted release"
