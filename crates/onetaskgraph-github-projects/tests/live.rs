@@ -334,15 +334,24 @@ enum LiveLane {
 /// Nothing here asks GitHub which project was updated most recently, for the viewer or for any
 /// organization: a credentialed lane that writes and deletes must reach only a board somebody
 /// nominated by name, and that requirement — rather than any cleanup — is what keeps it off a
-/// board nobody nominated. `required` is `ONETASKGRAPH_LIVE_REQUIRED=1`, which turns a skip into
+/// board nobody nominated. `ONETASKGRAPH_LIVE_REQUIRED=1` turns a skip into
 /// a failure, the same pairing an absent credential already has. `Err` is a misconfiguration,
 /// which fails whether or not the lane is required.
 fn live_lane(
     token: Option<&str>,
     owner: Option<&str>,
     project_number: Option<&str>,
-    required: bool,
+    required: Option<&str>,
 ) -> Result<LiveLane, String> {
+    let required = match required.map(str::trim) {
+        None | Some("") | Some("0") => false,
+        Some("1") => true,
+        Some(other) => {
+            return Err(format!(
+                "ONETASKGRAPH_LIVE_REQUIRED must be 1, 0 or unset, not {other:?}"
+            ));
+        }
+    };
     let skip = |reason: String| -> Result<LiveLane, String> {
         if required {
             return Err(format!(
@@ -702,7 +711,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The live workflow spells these two names too, and the drift gate is the lane's own refusal: project.json runs test-live with ONETASKGRAPH_LIVE_REQUIRED=1, so a name spelled differently on either side fails that job naming both variables rather than skipping green.
         env::var("GH_PROJECTS_OWNER").ok().as_deref(),
         env::var("GH_PROJECTS_NUMBER").ok().as_deref(),
-        env::var("ONETASKGRAPH_LIVE_REQUIRED").as_deref() == Ok("1"),
+        env::var("ONETASKGRAPH_LIVE_REQUIRED").ok().as_deref(),
     )
     .unwrap_or_else(|error| panic!("the GitHub Projects live lane cannot run: {error}"));
     let (token, owner, project_number) = match lane {
@@ -720,6 +729,17 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     verify_mutation_schema(&token)
         .await
         .unwrap_or_else(|error| panic!("GitHub mutation schema drifted: {error}"));
+    // The production boundary validates the board this lane was pointed at — GitHub's owner
+    // grammar and the project number's range — before either reaches GitHub.
+    let source = onetaskgraph_github_projects::Plugin
+        .build(
+            &SourceName::new("github-live").unwrap(),
+            &json!({"owner":owner,"project_number":project_number}),
+            &LiveSecret(token.clone().into()),
+        )
+        .unwrap_or_else(|error| {
+            panic!("the GitHub Projects live lane cannot use this board: {error}")
+        });
     let project_id = nominated_project_id(&token, &owner, project_number)
         .await
         .unwrap_or_else(|error| panic!("GitHub Projects live board lookup failed: {error}"));
@@ -731,13 +751,6 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         .unwrap_or_else(|error| {
             panic!("live residue left by an earlier interrupted run could not be cleared: {error}")
         });
-    let source = onetaskgraph_github_projects::Plugin
-        .build(
-            &SourceName::new("github-live").unwrap(),
-            &json!({"owner":owner,"project_number":project_number}),
-            &LiveSecret(token.clone().into()),
-        )
-        .unwrap();
 
     assert!(source.health().await.unwrap().reachable);
     let capabilities = source.capabilities();
@@ -1025,7 +1038,7 @@ async fn cleanup_runs_after_a_failed_live_journey() {
 #[test]
 fn the_lane_takes_its_board_only_from_the_two_names() {
     assert_eq!(
-        live_lane(Some("live-token"), Some("nickderobertis"), Some("1"), false),
+        live_lane(Some("live-token"), Some("nickderobertis"), Some("1"), None),
         Ok(LiveLane::Run {
             token: "live-token".to_owned(),
             owner: "nickderobertis".to_owned(),
@@ -1036,7 +1049,7 @@ fn the_lane_takes_its_board_only_from_the_two_names() {
 
 #[test]
 fn an_unnamed_board_skips_the_lane_and_says_which_two_names_it_needs() {
-    let Ok(LiveLane::Skip(reason)) = live_lane(Some("live-token"), None, None, false) else {
+    let Ok(LiveLane::Skip(reason)) = live_lane(Some("live-token"), None, None, None) else {
         panic!("a credential without a named board must skip rather than discover one");
     };
     assert!(
@@ -1047,7 +1060,7 @@ fn an_unnamed_board_skips_the_lane_and_says_which_two_names_it_needs() {
 
 #[test]
 fn an_unnamed_board_fails_the_lane_when_the_live_tier_is_required() {
-    let error = live_lane(Some("live-token"), None, None, true)
+    let error = live_lane(Some("live-token"), None, None, Some("1"))
         .expect_err("ONETASKGRAPH_LIVE_REQUIRED=1 must turn the unnamed-board skip into a failure");
     assert!(
         error.contains("GH_PROJECTS_OWNER")
@@ -1059,16 +1072,16 @@ fn an_unnamed_board_fails_the_lane_when_the_live_tier_is_required() {
 
 #[test]
 fn an_absent_credential_keeps_its_own_skip_or_fail_pairing() {
-    let Ok(LiveLane::Skip(reason)) = live_lane(None, Some("nickderobertis"), Some("1"), false)
+    let Ok(LiveLane::Skip(reason)) = live_lane(None, Some("nickderobertis"), Some("1"), None)
     else {
         panic!("an absent credential must skip");
     };
     assert!(reason.contains("GH_PROJECTS_TOKEN"), "{reason}");
-    let error = live_lane(None, Some("nickderobertis"), Some("1"), true).expect_err(
+    let error = live_lane(None, Some("nickderobertis"), Some("1"), Some("1")).expect_err(
         "ONETASKGRAPH_LIVE_REQUIRED=1 must turn the absent-credential skip into a failure",
     );
     assert!(error.contains("GH_PROJECTS_TOKEN"), "{error}");
-    let Ok(LiveLane::Skip(empty)) = live_lane(Some("  "), Some("nickderobertis"), Some("1"), false)
+    let Ok(LiveLane::Skip(empty)) = live_lane(Some("  "), Some("nickderobertis"), Some("1"), None)
     else {
         panic!("an empty credential must skip");
     };
@@ -1084,7 +1097,7 @@ fn half_a_board_and_an_unusable_number_are_misconfigurations_rather_than_skips()
         (Some("nickderobertis"), Some("not-a-number")),
         (Some("nickderobertis"), Some("4294967295")),
     ] {
-        live_lane(Some("live-token"), owner, number, false).expect_err(&format!(
+        live_lane(Some("live-token"), owner, number, None).expect_err(&format!(
             "GH_PROJECTS_OWNER={owner:?} with GH_PROJECTS_NUMBER={number:?} must fail rather than \
              skip or select a board"
         ));
@@ -1111,4 +1124,24 @@ fn residue_recovery_matches_this_lanes_own_artifacts_and_nothing_else() {
             "residue recovery must not match {foreign:?}"
         );
     }
+}
+
+#[test]
+fn an_unreadable_live_tier_demand_is_a_misconfiguration() {
+    for unusable in ["yes", "true", "2", "on"] {
+        live_lane(
+            Some("live-token"),
+            Some("nickderobertis"),
+            Some("1"),
+            Some(unusable),
+        )
+        .expect_err(&format!(
+            "ONETASKGRAPH_LIVE_REQUIRED={unusable:?} must fail rather than quietly mean not-required"
+        ));
+    }
+    assert_eq!(
+        live_lane(Some("live-token"), None, None, Some("0")),
+        live_lane(Some("live-token"), None, None, None),
+        "0 and unset both mean the lane may skip"
+    );
 }
