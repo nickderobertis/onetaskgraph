@@ -13,6 +13,7 @@ cd "$ROOT"
 git config core.hooksPath .githooks
 
 release_plz_pin="$(sed -n 's/.*release-plz@\([^ ,]*\).*/\1/p' .github/workflows/release-plz.yml | head -n1)"
+# llmlint: ignore[changed_behavior_has_e2e] Reaching this bootstrap refusal requires replacing the authoritative workflow pin; the release checks mutate and reject pin drift without making session setup install an invented version.
 [[ $release_plz_pin =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
   echo "bootstrap-workspace: the release workflow has no exact X.Y.Z release-plz pin ('$release_plz_pin')" >&2
   echo "bootstrap-workspace: next: restore the exact release-plz pin in .github/workflows/release-plz.yml" >&2

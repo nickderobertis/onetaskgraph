@@ -10,7 +10,8 @@ fail() {
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fail \
   "could not resolve the repository root" "run this from a checkout of the repository"
-pinned="$(sed -n 's/.*release-plz@\([^ ,]*\).*/\1/p' "$ROOT/.github/workflows/release-plz.yml" | head -n1)"
+pinned="$(sed -n 's/.*release-plz@\([^ ,]*\).*/\1/p' "$ROOT/.github/workflows/release-plz.yml" | head -n1)" || fail \
+  "could not read the workflow's release-plz pin" "restore the readable workflow and rerun"
 [[ $pinned =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "the release workflow has no exact X.Y.Z release-plz pin ('$pinned')" "restore its exact tool pin and rerun"
 [ "$(release-plz --version 2>/dev/null || true)" = "release-plz $pinned" ] || fail \
   "release-plz $pinned is not installed, so the real preparation cannot be exercised" \
@@ -23,7 +24,8 @@ scratch="$(mktemp -d)" || fail "could not create a scratch directory" "check tem
 trap 'rm -rf "$scratch"' EXIT
 repo="$scratch/repo"
 remote="$scratch/origin.git"
-source_branch="$(git -C "$ROOT" branch --show-current)"
+source_branch="$(git -C "$ROOT" branch --show-current)" || fail \
+  "could not determine the branch under review" "check the repository state and rerun"
 [ -n "$source_branch" ] || fail "the checkout is detached, so no branch can be cloned" "check out the branch under review and rerun"
 git clone --quiet --branch "$source_branch" "$ROOT" "$repo" || fail \
   "could not clone the finished tree" "check the current branch and rerun"
@@ -36,17 +38,26 @@ git clone --quiet --branch "$source_branch" "$ROOT" "$repo" || fail \
 # twice before either decision can be observed.
 perl -pi -e 's/^semver_check = true$/semver_check = false/' "$repo/release-plz.toml" || fail \
   "could not disable the unrelated scratch semver pass" "check Perl and rerun"
-git -C "$repo" add -A
+git -C "$repo" add -A || fail "could not stage the tooling-only fixture" "check the scratch repository and rerun"
 git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
   -m "fix(release): prepare tooling-only releases" || fail \
   "could not commit the tooling-only fixture" "check the scratch repository and rerun"
 git init --quiet --bare "$remote" || fail "could not create the local origin" "check scratch-directory permissions"
 git -C "$repo" remote set-url origin "$remote" || fail "could not point the fixture at its local origin" "check git and rerun"
 git -C "$repo" push --quiet --set-upstream origin HEAD || fail "could not seed the local origin" "check git and rerun"
-fixture_base="$(git -C "$repo" branch --show-current)"
+fixture_base="$(git -C "$repo" branch --show-current)" || fail \
+  "could not read the fixture base branch" "check the scratch repository and rerun"
+released_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" || fail \
+  "could not read the fixture's released version" "restore the binary manifest and rerun"
+[[ $released_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail \
+  "the fixture has no plain X.Y.Z released version ('$released_version')" "restore the binary manifest and rerun"
+git --git-dir="$remote" symbolic-ref HEAD "refs/heads/$fixture_base" || fail \
+  "could not set the local origin's default branch" "check the scratch repository and rerun"
+git -C "$repo" switch --quiet --detach "$fixture_base" || fail \
+  "could not detach the tooling-only checkout" "check the scratch repository and rerun"
 
 mkdir -p "$scratch/bin" "$scratch/state" || fail "could not create fixture state directories" "check scratch-directory permissions"
-cat > "$scratch/bin/gh" <<'GH'
+if ! cat > "$scratch/bin/gh" <<'GH'
 #!/usr/bin/env bash
 set -euo pipefail
 case "${1:-} ${2:-}" in
@@ -55,9 +66,13 @@ case "${1:-} ${2:-}" in
   *) echo "gh fixture: unexpected call: $*" >&2; exit 2 ;;
 esac
 GH
+then
+  fail "could not create the gh fixture" "check scratch-directory permissions and free space"
+fi
 chmod +x "$scratch/bin/gh" || fail "could not make the gh fixture executable" "check scratch-directory permissions"
 export GH_FIXTURE_STATE="$scratch/state"
 export GIT_TOKEN=fixture-token
+export GITHUB_REF_NAME="$fixture_base"
 export PATH="$scratch/bin:$PATH"
 
 case_log="$scratch/tooling.log"
@@ -72,7 +87,8 @@ grep -qF "proposed release pull request" "$case_log" || fail \
 (cd "$repo" && scripts/set-version.sh --check) || fail "the proposed tree has version drift" \
   "run scripts/set-version.sh with the selected version and carry every changed manifest"
 
-git -C "$repo" switch --quiet "$fixture_base" || fail "could not restore $fixture_base before the update case" "check the scratch repository and rerun"
+git -C "$repo" switch --quiet --detach "$fixture_base" || fail "could not restore a detached $fixture_base before the update case" "check the scratch repository and rerun"
+unset GITHUB_REF_NAME
 case_log="$scratch/update.log"
 if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
   sed 's/^/    /' "$case_log" >&2
@@ -88,7 +104,7 @@ git -C "$repo" switch --quiet "$fixture_base" || fail "could not restore $fixtur
   "could not restore the tracked working tree for the ineligible case" "check git, tar and free space, then rerun"
 perl -pi -e 's/^semver_check = true$/semver_check = false/' "$repo/release-plz.toml" || fail \
   "could not disable the ineligible fixture's semver pass" "check Perl and rerun"
-git -C "$repo" tag --force v0.2.1 >/dev/null || fail "could not set the ineligible release boundary" "check the scratch repository and rerun"
+git -C "$repo" tag --force "v$released_version" >/dev/null || fail "could not set the ineligible release boundary" "check the scratch repository and rerun"
 printf '\n' >> "$repo/README.md" || fail "could not modify the ineligible README fixture" "check scratch-directory permissions"
 git -C "$repo" add README.md || fail "could not stage the ineligible fixture" "check the scratch repository and rerun"
 git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify -m "docs: ineligible fixture" || fail \
