@@ -1023,9 +1023,7 @@ async fn cleanup_runs_after_a_failed_live_journey() {
 }
 
 // The board and credential decision is a function of the environment alone, so these drive the
-// same `live_lane` the journey above drives, with the values the journey passes it. Nothing here
-// reaches GitHub: that is the point — after this change no code path in this crate's tests can
-// choose a board except from the two names.
+// same `live_lane` the journey drives, with the values it passes, and need no board to do it.
 
 #[test]
 fn the_lane_takes_its_board_only_from_the_two_names() {
