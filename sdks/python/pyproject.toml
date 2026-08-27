@@ -1,12 +1,12 @@
 [project]
 name = "onetaskgraph-sdk"
-version = "0.2.6"
+version = "0.2.7"
 description = "The Python SDK for onetaskgraph, generated from the binary's own JSON Schema bundle."
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
 authors = [{ name = "Nick DeRobertis" }]
-dependencies = ["onetaskgraph-cli==0.2.6", "pydantic>=2.12"]
+dependencies = ["onetaskgraph-cli==0.2.7", "pydantic>=2.12"]
 
 [project.urls]
 Repository = "https://github.com/nickderobertis/onetaskgraph"
