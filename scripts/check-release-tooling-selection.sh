@@ -49,6 +49,10 @@ git -C "$repo" tag "v$version" || fatal "could not tag the scratch baseline" "ch
 mkdir -p "$scratch/bin" || fatal "could not create the stand-in directory" "check scratch-directory permissions and rerun"
 cat > "$scratch/bin/release-plz" <<'STUB'
 #!/usr/bin/env bash
+if [ "${RELEASE_PLZ_STUB_FAIL:-}" = yes ]; then
+  echo "release-plz stand-in: selection failed as requested" >&2
+  exit 1
+fi
 if [ "${RELEASE_PLZ_STUB_INVALID:-}" = yes ]; then
   perl -pi -e 's/^version = "[^"]+"/version = "invalid"/' crates/onetaskgraph/Cargo.toml || {
     echo "release-plz stand-in: could not write invalid fixture" >&2
@@ -162,6 +166,7 @@ expect_refusal "takes no arguments" 2 scripts/select-release-version.sh unexpect
 mv "$scratch/bin/release-plz" "$scratch/release-plz-away" || fatal "could not hide the scratch stand-in" "check scratch-directory permissions and rerun"
 expect_refusal "release-plz is not on PATH" 2 scripts/select-release-version.sh
 mv "$scratch/release-plz-away" "$scratch/bin/release-plz" || fatal "could not restore the scratch stand-in" "check scratch-directory permissions and rerun"
+expect_refusal "release-plz could not decide the next version" 1 env RELEASE_PLZ_STUB_FAIL=yes scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the refusal fixture" "check that git works and rerun"
 expect_refusal "no valid semantic version after release-plz update" 1 env RELEASE_PLZ_STUB_INVALID=yes scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the refusal fixture" "check that git works and rerun"
@@ -183,8 +188,15 @@ git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the
 perl -pi -e 's/^version = "[^"]+"/version = "invalid"/' "$repo/crates/onetaskgraph/Cargo.toml" || fatal "could not invalidate the scratch baseline version" "check scratch-directory permissions and rerun"
 expect_refusal "has no plain X.Y.Z version" 1 scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the refusal fixture" "check that git works and rerun"
-chmod 000 "$repo/crates/onetaskgraph/Cargo.toml" || fatal "could not make the scratch manifest unreadable" "check scratch-directory permissions and rerun"
-expect_refusal "could not read" 1 scripts/select-release-version.sh
-chmod 644 "$repo/crates/onetaskgraph/Cargo.toml" || fatal "could not restore scratch manifest permissions" "check scratch-directory permissions and rerun"
+case "${OS:-} $(uname -s 2>/dev/null || true)" in
+  *Windows_NT* | *msys* | *cygwin* | *MINGW*)
+    echo "check-release-tooling-selection: unreadable-manifest case skipped on Windows (its permission model does not make chmod 000 unreadable); the Linux and macOS lanes gate this refusal" >&2
+    ;;
+  *)
+    chmod 000 "$repo/crates/onetaskgraph/Cargo.toml" || fatal "could not make the scratch manifest unreadable" "check scratch-directory permissions and rerun"
+    expect_refusal "could not read" 1 scripts/select-release-version.sh
+    chmod 644 "$repo/crates/onetaskgraph/Cargo.toml" || fatal "could not restore scratch manifest permissions" "check scratch-directory permissions and rerun"
+    ;;
+esac
 git -C "$repo" tag -d "v$version" >/dev/null || fatal "could not remove the scratch-only tag" "check that git works and rerun"
 expect_refusal "release boundary is unknown" 1 scripts/select-release-version.sh
