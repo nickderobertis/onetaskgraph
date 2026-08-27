@@ -45,11 +45,13 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || fail \
 # crate it considers, which is noise beside the one line that says what went wrong. A
 # variable rather than a temporary file, so there is no log to fail to create or clean up.
 quietly() {
-  local problem="$1" next="$2" output
+  local problem="$1" next="$2" output status
   shift 2
-  if ! output="$("$@" 2>&1)"; then
+  status=0
+  output="$("$@" 2>&1)" || status=$?
+  if [ "$status" -ne 0 ]; then
     printf '%s\n' "$output" >&2
-    fail "$problem" "$next"
+    fail "$problem" "$next" "$status"
   fi
 }
 
@@ -58,8 +60,8 @@ command -v release-plz >/dev/null 2>&1 || fail \
   "install it — the release workflow does, with taiki-e/install-action — then rerun" 2
 
 quietly \
-  "release-plz could not decide the next version" \
-  "fix what it reports above; a registry it cannot reach and a manifest it cannot parse both land here" \
+  "release version selection failed" \
+  "fix what the selector reports above, then rerun" \
   scripts/select-release-version.sh
 
 binary_manifest=crates/onetaskgraph/Cargo.toml

@@ -214,6 +214,19 @@ if ( PATH="$PATH_WITHOUT_RELEASE_PLZ"; hash -r 2>/dev/null; command -v release-p
     "release-plz is still reachable after dropping every directory that carries one, so the case for a machine without it would drive the real tool against the scratch tree" \
     "run 'command -v release-plz' and take it off PATH — a shell function or an alias reaches past the directory scan above"
 fi
+
+# Keep the real preparation and selector scripts in the status-propagation case, while
+# presenting the selector with a toolchain missing only python3. Each command reached before
+# that guard is linked explicitly, so the fixture does not depend on which ambient PATH
+# directory happens to carry Python on a given runner.
+path_without_python="$scratch/path-without-python"
+mkdir -p "$path_without_python" || fatal \
+  "could not create the missing-python fixture" "check scratch-directory permissions and rerun"
+for tool in bash dirname git head sed; do
+  ln -s "$(command -v "$tool")" "$path_without_python/$tool" || fatal \
+    "could not link $tool into the missing-python fixture" "check scratch-directory permissions and rerun"
+done
+readonly path_without_python
 export PATH="$scratch:$PATH"
 export RELEASE_PLZ_STUB_VERSION="$new_version"
 export RELEASE_PLZ_STUB_STATE="$state"
@@ -326,8 +339,11 @@ expect_refusal "a token passed as an argument, where every process on the runner
   "takes no arguments" 2 \
   scripts/prepare-release-pr.sh --git-token from-the-command-line
 expect_refusal "release-plz failing to decide the next version" \
-  "release-plz could not decide the next version" 1 \
+  "release version selection failed" 1 \
   env RELEASE_PLZ_STUB_FAIL=update scripts/prepare-release-pr.sh
+expect_refusal "the selector missing its required Python toolchain" \
+  "python3 is not on PATH" 2 \
+  env PATH="$path_without_python:$scratch" scripts/prepare-release-pr.sh
 expect_refusal "an update that leaves no version to read in the binary's manifest" \
   "no valid semantic version" 1 \
   env RELEASE_PLZ_STUB_INHERIT_VERSION=yes scripts/prepare-release-pr.sh
