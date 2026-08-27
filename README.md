@@ -5,8 +5,8 @@ One interface over the ticketing systems your work actually lives in.
 Tasks, projects, labels and the dependencies between them are spread across Linear, GitHub
 Projects and a folder of Markdown files, and every tool that wants to reach them ends up
 reimplementing all three. `onetaskgraph` implements them once, behind a single query
-surface, and exposes that surface three ways: a command-line tool, a Python SDK, and a
-TypeScript SDK. All three drive the same engine, so they cannot drift apart.
+surface: a command-line tool, the Rust engine crate's library API, and SDKs for Python and
+TypeScript. Every consumer reaches the same engine, so their query semantics cannot drift.
 
 Two properties make it different from a lowest-common-denominator wrapper:
 
@@ -29,10 +29,11 @@ Two properties make it different from a lowest-common-denominator wrapper:
   path, if any file outside that destination's own store changes.
 
 > **Status.** The plugin contract, the workspace, the gate, the configuration layer and the
-> query engine are in place, and the binary answers every verb below. The `in-memory`
-> source is complete; `local-md`, `linear` and `github-projects` are registered and refuse
-> with a clear message until their nodes land — and a configuration naming one of them
-> costs you that source, not the query.
+> query engine are in place, and the binary answers every verb below. The three sources
+> this product ships for your work — `local-md`, `linear` and `github-projects` — can all
+> be read and written; none is read-only. A copy can still refuse a configured destination
+> with no write side, such as a subprocess source whose capability handshake declares no
+> writes, but that is a property of that configured source rather than of these plugins.
 
 ## Using it
 
@@ -66,7 +67,7 @@ every selected source.
 
 `--explain` renders the plan the query ran, per source:
 
-```
+```console
 $ onetaskgraph task list --label bug --explain
 work:ENG-142   in-progress  Rate-limit the sync loop
 notes:2026-08  todo         Write up the migration
@@ -88,18 +89,43 @@ Authoring against a ticketing API is not something a person or an agent does wel
 folder of Markdown files is. So that is how work is created here: write the files, read
 them back through the CLI to be sure they parse, then copy them where your team works.
 
-```bash
-$EDITOR notes/tasks/rate-limit.md      # front matter and a body
-onetaskgraph task list --source notes  # they parse, and this is what they say
-onetaskgraph task copy notes:rate-limit --to work
+With `notes` configured as a `local-md` source rooted at `./notes`, create its task folder
+and write `notes/tasks/rate-limit.md`:
+
+```markdown
+---
+title: Rate-limit the sync loop
+status: Todo
+labels: [{id: local-reliability, name: reliability}]
+metadata: {onepipeline.turn_budget: 12}
+repositories: [github.com/acme/sync]
+---
+Back off when the API asks us to slow down.
 ```
+
+Read it through the CLI before writing to the permanent `linear` destination, then copy
+the qualified id the read returned:
+
+```console
+$ onetaskgraph task list --source notes
+notes:rate-limit  todo  Rate-limit the sync loop
+$ onetaskgraph task copy notes:rate-limit --to linear
+```
+
+The read is intentional: a malformed front matter block caught in a local file is cheaper
+to fix than a parse failure first discovered while writing to somebody's ticketing system.
+Projects use the same flow under `notes/projects/`, followed by `project list` and
+`project copy`.
 
 Editing is the same road in reverse — copy out, edit, copy back:
 
-```bash
-onetaskgraph task copy work:ENG-142 --to notes
-$EDITOR notes/tasks/ENG-142.md
-onetaskgraph task copy notes:ENG-142 --to work   # updates ENG-142; does not duplicate it
+```console
+$ onetaskgraph task copy work:T-1 --to notes
+$ grep -A2 '^metadata:' notes/tasks/T-1.md
+metadata:
+  onetaskgraph.origin: work:T-1
+$ $EDITOR notes/tasks/T-1.md
+$ onetaskgraph task copy notes:T-1 --to work
 ```
 
 The copy back **updates** rather than duplicating because the copied file carries the id
@@ -115,7 +141,7 @@ found, one is created carrying that origin.
 | --- | --- |
 | `--dry-run` | Every read, no write, and the action each item would have got. |
 | `--recreate` | An origin naming an item the destination no longer holds refuses by default, because creating there would duplicate work somebody deleted. This says create instead. |
-| `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy creates a second item. This re-establishes it by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
+| `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy back creates a new item. This re-establishes the lost correspondence by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it, matching each task independently. |
 
 Every field a copy read is written — title, content, status, labels, project,
@@ -183,13 +209,77 @@ uv tool install onetaskgraph-cli      # from PyPI, no Rust toolchain needed
 npm install -g onetaskgraph-cli       # from npm, no Rust toolchain needed
 ```
 
-The two SDKs are separate packages, and both drive the installed binary rather than
-reimplementing the engine:
+For Rust, the SDK surface is the engine crate itself rather than a separate wrapper
+package. Add it when the application should link the engine, or add either subprocess SDK
+when it should drive the installed binary:
 
 ```bash
+cargo add onetaskgraph-core onetaskgraph-plugin-api serde_json
+cargo add tokio --features macros,rt-multi-thread
 uv add onetaskgraph-sdk               # Python
 bun add @onetaskgraph/sdk             # TypeScript
 ```
+
+This complete example constructs an engine over two in-memory sources, copies a task through
+`Engine::copy`, inspects the outcome, and reads the destination back through the engine:
+
+```rust
+use onetaskgraph_core::{
+    Config, CopyItems, CopyRequest, CopyScope, Engine, Environment, GlobalId, Secrets,
+};
+use onetaskgraph_plugin_api::SourceName;
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::from_document(json!({
+        "sources": {
+            "drafts": {
+                "plugin": "in-memory",
+                "config": {"tasks": [{
+                    "id": "T-1",
+                    "title": "Ship the guide",
+                    "content": "Publish the Markdown workflow.",
+                    "status": {"category": "todo", "name": "Todo"},
+                    "labels": [],
+                    "metadata": {},
+                    "repositories": []
+                }]}
+            },
+            "work": {"plugin": "in-memory", "config": {}}
+        }
+    }))?;
+    let secrets = Secrets::load(Environment::default())?;
+    let engine = Engine::build(&config, &secrets);
+
+    let report = engine.copy(&CopyRequest {
+        items: CopyItems::new(vec!["drafts:T-1".parse::<GlobalId>()?])
+            .expect("a copy names at least one item"),
+        scope: CopyScope::Tasks,
+        destination: SourceName::new("work")?,
+        match_by: None,
+        recreate: false,
+        dry_run: false,
+    }).await?;
+
+    let outcome = &report.items[0];
+    assert_eq!(outcome.source.to_string(), "drafts:T-1");
+    assert_eq!(outcome.destination().unwrap().to_string(), "work:T-1");
+    assert_eq!(outcome.action.name(), "created");
+    println!("{} -> {} ({})", outcome.source,
+        outcome.destination().expect("the copy created a destination"),
+        outcome.action.name());
+
+    let copied = engine.task(outcome.destination().unwrap()).await?;
+    assert_eq!(copied.items[0].item.title, "Ship the guide");
+    println!("{}", copied.items[0].item.title);
+    Ok(())
+}
+```
+
+Unlike the Python and TypeScript SDKs, which spawn the compiled binary, a Rust consumer
+links `onetaskgraph-core` and calls `Engine` in process. The engine and its copy semantics
+remain the single implementation in either case.
 
 To work on the repository instead, clone it and run `just bootstrap`; `just --list` shows
 the rest.
@@ -266,8 +356,8 @@ id may contain colons freely.
 A task and a project each carry a caller-defined `metadata` map and the `repositories`
 they concern, and a dependency edge names both its ends by kind and qualified id — so an
 edge may cross projects, cross the task and project levels, and cross sources.
-[`docs/metadata.md`](./docs/metadata.md) says which keys are reserved, where each source
-keeps them, and what is read-only until the copy verb lands.
+[`docs/metadata.md`](./docs/metadata.md) says which keys are reserved and where each source
+keeps them.
 
 ## Writing a source in another language
 

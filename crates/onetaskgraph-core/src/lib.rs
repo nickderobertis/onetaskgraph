@@ -17,6 +17,10 @@
 //! journey plants sentinels, drives every verb, and fails if one reaches any file written
 //! during the run; and a re-ask test fails if one query asked twice reaches the source
 //! once. The latter two land with the verbs they drive.
+//!
+//! The repository README is included below so its worked Rust example is compiled and
+//! executed as a doctest whenever this crate's documentation tests run.
+#![doc = include_str!("../../../README.md")]
 #![deny(missing_docs)]
 
 pub mod config;
