@@ -34,11 +34,11 @@ trap 'rm -rf "$scratch"' EXIT
 repo="$scratch/repo"
 remote="$scratch/origin.git"
 hooks="$scratch/hooks"
-source_branch="$(git -C "$ROOT" branch --show-current)" || fail \
-  "could not determine the branch under review" "check the repository state and rerun"
-[ -n "$source_branch" ] || fail "the checkout is detached, so no branch can be cloned" "check out the branch under review and rerun"
-git clone --quiet --branch "$source_branch" "$ROOT" "$repo" || fail \
-  "could not clone the finished tree" "check the current branch and rerun"
+fixture_base=fixture-main
+scratch_clone "$ROOT" "$repo" || fail \
+  "could not clone the finished tree" "fix what scratch-clone reported above and rerun"
+git -C "$repo" switch --quiet --create "$fixture_base" || fail \
+  "could not create the fixture branch $fixture_base" "check the cloned commit and rerun"
 # The user's hooks belong to the checkout under review, not to fixture setup. Point this
 # scratch repository at an empty hook directory so its synthetic commits and local pushes
 # cannot recursively launch the complete gate when the check itself runs from a hook.
@@ -61,14 +61,14 @@ git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --q
 git init --quiet --bare "$remote" || fail "could not create the local origin" "check scratch-directory permissions"
 git -C "$repo" remote set-url origin "$remote" || fail "could not point the fixture at its local origin" "check git and rerun"
 git -C "$repo" push --quiet --set-upstream origin HEAD || fail "could not seed the local origin" "check git and rerun"
-fixture_base="$(git -C "$repo" branch --show-current)" || fail \
-  "could not read the fixture base branch" "check the scratch repository and rerun"
 released_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" || fail \
   "could not read the fixture's released version" "restore the binary manifest and rerun"
 [[ $released_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail \
   "the fixture has no plain X.Y.Z released version ('$released_version')" "restore the binary manifest and rerun"
 git --git-dir="$remote" symbolic-ref HEAD "refs/heads/$fixture_base" || fail \
   "could not set the local origin's default branch" "check the scratch repository and rerun"
+git -C "$repo" remote set-head origin "$fixture_base" || fail \
+  "could not align the clone's default remote branch with $fixture_base" "check the scratch repository and rerun"
 git -C "$repo" switch --quiet --detach "$fixture_base" || fail \
   "could not detach the tooling-only checkout" "check the scratch repository and rerun"
 
