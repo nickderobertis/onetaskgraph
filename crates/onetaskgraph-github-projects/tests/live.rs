@@ -380,10 +380,10 @@ fn live_lane(
                     .to_owned(),
             );
         }
-        (present, _) => {
+        (owner, _) => {
             return Err(format!(
                 "GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER name one board together: {} is missing",
-                if present.is_some() {
+                if owner.is_some() {
                     "GH_PROJECTS_NUMBER"
                 } else {
                     "GH_PROJECTS_OWNER"
