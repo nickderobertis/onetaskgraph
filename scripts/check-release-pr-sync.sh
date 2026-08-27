@@ -304,8 +304,8 @@ if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
     "scripts/prepare-release-pr.sh failed on a release-plz-shaped bump, so no release pull request can be prepared at all" \
     "read its diagnostic above and fix what it names"
 fi
-if [ -s "$case_log" ]; then
-  report "the preparation succeeded but was not quiet, so a real failure would arrive inside routine output. It said:"
+if ! grep -qF "release-plz proposed the package release pull request for $new_version" "$case_log"; then
+  report "the preparation succeeded without saying what it proposed, so its workflow log cannot distinguish a release from no release. It said:"
   quote_case_log
 fi
 

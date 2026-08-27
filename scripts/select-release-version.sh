@@ -55,7 +55,10 @@ after="$(read_version)"
 [[ $after =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail \
   "$manifest has no valid semantic version after release-plz update ('$after'); expected plain X.Y.Z" \
   "restore its version and inspect the release-plz output before rerunning"
-[ "$after" = "$before" ] || exit 0
+if [ "$after" != "$before" ]; then
+  echo "select-release-version: release-plz selected $before -> $after"
+  exit 0
+fi
 
 tag="v$before"
 git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null || fail \
@@ -127,10 +130,14 @@ PY
 done
 
 case "$bump" in
-  none) exit 0 ;;
+  none)
+    echo "select-release-version: no eligible package or release-tooling commit since $tag"
+    exit 0
+    ;;
   minor) next="$major.$((minor + 1)).0" ;;
   patch) next="$major.$minor.$((patch + 1))" ;;
 esac
 
 scripts/set-version.sh "$next" || fail "could not select release version $next" \
   "fix the manifest or lockfile named above and rerun"
+echo "select-release-version: release-tooling fallback selected $before -> $next"

@@ -12,6 +12,15 @@ cd "$ROOT"
 # Point git at the tracked hooks. Without this the pre-push gate is a file nobody runs.
 git config core.hooksPath .githooks
 
+release_plz_version="$(release-plz --version 2>/dev/null || true)"
+if [ "$release_plz_version" != "release-plz 0.3.160" ]; then
+  if command -v cargo-binstall >/dev/null 2>&1; then
+    cargo binstall release-plz --version 0.3.160 --no-confirm
+  else
+    cargo install release-plz --version 0.3.160 --locked
+  fi
+fi
+
 # The judged tier is out of `just check`, but a contributor should not have to discover
 # how to install it. Through the documented recipe, so there is one way to do it.
 #

@@ -201,7 +201,11 @@ expect_refusal() {
 
 expect_refusal "takes no arguments" 2 scripts/select-release-version.sh unexpected
 mv "$scratch/bin/release-plz" "$scratch/release-plz-away" || fatal "could not hide the scratch stand-in" "check scratch-directory permissions and rerun"
-expect_refusal "release-plz is not on PATH" 2 scripts/select-release-version.sh
+mkdir -p "$scratch/no-release-plz" || fatal "could not create the missing-tool PATH" "check scratch-directory permissions and rerun"
+for tool in bash dirname; do
+  ln -s "$(command -v "$tool")" "$scratch/no-release-plz/$tool" || fatal "could not link $tool into the missing-tool PATH" "check scratch-directory permissions and rerun"
+done
+expect_refusal "release-plz is not on PATH" 2 env PATH="$scratch/no-release-plz" scripts/select-release-version.sh
 mv "$scratch/release-plz-away" "$scratch/bin/release-plz" || fatal "could not restore the scratch stand-in" "check scratch-directory permissions and rerun"
 expect_refusal "release-plz could not decide the next version" 1 env RELEASE_PLZ_STUB_FAIL=yes scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the refusal fixture" "check that git works and rerun"
