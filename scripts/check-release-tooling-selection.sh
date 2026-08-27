@@ -171,6 +171,54 @@ grep -qF "registry recovery selected $version -> $major.$minor.$((patch + 1))" <
 [ "$(read_version)" = "$major.$minor.$((patch + 1))" ] || finding \
   "the partly published release did not advance every manifest beyond $version" "advance the synchronized workspace version for registry recovery"
 
+# The lag above is equally true of the head every push that merges a release pull request
+# produces: no registry can hold a version tagged seconds earlier. So the lag alone cannot
+# decide, and deciding on it alone released v0.2.4 and v0.2.5 from nothing but their own
+# release commits, with auto-merge feeding the next push straight back in. What tells the
+# two apart is what has landed since the boundary.
+expect_declined() {
+  what="$1"
+  declined_output="$(cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_REGISTRY_LAG=yes scripts/select-release-version.sh)" || finding \
+    "the selector failed for $what with the registry behind the manifest" \
+    "run that case directly and fix its diagnostic"
+  grep -qF "registry is behind $version with no eligible commit since v$version" <<<"$declined_output" || finding \
+    "the selector did not decline registry recovery for $what; it said: $declined_output" \
+    "decline recovery unless release-plz.toml's own release_commits policy accepts a commit since the release boundary"
+  [ "$(read_version)" = "$version" ] || finding \
+    "the selector released $what, which carries no commit that policy accepts" \
+    "leave every manifest at its released version when recovery is declined"
+}
+
+git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the release-loop fixture" "check that git works and rerun"
+git -C "$repo" switch --quiet --detach "v$version" || fatal "could not detach the release-loop fixture" "check that git works and rerun"
+expect_declined "a head standing exactly at its own release boundary"
+
+# And once this pipeline's release commit is the boundary's descendant rather than the
+# boundary itself — a later push that lands nothing else — the decision is the same.
+printf '\n' >> "$repo/npm/cli/package.json" || fatal "could not modify the release-loop fixture" "check scratch-directory permissions and rerun"
+git -C "$repo" add npm/cli/package.json || fatal "could not stage the release-loop fixture" "check that git works and rerun"
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
+  -m "chore: release v$major.$minor.$((patch + 1))" || fatal "could not commit the release-loop fixture" "check that git works and rerun"
+expect_declined "a head carrying only this pipeline's own release commit"
+
+# The recovery that branch exists for outlives the test: an eligible commit still recovers,
+# and the scan reaches it rather than reading HEAD alone, even under a release commit.
+printf '\n' >> "$repo/crates/onetaskgraph-core/src/lib.rs" || fatal "could not modify the buried-recovery fixture" "check scratch-directory permissions and rerun"
+git -C "$repo" add crates/onetaskgraph-core/src/lib.rs || fatal "could not stage the buried-recovery fixture" "check that git works and rerun"
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
+  -m "fix(core): recover a partly published release" || fatal "could not commit the buried-recovery fixture" "check that git works and rerun"
+printf '\n' >> "$repo/npm/cli/package.json" || fatal "could not modify the buried-recovery fixture" "check scratch-directory permissions and rerun"
+git -C "$repo" add npm/cli/package.json || fatal "could not stage the buried-recovery fixture" "check that git works and rerun"
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
+  -m "chore: release v$major.$minor.$((patch + 1))" || fatal "could not commit the buried-recovery fixture" "check that git works and rerun"
+buried_output="$(cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_REGISTRY_LAG=yes scripts/select-release-version.sh)" || finding \
+  "the selector failed to recover an eligible commit sitting under a release commit" "run the buried-recovery case directly and fix its diagnostic"
+grep -qF "registry recovery selected $version -> $major.$minor.$((patch + 1))" <<<"$buried_output" || finding \
+  "the selector missed the eligible commit under this pipeline's own release commit; it said: $buried_output" \
+  "scan every commit since the release boundary rather than reading HEAD alone"
+[ "$(read_version)" = "$major.$minor.$((patch + 1))" ] || finding \
+  "the buried eligible commit did not advance every manifest beyond $version" "advance the synchronized workspace version for registry recovery"
+
 # One real commit per entry in config/release-tooling-paths.txt makes the inventory's
 # complete contents executable rather than a prose list; removing an entry breaks its case.
 run_case "fix: repair release workflow" ".github/workflows/release.yml" \

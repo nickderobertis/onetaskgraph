@@ -168,19 +168,47 @@ git -C "$repo" switch --quiet "$fixture_base" || fail "could not restore $fixtur
   "could not restore the tracked working tree for the partial-publish case" "check git, tar and free space, then rerun"
 perl -pi -e 's/^semver_check = true$/semver_check = false/' "$repo/release-plz.toml" || fail \
   "could not disable the partial-publish fixture's semver pass" "check Perl and rerun"
-git -C "$repo" tag --force "v$released_version" >/dev/null || fail "could not set the partial-publish release boundary" "check the scratch repository and rerun"
+# A partly published release is one the registry is behind, and lag is the whole of what a
+# registry can say. Pin it here rather than inheriting whatever crates.io happens to hold:
+# once the checkout's own version is published, an unpinned fixture never reaches the
+# recovery decision at all, and this journey stops covering the branch it exists for while
+# still passing. The boundary below is a release this repository will never publish.
+lagged_version=900.0.0
+(cd "$repo" && scripts/set-version.sh "$lagged_version") || fail \
+  "could not put the partial-publish fixture beyond every registry version" \
+  "fix what set-version.sh named above and rerun"
+git -C "$repo" add -A || fail "could not stage the partial-publish release boundary" "check the scratch repository and rerun"
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet \
+  -m "chore: release v$lagged_version" || fail \
+  "could not commit the partial-publish release boundary" "check the scratch repository and rerun"
+git -C "$repo" tag --force "v$lagged_version" >/dev/null || fail "could not set the partial-publish release boundary" "check the scratch repository and rerun"
 package_names="$(cd "$repo" && cargo metadata --no-deps --format-version 1 | python3 -c \
   'import json, sys; print(" ".join(package["name"] for package in json.load(sys.stdin)["packages"]))')" || fail \
   "could not read the partial-publish package inventory" "repair Cargo metadata and rerun"
 for crate in $package_names; do
   [ "$crate" = onetaskgraph ] && continue
-  git -C "$repo" tag --force "$crate-v$released_version" >/dev/null || fail \
+  git -C "$repo" tag --force "$crate-v$lagged_version" >/dev/null || fail \
     "could not set the partial-publish tag for $crate" "check the scratch repository and rerun"
 done
 printf '\n' >> "$repo/crates/onetaskgraph-core/src/lib.rs" || fail "could not modify the partial-publish fixture" "check scratch-directory permissions"
 git -C "$repo" add crates/onetaskgraph-core/src/lib.rs || fail "could not stage the partial-publish fixture" "check the scratch repository and rerun"
 git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet -m "fix(core): partial-publish recovery fixture" || fail \
   "could not commit the partial-publish fixture" "check the scratch repository and rerun"
+recovery_version="${lagged_version%.*}.$((${lagged_version##*.} + 1))"
+# Observe the selector's own decision before a proposal is built from it. The proposal
+# cannot say which branch chose the version, and the branch is what this case covers: with
+# the fixture's lag unpinned it stopped reaching recovery at all and still passed.
+selector_log="$scratch/partial-publish-selector.log"
+if ! (cd "$repo" && scripts/select-release-version.sh) > "$selector_log" 2>&1; then
+  sed 's/^/    /' "$selector_log" >&2
+  fail "the real selector failed for the partly published head" "fix what it reports above and rerun"
+fi
+grep -qF "select-release-version: registry recovery selected $lagged_version -> $recovery_version" "$selector_log" || fail \
+  "the partly published head reached some decision other than registry recovery: $(cat "$selector_log")" \
+  "keep this fixture's registry lag pinned so the recovery branch is what this journey drives"
+git -C "$repo" checkout --quiet -- . || fail \
+  "could not restore the fixture after observing the selector's decision" "check the scratch repository and rerun"
+
 # The earlier cases leave an open fixture PR. Remove only that scratch state so registry
 # recovery proves its fresh-proposal branch as well as the update branch exercised above.
 : > "$scratch/state/proposals" || fail "could not clear the scratch proposal state" "check scratch-directory permissions and rerun"
@@ -191,8 +219,44 @@ if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
 fi
 grep -qF "proposed release pull request" "$case_log" || fail \
   "the partly published run did not create a registry-recovery proposal" "advance beyond the tagged version and open its release pull request"
-recovery_version="${released_version%.*}.$((${released_version##*.} + 1))"
 [ "$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" = "$recovery_version" ] || fail \
   "the partly published run did not select $recovery_version" "advance every crate to the patch after the attempted release"
 [ "$(wc -l < "$scratch/state/proposals")" -eq 1 ] || fail \
   "the partly published run created a duplicate pull request" "reuse the existing release pull request during recovery"
+
+# The other head the same registry lag describes: merging a release pull request pushes the
+# default branch, `release-plz release` tags a version seconds before any registry can hold
+# it, and what is there to release is the pipeline's own release commit and nothing else.
+# Proposing here is what released v0.2.4 and v0.2.5 from no source change at all, and
+# auto-merge fed each proposal straight back in as the next push.
+git -C "$repo" switch --quiet "$fixture_base" || fail \
+  "could not restore $fixture_base before the release-loop case" "check the scratch repository and rerun"
+loop_version="${lagged_version%.*}.$((${lagged_version##*.} + 2))"
+(cd "$repo" && scripts/set-version.sh "$loop_version") || fail \
+  "could not prepare the release-loop fixture" "fix what set-version.sh named above and rerun"
+git -C "$repo" add -A || fail "could not stage the release-loop fixture" "check the scratch repository and rerun"
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet \
+  -m "chore: release v$loop_version" || fail \
+  "could not commit the release-loop fixture" "check the scratch repository and rerun"
+# Only the release's own tag, which is what a `release-plz release` that did not finish
+# leaves behind — and so the head hardest to tell from a publish worth recovering. The real
+# tool reports the same registry lag here that it reports for the partly published head
+# above; the two are separated by what has landed since the boundary and by nothing else.
+git -C "$repo" tag --force "v$loop_version" >/dev/null || fail \
+  "could not tag the release-loop fixture" "check the scratch repository and rerun"
+: > "$scratch/state/proposals" || fail "could not clear the scratch proposal state" "check scratch-directory permissions and rerun"
+case_log="$scratch/release-loop.log"
+if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
+  sed 's/^/    /' "$case_log" >&2
+  fail "the real preparation failed for a head carrying only this pipeline's own release commit" \
+    "fix the phase named above and rerun"
+fi
+grep -qF "no release pull request proposed: the registry lags this repository's own release" "$case_log" || fail \
+  "the real preparation proposed a release from a head carrying only this pipeline's own release commit" \
+  "decline registry recovery unless release-plz.toml's own release_commits policy accepts a commit since the boundary"
+[ ! -s "$scratch/state/proposals" ] || fail \
+  "the release-loop head opened a pull request, which is the loop that published v0.2.4 and v0.2.5" \
+  "propose nothing while the registry lags only this repository's own release"
+[ "$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" = "$loop_version" ] || fail \
+  "the release-loop head advanced a manifest past $loop_version" \
+  "leave every manifest at its released version when recovery is declined"
