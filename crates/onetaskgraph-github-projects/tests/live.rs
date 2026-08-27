@@ -710,7 +710,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         env::var("GH_PROJECTS_NUMBER").ok().as_deref(),
         env::var("ONETASKGRAPH_LIVE_REQUIRED").as_deref() == Ok("1"),
     )
-    .unwrap_or_else(|error| panic!("GitHub Projects live lane is misconfigured: {error}"));
+    .unwrap_or_else(|error| panic!("the GitHub Projects live lane cannot run: {error}"));
     let (token, owner, project_number) = match lane {
         LiveLane::Run {
             token,
