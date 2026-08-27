@@ -190,8 +190,8 @@ git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the
 perl -pi -e 's/^version = "[^"]+"/version = "invalid"/' "$repo/crates/onetaskgraph/Cargo.toml" || fatal "could not invalidate the scratch baseline version" "check scratch-directory permissions and rerun"
 expect_refusal "has no plain X.Y.Z version" 1 scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the refusal fixture" "check that git works and rerun"
-case "${OS:-} $(uname -s 2>/dev/null || true)" in
-  *Windows_NT* | *msys* | *cygwin* | *MINGW*)
+case "$(uname -s 2>/dev/null || true)" in
+  *MSYS* | *CYGWIN* | *MINGW*)
     echo "check-release-tooling-selection: unreadable-manifest case skipped on Windows (its permission model does not make chmod 000 unreadable); the Linux and macOS lanes gate this refusal" >&2
     ;;
   *)
