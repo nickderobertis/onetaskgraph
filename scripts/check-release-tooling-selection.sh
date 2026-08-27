@@ -5,6 +5,11 @@
 # cannot construct or drive its scratch fixture.
 set -euo pipefail
 
+# The selector's fallback is reconciled against behavior observed from this release-plz.
+# The workflow pin check below makes moving the real tool require re-observing the matrix.
+readonly RECORDED_RELEASE_PLZ=0.3.160
+export RECORDED_RELEASE_PLZ
+
 fatal() {
   echo "check-release-tooling-selection: $1" >&2
   echo "check-release-tooling-selection: next: $2" >&2
@@ -46,6 +51,23 @@ version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Car
   "could not read the baseline binary version" "check scratch-directory permissions and rerun"
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fatal "the binary manifest has no plain X.Y.Z version ('$version')" "restore its version and rerun"
 git -C "$repo" tag "v$version" || fatal "could not tag the scratch baseline" "check that git works and rerun"
+
+check_release_plz_pin() {
+  workflow="$1"
+  installed="$(sed -n 's/.*[ ,]release-plz@\([^ ,]*\).*/\1/p' "$workflow" | head -n1)" || return 2
+  [ "$installed" = "$RECORDED_RELEASE_PLZ" ]
+}
+check_release_plz_pin "$repo/.github/workflows/release-plz.yml" || finding \
+  "the release workflow's release-plz pin differs from the selector fixture recorded at $RECORDED_RELEASE_PLZ" \
+  "re-observe the real tool's Conventional Commit version choices, then move RECORDED_RELEASE_PLZ with the workflow pin"
+pin_fixture="$scratch/release-plz-pin-drift.yml"
+cp "$repo/.github/workflows/release-plz.yml" "$pin_fixture" || fatal "could not copy the release-plz pin fixture" "check scratch-directory permissions and rerun"
+perl -pi -e 's/release-plz\@\Q$ENV{RECORDED_RELEASE_PLZ}\E/release-plz\@0.0.0/' "$pin_fixture" || fatal \
+  "could not mutate the release-plz pin fixture" "check that Perl works and rerun"
+if check_release_plz_pin "$pin_fixture"; then
+  finding "the release-plz drift guard accepted a changed tool pin" \
+    "keep the recorded version comparison tied to the workflow's installed release-plz"
+fi
 
 # The real selector invokes release-plz first. This deterministic stand-in models its
 # observed result for a tooling-only commit: success without changing a Cargo manifest.
@@ -122,7 +144,13 @@ git -C "$repo" switch --quiet --detach "v$version" || fatal \
   "the selector bumped a repository with no commit after the release tag" \
   "repair the no-post-tag-commit path and rerun"
 
+# One real commit per entry in config/release-tooling-paths.txt makes the inventory's
+# complete contents executable rather than a prose list; removing an entry breaks its case.
 run_case "fix: repair release workflow" ".github/workflows/release.yml" \
+  "$major.$minor.$((patch + 1))"
+run_case "fix: adjust release-tooling inventory" "config/release-tooling-paths.txt" \
+  "$major.$minor.$((patch + 1))"
+run_case "fix(cli): repair scoped release workflow" ".github/workflows/release.yml" \
   "$major.$minor.$((patch + 1))"
 run_case "fix!: repair breaking release contract" ".github/workflows/release.yml" \
   "$major.$((minor + 1)).0"
@@ -193,6 +221,12 @@ git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the
 perl -pi -e 's/^version = "[^"]+"/version = "invalid"/' "$repo/crates/onetaskgraph/Cargo.toml" || fatal "could not invalidate the scratch baseline version" "check scratch-directory permissions and rerun"
 expect_refusal "has no plain X.Y.Z version" 1 scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the refusal fixture" "check that git works and rerun"
+mv "$repo/config/release-tooling-paths.txt" "$scratch/release-tooling-paths-away" || fatal "could not hide the release-tooling inventory" "check scratch-directory permissions and rerun"
+expect_refusal "could not read config/release-tooling-paths.txt" 1 scripts/select-release-version.sh
+mv "$scratch/release-tooling-paths-away" "$repo/config/release-tooling-paths.txt" || fatal "could not restore the release-tooling inventory" "check scratch-directory permissions and rerun"
+printf '/outside-checkout/*\n' > "$repo/config/release-tooling-paths.txt" || fatal "could not write the unsafe inventory fixture" "check scratch-directory permissions and rerun"
+expect_refusal "contains unsafe pattern" 1 scripts/select-release-version.sh
+git -C "$repo" checkout --quiet "v$version" -- config/release-tooling-paths.txt || fatal "could not restore the release-tooling inventory" "check that git works and rerun"
 case "$(uname -s 2>/dev/null || true)" in
   *MSYS* | *CYGWIN* | *MINGW*)
     echo "check-release-tooling-selection: unreadable-manifest case skipped on Windows (its permission model does not make chmod 000 unreadable); the Linux and macOS lanes gate this refusal" >&2

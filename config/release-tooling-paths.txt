@@ -1,0 +1,10 @@
+.github/workflows/release*.yml
+config/release-tooling-paths.txt
+release-plz.toml
+npm/*
+pyproject.toml
+sdks/python/*
+sdks/typescript/*
+scripts/*release*.sh
+scripts/*distribution*.sh
+scripts/set-version.sh

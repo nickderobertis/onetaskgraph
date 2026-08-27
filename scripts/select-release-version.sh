@@ -29,6 +29,9 @@ command -v python3 >/dev/null 2>&1 || fail "python3 is not on PATH" "install Pyt
 # llmlint: ignore-end[changed_behavior_has_e2e]
 
 manifest=crates/onetaskgraph/Cargo.toml
+release_paths=config/release-tooling-paths.txt
+[ -r "$release_paths" ] || fail "could not read $release_paths" \
+  "restore the release-tooling path inventory and rerun"
 read_version() {
   local value
   value="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$manifest" | head -n1)" || fail \
@@ -96,13 +99,18 @@ PY
     "could not read paths changed by commit $commit" "check the repository history and rerun"
 # llmlint: ignore-end[changed_behavior_has_e2e]
   while IFS= read -r path; do
-    case "$path" in
-      .github/workflows/release*.yml|release-plz.toml|npm/*|pyproject.toml|sdks/python/*|sdks/typescript/*|\
-      scripts/*release*.sh|scripts/*distribution*.sh|scripts/set-version.sh)
+    while IFS= read -r pattern || [ -n "$pattern" ]; do
+      case "$pattern" in
+        "" | \#*) continue ;;
+        /* | *..*) fail "$release_paths contains unsafe pattern '$pattern'" \
+          "keep every entry repository-relative and remove parent traversal" ;;
+      esac
+      if [[ $path == $pattern ]]; then
         owns_release_path=yes
         break
-        ;;
-    esac
+      fi
+    done < "$release_paths"
+    [ "$owns_release_path" = no ] || break
   done <<EOF
 $changed_paths
 EOF
