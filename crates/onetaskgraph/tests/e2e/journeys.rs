@@ -897,6 +897,35 @@ fn every_complete_dataset_source_filters_projects_by_label_status_and_text() {
             "status",
         );
 
+        // `--status` is one vocabulary across both verbs, so every category it spells
+        // reaches this one too. These two are categories no project here carries: they
+        // are accepted, they select nothing rather than everything, and the plan reports
+        // the predicate exactly as it does for a category that matches.
+        let unheld = ok(
+            row,
+            &sandbox,
+            &[
+                "project",
+                "list",
+                "--status",
+                "draft",
+                "--status",
+                "cancelled",
+                "--explain",
+            ],
+        );
+        assert!(listed(&unheld).is_empty(), "{}: {unheld}", row.name);
+        plan_says(
+            row,
+            &unheld,
+            if declared.filter_by_status {
+                "pushed down"
+            } else {
+                "applied locally"
+            },
+            "status",
+        );
+
         // `alpha` is in P-2's body and in neither title, so each field selector keeps a
         // different set and a source searching the wrong one is caught.
         let in_title = ok(
