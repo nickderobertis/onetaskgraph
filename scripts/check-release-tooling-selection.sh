@@ -101,6 +101,10 @@ if [ -n "${RELEASE_PLZ_STUB_SELECTED:-}" ]; then
     exit 1
   }
 fi
+if [ "${RELEASE_PLZ_STUB_REGISTRY_LAG:-}" = yes ]; then
+  local_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/onetaskgraph/Cargo.toml | head -n1)"
+  echo "INFO onetaskgraph-core: local version ($local_version) > registry version (0.0.0). Only changelog will be updated."
+fi
 exit 0
 STUB
 chmod +x "$scratch/bin/release-plz" || fatal "could not make the stand-in executable" "check scratch-directory permissions and rerun"
@@ -147,6 +151,25 @@ git -C "$repo" switch --quiet --detach "v$version" || fatal \
 [ "$(read_version)" = "$version" ] || finding \
   "the selector bumped a repository with no commit after the release tag" \
   "repair the no-post-tag-commit path and rerun"
+
+# A tag records that a release was attempted, not that crates.io accepted every package.
+# Model release-plz's observed registry-lag result with every current-version tag present;
+# recovery must advance the whole workspace to a version no crate from that attempt holds.
+git -C "$repo" switch --quiet --detach "v$version" || fatal \
+  "could not detach the partial-publish fixture" "check that git works and rerun"
+printf '\n' >> "$repo/crates/onetaskgraph-core/src/lib.rs" || fatal \
+  "could not modify the partial-publish fixture" "check scratch-directory permissions and rerun"
+git -C "$repo" add crates/onetaskgraph-core/src/lib.rs || fatal \
+  "could not stage the partial-publish fixture" "check that git works and rerun"
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
+  -m "fix(core): recover a partly published release" || fatal \
+  "could not commit the partial-publish fixture" "check that git works and rerun"
+partial_output="$(cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_REGISTRY_LAG=yes scripts/select-release-version.sh)" || finding \
+  "the selector failed to recover a registry-lagged release" "run the partial-publish case directly and fix its diagnostic"
+grep -qF "registry recovery selected $version -> $major.$minor.$((patch + 1))" <<<"$partial_output" || finding \
+  "the selector did not identify registry recovery as its decision" "select the next workspace version before consulting release tags"
+[ "$(read_version)" = "$major.$minor.$((patch + 1))" ] || finding \
+  "the partly published release did not advance every manifest beyond $version" "advance the synchronized workspace version for registry recovery"
 
 # One real commit per entry in config/release-tooling-paths.txt makes the inventory's
 # complete contents executable rather than a prose list; removing an entry breaks its case.
@@ -240,6 +263,12 @@ git -C "$repo" add npm/cli/package.json .github/workflows/release.yml || fatal "
 git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
   -m "fix: exercise version sync refusal" || fatal "could not commit the set-version refusal" "check that git works and rerun"
 expect_refusal "could not select release version" 1 scripts/select-release-version.sh
+git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the refusal fixture" "check that git works and rerun"
+# Registry recovery reaches the same synchronization boundary through a distinct decision;
+# prove that its diagnostic identifies recovery rather than the tooling fallback.
+printf '\ninvalid\n' >> "$repo/npm/cli/package.json" || fatal "could not corrupt the registry-recovery carrier" "check scratch-directory permissions and rerun"
+expect_refusal "could not select registry recovery version" 1 env \
+  RELEASE_PLZ_STUB_REGISTRY_LAG=yes scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the refusal fixture" "check that git works and rerun"
 perl -pi -e 's/^version = "[^"]+"/version = "invalid"/' "$repo/crates/onetaskgraph/Cargo.toml" || fatal "could not invalidate the scratch baseline version" "check scratch-directory permissions and rerun"
 expect_refusal "has no plain X.Y.Z version" 1 scripts/select-release-version.sh

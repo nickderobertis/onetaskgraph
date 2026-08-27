@@ -163,22 +163,36 @@ grep -qF "updated release pull request #41" "$case_log" || fail \
 [ "$(wc -l < "$scratch/state/proposals")" -eq 1 ] || fail \
   "updating the existing proposal created a duplicate" "reuse the release branch and open pull request"
 
-git -C "$repo" switch --quiet "$fixture_base" || fail "could not restore $fixture_base before the ineligible case" "check the scratch repository and rerun"
+git -C "$repo" switch --quiet "$fixture_base" || fail "could not restore $fixture_base before the partial-publish case" "check the scratch repository and rerun"
 (cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$repo" || fail \
-  "could not restore the tracked working tree for the ineligible case" "check git, tar and free space, then rerun"
+  "could not restore the tracked working tree for the partial-publish case" "check git, tar and free space, then rerun"
 perl -pi -e 's/^semver_check = true$/semver_check = false/' "$repo/release-plz.toml" || fail \
-  "could not disable the ineligible fixture's semver pass" "check Perl and rerun"
-git -C "$repo" tag --force "v$released_version" >/dev/null || fail "could not set the ineligible release boundary" "check the scratch repository and rerun"
-printf '\n' >> "$repo/README.md" || fail "could not modify the ineligible README fixture" "check scratch-directory permissions"
-git -C "$repo" add README.md || fail "could not stage the ineligible fixture" "check the scratch repository and rerun"
-git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet -m "docs: ineligible fixture" || fail \
-  "could not commit the ineligible fixture" "check the scratch repository and rerun"
-case_log="$scratch/ineligible.log"
+  "could not disable the partial-publish fixture's semver pass" "check Perl and rerun"
+git -C "$repo" tag --force "v$released_version" >/dev/null || fail "could not set the partial-publish release boundary" "check the scratch repository and rerun"
+package_names="$(cd "$repo" && cargo metadata --no-deps --format-version 1 | python3 -c \
+  'import json, sys; print(" ".join(package["name"] for package in json.load(sys.stdin)["packages"]))')" || fail \
+  "could not read the partial-publish package inventory" "repair Cargo metadata and rerun"
+for crate in $package_names; do
+  [ "$crate" = onetaskgraph ] && continue
+  git -C "$repo" tag --force "$crate-v$released_version" >/dev/null || fail \
+    "could not set the partial-publish tag for $crate" "check the scratch repository and rerun"
+done
+printf '\n' >> "$repo/crates/onetaskgraph-core/src/lib.rs" || fail "could not modify the partial-publish fixture" "check scratch-directory permissions"
+git -C "$repo" add crates/onetaskgraph-core/src/lib.rs || fail "could not stage the partial-publish fixture" "check the scratch repository and rerun"
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet -m "fix(core): partial-publish recovery fixture" || fail \
+  "could not commit the partial-publish fixture" "check the scratch repository and rerun"
+# The earlier cases leave an open fixture PR. Remove only that scratch state so registry
+# recovery proves its fresh-proposal branch as well as the update branch exercised above.
+: > "$scratch/state/proposals" || fail "could not clear the scratch proposal state" "check scratch-directory permissions and rerun"
+case_log="$scratch/partial-publish.log"
 if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
   sed 's/^/    /' "$case_log" >&2
-  fail "the real preparation failed for the ineligible head" "fix the phase named above and rerun"
+  fail "the real preparation failed for the partly published head" "fix the phase named above and rerun"
 fi
-grep -qF "no release pull request proposed: the selector found no eligible change" "$case_log" || fail \
-  "the ineligible run did not expose why it proposed nothing" "repair the successful no-release diagnostic"
+grep -qF "proposed release pull request" "$case_log" || fail \
+  "the partly published run did not create a registry-recovery proposal" "advance beyond the tagged version and open its release pull request"
+recovery_version="${released_version%.*}.$((${released_version##*.} + 1))"
+[ "$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" = "$recovery_version" ] || fail \
+  "the partly published run did not select $recovery_version" "advance every crate to the patch after the attempted release"
 [ "$(wc -l < "$scratch/state/proposals")" -eq 1 ] || fail \
-  "the ineligible run proposed another pull request" "keep fallback eligibility confined to the inventoried release paths"
+  "the partly published run created a duplicate pull request" "reuse the existing release pull request during recovery"
