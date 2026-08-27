@@ -102,7 +102,8 @@ if [ -n "${RELEASE_PLZ_STUB_SELECTED:-}" ]; then
   }
 fi
 if [ "${RELEASE_PLZ_STUB_REGISTRY_LAG:-}" = yes ]; then
-  echo "INFO onetaskgraph-core: local version ($RELEASE_PLZ_STUB_LOCAL) > registry version (0.0.0). Only changelog will be updated."
+  local_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/onetaskgraph/Cargo.toml | head -n1)"
+  echo "INFO onetaskgraph-core: local version ($local_version) > registry version (0.0.0). Only changelog will be updated."
 fi
 exit 0
 STUB
@@ -163,7 +164,7 @@ git -C "$repo" add crates/onetaskgraph-core/src/lib.rs || fatal \
 git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
   -m "fix(core): recover a partly published release" || fatal \
   "could not commit the partial-publish fixture" "check that git works and rerun"
-partial_output="$(cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_REGISTRY_LAG=yes RELEASE_PLZ_STUB_LOCAL="$version" scripts/select-release-version.sh)" || finding \
+partial_output="$(cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_REGISTRY_LAG=yes scripts/select-release-version.sh)" || finding \
   "the selector failed to recover a registry-lagged release" "run the partial-publish case directly and fix its diagnostic"
 grep -qF "registry recovery selected $version -> $major.$minor.$((patch + 1))" <<<"$partial_output" || finding \
   "the selector did not identify registry recovery as its decision" "select the next workspace version before consulting release tags"
@@ -267,7 +268,7 @@ git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the
 # prove that its diagnostic identifies recovery rather than the tooling fallback.
 printf '\ninvalid\n' >> "$repo/npm/cli/package.json" || fatal "could not corrupt the registry-recovery carrier" "check scratch-directory permissions and rerun"
 expect_refusal "could not select registry recovery version" 1 env \
-  RELEASE_PLZ_STUB_REGISTRY_LAG=yes RELEASE_PLZ_STUB_LOCAL="$version" scripts/select-release-version.sh
+  RELEASE_PLZ_STUB_REGISTRY_LAG=yes scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the refusal fixture" "check that git works and rerun"
 perl -pi -e 's/^version = "[^"]+"/version = "invalid"/' "$repo/crates/onetaskgraph/Cargo.toml" || fatal "could not invalidate the scratch baseline version" "check scratch-directory permissions and rerun"
 expect_refusal "has no plain X.Y.Z version" 1 scripts/select-release-version.sh
