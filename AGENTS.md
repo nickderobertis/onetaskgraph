@@ -334,6 +334,15 @@ them do; this is the inventory of what is owed, not a status board.
   than installing it — a required check must not depend on crates.io — so the workflow pins
   the release-plz version and that check fails when the pin and the version the stand-in was
   recorded from part. Moving the pin means re-observing the real tool.
+- **Registry lag alone never proposes a release.** `scripts/select-release-version.sh`
+  recovers a partly failed publish only when `release-plz.toml`'s own `release_commits`
+  policy — the single declared one, read rather than restated — accepts a commit since the
+  release boundary. The lag itself says nothing: no registry can hold a version this
+  pipeline tagged seconds earlier, so every push that merges a release pull request looks
+  exactly like a publish to recover. Acting on the lag alone released v0.2.4 and v0.2.5
+  from no source change at all, and auto-merge fed each proposal back in as the next push.
+  `scripts/check-release-tooling-selection.sh` and `scripts/check-real-release-preparation.sh`
+  drive both decisions, the second against the real pinned tool over a real checkout.
 
 ## Conventions
 

@@ -60,23 +60,75 @@ if [ "$after" != "$before" ]; then
   exit 0
 fi
 
-# release-plz reports registry lag without advancing a manifest: its `update` decision is
-# registry-based, but it limits that situation to a changelog edit. A tag only proves that
-# publishing was attempted, so consulting it here would permanently wedge a partial
-# publish. Advance the synchronized workspace once; the attempted version may remain in
-# some registries, while its successor is new to every crate from that release.
-if grep -qF "local version ($before) > registry version (" <<<"$update_output"; then
-  next="$major.$minor.$((patch + 1))"
-  scripts/set-version.sh "$next" || fail "could not select registry recovery version $next" \
-    "fix the manifest or lockfile named above and rerun"
-  echo "select-release-version: registry recovery selected $before -> $next"
-  exit 0
-fi
-
 tag="v$before"
 git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null || fail \
   "$tag does not exist, so the release boundary is unknown" \
   "restore the tag or make the initial release through release-plz"
+
+# llmlint: ignore-block[changed_behavior_has_e2e] This read fails only for a repository corrupted after its tag and commit fixture exists; corrupting git internals would replace the real history boundary the checks below drive.
+commits="$(git rev-list --reverse "$tag..HEAD")" || fail \
+  "could not read commits after $tag" "check the repository history and rerun"
+# llmlint: ignore-end[changed_behavior_has_e2e]
+
+# This repository declares release eligibility once, as workspace.release_commits in
+# release-plz.toml, and both decisions below ask that one policy rather than restating it.
+# A second copy would drift, and the shape of that drift is the whole defect here: the
+# policy exists because release-plz would otherwise treat its own release commit as
+# release-worthy.
+release_policy_accepts() {
+  local message="$1" output status=0
+  output="$(RELEASE_MESSAGE="$message" python3 - <<'PY'
+import os, re, sys, tomllib
+try:
+    with open("release-plz.toml", "rb") as manifest:
+        policy = tomllib.load(manifest)["workspace"]["release_commits"]
+    policy = re.compile(policy)
+except Exception as error:
+    print(error, file=sys.stderr)
+    raise SystemExit(2)
+raise SystemExit(0 if policy.search(os.environ["RELEASE_MESSAGE"]) else 1)
+PY
+)" || status=$?
+  case "$status" in
+    0) return 0 ;;
+    1) return 1 ;;
+  esac
+  printf '%s\n' "$output" >&2
+  fail "could not load release eligibility from release-plz.toml" \
+    "restore its valid workspace.release_commits policy and rerun"
+}
+
+# release-plz reports registry lag without advancing a manifest: its `update` decision is
+# registry-based, but it limits that situation to a changelog edit. A tag only proves that
+# publishing was attempted, so treating its existence as "already released" would
+# permanently wedge a partial publish. What separates a release worth recovering from a
+# release this pipeline has just cut itself is not the lag — a registry cannot hold a
+# version tagged seconds earlier, so every push that merges a release pull request arrives
+# here — but what has landed since the boundary. Recover only for a commit the policy above
+# accepts; without that test the pipeline releases its own release commit, without end.
+if grep -qF "local version ($before) > registry version (" <<<"$update_output"; then
+  recoverable=no
+  for commit in $commits; do
+    # llmlint: ignore[changed_behavior_has_e2e] Reading a commit this script has just listed fails only for a repository corrupted mid-run, which would replace the history boundary under test.
+    message="$(git show -s --format=%B "$commit")" || fail \
+      "could not read commit $commit" "check the repository history and rerun"
+    if release_policy_accepts "$message"; then
+      recoverable=yes
+      break
+    fi
+  done
+  if [ "$recoverable" = yes ]; then
+    # The attempted version may remain in some registries, while its successor is new to
+    # every crate from that release.
+    next="$major.$minor.$((patch + 1))"
+    scripts/set-version.sh "$next" || fail "could not select registry recovery version $next" \
+      "fix the manifest or lockfile named above and rerun"
+    echo "select-release-version: registry recovery selected $before -> $next"
+    exit 0
+  fi
+  echo "select-release-version: registry is behind $before with no eligible commit since $tag"
+  exit 0
+fi
 
 bump=none
 # Validate the inventory before path matching so failures are reported in the parent shell,
@@ -90,31 +142,10 @@ while IFS= read -r pattern || [ -n "$pattern" ]; do
 done < "$release_paths"
 
 # llmlint: ignore-block[changed_behavior_has_e2e] These git reads fail only for a corrupt repository after the tag and commit fixture has been created; corrupting git internals would replace the real history boundary this check exists to exercise.
-commits="$(git rev-list --reverse "$tag..HEAD")" || fail \
-  "could not read commits after $tag" "check the repository history and rerun"
 for commit in $commits; do
   message="$(git show -s --format=%B "$commit")" || fail \
     "could not read commit $commit" "check the repository history and rerun"
-  policy_status=0
-  policy_output="$(RELEASE_MESSAGE="$message" python3 - <<'PY'
-import os, re, sys, tomllib
-try:
-    with open("release-plz.toml", "rb") as manifest:
-        policy = tomllib.load(manifest)["workspace"]["release_commits"]
-    policy = re.compile(policy)
-except Exception as error:
-    print(error, file=sys.stderr)
-    raise SystemExit(2)
-raise SystemExit(0 if policy.search(os.environ["RELEASE_MESSAGE"]) else 1)
-PY
-)" || policy_status=$?
-  if [ "$policy_status" -eq 1 ]; then
-    continue
-  elif [ "$policy_status" -ne 0 ]; then
-    printf '%s\n' "$policy_output" >&2
-    fail "could not load release eligibility from release-plz.toml" \
-      "restore its valid workspace.release_commits policy and rerun"
-  fi
+  release_policy_accepts "$message" || continue
   case "$message" in
     feat*|*!:*|*"BREAKING CHANGE:"*) candidate="minor" ;;
     *) candidate="patch" ;;

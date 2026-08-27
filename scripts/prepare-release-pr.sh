@@ -105,6 +105,12 @@ elif [[ $selection_output =~ ^select-release-version:\ release-plz\ selected\ [0
 elif [[ $selection_output =~ ^select-release-version:\ no\ eligible\ package\ or\ release-tooling\ commit\ since\ v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "prepare-release-pr: no release pull request proposed: the selector found no eligible change" >&2
     exit 0
+elif [[ $selection_output =~ ^select-release-version:\ registry\ is\ behind\ [0-9]+\.[0-9]+\.[0-9]+\ with\ no\ eligible\ commit\ since\ v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    # This is what every push that merges a release pull request looks like: the registry
+    # cannot yet hold the version tagged seconds earlier. Proposing here is what released
+    # v0.2.4 and v0.2.5 from nothing but their own release commits.
+    echo "prepare-release-pr: no release pull request proposed: the registry lags this repository's own release, and nothing eligible has landed since it" >&2
+    exit 0
 else
   # llmlint: ignore[changed_behavior_has_e2e] A successful malformed response requires replacing the selector boundary; its real success decisions are exercised, and its own check owns every refusal and output shape.
   fail "the selector completed without one valid decision line" \
