@@ -260,3 +260,101 @@ grep -qF "no release pull request proposed: the registry lags this repository's 
 [ "$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" = "$loop_version" ] || fail \
   "the release-loop head advanced a manifest past $loop_version" \
   "leave every manifest at its released version when recovery is declined"
+
+# The boundary a successful release leaves behind lives on the origin: `release-plz release`
+# creates the tag there, and this same job then runs preparation from a checkout made before
+# that tag existed. So every run after a release reaches the selector with the boundary it
+# names absent locally — which refused v0.2.2 and v0.2.6 and made a workflow that fails
+# exactly when it worked. Resolving that boundary must decide what the local one decided, so
+# one head is driven both ways and the two decisions are compared rather than described.
+git -C "$repo" switch --quiet "$fixture_base" || fail \
+  "could not restore $fixture_base before the remote-only boundary case" "check the scratch repository and rerun"
+# The declining run above left release-plz's changelog edit in the tree, and the real tool
+# refuses to decide anything from a dirty checkout.
+git -C "$repo" checkout --quiet -- . || fail \
+  "could not restore the fixture before the remote-only boundary case" "check the scratch repository and rerun"
+printf '\n' >> "$repo/crates/onetaskgraph-core/src/lib.rs" || fail \
+  "could not modify the remote-only boundary fixture" "check scratch-directory permissions"
+git -C "$repo" add crates/onetaskgraph-core/src/lib.rs || fail \
+  "could not stage the remote-only boundary fixture" "check the scratch repository and rerun"
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet \
+  -m "fix(core): recover from a boundary only the origin holds" || fail \
+  "could not commit the remote-only boundary fixture" "check the scratch repository and rerun"
+remote_only_version="${loop_version%.*}.$((${loop_version##*.} + 1))"
+
+local_boundary_log="$scratch/local-boundary-selector.log"
+if ! (cd "$repo" && scripts/select-release-version.sh) > "$local_boundary_log" 2>&1; then
+  sed 's/^/    /' "$local_boundary_log" >&2
+  fail "the real selector failed with its boundary tag in the checkout" "fix what it reports above and rerun"
+fi
+grep -qF "select-release-version: registry recovery selected $loop_version -> $remote_only_version" "$local_boundary_log" || fail \
+  "the boundary-in-checkout run reached some decision other than registry recovery: $(cat "$local_boundary_log")" \
+  "keep this fixture's registry lag pinned so both boundary shapes drive the same decision"
+git -C "$repo" checkout --quiet -- . || fail \
+  "could not restore the fixture after the boundary-in-checkout run" "check the scratch repository and rerun"
+
+publish_boundary_only_to_origin() {
+  git -C "$repo" push --quiet origin "refs/tags/v$loop_version" || fail \
+    "could not publish the boundary tag to the fixture origin" "check the scratch repository and rerun"
+  git -C "$repo" tag -d "v$loop_version" >/dev/null || fail \
+    "could not remove the local boundary tag" "check the scratch repository and rerun"
+  if git -C "$repo" rev-parse --verify --quiet "refs/tags/v$loop_version" >/dev/null; then
+    fail "the boundary tag is still in the checkout, so this case does not model a post-release run" \
+      "remove the local tag before driving the remote-only boundary"
+  fi
+  git -C "$repo" ls-remote --exit-code origin "refs/tags/v$loop_version" >/dev/null || fail \
+    "the fixture origin does not hold the boundary tag, so this case would refuse for the wrong reason" \
+    "publish the boundary tag to the fixture origin before driving it"
+}
+publish_boundary_only_to_origin
+
+remote_boundary_log="$scratch/remote-boundary-selector.log"
+if ! (cd "$repo" && scripts/select-release-version.sh) > "$remote_boundary_log" 2>&1; then
+  sed 's/^/    /' "$remote_boundary_log" >&2
+  fail "the real selector refused a boundary the origin holds, which is every run after a release cuts its tag" \
+    "resolve the release boundary from the origin before refusing it as unknown"
+fi
+diff "$local_boundary_log" "$remote_boundary_log" >/dev/null || fail \
+  "resolving the boundary from the origin changed the selector's decision: $(cat "$remote_boundary_log")" \
+  "resolve the boundary into the same ref, so the commits since it are the same set either way"
+git -C "$repo" checkout --quiet -- . || fail \
+  "could not restore the fixture after the remote-only selector run" "check the scratch repository and rerun"
+
+# And the whole preparation path over the same head, which is what the workflow runs.
+publish_boundary_only_to_origin
+: > "$scratch/state/proposals" || fail "could not clear the scratch proposal state" "check scratch-directory permissions and rerun"
+case_log="$scratch/remote-boundary.log"
+if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
+  sed 's/^/    /' "$case_log" >&2
+  fail "the real preparation failed for a head whose release boundary is only on the origin" \
+    "fix the phase named above and rerun"
+fi
+grep -qF "proposed release pull request" "$case_log" || fail \
+  "the remote-only boundary run did not propose a release" \
+  "resolve the boundary from the origin and propose the recovery it selects"
+[ "$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" = "$remote_only_version" ] || fail \
+  "the remote-only boundary run did not select $remote_only_version" \
+  "advance every crate to the patch after the attempted release"
+
+# A boundary neither the checkout nor the origin holds is genuinely unknown, and is still
+# refused naming both places it was looked for: guessing one proposes a version against
+# nothing at all.
+git -C "$repo" switch --quiet "$fixture_base" || fail \
+  "could not restore $fixture_base before the missing-boundary case" "check the scratch repository and rerun"
+git -C "$repo" tag -d "v$loop_version" >/dev/null || fail \
+  "could not remove the boundary tag the preparation run resolved" "check the scratch repository and rerun"
+git -C "$repo" push --quiet --delete origin "refs/tags/v$loop_version" || fail \
+  "could not remove the boundary tag from the fixture origin" "check the scratch repository and rerun"
+: > "$scratch/state/proposals" || fail "could not clear the scratch proposal state" "check scratch-directory permissions and rerun"
+case_log="$scratch/missing-boundary.log"
+missing_status=0
+(cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1 || missing_status=$?
+[ "$missing_status" -ne 0 ] || fail \
+  "the real preparation accepted a boundary neither the checkout nor the origin holds" \
+  "keep refusing an unresolvable release boundary rather than guessing one"
+grep -qF "v$loop_version is in neither this checkout nor origin, so the release boundary is unknown" "$case_log" || fail \
+  "the missing-boundary refusal did not name the tag and where it was looked for: $(cat "$case_log")" \
+  "refuse naming the missing boundary tag, this checkout and the origin"
+[ ! -s "$scratch/state/proposals" ] || fail \
+  "the missing-boundary head opened a pull request from a boundary nothing holds" \
+  "propose nothing when the release boundary cannot be resolved"

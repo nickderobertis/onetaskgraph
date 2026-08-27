@@ -145,12 +145,37 @@ run_case() {
 # rather than a non-releasable commit.
 git -C "$repo" switch --quiet --detach "v$version" || fatal \
   "could not detach the release-boundary fixture" "check that git works and rerun"
-(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh >/dev/null) || finding \
+boundary_decision="$(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh)" || finding \
   "the selector failed with HEAD exactly at the release tag" \
   "repair the no-post-tag-commit path and rerun"
 [ "$(read_version)" = "$version" ] || finding \
   "the selector bumped a repository with no commit after the release tag" \
   "repair the no-post-tag-commit path and rerun"
+
+# The same head again, with its boundary where a release actually leaves one. `release-plz
+# release` creates the tag on the origin, and the release workflow runs the selector in that
+# same job from a checkout made before the tag existed, so every run after a successful
+# release arrives with the boundary absent locally. It is resolvable rather than unknown,
+# and resolving it must decide exactly what the local boundary decided.
+remote="$scratch/origin.git"
+git init --quiet --bare "$remote" || fatal "could not create the fixture origin" "check scratch-directory permissions and rerun"
+git -C "$repo" remote add origin "$remote" || fatal "could not point the fixture at its origin" "check that git works and rerun"
+git -C "$repo" push --quiet origin "refs/tags/v$version" || fatal \
+  "could not publish the boundary tag to the fixture origin" "check that git works and rerun"
+git -C "$repo" tag -d "v$version" >/dev/null || fatal \
+  "could not remove the local boundary tag" "check that git works and rerun"
+remote_boundary_decision="$(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh)" || finding \
+  "the selector refused a boundary the origin holds, which is every run after a release cuts its tag" \
+  "resolve the release boundary from the origin before refusing it as unknown"
+[ "$remote_boundary_decision" = "$boundary_decision" ] || finding \
+  "resolving the boundary from the origin changed the decision: '$remote_boundary_decision' rather than '$boundary_decision'" \
+  "resolve the boundary into the same ref so the commits since it are the same set"
+[ "$(read_version)" = "$version" ] || finding \
+  "the selector bumped a repository whose only boundary was on the origin" \
+  "repair the no-post-tag-commit path and rerun"
+git -C "$repo" rev-parse --verify --quiet "refs/tags/v$version" >/dev/null || fatal \
+  "the resolved boundary tag is not in the fixture, so the cases below have none" \
+  "restore refs/tags/v$version in the scratch repository and rerun"
 
 # A tag records that a release was attempted, not that crates.io accepted every package.
 # Model release-plz's observed registry-lag result with every current-version tag present;
@@ -340,5 +365,10 @@ case "${OS:-}${OSTYPE:-}" in
     chmod 644 "$repo/crates/onetaskgraph/Cargo.toml" || fatal "could not restore scratch manifest permissions" "check scratch-directory permissions and rerun"
     ;;
 esac
+# A boundary neither the checkout nor the origin holds is genuinely unknown, and is refused
+# naming both places it was looked for: guessing one would propose a version against nothing.
 git -C "$repo" tag -d "v$version" >/dev/null || fatal "could not remove the scratch-only tag" "check that git works and rerun"
-expect_refusal "release boundary is unknown" 1 scripts/select-release-version.sh
+git -C "$repo" push --quiet --delete origin "refs/tags/v$version" || fatal \
+  "could not remove the boundary tag from the fixture origin" "check that git works and rerun"
+expect_refusal "v$version is in neither this checkout nor origin, so the release boundary is unknown" 1 \
+  scripts/select-release-version.sh
