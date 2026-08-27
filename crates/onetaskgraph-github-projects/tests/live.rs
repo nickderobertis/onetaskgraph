@@ -706,6 +706,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     // llmlint: ignore-block[live_tier_compiles_and_requires_credential] This lane is non-required by decision (AGENTS.md), so an absent credential or an unnamed board skips; `ONETASKGRAPH_LIVE_REQUIRED=1` demands both.
     let lane = live_lane(
         env::var("GH_PROJECTS_TOKEN").ok().as_deref(),
+        // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The live workflow spells these two names too, and the drift gate is the lane's own refusal: project.json runs test-live with ONETASKGRAPH_LIVE_REQUIRED=1, so a name spelled differently on either side fails that job naming both variables rather than skipping green.
         env::var("GH_PROJECTS_OWNER").ok().as_deref(),
         env::var("GH_PROJECTS_NUMBER").ok().as_deref(),
         env::var("ONETASKGRAPH_LIVE_REQUIRED").as_deref() == Ok("1"),
