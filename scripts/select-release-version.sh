@@ -60,6 +60,19 @@ if [ "$after" != "$before" ]; then
   exit 0
 fi
 
+# release-plz reports registry lag without advancing a manifest: its `update` decision is
+# registry-based, but it limits that situation to a changelog edit. A tag only proves that
+# publishing was attempted, so consulting it here would permanently wedge a partial
+# publish. Advance the synchronized workspace once; the attempted version may remain in
+# some registries, while its successor is new to every crate from that release.
+if grep -qF "local version ($before) > registry version (" <<<"$update_output"; then
+  next="$major.$minor.$((patch + 1))"
+  scripts/set-version.sh "$next" || fail "could not select registry recovery version $next" \
+    "fix the manifest or lockfile named above and rerun"
+  echo "select-release-version: registry recovery selected $before -> $next"
+  exit 0
+fi
+
 tag="v$before"
 git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null || fail \
   "$tag does not exist, so the release boundary is unknown" \

@@ -96,10 +96,12 @@ selection_output="$(scripts/select-release-version.sh 2>&1)" || {
   [ "$status" -eq 2 ] && fail "release version selection failed" "fix what the selector reports above, then rerun" 2
   fail "release version selection failed" "fix what the selector reports above, then rerun"
 }
-if [[ $selection_output =~ ^select-release-version:\ release-tooling\ fallback\ selected\ [0-9]+\.[0-9]+\.[0-9]+\ -\>\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  tooling_fallback=yes
+if [[ $selection_output =~ ^select-release-version:\ registry\ recovery\ selected\ [0-9]+\.[0-9]+\.[0-9]+\ -\>\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  manual_proposal=yes
+elif [[ $selection_output =~ ^select-release-version:\ release-tooling\ fallback\ selected\ [0-9]+\.[0-9]+\.[0-9]+\ -\>\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  manual_proposal=yes
 elif [[ $selection_output =~ ^select-release-version:\ release-plz\ selected\ [0-9]+\.[0-9]+\.[0-9]+\ -\>\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  tooling_fallback=no
+  manual_proposal=no
 elif [[ $selection_output =~ ^select-release-version:\ no\ eligible\ package\ or\ release-tooling\ commit\ since\ v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "prepare-release-pr: no release pull request proposed: the selector found no eligible change" >&2
     exit 0
@@ -127,7 +129,7 @@ run_phase \
   "fix what set-version.sh named above, then rerun" \
   scripts/set-version.sh --check
 
-if [ "$tooling_fallback" = no ]; then
+if [ "$manual_proposal" = no ]; then
   run_phase "release-plz could not open or update the release pull request" \
     "check that GIT_TOKEN is still authorised to open pull requests, then rerun" \
     release-plz release-pr --allow-dirty
