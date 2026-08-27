@@ -25,6 +25,8 @@ pinned="$(sed -n 's/.*release-plz@\([^ ,]*\).*/\1/p' "$ROOT/.github/workflows/re
 [ "$(release-plz --version 2>/dev/null || true)" = "release-plz $pinned" ] || fail \
   "release-plz $pinned is not installed, so the real preparation cannot be exercised" \
   "run 'just bootstrap', which installs the workflow's pinned tool, then rerun"
+release_plz_bin="$(command -v release-plz)" || fail \
+  "could not resolve the installed release-plz" "run 'just bootstrap', then rerun"
 for tool in git gh perl python3 uv; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is not on PATH" "run 'just bootstrap', then rerun"
 done
@@ -59,7 +61,14 @@ git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --q
   -m "fix(release): prepare tooling-only releases" || fail \
   "could not commit the tooling-only fixture" "check the scratch repository and rerun"
 git init --quiet --bare "$remote" || fail "could not create the local origin" "check scratch-directory permissions"
-git -C "$repo" remote set-url origin "$remote" || fail "could not point the fixture at its local origin" "check git and rerun"
+# release-plz chooses its forge from the configured remote URL. Keep that public seam
+# GitHub-shaped, while Git's URL rewrite routes every transport operation to the local
+# bare repository so this journey remains hermetic.
+fixture_origin=https://github.com/check/onetaskgraph-release-fixture.git
+git -C "$repo" config "url.$remote.insteadOf" "$fixture_origin" || fail \
+  "could not route the fixture origin to its local repository" "check git and rerun"
+git -C "$repo" remote set-url origin "$fixture_origin" || fail \
+  "could not give the fixture a GitHub-shaped origin" "check git and rerun"
 git -C "$repo" push --quiet --set-upstream origin HEAD || fail "could not seed the local origin" "check git and rerun"
 released_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" || fail \
   "could not read the fixture's released version" "restore the binary manifest and rerun"
@@ -73,6 +82,17 @@ git -C "$repo" switch --quiet --detach "$fixture_base" || fail \
   "could not detach the tooling-only checkout" "check the scratch repository and rerun"
 
 mkdir -p "$scratch/bin" "$scratch/state" || fail "could not create fixture state directories" "check scratch-directory permissions"
+if ! cat > "$scratch/bin/release-plz" <<'RELEASE_PLZ'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = update ]; then
+  exec "$REAL_RELEASE_PLZ" "$@" --forge github
+fi
+exec "$REAL_RELEASE_PLZ" "$@"
+RELEASE_PLZ
+then
+  fail "could not create the release-plz fixture launcher" "check scratch-directory permissions and free space"
+fi
 if ! cat > "$scratch/bin/gh" <<'GH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -85,10 +105,15 @@ GH
 then
   fail "could not create the gh fixture" "check scratch-directory permissions and free space"
 fi
-chmod +x "$scratch/bin/gh" || fail "could not make the gh fixture executable" "check scratch-directory permissions"
+chmod +x "$scratch/bin/release-plz" "$scratch/bin/gh" || fail \
+  "could not make the command fixtures executable" "check scratch-directory permissions"
 export GH_FIXTURE_STATE="$scratch/state"
 export GIT_TOKEN=fixture-token
 export GITHUB_REF_NAME="$fixture_base"
+# Git's insteadOf routing can be applied before release-plz detects the forge on Windows.
+# State the forge at this hermetic fixture boundary while still delegating the update to
+# the exact pinned binary verified above.
+export REAL_RELEASE_PLZ="$release_plz_bin"
 export PATH="$scratch/bin:$PATH"
 
 case_log="$scratch/tooling.log"
