@@ -87,6 +87,16 @@ released_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetask
   "could not read the fixture's released version" "restore the binary manifest and rerun"
 [[ $released_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail \
   "the fixture has no plain X.Y.Z released version ('$released_version')" "restore the binary manifest and rerun"
+# The checkout under test can be either an ordinary main commit, whose manifest version
+# has already been tagged, or a release pull request, whose version has not. Neither shape
+# should determine this fixture's history: discard every copied tag and establish the
+# tooling-only scenario's release boundary on the commit immediately before its eligible
+# release-tooling change.
+git -C "$repo" for-each-ref --format='delete %(refname)' refs/tags | \
+  git -C "$repo" update-ref --stdin || fail \
+  "could not clear inherited tags from the tooling-only fixture" "check the scratch repository and rerun"
+git -C "$repo" tag "v$released_version" HEAD^ || fail \
+  "could not set the tooling-only release boundary" "check the scratch repository and rerun"
 git --git-dir="$remote" symbolic-ref HEAD "refs/heads/$fixture_base" || fail \
   "could not set the local origin's default branch" "check the scratch repository and rerun"
 git -C "$repo" remote set-head origin "$fixture_base" || fail \
