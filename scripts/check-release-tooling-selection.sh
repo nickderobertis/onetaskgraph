@@ -201,11 +201,26 @@ expect_refusal() {
 
 expect_refusal "takes no arguments" 2 scripts/select-release-version.sh unexpected
 mv "$scratch/bin/release-plz" "$scratch/release-plz-away" || fatal "could not hide the scratch stand-in" "check scratch-directory permissions and rerun"
-mkdir -p "$scratch/no-release-plz" || fatal "could not create the missing-tool PATH" "check scratch-directory permissions and rerun"
-for tool in bash dirname; do
-  ln -s "$(command -v "$tool")" "$scratch/no-release-plz/$tool" || fatal "could not link $tool into the missing-tool PATH" "check scratch-directory permissions and rerun"
-done
-expect_refusal "release-plz is not on PATH" 2 env PATH="$scratch/no-release-plz" scripts/select-release-version.sh
+# Keep the ambient runtime directories and subtract only entries that carry release-plz.
+# This is load-bearing on Windows, where Git Bash needs DLLs from its installation and a
+# whitelist of executable symlinks leaves bash itself unable to start.
+path_without_tool() {
+  local tool="$1" entry result=""
+  local IFS=:
+  for entry in $PATH; do
+    [ -n "$entry" ] || continue
+    ( PATH="$entry"; hash -r 2>/dev/null; command -v "$tool" >/dev/null 2>&1 ) && continue
+    result="${result:+$result:}$entry"
+  done
+  printf '%s' "$result"
+}
+PATH_WITHOUT_RELEASE_PLZ="$(path_without_tool release-plz)"
+readonly PATH_WITHOUT_RELEASE_PLZ
+if ( PATH="$PATH_WITHOUT_RELEASE_PLZ"; hash -r 2>/dev/null; command -v release-plz >/dev/null 2>&1 ); then
+  fatal "release-plz is still reachable after dropping every directory that carries one" \
+    "run 'command -v release-plz' and remove any shell function or alias that reaches past the PATH scan"
+fi
+expect_refusal "release-plz is not on PATH" 2 env PATH="$PATH_WITHOUT_RELEASE_PLZ" scripts/select-release-version.sh
 mv "$scratch/release-plz-away" "$scratch/bin/release-plz" || fatal "could not restore the scratch stand-in" "check scratch-directory permissions and rerun"
 expect_refusal "release-plz could not decide the next version" 1 env RELEASE_PLZ_STUB_FAIL=yes scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the refusal fixture" "check that git works and rerun"
