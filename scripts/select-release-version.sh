@@ -60,10 +60,23 @@ if [ "$after" != "$before" ]; then
   exit 0
 fi
 
+# The boundary is a tag, and a tag missing from this checkout is not yet a missing tag.
+# `release-plz release` creates it on the origin, and the release workflow runs this script
+# in the same job, from a checkout made before that tag existed — so every run that follows
+# a successful release arrives here with the boundary it names absent locally. Fetch that
+# one ref before deciding anything: it writes the same ref the origin holds, so `$tag..HEAD`
+# below enumerates the same commits whether the boundary was already here or was just
+# resolved. Only a boundary the origin cannot supply either is genuinely unknown, and that
+# refusal is kept — guessing one would propose a version against nothing.
 tag="v$before"
-git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null || fail \
-  "$tag does not exist, so the release boundary is unknown" \
-  "restore the tag or make the initial release through release-plz"
+if ! git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+  fetch_output=""
+  if ! fetch_output="$(git fetch --no-tags origin "refs/tags/$tag:refs/tags/$tag" 2>&1)"; then
+    printf '%s\n' "$fetch_output" >&2
+    fail "$tag is in neither this checkout nor origin, so the release boundary is unknown" \
+      "restore the tag or make the initial release through release-plz"
+  fi
+fi
 
 # llmlint: ignore-block[changed_behavior_has_e2e] This read fails only for a repository corrupted after its tag and commit fixture exists; corrupting git internals would replace the real history boundary the checks below drive.
 commits="$(git rev-list --reverse "$tag..HEAD")" || fail \
