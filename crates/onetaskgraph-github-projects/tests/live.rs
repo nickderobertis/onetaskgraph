@@ -1,12 +1,8 @@
 //! Structural and residue-free write verification against GitHub's real Projects v2 API.
 //!
-//! This lane holds a credential and writes to a real board, so it writes only to the board
-//! `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` name. Nothing here asks GitHub which project was
-//! updated most recently: requiring the board to be nominated is what keeps the lane off a board
-//! nobody nominated, and without those two names the lane skips exactly as it does without the
-//! credential. Separately, and for a different reason, each run clears residue matching the title
-//! pattern it writes its own artifacts under before it starts — that is self-healing after an
-//! interrupted run, so an artifact outliving a killed process is removed by the next run.
+//! The board comes from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` or the lane skips: requiring
+//! the board to be named is what keeps a credentialed write lane off a board nobody nominated.
+//! Clearing residue before each run is a separate thing — self-healing after an interrupted run.
 
 use std::{collections::BTreeMap, env, future::Future};
 
@@ -322,16 +318,13 @@ where
     }
 }
 
-/// What the environment says about running this lane.
 #[derive(Debug, PartialEq, Eq)]
 enum LiveLane {
-    /// Every input the lane needs: the credential, and the board named by whoever ran it.
     Run {
         token: String,
         owner: String,
         project_number: u32,
     },
-    /// An input is absent. The lane is non-required, so it prints this reason and returns.
     Skip(String),
 }
 
@@ -730,13 +723,9 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     let project_id = nominated_project_id(&token, &owner, project_number)
         .await
         .unwrap_or_else(|error| panic!("GitHub Projects live board lookup failed: {error}"));
-    // Self-healing after an interrupted run: `run_then_cleanup` removes this run's artifact
-    // whether the journey passes or fails, but a killed or timed-out process never reaches it,
-    // and the artifact it wrote would then sit on the board forever. So each run first clears
-    // every item titled the way this lane titles its own. This recovers from an interruption
-    // and nothing more — what keeps the lane off a board nobody nominated is `live_lane`
-    // requiring the board to be named, since a sweep of this lane's own prefix could not help a
-    // board the lane should never have been writing to.
+    // Self-healing after an interrupted run: a process killed between its write and its cleanup
+    // never reaches `run_then_cleanup`, so the next run clears what it left. What bounds where
+    // this lane may write is `live_lane`, not this sweep.
     remove_live_artifacts(&token, &project_id, &is_artifact_title)
         .await
         .unwrap_or_else(|error| {
