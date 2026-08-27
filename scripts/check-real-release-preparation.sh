@@ -10,6 +10,15 @@ fail() {
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fail \
   "could not resolve the repository root" "run this from a checkout of the repository"
+[ -f "$ROOT/scripts/scratch-clone.sh" ] || fail \
+  "scripts/scratch-clone.sh is missing, so hook-exported git state cannot be cleared" \
+  "restore scripts/scratch-clone.sh and rerun"
+# shellcheck source=scripts/scratch-clone.sh
+source "$ROOT/scripts/scratch-clone.sh"
+# Git exports repository-routing variables to hooks, and they override every later `git
+# -C`. Clear them before the first git command so this check addresses its scratch clone
+# even when distribution-check is running inside pre-push.
+scratch_clone_strip_git_env
 pinned="$(sed -n 's/.*release-plz@\([^ ,]*\).*/\1/p' "$ROOT/.github/workflows/release-plz.yml" | head -n1)" || fail \
   "could not read the workflow's release-plz pin" "restore the readable workflow and rerun"
 [[ $pinned =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "the release workflow has no exact X.Y.Z release-plz pin ('$pinned')" "restore its exact tool pin and rerun"
@@ -24,11 +33,18 @@ scratch="$(mktemp -d)" || fail "could not create a scratch directory" "check tem
 trap 'rm -rf "$scratch"' EXIT
 repo="$scratch/repo"
 remote="$scratch/origin.git"
+hooks="$scratch/hooks"
 source_branch="$(git -C "$ROOT" branch --show-current)" || fail \
   "could not determine the branch under review" "check the repository state and rerun"
 [ -n "$source_branch" ] || fail "the checkout is detached, so no branch can be cloned" "check out the branch under review and rerun"
 git clone --quiet --branch "$source_branch" "$ROOT" "$repo" || fail \
   "could not clone the finished tree" "check the current branch and rerun"
+# The user's hooks belong to the checkout under review, not to fixture setup. Point this
+# scratch repository at an empty hook directory so its synthetic commits and local pushes
+# cannot recursively launch the complete gate when the check itself runs from a hook.
+mkdir -p "$hooks" || fail "could not create the empty fixture hook directory" "check scratch-directory permissions"
+git -C "$repo" config core.hooksPath "$hooks" || fail \
+  "could not isolate the fixture from repository hooks" "check the scratch repository and rerun"
 # Exercise the working tree under review, then give release-plz the tooling-only commit the
 # workflow receives after merge.
 (cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$repo" || fail \
@@ -39,7 +55,7 @@ git clone --quiet --branch "$source_branch" "$ROOT" "$repo" || fail \
 perl -pi -e 's/^semver_check = true$/semver_check = false/' "$repo/release-plz.toml" || fail \
   "could not disable the unrelated scratch semver pass" "check Perl and rerun"
 git -C "$repo" add -A || fail "could not stage the tooling-only fixture" "check the scratch repository and rerun"
-git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet \
   -m "fix(release): prepare tooling-only releases" || fail \
   "could not commit the tooling-only fixture" "check the scratch repository and rerun"
 git init --quiet --bare "$remote" || fail "could not create the local origin" "check scratch-directory permissions"
@@ -107,7 +123,7 @@ perl -pi -e 's/^semver_check = true$/semver_check = false/' "$repo/release-plz.t
 git -C "$repo" tag --force "v$released_version" >/dev/null || fail "could not set the ineligible release boundary" "check the scratch repository and rerun"
 printf '\n' >> "$repo/README.md" || fail "could not modify the ineligible README fixture" "check scratch-directory permissions"
 git -C "$repo" add README.md || fail "could not stage the ineligible fixture" "check the scratch repository and rerun"
-git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify -m "docs: ineligible fixture" || fail \
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet -m "docs: ineligible fixture" || fail \
   "could not commit the ineligible fixture" "check the scratch repository and rerun"
 case_log="$scratch/ineligible.log"
 if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
