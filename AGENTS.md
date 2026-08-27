@@ -208,6 +208,16 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   on any machine exporting the credential, and part of a *cached* one, replaying a
   third-party verdict against a tree that cannot describe it. The test stays compiled and
   linted; `test-live` passes `--include-ignored`, which is the only place it runs.
+  **A live lane that writes names the board it writes to.** The GitHub Projects lane takes its
+  board from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, which are required inputs of it
+  alongside `GH_PROJECTS_TOKEN`, and skips with a printed reason when either is absent —
+  `ONETASKGRAPH_LIVE_REQUIRED=1` turning that skip into a failure, the same pairing the
+  credential has. It never asks GitHub which project was updated most recently: that rule once
+  retargeted the credentialed lane from the fixture board onto the board plans are authored on.
+  Requiring the board to be named is what keeps the lane off a board nobody nominated. The
+  lane's separate sweep of items titled the way it titles its own artifacts is self-healing
+  after an interrupted run — it recovers residue a killed process left behind, and it is not
+  what bounds where the lane may write.
 
 ### The journeys this repository owes
 
