@@ -148,7 +148,12 @@ shift || true
 # The cases that drive a failing release-plz set this to the phase that should fail.
 if [ "${RELEASE_PLZ_STUB_FAIL:-}" = "$subcommand" ]; then
   echo "release-plz stand-in: $subcommand was asked to fail" >&2
-  exit 1
+  fail_status="${RELEASE_PLZ_STUB_FAIL_STATUS:-1}"
+  if ! [[ $fail_status =~ ^[1-9][0-9]*$ ]] || [ "$fail_status" -gt 255 ]; then
+    echo "release-plz stand-in: failure status must be an integer from 1 through 255" >&2
+    exit 2
+  fi
+  exit "$fail_status"
 fi
 case "$subcommand" in
   update)
@@ -197,17 +202,17 @@ chmod +x "$scratch/release-plz" || fatal \
 # a machine with release-plz installed would run the real tool against the scratch tree and
 # the case would prove the opposite of what it says. So every directory carrying one is
 # dropped, and the result is put to the question it is about to be trusted for.
-path_without_release_plz() {
-  local entry result=""
+path_without_tool() {
+  local tool="$1" entry result=""
   local IFS=:
   for entry in $PATH; do
     [ -n "$entry" ] || continue
-    ( PATH="$entry"; hash -r 2>/dev/null; command -v release-plz >/dev/null 2>&1 ) && continue
+    ( PATH="$entry"; hash -r 2>/dev/null; command -v "$tool" >/dev/null 2>&1 ) && continue
     result="${result:+$result:}$entry"
   done
   printf '%s' "$result"
 }
-PATH_WITHOUT_RELEASE_PLZ="$(path_without_release_plz)"
+PATH_WITHOUT_RELEASE_PLZ="$(path_without_tool release-plz)"
 readonly PATH_WITHOUT_RELEASE_PLZ
 if ( PATH="$PATH_WITHOUT_RELEASE_PLZ"; hash -r 2>/dev/null; command -v release-plz >/dev/null 2>&1 ); then
   fatal \
@@ -215,10 +220,18 @@ if ( PATH="$PATH_WITHOUT_RELEASE_PLZ"; hash -r 2>/dev/null; command -v release-p
     "run 'command -v release-plz' and take it off PATH — a shell function or an alias reaches past the directory scan above"
 fi
 
-# Keep the real preparation and selector scripts in the status-propagation case, while
-# presenting the selector with a toolchain missing only python3. Each command reached before
-# that guard is linked explicitly, so the fixture does not depend on which ambient PATH
-# directory happens to carry Python on a given runner.
+# Subtract only the entries that expose python3. Keeping every other PATH entry is
+# load-bearing on Windows, where Git Bash needs DLLs beside its own installation and a
+# whitelist of executable symlinks leaves bash itself unable to start. The links retain
+# commands that share Python's directory on Unix; the remaining PATH retains their runtime
+# libraries on Windows.
+PATH_WITHOUT_PYTHON="$(path_without_tool python3)"
+readonly PATH_WITHOUT_PYTHON
+if ( PATH="$PATH_WITHOUT_PYTHON"; hash -r 2>/dev/null; command -v python3 >/dev/null 2>&1 ); then
+  fatal \
+    "python3 is still reachable after dropping every directory that carries it, so the missing-tool case would not reach the selector's refusal" \
+    "run 'command -v python3' and remove any shell function or alias that reaches past the PATH scan"
+fi
 path_without_python="$scratch/path-without-python"
 mkdir -p "$path_without_python" || fatal \
   "could not create the missing-python fixture" "check scratch-directory permissions and rerun"
@@ -341,9 +354,12 @@ expect_refusal "a token passed as an argument, where every process on the runner
 expect_refusal "release-plz failing to decide the next version" \
   "release version selection failed" 1 \
   env RELEASE_PLZ_STUB_FAIL=update scripts/prepare-release-pr.sh
+expect_refusal "release-plz returning an undefined phase status" \
+  "release version selection failed" 1 \
+  env RELEASE_PLZ_STUB_FAIL=update RELEASE_PLZ_STUB_FAIL_STATUS=7 scripts/prepare-release-pr.sh
 expect_refusal "the selector missing its required Python toolchain" \
   "python3 is not on PATH" 2 \
-  env PATH="$path_without_python:$scratch" scripts/prepare-release-pr.sh
+  env PATH="$path_without_python:$scratch:$PATH_WITHOUT_PYTHON" scripts/prepare-release-pr.sh
 expect_refusal "an update that leaves no version to read in the binary's manifest" \
   "no valid semantic version" 1 \
   env RELEASE_PLZ_STUB_INHERIT_VERSION=yes scripts/prepare-release-pr.sh

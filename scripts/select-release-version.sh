@@ -63,7 +63,17 @@ git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null || fail \
   "restore the tag or make the initial release through release-plz"
 
 bump=none
-# llmlint: ignore-block[changed_behavior_has_e2e] These three git reads fail only for a corrupt repository after the tag and commit fixture has been created; corrupting git internals would replace the real history boundary this check exists to exercise.
+# Validate the inventory before path matching so failures are reported in the parent shell,
+# rather than being obscured by the NUL-delimited git pipeline below.
+while IFS= read -r pattern || [ -n "$pattern" ]; do
+  case "$pattern" in
+    "" | \#*) continue ;;
+    /* | *..*) fail "$release_paths contains unsafe pattern '$pattern'" \
+      "keep every entry repository-relative and remove parent traversal" ;;
+  esac
+done < "$release_paths"
+
+# llmlint: ignore-block[changed_behavior_has_e2e] These git reads fail only for a corrupt repository after the tag and commit fixture has been created; corrupting git internals would replace the real history boundary this check exists to exercise.
 commits="$(git rev-list --reverse "$tag..HEAD")" || fail \
   "could not read commits after $tag" "check the repository history and rerun"
 for commit in $commits; do
@@ -94,26 +104,23 @@ PY
     *) candidate="patch" ;;
   esac
 
-  owns_release_path=no
-  changed_paths="$(git diff-tree --no-commit-id --name-only -r "$commit")" || fail \
+  match_status=0
+  owns_release_path="$(
+    git diff-tree --no-commit-id --name-only -z -r "$commit" |
+      {
+        matched=no
+        while IFS= read -r -d '' path; do
+          while IFS= read -r pattern || [ -n "$pattern" ]; do
+            case "$pattern" in "" | \#*) continue ;; esac
+            [[ $path == $pattern ]] && matched=yes
+          done < "$release_paths"
+        done
+        printf '%s' "$matched"
+      }
+  )" || match_status=$?
+  [ "$match_status" -eq 0 ] || fail \
     "could not read paths changed by commit $commit" "check the repository history and rerun"
 # llmlint: ignore-end[changed_behavior_has_e2e]
-  while IFS= read -r path; do
-    while IFS= read -r pattern || [ -n "$pattern" ]; do
-      case "$pattern" in
-        "" | \#*) continue ;;
-        /* | *..*) fail "$release_paths contains unsafe pattern '$pattern'" \
-          "keep every entry repository-relative and remove parent traversal" ;;
-      esac
-      if [[ $path == $pattern ]]; then
-        owns_release_path=yes
-        break
-      fi
-    done < "$release_paths"
-    [ "$owns_release_path" = no ] || break
-  done <<EOF
-$changed_paths
-EOF
   [ "$owns_release_path" = yes ] || continue
   [ "$candidate" = minor ] && bump=minor
   [ "$bump" = none ] && bump="patch"

@@ -43,6 +43,10 @@ repo="$scratch/repo"
 mkdir -p "$repo" || fatal "could not create $repo" "check free space and rerun"
 (cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$repo" || fatal \
   "could not copy the tracked tree" "confirm git ls-files works and check free space"
+# Blank and comment entries are supported inventory syntax. Put both in the committed
+# baseline so every selector journey below proves they are ignored during real matching.
+perl -pi -e 'print "# scratch-only inventory comment\n\n" if $. == 1' "$repo/config/release-tooling-paths.txt" || fatal \
+  "could not add ignored inventory entries to the scratch baseline" "check that Perl works and rerun"
 git -C "$repo" init --quiet || fatal "could not initialize the scratch repository" "check that git works and rerun"
 git -C "$repo" add -A || fatal "could not stage the scratch baseline" "check scratch-directory permissions and rerun"
 git -C "$repo" -c user.name=check -c user.email=check@example.invalid \
@@ -225,6 +229,9 @@ mv "$repo/config/release-tooling-paths.txt" "$scratch/release-tooling-paths-away
 expect_refusal "could not read config/release-tooling-paths.txt" 1 scripts/select-release-version.sh
 mv "$scratch/release-tooling-paths-away" "$repo/config/release-tooling-paths.txt" || fatal "could not restore the release-tooling inventory" "check scratch-directory permissions and rerun"
 printf '/outside-checkout/*\n' > "$repo/config/release-tooling-paths.txt" || fatal "could not write the unsafe inventory fixture" "check scratch-directory permissions and rerun"
+expect_refusal "contains unsafe pattern" 1 scripts/select-release-version.sh
+git -C "$repo" checkout --quiet "v$version" -- config/release-tooling-paths.txt || fatal "could not restore the release-tooling inventory" "check that git works and rerun"
+printf '../outside-checkout/*\n' > "$repo/config/release-tooling-paths.txt" || fatal "could not write the parent-traversal inventory fixture" "check scratch-directory permissions and rerun"
 expect_refusal "contains unsafe pattern" 1 scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- config/release-tooling-paths.txt || fatal "could not restore the release-tooling inventory" "check that git works and rerun"
 case "${OS:-}${OSTYPE:-}" in

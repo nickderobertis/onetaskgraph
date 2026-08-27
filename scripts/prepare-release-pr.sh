@@ -51,7 +51,8 @@ quietly() {
   output="$("$@" 2>&1)" || status=$?
   if [ "$status" -ne 0 ]; then
     printf '%s\n' "$output" >&2
-    fail "$problem" "$next" "$status"
+    [ "$status" -eq 2 ] && fail "$problem" "$next" 2
+    fail "$problem" "$next"
   fi
 }
 
