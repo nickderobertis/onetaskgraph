@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Drive the production selector against real commits whose only changed file is release
 # tooling, and prove both releasable and non-releasable subjects at the public script seam.
+# Exit status: 0 when every case passes; 1 for a behavior finding; 2 when the check itself
+# cannot construct or drive its scratch fixture.
 set -euo pipefail
 
 fatal() {
@@ -20,6 +22,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
 # Git hooks export GIT_DIR, which overrides every `git -C "$repo"` below. Load the
 # repository's shared guard before constructing the scratch repository so this check runs
 # against the same fixture both by hand and from the pre-push gate.
+# The source path is built from $ROOT at runtime, so ShellCheck cannot resolve it itself.
 # shellcheck source=scripts/scratch-clone.sh
 if [ ! -r "$ROOT/scripts/scratch-clone.sh" ] || ! source "$ROOT/scripts/scratch-clone.sh"; then
   fatal "could not load the git-environment guard" \
