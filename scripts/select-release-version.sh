@@ -87,7 +87,7 @@ PY
       "restore its valid workspace.release_commits policy and rerun"
   fi
   case "$message" in
-    feat*|*"BREAKING CHANGE:"*) candidate="minor" ;;
+    feat*|*!:*|*"BREAKING CHANGE:"*) candidate="minor" ;;
     *) candidate="patch" ;;
   esac
 

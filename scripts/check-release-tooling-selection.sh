@@ -121,6 +121,8 @@ git -C "$repo" switch --quiet --detach "v$version" || fatal \
 
 run_case "fix: repair release workflow" ".github/workflows/release.yml" \
   "$major.$minor.$((patch + 1))"
+run_case "fix!: repair breaking release contract" ".github/workflows/release.yml" \
+  "$major.$((minor + 1)).0"
 run_case "feat: extend distribution contract" "scripts/check-distribution-contract.sh" \
   "$major.$((minor + 1)).0"
 run_case "perf: streamline npm packaging" "npm/cli/package.json" \
