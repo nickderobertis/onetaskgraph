@@ -128,7 +128,7 @@ run_case() {
   git -C "$repo" add "$path" || fatal "could not stage fixture $path" "check that git works and rerun"
   git -C "$repo" -c user.name=check -c user.email=check@example.invalid \
     commit --quiet --no-verify -m "$subject" || fatal "could not commit fixture $path" "check that git works and rerun"
-  (cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_SELECTED="$selected" scripts/select-release-version.sh) || finding \
+  (cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_SELECTED="$selected" scripts/select-release-version.sh >/dev/null) || finding \
     "the selector failed for '$subject' changing $path" "run that case directly and fix its diagnostic"
   actual="$(read_version)"
   [ "$actual" = "$expected" ] || finding \
@@ -141,7 +141,7 @@ run_case() {
 # rather than a non-releasable commit.
 git -C "$repo" switch --quiet --detach "v$version" || fatal \
   "could not detach the release-boundary fixture" "check that git works and rerun"
-(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh) || finding \
+(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh >/dev/null) || finding \
   "the selector failed with HEAD exactly at the release tag" \
   "repair the no-post-tag-commit path and rerun"
 [ "$(read_version)" = "$version" ] || finding \
@@ -185,7 +185,7 @@ for entry in "fix: first tooling change|release-plz.toml" "feat: second tooling 
   git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
     -m "$subject" || fatal "could not commit aggregation fixture $path" "check that git works and rerun"
 done
-(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh) || finding \
+(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh >/dev/null) || finding \
   "the selector failed to aggregate real commits" "run the aggregation case directly and fix its diagnostic"
 [ "$(read_version)" = "$major.$((minor + 1)).0" ] || finding \
   "the selector did not give a feature precedence over a patch" "repair bump aggregation and rerun"

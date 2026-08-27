@@ -172,6 +172,7 @@ case "$subcommand" in
     ;;
   release-pr)
     echo "release-pr $*" >> "$state/calls"
+    echo "release-plz stand-in: proposed package release"
     allow_dirty=no
     for argument in "$@"; do
       [ "$argument" = --allow-dirty ] && allow_dirty=yes

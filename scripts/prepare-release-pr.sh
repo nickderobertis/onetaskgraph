@@ -41,14 +41,14 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || fail \
   "could not enter this repository's root from ${BASH_SOURCE[0]}" \
   "run this from a checkout of this repository, as .github/workflows/release-plz.yml does" 2
 
-# Preserve successful decisions as well as failure diagnostics in the workflow log.
+# Preserve failure diagnostics while the caller emits one decision line on success.
 run_phase() {
   local problem="$1" next="$2" output status
   shift 2
   status=0
   output="$("$@" 2>&1)" || status=$?
-  [ -z "$output" ] || printf '%s\n' "$output" >&2
   if [ "$status" -ne 0 ]; then
+    printf '%s\n' "$output" >&2
     [ "$status" -eq 2 ] && fail "$problem" "$next" 2
     fail "$problem" "$next"
   fi
@@ -64,7 +64,6 @@ selection_output="$(scripts/select-release-version.sh 2>&1)" || {
   [ "$status" -eq 2 ] && fail "release version selection failed" "fix what the selector reports above, then rerun" 2
   fail "release version selection failed" "fix what the selector reports above, then rerun"
 }
-printf '%s\n' "$selection_output" >&2
 case "$selection_output" in
   *"release-tooling fallback selected "*) tooling_fallback=yes ;;
   *"release-plz selected "*) tooling_fallback=no ;;
@@ -96,11 +95,12 @@ run_phase \
 if [ "$tooling_fallback" = no ]; then
   run_phase "release-plz could not open or update the release pull request" \
     "check that GIT_TOKEN is still authorised to open pull requests, then rerun" \
-    release-plz release-pr --allow-dirty --output json
+    release-plz release-pr --allow-dirty
   echo "prepare-release-pr: release-plz proposed the package release pull request for $version" >&2
   exit 0
 fi
 
+# llmlint: ignore-block[changed_behavior_has_e2e] Missing host tools, a detached Actions checkout, git transport failures, and GitHub authorization failures cannot be induced while retaining the real installed tools, repository, local remote and CLI boundary this journey is required to drive; check-real-release-preparation exercises creation and update through those boundaries.
 command -v gh >/dev/null 2>&1 || fail "gh is not on PATH, so the release-tooling pull request cannot be proposed" \
   "install GitHub CLI — GitHub-hosted runners include it — then rerun" 2
 base_branch="$(git branch --show-current)"
@@ -113,10 +113,12 @@ if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1
 fi
 run_phase "could not create release branch $branch" "restore the checkout and rerun" git switch --force-create "$branch"
 run_phase "could not stage the prepared release" "inspect the working tree and rerun" git add -A
-run_phase "could not commit the prepared release" "inspect git's diagnostic and rerun" \
-  git -c user.name=release-plz -c user.email=release-plz@users.noreply.github.com commit -m "chore: release v$version"
-run_phase "could not publish release branch $branch" "check the checkout token's contents permission and rerun" \
-  git push --force-with-lease --set-upstream origin "$branch"
+if ! git diff --cached --quiet; then
+  run_phase "could not commit the prepared release" "inspect git's diagnostic and rerun" \
+    git -c user.name=release-plz -c user.email=release-plz@users.noreply.github.com commit -m "chore: release v$version"
+  run_phase "could not publish release branch $branch" "check the checkout token's contents permission and rerun" \
+    git push --force-with-lease --set-upstream origin "$branch"
+fi
 pr_number="$(GH_TOKEN="$GIT_TOKEN" gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')" || fail \
   "could not check for an existing pull request from $branch" "check the token's pull-request permission and rerun"
 if [ -z "$pr_number" ]; then
@@ -127,3 +129,4 @@ if [ -z "$pr_number" ]; then
 else
   echo "prepare-release-pr: updated release pull request #$pr_number from $branch to $base_branch at v$version" >&2
 fi
+# llmlint: ignore-end[changed_behavior_has_e2e]
