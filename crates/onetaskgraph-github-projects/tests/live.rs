@@ -1022,9 +1022,6 @@ async fn cleanup_runs_after_a_failed_live_journey() {
     assert!(cleaned.load(std::sync::atomic::Ordering::SeqCst));
 }
 
-// The board and credential decision is a function of the environment alone, so these drive the
-// same `live_lane` the journey drives, with the values it passes, and need no board to do it.
-
 #[test]
 fn the_lane_takes_its_board_only_from_the_two_names() {
     assert_eq!(
