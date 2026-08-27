@@ -227,8 +227,8 @@ mv "$scratch/release-tooling-paths-away" "$repo/config/release-tooling-paths.txt
 printf '/outside-checkout/*\n' > "$repo/config/release-tooling-paths.txt" || fatal "could not write the unsafe inventory fixture" "check scratch-directory permissions and rerun"
 expect_refusal "contains unsafe pattern" 1 scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- config/release-tooling-paths.txt || fatal "could not restore the release-tooling inventory" "check that git works and rerun"
-case "$(uname -s 2>/dev/null || true)" in
-  *MSYS* | *CYGWIN* | *MINGW*)
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
     echo "check-release-tooling-selection: unreadable-manifest case skipped on Windows (its permission model does not make chmod 000 unreadable); the Linux and macOS lanes gate this refusal" >&2
     ;;
   *)
