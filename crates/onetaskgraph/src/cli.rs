@@ -378,6 +378,8 @@ pub struct SearchArgs {
 /// clap into the plugin contract's dependencies for the sake of one flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum StatusArg {
+    /// Written down but not yet committed to as work.
+    Draft,
     /// Known about, not yet queued.
     Backlog,
     /// Queued, not yet started.
@@ -397,6 +399,7 @@ impl StatusArg {
     #[must_use]
     pub fn category(self) -> StatusCategory {
         match self {
+            Self::Draft => StatusCategory::Draft,
             Self::Backlog => StatusCategory::Backlog,
             Self::Todo => StatusCategory::Todo,
             Self::InProgress => StatusCategory::InProgress,

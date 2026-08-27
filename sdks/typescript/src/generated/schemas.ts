@@ -1209,6 +1209,11 @@ export const runtimeSchemas = {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
           {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
             "const": "backlog",
             "description": "Known about, not yet queued.",
             "type": "string"
@@ -1329,6 +1334,11 @@ export const runtimeSchemas = {
       "StatusCategory": {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
           {
             "const": "backlog",
             "description": "Known about, not yet queued.",
@@ -1610,6 +1620,11 @@ export const runtimeSchemas = {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
           {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
             "const": "backlog",
             "description": "Known about, not yet queued.",
             "type": "string"
@@ -1755,6 +1770,11 @@ export const runtimeSchemas = {
       "StatusCategory": {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
           {
             "const": "backlog",
             "description": "Known about, not yet queued.",
@@ -2170,6 +2190,11 @@ export const runtimeSchemas = {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
           {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
             "const": "backlog",
             "description": "Known about, not yet queued.",
             "type": "string"
@@ -2281,6 +2306,11 @@ export const runtimeSchemas = {
       "StatusCategory": {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
           {
             "const": "backlog",
             "description": "Known about, not yet queued.",
@@ -3660,6 +3690,11 @@ export const runtimeSchemas = {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
           {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
             "const": "backlog",
             "description": "Known about, not yet queued.",
             "type": "string"
@@ -4063,6 +4098,11 @@ export const runtimeSchemas = {
       "StatusCategory": {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
           {
             "const": "backlog",
             "description": "Known about, not yet queued.",
@@ -4680,6 +4720,11 @@ export const runtimeSchemas = {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
           {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
             "const": "backlog",
             "description": "Known about, not yet queued.",
             "type": "string"
@@ -5057,6 +5102,11 @@ export const runtimeSchemas = {
       "StatusCategory": {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
           {
             "const": "backlog",
             "description": "Known about, not yet queued.",
@@ -6308,6 +6358,11 @@ export const runtimeSchemas = {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
           {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
             "const": "backlog",
             "description": "Known about, not yet queued.",
             "type": "string"
@@ -6363,6 +6418,11 @@ export const runtimeSchemas = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "The normalised status vocabulary shared across every source.",
     "oneOf": [
+      {
+        "const": "draft",
+        "description": "Written down but not yet committed to as work.",
+        "type": "string"
+      },
       {
         "const": "backlog",
         "description": "Known about, not yet queued.",
@@ -6452,6 +6512,11 @@ export const runtimeSchemas = {
       "StatusCategory": {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
           {
             "const": "backlog",
             "description": "Known about, not yet queued.",
@@ -6641,6 +6706,11 @@ export const runtimeSchemas = {
       "StatusCategory": {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
           {
             "const": "backlog",
             "description": "Known about, not yet queued.",

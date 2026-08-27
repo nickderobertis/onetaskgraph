@@ -152,6 +152,7 @@ class SourcePlan(BaseModel):
 
 
 class StatusCategory(StrEnum):
+    StatusCategoryDraft = "draft"
     StatusCategoryBacklog = "backlog"
     StatusCategoryTodo = "todo"
     StatusCategoryInProgress = "in-progress"

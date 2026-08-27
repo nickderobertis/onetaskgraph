@@ -368,8 +368,8 @@ look like a failure of the source.
   per-source, and a user filtering across sources types a word. `any_of` matches a
   task carrying at least one; `all_of` matches a task carrying every one; `none_of`
   excludes a task carrying any. An empty list is not a filter.
-- `statuses` holds `StatusCategory` values: `"backlog"`, `"todo"`, `"in-progress"`,
-  `"done"`, `"cancelled"`, `"unknown"`. An empty list is not a filter.
+- `statuses` holds `StatusCategory` values: `"draft"`, `"backlog"`, `"todo"`,
+  `"in-progress"`, `"done"`, `"cancelled"`, `"unknown"`. An empty list is not a filter.
 - `project` is the string `"any"`, the string `"orphans"` — tasks belonging to no
   project — or the object `{"is": "<native id>"}`. It is externally tagged, unlike
   `SourceError` (§5), which is tagged on `kind`; both shapes are as

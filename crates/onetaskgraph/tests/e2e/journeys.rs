@@ -1140,13 +1140,17 @@ fn every_status_category_and_search_scope_the_command_line_spells_is_accepted() 
             assert_eq!(listed(&found), ours(&expected), "{} {category}", row.name);
         }
 
-        // And the three it does not: accepted, and correctly matching nothing.
+        // And the four it does not: accepted, and correctly matching nothing. `draft` is
+        // one of them at every row, which is what says the vocabulary reaches every
+        // source kind rather than only the one that spells a draft in its own store.
         let none = ok(
             row,
             &sandbox,
             &[
                 "task",
                 "list",
+                "--status",
+                "draft",
                 "--status",
                 "backlog",
                 "--status",

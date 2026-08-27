@@ -840,6 +840,7 @@ fn a_project_and_an_orphan_task_round_trip_through_json() {
 #[test]
 fn the_normalised_vocabularies_serialise_as_kebab_case() {
     let categories = [
+        (StatusCategory::Draft, "draft"),
         (StatusCategory::Backlog, "backlog"),
         (StatusCategory::Todo, "todo"),
         (StatusCategory::InProgress, "in-progress"),

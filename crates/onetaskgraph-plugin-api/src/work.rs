@@ -192,6 +192,8 @@ pub struct Status {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum StatusCategory {
+    /// Written down but not yet committed to as work.
+    Draft,
     /// Known about, not yet queued.
     Backlog,
     /// Queued, not yet started.

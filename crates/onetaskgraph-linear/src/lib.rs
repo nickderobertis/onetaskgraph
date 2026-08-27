@@ -965,6 +965,10 @@ fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Pag
 // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear's workflow-state strings follow the accepted 2026-08-24 contract; its authoritative enum is exposed only through an authenticated unversioned explorer, while real-HTTP tests cover every serialized and parsed value.
 fn linear_statuses(s: &StatusCategory) -> Vec<&'static str> {
     match s {
+        // Linear's workflow states are triage, backlog, unstarted, started, completed and
+        // canceled; none of them is a draft, so this narrows to nothing exactly as
+        // `Unknown` does rather than filtering on a state Linear does not have.
+        StatusCategory::Draft => vec![],
         StatusCategory::Backlog => vec!["backlog"],
         StatusCategory::Todo => vec!["unstarted"],
         StatusCategory::InProgress => vec!["started"],
