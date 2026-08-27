@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+readme = "../../README.md"
 
 # The engine may depend on every plugin; no plugin may depend back. Registering a new
 # plugin here is what lets a configuration name it.
