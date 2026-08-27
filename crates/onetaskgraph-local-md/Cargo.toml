@@ -1,7 +1,7 @@
 [package]
 name = "onetaskgraph-local-md"
 description = "A onetaskgraph source over Markdown task files on the local filesystem."
-version = "0.2.3"
+version = "0.2.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
