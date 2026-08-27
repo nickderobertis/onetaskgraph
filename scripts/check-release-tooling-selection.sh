@@ -128,7 +128,7 @@ run_case() {
   git -C "$repo" add "$path" || fatal "could not stage fixture $path" "check that git works and rerun"
   git -C "$repo" -c user.name=check -c user.email=check@example.invalid \
     commit --quiet --no-verify -m "$subject" || fatal "could not commit fixture $path" "check that git works and rerun"
-  (cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_SELECTED="$selected" scripts/select-release-version.sh) || finding \
+  (cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_SELECTED="$selected" scripts/select-release-version.sh >/dev/null) || finding \
     "the selector failed for '$subject' changing $path" "run that case directly and fix its diagnostic"
   actual="$(read_version)"
   [ "$actual" = "$expected" ] || finding \
@@ -141,7 +141,7 @@ run_case() {
 # rather than a non-releasable commit.
 git -C "$repo" switch --quiet --detach "v$version" || fatal \
   "could not detach the release-boundary fixture" "check that git works and rerun"
-(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh) || finding \
+(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh >/dev/null) || finding \
   "the selector failed with HEAD exactly at the release tag" \
   "repair the no-post-tag-commit path and rerun"
 [ "$(read_version)" = "$version" ] || finding \
@@ -185,7 +185,7 @@ for entry in "fix: first tooling change|release-plz.toml" "feat: second tooling 
   git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
     -m "$subject" || fatal "could not commit aggregation fixture $path" "check that git works and rerun"
 done
-(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh) || finding \
+(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh >/dev/null) || finding \
   "the selector failed to aggregate real commits" "run the aggregation case directly and fix its diagnostic"
 [ "$(read_version)" = "$major.$((minor + 1)).0" ] || finding \
   "the selector did not give a feature precedence over a patch" "repair bump aggregation and rerun"
@@ -201,7 +201,26 @@ expect_refusal() {
 
 expect_refusal "takes no arguments" 2 scripts/select-release-version.sh unexpected
 mv "$scratch/bin/release-plz" "$scratch/release-plz-away" || fatal "could not hide the scratch stand-in" "check scratch-directory permissions and rerun"
-expect_refusal "release-plz is not on PATH" 2 scripts/select-release-version.sh
+# Keep the ambient runtime directories and subtract only entries that carry release-plz.
+# This is load-bearing on Windows, where Git Bash needs DLLs from its installation and a
+# whitelist of executable symlinks leaves bash itself unable to start.
+path_without_tool() {
+  local tool="$1" entry result=""
+  local IFS=:
+  for entry in $PATH; do
+    [ -n "$entry" ] || continue
+    ( PATH="$entry"; hash -r 2>/dev/null; command -v "$tool" >/dev/null 2>&1 ) && continue
+    result="${result:+$result:}$entry"
+  done
+  printf '%s' "$result"
+}
+PATH_WITHOUT_RELEASE_PLZ="$(path_without_tool release-plz)"
+readonly PATH_WITHOUT_RELEASE_PLZ
+if ( PATH="$PATH_WITHOUT_RELEASE_PLZ"; hash -r 2>/dev/null; command -v release-plz >/dev/null 2>&1 ); then
+  fatal "release-plz is still reachable after dropping every directory that carries one" \
+    "run 'command -v release-plz' and remove any shell function or alias that reaches past the PATH scan"
+fi
+expect_refusal "release-plz is not on PATH" 2 env PATH="$PATH_WITHOUT_RELEASE_PLZ" scripts/select-release-version.sh
 mv "$scratch/release-plz-away" "$scratch/bin/release-plz" || fatal "could not restore the scratch stand-in" "check scratch-directory permissions and rerun"
 expect_refusal "release-plz could not decide the next version" 1 env RELEASE_PLZ_STUB_FAIL=yes scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the refusal fixture" "check that git works and rerun"

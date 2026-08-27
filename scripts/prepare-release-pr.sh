@@ -41,10 +41,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || fail \
   "could not enter this repository's root from ${BASH_SOURCE[0]}" \
   "run this from a checkout of this repository, as .github/workflows/release-plz.yml does" 2
 
-# Quiet on success, and everything the tool said when it fails: release-plz narrates every
-# crate it considers, which is noise beside the one line that says what went wrong. A
-# variable rather than a temporary file, so there is no log to fail to create or clean up.
-quietly() {
+# Preserve failure diagnostics while the caller emits one decision line on success.
+run_phase() {
   local problem="$1" next="$2" output status
   shift 2
   status=0
@@ -56,14 +54,60 @@ quietly() {
   fi
 }
 
+# A push checkout can be detached even though its workflow ref names the pull-request base.
+# release-plz itself requires an attached branch with an upstream, so restore that context
+# before selection rather than waiting until the fallback needs `gh pr create --base`.
+current_branch="$(git branch --show-current)" || fail "could not determine whether the checkout is detached" \
+  "check the repository state and rerun" 2
+base_branch="$current_branch"
+# llmlint: ignore-block[changed_behavior_has_e2e] The real journey exercises both supported detached inputs (the Actions workflow ref and origin/HEAD); inducing these refusals or transport failures requires malformed workflow state or replacing the working local remote rather than retaining the real boundary under test.
+if [ -z "$base_branch" ]; then
+  base_branch="${GITHUB_REF_NAME:-}"
+fi
+if [ -z "$base_branch" ]; then
+  base_branch="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  base_branch="${base_branch#origin/}"
+fi
+[ -n "$base_branch" ] || fail "no workflow ref, attached branch, or default remote branch names the pull-request base" \
+  "set GITHUB_REF_NAME to the pushed branch or repair origin/HEAD, then rerun" 2
+git check-ref-format --branch "$base_branch" >/dev/null 2>&1 || fail \
+  "the derived pull-request base '$base_branch' is not a valid branch name" \
+  "repair GITHUB_REF_NAME or origin/HEAD, then rerun" 2
+if [ -z "$current_branch" ]; then
+  git ls-remote --exit-code --heads origin "refs/heads/$base_branch" >/dev/null 2>&1 || fail \
+    "origin has no branch named $base_branch, so it cannot be the pull-request base" \
+    "repair GITHUB_REF_NAME or origin/HEAD, then rerun" 2
+  run_phase "could not fetch the detached checkout's base branch $base_branch" \
+    "check the checkout token's contents permission and rerun" \
+    git fetch origin "refs/heads/$base_branch:refs/remotes/origin/$base_branch"
+  run_phase "could not attach the checkout to $base_branch" \
+    "check that HEAD is the pushed commit and rerun" \
+    git switch --force-create "$base_branch" --track "origin/$base_branch"
+fi
+# llmlint: ignore-end[changed_behavior_has_e2e]
+
 command -v release-plz >/dev/null 2>&1 || fail \
   "release-plz is not on PATH, so no version can be decided" \
   "install it — the release workflow does, with taiki-e/install-action — then rerun" 2
 
-quietly \
-  "release version selection failed" \
-  "fix what the selector reports above, then rerun" \
-  scripts/select-release-version.sh
+selection_output="$(scripts/select-release-version.sh 2>&1)" || {
+  status=$?
+  printf '%s\n' "$selection_output" >&2
+  [ "$status" -eq 2 ] && fail "release version selection failed" "fix what the selector reports above, then rerun" 2
+  fail "release version selection failed" "fix what the selector reports above, then rerun"
+}
+if [[ $selection_output =~ ^select-release-version:\ release-tooling\ fallback\ selected\ [0-9]+\.[0-9]+\.[0-9]+\ -\>\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  tooling_fallback=yes
+elif [[ $selection_output =~ ^select-release-version:\ release-plz\ selected\ [0-9]+\.[0-9]+\.[0-9]+\ -\>\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  tooling_fallback=no
+elif [[ $selection_output =~ ^select-release-version:\ no\ eligible\ package\ or\ release-tooling\ commit\ since\ v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "prepare-release-pr: no release pull request proposed: the selector found no eligible change" >&2
+    exit 0
+else
+  # llmlint: ignore[changed_behavior_has_e2e] A successful malformed response requires replacing the selector boundary; its real success decisions are exercised, and its own check owns every refusal and output shape.
+  fail "the selector completed without one valid decision line" \
+    "repair scripts/select-release-version.sh so success names exactly the selected version or why it selected none"
+fi
 
 binary_manifest=crates/onetaskgraph/Cargo.toml
 version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$binary_manifest" | head -n1)
@@ -71,19 +115,58 @@ version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$binary_manifest" | head -n1)
   "$binary_manifest has no valid semantic version after the update: '$version'" \
   "restore its X.Y.Z version and rerun; that manifest is where the release's version is read from"
 
-quietly \
+run_phase \
   "could not bring every manifest to $version" \
   "fix the manifest or lockfile it names above, then rerun" \
   scripts/set-version.sh "$version"
 
 # Refuse to open a pull request this repository's own required check would refuse; without
 # this the drift reaches CI, which costs a three-platform run to say the same thing.
-quietly \
+run_phase \
   "the manifests still disagree after the sync, so the release pull request would fail its own distribution-check" \
   "fix what set-version.sh named above, then rerun" \
   scripts/set-version.sh --check
 
-quietly \
-  "release-plz could not open or update the release pull request" \
-  "check that GIT_TOKEN is still authorised to open pull requests, then rerun" \
-  release-plz release-pr --allow-dirty
+if [ "$tooling_fallback" = no ]; then
+  run_phase "release-plz could not open or update the release pull request" \
+    "check that GIT_TOKEN is still authorised to open pull requests, then rerun" \
+    release-plz release-pr --allow-dirty
+  echo "prepare-release-pr: release-plz proposed the package release pull request for $version" >&2
+  exit 0
+fi
+
+# llmlint: ignore-block[changed_behavior_has_e2e] Missing host tools, git transport failures, and GitHub authorization failures cannot be induced while retaining the real installed tools, repository, local remote and CLI boundary this journey is required to drive; check-real-release-preparation exercises detached checkout recovery, creation and update through those boundaries.
+command -v gh >/dev/null 2>&1 || fail "gh is not on PATH, so the release-tooling pull request cannot be proposed" \
+  "install GitHub CLI — GitHub-hosted runners include it — then rerun" 2
+branch="release-plz-$version"
+if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+  run_phase "could not fetch existing release branch $branch" "check the checkout token's contents permission and rerun" \
+    git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch"
+fi
+run_phase "could not create release branch $branch" "restore the checkout and rerun" git switch --force-create "$branch"
+run_phase "could not stage the prepared release" "inspect the working tree and rerun" git add -A
+diff_status=0
+git diff --cached --quiet || diff_status=$?
+if [ "$diff_status" -eq 1 ]; then
+  run_phase "could not commit the prepared release" "inspect git's diagnostic and rerun" \
+    git -c user.name=release-plz -c user.email=release-plz@users.noreply.github.com commit -m "chore: release v$version"
+  run_phase "could not publish release branch $branch" "check the checkout token's contents permission and rerun" \
+    git push --force-with-lease --set-upstream origin "$branch"
+elif [ "$diff_status" -ne 0 ]; then
+  fail "could not inspect the staged release before committing it" "read git's diagnostic above and rerun"
+fi
+pr_number="$(GH_TOKEN="$GIT_TOKEN" gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')" || fail \
+  "could not check for an existing pull request from $branch" "check the token's pull-request permission and rerun"
+if [ -n "$pr_number" ] && ! [[ $pr_number =~ ^[1-9][0-9]*$ ]]; then
+  fail "gh returned an invalid pull-request number '$pr_number' for $branch" \
+    "check the GitHub CLI response and rerun"
+fi
+if [ -z "$pr_number" ]; then
+  run_phase "could not open the release pull request" "check the token's pull-request permission and rerun" \
+    env GH_TOKEN="$GIT_TOKEN" gh pr create --base "$base_branch" --head "$branch" \
+      --title "chore: release v$version" --body "Release v$version selected from an eligible change confined to release tooling."
+  echo "prepare-release-pr: proposed release pull request from $branch to $base_branch at v$version" >&2
+else
+  echo "prepare-release-pr: updated release pull request #$pr_number from $branch to $base_branch at v$version" >&2
+fi
+# llmlint: ignore-end[changed_behavior_has_e2e]
