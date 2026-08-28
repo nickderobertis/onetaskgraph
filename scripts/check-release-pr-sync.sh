@@ -531,10 +531,12 @@ fi
 #    It is the first phase, so nothing has been decided when it fails, and the run must stop
 #    rather than prepare a release over the tree the last one left. Induced with the index
 #    lock a killed run leaves behind — which is exactly the interruption the restore is for,
-#    and, unlike taking away the object the restore reads, it is the same inducement on every
-#    platform: the scratch repository holds its objects loose on some runners and packed on
-#    others, and this case once failed on windows-latest alone for that reason. It is put back
-#    afterwards, because every case below needs a checkout that can restore itself.
+#    and, unlike taking away the loose object the restore reads, it can be constructed
+#    wherever this check runs. That is not a nicety: a scratch repository whose objects are
+#    packed has no loose object to take away, and all three CI runners refused that
+#    inducement rather than assert on a case they could not build, which is why nothing here
+#    may depend on how the objects are stored. The lock is put back afterwards, because every
+#    case below needs a checkout that can restore itself.
 restore_blocked=crates/onetaskgraph/Cargo.toml
 index_lock="$repo/.git/index.lock"
 : > "$index_lock" || fatal \
