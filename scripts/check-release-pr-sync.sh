@@ -529,25 +529,20 @@ fi
 
 #    And the way that stalls before any of them: a checkout the preparation cannot restore.
 #    It is the first phase, so nothing has been decided when it fails, and the run must stop
-#    rather than prepare a release over the tree the last one left. Induced by removing the
-#    one object the restore needs — what a truncated or damaged store leaves behind — and put
-#    back afterwards, because every case below needs a checkout that can restore itself.
+#    rather than prepare a release over the tree the last one left. Induced with the index
+#    lock a killed run leaves behind — which is exactly the interruption the restore is for,
+#    and, unlike taking away the object the restore reads, it is the same inducement on every
+#    platform: the scratch repository holds its objects loose on some runners and packed on
+#    others, and this case once failed on windows-latest alone for that reason. It is put back
+#    afterwards, because every case below needs a checkout that can restore itself.
 restore_blocked=crates/onetaskgraph/Cargo.toml
-blocked_blob="$(git -C "$repo" rev-parse "HEAD:$restore_blocked")" || fatal \
-  "could not read the object $restore_blocked is restored from" \
-  "check that git works ('git --version') and rerun"
-blocked_object="$repo/.git/objects/${blocked_blob:0:2}/${blocked_blob:2}"
-[ -f "$blocked_object" ] || fatal \
-  "the scratch repository holds $restore_blocked in a pack rather than as a loose object, so this case cannot take away what the restore reads" \
-  "unpack the fixture's objects, or induce the unrestorable checkout another way, then rerun"
-cp "$repo/$restore_blocked" "$scratch/blocked-content" || fatal \
-  "could not save $restore_blocked before taking away the object it is restored from" \
-  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
-rm -f "$blocked_object" || fatal \
-  "could not take away the object $restore_blocked is restored from" \
+index_lock="$repo/.git/index.lock"
+: > "$index_lock" || fatal \
+  "could not leave an index lock behind in the scratch repository" \
   "check the permissions of the scratch repository and rerun"
-# The tree has to need that object back, or git restores nothing and reads nothing: this is
-# the shape a preparation that did not finish leaves, which is the tree the restore is for.
+# The tree has to differ from HEAD, or git restores nothing and the lock is never reached:
+# this is the shape a preparation that did not finish leaves, which is the tree the restore
+# is for.
 printf '\n# left behind by a preparation that did not finish\n' >> "$repo/$restore_blocked" || fatal \
   "could not leave $restore_blocked as an unfinished preparation leaves it" \
   "check the permissions of the scratch repository and rerun"
@@ -565,8 +560,8 @@ else
     report "the preparation refused an unrestorable checkout without naming the phase that stopped. It said:"
     quote_case_log
   fi
-  if ! grep -qF "$restore_blocked" "$case_log"; then
-    report "the refusal never names $restore_blocked, which is what git said it could not restore — so the reader is told which phase failed and nothing about why. It said:"
+  if ! grep -qF "index.lock" "$case_log"; then
+    report "the refusal never quotes what git said it could not do, so the reader is told which phase failed and nothing about why. It said:"
     quote_case_log
   fi
   if [ -s "$state/calls" ]; then
@@ -574,16 +569,13 @@ else
     sed 's/^/    /' "$state/calls" >&2
   fi
 fi
-cp "$scratch/blocked-content" "$repo/$restore_blocked" || fatal \
-  "could not put $restore_blocked back after the unrestorable-checkout case" \
-  "check the permissions of the scratch repository and rerun"
-restored_blob="$(git -C "$repo" hash-object -w -- "$restore_blocked")" || fatal \
-  "could not write $restore_blocked's object back into the scratch repository" \
-  "check that git works ('git --version') and rerun"
-[ "$restored_blob" = "$blocked_blob" ] || fatal \
-  "putting $restore_blocked back wrote $restored_blob where the baseline holds $blocked_blob, so every case below would run against a checkout that cannot restore itself" \
-  "restore the scratch repository's object store, then rerun"
+rm -f "$index_lock" || fatal \
+  "could not take the index lock back out of the scratch repository after the unrestorable-checkout case" \
+  "remove $index_lock by hand, then rerun"
 restore_scratch
+git -C "$repo" diff --quiet -- "$restore_blocked" || fatal \
+  "$restore_blocked still differs from the baseline after the unrestorable-checkout case, so every case below would run against a half-bumped tree" \
+  "restore the scratch repository and rerun"
 
 # 8. The two ways the sync itself can fail. Replacing the script in the scratch tree rather
 #    than the manifests: what is under test here is that the preparation stops, and stops
