@@ -783,32 +783,47 @@ impl GitHubProjectsSource {
         })
     }
 
-    /// The board option this status must be written to, or the refusal that says why not.
+    /// The board Status option this write selects, or the refusal that says why not.
+    ///
+    /// For a column target the option is what the status *is*, so a board that has no such
+    /// option is a refusal naming the status and the instance. For a closed target the
+    /// issue's own state carries the category, and the option carries only the name a
+    /// reader reports — so an option spelled the way this status is spelled is selected
+    /// when the board has one, and nothing is refused when it does not.
     fn column_for(
         &self,
         board: &Board,
         status: &Status,
+        target: &StatusTarget,
     ) -> Result<Option<(String, String)>, SourceError> {
-        let StatusTarget::Column(wanted) = self.resolved_target(status.category)? else {
-            return Ok(None);
+        let (wanted, required) = match target {
+            StatusTarget::Column(wanted) => (wanted.as_str(), true),
+            StatusTarget::Closed(_) => (status.name.as_str(), false),
+            StatusTarget::Disabled => return Ok(None),
         };
-        let field = Board::field(&board.fields, "Status")?.ok_or_else(|| SourceError::Refused {
+        let missing = |detail: &str| SourceError::Refused {
             message: format!(
-                "status {} of source {} needs the board Status option {wanted:?}, and this board \
-                 has no Status field",
+                "status {} of source {} needs the board Status option {wanted:?}, and {detail};                  add that option to the board, or point status_mapping.{} of this source at one                  it has",
                 category_name(status.category),
-                self.name
+                self.name,
+                category_name(status.category)
             ),
-        })?;
+        };
+        let Some(field) = Board::field(&board.fields, "Status")? else {
+            return if required {
+                Err(missing("this board has no Status field"))
+            } else {
+                Ok(None)
+            };
+        };
         if required_str(field, "__typename")? != "ProjectV2SingleSelectField" {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "status {} of source {} needs the board Status option {wanted:?}, and this \
-                     board's Status field is not a single-select field",
-                    category_name(status.category),
-                    self.name
-                ),
-            });
+            return if required {
+                Err(missing(
+                    "this board's Status field is not a single-select field",
+                ))
+            } else {
+                Ok(None)
+            };
         }
         let option = field
             .get("options")
@@ -818,23 +833,17 @@ impl GitHubProjectsSource {
                     option
                         .get("name")
                         .and_then(Value::as_str)
-                        .is_some_and(|name| name.eq_ignore_ascii_case(&wanted))
+                        .is_some_and(|name| name.eq_ignore_ascii_case(wanted))
                 })
-            })
-            .ok_or_else(|| SourceError::Refused {
-                message: format!(
-                    "status {} of source {} maps to the board Status option {wanted:?}, which \
-                     this board does not have; add that option to the board, or point \
-                     status_mapping.{} of this source at one it has",
-                    category_name(status.category),
-                    self.name,
-                    category_name(status.category)
-                ),
-            })?;
-        Ok(Some((
-            required_str(field, "id")?.to_owned(),
-            required_str(option, "id")?.to_owned(),
-        )))
+            });
+        match option {
+            None if required => Err(missing("this board does not have it")),
+            None => Ok(None),
+            Some(option) => Ok(Some((
+                required_str(field, "id")?.to_owned(),
+                required_str(option, "id")?.to_owned(),
+            ))),
+        }
     }
 
     /// This instance's target for a category, refusing one it has disabled.
@@ -1111,7 +1120,7 @@ impl GitHubProjectsSource {
     ) -> Result<NativeId, SourceError> {
         let board = self.board().await?;
         let status_target = self.resolved_target(incoming.status.category)?;
-        let column = self.column_for(&board, incoming.status)?;
+        let column = self.column_for(&board, incoming.status, &status_target)?;
         let existing = target
             .map(|target| {
                 board

@@ -209,8 +209,10 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   third-party verdict against a tree that cannot describe it. The test stays compiled and
   linted; `test-live` passes `--include-ignored`, which is the only place it runs.
   **A live lane that writes names the board it writes to.** The GitHub Projects lane takes its
-  board from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, which are required inputs of it
-  alongside `GH_PROJECTS_TOKEN`, and skips with a printed reason when either is absent —
+  board from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` and the repository it creates its
+  issues in from `GH_PROJECTS_REPOSITORY` — a project there is an issue and a board has no
+  repository of its own — all three being required inputs of it alongside
+  `GH_PROJECTS_TOKEN`, and skips with a printed reason when any is absent —
   `ONETASKGRAPH_LIVE_REQUIRED=1` turning that skip into a failure, the same pairing the
   credential has. It never asks GitHub which project was updated most recently: that rule once
   retargeted the credentialed lane from the fixture board onto the board plans are authored on.

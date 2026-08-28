@@ -257,7 +257,6 @@ pub const ROWS: &[Row] = &[
         },
     },
 ];
-
 fn github_projects_block(sandbox: &Sandbox) -> Value {
     github_projects_server(sandbox, None)
 }
@@ -270,15 +269,256 @@ pub fn github_projects_recording(sandbox: &Sandbox, recorded: Value) -> Value {
     github_projects_server(sandbox, Some(recorded))
 }
 
+/// One item on the fixture board, in the shape the fixture keeps it between requests.
+///
+/// A board is a container of projects: `T-1`..`T-4` are task issues, and `P-1` and `P-2`
+/// are project issues, readable as projects because they carry this source's own kind
+/// marker rather than because the board is one.
+fn github_item(
+    id: &str,
+    title: &str,
+    body: &str,
+    status: &str,
+    state: (&str, Option<&str>),
+    labels: Value,
+    slot: Value,
+) -> Value {
+    let body = if slot.as_object().is_some_and(serde_json::Map::is_empty) {
+        body.to_owned()
+    } else {
+        format!("{body}\n\n<!-- onetaskgraph.metadata\n{slot}\n-->")
+    };
+    json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue","title":title,"body":body,
+           "state":state.0,"reason":state.1,"parent":Value::Null,
+           "repo":"nickderobertis/onetaskgraph","status":status,"origin":"",
+           "labels":labels})
+}
+
+fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
+    let marked = |extra: Value| {
+        let mut slot = json!({"onetaskgraph.item_kind":"project"});
+        for (key, value) in extra.as_object().expect("an object") {
+            slot[key] = value.clone();
+        }
+        slot
+    };
+    vec![
+        github_item(
+            "T-1",
+            "Alpha engine",
+            "the engine core",
+            "Todo",
+            ("OPEN", None),
+            json!([["L-1", "bug"], ["L-3", "core"]]),
+            json!({"onepipeline.turn_budget":12,"caller.flags":[true,null],
+                   "onetaskgraph.depends_on":recorded.cloned().unwrap_or_else(||
+                       Value::Array(recorded_far_ends("task_dependencies", &json!("T-1"))))}),
+        ),
+        github_item(
+            "T-2",
+            "Beta",
+            "alpha in the body",
+            "Shipped",
+            ("CLOSED", Some("COMPLETED")),
+            json!([["L-2", "chore"]]),
+            json!({}),
+        ),
+        github_item(
+            "T-3",
+            "Gamma",
+            "unrelated",
+            "Todo",
+            ("OPEN", None),
+            json!([["L-1", "bug"]]),
+            json!({}),
+        ),
+        github_item(
+            "T-4",
+            "Delta docs",
+            "documentation",
+            "Doing",
+            ("OPEN", None),
+            json!([["L-3", "core"]]),
+            json!({}),
+        ),
+        github_item(
+            "P-1",
+            "Engine",
+            "alpha engine project",
+            "Doing",
+            ("OPEN", None),
+            json!([]),
+            marked(json!({"onepipeline.publication":{"mode":"review"},
+                          "onetaskgraph.depends_on":recorded_far_ends("project_dependencies", &json!("P-1"))})),
+        ),
+        github_item(
+            "P-2",
+            "Docs",
+            "alpha docs",
+            "Todo",
+            ("OPEN", None),
+            json!([]),
+            marked(json!({})),
+        ),
+    ]
+}
+
+/// The board's own `blockedBy` graph: which item waits on which.
+fn github_blockers() -> Vec<(String, Vec<String>)> {
+    [
+        ("T-1", vec!["T-2"]),
+        ("T-3", vec!["T-2"]),
+        ("P-1", vec!["P-2"]),
+    ]
+    .into_iter()
+    .map(|(id, blockers)| {
+        (
+            id.to_owned(),
+            blockers.into_iter().map(str::to_owned).collect(),
+        )
+    })
+    .collect()
+}
+
+/// The board this fixture keeps, and everything a request may change on it.
+struct GitHubBoard {
+    items: Vec<Value>,
+    /// Issues `createIssue` made which `addProjectV2ItemById` has not filed yet.
+    pending: Vec<Value>,
+    blocked_by: Vec<(String, Vec<String>)>,
+    created: usize,
+    /// The board's **own** title, description and readme — a person's, not this
+    /// product's. `updateProjectV2` is answered here rather than refused so that a
+    /// journey asserting these are byte-identical after a copy fails when something
+    /// writes them, instead of passing because nothing could have.
+    own: Value,
+}
+
+/// A read-only handle on one fixture board's own fields.
+pub struct GitHubBoardFields(Arc<Mutex<GitHubBoard>>);
+
+impl GitHubBoardFields {
+    /// The board's own `title`, `shortDescription` and `readme`, as it holds them now.
+    #[must_use]
+    pub fn own(&self) -> Value {
+        self.0.lock().unwrap().own.clone()
+    }
+}
+
+impl GitHubBoard {
+    fn options() -> Value {
+        json!([{"id":"OPT-backlog","name":"Backlog"},{"id":"OPT-todo","name":"Todo"},
+               {"id":"OPT-doing","name":"Doing"},{"id":"OPT-shipped","name":"Shipped"}])
+    }
+
+    fn fields() -> Value {
+        json!({"nodes":[
+            {"__typename":"ProjectV2SingleSelectField","id":"FIELD-status","name":"Status",
+             "options":Self::options()},
+            {"__typename":"ProjectV2Field","id":"FIELD-origin","name":"onetaskgraph.origin"}
+        ],"pageInfo":{"hasNextPage":false}})
+    }
+
+    fn subs(&self, id: &str) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item["parent"] == json!(id))
+            .count()
+    }
+
+    fn find(&mut self, id: &Value) -> &mut Value {
+        self.items
+            .iter_mut()
+            .find(|item| item["id"] == *id)
+            .expect("the fixture holds the item being written")
+    }
+
+    fn content(&self, item: &Value) -> Value {
+        json!({"__typename":"Issue","id":item["id"],"title":item["title"],"body":item["body"],
+               "url":format!("https://example.invalid/{}", item["id"].as_str().unwrap()),
+               "createdAt":null,"updatedAt":null,"state":item["state"],
+               "stateReason":item["reason"],
+               "repository":item["repo"].as_str().map(|repo| json!({"nameWithOwner":repo})),
+               "parent":item["parent"].as_str().map(|id| json!({"id":id})),
+               "subIssuesSummary":{"total":self.subs(item["id"].as_str().unwrap())},
+               "labels":{"nodes":item["labels"].as_array().unwrap().iter()
+                   .map(|pair| json!({"id":pair[0],"name":pair[1],"color":null}))
+                   .collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}})
+    }
+
+    fn rendered(&self, item: &Value) -> Value {
+        let mut values = vec![
+            json!({"name":item["status"],"field":{"id":"FIELD-status","name":"Status",
+                   "options":Self::options()}}),
+            json!({"text":item["origin"],"field":{"id":"FIELD-origin","name":"onetaskgraph.origin"}}),
+        ];
+        if let Some(labels) = item.get("field_labels") {
+            values.push(json!({"labels":{"nodes":labels,"pageInfo":{"hasNextPage":false}}}));
+        }
+        json!({"id":item["item"],
+               "fieldValues":{"nodes":values,"pageInfo":{"hasNextPage":false}},
+               "content":self.content(item)})
+    }
+
+    /// Every far end one issue is related to, in the direction asked for.
+    fn related(&self, id: &str, blocking: bool) -> Value {
+        let ids: Vec<String> = if blocking {
+            self.blocked_by
+                .iter()
+                .filter(|(_, blockers)| blockers.iter().any(|blocker| blocker == id))
+                .map(|(near, _)| near.clone())
+                .collect()
+        } else {
+            self.blocked_by
+                .iter()
+                .find(|(near, _)| near == id)
+                .map(|(_, blockers)| blockers.clone())
+                .unwrap_or_default()
+        };
+        Value::Array(
+            ids.into_iter()
+                .map(|id| {
+                    let far = self.items.iter().find(|item| item["id"] == json!(id));
+                    json!({"id":id,
+                           "body":far.map(|item| item["body"].clone()),
+                           "parent":far.and_then(|item| item["parent"].as_str())
+                               .map(|parent| json!({"id":parent})),
+                           "subIssuesSummary":{"total":self.subs(&id)}})
+                })
+                .collect(),
+        )
+    }
+}
+
+// llmlint: ignore-block[functions_do_one_thing] One GraphQL endpoint's dispatch table: each
+// arm answers exactly one production document, and keeping them in one table is what makes
+// the fixture's coverage of those documents readable at a glance.
 fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
+    github_projects_board(sandbox, recorded).0
+}
+
+/// The same board, with a handle on the fields this source must never write.
+pub fn github_projects_with_board(sandbox: &Sandbox) -> (Value, GitHubBoardFields) {
+    github_projects_board(sandbox, None)
+}
+
+fn github_projects_board(sandbox: &Sandbox, recorded: Option<Value>) -> (Value, GitHubBoardFields) {
     sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
     let endpoint = format!(
         "http://{}/graphql",
         listener.local_addr().expect("fixture address")
     );
-    let written = Arc::new(Mutex::new(Vec::<Value>::new()));
-    let project_write = Arc::new(Mutex::new(None::<Value>));
+    let board = Arc::new(Mutex::new(GitHubBoard {
+        items: github_dataset(recorded.as_ref()),
+        pending: Vec::new(),
+        blocked_by: github_blockers(),
+        created: 0,
+        own: json!({"title":"Fixture board",
+                    "shortDescription":"the board a person set up",
+                    "readme":"# Fixture board\n\nA person wrote this."}),
+    }));
+    let held = Arc::clone(&board);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
@@ -288,197 +528,9 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
             let variables = request["variables"]
                 .as_object()
                 .expect("GraphQL variables object");
-            let variables = &Value::Object(variables.clone());
-            let data = if query.contains("addProjectV2DraftIssue(input:$input)") {
-                let input = &variables["input"];
-                assert_eq!(input["projectId"], "P-1");
-                assert!(
-                    input["title"]
-                        .as_str()
-                        .is_some_and(|value| !value.is_empty())
-                );
-                assert!(input["body"].is_string() || input["body"].is_null());
-                let mut rows = written.lock().unwrap();
-                let number = rows.len() + 1;
-                let content_id = format!("DRAFT-{number}");
-                let item_id = format!("ITEM-DRAFT-{number}");
-                rows.push(json!({"id":item_id,"fieldValues":{"nodes":[
-                    {"name":"Todo","field":{"id":"FIELD-status","name":"Status","options":[{"id":"OPT-todo","name":"Todo"},{"id":"OPT-doing","name":"Doing"},{"id":"OPT-shipped","name":"Shipped"}]}},
-                    {"text":"{}","field":{"id":"FIELD-metadata","name":"onetaskgraph.metadata"}}
-                ],"pageInfo":{"hasNextPage":false}},"content":{"__typename":"DraftIssue","id":content_id,
-                    "title":input["title"],"body":input["body"],"createdAt":null,"updatedAt":null}}));
-                json!({"addProjectV2DraftIssue":{"projectItem":{"id":item_id,"content":{"id":content_id}}}})
-            } else if query.contains("updateProjectV2DraftIssue(input:$input)") {
-                let input = &variables["input"];
-                assert!(
-                    input["draftIssueId"]
-                        .as_str()
-                        .is_some_and(|value| !value.is_empty())
-                );
-                assert!(input["title"].is_string());
-                assert!(input["body"].is_string() || input["body"].is_null());
-                let mut rows = written.lock().unwrap();
-                let row = rows
-                    .iter_mut()
-                    .find(|row| row["content"]["id"] == input["draftIssueId"])
-                    .expect("updated fixture draft exists");
-                row["content"]["title"] = input["title"].clone();
-                row["content"]["body"] = input["body"].clone();
-                json!({"updateProjectV2DraftIssue":{"draftIssue":{"id":input["draftIssueId"]}}})
-            } else if query.contains("updateIssue(input:$input)") {
-                assert!(
-                    variables["input"]["title"]
-                        .as_str()
-                        .is_some_and(|title| !title.is_empty())
-                );
-                assert!(
-                    variables["input"]["body"].is_string() || variables["input"]["body"].is_null()
-                );
-                if variables["input"]["id"] == "T-1" {
-                    assert_eq!(variables["input"]["title"], "Alpha engine revised");
-                    assert_eq!(variables["input"]["body"], "the engine core");
-                }
-                json!({"updateIssue":{"issue":{"id":variables["input"]["id"]}}})
-            } else if query.contains("updateProjectV2ItemFieldValue(input:$input)") {
-                let input = &variables["input"];
-                for key in ["projectId", "itemId", "fieldId"] {
-                    assert!(input[key].as_str().is_some_and(|value| !value.is_empty()));
-                }
-                assert!(
-                    input["value"]
-                        .as_object()
-                        .is_some_and(|value| value.len() == 1)
-                );
-                assert!(
-                    input["value"]["text"].is_string()
-                        || input["value"]["singleSelectOptionId"].is_string()
-                );
-                let mut rows = written.lock().unwrap();
-                let row = rows.iter_mut().find(|row| row["id"] == input["itemId"]);
-                if let Some(row) = row {
-                    if input["fieldId"] == "FIELD-metadata" {
-                        row["fieldValues"]["nodes"][1]["text"] = input["value"]["text"].clone();
-                    }
-                    if input["fieldId"] == "FIELD-status" {
-                        let option = input["value"]["singleSelectOptionId"].as_str().unwrap();
-                        row["fieldValues"]["nodes"][0]["name"] = json!(match option {
-                            "OPT-doing" => "Doing",
-                            "OPT-shipped" => "Shipped",
-                            _ => "Todo",
-                        });
-                    }
-                } else {
-                    assert!(input["itemId"].as_str().unwrap().starts_with("ITEM-T-"));
-                    if input["itemId"] == "ITEM-T-1" && input["fieldId"] == "FIELD-metadata" {
-                        let metadata: Value =
-                            serde_json::from_str(input["value"]["text"].as_str().unwrap()).unwrap();
-                        assert_eq!(metadata["onetaskgraph.origin"], "notes:T-1");
-                    }
-                    if input["itemId"] == "ITEM-T-1" && input["fieldId"] == "FIELD-status" {
-                        assert_eq!(input["value"]["singleSelectOptionId"], "OPT-todo");
-                    }
-                }
-                json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":input["itemId"]}}})
-            } else if query.contains("updateProjectV2(input:$input)") {
-                assert_eq!(variables["input"]["projectId"], "P-1");
-                assert!(
-                    variables["input"]["title"]
-                        .as_str()
-                        .is_some_and(|title| !title.is_empty())
-                );
-                assert!(
-                    variables["input"]["shortDescription"].is_string()
-                        || variables["input"]["shortDescription"].is_null()
-                );
-                assert!(variables["input"]["closed"].is_boolean());
-                *project_write.lock().unwrap() = Some(variables["input"].clone());
-                json!({"updateProjectV2":{"projectV2":{"id":"P-1"}}})
-            } else if query.contains("addBlockedBy(input:$input)") {
-                assert!(
-                    variables["input"]["issueId"]
-                        .as_str()
-                        .is_some_and(|value| !value.is_empty())
-                );
-                assert!(
-                    variables["input"]["blockingIssueId"]
-                        .as_str()
-                        .is_some_and(|value| !value.is_empty())
-                );
-                assert_eq!(variables["input"]["issueId"], "T-1");
-                assert_eq!(variables["input"]["blockingIssueId"], "T-3");
-                json!({"addBlockedBy":{"issue":{"id":variables["input"]["issueId"]},"blockingIssue":{"id":variables["input"]["blockingIssueId"]}}})
-            } else if query.contains("removeBlockedBy(input:$input)") {
-                assert!(
-                    variables["input"]["issueId"]
-                        .as_str()
-                        .is_some_and(|value| !value.is_empty())
-                );
-                assert!(
-                    variables["input"]["blockingIssueId"]
-                        .as_str()
-                        .is_some_and(|value| !value.is_empty())
-                );
-                assert_eq!(variables["input"]["issueId"], "T-1");
-                assert_eq!(variables["input"]["blockingIssueId"], "T-2");
-                json!({"removeBlockedBy":{"issue":{"id":variables["input"]["issueId"]},"blockingIssue":{"id":variables["input"]["blockingIssueId"]}}})
-            } else if query.contains("node(id:$id)") {
-                let id = variables["id"].as_str().expect("dependency id");
-                let first = variables["first"]
-                    .as_u64()
-                    .expect("dependency first must be an unsigned integer");
-                assert!(
-                    (1..=100).contains(&first),
-                    "dependency first is out of range"
-                );
-                assert!(
-                    variables["after"].is_null() || variables["after"].is_string(),
-                    "dependency after must be null or a string"
-                );
-                if written
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .any(|row| row["content"]["id"] == id)
-                {
-                    json!({"node":{"__typename":"DraftIssue"}})
-                } else {
-                    // T-2 sits on a second board, so aggregating this board's issue edges
-                    // yields a real project-level edge rather than one this board makes with
-                    // itself, which the source drops.
-                    let blockers = match id {
-                        "T-1" | "T-3" | "T-4" => vec![
-                            json!({"id":"T-2","projectItems":{"nodes":[{"project":{"id":"P-2"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
-                        ],
-                        _ => vec![],
-                    };
-                    // The production document selects both connections, so the fixture answers
-                    // both: T-2 is what the other three are blocked by, and so what it blocks.
-                    let blocking = if id == "T-2" {
-                        ["T-1", "T-3", "T-4"]
-                        .into_iter()
-                        .map(|id| json!({"id":id,"projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}))
-                        .collect::<Vec<_>>()
-                    } else {
-                        vec![]
-                    };
-                    json!({"node":{"__typename":"Issue",
-                    "blockedBy":{"nodes":blockers,"pageInfo":{"hasNextPage":false,"endCursor":null}},
-                    "blocking":{"nodes":blocking,"pageInfo":{"hasNextPage":false,"endCursor":null}}}})
-                }
-            } else if query.contains("owner:repositoryOwner") {
-                assert_eq!(variables["owner"], "fixture-owner");
-                assert_eq!(variables["number"], 7);
-                assert_eq!(variables["nestedFirst"], 50);
-                github_project_page(
-                    variables,
-                    recorded.as_ref(),
-                    &written.lock().unwrap(),
-                    project_write.lock().unwrap().as_ref(),
-                )
-            } else {
-                panic!("fixture received an unknown GraphQL operation")
-            };
-            let body = json!({"data":data}).to_string();
+            let variables = Value::Object(variables.clone());
+            let data = github_answer(&board, query, &variables);
+            let body = json!({ "data": data }).to_string();
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -488,13 +540,206 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 .expect("GitHub fixture response");
         }
     });
-    json!({
-        "owner": "fixture-owner",
-        "project_number": 7,
-        "token_env": "GITHUB_PROJECTS_FIXTURE_TOKEN",
-        "endpoint": endpoint,
-        "status_mapping": {"Doing":"in-progress", "Shipped":"done"}
-    })
+    (
+        json!({
+            "owner": "fixture-owner",
+            "project_number": 7,
+            "repository": "nickderobertis/onetaskgraph",
+            "token_env": "GITHUB_PROJECTS_FIXTURE_TOKEN",
+            "endpoint": endpoint,
+            // `done` and `cancelled` keep their shipped defaults, which close the issue:
+            // GitHub derives a project's `Sub-issues progress` from closed sub-issues, so a
+            // plan whose finished tasks were only moved to a column reads 0% complete forever.
+            "status_mapping": {"todo":"Todo","in-progress":"Doing"}
+        }),
+        GitHubBoardFields(held),
+    )
+}
+
+fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
+    let mut board = board.lock().unwrap();
+    let input = variables.get("input").cloned().unwrap_or(Value::Null);
+    if query.contains("repository(owner:$owner,name:$name)") {
+        assert_eq!(variables["owner"], "nickderobertis");
+        return json!({"repository":{"id":"REPO-1","nameWithOwner":"nickderobertis/onetaskgraph"}});
+    }
+    if query.contains("createIssue(input:$input)") {
+        assert_eq!(input["repositoryId"], "REPO-1");
+        assert!(input["title"].as_str().is_some_and(|t| !t.is_empty()));
+        assert!(input["body"].is_string() || input["body"].is_null());
+        board.created += 1;
+        let id = format!("ISSUE-{}", board.created);
+        let created = json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue",
+            "title":input["title"],"body":input["body"],"state":"OPEN","reason":null,
+            "parent":Value::Null,"repo":"nickderobertis/onetaskgraph","status":"Todo",
+            "origin":"","labels":[]});
+        board.pending.push(created);
+        return json!({"createIssue":{"issue":{"id":id}}});
+    }
+    if query.contains("addProjectV2ItemById(input:$input)") {
+        assert_eq!(input["projectId"], "PVT-board");
+        let content = input["contentId"].clone();
+        let at = board
+            .pending
+            .iter()
+            .position(|item| item["id"] == content)
+            .expect("the issue was created before it was filed");
+        let item = board.pending.remove(at);
+        let id = item["item"].clone();
+        board.items.push(item);
+        return json!({"addProjectV2ItemById":{"item":{"id":id}}});
+    }
+    if query.contains("updateIssue(input:$input)") {
+        let held = board.find(&input["id"]);
+        if let Some(title) = input["title"].as_str() {
+            held["title"] = json!(title);
+        }
+        if input.get("body").is_some() && input["title"].is_string() {
+            held["body"] = input["body"].clone();
+        }
+        let state = input["stateInput"].clone();
+        if !state.is_null() {
+            held["state"] = state["value"].clone();
+            held["reason"] = state["stateReason"].clone();
+        }
+        return json!({"updateIssue":{"issue":{"id":input["id"]}}});
+    }
+    if query.contains("updateProjectV2ItemFieldValue(input:$input)") {
+        assert_eq!(input["projectId"], "PVT-board");
+        assert!(
+            input["value"]
+                .as_object()
+                .is_some_and(|value| value.len() == 1)
+        );
+        let item_id = input["itemId"].clone();
+        let option = input["value"]["singleSelectOptionId"].as_str().map(|id| {
+            GitHubBoard::options()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|option| option["id"] == id)
+                .expect("an option this board has")["name"]
+                .clone()
+        });
+        let text = input["value"]["text"].clone();
+        let held = board
+            .items
+            .iter_mut()
+            .find(|item| item["item"] == item_id)
+            .expect("a field update names a board item");
+        if let Some(option) = option {
+            held["status"] = option;
+        }
+        if text.is_string() {
+            held["origin"] = text;
+        }
+        return json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id}}});
+    }
+    if query.contains("addSubIssue(input:$input)") || query.contains("removeSubIssue(input:$input)")
+    {
+        let adding = query.contains("addSubIssue(input:$input)");
+        let parent = input["issueId"].clone();
+        let child = input["subIssueId"].clone();
+        board.find(&child)["parent"] = if adding { parent.clone() } else { Value::Null };
+        let root = if adding {
+            "addSubIssue"
+        } else {
+            "removeSubIssue"
+        };
+        return json!({root:{"issue":{"id":parent},"subIssue":{"id":child}}});
+    }
+    if query.contains("addBlockedBy(input:$input)")
+        || query.contains("removeBlockedBy(input:$input)")
+    {
+        let adding = query.contains("addBlockedBy(input:$input)");
+        let issue = input["issueId"].as_str().expect("an issue id").to_owned();
+        let blocker = input["blockingIssueId"]
+            .as_str()
+            .expect("a blocking issue id")
+            .to_owned();
+        let entry = match board.blocked_by.iter().position(|(near, _)| *near == issue) {
+            Some(at) => &mut board.blocked_by[at].1,
+            None => {
+                board.blocked_by.push((issue.clone(), Vec::new()));
+                &mut board.blocked_by.last_mut().unwrap().1
+            }
+        };
+        if adding {
+            entry.push(blocker.clone());
+        } else {
+            entry.retain(|held| held != &blocker);
+        }
+        let root = if adding {
+            "addBlockedBy"
+        } else {
+            "removeBlockedBy"
+        };
+        return json!({root:{"issue":{"id":issue},"blockingIssue":{"id":blocker}}});
+    }
+    if query.contains("updateProjectV2(input:$input)") {
+        for field in ["title", "shortDescription", "readme"] {
+            if let Some(value) = input.get(field) {
+                board.own[field] = value.clone();
+            }
+        }
+        return json!({"updateProjectV2":{"projectV2":{"id":"PVT-board"}}});
+    }
+    if query.contains("node(id:$id)") {
+        let id = variables["id"].as_str().expect("dependency id").to_owned();
+        let first = variables["first"]
+            .as_u64()
+            .expect("dependency first must be an unsigned integer");
+        assert!(
+            (1..=100).contains(&first),
+            "dependency first is out of range"
+        );
+        assert!(
+            variables["after"].is_null() || variables["after"].is_string(),
+            "dependency after must be null or a string"
+        );
+        if !board.items.iter().any(|item| item["id"] == json!(id)) {
+            return json!({ "node": null });
+        }
+        return json!({"node":{"__typename":"Issue",
+            "blockedBy":{"nodes":board.related(&id, false),
+                         "pageInfo":{"hasNextPage":false,"endCursor":null}},
+            "blocking":{"nodes":board.related(&id, true),
+                        "pageInfo":{"hasNextPage":false,"endCursor":null}}}});
+    }
+    assert!(
+        query.contains("owner:repositoryOwner"),
+        "fixture received an unknown GraphQL operation"
+    );
+    assert_eq!(variables["owner"], "fixture-owner");
+    assert_eq!(variables["number"], 7);
+    assert_eq!(variables["nestedFirst"], 50);
+    assert_eq!(variables["duplicates"], json!(true));
+    let offset = match &variables["after"] {
+        Value::Null => 0,
+        Value::String(cursor) => cursor.parse::<usize>().expect("numeric after cursor"),
+        other => panic!("GraphQL after must be null or a numeric string: {other}"),
+    };
+    let first = usize::try_from(
+        variables["first"]
+            .as_u64()
+            .expect("GraphQL first must be an unsigned integer"),
+    )
+    .expect("GraphQL first fits usize");
+    assert!(first > 0, "GraphQL first must be positive");
+    assert!(
+        offset <= board.items.len(),
+        "GraphQL after cursor is out of range"
+    );
+    let end = (offset + first).min(board.items.len());
+    let nodes = board.items[offset..end]
+        .iter()
+        .map(|item| board.rendered(item))
+        .collect::<Vec<_>>();
+    let title = board.own["title"].clone();
+    json!({"owner":{"projectV2":{"id":"PVT-board","title":title,
+        "fields":GitHubBoard::fields(),
+        "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < board.items.len(),
+                                           "endCursor":end.to_string()}}}}})
 }
 
 fn read_http_json(stream: &mut impl Read) -> Value {
@@ -529,104 +774,6 @@ fn read_http_json(stream: &mut impl Read) -> Value {
         bytes.extend_from_slice(&chunk[..count]);
     }
     serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
-}
-
-fn github_project_page(
-    variables: &Value,
-    recorded: Option<&Value>,
-    written: &[Value],
-    project_write: Option<&Value>,
-) -> Value {
-    let tasks = [
-        (
-            "T-1",
-            "Alpha engine",
-            "the engine core",
-            "Todo",
-            "OPEN",
-            vec![("L-1", "bug"), ("L-3", "core")],
-        ),
-        (
-            "T-2",
-            "Beta",
-            "alpha in the body",
-            "Shipped",
-            "CLOSED",
-            vec![("L-2", "chore")],
-        ),
-        (
-            "T-3",
-            "Gamma",
-            "unrelated",
-            "Todo",
-            "OPEN",
-            vec![("L-1", "bug")],
-        ),
-        (
-            "T-4",
-            "Delta docs",
-            "documentation",
-            "Doing",
-            "OPEN",
-            vec![("L-3", "core")],
-        ),
-    ];
-    let offset = match variables.get("after") {
-        Some(Value::Null) => 0,
-        Some(Value::String(value)) => value.parse::<usize>().expect("numeric after cursor"),
-        _ => panic!("GraphQL after must be null or a numeric string"),
-    };
-    let first = usize::try_from(
-        variables
-            .get("first")
-            .and_then(Value::as_u64)
-            .expect("GraphQL first must be an unsigned integer"),
-    )
-    .expect("GraphQL first fits usize");
-    assert!(first > 0, "GraphQL first must be positive");
-    assert!(
-        offset <= tasks.len(),
-        "GraphQL after cursor is out of range"
-    );
-    let end = (offset + first).min(tasks.len());
-    let mut nodes = tasks[offset..end]
-        .iter()
-        .map(|(id, title, body, status, state, labels)| json!({
-            "id": format!("ITEM-{id}"),
-            "fieldValues":{"nodes":[{"name":status,"field":{"id":"FIELD-status","name":"Status","options":[
-                {"id":"OPT-todo","name":"Todo"},{"id":"OPT-doing","name":"Doing"},{"id":"OPT-shipped","name":"Shipped"}]}},
-                {"text": if *id == "T-1" {serde_json::to_string(&json!({"onepipeline.turn_budget":12,"caller.flags":[true,null],
-                    "onetaskgraph.depends_on": recorded.cloned().unwrap_or_else(|| Value::Array(recorded_far_ends("task_dependencies",&json!("T-1"))))})).unwrap()} else {"{}".into()},"field":{"id":"FIELD-metadata","name":"onetaskgraph.metadata"}}],"pageInfo":{"hasNextPage":false}},
-            "content":{
-                "__typename":"Issue","id":id,"title":title,"body":body,"state":state,"repository":{"nameWithOwner":"nickderobertis/onetaskgraph"},
-                "url":format!("https://example.invalid/{id}"),
-                "labels":{"nodes":labels.iter().map(|(id, name)| json!({"id":id,"name":name})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}
-            }
-        }))
-        .collect::<Vec<_>>();
-    if end == tasks.len() {
-        nodes.extend_from_slice(written);
-    }
-    let title = project_write
-        .and_then(|value| value["title"].as_str())
-        .unwrap_or("Engine");
-    let description = project_write.and_then(|value| value["shortDescription"].as_str()).map(str::to_owned).unwrap_or_else(|| format!("alpha engine project\n\n<!-- onetaskgraph.metadata\n{}\n-->", serde_json::to_string(&json!({
-        "onepipeline.publication":{"mode":"review"},
-        "onetaskgraph.repositories":["github.com/nickderobertis/onetaskgraph"],
-        "onetaskgraph.depends_on":recorded_far_ends("project_dependencies",&json!("P-1"))
-    })).unwrap()));
-    let closed = project_write
-        .and_then(|value| value["closed"].as_bool())
-        .unwrap_or(false);
-    json!({
-        "owner":{"projectV2":{
-            "id":"P-1","title":title,"shortDescription":description,
-            "url":"https://example.invalid/P-1","closed":closed,
-            "fields":{"nodes":[{"__typename":"ProjectV2SingleSelectField","id":"FIELD-status","name":"Status","options":[{"id":"OPT-todo","name":"Todo"},{"id":"OPT-doing","name":"Doing"},{"id":"OPT-shipped","name":"Shipped"}]},{"__typename":"ProjectV2Field","id":"FIELD-metadata","name":"onetaskgraph.metadata"}],"pageInfo":{"hasNextPage":false}},
-            "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < tasks.len(),"endCursor":end.to_string()}}
-        }},
-        "user":{"projectV2":null}
-    })
 }
 
 /// A socket-level Linear GraphQL fixture used by the shared binary journeys.

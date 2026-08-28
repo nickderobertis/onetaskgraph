@@ -2853,3 +2853,26 @@ async fn a_blocked_by_connection_answered_in_pages_is_walked_before_it_is_reconc
 fn the_plugin_names_the_kind_the_registry_knows_it_by() {
     assert_eq!(Plugin.kind(), onetaskgraph_github_projects::KIND);
 }
+
+#[tokio::test]
+async fn a_closed_status_still_selects_the_column_that_spells_it_so_a_copy_settles() {
+    // The closed state carries the category and the option carries the name, so a write
+    // that closed the issue and left the option alone would read back under whatever
+    // column the item happened to sit in — and a copy would report a change forever.
+    let fixture = board(vec![]);
+    let source = source(&fixture);
+    let id = source
+        .write_task(&write(task(
+            "T-1",
+            "one",
+            status(StatusCategory::Done, "Shipped"),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(fixture.item(&id.0).state, "CLOSED");
+    assert_eq!(fixture.item(&id.0).status.as_deref(), Some("Shipped"));
+    assert_eq!(
+        source.get_task(&id).await.unwrap().unwrap().status,
+        status(StatusCategory::Done, "Shipped")
+    );
+}
