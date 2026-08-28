@@ -1,6 +1,6 @@
 {
   "name": "@onetaskgraph/cli-linux-arm64",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "os": [
     "linux"
   ],
