@@ -136,8 +136,12 @@ class GeneratedClient:
         search: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
-        status: list[Literal["backlog", "todo", "in-progress", "done", "cancelled", "unknown"]]
-        | tuple[Literal["backlog", "todo", "in-progress", "done", "cancelled", "unknown"], ...]
+        status: list[
+            Literal["draft", "backlog", "todo", "in-progress", "done", "cancelled", "unknown"]
+        ]
+        | tuple[
+            Literal["draft", "backlog", "todo", "in-progress", "done", "cancelled", "unknown"], ...
+        ]
         | None = None,
     ) -> QueryResponseOfQualifiedProject:
         """Run ``onetaskgraph project list``."""
@@ -300,8 +304,12 @@ class GeneratedClient:
         search: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
-        status: list[Literal["backlog", "todo", "in-progress", "done", "cancelled", "unknown"]]
-        | tuple[Literal["backlog", "todo", "in-progress", "done", "cancelled", "unknown"], ...]
+        status: list[
+            Literal["draft", "backlog", "todo", "in-progress", "done", "cancelled", "unknown"]
+        ]
+        | tuple[
+            Literal["draft", "backlog", "todo", "in-progress", "done", "cancelled", "unknown"], ...
+        ]
         | None = None,
     ) -> QueryResponseOfQualifiedTask:
         """Run ``onetaskgraph task list``."""

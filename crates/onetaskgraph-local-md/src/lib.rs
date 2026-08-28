@@ -35,6 +35,7 @@ pub struct LocalMdConfig {
 
 fn default_statuses() -> BTreeMap<String, StatusCategory> {
     [
+        ("draft", StatusCategory::Draft),
         ("backlog", StatusCategory::Backlog),
         ("todo", StatusCategory::Todo),
         ("in progress", StatusCategory::InProgress),
@@ -107,7 +108,7 @@ struct FrontMatter {
     repositories: Vec<Repository>,
 }
 fn default_status() -> String {
-    "todo".to_owned()
+    "backlog".to_owned()
 }
 
 #[derive(Debug, Deserialize)]
@@ -755,6 +756,7 @@ struct WrittenDependency {
 /// This vocabulary's own spelling of a category, for a message a user has to act on.
 fn category_name(category: StatusCategory) -> &'static str {
     match category {
+        StatusCategory::Draft => "draft",
         StatusCategory::Backlog => "backlog",
         StatusCategory::Todo => "todo",
         StatusCategory::InProgress => "in-progress",

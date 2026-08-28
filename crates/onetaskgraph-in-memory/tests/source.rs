@@ -1018,3 +1018,73 @@ async fn a_key_this_source_cannot_carry_refuses_the_write_naming_every_one_of_th
             .is_none()
     );
 }
+
+/// `draft` is an ordinary category here: it is configurable, it lists, and it filters.
+///
+/// Built as its own configuration block rather than by widening the shared graph, because
+/// this asserts what the vocabulary admits and every other test asserts on that graph's
+/// exact rows. The source parses the block through the real `Plugin::build`, so the
+/// assertion covers `StatusCategory`'s own wire spelling as well as the filter.
+#[tokio::test]
+async fn a_draft_status_is_configurable_listed_and_filtered_like_any_other() {
+    let source = Plugin
+        .build(
+            &SourceName::new("work").unwrap(),
+            &json!({
+                "tasks": [
+                    {
+                        "id": "T-1", "title": "Sketch", "content": null,
+                        "status": {"category": "draft", "name": "Sketch"},
+                        "labels": [], "project": null, "url": null,
+                        "created_at": null, "updated_at": null,
+                    },
+                    {
+                        "id": "T-2", "title": "Queued", "content": null,
+                        "status": {"category": "todo", "name": "Todo"},
+                        "labels": [], "project": null, "url": null,
+                        "created_at": null, "updated_at": null,
+                    },
+                ],
+                "capabilities": {"filter_by_status": "native"},
+            }),
+            &NoSecrets,
+        )
+        .expect("a draft is a status this configuration may state");
+
+    let all = source
+        .query_tasks(&TaskQuery::default(), &whole())
+        .await
+        .expect("answers");
+    assert_eq!(task_ids(&all), ["T-1", "T-2"]);
+    assert_eq!(
+        all.items[0].status.category,
+        onetaskgraph_plugin_api::StatusCategory::Draft
+    );
+    // The source's own wording survives normalisation, as it does for every category.
+    assert_eq!(all.items[0].status.name, "Sketch");
+
+    let drafts = source
+        .query_tasks(
+            &TaskQuery {
+                statuses: vec![onetaskgraph_plugin_api::StatusCategory::Draft],
+                ..TaskQuery::default()
+            },
+            &whole(),
+        )
+        .await
+        .expect("answers");
+    assert_eq!(task_ids(&drafts), ["T-1"]);
+
+    // And `todo` did not move: it still selects only what it selected before.
+    let todo = source
+        .query_tasks(
+            &TaskQuery {
+                statuses: vec![onetaskgraph_plugin_api::StatusCategory::Todo],
+                ..TaskQuery::default()
+            },
+            &whole(),
+        )
+        .await
+        .expect("answers");
+    assert_eq!(task_ids(&todo), ["T-2"]);
+}

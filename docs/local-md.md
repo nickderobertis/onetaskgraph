@@ -40,7 +40,8 @@ Long-form task content goes here.
 ```
 
 `title` is optional; it falls back to the first level-one heading, then the file name.
-`status` defaults to `todo`. `labels`, `project`, `metadata`, `repositories`, and
+`status` defaults to `backlog`, so a document that says nothing about its status is
+work that has been written down but not yet queued. `labels`, `project`, `metadata`, `repositories`, and
 `depends_on` are optional. `metadata` is an ordered mapping of JSON-compatible YAML
 values; `repositories` is an ordered list of normalized origins. A simple
 dependency is a blocking edge; the expanded form accepts `kind: blocks` or `related`.
@@ -60,9 +61,9 @@ it is a command of your own against that qualified id.
 [`metadata.md`](./metadata.md).
 
 Status names are preserved for display and mapped case-insensitively to normalized
-categories. The default mapping is `backlog` → backlog, `todo` → todo, `in progress` and
-`doing` → in-progress, `done` → done, and `cancelled`/`canceled` → cancelled. Other words
-map to unknown. Replace the mapping with `status_mapping` in the source configuration:
+categories. The default mapping is `draft` → draft, `backlog` → backlog, `todo` → todo,
+`in progress` and `doing` → in-progress, `done` → done, and `cancelled`/`canceled` →
+cancelled. Other words map to unknown. Replace the mapping with `status_mapping` in the source configuration:
 
 ```yaml
 sources:

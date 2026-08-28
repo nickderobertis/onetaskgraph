@@ -624,7 +624,7 @@ async fn escaped_directory_and_non_utf8_document_are_refused() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(task.status.category, StatusCategory::Todo);
+    assert_eq!(task.status.category, StatusCategory::Backlog);
 
     // macOS filesystems reject this byte sequence before the plugin can observe it.
     #[cfg(target_os = "linux")]
@@ -1100,5 +1100,122 @@ async fn a_folder_that_already_answers_to_every_name_a_create_could_take_refuses
     assert!(
         message.contains("every name from taken to taken-1000"),
         "{message}"
+    );
+}
+
+/// A document that says nothing about its status lands in the backlog, and `draft` is a
+/// status a document may simply state.
+///
+/// The default is what a user gets for writing a file and nothing else, so it is asserted
+/// on the front matter a user would actually write rather than on the mapping table: an
+/// omitted `status:` reads `backlog`, and `todo` continues to read `todo` — this source's
+/// spelling of `todo` did not move when the default did.
+#[tokio::test]
+async fn an_unstated_status_reads_as_backlog_and_draft_is_read_as_an_ordinary_status() {
+    let root = tempfile::tempdir().expect("temporary notes");
+    fs::create_dir_all(root.path().join("tasks")).expect("task folder");
+    fs::write(
+        root.path().join("tasks/unstated.md"),
+        "---\n{}\n---\n# Unstated\n",
+    )
+    .expect("task");
+    fs::write(
+        root.path().join("tasks/stated.md"),
+        "---\nstatus: todo\n---\n# Stated\n",
+    )
+    .expect("task");
+    fs::write(
+        root.path().join("tasks/sketch.md"),
+        "---\nstatus: Draft\n---\n# Sketch\n",
+    )
+    .expect("task");
+    let source = onetaskgraph_local_md::Plugin
+        .build(
+            &SourceName::new("notes").unwrap(),
+            &serde_json::json!({"root": root.path()}),
+            &NoSecrets,
+        )
+        .expect("source builds");
+
+    let unstated = source
+        .get_task(&NativeId("unstated".into()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unstated.status.category, StatusCategory::Backlog);
+    assert_eq!(unstated.status.name, "backlog");
+
+    let stated = source
+        .get_task(&NativeId("stated".into()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stated.status.category, StatusCategory::Todo);
+    assert_eq!(stated.status.name, "todo");
+
+    // Read, not refused, and case-insensitively like every other status name.
+    let sketch = source
+        .get_task(&NativeId("sketch".into()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(sketch.status.category, StatusCategory::Draft);
+    assert_eq!(sketch.status.name, "Draft");
+
+    // And the category is a filter like any other, so a draft is selectable on its own.
+    let drafts = source
+        .query_tasks(
+            &TaskQuery {
+                statuses: vec![StatusCategory::Draft],
+                ..Default::default()
+            },
+            &page(10),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        drafts
+            .items
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["sketch"]
+    );
+
+    // A draft is also a status this source can write back, which is what keeps a copy
+    // into a Markdown folder from refusing the field it just read.
+    let written = source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("sketch".into())),
+            item: Task {
+                id: NativeId("sketch".into()),
+                title: "Sketch".into(),
+                content: None,
+                status: Status {
+                    category: StatusCategory::Draft,
+                    name: "draft".into(),
+                },
+                labels: Vec::new(),
+                project: None,
+                url: None,
+                created_at: None,
+                updated_at: None,
+                metadata: Default::default(),
+                repositories: Vec::new(),
+            },
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("the folder takes a draft back");
+    assert_eq!(written, NativeId("sketch".into()));
+    assert_eq!(
+        source
+            .get_task(&written)
+            .await
+            .unwrap()
+            .unwrap()
+            .status
+            .category,
+        StatusCategory::Draft
     );
 }

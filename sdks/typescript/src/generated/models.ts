@@ -744,7 +744,7 @@ export interface Status {
 /**
  * The normalised value filters compare against.
  */
-category: ("backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
+category: ("draft" | "backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
 /**
  * The source's own label for this status.
  */
@@ -867,7 +867,7 @@ export interface Status {
 /**
  * The normalised value filters compare against.
  */
-category: ("backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
+category: ("draft" | "backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
 /**
  * The source's own label for this status.
  */
@@ -1018,7 +1018,7 @@ export interface Status {
 /**
  * The normalised value filters compare against.
  */
-category: ("backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
+category: ("draft" | "backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
 /**
  * The source's own label for this status.
  */
@@ -1032,7 +1032,7 @@ export namespace GeneratedProjectQuery {
 /**
  * The normalised status vocabulary shared across every source.
  */
-export type StatusCategory = ("backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
+export type StatusCategory = ("draft" | "backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
 
 /**
  * A filter over a source's projects.
@@ -1280,7 +1280,7 @@ export interface Status {
 /**
  * The normalised value filters compare against.
  */
-category: ("backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
+category: ("draft" | "backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
 /**
  * The source's own label for this status.
  */
@@ -1398,7 +1398,7 @@ export interface Status {
 /**
  * The normalised value filters compare against.
  */
-category: ("backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
+category: ("draft" | "backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
 /**
  * The source's own label for this status.
  */
@@ -2077,7 +2077,7 @@ export interface Status {
 /**
  * The normalised value filters compare against.
  */
-category: ("backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
+category: ("draft" | "backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
 /**
  * The source's own label for this status.
  */
@@ -2355,7 +2355,7 @@ export interface Status {
 /**
  * The normalised value filters compare against.
  */
-category: ("backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
+category: ("draft" | "backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
 /**
  * The source's own label for this status.
  */
@@ -3160,7 +3160,7 @@ export interface Status {
 /**
  * The normalised value filters compare against.
  */
-category: ("backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
+category: ("draft" | "backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
 /**
  * The source's own label for this status.
  */
@@ -3174,7 +3174,7 @@ export namespace GeneratedStatusCategory {
 /**
  * The normalised status vocabulary shared across every source.
  */
-export type StatusCategory = ("backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
+export type StatusCategory = ("draft" | "backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
 
 }
 export type StatusCategory = GeneratedStatusCategory.StatusCategory;
@@ -3272,7 +3272,7 @@ export interface Status {
 /**
  * The normalised value filters compare against.
  */
-category: ("backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
+category: ("draft" | "backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
 /**
  * The source's own label for this status.
  */
@@ -3294,7 +3294,7 @@ export type NativeId = string
 /**
  * The normalised status vocabulary shared across every source.
  */
-export type StatusCategory = ("backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
+export type StatusCategory = ("draft" | "backlog" | "todo" | "in-progress" | "done" | "cancelled" | "unknown")
 
 /**
  * A filter over a source's tasks.

@@ -2124,3 +2124,62 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
         .unwrap();
     assert!(wire.recv().unwrap().contains("eqIgnoreCase"));
 }
+
+/// `Draft` narrows to no Linear workflow-state type, exactly as `Unknown` does.
+///
+/// Linear's workflow states are `triage`, `backlog`, `unstarted`, `started`, `completed`
+/// and `canceled`; none of them is a draft. Asserted on the GraphQL this source really
+/// sends rather than on the mapping table, because a state name invented here would be
+/// a filter Linear rejects — and a state name borrowed from a *neighbouring* category
+/// would silently answer a draft query with that category's issues.
+#[tokio::test]
+async fn a_draft_filter_names_no_linear_workflow_state_the_way_an_unknown_one_does() {
+    let empty =
+        r#"{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#;
+    let mut sent = Vec::new();
+    for category in [StatusCategory::Draft, StatusCategory::Unknown] {
+        let (endpoint, wire) = server("200 OK", "", empty);
+        let page = source(&endpoint)
+            .query_tasks(
+                &TaskQuery {
+                    statuses: vec![category],
+                    ..Default::default()
+                },
+                &PageRequest {
+                    cursor: None,
+                    limit: 10,
+                },
+            )
+            .await
+            .expect("Linear answers");
+        assert!(page.items.is_empty());
+        sent.push(wire.recv().expect("the request reached the server"));
+    }
+
+    let draft = &sent[0];
+    assert!(
+        draft.contains(r#"{"state":{"type":{"in":[]}}}"#),
+        "a draft filter names no workflow-state type: {draft}"
+    );
+    for state in [
+        "triage",
+        "backlog",
+        "unstarted",
+        "started",
+        "completed",
+        "canceled",
+    ] {
+        assert!(
+            !draft.contains(&format!("\"{state}\"")),
+            "a draft filter must not borrow the `{state}` workflow state: {draft}"
+        );
+    }
+
+    // The two requests differ only in nothing: `Unknown` already narrows this way, and
+    // `Draft` joining it is what makes the pair the same query.
+    assert_eq!(
+        draft.split("\r\n\r\n").nth(1),
+        sent[1].split("\r\n\r\n").nth(1),
+        "draft and unknown send the same filter"
+    );
+}
