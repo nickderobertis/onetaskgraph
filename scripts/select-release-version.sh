@@ -45,8 +45,12 @@ major="${BASH_REMATCH[1]}"
 minor="${BASH_REMATCH[2]}"
 patch="${BASH_REMATCH[3]}"
 
+# --no-changelog: this script decides a version and nothing else. An entry written here is
+# headed by that package's own next version, which set-version.sh normalises away, and
+# `release-plz release-pr` prepends its own entry beside it rather than replacing it — two
+# entries for one set of changes, which is what jammed #55.
 update_output=""
-if ! update_output="$(release-plz update 2>&1)"; then
+if ! update_output="$(release-plz update --no-changelog 2>&1)"; then
   printf '%s\n' "$update_output" >&2
   fail "release-plz could not decide the next version" \
     "fix what it reports above; a registry it cannot reach and a manifest it cannot parse both land here"
