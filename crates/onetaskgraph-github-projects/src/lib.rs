@@ -1342,6 +1342,21 @@ impl GitHubProjectsSource {
             } else {
                 None
             };
+            // The caller says which kind the far end is, and this board holds the far end
+            // itself, so a disagreement is settled here rather than stored: recorded, the
+            // wrong kind would read back as a cross-level edge that never existed; written
+            // natively, it would name a relationship of a different level than the caller
+            // asked for.
+            if let Some(disagreeing) = far.filter(|far| far.kind != edge.to.kind) {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "GitHub dependency item {far_id} is a {} of this board, and this item \
+                         names it as a {}; record the kind it is",
+                        disagreeing.kind.marker(),
+                        edge.to.kind.marker()
+                    ),
+                });
+            }
             // A draft has neither `blockedBy` nor `blocking`, so no edge of one is native
             // however the far end is spelled — and one classified native here would be
             // written nowhere at all, because a draft's native reconciliation never runs.

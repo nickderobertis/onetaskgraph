@@ -685,6 +685,33 @@ fn a_board_that_fails_between_creating_an_issue_and_filing_it_says_so_and_recove
 }
 
 #[test]
+fn a_dependency_naming_a_board_item_as_the_wrong_kind_is_refused_before_anything_lands() {
+    // The board holds the far end itself, so it is the board that says which kind `P-2`
+    // is — a project. An edge naming it a task would be stored as a relationship at a
+    // level it is not at, and the refusal comes before the issue is created.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Todo\n\
+         depends_on: [{id: \"board:P-2\", item: task}]\n---\ndo this first\n",
+    )
+    .unwrap();
+    board_with_plans(&sandbox, "plans");
+
+    let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
+    for expected in ["P-2", "project", "task"] {
+        assert!(said.contains(expected), "{expected} is named: {said}");
+    }
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert!(
+        !listed.contains("First step"),
+        "nothing was created before the refusal: {listed}"
+    );
+}
+
+#[test]
 fn a_field_write_that_fails_after_an_issue_is_filed_leaves_it_findable_by_title() {
     // The later half of the same sequence: the issue exists and is on the board, and the
     // copy origin that would let the next copy find it is what did not land. So a plain

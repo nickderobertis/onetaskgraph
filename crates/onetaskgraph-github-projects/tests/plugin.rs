@@ -1794,6 +1794,32 @@ async fn a_recorded_tail_pages_and_refuses_a_cursor_no_reverse_walk_issues() {
 }
 
 #[tokio::test]
+async fn a_dependency_write_refuses_a_far_end_of_a_kind_this_board_says_it_is_not() {
+    // The caller names the far end's kind and the board holds the far end itself, so a
+    // disagreement is settled rather than stored: `I_2` has sub-issues, which is what
+    // makes it a project, and an edge naming it a task would otherwise be written as a
+    // native `blockedBy` link standing for a relationship at a level it is not at.
+    let fixture = board(vec![
+        Item::issue("I_1", "step").status("Todo"),
+        Item::issue("I_2", "plan").status("Todo").sub_issues(1),
+    ]);
+    let message = refusal(
+        source(&fixture)
+            .write_task(&ItemWrite {
+                target: Some(NativeId("I_1".to_owned())),
+                item: task("T", "step", status(StatusCategory::Todo, "Todo")),
+                depends_on: vec![edge(("I_1", ItemKind::Task), ("I_2", ItemKind::Task))],
+            })
+            .await
+            .expect_err("a far end the board says is a project"),
+    );
+    assert!(
+        message.contains("I_2") && message.contains("project") && message.contains("task"),
+        "the entry and both kinds are named: {message}"
+    );
+}
+
+#[tokio::test]
 async fn a_dependency_write_refuses_a_same_source_far_end_the_board_does_not_hold() {
     let fixture = board(vec![Item::issue("I_1", "step").status("Todo")]);
     let message = refusal(
