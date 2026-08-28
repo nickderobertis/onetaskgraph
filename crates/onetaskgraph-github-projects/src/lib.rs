@@ -151,12 +151,31 @@ fn default_endpoint() -> String {
 #[serde(untagged)]
 pub enum StatusTargetConfig {
     /// The name of a `Status` single-select option already on the board.
-    Column(String),
+    Column(ColumnName),
     /// A closed issue state, whose reason is what tells done from cancelled.
     Closed {
         /// The `IssueClosedStateReason` to close with.
         closed: ClosedState,
     },
+}
+
+/// The name of a `Status` single-select option on the board.
+///
+/// Validated on the way in rather than checked later, so a blank option name — which
+/// nothing on a board can be — is a state this type cannot hold.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(try_from = "String")]
+pub struct ColumnName(String);
+
+impl TryFrom<String> for ColumnName {
+    type Error = String;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        if name.trim().is_empty() {
+            return Err("a status_mapping option name cannot be blank".to_owned());
+        }
+        Ok(Self(name))
+    }
 }
 
 /// The two closed states this product can mean.
@@ -259,7 +278,13 @@ enum StatusTarget {
 }
 
 /// Every status category, in the order the vocabulary declares them.
-const CATEGORIES: [StatusCategory; 7] = [
+///
+/// This list mirrors `StatusCategory`, so it carries its own drift gate rather than a
+/// reviewer's attention: [`category_position`] is a wildcard-free match, so a variant
+/// added to the shared vocabulary fails to compile until it is named there, and this
+/// crate's suite asserts that every position that function can return is filled by the
+/// category returning it — which a list still missing the new variant cannot satisfy.
+pub const CATEGORIES: [StatusCategory; 7] = [
     StatusCategory::Draft,
     StatusCategory::Backlog,
     StatusCategory::Todo,
@@ -268,6 +293,20 @@ const CATEGORIES: [StatusCategory; 7] = [
     StatusCategory::Cancelled,
     StatusCategory::Unknown,
 ];
+
+/// Where one category sits in [`CATEGORIES`]; see that list for what this pins.
+#[must_use]
+pub const fn category_position(category: StatusCategory) -> usize {
+    match category {
+        StatusCategory::Draft => 0,
+        StatusCategory::Backlog => 1,
+        StatusCategory::Todo => 2,
+        StatusCategory::InProgress => 3,
+        StatusCategory::Done => 4,
+        StatusCategory::Cancelled => 5,
+        StatusCategory::Unknown => 6,
+    }
+}
 
 /// The spelling a status category is configured and reported under.
 fn category_name(category: StatusCategory) -> &'static str {
@@ -328,17 +367,7 @@ impl StatusMapping {
             let target = match overrides.remove(category_name(category)) {
                 None => shipped_default(category),
                 Some(None) => StatusTarget::Disabled,
-                Some(Some(StatusTargetConfig::Column(option))) => {
-                    if option.trim().is_empty() {
-                        return Err(SourceError::Config {
-                            message: format!(
-                                "status_mapping.{} of source {instance} is a blank option name",
-                                category_name(category)
-                            ),
-                        });
-                    }
-                    StatusTarget::Column(option)
-                }
+                Some(Some(StatusTargetConfig::Column(option))) => StatusTarget::Column(option.0),
                 Some(Some(StatusTargetConfig::Closed { closed })) => StatusTarget::Closed(closed),
             };
             targets.push((category, target));
@@ -688,10 +717,12 @@ impl GitHubProjectsSource {
         let (body, slot) = metadata_body(optional_str(content, "body")?.map(str::to_owned))?;
         let parent = optional_str(content.get("parent").unwrap_or(&Value::Null), "id")?
             .map(|id| NativeId(id.to_owned()));
-        let sub_issues = content
-            .pointer("/subIssuesSummary/total")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
+        // A draft has no sub-issues to summarise, and GitHub's schema gives it no field
+        // to read one from; it is a task, and never a project.
+        let sub_issues = match content_kind {
+            ContentKind::Issue => sub_issue_total(content)?,
+            ContentKind::DraftIssue => 0,
+        };
         let content_id = required_str(content, "id")?;
         let marked = ItemKind::from_metadata(&slot).map_err(|message| SourceError::Malformed {
             message: format!("GitHub issue {content_id}: {message}"),
@@ -1824,10 +1855,7 @@ fn related_kind(value: &Value) -> Result<ItemKind, SourceError> {
     let marked = ItemKind::from_metadata(&slot).map_err(|message| SourceError::Malformed {
         message: format!("GitHub issue {id}: {message}"),
     })?;
-    let sub_issues = value
-        .pointer("/subIssuesSummary/total")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
+    let sub_issues = sub_issue_total(value)?;
     Ok(if sub_issues > 0 || marked == Some(ItemKind::Project) {
         ItemKind::Project
     } else {
@@ -1967,6 +1995,26 @@ fn valid_environment_name(name: &str) -> bool {
         .next()
         .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// How many sub-issues one issue has.
+///
+/// `Issue.subIssuesSummary` is `SubIssuesSummary!` and its `total` is `Int!`, so an
+/// absent or non-integer one is a response this source cannot read — and reading it as
+/// zero would classify a project as a task, which is exactly the mistake the marker
+/// exists to keep from happening quietly.
+fn sub_issue_total(issue: &Value) -> Result<u64, SourceError> {
+    let summary = issue
+        .get("subIssuesSummary")
+        .ok_or_else(|| SourceError::Malformed {
+            message: "GitHub issue is missing subIssuesSummary".into(),
+        })?;
+    summary
+        .get("total")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "GitHub issue subIssuesSummary.total is not an unsigned integer".into(),
+        })
 }
 
 fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceError> {

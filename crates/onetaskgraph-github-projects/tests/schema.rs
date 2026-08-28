@@ -349,3 +349,29 @@ fn no_source_path_writes_the_board_itself_or_a_status_fields_option_set() {
         );
     }
 }
+
+/// The category list this source maps cannot silently lose a variant of the vocabulary.
+///
+/// `CATEGORIES` mirrors `StatusCategory`, and `category_position` is a wildcard-free
+/// match over it — so a variant added to the shared vocabulary fails to compile there
+/// until it is named, and this reconciliation fails until the list holds it too.
+#[test]
+fn every_status_category_this_source_can_be_handed_has_a_place_in_its_mapping() {
+    use onetaskgraph_github_projects::{CATEGORIES, category_position};
+
+    let mut filled = [false; CATEGORIES.len()];
+    for category in CATEGORIES {
+        let at = category_position(category);
+        assert!(at < CATEGORIES.len(), "{category:?} sits past the list");
+        assert!(
+            !filled[at],
+            "{category:?} shares a place with another category"
+        );
+        assert_eq!(CATEGORIES[at], category, "{category:?} is filed elsewhere");
+        filled[at] = true;
+    }
+    assert!(
+        filled.iter().all(|filled| *filled),
+        "a place in the list is unfilled, so a category the vocabulary declares is missing"
+    );
+}

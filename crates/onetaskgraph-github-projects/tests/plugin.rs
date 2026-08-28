@@ -2094,7 +2094,7 @@ async fn malformed_board_shapes_are_named_rather_than_guessed_at() {
         ),
         (
             board(
-                json!({"nodes":[{"id":"PVTI","content":{"__typename":"Issue","id":"I"}}],"pageInfo":{"hasNextPage":false}}),
+                json!({"nodes":[{"id":"PVTI","content":{"__typename":"Issue","id":"I","subIssuesSummary":{"total":0}}}],"pageInfo":{"hasNextPage":false}}),
                 complete.clone(),
             ),
             "missing fieldValues",
@@ -2102,7 +2102,7 @@ async fn malformed_board_shapes_are_named_rather_than_guessed_at() {
         (
             board(
                 json!({"nodes":[{"id":"PVTI","fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":true}},
-                                 "content":{"__typename":"Issue","id":"I"}}],"pageInfo":{"hasNextPage":false}}),
+                                 "content":{"__typename":"Issue","id":"I","subIssuesSummary":{"total":0}}}],"pageInfo":{"hasNextPage":false}}),
                 complete.clone(),
             ),
             "exceeds the supported nested connection size",
@@ -2234,8 +2234,8 @@ async fn every_board_shape_this_source_will_not_guess_at_is_named() {
             board_json(
                 usable_fields(),
                 complete(json!([issue_item(
-                    json!({"__typename":"Issue","id":"I_1","title":"one",
-                    "body":"","createdAt":"not-a-time"})
+                    json!({"__typename":"Issue","id":"I_1","title":"one","body":"",
+                    "createdAt":"not-a-time","subIssuesSummary":{"total":0}})
                 )])),
             ),
             "is not a timestamp",
@@ -2245,6 +2245,7 @@ async fn every_board_shape_this_source_will_not_guess_at_is_named() {
                 usable_fields(),
                 complete(json!([issue_item(
                     json!({"__typename":"Issue","id":"I_1","title":"one","body":"",
+                    "subIssuesSummary":{"total":0},
                     "labels":{"nodes":"no","pageInfo":{"hasNextPage":false}}})
                 )])),
             ),
@@ -2829,4 +2830,40 @@ async fn a_closed_status_still_selects_the_column_that_spells_it_so_a_copy_settl
         source.get_task(&id).await.unwrap().unwrap().status,
         status(StatusCategory::Done, "Shipped")
     );
+}
+
+#[tokio::test]
+async fn a_sub_issue_count_this_source_cannot_read_is_refused_rather_than_read_as_none() {
+    // Reading an absent or non-integer `subIssuesSummary.total` as zero would classify a
+    // project as a task — quietly, and in exactly the case the kind marker exists for.
+    let mut without = plain_issue();
+    without.as_object_mut().unwrap().remove("subIssuesSummary");
+    let mut malformed = plain_issue();
+    malformed["subIssuesSummary"] = json!({"total":"many"});
+    for content in [without, malformed] {
+        let body = board_json(usable_fields(), complete(json!([issue_item(content)])));
+        let message = refusal(
+            configured(&raw_server("200 OK", &body.to_string()), json!({}))
+                .query_tasks(&TaskQuery::default(), &page(10))
+                .await
+                .expect_err("a sub-issue count this source cannot read"),
+        );
+        assert!(message.contains("subIssuesSummary"), "{message}");
+    }
+
+    for far in [
+        json!({"id":"I_far","body":null,"parent":null}),
+        json!({"id":"I_far","body":null,"parent":null,"subIssuesSummary":{"total":-1}}),
+    ] {
+        let node = json!({"data":{"node":{"__typename":"Issue",
+            "blockedBy":{"nodes":[far],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+            "blocking":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}});
+        let message = refusal(
+            configured(&raw_server("200 OK", &node.to_string()), json!({}))
+                .task_dependencies(&NativeId("I_1".to_owned()), Direction::DependsOn, &page(10))
+                .await
+                .expect_err("a far end whose sub-issue count this source cannot read"),
+        );
+        assert!(message.contains("subIssuesSummary"), "{message}");
+    }
 }
