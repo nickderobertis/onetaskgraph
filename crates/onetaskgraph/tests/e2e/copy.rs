@@ -17,8 +17,8 @@ use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{
-    ROWS, SOURCE, document, empty_folder, github_projects_failing_to_file_once,
-    github_projects_with_board, linear_block, qualified,
+    ROWS, SOURCE, document, empty_folder, github_projects_failing_a_field_write_once,
+    github_projects_failing_to_file_once, github_projects_with_board, linear_block, qualified,
 };
 
 /// The folder every copy journey copies into, configured beside the source under test.
@@ -668,12 +668,81 @@ fn a_board_that_fails_between_creating_an_issue_and_filing_it_says_so_and_recove
         &sandbox,
         &["task", "copy", "plans:A", "--to", "board", "--json"],
     );
-    assert_eq!(reported(&copied).len(), 1, "{copied}");
+    let landed = reported(&copied);
+    assert_eq!(landed.len(), 1, "{copied}");
+    assert_eq!(
+        landed[0].1,
+        json!("board:ISSUE-2"),
+        "the issue the failed attempt created is on no board, so nothing can match it and \
+         the retry creates its own — the orphan stays in the repository: {copied}"
+    );
     let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
     assert_eq!(
         listed.matches("First step").count(),
         1,
         "the retry lands one item where the failed attempt landed none: {listed}"
+    );
+}
+
+#[test]
+fn a_field_write_that_fails_after_an_issue_is_filed_leaves_it_findable_by_title() {
+    // The later half of the same sequence: the issue exists and is on the board, and the
+    // copy origin that would let the next copy find it is what did not land. So a plain
+    // retry cannot match it — `--match-by title` is the escape that re-establishes the
+    // correspondence instead of filing a second issue for the same plan.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Doing\n---\ndo this first\n",
+    )
+    .unwrap();
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root": root, "status_mapping": {"Doing":"in-progress"}}},
+        "board": {"plugin":"github-projects",
+                  "config": github_projects_failing_a_field_write_once(&sandbox)}
+    })));
+
+    let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
+    assert!(
+        said.contains("Something went wrong while executing your query"),
+        "the failure GitHub reported is what the caller is told: {said}"
+    );
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(
+        listed.matches("First step").count(),
+        1,
+        "the issue was filed before the field write failed, so the board holds it: {listed}"
+    );
+
+    let copied = ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "plans:A",
+            "--to",
+            "board",
+            "--match-by",
+            "title",
+            "--json",
+        ],
+    );
+    let landed = reported(&copied);
+    assert_eq!(landed.len(), 1, "{copied}");
+    assert_eq!(landed[0].2, "updated", "{copied}");
+    let finished = shown(&sandbox, "task", landed[0].1.as_str().expect("an id"));
+    assert_eq!(
+        finished["status"]["category"], "in-progress",
+        "the status the failed attempt could not write is what the retry finishes"
+    );
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(
+        listed.matches("First step").count(),
+        1,
+        "and one plan is one issue rather than two: {listed}"
     );
 }
 

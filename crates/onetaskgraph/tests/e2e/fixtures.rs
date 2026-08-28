@@ -531,28 +531,42 @@ impl GitHubBoard {
 }
 
 fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
-    github_projects_board(sandbox, recorded, false).0
+    github_projects_board(sandbox, recorded, None).0
 }
 
 /// The same board, with a handle on the fields this source must never write.
 pub fn github_projects_with_board(sandbox: &Sandbox) -> (Value, GitHubBoardFields) {
-    github_projects_board(sandbox, None, false)
+    github_projects_board(sandbox, None, None)
 }
 
 /// The same board again, failing the first attempt to file a created issue on it.
 ///
-/// Creating an item there is two calls — `createIssue` and then
-/// `addProjectV2ItemById` — so GitHub can fail between them, and what the product does
-/// with an issue that exists but is on no board is a journey rather than a reading of
-/// the code. The failure is spent once, so the same board answers the retry.
+/// Creating an item there is several calls — `createIssue`, then
+/// `addProjectV2ItemById`, then the board's own fields — so GitHub can fail part way
+/// through, and what the product does with an issue that exists but is on no board is a
+/// journey rather than a reading of the code. The failure is spent once, so the same
+/// board answers the retry.
 pub fn github_projects_failing_to_file_once(sandbox: &Sandbox) -> Value {
-    github_projects_board(sandbox, None, true).0
+    github_projects_board(sandbox, None, Some("addProjectV2ItemById(input:$input)")).0
+}
+
+/// The same board, failing the first field write onto an item it has already filed.
+///
+/// The later half of that sequence: the issue exists and is on the board, and the copy
+/// origin and status that make it findable and readable are what did not land.
+pub fn github_projects_failing_a_field_write_once(sandbox: &Sandbox) -> Value {
+    github_projects_board(
+        sandbox,
+        None,
+        Some("updateProjectV2ItemFieldValue(input:$input)"),
+    )
+    .0
 }
 
 fn github_projects_board(
     sandbox: &Sandbox,
     recorded: Option<Value>,
-    fail_first_filing: bool,
+    fail_first: Option<&'static str>,
 ) -> (Value, GitHubBoardFields) {
     sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
@@ -569,7 +583,7 @@ fn github_projects_board(
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
     }));
-    let mut owed_failure = fail_first_filing;
+    let mut owed_failure = fail_first;
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
@@ -580,8 +594,8 @@ fn github_projects_board(
                 .as_object()
                 .expect("GraphQL variables object");
             let variables = Value::Object(variables.clone());
-            let body = if owed_failure && query.contains("addProjectV2ItemById(input:$input)") {
-                owed_failure = false;
+            let body = if owed_failure.is_some_and(|operation| query.contains(operation)) {
+                owed_failure = None;
                 json!({"data":Value::Null,
                        "errors":[{"message":"Something went wrong while executing your query"}]})
                 .to_string()
