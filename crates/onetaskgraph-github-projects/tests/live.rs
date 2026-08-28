@@ -1,8 +1,14 @@
 //! Structural and residue-free write verification against GitHub's real Projects v2 API.
 //!
-//! The board comes from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` or the lane skips: requiring
-//! the board to be named is what keeps a credentialed write lane off a board nobody nominated.
-//! Clearing residue before each run is a separate thing — self-healing after an interrupted run.
+//! The board comes from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, and the repository this
+//! source creates its issues in comes from `GH_PROJECTS_REPOSITORY`, or the lane skips:
+//! requiring both to be named is what keeps a credentialed write lane off a board and a
+//! repository nobody nominated. Clearing residue before each run is a separate thing —
+//! self-healing after an interrupted run.
+//!
+//! The artifact this lane writes is a real issue, because a project is an issue and a task is
+//! its sub-issue, so leaving no residue means deleting the board item **and** the issue. The
+//! credential therefore needs to be able to delete an issue in `GH_PROJECTS_REPOSITORY`.
 
 use std::{collections::BTreeMap, env, future::Future};
 
@@ -52,6 +58,9 @@ async fn graphql_variables(
     Ok(response)
 }
 
+/// The one board text field this source keeps a copy's origin in.
+const ORIGIN_FIELD: &str = "onetaskgraph.origin";
+
 async fn writable_fields(token: &str, project_id: &str) -> Result<Vec<Value>, String> {
     let mut after = Value::Null;
     let mut fields = Vec::new();
@@ -92,27 +101,27 @@ async fn writable_fields(token: &str, project_id: &str) -> Result<Vec<Value>, St
     }
 }
 
-async fn ensure_metadata_field(token: &str, project_id: &str) -> Result<bool, String> {
+async fn ensure_origin_field(token: &str, project_id: &str) -> Result<bool, String> {
     if writable_fields(token, project_id)
         .await?
         .iter()
-        .any(|field| field.get("name").and_then(Value::as_str) == Some("onetaskgraph.metadata"))
+        .any(|field| field.get("name").and_then(Value::as_str) == Some(ORIGIN_FIELD))
     {
         return Ok(false);
     }
     let response = graphql_variables(
         token,
         "mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){projectV2Field{... on ProjectV2Field{id name}}}}",
-        "live metadata field creation",
-        json!({"input":{"projectId":project_id,"dataType":"TEXT","name":"onetaskgraph.metadata"}}),
+        "live origin field creation",
+        json!({"input":{"projectId":project_id,"dataType":"TEXT","name":ORIGIN_FIELD}}),
     )
     .await?;
     if response
         .pointer("/data/createProjectV2Field/projectV2Field/name")
         .and_then(Value::as_str)
-        != Some("onetaskgraph.metadata")
+        != Some(ORIGIN_FIELD)
     {
-        return Err("GitHub did not confirm creation of the live metadata field".to_owned());
+        return Err("GitHub did not confirm creation of the live origin field".to_owned());
     }
     Ok(true)
 }
@@ -131,20 +140,18 @@ async fn live_write_status(token: &str, project_id: &str) -> Result<String, Stri
         .ok_or_else(|| "live project has no selectable Status option".to_owned())
 }
 
-async fn remove_live_metadata_field(token: &str, project_id: &str) -> Result<(), String> {
+async fn remove_live_origin_field(token: &str, project_id: &str) -> Result<(), String> {
     for _ in 0..10 {
         let field_ids = writable_fields(token, project_id)
             .await?
             .into_iter()
-            .filter(|field| {
-                field.get("name").and_then(Value::as_str) == Some("onetaskgraph.metadata")
-            })
+            .filter(|field| field.get("name").and_then(Value::as_str) == Some(ORIGIN_FIELD))
             .map(|field| {
                 field
                     .get("id")
                     .and_then(Value::as_str)
                     .map(str::to_owned)
-                    .ok_or_else(|| "live metadata field has no id".to_owned())
+                    .ok_or_else(|| "live origin field has no id".to_owned())
             })
             .collect::<Result<Vec<_>, _>>()?;
         if field_ids.is_empty() {
@@ -154,14 +161,14 @@ async fn remove_live_metadata_field(token: &str, project_id: &str) -> Result<(),
             graphql_variables(
                 token,
                 "mutation($input:DeleteProjectV2FieldInput!){deleteProjectV2Field(input:$input){projectV2Field{... on ProjectV2Field{id}}}}",
-                "live metadata field cleanup",
+                "live origin field cleanup",
                 json!({"input":{"fieldId":field_id}}),
             )
             .await?;
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
-    Err("live metadata field cleanup left the temporary field behind".to_owned())
+    Err("live origin field cleanup left the temporary field behind".to_owned())
 }
 
 /// The prefix of every board item this lane writes.
@@ -187,17 +194,20 @@ fn is_artifact_title(title: &str) -> bool {
         .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+/// One artifact this lane wrote: its board item, and the issue behind it when there is one.
+type Artifact = (String, Option<String>);
+
 async fn artifact_item_ids(
     token: &str,
     project_id: &str,
     matches: &dyn Fn(&str) -> bool,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<Artifact>, String> {
     let mut after = Value::Null;
     let mut found = Vec::new();
     loop {
         let response = graphql_variables(
             token,
-            "query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){nodes{id content{... on DraftIssue{title}}}pageInfo{hasNextPage endCursor}}}}}",
+            "query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){nodes{id content{... on DraftIssue{title} ... on Issue{__typename id title}}}pageInfo{hasNextPage endCursor}}}}}",
             "live artifact lookup",
             json!({"id":project_id,"after":after}),
         )
@@ -214,12 +224,18 @@ async fn artifact_item_ids(
                 continue;
             };
             if matches(title) {
-                found.push(
+                let issue = (node.pointer("/content/__typename").and_then(Value::as_str)
+                    == Some("Issue"))
+                .then(|| node.pointer("/content/id").and_then(Value::as_str))
+                .flatten()
+                .map(str::to_owned);
+                found.push((
                     node.get("id")
                         .and_then(Value::as_str)
                         .ok_or_else(|| "live artifact has no project item id".to_owned())?
                         .to_owned(),
-                );
+                    issue,
+                ));
             }
         }
         if connection
@@ -250,7 +266,7 @@ async fn remove_live_artifacts(
         if item_ids.is_empty() {
             return Ok(());
         }
-        for item_id in item_ids {
+        for (item_id, issue_id) in item_ids {
             let response = graphql_variables(
                 token,
                 "mutation($input:DeleteProjectV2ItemInput!){deleteProjectV2Item(input:$input){deletedItemId}}",
@@ -267,6 +283,17 @@ async fn remove_live_artifacts(
                     "GitHub did not confirm deletion of project item {item_id}"
                 ));
             }
+            // Taking the item off the board leaves the issue in the repository, and this
+            // lane's whole claim is that it leaves no residue anywhere.
+            if let Some(issue_id) = issue_id {
+                graphql_variables(
+                    token,
+                    "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){repository{id}}}",
+                    "live artifact issue cleanup",
+                    json!({"input":{"issueId":issue_id}}),
+                )
+                .await?;
+            }
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
@@ -274,6 +301,9 @@ async fn remove_live_artifacts(
         "live artifact cleanup left project items: {}",
         artifact_item_ids(token, project_id, matches)
             .await?
+            .into_iter()
+            .map(|(item, _)| item)
+            .collect::<Vec<_>>()
             .join(", ")
     ))
 }
@@ -282,12 +312,12 @@ async fn remove_live_state(
     token: &str,
     project_id: &str,
     title: &str,
-    remove_metadata_field: bool,
+    remove_origin_field: bool,
 ) -> Result<(), String> {
     let item_result =
         remove_live_artifacts(token, project_id, &|candidate| candidate == title).await;
-    let field_result = if remove_metadata_field {
-        remove_live_metadata_field(token, project_id).await
+    let field_result = if remove_origin_field {
+        remove_live_origin_field(token, project_id).await
     } else {
         Ok(())
     };
@@ -324,13 +354,15 @@ enum LiveLane {
         token: String,
         owner: String,
         project_number: u32,
+        repository: String,
     },
     Skip(String),
 }
 
 /// Decides whether this lane may run, and against which board.
 ///
-/// The board comes from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` or the lane does not run.
+/// The board comes from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, and the repository this
+/// source creates its issues in comes from `GH_PROJECTS_REPOSITORY`, or the lane does not run.
 /// Nothing here asks GitHub which project was updated most recently, for the viewer or for any
 /// organization: a credentialed lane that writes and deletes must reach only a board somebody
 /// nominated by name, and that requirement — rather than any cleanup — is what keeps it off a
@@ -341,6 +373,7 @@ fn live_lane(
     token: Option<&str>,
     owner: Option<&str>,
     project_number: Option<&str>,
+    repository: Option<&str>,
     required: Option<&str>,
 ) -> Result<LiveLane, String> {
     let required = match required.map(str::trim) {
@@ -398,10 +431,29 @@ fn live_lane(
         .ok_or_else(|| {
             format!("GH_PROJECTS_NUMBER must be a positive GraphQL Int, not {project_number:?}")
         })?;
+    let Some(repository) = repository
+        .map(str::trim)
+        .filter(|repository| !repository.is_empty())
+    else {
+        return skip(
+            "GH_PROJECTS_REPOSITORY is not set, and this lane creates its artifact as an issue \
+             in the repository that name gives rather than discovering one"
+                .to_owned(),
+        );
+    };
+    if repository
+        .split_once('/')
+        .is_none_or(|(owner, name)| owner.is_empty() || name.is_empty() || name.contains('/'))
+    {
+        return Err(format!(
+            "GH_PROJECTS_REPOSITORY must be spelled owner/name, not {repository:?}"
+        ));
+    }
     Ok(LiveLane::Run {
         token: token.to_owned(),
         owner: owner.to_owned(),
         project_number: number,
+        repository: repository.to_owned(),
     })
 }
 
@@ -458,10 +510,17 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
         .and_then(Value::as_array)
         .ok_or_else(|| "mutation contract introspection returned no fields".to_owned())?;
     for (field_name, input_name, payload_name) in [
+        ("createIssue", "CreateIssueInput", "CreateIssuePayload"),
         (
-            "addProjectV2DraftIssue",
-            "AddProjectV2DraftIssueInput",
-            "AddProjectV2DraftIssuePayload",
+            "addProjectV2ItemById",
+            "AddProjectV2ItemByIdInput",
+            "AddProjectV2ItemByIdPayload",
+        ),
+        ("addSubIssue", "AddSubIssueInput", "AddSubIssuePayload"),
+        (
+            "removeSubIssue",
+            "RemoveSubIssueInput",
+            "RemoveSubIssuePayload",
         ),
         ("addBlockedBy", "AddBlockedByInput", "AddBlockedByPayload"),
         (
@@ -474,6 +533,7 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             "DeleteProjectV2ItemInput",
             "DeleteProjectV2ItemPayload",
         ),
+        ("deleteIssue", "DeleteIssueInput", "DeleteIssuePayload"),
         (
             "createProjectV2Field",
             "CreateProjectV2FieldInput",
@@ -485,11 +545,6 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             "DeleteProjectV2FieldPayload",
         ),
         ("updateIssue", "UpdateIssueInput", "UpdateIssuePayload"),
-        (
-            "updateProjectV2",
-            "UpdateProjectV2Input",
-            "UpdateProjectV2Payload",
-        ),
         (
             "updateProjectV2DraftIssue",
             "UpdateProjectV2DraftIssueInput",
@@ -528,16 +583,28 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
     }
     for (type_name, input, expected_fields) in [
         (
-            "AddProjectV2DraftIssueInput",
+            "CreateIssueInput",
             true,
-            &["projectId", "title", "body"][..],
+            &["repositoryId", "title", "body"][..],
         ),
+        (
+            "AddProjectV2ItemByIdInput",
+            true,
+            &["projectId", "contentId"][..],
+        ),
+        ("AddSubIssueInput", true, &["issueId", "subIssueId"][..]),
+        ("RemoveSubIssueInput", true, &["issueId", "subIssueId"][..]),
         (
             "UpdateProjectV2DraftIssueInput",
             true,
             &["draftIssueId", "title", "body"][..],
         ),
-        ("UpdateIssueInput", true, &["id", "title", "body"][..]),
+        (
+            "UpdateIssueInput",
+            true,
+            &["id", "title", "body", "stateInput"][..],
+        ),
+        ("IssueStateUpdateInput", true, &["value", "stateReason"][..]),
         (
             "UpdateProjectV2ItemFieldValueInput",
             true,
@@ -547,11 +614,6 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             "ProjectV2FieldValue",
             true,
             &["text", "singleSelectOptionId"][..],
-        ),
-        (
-            "UpdateProjectV2Input",
-            true,
-            &["projectId", "title", "shortDescription", "closed"][..],
         ),
         (
             "AddBlockedByInput",
@@ -568,13 +630,17 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             true,
             &["projectId", "itemId"][..],
         ),
+        ("DeleteIssueInput", true, &["issueId"][..]),
         (
             "CreateProjectV2FieldInput",
             true,
             &["projectId", "dataType", "name"][..],
         ),
         ("DeleteProjectV2FieldInput", true, &["fieldId"][..]),
-        ("AddProjectV2DraftIssuePayload", false, &["projectItem"][..]),
+        ("CreateIssuePayload", false, &["issue"][..]),
+        ("AddProjectV2ItemByIdPayload", false, &["item"][..]),
+        ("AddSubIssuePayload", false, &["issue", "subIssue"][..]),
+        ("RemoveSubIssuePayload", false, &["issue", "subIssue"][..]),
         (
             "UpdateProjectV2DraftIssuePayload",
             false,
@@ -586,7 +652,6 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             false,
             &["projectV2Item"][..],
         ),
-        ("UpdateProjectV2Payload", false, &["projectV2"][..]),
         (
             "AddBlockedByPayload",
             false,
@@ -598,6 +663,7 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             &["issue", "blockingIssue"][..],
         ),
         ("DeleteProjectV2ItemPayload", false, &["deletedItemId"][..]),
+        ("DeleteIssuePayload", false, &["repository"][..]),
         (
             "CreateProjectV2FieldPayload",
             false,
@@ -648,17 +714,31 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
 
 fn mutation_field_types(type_name: &str) -> &'static [(&'static str, &'static str)] {
     match type_name {
-        "AddProjectV2DraftIssueInput" => &[
-            ("projectId", "ID!"),
+        "CreateIssueInput" => &[
+            ("repositoryId", "ID!"),
             ("title", "String!"),
             ("body", "String"),
         ],
+        "AddProjectV2ItemByIdInput" => &[("projectId", "ID!"), ("contentId", "ID!")],
+        "AddSubIssueInput" => &[("issueId", "ID!"), ("subIssueId", "ID")],
+        "RemoveSubIssueInput" => &[("issueId", "ID!"), ("subIssueId", "ID!")],
         "UpdateProjectV2DraftIssueInput" => &[
             ("draftIssueId", "ID!"),
             ("title", "String"),
             ("body", "String"),
         ],
-        "UpdateIssueInput" => &[("id", "ID!"), ("title", "String"), ("body", "String")],
+        "UpdateIssueInput" => &[
+            ("id", "ID!"),
+            ("title", "String"),
+            ("body", "String"),
+            ("stateInput", "IssueStateUpdateInput"),
+        ],
+        // The two facts this redesign rests on: an issue's state moves with its title and
+        // body in one mutation, and the reason is what tells done from cancelled.
+        "IssueStateUpdateInput" => &[
+            ("value", "IssueState!"),
+            ("stateReason", "IssueClosedStateReason"),
+        ],
         "UpdateProjectV2ItemFieldValueInput" => &[
             ("projectId", "ID!"),
             ("itemId", "ID!"),
@@ -666,31 +746,29 @@ fn mutation_field_types(type_name: &str) -> &'static [(&'static str, &'static st
             ("value", "ProjectV2FieldValue!"),
         ],
         "ProjectV2FieldValue" => &[("text", "String"), ("singleSelectOptionId", "String")],
-        "UpdateProjectV2Input" => &[
-            ("projectId", "ID!"),
-            ("title", "String"),
-            ("shortDescription", "String"),
-            ("closed", "Boolean"),
-        ],
         "AddBlockedByInput" | "RemoveBlockedByInput" => {
             &[("issueId", "ID!"), ("blockingIssueId", "ID!")]
         }
         "DeleteProjectV2ItemInput" => &[("projectId", "ID!"), ("itemId", "ID!")],
+        "DeleteIssueInput" => &[("issueId", "ID!")],
         "CreateProjectV2FieldInput" => &[
             ("projectId", "ID!"),
             ("dataType", "ProjectV2CustomFieldType!"),
             ("name", "String!"),
         ],
         "DeleteProjectV2FieldInput" => &[("fieldId", "ID!")],
-        "AddProjectV2DraftIssuePayload" => &[("projectItem", "ProjectV2Item")],
+        "CreateIssuePayload" | "UpdateIssuePayload" => &[("issue", "Issue")],
+        "AddProjectV2ItemByIdPayload" => &[("item", "ProjectV2Item")],
+        "AddSubIssuePayload" | "RemoveSubIssuePayload" => {
+            &[("issue", "Issue"), ("subIssue", "Issue")]
+        }
         "UpdateProjectV2DraftIssuePayload" => &[("draftIssue", "DraftIssue")],
-        "UpdateIssuePayload" => &[("issue", "Issue")],
         "UpdateProjectV2ItemFieldValuePayload" => &[("projectV2Item", "ProjectV2Item")],
-        "UpdateProjectV2Payload" => &[("projectV2", "ProjectV2")],
         "AddBlockedByPayload" | "RemoveBlockedByPayload" => {
             &[("issue", "Issue"), ("blockingIssue", "Issue")]
         }
         "DeleteProjectV2ItemPayload" => &[("deletedItemId", "ID")],
+        "DeleteIssuePayload" => &[("repository", "Repository")],
         "CreateProjectV2FieldPayload" | "DeleteProjectV2FieldPayload" => {
             &[("projectV2Field", "ProjectV2FieldConfiguration")]
         }
@@ -699,11 +777,11 @@ fn mutation_field_types(type_name: &str) -> &'static [(&'static str, &'static st
 }
 
 fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
-    PageRequest { cursor, limit: 25 }
+    PageRequest { cursor, limit: 50 }
 }
 
-#[ignore = "the live lane: run it with `just test-live onetaskgraph-github-projects`"]
 #[tokio::test]
+#[ignore = "the live lane: run it with `just test-live onetaskgraph-github-projects`"]
 async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     // llmlint: ignore-block[live_tier_compiles_and_requires_credential] This lane is non-required by decision (AGENTS.md), so an absent credential or an unnamed board skips; `ONETASKGRAPH_LIVE_REQUIRED=1` demands both.
     let lane = live_lane(
@@ -711,15 +789,17 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The live workflow spells these two names too, and the drift gate is the lane's own refusal: project.json runs test-live with ONETASKGRAPH_LIVE_REQUIRED=1, so a name spelled differently on either side fails that job naming both variables rather than skipping green.
         env::var("GH_PROJECTS_OWNER").ok().as_deref(),
         env::var("GH_PROJECTS_NUMBER").ok().as_deref(),
+        env::var("GH_PROJECTS_REPOSITORY").ok().as_deref(),
         env::var("ONETASKGRAPH_LIVE_REQUIRED").ok().as_deref(),
     )
     .unwrap_or_else(|error| panic!("the GitHub Projects live lane cannot run: {error}"));
-    let (token, owner, project_number) = match lane {
+    let (token, owner, project_number, repository) = match lane {
         LiveLane::Run {
             token,
             owner,
             project_number,
-        } => (token, owner, project_number),
+            repository,
+        } => (token, owner, project_number, repository),
         LiveLane::Skip(reason) => {
             eprintln!("skipped live GitHub Projects journey: {reason}");
             return;
@@ -734,7 +814,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     let source = onetaskgraph_github_projects::Plugin
         .build(
             &SourceName::new("github-live").unwrap(),
-            &json!({"owner":owner,"project_number":project_number}),
+            &json!({"owner":owner,"project_number":project_number,"repository":repository}),
             &LiveSecret(token.clone().into()),
         )
         .unwrap_or_else(|error| {
@@ -763,17 +843,27 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         capabilities.task_dependencies,
         DependencySupport::BothDirections
     );
-    let projects = source
-        .query_projects(&ProjectQuery::default(), &page(None))
-        .await
-        .unwrap();
-    assert_eq!(projects.items.len(), 1);
-    assert!(projects.next.is_none());
-    let project = &projects.items[0];
-    assert_eq!(
-        source.get_project(&project.id).await.unwrap().as_ref(),
-        Some(project)
-    );
+    // A board is a container of projects now, so how many it holds is the board's business.
+    let mut projects = Vec::new();
+    let mut cursor = None;
+    loop {
+        let read = source
+            .query_projects(&ProjectQuery::default(), &page(cursor))
+            .await
+            .unwrap();
+        projects.extend(read.items);
+        cursor = read.next;
+        if cursor.is_none() {
+            break;
+        }
+        assert!(projects.len() < 10_000, "the project walk must terminate");
+    }
+    if let Some(project) = projects.first() {
+        assert_eq!(
+            source.get_project(&project.id).await.unwrap().as_ref(),
+            Some(project)
+        );
+    }
     assert!(
         source
             .get_project(&NativeId("not-a-real-project".into()))
@@ -892,47 +982,43 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         );
     }
 
-    let forward_projects = source
-        .project_dependencies(&project.id, Direction::DependsOn, &page(None))
-        .await
-        .expect("forward project dependency read failed");
-    assert!(
-        forward_projects
-            .items
-            .iter()
-            .all(|edge| edge.from == project.id
-                && projects.items.iter().any(|item| edge.to == item.id)),
-        "every forward issue dependency must resolve through projectItems to a visible project"
-    );
-    let reverse_projects = source
-        .project_dependencies(&project.id, Direction::DependedOnBy, &page(None))
-        .await
-        .expect("reverse project dependency read failed");
-    assert!(
-        reverse_projects
-            .items
-            .iter()
-            .all(|edge| edge.to == project.id
-                && projects.items.iter().any(|item| edge.from == item.id)),
-        "every reverse issue dependency must resolve through projectItems to a visible project"
-    );
+    for project in &projects {
+        let forward_projects = source
+            .project_dependencies(&project.id, Direction::DependsOn, &page(None))
+            .await
+            .expect("forward project dependency read failed");
+        assert!(
+            forward_projects
+                .items
+                .iter()
+                .all(|edge| edge.from == project.id),
+            "a forward project edge is reported from the project that depends"
+        );
+        let reverse_projects = source
+            .project_dependencies(&project.id, Direction::DependedOnBy, &page(None))
+            .await
+            .expect("reverse project dependency read failed");
+        assert!(
+            reverse_projects
+                .items
+                .iter()
+                .all(|edge| edge.to == project.id),
+            "a reverse project edge is reported at the project that is depended on"
+        );
+    }
 
-    assert_eq!(
-        project.id.0, project_id,
-        "the source must read the board GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER name"
-    );
-    let metadata_field_created = match ensure_metadata_field(&token, &project_id).await {
+    let origin_field_created = match ensure_origin_field(&token, &project_id).await {
         Ok(created) => created,
         Err(error) => {
-            let cleanup = remove_live_metadata_field(&token, &project_id).await;
-            panic!("GitHub live metadata setup failed: {error}; cleanup result: {cleanup:?}");
+            let cleanup = remove_live_origin_field(&token, &project_id).await;
+            panic!("GitHub live origin field setup failed: {error}; cleanup result: {cleanup:?}");
         }
     };
     let status_name = match live_write_status(&token, &project_id).await {
         Ok(status) => status,
         Err(error) => {
-            let cleanup = if metadata_field_created {
-                remove_live_metadata_field(&token, &project_id).await
+            let cleanup = if origin_field_created {
+                remove_live_origin_field(&token, &project_id).await
             } else {
                 Ok(())
             };
@@ -941,6 +1027,16 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
             );
         }
     };
+    // Writes go by status *category*, and this board's own first Status option is the only
+    // column this lane knows exists, so `unknown` is pointed at it for this instance alone.
+    let writer = onetaskgraph_github_projects::Plugin
+        .build(
+            &SourceName::new("github-live").unwrap(),
+            &json!({"owner":owner,"project_number":project_number,"repository":repository,
+                    "status_mapping":{"unknown":status_name}}),
+            &LiveSecret(token.clone().into()),
+        )
+        .unwrap_or_else(|error| panic!("the live write configuration was refused: {error}"));
     let title = artifact_title(std::process::id(), chrono::Utc::now().timestamp_micros());
     let written_title = title.clone();
     let cleanup_title = title.clone();
@@ -948,7 +1044,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         || async {
             let mut metadata = BTreeMap::new();
             metadata.insert("live.round_trip".into(), json!({"nested":[1,true,null]}));
-            let id = source
+            let id = writer
                 .write_task(&ItemWrite {
                     target: None,
                     item: Task {
@@ -959,7 +1055,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
                         ),
                         status: Status {
                             category: StatusCategory::Unknown,
-                            name: status_name,
+                            name: "unknown".into(),
                         },
                         labels: vec![],
                         project: None,
@@ -975,7 +1071,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
                 .map_err(|error| format!("live GitHub write failed: {error}"))?;
             let mut written = None;
             for _ in 0..10 {
-                written = source
+                written = writer
                     .get_task(&id)
                     .await
                     .map_err(|error| format!("live GitHub write read-back failed: {error}"))?;
@@ -993,7 +1089,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
             }
             Ok(())
         },
-        || remove_live_state(&token, &project_id, &cleanup_title, metadata_field_created),
+        || remove_live_state(&token, &project_id, &cleanup_title, origin_field_created),
     )
     .await
     .unwrap_or_else(|error| panic!("GitHub live write journey failed: {error}"));
@@ -1038,18 +1134,27 @@ async fn cleanup_runs_after_a_failed_live_journey() {
 #[test]
 fn the_lane_takes_its_board_only_from_the_two_names() {
     assert_eq!(
-        live_lane(Some("live-token"), Some("nickderobertis"), Some("1"), None),
+        live_lane(
+            Some("live-token"),
+            Some("nickderobertis"),
+            Some("1"),
+            Some("acme/work"),
+            None
+        ),
         Ok(LiveLane::Run {
             token: "live-token".to_owned(),
             owner: "nickderobertis".to_owned(),
             project_number: 1,
+            repository: "acme/work".to_owned(),
         })
     );
 }
 
 #[test]
 fn an_unnamed_board_skips_the_lane_and_says_which_two_names_it_needs() {
-    let Ok(LiveLane::Skip(reason)) = live_lane(Some("live-token"), None, None, None) else {
+    let Ok(LiveLane::Skip(reason)) =
+        live_lane(Some("live-token"), None, None, Some("acme/work"), None)
+    else {
         panic!("a credential without a named board must skip rather than discover one");
     };
     assert!(
@@ -1060,7 +1165,7 @@ fn an_unnamed_board_skips_the_lane_and_says_which_two_names_it_needs() {
 
 #[test]
 fn an_unnamed_board_fails_the_lane_when_the_live_tier_is_required() {
-    let error = live_lane(Some("live-token"), None, None, Some("1"))
+    let error = live_lane(Some("live-token"), None, None, Some("acme/work"), Some("1"))
         .expect_err("ONETASKGRAPH_LIVE_REQUIRED=1 must turn the unnamed-board skip into a failure");
     assert!(
         error.contains("GH_PROJECTS_OWNER")
@@ -1072,17 +1177,32 @@ fn an_unnamed_board_fails_the_lane_when_the_live_tier_is_required() {
 
 #[test]
 fn an_absent_credential_keeps_its_own_skip_or_fail_pairing() {
-    let Ok(LiveLane::Skip(reason)) = live_lane(None, Some("nickderobertis"), Some("1"), None)
-    else {
+    let Ok(LiveLane::Skip(reason)) = live_lane(
+        None,
+        Some("nickderobertis"),
+        Some("1"),
+        Some("acme/work"),
+        None,
+    ) else {
         panic!("an absent credential must skip");
     };
     assert!(reason.contains("GH_PROJECTS_TOKEN"), "{reason}");
-    let error = live_lane(None, Some("nickderobertis"), Some("1"), Some("1")).expect_err(
-        "ONETASKGRAPH_LIVE_REQUIRED=1 must turn the absent-credential skip into a failure",
-    );
+    let error = live_lane(
+        None,
+        Some("nickderobertis"),
+        Some("1"),
+        Some("acme/work"),
+        Some("1"),
+    )
+    .expect_err("ONETASKGRAPH_LIVE_REQUIRED=1 must turn the absent-credential skip into a failure");
     assert!(error.contains("GH_PROJECTS_TOKEN"), "{error}");
-    let Ok(LiveLane::Skip(empty)) = live_lane(Some("  "), Some("nickderobertis"), Some("1"), None)
-    else {
+    let Ok(LiveLane::Skip(empty)) = live_lane(
+        Some("  "),
+        Some("nickderobertis"),
+        Some("1"),
+        Some("acme/work"),
+        None,
+    ) else {
         panic!("an empty credential must skip");
     };
     assert!(empty.contains("GH_PROJECTS_TOKEN"), "{empty}");
@@ -1097,10 +1217,45 @@ fn half_a_board_and_an_unusable_number_are_misconfigurations_rather_than_skips()
         (Some("nickderobertis"), Some("not-a-number")),
         (Some("nickderobertis"), Some("4294967295")),
     ] {
-        live_lane(Some("live-token"), owner, number, None).expect_err(&format!(
+        live_lane(Some("live-token"), owner, number, Some("acme/work"), None).expect_err(&format!(
             "GH_PROJECTS_OWNER={owner:?} with GH_PROJECTS_NUMBER={number:?} must fail rather than \
              skip or select a board"
         ));
+    }
+}
+
+#[test]
+fn an_unnamed_repository_skips_the_lane_and_a_malformed_one_is_a_misconfiguration() {
+    // A lane that creates issues names the repository it creates them in, for the reason it
+    // names the board: a credentialed write must not land somewhere nobody nominated.
+    let Ok(LiveLane::Skip(reason)) = live_lane(
+        Some("live-token"),
+        Some("nickderobertis"),
+        Some("1"),
+        None,
+        None,
+    ) else {
+        panic!("an unnamed repository must skip rather than discover one");
+    };
+    assert!(reason.contains("GH_PROJECTS_REPOSITORY"), "{reason}");
+    let required = live_lane(
+        Some("live-token"),
+        Some("nickderobertis"),
+        Some("1"),
+        None,
+        Some("1"),
+    )
+    .expect_err("ONETASKGRAPH_LIVE_REQUIRED=1 turns that skip into a failure");
+    assert!(required.contains("GH_PROJECTS_REPOSITORY"), "{required}");
+    for malformed in ["nameless", "acme/", "/work", "acme/work/extra"] {
+        live_lane(
+            Some("live-token"),
+            Some("nickderobertis"),
+            Some("1"),
+            Some(malformed),
+            None,
+        )
+        .expect_err(&format!("GH_PROJECTS_REPOSITORY={malformed:?} must fail"));
     }
 }
 
@@ -1133,6 +1288,7 @@ fn an_unreadable_live_tier_demand_is_a_misconfiguration() {
             Some("live-token"),
             Some("nickderobertis"),
             Some("1"),
+            Some("acme/work"),
             Some(unusable),
         )
         .expect_err(&format!(
@@ -1140,8 +1296,8 @@ fn an_unreadable_live_tier_demand_is_a_misconfiguration() {
         ));
     }
     assert_eq!(
-        live_lane(Some("live-token"), None, None, Some("0")),
-        live_lane(Some("live-token"), None, None, None),
+        live_lane(Some("live-token"), None, None, Some("acme/work"), Some("0")),
+        live_lane(Some("live-token"), None, None, Some("acme/work"), None),
         "0 and unset both mean the lane may skip"
     );
 }

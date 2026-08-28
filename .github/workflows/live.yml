@@ -74,7 +74,11 @@ jobs:
           # credentialed write lane onto the board plans are authored on — so without these two
           # it skips. They are not secret: they are the fixture board this lane's own items live
           # on, and naming them in the open is what makes the blast radius reviewable.
-          # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The live workflow spells these two names too, and the drift gate is the lane's own refusal: project.json runs test-live with ONETASKGRAPH_LIVE_REQUIRED=1, so a name spelled differently on either side fails that job naming both variables rather than skipping green.
+          # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The live workflow spells these three names too, and the drift gate is the lane's own refusal: project.json runs test-live with ONETASKGRAPH_LIVE_REQUIRED=1, so a name spelled differently on either side fails that job naming the variables rather than skipping green.
           GH_PROJECTS_OWNER: nickderobertis
           GH_PROJECTS_NUMBER: "1"
+          # A project is an issue and a task is its sub-issue, so this lane's artifact is a
+          # real issue and a board has no repository to create one in. Named for the same
+          # reason the board is: a credentialed write must not land somewhere nobody chose.
+          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph
         run: just test-live onetaskgraph-github-projects

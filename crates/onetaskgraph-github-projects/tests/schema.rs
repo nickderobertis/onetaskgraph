@@ -1,4 +1,9 @@
 //! Deterministic drift check for the exact GitHub GraphQL production documents.
+//!
+//! The pinned subset defines no `updateProjectV2`, no `ProjectV2.shortDescription` and no
+//! `ProjectV2.readme`, so a document that reached for one would fail here rather than
+//! rename a user's board; it defines no `updateProjectV2Field` either, so nothing can
+//! overwrite a Status field's option set.
 
 use graphql_parser::{query, schema};
 use std::collections::{HashMap, HashSet};
@@ -234,22 +239,23 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
 
     for (operation, fixture_pointer, fixture) in [
         (
-            graphql::PROJECT,
+            graphql::BOARD,
             Some("/data/owner"),
             Some(include_str!("fixtures/project.json")),
         ),
-        (graphql::TASK_DEPENDENCIES, None, None),
-        (graphql::RELATED_PROJECTS, None, None),
+        (graphql::REPOSITORY, None, None),
         (
-            graphql::PROJECT_DEPENDENCIES,
+            graphql::ISSUE_DEPENDENCIES,
             Some("/data/node"),
             Some(include_str!("fixtures/dependencies.json")),
         ),
-        (graphql::CREATE_DRAFT, None, None),
-        (graphql::UPDATE_DRAFT, None, None),
+        (graphql::CREATE_ISSUE, None, None),
+        (graphql::ADD_TO_BOARD, None, None),
         (graphql::UPDATE_ISSUE, None, None),
+        (graphql::UPDATE_DRAFT, None, None),
         (graphql::UPDATE_FIELD, None, None),
-        (graphql::UPDATE_PROJECT, None, None),
+        (graphql::ADD_SUB_ISSUE, None, None),
+        (graphql::REMOVE_SUB_ISSUE, None, None),
         (graphql::ADD_BLOCKED_BY, None, None),
         (graphql::REMOVE_BLOCKED_BY, None, None),
     ] {
@@ -305,5 +311,41 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
             }
             assert_fixture_keys(fixture.pointer(pointer).unwrap(), &keys);
         }
+    }
+}
+
+/// Nothing this crate can do renames a board or rewrites a Status field's options.
+///
+/// The pinned schema already refuses a *document* naming either, and this reads the whole
+/// crate rather than the documents alone: the criterion is that no code path invokes
+/// `updateProjectV2Field` with `singleSelectOptions`, and a source file is where a path
+/// would have to be spelled. GitHub documents that input as overwriting a field's existing
+/// options, so no addition is additive and a mistake destroys every item's status; a
+/// status this board cannot represent is a refusal instead.
+#[test]
+fn no_source_path_writes_the_board_itself_or_a_status_fields_option_set() {
+    /// Everything the file says that is not a comment about what it does not do.
+    fn code(text: &str, comment: &str) -> String {
+        text.lines()
+            .filter(|line| !line.trim_start().starts_with(comment))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+    const FORBIDDEN: [&str; 5] = [
+        "updateProjectV2Field",
+        "singleSelectOptions",
+        "updateProjectV2(",
+        "shortDescription",
+        "readme",
+    ];
+    for forbidden in FORBIDDEN {
+        assert!(
+            !code(include_str!("../src/lib.rs"), "//").contains(forbidden),
+            "the source names {forbidden}, which this board is never written through"
+        );
+        assert!(
+            !code(include_str!("fixtures/schema.graphql"), "#").contains(forbidden),
+            "the pinned schema defines {forbidden}, which would let a document reach it"
+        );
     }
 }
