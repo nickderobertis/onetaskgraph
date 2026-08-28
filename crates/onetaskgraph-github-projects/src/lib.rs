@@ -163,9 +163,16 @@ pub enum StatusTargetConfig {
 ///
 /// Validated on the way in rather than checked later, so a blank option name — which
 /// nothing on a board can be — is a state this type cannot hold.
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(try_from = "String")]
 pub struct ColumnName(String);
+
+impl ColumnName {
+    /// The option name, as the board spells it.
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 impl TryFrom<String> for ColumnName {
     type Error = String;
@@ -272,7 +279,7 @@ enum StatusTarget {
     /// Not usable against this instance.
     Disabled,
     /// The board's `Status` option of this name.
-    Column(String),
+    Column(ColumnName),
     /// A closed issue, with the reason that says which closed it means.
     Closed(ClosedState),
 }
@@ -321,12 +328,20 @@ fn category_name(category: StatusCategory) -> &'static str {
     }
 }
 
+/// A shipped default's option name.
+///
+/// The literals below are this file's own and non-blank, and they are validated by the
+/// one constructor a configured name goes through rather than beside it.
+fn shipped_column(name: &'static str) -> ColumnName {
+    ColumnName::try_from(name.to_owned()).expect("a shipped default names a board option")
+}
+
 /// The shipped default for one category, before this instance's configuration.
 fn shipped_default(category: StatusCategory) -> StatusTarget {
     match category {
-        StatusCategory::Backlog => StatusTarget::Column("Backlog".into()),
-        StatusCategory::Todo => StatusTarget::Column("Todo".into()),
-        StatusCategory::InProgress => StatusTarget::Column("In Progress".into()),
+        StatusCategory::Backlog => StatusTarget::Column(shipped_column("Backlog")),
+        StatusCategory::Todo => StatusTarget::Column(shipped_column("Todo")),
+        StatusCategory::InProgress => StatusTarget::Column(shipped_column("In Progress")),
         StatusCategory::Done => StatusTarget::Closed(ClosedState::Completed),
         StatusCategory::Cancelled => StatusTarget::Closed(ClosedState::NotPlanned),
         StatusCategory::Draft | StatusCategory::Unknown => StatusTarget::Disabled,
@@ -334,9 +349,13 @@ fn shipped_default(category: StatusCategory) -> StatusTarget {
 }
 
 /// This instance's complete category-to-target mapping, read in both directions.
+///
+/// One target per category, held at that category's own [`category_position`], so a
+/// category missing from the mapping, named twice in it, or filed out of order is a
+/// state this type cannot hold rather than one [`Self::target`] has to defend against.
 #[derive(Debug, Clone)]
 struct StatusMapping {
-    targets: Vec<(StatusCategory, StatusTarget)>,
+    targets: [StatusTarget; CATEGORIES.len()],
 }
 
 impl StatusMapping {
@@ -362,30 +381,30 @@ impl StatusMapping {
                 })?;
             overrides.insert(category_name(*category), value);
         }
-        let mut targets = Vec::with_capacity(CATEGORIES.len());
-        for category in CATEGORIES {
-            let target = match overrides.remove(category_name(category)) {
-                None => shipped_default(category),
-                Some(None) => StatusTarget::Disabled,
-                Some(Some(StatusTargetConfig::Column(option))) => StatusTarget::Column(option.0),
-                Some(Some(StatusTargetConfig::Closed { closed })) => StatusTarget::Closed(closed),
-            };
-            targets.push((category, target));
-        }
+        // `CATEGORIES[position] == category` for every category — the crate's suite
+        // asserts it — so mapping the list in order fills each category's own slot.
+        let targets = CATEGORIES.map(|category| match overrides.remove(category_name(category)) {
+            None => shipped_default(category),
+            Some(None) => StatusTarget::Disabled,
+            Some(Some(StatusTargetConfig::Column(option))) => StatusTarget::Column(option),
+            Some(Some(StatusTargetConfig::Closed { closed })) => StatusTarget::Closed(closed),
+        });
         let mapping = Self { targets };
-        for (index, (category, target)) in mapping.targets.iter().enumerate() {
-            let StatusTarget::Column(option) = target else {
+        for (index, category) in CATEGORIES.into_iter().enumerate() {
+            let StatusTarget::Column(option) = mapping.target(category) else {
                 continue;
             };
-            if let Some((other, _)) = mapping.targets[..index].iter().find(|(_, earlier)| {
-                matches!(earlier, StatusTarget::Column(name) if name.eq_ignore_ascii_case(option))
+            if let Some(other) = CATEGORIES[..index].iter().find(|earlier| {
+                matches!(mapping.target(**earlier), StatusTarget::Column(name)
+                    if name.as_str().eq_ignore_ascii_case(option.as_str()))
             }) {
                 return Err(SourceError::Config {
                     message: format!(
                         "status_mapping of source {instance} sends both {} and {} to the board \
-                         option {option:?}; one option cannot read back as two categories",
+                         option {:?}; one option cannot read back as two categories",
                         category_name(*other),
-                        category_name(*category)
+                        category_name(category),
+                        option.as_str()
                     ),
                 });
             }
@@ -394,18 +413,14 @@ impl StatusMapping {
     }
 
     fn target(&self, category: StatusCategory) -> &StatusTarget {
-        self.targets
-            .iter()
-            .find(|(known, _)| *known == category)
-            .map(|(_, target)| target)
-            .expect("every status category has a resolved target")
+        &self.targets[category_position(category)]
     }
 
     /// The category a board option name reports, or `None` when nothing maps to it.
     fn category_of(&self, option: &str) -> Option<StatusCategory> {
-        self.targets.iter().find_map(|(category, target)| {
-            matches!(target, StatusTarget::Column(name) if name.eq_ignore_ascii_case(option))
-                .then_some(*category)
+        CATEGORIES.into_iter().find(|category| {
+            matches!(self.target(*category), StatusTarget::Column(name)
+                if name.as_str().eq_ignore_ascii_case(option))
         })
     }
 }
