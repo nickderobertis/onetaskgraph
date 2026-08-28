@@ -140,6 +140,25 @@ async fn live_write_status(token: &str, project_id: &str) -> Result<String, Stri
         .ok_or_else(|| "live project has no selectable Status option".to_owned())
 }
 
+/// The write configuration this lane builds for the board it was pointed at.
+///
+/// Writes go by status *category*, and the board's own first Status option is the only
+/// column this lane knows exists — so `todo` is pointed at it and every other
+/// column-bearing category is disabled. Exactly one category writes a column, so however
+/// this board spells that option, no two categories can send it the same one and the
+/// source's own validation has nothing to refuse. Pointing `unknown` at that column
+/// instead is the collision itself: `unknown` and `draft` map to no column by design,
+/// precisely so neither can collide with a category that has one.
+fn live_write_config(
+    owner: &str,
+    project_number: u32,
+    repository: &str,
+    status_option: &str,
+) -> Value {
+    json!({"owner":owner,"project_number":project_number,"repository":repository,
+           "status_mapping":{"todo":status_option,"backlog":null,"in-progress":null}})
+}
+
 async fn remove_live_origin_field(token: &str, project_id: &str) -> Result<(), String> {
     for _ in 0..10 {
         let field_ids = writable_fields(token, project_id)
@@ -1034,18 +1053,16 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
             );
         }
     };
-    // Writes go by status *category*, and this board's own first Status option is the only
-    // column this lane knows exists, so `unknown` is pointed at it for this instance alone.
     let writer = onetaskgraph_github_projects::Plugin
         .build(
             &SourceName::new("github-live").unwrap(),
-            &json!({"owner":owner,"project_number":project_number,"repository":repository,
-                    "status_mapping":{"unknown":status_name}}),
+            &live_write_config(&owner, project_number, &repository, &status_name),
             &LiveSecret(token.clone().into()),
         )
         .unwrap_or_else(|error| panic!("the live write configuration was refused: {error}"));
     let title = artifact_title(std::process::id(), chrono::Utc::now().timestamp_micros());
     let written_title = title.clone();
+    let written_status = status_name.clone();
     let cleanup_title = title.clone();
     run_then_cleanup(
         || async {
@@ -1061,8 +1078,8 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
                             "temporary credentialed write; the live lane removes this".into(),
                         ),
                         status: Status {
-                            category: StatusCategory::Unknown,
-                            name: "unknown".into(),
+                            category: StatusCategory::Todo,
+                            name: written_status.clone(),
                         },
                         labels: vec![],
                         project: None,
@@ -1093,6 +1110,15 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
                 || written.metadata.get("live.round_trip") != Some(&json!({"nested":[1,true,null]}))
             {
                 return Err("live GitHub write did not round-trip title and metadata".to_owned());
+            }
+            // The column this configuration gives `todo` is given to no other category, so
+            // reading it back reports the category that was written rather than another.
+            if written.status.category != StatusCategory::Todo {
+                return Err(format!(
+                    "live GitHub write filed under {:?} read back as {:?}",
+                    StatusCategory::Todo,
+                    written.status.category
+                ));
             }
             Ok(())
         },
@@ -1155,6 +1181,27 @@ fn the_lane_takes_its_board_and_repository_only_from_the_names_it_is_given() {
             repository: "acme/work".to_owned(),
         })
     );
+}
+
+#[test]
+fn the_lanes_write_configuration_is_accepted_whatever_the_board_calls_its_first_column() {
+    // The lane discovers this option name from the board at run time, so its configuration
+    // has to be accepted whichever name comes back — including each name a shipped default
+    // already claims, which is where pointing `unknown` at the column collided.
+    for option in ["Todo", "Backlog", "In Progress", "Ready for review"] {
+        onetaskgraph_github_projects::Plugin
+            .build(
+                &SourceName::new("github-live").unwrap(),
+                &live_write_config("nickderobertis", 1, "acme/work", option),
+                &LiveSecret("live-token".into()),
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "the live write configuration was refused for a board whose first Status \
+                     option is {option:?}: {error}"
+                )
+            });
+    }
 }
 
 #[test]
