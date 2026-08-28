@@ -375,3 +375,43 @@ fn every_status_category_this_source_can_be_handed_has_a_place_in_its_mapping() 
         "a place in the list is unfilled, so a category the vocabulary declares is missing"
     );
 }
+
+#[test]
+fn the_category_list_is_reconciled_against_the_vocabulary_it_mirrors() {
+    use onetaskgraph_github_projects::CATEGORIES;
+    use onetaskgraph_plugin_api::StatusCategory;
+
+    // The list checking itself proves nothing about the enum it restates: a variant added
+    // to the shared vocabulary and given a place by `category_position` compiles with the
+    // list one short, and every mapping indexed by that place then panics. `StatusCategory`'s
+    // own derived schema is the second source — generated from the variants rather than
+    // written beside them — so it grows the moment the vocabulary does, in its order.
+    let schema = serde_json::to_value(schemars::schema_for!(StatusCategory))
+        .expect("the derived schema serializes");
+    let declared = schema["oneOf"]
+        .as_array()
+        .expect("a unit-variant enum schema lists its variants")
+        .iter()
+        .map(|variant| {
+            variant["const"]
+                .as_str()
+                .expect("each variant is a string constant")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    let mirrored = CATEGORIES
+        .iter()
+        .map(|category| {
+            serde_json::to_value(category)
+                .expect("a category serializes")
+                .as_str()
+                .expect("a category serializes as a string")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declared, mirrored,
+        "CATEGORIES must name every category the vocabulary declares, in the order it \
+         declares them"
+    );
+}

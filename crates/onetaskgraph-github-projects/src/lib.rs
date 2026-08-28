@@ -289,8 +289,10 @@ enum StatusTarget {
 /// This list mirrors `StatusCategory`, so it carries its own drift gate rather than a
 /// reviewer's attention: [`category_position`] is a wildcard-free match, so a variant
 /// added to the shared vocabulary fails to compile until it is named there, and this
-/// crate's suite asserts that every position that function can return is filled by the
-/// category returning it — which a list still missing the new variant cannot satisfy.
+/// crate's suite reconciles this list against that enum's own derived schema, which is
+/// generated from the variants rather than written beside them. The schema is what
+/// catches a list left one short — a list checking only the positions it already holds
+/// would pass while every mapping indexed by the new position panicked.
 pub const CATEGORIES: [StatusCategory; 7] = [
     StatusCategory::Draft,
     StatusCategory::Backlog,
