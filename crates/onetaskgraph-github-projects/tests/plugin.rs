@@ -1841,6 +1841,52 @@ async fn a_dependency_write_refuses_a_same_source_far_end_the_board_does_not_hol
 }
 
 #[tokio::test]
+async fn a_same_source_far_end_keeps_every_colon_its_own_native_id_holds() {
+    // A qualified id is `<source>:<native>` split at its *first* colon, and a GitHub node id
+    // is opaque, so the native half may hold colons of its own. Split at the last one, this
+    // far end would be looked up as `2`, and an edge to an item this board holds would be
+    // refused as missing.
+    let fixture = board(vec![
+        Item::issue("I_1", "one").status("Todo"),
+        Item::issue("I:urn:2", "two").status("Todo"),
+    ]);
+    let source = source(&fixture);
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_1".to_owned())),
+            item: Task {
+                repositories: vec![
+                    Repository::try_from("github.com/acme/work".to_owned()).unwrap(),
+                ],
+                ..task("T", "one", status(StatusCategory::Todo, "Todo"))
+            },
+            depends_on: vec![DependencyEdge {
+                from: DependencyEndpoint::from_native(NativeId("I_1".to_owned()), ItemKind::Task),
+                to: DependencyEndpoint::new("work:I:urn:2".to_owned(), ItemKind::Task).unwrap(),
+                kind: DependencyKind::Blocks,
+            }],
+        })
+        .await
+        .expect("a same-source far end this board holds is written natively");
+    assert!(
+        fixture
+            .seen()
+            .iter()
+            .any(|call| call[0] == "addBlockedBy" && call[1]["blockingIssueId"] == "I:urn:2"),
+        "the whole native id is the far end: {:?}",
+        fixture.seen()
+    );
+    assert!(
+        !fixture
+            .item("I_1")
+            .body
+            .unwrap_or_default()
+            .contains("work:I:urn:2"),
+        "a far end this board holds is linked natively rather than recorded"
+    );
+}
+
+#[tokio::test]
 async fn dependencies_of_an_item_nothing_holds_are_refused_rather_than_empty() {
     let fixture = board(vec![]);
     let message = refusal(

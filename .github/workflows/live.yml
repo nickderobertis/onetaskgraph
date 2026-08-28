@@ -1,6 +1,4 @@
 # llmlint: ignore-file[live_tier_compiles_and_requires_credential] empty live lane passes by design
-# The live lane: the two hosted plugins, proven against the real APIs.
-#
 # Fixtures prove the shape of what a plugin does; only the real API proves it still
 # answers the way the plugin assumes. This runs daily, on demand, and on every pull
 # request so a plugin change does not wait a day for its first real-API signal.
