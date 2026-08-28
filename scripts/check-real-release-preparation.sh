@@ -323,6 +323,50 @@ run_preparation() {
   fi
 }
 
+# The version the run says it proposed, read from its own decision line rather than
+# recomputed: what is under test includes which version it chose.
+prepared_version() {
+  local version
+  version="$(sed -n 's/^prepare-release-pr: .* at v\([0-9][0-9A-Za-z.+-]*\)$/\1/p' "$1" | head -n1)"
+  [ -n "$version" ] || fail "the preparation's decision line does not name the version it proposed: $(cat "$1")" \
+    "keep the proposal line ending in the version, which the workflow log and this journey both read"
+  printf '%s' "$version"
+}
+
+# A release is never described twice, and never under a version the pull request does not
+# propose: an entry release-plz writes while a version is still being selected is headed by
+# that package's own next version, which set-version.sh then normalises away.
+# Writing no entry at all is not this function's business — the release-tooling and
+# registry-recovery proposals reach the branch without one, because the run that writes the
+# changelog is the one that builds the release commit, and neither of those is that run.
+# changelogs_describe_this_release_at_most_once <base commit> <branch> <released version>
+changelogs_describe_this_release_at_most_once() {
+  local base="$1" branch="$2" released="$3" crate changelog added heading
+  for changelog_path in "$repo"/crates/*/CHANGELOG.md; do
+    crate="$(basename "$(dirname "$changelog_path")")"
+    changelog="crates/$crate/CHANGELOG.md"
+    git -C "$repo" show "$branch:$changelog" > "$scratch/branch-changelog" 2>/dev/null || continue
+    git -C "$repo" show "$base:$changelog" > "$scratch/base-changelog" 2>/dev/null || : > "$scratch/base-changelog"
+    grep '^## \[' "$scratch/branch-changelog" > "$scratch/branch-headings" || : > "$scratch/branch-headings"
+    grep '^## \[' "$scratch/base-changelog" > "$scratch/base-headings" || : > "$scratch/base-headings"
+    added=0
+    while IFS= read -r heading; do
+      grep -qxF "$heading" "$scratch/base-headings" && continue
+      added=$((added + 1))
+      case "$heading" in
+        "## [$released]"*) ;;
+        *) fail "$branch carries $changelog holding '$heading', which describes this release under a version it does not propose — its manifests say $released" \
+          "select the version without writing a changelog, and let the run that builds the release commit write the entry for the version finally selected" ;;
+      esac
+    done < "$scratch/branch-headings"
+    [ "$added" -le 1 ] || fail \
+      "$branch carries $changelog holding $added new entries for one set of changes" \
+      "write the release's changelog entry once, for the version finally selected"
+  done
+}
+
+tooling_base="$(git -C "$repo" rev-parse HEAD)" || fail \
+  "could not read the tooling-only head" "check the scratch repository and rerun"
 case_log="$scratch/tooling.log"
 run_preparation "$case_log" "the real preparation failed for the tooling-only head" \
   "fix the phase named above and rerun"
@@ -332,16 +376,41 @@ grep -qF "proposed release pull request" "$case_log" || fail \
   "repair the fallback proposal path and rerun"
 (cd "$repo" && scripts/set-version.sh --check) || fail "the proposed tree has version drift" \
   "run scripts/set-version.sh with the selected version and carry every changed manifest"
+tooling_version="$(prepared_version "$case_log")"
+tooling_branch="release-plz-$tooling_version"
+changelogs_describe_this_release_at_most_once "$tooling_base" "$tooling_branch" "$tooling_version"
+tooling_tree="$(git -C "$repo" rev-parse "$tooling_branch^{tree}")" || fail \
+  "could not read the tree the tooling-only run put on $tooling_branch" "check the scratch repository and rerun"
 
 git -C "$repo" switch --quiet --detach "$fixture_base" || fail "could not restore a detached $fixture_base before the update case" "check the scratch repository and rerun"
 unset GITHUB_REF_NAME
+# What a run that got as far as selecting a version leaves behind: bumped manifests nobody
+# committed. The workflow's next push arrives at a fresh checkout, but a rerun here does not,
+# and preparing again has to regenerate the release from the base rather than compute it from
+# what the last run wrote — release-plz refuses to decide anything from a dirty checkout, and
+# a version decided from already-bumped manifests is a second release, not the same one.
+if ! (cd "$repo" && scripts/set-version.sh "$tooling_version") > "$scratch/leftover.log" 2>&1; then
+  sed 's/^/    /' "$scratch/leftover.log" >&2
+  fail "could not leave the checkout as an interrupted preparation leaves it" \
+    "fix what set-version.sh reports above and rerun"
+fi
+[ -n "$(git -C "$repo" status --porcelain)" ] || fail \
+  "selection left the checkout clean, so the update case no longer models a rerun over what the last run wrote" \
+  "check what the selector writes and put an uncommitted preparation back into this case"
 case_log="$scratch/update.log"
-run_preparation "$case_log" "the real preparation failed while updating the existing proposal" \
+run_preparation "$case_log" "the real preparation failed while updating the existing proposal over the tree the last one left" \
   "fix the phase named above and rerun"
 grep -qF "updated release pull request #41" "$case_log" || fail \
   "the existing proposal was not updated visibly" "repair the existing-branch and existing-PR path and rerun"
 [ "$(wc -l < "$scratch/state/proposals")" -eq 1 ] || fail \
   "updating the existing proposal created a duplicate" "reuse the release branch and open pull request"
+[ "$(prepared_version "$case_log")" = "$tooling_version" ] || fail \
+  "preparing again over the same base proposed $(prepared_version "$case_log") where the first preparation proposed $tooling_version" \
+  "regenerate the release from the base, so a rerun decides what a single run decided"
+changelogs_describe_this_release_at_most_once "$tooling_base" "$tooling_branch" "$tooling_version"
+[ "$(git -C "$repo" rev-parse "$tooling_branch^{tree}")" = "$tooling_tree" ] || fail \
+  "preparing again over the same base put a different tree on $tooling_branch than a single preparation leaves" \
+  "regenerate the release from the base rather than adding to what the last run left"
 
 git -C "$repo" switch --quiet "$fixture_base" || fail "could not restore $fixture_base before the partial-publish case" "check the scratch repository and rerun"
 (cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$repo" || fail \
@@ -389,6 +458,8 @@ git -C "$repo" checkout --quiet -- . || fail \
 # The earlier cases leave an open fixture PR. Remove only that scratch state so registry
 # recovery proves its fresh-proposal branch as well as the update branch exercised above.
 : > "$scratch/state/proposals" || fail "could not clear the scratch proposal state" "check scratch-directory permissions and rerun"
+recovery_base="$(git -C "$repo" rev-parse HEAD)" || fail \
+  "could not read the partly published head" "check the scratch repository and rerun"
 case_log="$scratch/partial-publish.log"
 run_preparation "$case_log" "the real preparation failed for the partly published head" \
   "fix the phase named above and rerun"
@@ -398,6 +469,7 @@ grep -qF "proposed release pull request" "$case_log" || fail \
   "the partly published run did not select $recovery_version" "advance every crate to the patch after the attempted release"
 [ "$(wc -l < "$scratch/state/proposals")" -eq 1 ] || fail \
   "the partly published run created a duplicate pull request" "reuse the existing release pull request during recovery"
+changelogs_describe_this_release_at_most_once "$recovery_base" "release-plz-$recovery_version" "$recovery_version"
 
 # The other head the same registry lag describes: merging a release pull request pushes the
 # default branch, `release-plz release` tags a version seconds before any registry can hold
@@ -496,6 +568,8 @@ git -C "$repo" checkout --quiet -- . || fail \
 # And the whole preparation path over the same head, which is what the workflow runs.
 publish_boundary_only_to_origin
 : > "$scratch/state/proposals" || fail "could not clear the scratch proposal state" "check scratch-directory permissions and rerun"
+remote_boundary_base="$(git -C "$repo" rev-parse HEAD)" || fail \
+  "could not read the head whose boundary only the origin holds" "check the scratch repository and rerun"
 case_log="$scratch/remote-boundary.log"
 run_preparation "$case_log" \
   "the real preparation failed for a head whose release boundary is only on the origin" \
@@ -506,6 +580,7 @@ grep -qF "proposed release pull request" "$case_log" || fail \
 [ "$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" = "$remote_only_version" ] || fail \
   "the remote-only boundary run did not select $remote_only_version" \
   "advance every crate to the patch after the attempted release"
+changelogs_describe_this_release_at_most_once "$remote_boundary_base" "release-plz-$remote_only_version" "$remote_only_version"
 
 # A boundary neither the checkout nor the origin holds is genuinely unknown, and is still
 # refused naming both places it was looked for: guessing one proposes a version against

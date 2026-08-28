@@ -54,6 +54,19 @@ run_phase() {
   fi
 }
 
+# Preparing again supersedes the last preparation rather than adding to it. release-plz
+# decides a release from what differs from HEAD, so a tree still carrying an earlier run's
+# bump is a different base: the next run reads its version out of manifests that run wrote
+# and refuses the dirty checkout outright before it gets that far. Restoring the tracked
+# files first makes every run start where the workflow's own fresh checkout starts, so a
+# second preparation over the same base leaves what a single one would have left. Untracked
+# files are left alone: with selection asking for no changelog, nothing below writes a file
+# this repository does not already track.
+run_phase \
+  "could not restore this checkout's tracked files to HEAD before preparing the release" \
+  "inspect the working tree — this script prepares the release from HEAD and rewrites every version manifest, so it needs a checkout it may restore" \
+  git checkout HEAD -- .
+
 # A push checkout can be detached even though its workflow ref names the pull-request base.
 # release-plz itself requires an attached branch with an upstream, so restore that context
 # before selection rather than waiting until the fallback needs `gh pr create --base`.
