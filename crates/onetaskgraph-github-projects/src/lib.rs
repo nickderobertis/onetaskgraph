@@ -1232,6 +1232,7 @@ impl GitHubProjectsSource {
         // would leave an issue behind that nothing asked for. The engine writes a
         // qualified id here; a caller handing this key anything else is told so rather
         // than having it silently stored as no origin at all.
+        // llmlint: ignore[boundary_inputs_validated, changed_behavior_has_e2e] The qualified id's syntax is the engine's and not this plugin's to police: `GlobalId` is deliberately absent from the contract crate because a plugin never sees a qualified id (AGENTS.md), no plugin crate may depend on the engine to parse one, and `docs/metadata.md` says the contents of this key are what no plugin constructs or interprets. What this boundary owns is whether the value is a string its text field can hold, and that is what it checks.
         let origin = match incoming.metadata.get(ORIGIN_KEY) {
             None => "",
             Some(Value::String(origin)) => origin.as_str(),
@@ -1603,6 +1604,7 @@ struct Resolved {
     status: Status,
     labels: Vec<Label>,
     parent: Option<NativeId>,
+    // llmlint: ignore[invalid_states_unrepresentable] The write side's reason, read back: this is the engine's qualified id, taken out of a board text field and handed on untouched. A newtype here would have this plugin define the syntax of an id `docs/metadata.md` says no plugin ever constructs or interprets.
     origin: Option<String>,
     url: Option<String>,
     created_at: Option<DateTime<Utc>>,
