@@ -1325,11 +1325,18 @@ impl GitHubProjectsSource {
                 .to
                 .source()
                 .is_none_or(|source| source == self.name.as_str());
-            let far_id = edge
-                .to
-                .id()
-                .rsplit_once(':')
-                .map_or(edge.to.id(), |(_, id)| id);
+            // A qualified id's source segment runs to its *first* colon — `GlobalId` and
+            // `DependencyEndpoint::source` both read it that way — and a native id may hold
+            // colons of its own, so the far end is everything after that one separator.
+            // Splitting at the last would truncate `work:urn:task:7` to `7`.
+            let far_id = if edge.to.is_qualified() {
+                edge.to
+                    .id()
+                    .split_once(':')
+                    .map_or(edge.to.id(), |(_, native)| native)
+            } else {
+                edge.to.id()
+            };
             let far = if same_source {
                 Some(
                     board
