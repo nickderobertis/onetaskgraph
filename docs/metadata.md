@@ -14,16 +14,41 @@ trip through the ticketing system the user already works in.
 
 Keys are free-form, with two prefixes reserved:
 
-- `onetaskgraph.` belongs to this product. It defines exactly three keys, each spelled
+- `onetaskgraph.` belongs to this product. It defines exactly four keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
-  (`Repository::METADATA_KEY`) and `onetaskgraph.depends_on`
-  (`DependencyEdge::RECORDED_KEY`) in the contract crate, and `onetaskgraph.origin`
-  (`GlobalId::ORIGIN_KEY`) in the engine — that last one carries a *qualified* id, which
-  no plugin ever constructs or interprets.
+  (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
+  (`DependencyEdge::RECORDED_KEY`) and `onetaskgraph.item_kind`
+  (`ItemKind::METADATA_KEY`) in the contract crate, and `onetaskgraph.origin`
+  (`GlobalId::ORIGIN_KEY`) in the engine — that last one carries a *qualified* id, whose
+  contents no plugin ever constructs or interprets, though `github-projects` routes the
+  key itself into a text field of its own.
 - `onepipeline.` belongs to that consumer.
 
 Every other key is the caller's. A source returns it exactly as it holds it — the same
 value, of the same JSON type — and this product never interprets it.
+
+### `onetaskgraph.item_kind` is one plugin's, and only one plugin's
+
+The first three keys above are obligations on **every** source. `onetaskgraph.item_kind`
+is not one, and the difference is the point: it is spelled in the contract crate for the
+reason the others are — a key under this product's prefix is the product's to name, so no
+plugin can invent a colliding spelling — and it obliges nobody.
+
+**`github-projects` is the one source that reads or writes it.** A GitHub Projects board
+holds only issues. A project there *is* an issue and its tasks are that issue's
+sub-issues, so an issue with sub-issues is a project and an issue without them is a task —
+except for the one state a project copy necessarily passes through, between creating the
+project and filing its first task, where an empty project is indistinguishable from a
+task. The marker is what makes that state readable. It is **sufficient and never
+necessary**: an unmarked issue with sub-issues is still a project, so a person can author
+one on the board by hand with no knowledge of this metadata at all, and clearing a marker
+never hides a project. A sub-issue is always a task, whatever it carries. The key accepts
+exactly `"project"` and `"task"`; anything else is malformed.
+
+**No other source has that problem, so none of them touches the key.** `local-md` has a
+folder per kind and Linear has native projects, so each already knows which kind an item
+is without being told. To them the key is ordinary caller metadata: they hand it back with
+its value and JSON type intact, exactly as they hand back every other key they do not own.
 
 ## Repositories
 
@@ -34,7 +59,10 @@ resolve. A list names each origin once; a repeat is refused rather than silently
 collapsed.
 
 A source with a native notion of it reads it from there. `github-projects` derives it
-from an issue-backed item's own repository. Every source reads it from
+from an issue's own repository, and records the key **only** when the item's list is not
+exactly that one repository — which it has to, now that every plan item is an issue in one
+nominated repository and the derivation would otherwise report the plan's repository
+instead of the one a plan node actually names. Every source reads it from
 `onetaskgraph.repositories` where it has no native slot, so it is reachable everywhere.
 
 ## Dependencies that leave the source
@@ -56,9 +84,9 @@ and will not accept:
 | --- | --- | --- |
 | `linear` issue | issues of this workspace | another source, or a Linear project |
 | `linear` project | projects of this workspace | another source, or a Linear issue |
-| `github-projects` issue item | issues of this project | another source, or a board |
+| `github-projects` task issue | task issues of this board | another source, or a project |
+| `github-projects` project issue | project issues of this board | another source, or a task |
 | `github-projects` draft item | nothing | anything |
-| `github-projects` board | boards, aggregated from its issues | another source, or a task |
 
 An edge is always oriented `from` **depends on** `to`, whichever way the backend spells it.
 GitHub's `blockedBy` and `blocking` are one relationship read from either end, so both
@@ -70,7 +98,7 @@ report the same edge with the waiting item as `from`, rather than two mirrored o
 | --- | --- |
 | `local-md` | a `metadata:` mapping in the YAML front matter |
 | `in-memory` | as given in its configuration |
-| `github-projects` | canonical JSON in a project text field named `onetaskgraph.metadata` for an item, and in the board's own description slot for the project |
+| `github-projects` | canonical JSON in a trailing comment slot at the end of the issue body, for a project issue and a task issue alike |
 | `linear` | canonical JSON in a slot the source owns on the item itself |
 
 ### Linear's slot, settled
@@ -94,8 +122,18 @@ renders the description as Markdown and a Markdown comment does not render.
 
 The read side takes the slot off the visible description, so `content` is what the person
 wrote. Only a comment at the very **end** of the description is a slot; one in the middle
-is visible content and is left alone. GitHub Projects uses the same encoding for a board's
-description, which has no custom fields of its own.
+is visible content and is left alone.
+
+**`github-projects` uses that same encoding, in the issue body, and for the same reason
+plus one of its own: length.** A ProjectV2 custom field is only `TEXT`, `NUMBER`, `DATE`,
+`SINGLE_SELECT`, `MULTI_SELECT` or `ITERATION`, a `TEXT` value is length-bounded, and a
+board's `shortDescription` is capped at 300 characters — of which the metadata comment
+spends about 110 before any content, so a project carrying an ordinary 278-character goal
+statement could not be copied at all. Caller metadata is unbounded (`onepipeline.steps`
+carries whole task prose), so it goes where the body is: in the issue. Short typed things
+do not: status goes to the board's `Status` single-select and the issue's own open or
+closed state, `onetaskgraph.origin` goes to a source-owned `onetaskgraph.origin` text
+field, and dependencies go to `blockedBy` and to sub-issue links.
 
 ## Reading and writing are different obligations
 

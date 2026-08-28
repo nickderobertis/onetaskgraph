@@ -1,19 +1,36 @@
 # Recorded GraphQL shapes
 
 `project.json` follows GitHub's published `ProjectV2`, `ProjectV2Item`,
-`ProjectV2ItemContent`, `ProjectV2ItemFieldSingleSelectValue`, and label-connection schema.
+`ProjectV2ItemContent`, `ProjectV2ItemFieldSingleSelectValue`, `Issue.parent`,
+`Issue.subIssuesSummary` and label-connection schema. It is one board holding two projects
+— an issue with a sub-issue, and an empty issue readable as a project only because it
+carries `onetaskgraph.item_kind` — one task, and one pull request the source ignores.
 `dependencies.json` follows the published `Issue.blockedBy: IssueConnection` and
-`Issue.blocking: IssueConnection` shapes, which provide both dependency directions.
+`Issue.blocking: IssueConnection` shapes, which provide both dependency directions, with
+each far end carrying the fields that say which kind of item it is.
 
 The values are synthetic and stable; the object, union, and connection shapes are recorded from
 the official GraphQL references at <https://docs.github.com/en/graphql/reference/projects> and
 <https://docs.github.com/en/graphql/reference/issues>. Tests serve these files through an actual
 loopback HTTP server and exercise request construction, authentication, parsing, and mapping.
 
-`schema.graphql` is the authoritative contract subset: the read surface was obtained from
-GitHub.com's GraphQL introspection endpoint on 2026-08-24, and the mutation inputs and payloads
-were derived from GitHub's published Projects and Issues references on 2026-08-26. The
-pinned-schema test validates every production operation's
-selected fields, arguments, variable types, fragment type conditions, and fixture keys against it;
-the credentialed live lane introspects the current mutation fields and input types as its mutation
-freshness check, then exercises reads without changing the configured board.
+`schema.graphql` is the authoritative contract subset. The read surface was obtained from
+GitHub.com's GraphQL introspection endpoint on 2026-08-24; the sub-issue, state-reason and
+write surface — `Issue.parent`, `Issue.subIssues`, `Issue.subIssuesSummary`,
+`Issue.stateReason(enableDuplicate:)`, `IssueStateReason`, `IssueClosedStateReason`,
+`CreateIssueInput`, `UpdateIssueInput.stateInput`, `IssueStateUpdateInput`,
+`AddSubIssueInput`, `RemoveSubIssueInput`, `AddProjectV2ItemByIdInput` and their payloads —
+was read from GitHub.com's own published schema artifact
+<https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-08-27. The pinned-schema
+test validates every production operation's selected fields, arguments, variable types,
+fragment type conditions, and fixture keys against it; the credentialed live lane
+introspects the current mutation fields and input types as its mutation freshness check,
+then exercises reads without changing the configured board.
+
+Two absences in `schema.graphql` are load-bearing rather than incidental.
+`ProjectV2.shortDescription` and `ProjectV2.readme` are not there, and neither is
+`updateProjectV2`: a board is a container of projects and this source never writes the
+board's own fields, so a document that tried to would fail the pinned-schema test rather
+than rename a user's board. `updateProjectV2Field` is absent because its
+`singleSelectOptions` is documented as overwriting a field's existing options, so no
+addition is additive and a mistake would destroy every item's status.

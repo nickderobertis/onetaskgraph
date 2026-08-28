@@ -812,8 +812,9 @@ labels: Label[]
  * 
  * Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
  * product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
- * the two it defines — and `onepipeline.` belongs to that consumer. Every other key
- * is the caller's, and a source returns it exactly as it holds it.
+ * the two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —
+ * and `onepipeline.` belongs to that consumer. Every other key is the caller's, and
+ * a source returns it exactly as it holds it.
  */
 metadata?: {
 [k: string]: any
@@ -1343,8 +1344,9 @@ labels: Label[]
  * 
  * Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
  * product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
- * the two it defines — and `onepipeline.` belongs to that consumer. Every other key
- * is the caller's, and a source returns it exactly as it holds it.
+ * the two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —
+ * and `onepipeline.` belongs to that consumer. Every other key is the caller's, and
+ * a source returns it exactly as it holds it.
  */
 metadata?: {
 [k: string]: any
@@ -2300,8 +2302,9 @@ labels: Label[]
  * 
  * Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
  * product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
- * the two it defines — and `onepipeline.` belongs to that consumer. Every other key
- * is the caller's, and a source returns it exactly as it holds it.
+ * the two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —
+ * and `onepipeline.` belongs to that consumer. Every other key is the caller's, and
+ * a source returns it exactly as it holds it.
  */
 metadata?: {
 [k: string]: any
@@ -3217,8 +3220,9 @@ labels: Label[]
  * 
  * Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
  * product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
- * the two it defines — and `onepipeline.` belongs to that consumer. Every other key
- * is the caller's, and a source returns it exactly as it holds it.
+ * the two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —
+ * and `onepipeline.` belongs to that consumer. Every other key is the caller's, and
+ * a source returns it exactly as it holds it.
  */
 metadata?: {
 [k: string]: any

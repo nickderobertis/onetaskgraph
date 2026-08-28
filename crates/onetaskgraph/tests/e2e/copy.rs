@@ -16,7 +16,10 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{ROWS, SOURCE, document, empty_folder, linear_block, qualified};
+use crate::fixtures::{
+    ROWS, SOURCE, document, empty_folder, github_projects_failing_a_field_write_once,
+    github_projects_failing_to_file_once, github_projects_with_board, linear_block, qualified,
+};
 
 /// The folder every copy journey copies into, configured beside the source under test.
 const NOTES: &str = "notes";
@@ -500,8 +503,352 @@ fn every_source_kind_can_be_copied_into_a_folder_of_markdown_with_its_fields_int
     }
 }
 
+/// The GitHub board every journey below copies into, beside the folder it copies from.
+fn board_with_plans(sandbox: &Sandbox, folder: &str) -> crate::fixtures::GitHubBoardFields {
+    let (config, board) = github_projects_with_board(sandbox);
+    sandbox.project_document(&document(&json!({
+        folder: {"plugin":"local-md","config":{
+            "root": sandbox.subdirectory(folder),
+            "status_mapping": {"Todo":"todo","Doing":"in-progress","Shipped":"done",
+                               "Idea":"draft"}}},
+        "board": {"plugin":"github-projects","config":config}
+    })));
+    board
+}
+
 #[test]
-fn github_projects_is_a_permanent_destination_and_persists_draft_fields() {
+fn a_project_and_its_tasks_copy_into_a_board_without_touching_the_board_itself() {
+    // The defect this replaces: the source resolved to one board id and treated it as the
+    // project, so copying a project into it renamed a real user's board. A board is a
+    // container of projects now — a project lands as an issue and its tasks land as that
+    // issue's sub-issues — and the board's own fields are never written by anything here.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("projects")).unwrap();
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(root.join("projects/P-1.md"), "---\ntitle: Published roadmap\nstatus: Doing\nmetadata: {caller.approved: true, caller.shape: {nested: [1, true, null]}}\n---\nThe permanent plan\n").unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Todo\nproject: P-1\n---\ndo this first\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("tasks/B.md"),
+        "---\ntitle: Second step\nstatus: Todo\nproject: P-1\n---\nthen this\n",
+    )
+    .unwrap();
+    let board = board_with_plans(&sandbox, "plans");
+    let before = board.own();
+    assert_eq!(
+        before,
+        json!({"title":"Fixture board",
+               "shortDescription":"the board a person set up",
+               "readme":"# Fixture board\n\nA person wrote this."}),
+        "the board this copy lands on is a person's, with a title and a readme of its own"
+    );
+
+    let copied = ok(
+        &sandbox,
+        &["project", "copy", "plans:P-1", "--to", "board", "--json"],
+    );
+    let reported = reported(&copied);
+    assert_eq!(
+        reported
+            .iter()
+            .map(|(source, _, action)| (source.as_str(), action.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("plans:P-1", "created"),
+            ("plans:A", "created"),
+            ("plans:B", "created"),
+        ]
+    );
+    let project = reported[0].1.as_str().expect("a created project id");
+
+    let written = shown(&sandbox, "project", project);
+    assert_eq!(written["title"], "Published roadmap");
+    assert_eq!(written["content"], "The permanent plan");
+    assert_eq!(written["status"]["category"], "in-progress");
+    assert_eq!(written["metadata"]["caller.approved"], true);
+    assert_eq!(
+        written["metadata"]["caller.shape"],
+        json!({"nested":[1,true,null]}),
+        "unbounded caller JSON survives with its types intact"
+    );
+
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    for title in ["First step", "Second step"] {
+        assert!(listed.contains(title), "{listed}");
+    }
+    let filed = shown(&sandbox, "task", reported[1].1.as_str().unwrap());
+    assert_eq!(
+        filed["project"].as_str(),
+        project.strip_prefix("board:"),
+        "a project's tasks are that issue's sub-issues"
+    );
+    assert_eq!(filed["status"]["name"], "Todo");
+
+    assert_eq!(
+        board.own(),
+        before,
+        "the board's own title, shortDescription and readme are never written"
+    );
+}
+
+#[test]
+fn a_project_whose_goal_outgrows_a_board_description_still_copies() {
+    // Why the metadata slot moved out of `shortDescription`: that field is capped at 300
+    // characters, and the metadata comment spent about 110 of them before any content, so
+    // a project carrying an ordinary goal statement could not be copied at all.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("projects")).unwrap();
+    let goal =
+        "This plan exists so that the whole harness can author its work on a board. ".repeat(6);
+    assert!(goal.len() > 300, "the goal must outgrow the old slot");
+    std::fs::write(
+        root.join("projects/P-1.md"),
+        format!("---\ntitle: Long goal\nstatus: Todo\nmetadata: {{onepipeline.steps: [{goal:?}]}}\n---\n{goal}\n"),
+    )
+    .unwrap();
+    board_with_plans(&sandbox, "plans");
+
+    let copied = ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plans:P-1",
+            "--to",
+            "board",
+            "--no-tasks",
+            "--json",
+        ],
+    );
+    let id = reported(&copied)[0].1.as_str().expect("an id").to_owned();
+    let written = shown(&sandbox, "project", &id);
+    assert_eq!(written["content"], goal.trim_end());
+    assert_eq!(written["metadata"]["onepipeline.steps"], json!([goal]));
+}
+
+#[test]
+fn a_board_that_fails_between_creating_an_issue_and_filing_it_says_so_and_recovers() {
+    // Landing an item on a board is two calls — `createIssue`, then
+    // `addProjectV2ItemById` — so GitHub can fail between them, and what happens then is
+    // a journey rather than a reading of the code: the copy exits non-zero saying what
+    // GitHub said, the board holds nothing it was not already holding, and the retry
+    // lands exactly one item rather than two.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Todo\n---\ndo this first\n",
+    )
+    .unwrap();
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root": root, "status_mapping": {"Todo":"todo"}}},
+        "board": {"plugin":"github-projects",
+                  "config": github_projects_failing_to_file_once(&sandbox)}
+    })));
+
+    let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
+    assert!(
+        said.contains("Something went wrong while executing your query"),
+        "the failure GitHub reported is what the caller is told: {said}"
+    );
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert!(
+        !listed.contains("First step"),
+        "an issue that was never filed is on no board: {listed}"
+    );
+
+    let copied = ok(
+        &sandbox,
+        &["task", "copy", "plans:A", "--to", "board", "--json"],
+    );
+    let landed = reported(&copied);
+    assert_eq!(landed.len(), 1, "{copied}");
+    assert_eq!(
+        landed[0].1,
+        json!("board:ISSUE-2"),
+        "the issue the failed attempt created is on no board, so nothing can match it and \
+         the retry creates its own — the orphan stays in the repository: {copied}"
+    );
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(
+        listed.matches("First step").count(),
+        1,
+        "the retry lands one item where the failed attempt landed none: {listed}"
+    );
+}
+
+#[test]
+fn a_dependency_naming_a_board_item_as_the_wrong_kind_is_refused_before_anything_lands() {
+    // The board holds the far end itself, so it is the board that says which kind `P-2`
+    // is — a project. An edge naming it a task would be stored as a relationship at a
+    // level it is not at, and the refusal comes before the issue is created.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Todo\n\
+         depends_on: [{id: \"board:P-2\", item: task}]\n---\ndo this first\n",
+    )
+    .unwrap();
+    board_with_plans(&sandbox, "plans");
+
+    let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
+    for expected in ["P-2", "project", "task"] {
+        assert!(said.contains(expected), "{expected} is named: {said}");
+    }
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert!(
+        !listed.contains("First step"),
+        "nothing was created before the refusal: {listed}"
+    );
+}
+
+#[test]
+fn a_field_write_that_fails_after_an_issue_is_filed_leaves_it_findable_by_title() {
+    // The later half of the same sequence: the issue exists and is on the board, and the
+    // copy origin that would let the next copy find it is what did not land. So a plain
+    // retry cannot match it — `--match-by title` is the escape that re-establishes the
+    // correspondence instead of filing a second issue for the same plan.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Doing\n---\ndo this first\n",
+    )
+    .unwrap();
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root": root, "status_mapping": {"Doing":"in-progress"}}},
+        "board": {"plugin":"github-projects",
+                  "config": github_projects_failing_a_field_write_once(&sandbox)}
+    })));
+
+    let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
+    assert!(
+        said.contains("Something went wrong while executing your query"),
+        "the failure GitHub reported is what the caller is told: {said}"
+    );
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(
+        listed.matches("First step").count(),
+        1,
+        "the issue was filed before the field write failed, so the board holds it: {listed}"
+    );
+
+    let copied = ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "plans:A",
+            "--to",
+            "board",
+            "--match-by",
+            "title",
+            "--json",
+        ],
+    );
+    let landed = reported(&copied);
+    assert_eq!(landed.len(), 1, "{copied}");
+    assert_eq!(landed[0].2, "updated", "{copied}");
+    let finished = shown(&sandbox, "task", landed[0].1.as_str().expect("an id"));
+    assert_eq!(
+        finished["status"]["category"], "in-progress",
+        "the status the failed attempt could not write is what the retry finishes"
+    );
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(
+        listed.matches("First step").count(),
+        1,
+        "and one plan is one issue rather than two: {listed}"
+    );
+}
+
+#[test]
+fn a_status_this_integration_cannot_hold_is_refused_naming_it_and_the_source() {
+    // `draft` is an ordinary status everywhere else. This source refuses it, and says why:
+    // a GitHub draft issue cannot have sub-issues, and a project's tasks are sub-issues.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: Not yet committed\nstatus: Idea\n---\nan idea\n",
+    )
+    .unwrap();
+    board_with_plans(&sandbox, "plans");
+
+    assert_eq!(
+        shown(&sandbox, "task", "plans:A")["status"]["category"],
+        "draft",
+        "draft is an ordinary accepted status in the source it came from"
+    );
+    let complaint = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
+    assert!(complaint.contains("draft"), "{complaint}");
+    assert!(complaint.contains("board"), "{complaint}");
+    assert!(complaint.contains("sub-issue"), "{complaint}");
+}
+
+#[test]
+fn a_copy_into_a_board_settles_instead_of_reporting_a_change_on_every_run() {
+    // Writing `done` closes the issue, and writing a non-terminal status over a closed one
+    // has to reopen it. Without that the item reads back `Unknown` and this loop never
+    // reaches `unchanged` — a copy would report a change forever.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    let write_status = |status: &str| {
+        std::fs::write(
+            root.join("tasks/A.md"),
+            format!("---\ntitle: One step\nstatus: {status}\n---\ndo this\n"),
+        )
+        .unwrap();
+    };
+    write_status("Todo");
+    board_with_plans(&sandbox, "plans");
+
+    let copy = |sandbox: &Sandbox| {
+        reported(&ok(
+            sandbox,
+            &["task", "copy", "plans:A", "--to", "board", "--json"],
+        ))
+    };
+    let created = copy(&sandbox);
+    assert_eq!(created[0].2, "created");
+    let id = created[0].1.as_str().expect("an id").to_owned();
+    assert_eq!(copy(&sandbox)[0].2, "unchanged");
+
+    write_status("Shipped");
+    assert_eq!(copy(&sandbox)[0].2, "updated");
+    assert_eq!(shown(&sandbox, "task", &id)["status"]["category"], "done");
+    assert_eq!(
+        copy(&sandbox)[0].2,
+        "unchanged",
+        "a closed issue reads back as the status that closed it"
+    );
+
+    write_status("Todo");
+    assert_eq!(copy(&sandbox)[0].2, "updated");
+    let reopened = shown(&sandbox, "task", &id);
+    assert_eq!(
+        reopened["status"],
+        json!({"category":"todo","name":"Todo"}),
+        "a non-terminal status reopens the issue rather than leaving it Unknown"
+    );
+    assert_eq!(copy(&sandbox)[0].2, "unchanged");
+}
+
+#[test]
+fn github_projects_is_a_permanent_destination_whose_created_items_are_issues() {
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("authored");
     std::fs::create_dir_all(root.join("tasks")).unwrap();
@@ -511,14 +858,7 @@ fn github_projects_is_a_permanent_destination_and_persists_draft_fields() {
         "---\ntitle: Supporting plan\nstatus: Todo\n---\nsupport it\n",
     )
     .unwrap();
-    let github = ROWS
-        .iter()
-        .find(|row| row.plugin == "github-projects")
-        .unwrap();
-    sandbox.project_document(&document(&json!({
-        "authored":{"plugin":"local-md","config":{"root":root}},
-        "board":{"plugin":"github-projects","config":(github.fixture.block)(&sandbox)}
-    })));
+    board_with_plans(&sandbox, "authored");
 
     let first = ok(
         &sandbox,
@@ -532,22 +872,21 @@ fn github_projects_is_a_permanent_destination_and_persists_draft_fields() {
             "--json",
         ],
     );
+    let first = reported(&first);
     assert_eq!(
-        reported(&first),
+        first
+            .iter()
+            .map(|(source, _, action)| (source.as_str(), action.as_str()))
+            .collect::<Vec<_>>(),
         vec![
-            (
-                "authored:PLAN-1".into(),
-                json!("board:DRAFT-1"),
-                "created".into()
-            ),
-            (
-                "authored:PLAN-2".into(),
-                json!("board:DRAFT-2"),
-                "created".into()
-            )
+            ("authored:PLAN-1", "created"),
+            ("authored:PLAN-2", "created"),
         ]
     );
-    let copied = shown(&sandbox, "task", "board:DRAFT-1");
+    let one = first[0].1.as_str().expect("an id").to_owned();
+    let two = first[1].1.as_str().expect("an id").to_owned();
+
+    let copied = shown(&sandbox, "task", &one);
     assert_eq!(copied["title"], "Publish the plan");
     assert_eq!(copied["content"], "share this plan");
     assert_eq!(copied["status"]["name"], "Todo");
@@ -558,17 +897,12 @@ fn github_projects_is_a_permanent_destination_and_persists_draft_fields() {
     );
     assert_eq!(
         copied["repositories"],
-        json!(["github.com/nickderobertis/onetaskgraph"])
+        json!(["github.com/nickderobertis/onetaskgraph"]),
+        "a list that is exactly the issue's own repository is derived rather than recorded"
     );
-    assert_eq!(
-        copied["metadata"]["onetaskgraph.depends_on"],
-        json!([
-            {"id":"DRAFT-2","kind":"task"},
-            {"id":"elsewhere:T-9","kind":"task"}
-        ])
-    );
+
     let dependencies: Value =
-        serde_json::from_str(&ok(&sandbox, &["task", "deps", "board:DRAFT-1", "--json"])).unwrap();
+        serde_json::from_str(&ok(&sandbox, &["task", "deps", &one, "--json"])).unwrap();
     assert_eq!(
         dependencies["items"]
             .as_array()
@@ -577,139 +911,29 @@ fn github_projects_is_a_permanent_destination_and_persists_draft_fields() {
             .map(|edge| edge["to"].clone())
             .collect::<Vec<_>>(),
         vec![
-            json!({"id":"board:DRAFT-2","kind":"task"}),
+            json!({"id":two,"kind":"task"}),
             json!({"id":"elsewhere:T-9","kind":"task"})
-        ]
+        ],
+        "the far end inside the copied set is native and the one elsewhere is recorded"
     );
 
     let second = ok(
         &sandbox,
         &["task", "copy", "authored:PLAN-1", "--to", "board", "--json"],
     );
+    // Copying PLAN-1 alone is not the same copy: PLAN-2 is no longer in the copied set, so
+    // its edge is rewritten to name the source it is still in. That is a real change, and
+    // the point here is that it lands on the item already there rather than beside it.
     assert_eq!(
         reported(&second),
-        vec![(
-            "authored:PLAN-1".into(),
-            json!("board:DRAFT-1"),
-            "updated".into()
-        )]
+        vec![("authored:PLAN-1".into(), json!(one), "updated".into())]
     );
     assert_eq!(
         ok(&sandbox, &["task", "list", "--source", "board"])
             .lines()
             .count(),
-        6
-    );
-}
-
-#[test]
-fn a_project_copy_updates_the_configured_github_board_without_creating_one() {
-    let sandbox = Sandbox::new();
-    let root = sandbox.subdirectory("plans");
-    std::fs::create_dir_all(root.join("projects")).unwrap();
-    std::fs::write(root.join("projects/P-1.md"), "---\ntitle: Published roadmap\nstatus: Open\nmetadata: {caller.approved: true}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [{id: 'elsewhere:P-9', item: project}]\n---\nThe permanent plan\n").unwrap();
-    let github = ROWS
-        .iter()
-        .find(|row| row.plugin == "github-projects")
-        .unwrap();
-    sandbox.project_document(&document(&json!({
-        "plans":{"plugin":"local-md","config":{"root":root}},
-        "board":{"plugin":"github-projects","config":(github.fixture.block)(&sandbox)}
-    })));
-    let copied = ok(
-        &sandbox,
-        &[
-            "project",
-            "copy",
-            "plans:P-1",
-            "--to",
-            "board",
-            "--no-tasks",
-            "--json",
-        ],
-    );
-    assert_eq!(
-        reported(&copied),
-        vec![("plans:P-1".into(), json!("board:P-1"), "created".into())]
-    );
-    let written = shown(&sandbox, "project", "board:P-1");
-    assert_eq!(written["title"], "Published roadmap");
-    assert_eq!(written["content"], "The permanent plan");
-    assert_eq!(written["status"]["category"], "in-progress");
-    assert_eq!(written["metadata"]["caller.approved"], true);
-    assert_eq!(
-        written["repositories"],
-        json!(["github.com/nickderobertis/onetaskgraph"])
-    );
-    let dependencies: Value =
-        serde_json::from_str(&ok(&sandbox, &["project", "deps", "board:P-1", "--json"])).unwrap();
-    assert!(
-        dependencies["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|edge| edge["to"]["id"] == "elsewhere:P-9")
-    );
-
-    for status in ["Todo", "Waiting"] {
-        std::fs::write(
-            root.join("projects/P-1.md"),
-            format!(
-                "---\ntitle: Published roadmap\nstatus: {status}\nmetadata: {{caller.approved: true}}\nrepositories: [github.com/nickderobertis/onetaskgraph]\n---\nThe permanent plan\n"
-            ),
-        )
-        .unwrap();
-        ok(
-            &sandbox,
-            &[
-                "project",
-                "copy",
-                "plans:P-1",
-                "--to",
-                "board",
-                "--no-tasks",
-            ],
-        );
-        assert_eq!(
-            shown(&sandbox, "project", "board:P-1")["status"]["category"],
-            "in-progress",
-            "{status} keeps the configured GitHub project open"
-        );
-    }
-
-    std::fs::write(
-        root.join("projects/P-1.md"),
-        "---\ntitle: Published roadmap\nstatus: Done\nmetadata: {caller.approved: true}\n---\nThe permanent plan\n",
-    )
-    .unwrap();
-    let cleared = ok(
-        &sandbox,
-        &[
-            "project",
-            "copy",
-            "plans:P-1",
-            "--to",
-            "board",
-            "--no-tasks",
-            "--json",
-        ],
-    );
-    assert_eq!(
-        reported(&cleared),
-        vec![("plans:P-1".into(), json!("board:P-1"), "updated".into())]
-    );
-    let shown = shown(&sandbox, "project", "board:P-1");
-    assert_eq!(shown["status"]["category"], "done");
-    assert_eq!(shown["repositories"], json!([]));
-    let dependencies: Value =
-        serde_json::from_str(&ok(&sandbox, &["project", "deps", "board:P-1", "--json"])).unwrap();
-    assert!(
-        dependencies["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|edge| edge["to"]["id"] != "elsewhere:P-9"),
-        "clearing recorded dependencies preserves only native issue relationships"
+        6,
+        "a second copy of the same item updates it rather than duplicating it"
     );
 }
 

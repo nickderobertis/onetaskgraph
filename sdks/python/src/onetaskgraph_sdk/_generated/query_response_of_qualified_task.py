@@ -207,7 +207,7 @@ class Task(BaseModel):
     metadata: Annotated[
         dict[str, JsonValue] | None,
         Field(
-            description="Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two it defines — and `onepipeline.` belongs to that consumer. Every other key\nis the caller's, and a source returns it exactly as it holds it."
+            description="Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it."
         ),
     ] = {}
     project: Annotated[
