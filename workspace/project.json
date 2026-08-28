@@ -60,7 +60,8 @@
           "bash scripts/check-contract-inventory.sh",
           "bash scripts/check-protocol-contract.sh",
           "bash scripts/check-credential-names.sh",
-          "bash scripts/check-journey-matrix.sh"
+          "bash scripts/check-journey-matrix.sh",
+          "bash scripts/check-origin-key-spelling.sh"
         ],
         "parallel": false
       },
@@ -91,7 +92,9 @@
         "{workspaceRoot}/scripts/check-credential-names.sh",
         "{workspaceRoot}/crates/onetaskgraph-core/src/registry.rs",
         "{workspaceRoot}/crates/onetaskgraph/tests/e2e/fixtures.rs",
-        "{workspaceRoot}/scripts/check-journey-matrix.sh"
+        "{workspaceRoot}/scripts/check-journey-matrix.sh",
+        "{workspaceRoot}/crates/onetaskgraph-core/src/global_id.rs",
+        "{workspaceRoot}/scripts/check-origin-key-spelling.sh"
       ]
     },
     "typecheck": {

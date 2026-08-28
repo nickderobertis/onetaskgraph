@@ -1850,6 +1850,9 @@ impl TaskSource for GitHubProjectsSource {
 const RECORDED_CURSOR: &str = "onetaskgraph.depends_on:";
 
 /// The board text field this source keeps a copy's origin in.
+///
+/// Named after the key it holds, and held to that name by the guard below rather than by
+/// a reader noticing.
 const ORIGIN_FIELD: &str = "onetaskgraph.origin";
 
 /// The metadata key that field holds.
@@ -1858,6 +1861,13 @@ const ORIGIN_FIELD: &str = "onetaskgraph.origin";
 /// constructs or interprets the qualified id it carries. This source names it only to
 /// route it — a short, typed value belongs in a typed field rather than in the body slot
 /// a caller's own prose shares.
+///
+/// Restated rather than imported, because no plugin crate may depend on the engine. What
+/// keeps the two spellings one contract is `scripts/check-origin-key-spelling.sh`, a
+/// target in `check`: it reads the engine's own literal and fails naming the file and the
+/// line when a plugin's parts from it either way. Drift here has one symptom — a copy
+/// that creates a second item every run instead of finding the one it wrote — and that is
+/// too late to learn it.
 const ORIGIN_KEY: &str = "onetaskgraph.origin";
 
 /// Where a recorded tail resumes, refusing a cursor no walk in `direction` reported.
