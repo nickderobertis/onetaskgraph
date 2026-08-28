@@ -45,25 +45,169 @@ for tool in git gh perl python3 uv; do
 done
 
 scratch="$(mktemp -d)" || fail "could not create a scratch directory" "check temporary-directory permissions"
-trap 'rm -rf "$scratch"' EXIT
+recorder_pid=
+cleanup() {
+  if [ -n "$recorder_pid" ]; then
+    kill "$recorder_pid" 2>/dev/null || true
+  fi
+  rm -rf "$scratch"
+}
+trap cleanup EXIT
+mkdir -p "$scratch/bin" "$scratch/state" || fail "could not create fixture state directories" "check scratch-directory permissions"
+# Every destination this journey is allowed to reach is inside the fixture, and all of them
+# are filesystem paths: the bare origin next door, the `gh` shim, the released tree the
+# registry lookup now reads. So nothing legitimate ever opens an HTTP connection, and a
+# proxy that records and refuses one costs nothing while it holds. Point every proxy
+# variable at it, clear the bypass lists, and read its log after each phase below: a
+# non-empty log names the host that reached past the fixture, which is what a bare 401 or a
+# registry timeout will not.
+if ! cat > "$scratch/off-fixture-recorder.py" <<'RECORDER'
+"""Record and refuse every HTTP destination, so a host outside the fixture is named."""
+
+import socket
+import sys
+
+log_path, port_path = sys.argv[1], sys.argv[2]
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(("127.0.0.1", 0))
+server.listen(64)
+with open(port_path, "w") as handle:
+    handle.write(str(server.getsockname()[1]))
+    handle.flush()
+
+def record(destination):
+    # Whatever opened this connection chose the text, so keep only printable non-space
+    # characters and bound the length: a destination is what the log is read for, and an
+    # embedded newline or control sequence would forge or hide a second entry.
+    safe = "".join(c for c in destination if c.isprintable() and not c.isspace())[:200]
+    with open(log_path, "a") as handle:
+        handle.write((safe or "<unnamed destination>") + "\n")
+        handle.flush()
+
+
+while True:
+    connection, _ = server.accept()
+    try:
+        connection.settimeout(5)
+        request = b""
+        while b"\r\n" not in request and len(request) < 8192:
+            chunk = connection.recv(4096)
+            if not chunk:
+                break
+            request += chunk
+        line = request.split(b"\r\n", 1)[0].decode("utf-8", "replace")
+        fields = line.split(" ")
+        record(fields[1] if len(fields) > 1 else line)
+        connection.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    except OSError as error:
+        # A connection that failed mid-read still left the fixture, and dropping it would
+        # let exactly that attempt pass as a clean run. Record it as the attempt it is.
+        record("<destination unread: %s>" % error)
+    finally:
+        connection.close()
+RECORDER
+then
+  fail "could not create the off-fixture destination recorder" "check scratch-directory permissions and free space"
+fi
+offsite_log="$scratch/state/off-fixture-destinations"
+recorder_port="$scratch/state/recorder-port"
+recorder_diagnostics="$scratch/state/recorder-diagnostics"
+python3 "$scratch/off-fixture-recorder.py" "$offsite_log" "$recorder_port" \
+  > "$recorder_diagnostics" 2>&1 &
+recorder_pid=$!
+recorder_waits=0
+while [ ! -s "$recorder_port" ] && [ "$recorder_waits" -lt 100 ]; do
+  sleep 0.1
+  recorder_waits=$((recorder_waits + 1))
+done
+if [ ! -s "$recorder_port" ]; then
+  if [ -s "$recorder_diagnostics" ]; then
+    sed 's/^/    /' "$recorder_diagnostics" >&2
+  fi
+  fail "the off-fixture destination recorder did not come up, so nothing would notice a request leaving the fixture" \
+    "fix what it reported above; with no output it never started, so check that python3 can bind a loopback port here"
+fi
+recorder_listen_port="$(cat "$recorder_port")" || fail \
+  "could not read the port the off-fixture destination recorder bound" "check scratch-directory permissions and rerun"
+if ! [[ $recorder_listen_port =~ ^[1-9][0-9]*$ ]] || [ "$recorder_listen_port" -gt 65535 ]; then
+  fail "the off-fixture destination recorder reported '$recorder_listen_port', which is not a TCP port" \
+    "restore the recorder so it writes the port it bound, then rerun"
+fi
+recorder_url="http://127.0.0.1:$recorder_listen_port"
+export http_proxy="$recorder_url" https_proxy="$recorder_url" all_proxy="$recorder_url"
+export HTTP_PROXY="$recorder_url" HTTPS_PROXY="$recorder_url" ALL_PROXY="$recorder_url"
+export no_proxy="" NO_PROXY=""
 repo="$scratch/repo"
 remote="$scratch/origin.git"
 hooks="$scratch/hooks"
 fixture_base=fixture-main
 scratch_clone "$ROOT" "$repo" || fail \
   "could not clone the finished tree" "fix what scratch-clone reported above and rerun"
-git -C "$repo" switch --quiet --create "$fixture_base" || fail \
-  "could not create the fixture branch $fixture_base" "check the cloned commit and rerun"
+# The clone carries this repository's own history, and one unreleased feat or fix anywhere
+# in it is enough for release-plz to select a package version — which sends preparation down
+# `release-plz release-pr` and out to the real api.github.com, the one boundary this fixture
+# cannot serve. Hermetic by luck of what has landed is not hermetic, so the fixture branch is
+# a root of its own: the released baseline below, the tooling-only commit this journey is
+# about, and nothing this repository happens to be carrying.
+git -C "$repo" checkout --quiet --orphan "$fixture_base" || fail \
+  "could not root the fixture branch $fixture_base at an orphan commit" \
+  "check the cloned commit and rerun"
 # The user's hooks belong to the checkout under review, not to fixture setup. Point this
 # scratch repository at an empty hook directory so its synthetic commits and local pushes
 # cannot recursively launch the complete gate when the check itself runs from a hook.
 mkdir -p "$hooks" || fail "could not create the empty fixture hook directory" "check scratch-directory permissions"
 git -C "$repo" config core.hooksPath "$hooks" || fail \
   "could not isolate the fixture from repository hooks" "check the scratch repository and rerun"
-# Exercise the working tree under review, then give release-plz the tooling-only commit the
-# workflow receives after merge.
+# Exercise the working tree under review. It is this fixture's released baseline: every
+# crate is at the version the boundary tags below name, so no crate has anything waiting to
+# be released and release-plz has no package bump to select.
 (cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$repo" || fail \
   "could not copy the tracked working tree into the checkout" "check git, tar and free space, then rerun"
+released_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" || fail \
+  "could not read the fixture's released version" "restore the binary manifest and rerun"
+[[ $released_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail \
+  "the fixture has no plain X.Y.Z released version ('$released_version')" "restore the binary manifest and rerun"
+git -C "$repo" add -A || fail "could not stage the released baseline" "check the scratch repository and rerun"
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet \
+  -m "chore: release v$released_version" || fail \
+  "could not commit the released baseline" "check the scratch repository and rerun"
+baseline="$(git -C "$repo" rev-parse HEAD)" || fail \
+  "could not read the released baseline commit" "check the scratch repository and rerun"
+# The checkout under test can be either an ordinary main commit, whose manifest version has
+# already been tagged, or a release pull request, whose version has not. Neither shape should
+# determine this fixture's history: discard every tag the clone carried and put this
+# fixture's own boundary — the workspace tag and every package's — on the baseline, so each
+# crate reads as released and the only commit after it is the tooling-only change below.
+git -C "$repo" for-each-ref --format='delete %(refname)' refs/tags | \
+  git -C "$repo" update-ref --stdin || fail \
+  "could not clear inherited tags from the tooling-only fixture" "check the scratch repository and rerun"
+package_names="$(cd "$repo" && cargo metadata --no-deps --format-version 1 | python3 -c \
+  'import json, sys; print(" ".join(package["name"] for package in json.load(sys.stdin)["packages"]))')" || fail \
+  "could not read the fixture's package inventory" "repair Cargo metadata and rerun"
+git -C "$repo" tag "v$released_version" "$baseline" || fail \
+  "could not set the tooling-only release boundary" "check the scratch repository and rerun"
+for crate in $package_names; do
+  [ "$crate" = onetaskgraph ] && continue
+  git -C "$repo" tag "$crate-v$released_version" "$baseline" || fail \
+    "could not put $crate's release boundary on the baseline" "check the scratch repository and rerun"
+done
+# release-plz compares each package with its released copy, and left alone it downloads that
+# copy from crates.io — a host outside this fixture, and the last one this journey reached.
+# The real tool takes the comparison from a local checkout of the released version instead,
+# which is what the baseline above is, so export it once and point every `update` at it. The
+# registry lag the recovery cases turn on stops depending on what crates.io happens to hold
+# and becomes this fixture's own: every package is released at the baseline's version and
+# nowhere else.
+registry_snapshot="$scratch/registry"
+mkdir -p "$registry_snapshot" || fail \
+  "could not create the fixture's released-version snapshot" "check scratch-directory permissions"
+git -C "$repo" archive "$baseline" | tar -xf - -C "$registry_snapshot" || fail \
+  "could not export the released version release-plz compares against" \
+  "check git, tar and free space, then rerun"
+[ -f "$registry_snapshot/Cargo.toml" ] || fail \
+  "the released-version snapshot has no workspace manifest, so release-plz would fall back to crates.io" \
+  "check that the baseline commit carries Cargo.toml and rerun"
 # Semver compatibility is gated independently. Disabling it in this scratch-only config
 # keeps this journey focused on selection and proposal rather than compiling every crate
 # twice before either decision can be observed.
@@ -83,20 +227,6 @@ git -C "$repo" config "url.$remote.insteadOf" "$fixture_origin" || fail \
 git -C "$repo" remote set-url origin "$fixture_origin" || fail \
   "could not give the fixture a GitHub-shaped origin" "check git and rerun"
 git -C "$repo" push --quiet --set-upstream origin HEAD || fail "could not seed the local origin" "check git and rerun"
-released_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" || fail \
-  "could not read the fixture's released version" "restore the binary manifest and rerun"
-[[ $released_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail \
-  "the fixture has no plain X.Y.Z released version ('$released_version')" "restore the binary manifest and rerun"
-# The checkout under test can be either an ordinary main commit, whose manifest version
-# has already been tagged, or a release pull request, whose version has not. Neither shape
-# should determine this fixture's history: discard every copied tag and establish the
-# tooling-only scenario's release boundary on the commit immediately before its eligible
-# release-tooling change.
-git -C "$repo" for-each-ref --format='delete %(refname)' refs/tags | \
-  git -C "$repo" update-ref --stdin || fail \
-  "could not clear inherited tags from the tooling-only fixture" "check the scratch repository and rerun"
-git -C "$repo" tag "v$released_version" HEAD^ || fail \
-  "could not set the tooling-only release boundary" "check the scratch repository and rerun"
 git --git-dir="$remote" symbolic-ref HEAD "refs/heads/$fixture_base" || fail \
   "could not set the local origin's default branch" "check the scratch repository and rerun"
 git -C "$repo" remote set-head origin "$fixture_base" || fail \
@@ -104,12 +234,32 @@ git -C "$repo" remote set-head origin "$fixture_base" || fail \
 git -C "$repo" switch --quiet --detach "$fixture_base" || fail \
   "could not detach the tooling-only checkout" "check the scratch repository and rerun"
 
-mkdir -p "$scratch/bin" "$scratch/state" || fail "could not create fixture state directories" "check scratch-directory permissions"
 if ! cat > "$scratch/bin/release-plz" <<'RELEASE_PLZ'
 #!/usr/bin/env bash
 set -euo pipefail
+read_manifest_version() {
+  sed -n 's/^version = "\([^"]*\)"/\1/p' crates/onetaskgraph/Cargo.toml | head -n1
+}
 if [ "${1:-}" = update ]; then
-  exec "$REAL_RELEASE_PLZ" "$@" --forge github
+  # The selector decides from what this run does to the manifest, and nothing downstream
+  # can report which branch it took. Record it here so a refusal below can name it.
+  before="$(read_manifest_version)"
+  status=0
+  "$REAL_RELEASE_PLZ" "$@" --forge github \
+    --registry-manifest-path "$FIXTURE_REGISTRY_MANIFEST" || status=$?
+  printf '%s -> %s\n' "$before" "$(read_manifest_version)" > "$GH_FIXTURE_STATE/selection"
+  exit "$status"
+fi
+if [ "${1:-}" = release-pr ]; then
+  # `release-pr` asks api.github.com for this repository's open pull requests. The fixture's
+  # insteadOf rule rewrites git transport and cannot touch an HTTP API call, and GIT_TOKEN
+  # is the literal string fixture-token — so reaching here is the hermetic premise failing,
+  # not a credential missing, and the bare 401 GitHub answers with says the opposite.
+  decision="$(cat "$GH_FIXTURE_STATE/selection" 2>/dev/null || true)"
+  printf '%s\n' "${decision:-<no update recorded>}" > "$GH_FIXTURE_STATE/forge-api-attempt"
+  echo "release-plz fixture: refusing 'release-pr': it calls the real GitHub API, which this hermetic fixture does not serve" >&2
+  echo "release-plz fixture: the selector answered 'release-plz selected ${decision:-<no update recorded>}'" >&2
+  exit 1
 fi
 exec "$REAL_RELEASE_PLZ" "$@"
 RELEASE_PLZ
@@ -137,13 +287,45 @@ export GITHUB_REF_NAME="$fixture_base"
 # State the forge at this hermetic fixture boundary while still delegating the update to
 # the exact pinned binary verified above.
 export REAL_RELEASE_PLZ="$release_plz_bin"
+export FIXTURE_REGISTRY_MANIFEST="$registry_snapshot/Cargo.toml"
+# set-version.sh re-locks the Python projects after every bump, and uv reads its index for
+# that unless told the answer is already written down. It is: uv.lock pins every dependency
+# and the only thing changing here is the workspace's own version, so these locks resolve
+# from the checked-in files with an empty cache. Without this the journey reaches pypi.org,
+# which is as far outside the fixture as crates.io was.
+export UV_OFFLINE=1
 export PATH="$scratch/bin:$PATH"
 
+forge_attempt="$scratch/state/forge-api-attempt"
+# Every transport this fixture offers is local — git is rewritten to a bare repository next
+# door and `gh` is the shim above — so `release-plz release-pr`'s HTTP call to
+# api.github.com is the one way out of it, and the launcher above records the attempt rather
+# than letting it leave. Read that record after every preparation run, before the run's own
+# assertions, so this journey fails naming the premise that broke.
+guard_hermetic() {
+  if [ -s "$offsite_log" ]; then
+    fail "the hermetic premise was violated: this journey reached past the fixture to $(sort -u "$offsite_log" | tr '\n' ' ')" \
+      "keep every destination inside the fixture — the local origin, the gh shim, and the released-version snapshot release-plz compares against"
+  fi
+  [ -e "$forge_attempt" ] || return 0
+  fail "the hermetic premise was violated: preparation reached 'release-plz release-pr', which asks api.github.com for this fixture's open pull requests, after the selector answered 'release-plz selected $(cat "$forge_attempt")'" \
+    "keep an unreleased releasable commit out of this fixture's history, so selection stays on the release-tooling and registry-recovery branches this journey proposes through gh"
+}
+
+# run_preparation <log> <problem> <next action>
+run_preparation() {
+  local log="$1" problem="$2" next="$3" status=0
+  (cd "$repo" && scripts/prepare-release-pr.sh) > "$log" 2>&1 || status=$?
+  guard_hermetic
+  if [ "$status" -ne 0 ]; then
+    sed 's/^/    /' "$log" >&2
+    fail "$problem" "$next"
+  fi
+}
+
 case_log="$scratch/tooling.log"
-if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
-  sed 's/^/    /' "$case_log" >&2
-  fail "the real preparation failed for the tooling-only head" "fix the phase named above and rerun"
-fi
+run_preparation "$case_log" "the real preparation failed for the tooling-only head" \
+  "fix the phase named above and rerun"
 grep -qF "proposed release pull request" "$case_log" || fail \
   "the tooling-only run did not report a proposal" "repair the fallback proposal path and rerun"
 [ -s "$scratch/state/proposals" ] || fail "the tooling-only run never proposed a pull request" \
@@ -154,10 +336,8 @@ grep -qF "proposed release pull request" "$case_log" || fail \
 git -C "$repo" switch --quiet --detach "$fixture_base" || fail "could not restore a detached $fixture_base before the update case" "check the scratch repository and rerun"
 unset GITHUB_REF_NAME
 case_log="$scratch/update.log"
-if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
-  sed 's/^/    /' "$case_log" >&2
-  fail "the real preparation failed while updating the existing proposal" "fix the phase named above and rerun"
-fi
+run_preparation "$case_log" "the real preparation failed while updating the existing proposal" \
+  "fix the phase named above and rerun"
 grep -qF "updated release pull request #41" "$case_log" || fail \
   "the existing proposal was not updated visibly" "repair the existing-branch and existing-PR path and rerun"
 [ "$(wc -l < "$scratch/state/proposals")" -eq 1 ] || fail \
@@ -182,9 +362,6 @@ git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --q
   -m "chore: release v$lagged_version" || fail \
   "could not commit the partial-publish release boundary" "check the scratch repository and rerun"
 git -C "$repo" tag --force "v$lagged_version" >/dev/null || fail "could not set the partial-publish release boundary" "check the scratch repository and rerun"
-package_names="$(cd "$repo" && cargo metadata --no-deps --format-version 1 | python3 -c \
-  'import json, sys; print(" ".join(package["name"] for package in json.load(sys.stdin)["packages"]))')" || fail \
-  "could not read the partial-publish package inventory" "repair Cargo metadata and rerun"
 for crate in $package_names; do
   [ "$crate" = onetaskgraph ] && continue
   git -C "$repo" tag --force "$crate-v$lagged_version" >/dev/null || fail \
@@ -213,10 +390,8 @@ git -C "$repo" checkout --quiet -- . || fail \
 # recovery proves its fresh-proposal branch as well as the update branch exercised above.
 : > "$scratch/state/proposals" || fail "could not clear the scratch proposal state" "check scratch-directory permissions and rerun"
 case_log="$scratch/partial-publish.log"
-if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
-  sed 's/^/    /' "$case_log" >&2
-  fail "the real preparation failed for the partly published head" "fix the phase named above and rerun"
-fi
+run_preparation "$case_log" "the real preparation failed for the partly published head" \
+  "fix the phase named above and rerun"
 grep -qF "proposed release pull request" "$case_log" || fail \
   "the partly published run did not create a registry-recovery proposal" "advance beyond the tagged version and open its release pull request"
 [ "$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" = "$recovery_version" ] || fail \
@@ -246,11 +421,9 @@ git -C "$repo" tag --force "v$loop_version" >/dev/null || fail \
   "could not tag the release-loop fixture" "check the scratch repository and rerun"
 : > "$scratch/state/proposals" || fail "could not clear the scratch proposal state" "check scratch-directory permissions and rerun"
 case_log="$scratch/release-loop.log"
-if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
-  sed 's/^/    /' "$case_log" >&2
-  fail "the real preparation failed for a head carrying only this pipeline's own release commit" \
-    "fix the phase named above and rerun"
-fi
+run_preparation "$case_log" \
+  "the real preparation failed for a head carrying only this pipeline's own release commit" \
+  "fix the phase named above and rerun"
 grep -qF "no release pull request proposed: the registry lags this repository's own release" "$case_log" || fail \
   "the real preparation proposed a release from a head carrying only this pipeline's own release commit" \
   "decline registry recovery unless release-plz.toml's own release_commits policy accepts a commit since the boundary"
@@ -324,11 +497,9 @@ git -C "$repo" checkout --quiet -- . || fail \
 publish_boundary_only_to_origin
 : > "$scratch/state/proposals" || fail "could not clear the scratch proposal state" "check scratch-directory permissions and rerun"
 case_log="$scratch/remote-boundary.log"
-if ! (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1; then
-  sed 's/^/    /' "$case_log" >&2
-  fail "the real preparation failed for a head whose release boundary is only on the origin" \
-    "fix the phase named above and rerun"
-fi
+run_preparation "$case_log" \
+  "the real preparation failed for a head whose release boundary is only on the origin" \
+  "fix the phase named above and rerun"
 grep -qF "proposed release pull request" "$case_log" || fail \
   "the remote-only boundary run did not propose a release" \
   "resolve the boundary from the origin and propose the recovery it selects"
@@ -349,6 +520,7 @@ git -C "$repo" push --quiet --delete origin "refs/tags/v$loop_version" || fail \
 case_log="$scratch/missing-boundary.log"
 missing_status=0
 (cd "$repo" && scripts/prepare-release-pr.sh) > "$case_log" 2>&1 || missing_status=$?
+guard_hermetic
 [ "$missing_status" -ne 0 ] || fail \
   "the real preparation accepted a boundary neither the checkout nor the origin holds" \
   "keep refusing an unresolvable release boundary rather than guessing one"
