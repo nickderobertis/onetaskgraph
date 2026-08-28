@@ -17,7 +17,8 @@ use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{
-    ROWS, SOURCE, document, empty_folder, github_projects_with_board, linear_block, qualified,
+    ROWS, SOURCE, document, empty_folder, github_projects_failing_to_file_once,
+    github_projects_with_board, linear_block, qualified,
 };
 
 /// The folder every copy journey copies into, configured beside the source under test.
@@ -628,6 +629,52 @@ fn a_project_whose_goal_outgrows_a_board_description_still_copies() {
     let written = shown(&sandbox, "project", &id);
     assert_eq!(written["content"], goal.trim_end());
     assert_eq!(written["metadata"]["onepipeline.steps"], json!([goal]));
+}
+
+#[test]
+fn a_board_that_fails_between_creating_an_issue_and_filing_it_says_so_and_recovers() {
+    // Landing an item on a board is two calls — `createIssue`, then
+    // `addProjectV2ItemById` — so GitHub can fail between them, and what happens then is
+    // a journey rather than a reading of the code: the copy exits non-zero saying what
+    // GitHub said, the board holds nothing it was not already holding, and the retry
+    // lands exactly one item rather than two.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Todo\n---\ndo this first\n",
+    )
+    .unwrap();
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root": root, "status_mapping": {"Todo":"todo"}}},
+        "board": {"plugin":"github-projects",
+                  "config": github_projects_failing_to_file_once(&sandbox)}
+    })));
+
+    let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
+    assert!(
+        said.contains("Something went wrong while executing your query"),
+        "the failure GitHub reported is what the caller is told: {said}"
+    );
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert!(
+        !listed.contains("First step"),
+        "an issue that was never filed is on no board: {listed}"
+    );
+
+    let copied = ok(
+        &sandbox,
+        &["task", "copy", "plans:A", "--to", "board", "--json"],
+    );
+    assert_eq!(reported(&copied).len(), 1, "{copied}");
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(
+        listed.matches("First step").count(),
+        1,
+        "the retry lands one item where the failed attempt landed none: {listed}"
+    );
 }
 
 #[test]

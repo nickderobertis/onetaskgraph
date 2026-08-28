@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::{Arc, Mutex},
     thread,
 };
@@ -395,14 +395,54 @@ struct GitHubBoard {
 }
 
 /// A read-only handle on one fixture board's own fields.
-pub struct GitHubBoardFields(Arc<Mutex<GitHubBoard>>);
+pub struct GitHubBoardFields {
+    endpoint: String,
+}
 
 impl GitHubBoardFields {
-    /// The board's own `title`, `shortDescription` and `readme`, as it holds them now.
+    /// The board's own `title`, `shortDescription` and `readme`, asked of the GitHub
+    /// endpoint the way any client of it asks.
+    ///
+    /// It crosses the same HTTP boundary the product crosses rather than reading the
+    /// fixture's own memory, so a journey asserting the board is untouched is asserting
+    /// what a person opening that board would see.
     #[must_use]
     pub fn own(&self) -> Value {
-        self.0.lock().unwrap().own.clone()
+        graphql_over_http(
+            &self.endpoint,
+            "query($id:ID!){node(id:$id){... on ProjectV2{title shortDescription readme}}}",
+            &json!({"id":"PVT-board"}),
+        )["node"]
+            .clone()
     }
+}
+
+/// One GraphQL request to a fixture endpoint, sent as the product itself sends one.
+fn graphql_over_http(endpoint: &str, query: &str, variables: &Value) -> Value {
+    let address = endpoint
+        .strip_prefix("http://")
+        .and_then(|rest| rest.split('/').next())
+        .expect("a fixture endpoint spelled http://host:port/graphql");
+    let body = json!({"query":query,"variables":variables}).to_string();
+    let mut stream = TcpStream::connect(address).expect("fixture connection");
+    stream
+        .write_all(
+            format!(
+                "POST /graphql HTTP/1.1\r\nHost: {address}\r\nauthorization: Bearer test-token\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .expect("fixture request");
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).expect("fixture response");
+    let at = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("HTTP header terminator")
+        + 4;
+    let answered: Value = serde_json::from_slice(&response[at..]).expect("fixture response JSON");
+    answered["data"].clone()
 }
 
 impl GitHubBoard {
@@ -491,15 +531,29 @@ impl GitHubBoard {
 }
 
 fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
-    github_projects_board(sandbox, recorded).0
+    github_projects_board(sandbox, recorded, false).0
 }
 
 /// The same board, with a handle on the fields this source must never write.
 pub fn github_projects_with_board(sandbox: &Sandbox) -> (Value, GitHubBoardFields) {
-    github_projects_board(sandbox, None)
+    github_projects_board(sandbox, None, false)
 }
 
-fn github_projects_board(sandbox: &Sandbox, recorded: Option<Value>) -> (Value, GitHubBoardFields) {
+/// The same board again, failing the first attempt to file a created issue on it.
+///
+/// Creating an item there is two calls — `createIssue` and then
+/// `addProjectV2ItemById` — so GitHub can fail between them, and what the product does
+/// with an issue that exists but is on no board is a journey rather than a reading of
+/// the code. The failure is spent once, so the same board answers the retry.
+pub fn github_projects_failing_to_file_once(sandbox: &Sandbox) -> Value {
+    github_projects_board(sandbox, None, true).0
+}
+
+fn github_projects_board(
+    sandbox: &Sandbox,
+    recorded: Option<Value>,
+    fail_first_filing: bool,
+) -> (Value, GitHubBoardFields) {
     sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
     let endpoint = format!(
@@ -515,7 +569,7 @@ fn github_projects_board(sandbox: &Sandbox, recorded: Option<Value>) -> (Value, 
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
     }));
-    let held = Arc::clone(&board);
+    let mut owed_failure = fail_first_filing;
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
@@ -526,8 +580,14 @@ fn github_projects_board(sandbox: &Sandbox, recorded: Option<Value>) -> (Value, 
                 .as_object()
                 .expect("GraphQL variables object");
             let variables = Value::Object(variables.clone());
-            let data = github_answer(&board, query, &variables);
-            let body = json!({ "data": data }).to_string();
+            let body = if owed_failure && query.contains("addProjectV2ItemById(input:$input)") {
+                owed_failure = false;
+                json!({"data":Value::Null,
+                       "errors":[{"message":"Something went wrong while executing your query"}]})
+                .to_string()
+            } else {
+                json!({ "data": github_answer(&board, query, &variables) }).to_string()
+            };
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -543,13 +603,13 @@ fn github_projects_board(sandbox: &Sandbox, recorded: Option<Value>) -> (Value, 
             "project_number": 7,
             "repository": "nickderobertis/onetaskgraph",
             "token_env": "GITHUB_PROJECTS_FIXTURE_TOKEN",
-            "endpoint": endpoint,
+            "endpoint": endpoint.clone(),
             // `done` and `cancelled` keep their shipped defaults, which close the issue:
             // GitHub derives a project's `Sub-issues progress` from closed sub-issues, so a
             // plan whose finished tasks were only moved to a column reads 0% complete forever.
             "status_mapping": {"todo":"Todo","in-progress":"Doing"}
         }),
-        GitHubBoardFields(held),
+        GitHubBoardFields { endpoint },
     )
 }
 
@@ -680,6 +740,10 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             }
         }
         return json!({"updateProjectV2":{"projectV2":{"id":"PVT-board"}}});
+    }
+    if query.contains("... on ProjectV2{title shortDescription readme}") {
+        assert_eq!(variables["id"], "PVT-board");
+        return json!({ "node": board.own.clone() });
     }
     if query.contains("node(id:$id)") {
         let id = variables["id"].as_str().expect("dependency id").to_owned();
