@@ -263,9 +263,6 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
     Fixture { endpoint, state }
 }
 
-// llmlint: ignore[functions_do_one_thing] This is one GraphQL endpoint's dispatch: a flat
-// operation table whose arms each answer one document. Splitting it per arm would hide the
-// table that makes the fixture's coverage of the production documents readable at a glance.
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     let mut state = state.lock().unwrap();
     let input = variables.get("input").cloned().unwrap_or(Value::Null);

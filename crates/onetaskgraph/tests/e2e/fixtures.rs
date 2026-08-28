@@ -490,9 +490,6 @@ impl GitHubBoard {
     }
 }
 
-// llmlint: ignore-block[functions_do_one_thing] One GraphQL endpoint's dispatch table: each
-// arm answers exactly one production document, and keeping them in one table is what makes
-// the fixture's coverage of those documents readable at a glance.
 fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
     github_projects_board(sandbox, recorded).0
 }
