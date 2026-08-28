@@ -45,7 +45,99 @@ for tool in git gh perl python3 uv; do
 done
 
 scratch="$(mktemp -d)" || fail "could not create a scratch directory" "check temporary-directory permissions"
-trap 'rm -rf "$scratch"' EXIT
+recorder_pid=
+cleanup() {
+  if [ -n "$recorder_pid" ]; then
+    kill "$recorder_pid" 2>/dev/null || true
+  fi
+  rm -rf "$scratch"
+}
+trap cleanup EXIT
+mkdir -p "$scratch/bin" "$scratch/state" || fail "could not create fixture state directories" "check scratch-directory permissions"
+# Every destination this journey is allowed to reach is inside the fixture, and all of them
+# are filesystem paths: the bare origin next door, the `gh` shim, the released tree the
+# registry lookup now reads. So nothing legitimate ever opens an HTTP connection, and a
+# proxy that records and refuses one costs nothing while it holds. Point every proxy
+# variable at it, clear the bypass lists, and read its log after each phase below: a
+# non-empty log names the host that reached past the fixture, which is what a bare 401 or a
+# registry timeout will not.
+if ! cat > "$scratch/off-fixture-recorder.py" <<'RECORDER'
+"""Record and refuse every HTTP destination, so a host outside the fixture is named."""
+
+import socket
+import sys
+
+log_path, port_path = sys.argv[1], sys.argv[2]
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(("127.0.0.1", 0))
+server.listen(64)
+with open(port_path, "w") as handle:
+    handle.write(str(server.getsockname()[1]))
+    handle.flush()
+
+def record(destination):
+    # Whatever opened this connection chose the text, so keep only printable non-space
+    # characters and bound the length: a destination is what the log is read for, and an
+    # embedded newline or control sequence would forge or hide a second entry.
+    safe = "".join(c for c in destination if c.isprintable() and not c.isspace())[:200]
+    with open(log_path, "a") as handle:
+        handle.write((safe or "<unnamed destination>") + "\n")
+        handle.flush()
+
+
+while True:
+    connection, _ = server.accept()
+    try:
+        connection.settimeout(5)
+        request = b""
+        while b"\r\n" not in request and len(request) < 8192:
+            chunk = connection.recv(4096)
+            if not chunk:
+                break
+            request += chunk
+        line = request.split(b"\r\n", 1)[0].decode("utf-8", "replace")
+        fields = line.split(" ")
+        record(fields[1] if len(fields) > 1 else line)
+        connection.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    except OSError as error:
+        # A connection that failed mid-read still left the fixture, and dropping it would
+        # let exactly that attempt pass as a clean run. Record it as the attempt it is.
+        record("<destination unread: %s>" % error)
+    finally:
+        connection.close()
+RECORDER
+then
+  fail "could not create the off-fixture destination recorder" "check scratch-directory permissions and free space"
+fi
+offsite_log="$scratch/state/off-fixture-destinations"
+recorder_port="$scratch/state/recorder-port"
+recorder_diagnostics="$scratch/state/recorder-diagnostics"
+python3 "$scratch/off-fixture-recorder.py" "$offsite_log" "$recorder_port" \
+  > "$recorder_diagnostics" 2>&1 &
+recorder_pid=$!
+recorder_waits=0
+while [ ! -s "$recorder_port" ] && [ "$recorder_waits" -lt 100 ]; do
+  sleep 0.1
+  recorder_waits=$((recorder_waits + 1))
+done
+if [ ! -s "$recorder_port" ]; then
+  if [ -s "$recorder_diagnostics" ]; then
+    sed 's/^/    /' "$recorder_diagnostics" >&2
+  fi
+  fail "the off-fixture destination recorder did not come up, so nothing would notice a request leaving the fixture" \
+    "fix what it reported above; with no output it never started, so check that python3 can bind a loopback port here"
+fi
+recorder_listen_port="$(cat "$recorder_port")" || fail \
+  "could not read the port the off-fixture destination recorder bound" "check scratch-directory permissions and rerun"
+if ! [[ $recorder_listen_port =~ ^[1-9][0-9]*$ ]] || [ "$recorder_listen_port" -gt 65535 ]; then
+  fail "the off-fixture destination recorder reported '$recorder_listen_port', which is not a TCP port" \
+    "restore the recorder so it writes the port it bound, then rerun"
+fi
+recorder_url="http://127.0.0.1:$recorder_listen_port"
+export http_proxy="$recorder_url" https_proxy="$recorder_url" all_proxy="$recorder_url"
+export HTTP_PROXY="$recorder_url" HTTPS_PROXY="$recorder_url" ALL_PROXY="$recorder_url"
+export no_proxy="" NO_PROXY=""
 repo="$scratch/repo"
 remote="$scratch/origin.git"
 hooks="$scratch/hooks"
@@ -100,6 +192,22 @@ for crate in $package_names; do
   git -C "$repo" tag "$crate-v$released_version" "$baseline" || fail \
     "could not put $crate's release boundary on the baseline" "check the scratch repository and rerun"
 done
+# release-plz compares each package with its released copy, and left alone it downloads that
+# copy from crates.io — a host outside this fixture, and the last one this journey reached.
+# The real tool takes the comparison from a local checkout of the released version instead,
+# which is what the baseline above is, so export it once and point every `update` at it. The
+# registry lag the recovery cases turn on stops depending on what crates.io happens to hold
+# and becomes this fixture's own: every package is released at the baseline's version and
+# nowhere else.
+registry_snapshot="$scratch/registry"
+mkdir -p "$registry_snapshot" || fail \
+  "could not create the fixture's released-version snapshot" "check scratch-directory permissions"
+git -C "$repo" archive "$baseline" | tar -xf - -C "$registry_snapshot" || fail \
+  "could not export the released version release-plz compares against" \
+  "check git, tar and free space, then rerun"
+[ -f "$registry_snapshot/Cargo.toml" ] || fail \
+  "the released-version snapshot has no workspace manifest, so release-plz would fall back to crates.io" \
+  "check that the baseline commit carries Cargo.toml and rerun"
 # Semver compatibility is gated independently. Disabling it in this scratch-only config
 # keeps this journey focused on selection and proposal rather than compiling every crate
 # twice before either decision can be observed.
@@ -126,7 +234,6 @@ git -C "$repo" remote set-head origin "$fixture_base" || fail \
 git -C "$repo" switch --quiet --detach "$fixture_base" || fail \
   "could not detach the tooling-only checkout" "check the scratch repository and rerun"
 
-mkdir -p "$scratch/bin" "$scratch/state" || fail "could not create fixture state directories" "check scratch-directory permissions"
 if ! cat > "$scratch/bin/release-plz" <<'RELEASE_PLZ'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -138,7 +245,8 @@ if [ "${1:-}" = update ]; then
   # can report which branch it took. Record it here so a refusal below can name it.
   before="$(read_manifest_version)"
   status=0
-  "$REAL_RELEASE_PLZ" "$@" --forge github || status=$?
+  "$REAL_RELEASE_PLZ" "$@" --forge github \
+    --registry-manifest-path "$FIXTURE_REGISTRY_MANIFEST" || status=$?
   printf '%s -> %s\n' "$before" "$(read_manifest_version)" > "$GH_FIXTURE_STATE/selection"
   exit "$status"
 fi
@@ -179,6 +287,13 @@ export GITHUB_REF_NAME="$fixture_base"
 # State the forge at this hermetic fixture boundary while still delegating the update to
 # the exact pinned binary verified above.
 export REAL_RELEASE_PLZ="$release_plz_bin"
+export FIXTURE_REGISTRY_MANIFEST="$registry_snapshot/Cargo.toml"
+# set-version.sh re-locks the Python projects after every bump, and uv reads its index for
+# that unless told the answer is already written down. It is: uv.lock pins every dependency
+# and the only thing changing here is the workspace's own version, so these locks resolve
+# from the checked-in files with an empty cache. Without this the journey reaches pypi.org,
+# which is as far outside the fixture as crates.io was.
+export UV_OFFLINE=1
 export PATH="$scratch/bin:$PATH"
 
 forge_attempt="$scratch/state/forge-api-attempt"
@@ -188,6 +303,10 @@ forge_attempt="$scratch/state/forge-api-attempt"
 # than letting it leave. Read that record after every preparation run, before the run's own
 # assertions, so this journey fails naming the premise that broke.
 guard_hermetic() {
+  if [ -s "$offsite_log" ]; then
+    fail "the hermetic premise was violated: this journey reached past the fixture to $(sort -u "$offsite_log" | tr '\n' ' ')" \
+      "keep every destination inside the fixture — the local origin, the gh shim, and the released-version snapshot release-plz compares against"
+  fi
   [ -e "$forge_attempt" ] || return 0
   fail "the hermetic premise was violated: preparation reached 'release-plz release-pr', which asks api.github.com for this fixture's open pull requests, after the selector answered 'release-plz selected $(cat "$forge_attempt")'" \
     "keep an unreleased releasable commit out of this fixture's history, so selection stays on the release-tooling and registry-recovery branches this journey proposes through gh"
