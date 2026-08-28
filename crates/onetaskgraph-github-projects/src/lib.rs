@@ -2042,11 +2042,9 @@ const METADATA_CLOSE: &str = "\n-->";
 
 /// The visible body and the metadata slot at the end of it.
 ///
-/// The same encoding `docs/metadata.md` settles for Linear, for the same two reasons: a
-/// Markdown comment does not render, so a person opening the issue on GitHub still sees
-/// their issue; and the slot lives inside a field that is already free text, so every
-/// other field round-trips beside it. Only a comment at the very end is a slot; one in
-/// the middle is a person's own content and is left alone.
+/// The encoding is the one `docs/metadata.md` settles for Linear, which is where its
+/// reasons are. Only a comment at the very end is a slot; one in the middle is a person's
+/// own content and is left alone.
 fn metadata_body(
     body: Option<String>,
 ) -> Result<(Option<String>, BTreeMap<String, Value>), SourceError> {
