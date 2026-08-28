@@ -324,12 +324,19 @@ run_preparation() {
 }
 
 # The version the run says it proposed, read from its own decision line rather than
-# recomputed: what is under test includes which version it chose.
+# recomputed: what is under test includes which version it chose. Held to the same semantic
+# version grammar prepare-release-pr.sh holds the manifest to, because everything below
+# builds a release branch name out of this: a value that is not a version is the decision
+# line having changed shape, and the journey has to say so rather than compare refs that
+# never existed.
 prepared_version() {
   local version
   version="$(sed -n 's/^prepare-release-pr: .* at v\([0-9][0-9A-Za-z.+-]*\)$/\1/p' "$1" | head -n1)"
   [ -n "$version" ] || fail "the preparation's decision line does not name the version it proposed: $(cat "$1")" \
     "keep the proposal line ending in the version, which the workflow log and this journey both read"
+  [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || fail \
+    "the preparation's decision line names '$version', which is not the semantic version its own manifest check requires" \
+    "keep the proposal line ending in the X.Y.Z version prepare-release-pr.sh validated, which is what names the release branch"
   printf '%s' "$version"
 }
 
