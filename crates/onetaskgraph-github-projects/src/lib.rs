@@ -1227,6 +1227,23 @@ impl GitHubProjectsSource {
             .await?;
         let slot = slot_metadata(incoming, own_repository.as_ref(), &fallback);
         let body = compose_body(incoming.content, &slot)?;
+        // Read before anything is created, for the reason the field below is: a value
+        // this destination cannot store has to refuse, and refusing after `createIssue`
+        // would leave an issue behind that nothing asked for. The engine writes a
+        // qualified id here; a caller handing this key anything else is told so rather
+        // than having it silently stored as no origin at all.
+        let origin = match incoming.metadata.get(ORIGIN_KEY) {
+            None => "",
+            Some(Value::String(origin)) => origin.as_str(),
+            Some(other) => {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "{ORIGIN_KEY} holds a qualified id spelled as a string, and this item's \
+                         is {other}"
+                    ),
+                });
+            }
+        };
         // Resolved before anything is created: a board that cannot carry the copy origin
         // has to refuse the write, and refusing it after `createIssue` would leave an
         // issue behind that nothing asked for.
@@ -1260,17 +1277,12 @@ impl GitHubProjectsSource {
                 (item.id.clone(), item.item_id.clone())
             }
             None => {
-                self.create_issue(&board, incoming, &body, &status_target)
+                self.create_and_file_issue(&board, incoming, &body, &status_target)
                     .await?
             }
         };
 
         if let Some(field_id) = &origin_field {
-            let origin = incoming
-                .metadata
-                .get(ORIGIN_KEY)
-                .and_then(Value::as_str)
-                .unwrap_or_default();
             self.set_item_field(&board.id, &item_id, field_id, json!({"text":origin}))
                 .await?;
         }
@@ -1380,7 +1392,12 @@ impl GitHubProjectsSource {
         Ok(())
     }
 
-    async fn create_issue(
+    /// Creates one issue, files it on the board, and closes it when the status says so.
+    ///
+    /// Three calls rather than one: `createIssue` needs a repository and answers with an
+    /// issue that is on no board, `addProjectV2ItemById` is what puts it there, and a
+    /// closed status is a state of the issue rather than a field of the board item.
+    async fn create_and_file_issue(
         &self,
         board: &Board,
         incoming: &Incoming<'_>,

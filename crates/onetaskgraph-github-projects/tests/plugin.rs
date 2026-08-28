@@ -2903,6 +2903,35 @@ async fn a_drafts_dependency_on_an_issue_is_recorded_rather_than_lost() {
 }
 
 #[tokio::test]
+async fn an_origin_that_is_not_a_qualified_id_is_refused_before_anything_is_created() {
+    // The board's origin field is text, so a value of another JSON type has nowhere to
+    // go; storing it as no origin at all would leave the copy unable to find this item
+    // again. The refusal comes before `createIssue`, like every other one this write owes.
+    let fixture = board_with(vec![], true, true);
+    let source = source(&fixture);
+    let mut item = task("T-1", "Publish", status(StatusCategory::Todo, "Todo"));
+    item.metadata = BTreeMap::from([(
+        "onetaskgraph.origin".to_owned(),
+        json!({"source":"notes","id":"T-1"}),
+    )]);
+    let said = refusal(
+        source
+            .write_task(&write(item))
+            .await
+            .expect_err("an origin of the wrong JSON type"),
+    );
+    assert!(
+        said.contains("onetaskgraph.origin") && said.contains("qualified id"),
+        "the key and what it holds are named: {said}"
+    );
+    assert!(
+        fixture.seen().is_empty(),
+        "nothing was written before the refusal: {:?}",
+        fixture.seen()
+    );
+}
+
+#[tokio::test]
 async fn a_board_that_cannot_carry_the_origin_refuses_before_it_creates_anything() {
     // Refusing after `createIssue` would leave an issue behind that nothing asked for.
     let fixture = board_with(vec![], true, false);
