@@ -2096,6 +2096,13 @@ fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceErro
         })
 }
 
+/// The slot's delimiters, which `docs/metadata.md` settles once for every source that
+/// needs one — Linear spells them too, in its own description field.
+///
+/// Restated rather than shared, because a plugin crate depends on the contract crate and
+/// nothing else of this workspace. `scripts/check-metadata-slot-encoding.sh`, a target in
+/// `check`, is what keeps the two one encoding: drift is otherwise quiet, since each
+/// source round-trips its own writes perfectly well under its own spelling.
 const METADATA_OPEN: &str = "<!-- onetaskgraph.metadata\n";
 const METADATA_CLOSE: &str = "\n-->";
 
