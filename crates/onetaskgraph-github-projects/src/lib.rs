@@ -289,8 +289,10 @@ enum StatusTarget {
 /// This list mirrors `StatusCategory`, so it carries its own drift gate rather than a
 /// reviewer's attention: [`category_position`] is a wildcard-free match, so a variant
 /// added to the shared vocabulary fails to compile until it is named there, and this
-/// crate's suite asserts that every position that function can return is filled by the
-/// category returning it — which a list still missing the new variant cannot satisfy.
+/// crate's suite reconciles this list against that enum's own derived schema, which is
+/// generated from the variants rather than written beside them. The schema is what
+/// catches a list left one short — a list checking only the positions it already holds
+/// would pass while every mapping indexed by the new position panicked.
 pub const CATEGORIES: [StatusCategory; 7] = [
     StatusCategory::Draft,
     StatusCategory::Backlog,
@@ -1325,11 +1327,18 @@ impl GitHubProjectsSource {
                 .to
                 .source()
                 .is_none_or(|source| source == self.name.as_str());
-            let far_id = edge
-                .to
-                .id()
-                .rsplit_once(':')
-                .map_or(edge.to.id(), |(_, id)| id);
+            // A qualified id's source segment runs to its *first* colon — `GlobalId` and
+            // `DependencyEndpoint::source` both read it that way — and a native id may hold
+            // colons of its own, so the far end is everything after that one separator.
+            // Splitting at the last would truncate `work:urn:task:7` to `7`.
+            let far_id = if edge.to.is_qualified() {
+                edge.to
+                    .id()
+                    .split_once(':')
+                    .map_or(edge.to.id(), |(_, native)| native)
+            } else {
+                edge.to.id()
+            };
             let far = if same_source {
                 Some(
                     board
