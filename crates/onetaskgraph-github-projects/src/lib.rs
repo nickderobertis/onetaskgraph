@@ -395,7 +395,7 @@ impl RepositoryTarget {
                 "repository must be spelled owner/name; {value:?} names no repository"
             ),
         })?;
-        if !valid_github_owner(owner) || name.is_empty() || name.contains('/') {
+        if !valid_github_owner(owner) || !valid_github_repository_name(name) {
             return Err(SourceError::Config {
                 message: format!(
                     "repository must be spelled owner/name with a GitHub login and one \
@@ -1947,6 +1947,18 @@ fn valid_github_owner(owner: &str) -> bool {
         && owner
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+/// GitHub's repository-name grammar: 1-100 ASCII letters, digits, `-`, `_` or `.`, and
+/// neither of the two names a path segment already means.
+fn valid_github_repository_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 100
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn valid_environment_name(name: &str) -> bool {

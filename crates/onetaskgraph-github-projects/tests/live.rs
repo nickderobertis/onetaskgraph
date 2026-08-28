@@ -394,6 +394,13 @@ fn live_lane(
         }
         Ok(LiveLane::Skip(reason))
     };
+    // llmlint: ignore[live_tier_compiles_and_requires_credential] An absent credential
+    // skipping is the recorded decision, not an oversight: AGENTS.md keeps this lane off
+    // the required checks because a required check a third party can turn red stops being
+    // trusted, and a Linear or GitHub outage must not block an unrelated merge. What makes
+    // the decision true rather than stated is that the lane is `#[ignore]`d and only
+    // `test-live` runs it — with `ONETASKGRAPH_LIVE_REQUIRED=1`, which turns every skip
+    // below into the failure this rule asks for.
     let Some(token) = token else {
         return skip("GH_PROJECTS_TOKEN is not set".to_owned());
     };

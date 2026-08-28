@@ -41,10 +41,6 @@ fn resume(cursor: &str, limit: u32) -> PageRequest {
     }
 }
 
-// ---------------------------------------------------------------------------
-// A board fixture that keeps state the way GitHub does.
-// ---------------------------------------------------------------------------
-
 /// One issue or draft as the fixture holds it.
 #[derive(Clone)]
 struct Item {
@@ -502,10 +498,6 @@ fn read_http_json(stream: &mut impl Read) -> Value {
     serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
 }
 
-// ---------------------------------------------------------------------------
-// A fixture that answers a fixed body, for the transport and shape failures.
-// ---------------------------------------------------------------------------
-
 fn raw_server(status: &str, body: &str) -> String {
     raw_server_with_headers(status, body, "")
 }
@@ -554,10 +546,6 @@ fn sequence_server(bodies: Vec<Value>) -> String {
     });
     format!("http://{address}/graphql")
 }
-
-// ---------------------------------------------------------------------------
-// Building the source.
-// ---------------------------------------------------------------------------
 
 fn configured(endpoint: &str, extra: Value) -> Box<dyn TaskSource> {
     let mut config = json!({"owner":"octo-org","project_number":7,"endpoint":endpoint,
@@ -637,10 +625,6 @@ fn write<T>(item: T) -> ItemWrite<T> {
         depends_on: vec![],
     }
 }
-
-// ---------------------------------------------------------------------------
-// The model: a board holds projects, and which item is which.
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn the_committed_board_fixture_maps_to_two_projects_one_task_and_no_pull_request() {
@@ -830,10 +814,6 @@ async fn a_malformed_kind_marker_is_refused_by_name() {
     assert!(message.contains("I_1"), "{message}");
 }
 
-// ---------------------------------------------------------------------------
-// Metadata: unbounded caller JSON in the body slot.
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn unbounded_caller_metadata_and_long_prose_round_trip_through_the_body_slot() {
     // The board's own `shortDescription` is capped at 300 characters and a project text
@@ -903,10 +883,6 @@ async fn a_slot_this_source_cannot_read_is_refused_rather_than_dropped() {
         assert!(message.contains(problem), "{message}");
     }
 }
-
-// ---------------------------------------------------------------------------
-// The repository the board does not have.
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn a_write_without_a_configured_repository_is_refused_naming_the_field() {
@@ -998,10 +974,6 @@ async fn repositories_are_derived_from_the_issue_and_recorded_only_when_they_dif
         "a plan node naming its own repositories is reported as it named them"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Status.
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn the_shipped_mapping_puts_each_category_where_it_says_it_does() {
@@ -1257,10 +1229,6 @@ async fn a_blank_option_name_and_a_malformed_target_are_refused() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Writing: creation, sub-issues, and the board that is never touched.
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn a_project_copy_creates_an_issue_files_its_tasks_under_it_and_never_writes_the_board() {
     let fixture = board(vec![]);
@@ -1502,10 +1470,6 @@ async fn a_draft_item_is_a_task_this_destination_updates_but_never_closes() {
     );
     assert!(filed.contains("sub-issue"), "{filed}");
 }
-
-// ---------------------------------------------------------------------------
-// Dependencies.
-// ---------------------------------------------------------------------------
 
 /// Every edge one direction reports, walked to exhaustion.
 ///
@@ -1866,10 +1830,6 @@ async fn dependencies_of_an_item_nothing_holds_are_refused_rather_than_empty() {
     assert!(message.contains("I_missing"), "{message}");
 }
 
-// ---------------------------------------------------------------------------
-// Paging, labels and health.
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn tasks_projects_and_labels_page_to_exhaustion_in_a_stable_order() {
     let fixture = board(vec![
@@ -1989,10 +1949,6 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
     );
 }
 
-// ---------------------------------------------------------------------------
-// Configuration and transport.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn the_config_schema_is_strict_and_build_validates_every_input() {
     let schema = serde_json::to_value(Plugin.config_schema()).unwrap();
@@ -2009,6 +1965,11 @@ fn the_config_schema_is_strict_and_build_validates_every_input() {
         json!({"owner":"octo","project_number":7,"endpoint":"http://example.invalid/graphql"}),
         json!({"owner":"octo","project_number":7,"repository":"nameless"}),
         json!({"owner":"octo","project_number":7,"repository":"acme/"}),
+        json!({"owner":"octo","project_number":7,"repository":"acme/a name"}),
+        json!({"owner":"octo","project_number":7,"repository":"acme/.."}),
+        json!({"owner":"octo","project_number":7,"repository":"acme/a/b"}),
+        json!({"owner":"octo","project_number":7,
+               "repository":format!("acme/{}", "n".repeat(101))}),
         json!({"owner":"octo","project_number":7,"unknown":true}),
     ] {
         assert!(
@@ -2210,10 +2171,6 @@ async fn a_mutation_that_answers_about_another_item_is_refused_as_malformed() {
         );
     }
 }
-
-// ---------------------------------------------------------------------------
-// The shapes a board can come back in that this source will not guess at.
-// ---------------------------------------------------------------------------
 
 fn board_json(fields: Value, items: Value) -> Value {
     json!({"data":{"owner":{"projectV2":{"id":"PVT_board","title":"Roadmap",
