@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.7...onetaskgraph-github-projects-v0.2.8) - 2026-08-28
+
+### Fixed
+
+- *(github-projects)* write the live lane only to a board it was told to use ([#51](https://github.com/nickderobertis/onetaskgraph/pull/51))
+
 ## [0.2.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.0...onetaskgraph-github-projects-v0.2.1) - 2026-08-26
 
 ### Added
