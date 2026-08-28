@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.9](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.8...onetaskgraph-plugin-api-v0.2.9) - 2026-08-28
+
+### Added
+
+- *(github-projects)* store many projects on one board as issues and their sub-issues ([#56](https://github.com/nickderobertis/onetaskgraph/pull/56))
+- add draft to the status vocabulary and default local-md to backlog ([#54](https://github.com/nickderobertis/onetaskgraph/pull/54))
+
+## [0.3.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.8...onetaskgraph-plugin-api-v0.3.0) - 2026-08-28
+
+### Added
+
+- *(github-projects)* store many projects on one board as issues and their sub-issues ([#56](https://github.com/nickderobertis/onetaskgraph/pull/56))
+- add draft to the status vocabulary and default local-md to backlog ([#54](https://github.com/nickderobertis/onetaskgraph/pull/54))
+
 ## [0.2.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.1.0...onetaskgraph-plugin-api-v0.2.0) - 2026-08-26
 
 ### Added

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.9](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-in-memory-v0.2.8...onetaskgraph-in-memory-v0.2.9) - 2026-08-28
+
+### Added
+
+- add draft to the status vocabulary and default local-md to backlog ([#54](https://github.com/nickderobertis/onetaskgraph/pull/54))
+
 ## [0.2.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-in-memory-v0.1.0...onetaskgraph-in-memory-v0.2.0) - 2026-08-26
 
 ### Added
