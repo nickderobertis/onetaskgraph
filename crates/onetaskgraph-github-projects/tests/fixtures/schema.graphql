@@ -1,6 +1,12 @@
 # Authoritative GitHub.com GraphQL read/write contract subset.
 # The full schema is intentionally reduced to the types and fields selected by this plugin;
 # tests validate every production document against this artifact.
+#
+# `ProjectV2.shortDescription` and `ProjectV2.readme` are absent on purpose, and so is
+# `updateProjectV2`: a board is a container of projects here, never a project, and nothing
+# this source does writes the board's own fields. `updateProjectV2Field` is absent for a
+# different reason — its `singleSelectOptions` overwrites a field's option set, so no
+# addition is additive and a mistake destroys every item's status.
 schema {
   query: Query
   mutation: Mutation
@@ -12,33 +18,49 @@ scalar Boolean
 
 type Query {
   repositoryOwner(login: String!): RepositoryOwner
+  repository(owner: String!, name: String!, followRenames: Boolean = true): Repository
   node(id: ID!): Node
 }
 type Mutation {
-  addProjectV2DraftIssue(input: AddProjectV2DraftIssueInput!): AddProjectV2DraftIssuePayload
+  createIssue(input: CreateIssueInput!): CreateIssuePayload
+  addProjectV2ItemById(input: AddProjectV2ItemByIdInput!): AddProjectV2ItemByIdPayload
+  updateIssue(input: UpdateIssueInput!): UpdateIssuePayload
   updateProjectV2DraftIssue(
     input: UpdateProjectV2DraftIssueInput!
   ): UpdateProjectV2DraftIssuePayload
-  updateIssue(input: UpdateIssueInput!): UpdateIssuePayload
   updateProjectV2ItemFieldValue(
     input: UpdateProjectV2ItemFieldValueInput!
   ): UpdateProjectV2ItemFieldValuePayload
-  updateProjectV2(input: UpdateProjectV2Input!): UpdateProjectV2Payload
+  addSubIssue(input: AddSubIssueInput!): AddSubIssuePayload
+  removeSubIssue(input: RemoveSubIssueInput!): RemoveSubIssuePayload
   addBlockedBy(input: AddBlockedByInput!): AddBlockedByPayload
   removeBlockedBy(input: RemoveBlockedByInput!): RemoveBlockedByPayload
 }
-input AddProjectV2DraftIssueInput {
-  projectId: ID!
+input CreateIssueInput {
+  repositoryId: ID!
   title: String!
   body: String
+  labelIds: [ID!]
+  parentIssueId: ID
 }
-input UpdateProjectV2DraftIssueInput {
-  draftIssueId: ID!
-  title: String
-  body: String
+input AddProjectV2ItemByIdInput {
+  projectId: ID!
+  contentId: ID!
 }
 input UpdateIssueInput {
   id: ID!
+  title: String
+  body: String
+  state: IssueState
+  stateInput: IssueStateUpdateInput
+}
+input IssueStateUpdateInput {
+  value: IssueState!
+  stateReason: IssueClosedStateReason
+  duplicateIssueId: ID
+}
+input UpdateProjectV2DraftIssueInput {
+  draftIssueId: ID!
   title: String
   body: String
 }
@@ -52,11 +74,14 @@ input ProjectV2FieldValue {
   text: String
   singleSelectOptionId: String
 }
-input UpdateProjectV2Input {
-  projectId: ID!
-  title: String
-  shortDescription: String
-  closed: Boolean
+input AddSubIssueInput {
+  issueId: ID!
+  subIssueId: ID
+  replaceParent: Boolean
+}
+input RemoveSubIssueInput {
+  issueId: ID!
+  subIssueId: ID!
 }
 input AddBlockedByInput {
   issueId: ID!
@@ -66,20 +91,28 @@ input RemoveBlockedByInput {
   issueId: ID!
   blockingIssueId: ID!
 }
-type AddProjectV2DraftIssuePayload {
-  projectItem: ProjectV2Item
+type CreateIssuePayload {
+  issue: Issue
 }
-type UpdateProjectV2DraftIssuePayload {
-  draftIssue: DraftIssue
+type AddProjectV2ItemByIdPayload {
+  item: ProjectV2Item
 }
 type UpdateIssuePayload {
   issue: Issue
 }
+type UpdateProjectV2DraftIssuePayload {
+  draftIssue: DraftIssue
+}
 type UpdateProjectV2ItemFieldValuePayload {
   projectV2Item: ProjectV2Item
 }
-type UpdateProjectV2Payload {
-  projectV2: ProjectV2
+type AddSubIssuePayload {
+  issue: Issue
+  subIssue: Issue
+}
+type RemoveSubIssuePayload {
+  issue: Issue
+  subIssue: Issue
 }
 type AddBlockedByPayload {
   issue: Issue
@@ -110,11 +143,8 @@ type User implements Node & RepositoryOwner & ProjectV2Owner {
 type ProjectV2 implements Node {
   id: ID!
   title: String!
-  shortDescription: String
-  url: URI!
   createdAt: DateTime!
   updatedAt: DateTime!
-  closed: Boolean!
   fields(first: Int, after: String): ProjectV2FieldConfigurationConnection!
   items(first: Int, after: String): ProjectV2ItemConnection!
 }
@@ -172,11 +202,19 @@ type Issue implements Node {
   createdAt: DateTime!
   updatedAt: DateTime!
   state: IssueState!
+  stateReason(enableDuplicate: Boolean = false): IssueStateReason
   repository: Repository!
+  parent: Issue
+  subIssues(first: Int, after: String): IssueConnection!
+  subIssuesSummary: SubIssuesSummary!
   labels(first: Int, after: String): LabelConnection
   blockedBy(first: Int, after: String): IssueConnection!
   blocking(first: Int, after: String): IssueConnection!
-  projectItems(first: Int, after: String): ProjectV2ItemConnection!
+}
+type SubIssuesSummary {
+  total: Int!
+  completed: Int!
+  percentCompleted: Int!
 }
 type PullRequest implements Node {
   id: ID!
@@ -189,7 +227,8 @@ type PullRequest implements Node {
   repository: Repository!
   labels(first: Int, after: String): LabelConnection
 }
-type Repository {
+type Repository implements Node {
+  id: ID!
   nameWithOwner: String!
 }
 type DraftIssue implements Node {
@@ -226,6 +265,17 @@ type PageInfo {
 enum IssueState {
   OPEN
   CLOSED
+}
+enum IssueStateReason {
+  COMPLETED
+  DUPLICATE
+  NOT_PLANNED
+  REOPENED
+}
+enum IssueClosedStateReason {
+  COMPLETED
+  DUPLICATE
+  NOT_PLANNED
 }
 enum PullRequestState {
   OPEN

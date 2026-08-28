@@ -2,25 +2,23 @@
   "data": {
     "owner": {
       "projectV2": {
-        "id": "PVT_project",
+        "id": "PVT_board",
         "title": "Roadmap",
-        "shortDescription": "Delivery plan\n\n<!-- onetaskgraph.metadata\n{\"caller.enabled\":true,\"onetaskgraph.repositories\":[\"github.com/acme/work\"]}\n-->",
-        "url": "https://github.example/projects/7",
-        "createdAt": "2026-01-01T00:00:00Z",
-        "updatedAt": "2026-02-01T00:00:00Z",
-        "closed": false,
         "fields": {
           "nodes": [
             {
               "__typename": "ProjectV2SingleSelectField",
               "id": "FIELD_status",
               "name": "Status",
-              "options": [{ "id": "OPT_doing", "name": "Doing" }]
+              "options": [
+                { "id": "OPT_todo", "name": "Todo" },
+                { "id": "OPT_doing", "name": "In Progress" }
+              ]
             },
             {
               "__typename": "ProjectV2Field",
-              "id": "FIELD_metadata",
-              "name": "onetaskgraph.metadata"
+              "id": "FIELD_origin",
+              "name": "onetaskgraph.origin"
             }
           ],
           "pageInfo": { "hasNextPage": false }
@@ -28,20 +26,58 @@
         "items": {
           "nodes": [
             {
-              "id": "PVTI_1",
+              "id": "PVTI_plan",
               "fieldValues": {
                 "nodes": [
                   {
-                    "name": "Doing",
+                    "name": "In Progress",
                     "field": {
                       "id": "FIELD_status",
                       "name": "Status",
-                      "options": [{ "id": "OPT_doing", "name": "Doing" }]
+                      "options": [
+                        { "id": "OPT_todo", "name": "Todo" },
+                        { "id": "OPT_doing", "name": "In Progress" }
+                      ]
+                    }
+                  },
+                  { "text": "", "field": { "id": "FIELD_origin", "name": "onetaskgraph.origin" } }
+                ],
+                "pageInfo": { "hasNextPage": false }
+              },
+              "content": {
+                "__typename": "Issue",
+                "id": "I_plan",
+                "title": "Delivery plan",
+                "body": "the delivery plan\n\n<!-- onetaskgraph.metadata\n{\"caller.enabled\":true}\n-->",
+                "url": "https://github.example/issues/1",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "updatedAt": "2026-02-01T00:00:00Z",
+                "state": "OPEN",
+                "stateReason": null,
+                "repository": { "nameWithOwner": "acme/work" },
+                "parent": null,
+                "subIssuesSummary": { "total": 1 },
+                "labels": { "nodes": [], "pageInfo": { "hasNextPage": false } }
+              }
+            },
+            {
+              "id": "PVTI_task",
+              "fieldValues": {
+                "nodes": [
+                  {
+                    "name": "Todo",
+                    "field": {
+                      "id": "FIELD_status",
+                      "name": "Status",
+                      "options": [
+                        { "id": "OPT_todo", "name": "Todo" },
+                        { "id": "OPT_doing", "name": "In Progress" }
+                      ]
                     }
                   },
                   {
-                    "text": "{\"caller.number\":7}",
-                    "field": { "id": "FIELD_metadata", "name": "onetaskgraph.metadata" }
+                    "text": "notes:T-1",
+                    "field": { "id": "FIELD_origin", "name": "onetaskgraph.origin" }
                   },
                   {
                     "labels": {
@@ -56,23 +92,64 @@
                 "__typename": "Issue",
                 "id": "I_task",
                 "title": "Ship it",
-                "body": "details",
-                "url": "https://github.example/issues/1",
+                "body": "details\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":7}\n-->",
+                "url": "https://github.example/issues/2",
                 "createdAt": "2026-01-02T00:00:00Z",
                 "updatedAt": "2026-01-03T00:00:00Z",
                 "state": "OPEN",
+                "stateReason": null,
                 "repository": { "nameWithOwner": "acme/work" },
+                "parent": { "id": "I_plan" },
+                "subIssuesSummary": { "total": 0 },
                 "labels": {
                   "nodes": [{ "id": "L_bug", "name": "bug", "color": "ff0000" }],
                   "pageInfo": { "hasNextPage": false }
                 }
               }
+            },
+            {
+              "id": "PVTI_empty",
+              "fieldValues": {
+                "nodes": [
+                  {
+                    "name": "Todo",
+                    "field": {
+                      "id": "FIELD_status",
+                      "name": "Status",
+                      "options": [
+                        { "id": "OPT_todo", "name": "Todo" },
+                        { "id": "OPT_doing", "name": "In Progress" }
+                      ]
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": false }
+              },
+              "content": {
+                "__typename": "Issue",
+                "id": "I_empty",
+                "title": "Next quarter",
+                "body": "<!-- onetaskgraph.metadata\n{\"onetaskgraph.item_kind\":\"project\"}\n-->",
+                "url": "https://github.example/issues/3",
+                "createdAt": "2026-01-04T00:00:00Z",
+                "updatedAt": "2026-01-04T00:00:00Z",
+                "state": "OPEN",
+                "stateReason": null,
+                "repository": { "nameWithOwner": "acme/work" },
+                "parent": null,
+                "subIssuesSummary": { "total": 0 },
+                "labels": { "nodes": [], "pageInfo": { "hasNextPage": false } }
+              }
+            },
+            {
+              "id": "PVTI_pull",
+              "fieldValues": { "nodes": [], "pageInfo": { "hasNextPage": false } },
+              "content": { "__typename": "PullRequest", "id": "PR_1" }
             }
           ],
           "pageInfo": { "hasNextPage": false, "endCursor": null }
         }
       }
-    },
-    "user": { "projectV2": null }
+    }
   }
 }

@@ -9,7 +9,7 @@
 use std::process::Output;
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{ROWS, Row, SOURCE, document, qualified};
+use crate::fixtures::{ROWS, Row, SOURCE, dataset, document, qualified};
 use serde_json::json;
 
 /// A sandbox holding this row's configuration document and nothing else.
@@ -1258,4 +1258,58 @@ fn a_native_id_may_contain_colons_because_a_qualified_id_splits_on_the_first_one
         );
         assert_eq!(listed(&qualified_form), ["work:urn:task:7"]);
     }
+}
+
+#[test]
+fn the_kind_marker_one_plugin_owns_is_ordinary_caller_metadata_everywhere_else() {
+    // `onetaskgraph.item_kind` is registered in the contract crate so no plugin can invent
+    // a colliding spelling, and it obliges nobody: `github-projects` needs it because a
+    // board holds only issues and an empty project is otherwise indistinguishable from a
+    // task, while local-md has folders and Linear has native projects. Every other source
+    // hands it back exactly as it holds it — including a value `github-projects` itself
+    // would refuse, which is what says the key is not being interpreted.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("folder");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/T-1.md"),
+        "---\ntitle: Marked\nstatus: Todo\nmetadata: {onetaskgraph.item_kind: {shape: [1, true, null]}}\n---\nbody\n",
+    )
+    .unwrap();
+    let mut memory = dataset();
+    memory["tasks"] = json!([{"id":"T-1","title":"Marked",
+        "status":{"category":"todo","name":"Todo"},"labels":[],
+        "metadata":{"onetaskgraph.item_kind":{"shape":[1, true, null]}}}]);
+    memory["task_dependencies"] = json!([]);
+    sandbox.project_document(&document(&json!({
+        "folder": {"plugin":"local-md","config":{"root":root}},
+        "memory": {"plugin":"in-memory","config":memory},
+    })));
+
+    for source in ["folder", "memory"] {
+        let shown: serde_json::Value = serde_json::from_str(&ok_at(
+            &sandbox,
+            &["task", "show", &qualified(source, "T-1"), "--json"],
+        ))
+        .expect("task show emits JSON");
+        assert_eq!(
+            shown["items"][0]["item"]["metadata"]["onetaskgraph.item_kind"],
+            json!({"shape":[1, true, null]}),
+            "{source} must return the key with its JSON type intact"
+        );
+    }
+}
+
+/// Standard output of a run that had to succeed, for a sandbox with no row behind it.
+fn ok_at(sandbox: &Sandbox, arguments: &[&str]) -> String {
+    let output = run(sandbox, arguments);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "`onetaskgraph {}` exited {:?}\n{}",
+        arguments.join(" "),
+        output.status.code(),
+        stderr(&output)
+    );
+    stdout(&output)
 }

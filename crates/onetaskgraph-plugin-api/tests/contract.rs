@@ -7,7 +7,7 @@
 use chrono::{TimeZone as _, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Health,
-    ItemWrite, Label, LabelFilter, NativeId, Page, PageRequest, Project, ProjectFilter,
+    ItemKind, ItemWrite, Label, LabelFilter, NativeId, Page, PageRequest, Project, ProjectFilter,
     ProjectQuery, SOURCE_NAME_PATTERN, SecretResolver, SourceError, SourceName, SourcePlugin,
     Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
     WriteSupport,
@@ -519,8 +519,6 @@ fn near_source() -> SourceName {
 
 #[test]
 fn a_near_item_records_the_far_ends_its_backend_cannot_name() {
-    use onetaskgraph_plugin_api::ItemKind;
-
     let metadata = [(
         DependencyEdge::RECORDED_KEY.to_owned(),
         serde_json::json!(["T-2", {"id": "elsewhere:P-9", "kind": "project"}]),
@@ -714,13 +712,59 @@ fn a_far_end_qualified_to_the_near_source_is_refused_like_a_bare_one() {
     );
 }
 
+/// The third key is one plugin's, and the difference is the point.
+///
+/// `onetaskgraph.repositories` and `onetaskgraph.depends_on` are obligations on every
+/// source. `onetaskgraph.item_kind` is spelled here for the same reason — a key under
+/// this product's prefix is the product's to name, so no plugin can invent a colliding
+/// one — but it obliges nobody: a source with a native notion of its own kinds never
+/// reads or writes it and passes it through as ordinary caller metadata.
 #[test]
-fn the_two_reserved_keys_are_spelled_once_and_under_this_products_prefix() {
+fn the_three_reserved_keys_are_spelled_once_and_under_this_products_prefix() {
     for key in [
         onetaskgraph_plugin_api::Repository::METADATA_KEY,
         DependencyEdge::RECORDED_KEY,
+        ItemKind::METADATA_KEY,
     ] {
         assert!(key.starts_with("onetaskgraph."), "{key}");
+    }
+}
+
+#[test]
+fn the_item_kind_marker_accepts_exactly_its_two_spellings() {
+    let marked = |value: serde_json::Value| {
+        std::collections::BTreeMap::from([(ItemKind::METADATA_KEY.to_owned(), value)])
+    };
+    assert_eq!(ItemKind::Project.marker(), "project");
+    assert_eq!(ItemKind::Task.marker(), "task");
+    assert_eq!(
+        ItemKind::from_metadata(&marked(serde_json::json!("project"))),
+        Ok(Some(ItemKind::Project))
+    );
+    assert_eq!(
+        ItemKind::from_metadata(&marked(serde_json::json!("task"))),
+        Ok(Some(ItemKind::Task))
+    );
+    assert_eq!(
+        ItemKind::from_metadata(&std::collections::BTreeMap::new()),
+        Ok(None),
+        "an unmarked item carries no kind rather than a wrong one"
+    );
+    for malformed in [
+        serde_json::json!("Project"),
+        serde_json::json!("issue"),
+        serde_json::json!(""),
+        serde_json::json!(1),
+        serde_json::json!(["project"]),
+        serde_json::Value::Null,
+    ] {
+        let refusal = ItemKind::from_metadata(&marked(malformed.clone()))
+            .expect_err(&format!("{malformed} is not a marker"));
+        assert!(refusal.contains(ItemKind::METADATA_KEY), "{refusal}");
+        assert!(
+            refusal.contains("project") && refusal.contains("task"),
+            "{refusal}"
+        );
     }
 }
 

@@ -35,8 +35,9 @@ pub struct Task {
     ///
     /// Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
     /// product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
-    /// the two it defines — and `onepipeline.` belongs to that consumer. Every other key
-    /// is the caller's, and a source returns it exactly as it holds it.
+    /// the two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —
+    /// and `onepipeline.` belongs to that consumer. Every other key is the caller's, and
+    /// a source returns it exactly as it holds it.
     #[serde(default)]
     pub metadata: BTreeMap<String, Value>,
     /// Normalized repository origins this task concerns, in source order and without
@@ -493,6 +494,54 @@ pub enum ItemKind {
     Task,
     /// A project.
     Project,
+}
+
+impl ItemKind {
+    /// The reserved metadata key an item is marked with when its backend cannot say
+    /// which kind it is.
+    ///
+    /// Spelled once, here, for the reason [`Repository::METADATA_KEY`] is: a key under
+    /// this product's prefix belongs to the product, and a plugin inventing its own
+    /// spelling would collide with the next one to want it.
+    ///
+    /// Unlike the other two reserved keys, this one obliges **no** source. A backend that
+    /// knows its own kinds — folders, native projects — never reads or writes it, and
+    /// passes it through as ordinary caller metadata with its JSON type intact, exactly
+    /// as it passes through every other key it does not own. `github-projects` is the one
+    /// source that needs it, because a GitHub Projects board holds only issues and an
+    /// empty project is indistinguishable from a task without it.
+    pub const METADATA_KEY: &'static str = "onetaskgraph.item_kind";
+
+    /// The value this kind is marked with under [`Self::METADATA_KEY`].
+    #[must_use]
+    pub const fn marker(self) -> &'static str {
+        match self {
+            Self::Task => "task",
+            Self::Project => "project",
+        }
+    }
+
+    /// The kind `metadata` marks, or `None` when it carries no marker at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when [`Self::METADATA_KEY`] holds anything other than the two
+    /// markers [`Self::marker`] spells.
+    pub fn from_metadata(metadata: &BTreeMap<String, Value>) -> Result<Option<Self>, String> {
+        let Some(value) = metadata.get(Self::METADATA_KEY) else {
+            return Ok(None);
+        };
+        match value.as_str() {
+            Some(marker) if marker == Self::Task.marker() => Ok(Some(Self::Task)),
+            Some(marker) if marker == Self::Project.marker() => Ok(Some(Self::Project)),
+            _ => Err(format!(
+                "{} is {value}; it accepts only {:?} or {:?}",
+                Self::METADATA_KEY,
+                Self::Project.marker(),
+                Self::Task.marker()
+            )),
+        }
+    }
 }
 
 /// What a [`DependencyEdge`] means.

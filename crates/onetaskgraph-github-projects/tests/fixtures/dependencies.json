@@ -6,10 +6,9 @@
         "nodes": [
           {
             "id": "I_blocker",
-            "projectItems": {
-              "nodes": [{ "project": { "id": "PVT_blocker" } }],
-              "pageInfo": { "hasNextPage": false, "endCursor": null }
-            }
+            "body": "<!-- onetaskgraph.metadata\n{\"onetaskgraph.item_kind\":\"project\"}\n-->",
+            "parent": null,
+            "subIssuesSummary": { "total": 0 }
           }
         ],
         "pageInfo": { "hasNextPage": false, "endCursor": null }
