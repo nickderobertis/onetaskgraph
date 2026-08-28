@@ -2867,3 +2867,64 @@ async fn a_sub_issue_count_this_source_cannot_read_is_refused_rather_than_read_a
         assert!(message.contains("subIssuesSummary"), "{message}");
     }
 }
+
+#[tokio::test]
+async fn a_drafts_dependency_on_an_issue_is_recorded_rather_than_lost() {
+    // A draft has neither `blockedBy` nor `blocking`, so an edge of one classified as
+    // native would be written nowhere: a draft's native reconciliation never runs.
+    let fixture = board(vec![
+        Item::draft("D_1", "a draft").status("Todo"),
+        Item::issue("I_2", "an issue").status("Todo"),
+    ]);
+    let source = source(&fixture);
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("D_1".to_owned())),
+            item: task("D", "a draft", status(StatusCategory::Todo, "Todo")),
+            depends_on: vec![edge(("D_1", ItemKind::Task), ("I_2", ItemKind::Task))],
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        walk(
+            source.as_ref(),
+            "D_1",
+            ItemKind::Task,
+            Direction::DependsOn,
+            10
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|edge| edge.to.id().to_owned())
+        .collect::<Vec<_>>(),
+        ["I_2"]
+    );
+}
+
+#[tokio::test]
+async fn a_board_that_cannot_carry_the_origin_refuses_before_it_creates_anything() {
+    // Refusing after `createIssue` would leave an issue behind that nothing asked for.
+    let fixture = board_with(vec![], true, false);
+    let source = source(&fixture);
+    let mut item = task("T-1", "Publish", status(StatusCategory::Todo, "Todo"));
+    item.metadata = BTreeMap::from([("onetaskgraph.origin".to_owned(), json!("notes:T-1"))]);
+    source
+        .write_task(&write(item))
+        .await
+        .expect_err("a board with no origin field");
+    assert!(
+        fixture.seen().is_empty(),
+        "nothing was written before the refusal: {:?}",
+        fixture.seen()
+    );
+    assert!(
+        source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .unwrap()
+            .items
+            .is_empty(),
+        "and no issue was left on the board"
+    );
+}

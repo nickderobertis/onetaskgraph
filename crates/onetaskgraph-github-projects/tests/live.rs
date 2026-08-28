@@ -1139,7 +1139,7 @@ async fn cleanup_runs_after_a_failed_live_journey() {
 }
 
 #[test]
-fn the_lane_takes_its_board_only_from_the_two_names() {
+fn the_lane_takes_its_board_and_repository_only_from_the_names_it_is_given() {
     assert_eq!(
         live_lane(
             Some("live-token"),

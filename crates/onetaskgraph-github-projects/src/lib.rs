@@ -1208,10 +1208,35 @@ impl GitHubProjectsSource {
                 .map_err(|message| SourceError::Config { message })?,
         };
         let (native, fallback) = self
-            .partition_edges(&board, incoming.kind, depends_on)
+            .partition_edges(&board, incoming.kind, content_kind, depends_on)
             .await?;
         let slot = slot_metadata(incoming, own_repository.as_ref(), &fallback);
         let body = compose_body(incoming.content, &slot)?;
+        // Resolved before anything is created: a board that cannot carry the copy origin
+        // has to refuse the write, and refusing it after `createIssue` would leave an
+        // issue behind that nothing asked for.
+        let origin_field = match Board::field(&board.fields, ORIGIN_FIELD)? {
+            Some(field) => {
+                if required_str(field, "__typename")? != "ProjectV2Field" {
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "GitHub board source-owned {ORIGIN_FIELD} field is not a text field"
+                        ),
+                    });
+                }
+                Some(required_str(field, "id")?.to_owned())
+            }
+            None if incoming.metadata.contains_key(ORIGIN_KEY) => {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "GitHub board has no source-owned {ORIGIN_FIELD} text field, and the \
+                         item carries {ORIGIN_KEY}; add a text field named {ORIGIN_FIELD} to \
+                         the board"
+                    ),
+                });
+            }
+            None => None,
+        };
 
         let (content_id, item_id) = match existing {
             Some(item) => {
@@ -1225,33 +1250,14 @@ impl GitHubProjectsSource {
             }
         };
 
-        if let Some(field) = Board::field(&board.fields, ORIGIN_FIELD)? {
-            if required_str(field, "__typename")? != "ProjectV2Field" {
-                return Err(SourceError::Refused {
-                    message: format!(
-                        "GitHub board source-owned {ORIGIN_FIELD} field is not a text field"
-                    ),
-                });
-            }
+        if let Some(field_id) = &origin_field {
             let origin = incoming
                 .metadata
                 .get(ORIGIN_KEY)
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            self.set_item_field(
-                &board.id,
-                &item_id,
-                required_str(field, "id")?,
-                json!({"text":origin}),
-            )
-            .await?;
-        } else if incoming.metadata.contains_key(ORIGIN_KEY) {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "GitHub board has no source-owned {ORIGIN_FIELD} text field, and the item \
-                     carries {ORIGIN_KEY}; add a text field named {ORIGIN_FIELD} to the board"
-                ),
-            });
+            self.set_item_field(&board.id, &item_id, field_id, json!({"text":origin}))
+                .await?;
         }
 
         if let Some((field_id, option_id)) = column {
@@ -1281,6 +1287,7 @@ impl GitHubProjectsSource {
         &self,
         board: &Board,
         near_kind: ItemKind,
+        near_content: ContentKind,
         depends_on: &[DependencyEdge],
     ) -> Result<(Vec<String>, Vec<DependencyEdge>), SourceError> {
         let mut native = Vec::new();
@@ -1308,9 +1315,13 @@ impl GitHubProjectsSource {
             } else {
                 None
             };
-            let native_here = far.is_some_and(|far| {
-                far.content_kind == ContentKind::Issue && edge.to.kind == near_kind
-            });
+            // A draft has neither `blockedBy` nor `blocking`, so no edge of one is native
+            // however the far end is spelled — and one classified native here would be
+            // written nowhere at all, because a draft's native reconciliation never runs.
+            let native_here = near_content == ContentKind::Issue
+                && far.is_some_and(|far| {
+                    far.content_kind == ContentKind::Issue && edge.to.kind == near_kind
+                });
             if native_here {
                 native.push(far_id.to_owned());
             } else {
