@@ -71,9 +71,9 @@ jobs:
           GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
           # The board this lane writes to, named here rather than discovered. The lane refuses
           # to pick a board itself — "whichever project was updated most recently" once walked a
-          # credentialed write lane onto the board plans are authored on — so without these two
-          # it skips. They are not secret: they are the fixture board this lane's own items live
-          # on, and naming them in the open is what makes the blast radius reviewable.
+          # credentialed write lane onto the board plans are authored on — so without every name
+          # below it skips. They are not secret: they are the fixture board this lane's own items
+          # live on, and naming them in the open is what makes the blast radius reviewable.
           # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The live workflow spells these three names too, and the drift gate is the lane's own refusal: project.json runs test-live with ONETASKGRAPH_LIVE_REQUIRED=1, so a name spelled differently on either side fails that job naming the variables rather than skipping green.
           GH_PROJECTS_OWNER: nickderobertis
           GH_PROJECTS_NUMBER: "1"

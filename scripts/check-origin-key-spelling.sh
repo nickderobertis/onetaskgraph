@@ -57,13 +57,28 @@ authority = found.group(1)
 # Forward slashes on every platform: python renders a path with the running platform's
 # separator, and a guard that names `crates\...` on one runner cannot be asserted against.
 problems = []
-for crate in sorted(pathlib.Path("crates").iterdir()):
+try:
+    crates = sorted(pathlib.Path("crates").iterdir())
+except OSError as error:
+    fail(
+        f"could not list the crates this check reads: {error}",
+        "run it from a checkout of this repository, where crates/ is the workspace's own "
+        "directory of crates, then re-run 'just check'.",
+    )
+for crate in crates:
     if not crate.is_dir() or crate.name == "onetaskgraph-core":
         continue
     for source in sorted(crate.glob("src/**/*.rs")):
-        for number, line in enumerate(
-            source.read_text(encoding="utf-8").splitlines(), start=1
-        ):
+        try:
+            text = source.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            fail(
+                f"could not read {source.as_posix()}: {error}",
+                "restore that file as UTF-8 Rust source — this check cannot tell a "
+                "plugin's spelling of the origin key from one it cannot read — then "
+                "re-run 'just check'.",
+            )
+        for number, line in enumerate(text.splitlines(), start=1):
             # Two ways to say the same thing, because either alone has a hole. A
             # literal naming an origin catches the engine renaming the key while a
             # plugin keeps the old spelling; a constant whose own name says origin
