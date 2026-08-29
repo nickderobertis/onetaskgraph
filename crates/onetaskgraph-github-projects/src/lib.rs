@@ -40,6 +40,39 @@
 //! and the board's own `Sub-issues progress` field from closed sub-issues: a plan whose
 //! finished tasks were only moved to a "Done" column would read 0% complete forever.
 //!
+//! **What this source applies, and what `Native` means when it says so.** Every field of
+//! [`Capabilities`] this source declares is `Support::Native`: `projects`, `orphan_tasks`,
+//! `filter_by_label`, `filter_by_status`, `search_title` and `search_content`, with
+//! `DependencySupport::BothDirections` for both dependency fields and [`MAX_PAGE_SIZE`] —
+//! GitHub's own connection maximum — for the page size. A reader who takes `Native` to
+//! mean *the remote service filters* will read that as a lie, so the three facts behind it
+//! are recorded here rather than re-derived.
+//!
+//! First, the plugin contract defines `Support::Native` as *the source applies this
+//! predicate itself*, and says nothing about where it applies it. What the declaration
+//! promises the engine is capability rule 1 — a predicate declared `Native` **is** applied
+//! — so that the engine may push it down and apply nothing of its own.
+//!
+//! Second, this source can keep that promise for every predicate at no additional API
+//! cost, because this source's own `board` walk already reads every page of the board
+//! before it answers anything at all. That walk is what `get_task`, `labels` and every
+//! listing already pay for; filtering the items it returns is in-process work over data
+//! already in hand.
+//!
+//! Third, no predicate could be pushed into the API even if that were wanted:
+//! `ProjectV2.items` takes `first` and `after` and offers no filter argument of any kind.
+//! So there is no server-side filtering to declare, and — the other half of the same fact
+//! — there is no predicate here that is genuinely unsupportable. Declaring one
+//! `Unsupported` would make the engine compensate for work this source has already done,
+//! and declaring `projects` native while ignoring the filter (which this source once did)
+//! silently returns another project's tasks, because the engine trusts the declaration and
+//! applies nothing locally.
+//!
+//! Filtering happens before paging, so a page of a filtered result is a page of the
+//! survivors rather than the survivors of a page. Label and text matching answer the same
+//! question the same way the local Markdown source's do, so one cross-source expectation
+//! holds for both.
+//!
 //! Required checks use only the local fixture server; the ignored credentialed lane
 //! verifies the current schema, creates and reads back one uniquely named issue, then
 //! deletes every matching project item and verifies that no residue remains.
@@ -59,9 +92,10 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Health, ItemKind, ItemWrite, Label, NativeId, Page, PageRequest, Project,
-    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskSource, WriteSupport,
+    Direction, Health, ItemKind, ItemWrite, Label, LabelFilter, NativeId, Page, PageRequest,
+    Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName,
+    SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
+    TextQuery, WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -1687,6 +1721,69 @@ enum ContentKind {
     Issue,
 }
 
+/// Whether `labels` satisfies `filter`, matching by name, case-insensitively.
+///
+/// This is the local Markdown source's `labels_match`, spelled the same way on purpose:
+/// the shared cross-source journeys assert one answer to one question, so two sources
+/// that disagree about what "carries the label bug" means fail them.
+fn labels_match(labels: &[Label], filter: &LabelFilter) -> bool {
+    let holds = |name: &String| {
+        labels
+            .iter()
+            .any(|label| label.name.eq_ignore_ascii_case(name))
+    };
+    (filter.any_of.is_empty() || filter.any_of.iter().any(holds))
+        && filter.all_of.iter().all(holds)
+        && !filter.none_of.iter().any(holds)
+}
+
+/// Whether `category` is one of `statuses`. An empty list is unfiltered rather than
+/// "keeps nothing", which is what lets a `Vec<StatusCategory>` spell no filter at all.
+fn status_matches(category: StatusCategory, statuses: &[StatusCategory]) -> bool {
+    statuses.is_empty() || statuses.contains(&category)
+}
+
+/// Whether `title`/`content` satisfies `query`, matching case-insensitively.
+///
+/// `content` is the item's own prose — the body with this source's trailing metadata
+/// comment already taken off — so a search never matches an encoding the author of the
+/// issue never wrote.
+fn text_matches(title: &str, content: Option<&str>, query: &TextQuery) -> bool {
+    let terms = query.terms.to_lowercase();
+    let in_title = title.to_lowercase().contains(&terms);
+    let in_content = content.is_some_and(|body| body.to_lowercase().contains(&terms));
+    match query.fields {
+        TextFields::Title => in_title,
+        TextFields::Content => in_content,
+        TextFields::TitleOrContent => in_title || in_content,
+    }
+}
+
+/// Whether one task survives every predicate its query carries.
+fn task_matches(task: &Task, query: &TaskQuery) -> bool {
+    labels_match(&task.labels, &query.labels)
+        && status_matches(task.status.category, &query.statuses)
+        && match &query.project {
+            ProjectFilter::Any => true,
+            ProjectFilter::Orphans => task.project.is_none(),
+            ProjectFilter::Is(id) => task.project.as_ref() == Some(id),
+        }
+        && query
+            .text
+            .as_ref()
+            .is_none_or(|text| text_matches(&task.title, task.content.as_deref(), text))
+}
+
+/// Whether one project survives every predicate its query carries.
+fn project_matches(project: &Project, query: &ProjectQuery) -> bool {
+    labels_match(&project.labels, &query.labels)
+        && status_matches(project.status.category, &query.statuses)
+        && query
+            .text
+            .as_ref()
+            .is_none_or(|text| text_matches(&project.title, project.content.as_deref(), text))
+}
+
 #[async_trait::async_trait]
 impl TaskSource for GitHubProjectsSource {
     fn kind(&self) -> &'static str {
@@ -1695,11 +1792,11 @@ impl TaskSource for GitHubProjectsSource {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
-            orphan_tasks: Support::Unsupported,
-            filter_by_label: Support::Unsupported,
-            filter_by_status: Support::Unsupported,
-            search_title: Support::Unsupported,
-            search_content: Support::Unsupported,
+            orphan_tasks: Support::Native,
+            filter_by_label: Support::Native,
+            filter_by_status: Support::Native,
+            search_title: Support::Native,
+            search_content: Support::Native,
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: MAX_PAGE_SIZE,
@@ -1737,10 +1834,12 @@ impl TaskSource for GitHubProjectsSource {
     }
     async fn query_tasks(
         &self,
-        _query: &TaskQuery,
+        query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
         validate_page(page)?;
+        // Filtered before paged: a page of a filtered result is a page of the survivors,
+        // never the survivors of a page.
         let tasks = self
             .board()
             .await?
@@ -1748,6 +1847,7 @@ impl TaskSource for GitHubProjectsSource {
             .iter()
             .filter(|item| item.kind == ItemKind::Task)
             .map(Resolved::task)
+            .filter(|task| task_matches(task, query))
             .collect();
         Ok(offset_page(
             tasks,
@@ -1757,7 +1857,7 @@ impl TaskSource for GitHubProjectsSource {
     }
     async fn query_projects(
         &self,
-        _query: &ProjectQuery,
+        query: &ProjectQuery,
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         validate_page(page)?;
@@ -1768,6 +1868,7 @@ impl TaskSource for GitHubProjectsSource {
             .iter()
             .filter(|item| item.kind == ItemKind::Project)
             .map(Resolved::project)
+            .filter(|project| project_matches(project, query))
             .collect();
         Ok(offset_page(
             projects,

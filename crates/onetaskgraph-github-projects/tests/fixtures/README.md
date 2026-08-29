@@ -3,8 +3,13 @@
 `project.json` follows GitHub's published `ProjectV2`, `ProjectV2Item`,
 `ProjectV2ItemContent`, `ProjectV2ItemFieldSingleSelectValue`, `Issue.parent`,
 `Issue.subIssuesSummary` and label-connection schema. It is one board holding two projects
-— an issue with a sub-issue, and an empty issue readable as a project only because it
-carries `onetaskgraph.item_kind` — one task, and one pull request the source ignores.
+— an issue with a sub-issue, and an issue that carries `onetaskgraph.item_kind` as well as
+one — a task under each of those projects, a task under neither, and one pull request the
+source ignores. Two projects each holding a task of its own is what lets the crate's suite
+prove that a task read scoped to one project answers with that project's tasks alone,
+which is the whole of what a board holding more than one plan needs; the task under no
+parent is what the project-less selection keeps. Their labels, statuses, titles and bodies
+differ from one another so that every predicate a query carries separates them.
 `dependencies.json` follows the published `Issue.blockedBy: IssueConnection` and
 `Issue.blocking: IssueConnection` shapes, which provide both dependency directions, with
 each far end carrying the fields that say which kind of item it is.

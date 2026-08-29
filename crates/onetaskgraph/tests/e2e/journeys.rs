@@ -123,8 +123,10 @@ fn github_projects_runs_shared_binary_journeys_against_its_fixture_server() {
         ],
     );
     assert_eq!(listed(&filtered), ours(&["T-1", "T-3"]));
-    plan_says(row, &filtered, "applied locally", "label");
-    plan_says(row, &filtered, "applied locally", "status");
+    // This source applies every predicate a query carries, so the engine pushes them all
+    // down and applies nothing of its own.
+    plan_says(row, &filtered, "pushed down", "label");
+    plan_says(row, &filtered, "pushed down", "status");
 
     let searched = ok(
         row,
@@ -140,8 +142,8 @@ fn github_projects_runs_shared_binary_journeys_against_its_fixture_server() {
         ],
     );
     assert_eq!(listed(&searched), ours(&["T-1", "T-2"]));
-    plan_says(row, &searched, "applied locally", "search-title");
-    plan_says(row, &searched, "applied locally", "search-content");
+    plan_says(row, &searched, "pushed down", "search-title");
+    plan_says(row, &searched, "pushed down", "search-content");
 
     let dependencies = ok(row, &sandbox, &["task", "deps", &qualified(SOURCE, "T-1")]);
     assert!(

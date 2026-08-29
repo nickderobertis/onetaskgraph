@@ -245,14 +245,17 @@ pub const ROWS: &[Row] = &[
             // it. It cannot faithfully represent the table's two projects and orphan.
             // Focused journeys drive this working row over the subset GitHub can model.
             complete_dataset: false,
+            // The source walks the whole board before it answers anything, so it applies
+            // every predicate a query carries itself; `GitHubProjectsSource`'s own module
+            // documentation records why that is what `Native` means here.
             declared: Declared {
-                filter_by_label: false,
-                filter_by_status: false,
-                search_title: false,
-                search_content: false,
-                orphan_tasks: false,
-                reverse_task_dependencies: false,
-                reverse_project_dependencies: false,
+                filter_by_label: true,
+                filter_by_status: true,
+                search_title: true,
+                search_content: true,
+                orphan_tasks: true,
+                reverse_task_dependencies: true,
+                reverse_project_dependencies: true,
             },
         },
     },

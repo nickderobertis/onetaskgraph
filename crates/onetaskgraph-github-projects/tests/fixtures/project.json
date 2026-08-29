@@ -108,7 +108,7 @@
               }
             },
             {
-              "id": "PVTI_empty",
+              "id": "PVTI_next",
               "fieldValues": {
                 "nodes": [
                   {
@@ -127,7 +127,7 @@
               },
               "content": {
                 "__typename": "Issue",
-                "id": "I_empty",
+                "id": "I_next",
                 "title": "Next quarter",
                 "body": "<!-- onetaskgraph.metadata\n{\"onetaskgraph.item_kind\":\"project\"}\n-->",
                 "url": "https://github.example/issues/3",
@@ -137,8 +137,85 @@
                 "stateReason": null,
                 "repository": { "nameWithOwner": "acme/work" },
                 "parent": null,
+                "subIssuesSummary": { "total": 1 },
+                "labels": { "nodes": [], "pageInfo": { "hasNextPage": false } }
+              }
+            },
+            {
+              "id": "PVTI_notes",
+              "fieldValues": {
+                "nodes": [
+                  {
+                    "name": "In Progress",
+                    "field": {
+                      "id": "FIELD_status",
+                      "name": "Status",
+                      "options": [
+                        { "id": "OPT_todo", "name": "Todo" },
+                        { "id": "OPT_doing", "name": "In Progress" }
+                      ]
+                    }
+                  },
+                  {
+                    "labels": {
+                      "nodes": [{ "id": "L_docs", "name": "docs", "color": "0000ff" }],
+                      "pageInfo": { "hasNextPage": false }
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": false }
+              },
+              "content": {
+                "__typename": "Issue",
+                "id": "I_notes",
+                "title": "Draft the notes",
+                "body": "what next quarter needs written down",
+                "url": "https://github.example/issues/4",
+                "createdAt": "2026-01-05T00:00:00Z",
+                "updatedAt": "2026-01-05T00:00:00Z",
+                "state": "OPEN",
+                "stateReason": null,
+                "repository": { "nameWithOwner": "acme/work" },
+                "parent": { "id": "I_next" },
                 "subIssuesSummary": { "total": 0 },
                 "labels": { "nodes": [], "pageInfo": { "hasNextPage": false } }
+              }
+            },
+            {
+              "id": "PVTI_loose",
+              "fieldValues": {
+                "nodes": [
+                  {
+                    "name": "Todo",
+                    "field": {
+                      "id": "FIELD_status",
+                      "name": "Status",
+                      "options": [
+                        { "id": "OPT_todo", "name": "Todo" },
+                        { "id": "OPT_doing", "name": "In Progress" }
+                      ]
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": false }
+              },
+              "content": {
+                "__typename": "Issue",
+                "id": "I_loose",
+                "title": "Sweep the backlog",
+                "body": "work nobody has filed under a plan",
+                "url": "https://github.example/issues/5",
+                "createdAt": "2026-01-06T00:00:00Z",
+                "updatedAt": "2026-01-06T00:00:00Z",
+                "state": "OPEN",
+                "stateReason": null,
+                "repository": { "nameWithOwner": "acme/work" },
+                "parent": null,
+                "subIssuesSummary": { "total": 0 },
+                "labels": {
+                  "nodes": [{ "id": "L_bug", "name": "bug", "color": "ff0000" }],
+                  "pageInfo": { "hasNextPage": false }
+                }
               }
             },
             {
