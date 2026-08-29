@@ -13,8 +13,10 @@
 use std::{collections::BTreeMap, env, future::Future};
 
 use onetaskgraph_plugin_api::{
-    DependencySupport, Direction, ItemWrite, NativeId, PageRequest, ProjectQuery, SecretResolver,
-    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
+    Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
+    ItemKind, ItemWrite, LabelFilter, NativeId, PageRequest, Project, ProjectFilter, ProjectQuery,
+    SecretResolver, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
+    TaskSource, TextFields, TextQuery,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -327,24 +329,207 @@ async fn remove_live_artifacts(
     ))
 }
 
+/// A live assertion that returns rather than panics.
+///
+/// Every check inside the journey below has to reach `run_then_cleanup` as an `Err`: a
+/// panic would unwind past the cleanup and leave this run's projects, tasks, issues and
+/// label on the board for the next run to find.
+macro_rules! ensure {
+    ($condition:expr, $($message:tt)+) => {
+        if !$condition {
+            return Err(format!($($message)+));
+        }
+    };
+}
+
+/// Whether a board item is one *this* run wrote.
+///
+/// Every artifact of one run carries this process's id, so a run names its own for
+/// cleanup without touching one an interrupted earlier run left for [`is_artifact_title`]
+/// to sweep.
+fn is_run_artifact_title(process_id: u32, title: &str) -> bool {
+    is_artifact_title(title) && title.starts_with(&format!("{ARTIFACT_PREFIX}{process_id}-"))
+}
+
+/// The prefix of the one repository label this lane creates.
+///
+/// A label this lane created is residue exactly as an issue is, so it is named the way
+/// board items are — this process's id and a timestamp — and swept the same way before a
+/// run starts. The grammar [`is_artifact_label`] accepts is letters, digits and hyphens
+/// only, which is what lets the cleanup below name one in a URL path unescaped.
+const LABEL_PREFIX: &str = "onetaskgraph-live-";
+
+fn artifact_label(process_id: u32, stamp_micros: i64) -> String {
+    format!("{LABEL_PREFIX}{process_id}-{stamp_micros}")
+}
+
+/// Whether a repository label is one this lane created, in this run or in an earlier one.
+fn is_artifact_label(name: &str) -> bool {
+    let Some(suffix) = name.strip_prefix(LABEL_PREFIX) else {
+        return false;
+    };
+    let Some((process_id, stamp_micros)) = suffix.split_once('-') else {
+        return false;
+    };
+    [process_id, stamp_micros]
+        .iter()
+        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// One REST call to GitHub, for the label lifecycle GraphQL puts behind a schema preview.
+async fn rest(
+    token: &str,
+    method: reqwest::Method,
+    url: &str,
+    body: Option<Value>,
+    what: &str,
+) -> Result<Value, String> {
+    let mut request = reqwest::Client::new()
+        .request(method, url)
+        .header("user-agent", "onetaskgraph-live-test")
+        .header("accept", "application/vnd.github+json")
+        .bearer_auth(token);
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("{what} could not reach GitHub: {error}"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("{what} returned no readable body: {error}"))?;
+    if !status.is_success() {
+        return Err(format!("{what} failed with HTTP {status}: {text}"));
+    }
+    if text.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str(&text).map_err(|error| format!("{what} returned invalid JSON: {error}"))
+}
+
+/// Creates the one repository label this run filters by, and reports its node id.
+async fn create_artifact_label(
+    token: &str,
+    repository: &str,
+    name: &str,
+) -> Result<String, String> {
+    let created = rest(
+        token,
+        reqwest::Method::POST,
+        &format!("https://api.github.com/repos/{repository}/labels"),
+        Some(json!({"name":name,"color":"ededed",
+                    "description":"temporary onetaskgraph live-lane label"})),
+        "live label creation",
+    )
+    .await?;
+    created
+        .get("node_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("live label creation returned no node id: {created}"))
+}
+
+async fn attach_artifact_label(token: &str, issue_id: &str, label_id: &str) -> Result<(), String> {
+    let response = graphql_variables(
+        token,
+        "mutation($input:AddLabelsToLabelableInput!){addLabelsToLabelable(input:$input){labelable{... on Issue{id}}}}",
+        "live label attachment",
+        json!({"input":{"labelableId":issue_id,"labelIds":[label_id]}}),
+    )
+    .await?;
+    if response
+        .pointer("/data/addLabelsToLabelable/labelable/id")
+        .and_then(Value::as_str)
+        != Some(issue_id)
+    {
+        return Err(format!(
+            "GitHub did not confirm attaching the live label to issue {issue_id}"
+        ));
+    }
+    Ok(())
+}
+
+async fn remove_artifact_labels(
+    token: &str,
+    repository: &str,
+    matches: &dyn Fn(&str) -> bool,
+) -> Result<(), String> {
+    let mut names = Vec::new();
+    for number in 1..=50 {
+        let listed = rest(
+            token,
+            reqwest::Method::GET,
+            &format!("https://api.github.com/repos/{repository}/labels?per_page=100&page={number}"),
+            None,
+            "live label lookup",
+        )
+        .await?;
+        let nodes = listed
+            .as_array()
+            .ok_or_else(|| "live label lookup did not return a list of labels".to_owned())?;
+        names.extend(
+            nodes
+                .iter()
+                .filter_map(|node| node.get("name").and_then(Value::as_str))
+                .filter(|name| matches(name))
+                .map(str::to_owned),
+        );
+        if nodes.len() < 100 {
+            break;
+        }
+    }
+    for name in &names {
+        // Safe unescaped: `matches` accepts only the grammar `LABEL_PREFIX` documents.
+        rest(
+            token,
+            reqwest::Method::DELETE,
+            &format!("https://api.github.com/repos/{repository}/labels/{name}"),
+            None,
+            "live label cleanup",
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Everything one run of this lane created, removed whether its journey passed or failed.
+///
+/// Three stores, because a run writes to three: the board holds its items, the repository
+/// holds the issues behind them and the label they filter by, and the board's own field
+/// set holds the origin field the write path needs. Every one of them is swept, and every
+/// failure is reported rather than the first, because residue left in one is residue the
+/// next run has to heal.
 async fn remove_live_state(
     token: &str,
     project_id: &str,
-    title: &str,
+    repository: &str,
+    process_id: u32,
     remove_origin_field: bool,
 ) -> Result<(), String> {
-    let item_result =
-        remove_live_artifacts(token, project_id, &|candidate| candidate == title).await;
+    let item_result = remove_live_artifacts(token, project_id, &|title| {
+        is_run_artifact_title(process_id, title)
+    })
+    .await;
+    let label_result = remove_artifact_labels(token, repository, &|name| {
+        is_artifact_label(name) && name.starts_with(&format!("{LABEL_PREFIX}{process_id}-"))
+    })
+    .await;
     let field_result = if remove_origin_field {
         remove_live_origin_field(token, project_id).await
     } else {
         Ok(())
     };
-    match (item_result, field_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(item), Ok(())) => Err(item),
-        (Ok(()), Err(field)) => Err(field),
-        (Err(item), Err(field)) => Err(format!("{item}; additionally, {field}")),
+    let problems = [item_result, label_result, field_result]
+        .into_iter()
+        .filter_map(Result::err)
+        .collect::<Vec<_>>();
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("; additionally, "))
     }
 }
 
@@ -806,6 +991,613 @@ fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
     PageRequest { cursor, limit: 50 }
 }
 
+/// The one board, repository and naming this run may write under.
+struct LiveRun {
+    token: String,
+    repository: String,
+    project_id: String,
+    process_id: u32,
+    stamp_micros: i64,
+    status_option: String,
+}
+
+impl LiveRun {
+    /// The title of this run's `offset`-th artifact.
+    ///
+    /// One stamp per artifact, so every title this run writes is unique and every one of
+    /// them still reads as this run's to [`is_run_artifact_title`] and as the lane's own
+    /// to the sweep the next run does.
+    fn title(&self, offset: i64) -> String {
+        artifact_title(self.process_id, self.stamp_micros + offset)
+    }
+
+    /// The prefix no other item on the board carries, which is what lets the listings
+    /// below assert an exact set rather than a containment.
+    fn prefix(&self) -> String {
+        format!("{ARTIFACT_PREFIX}{}-", self.process_id)
+    }
+}
+
+fn artifact_project(title: &str, status: &Status) -> Project {
+    Project {
+        id: NativeId("live-source-item".into()),
+        title: title.to_owned(),
+        content: Some("temporary credentialed write; the live lane removes this".into()),
+        status: status.clone(),
+        labels: vec![],
+        url: None,
+        created_at: None,
+        updated_at: None,
+        metadata: BTreeMap::new(),
+        repositories: vec![],
+    }
+}
+
+fn artifact_task(
+    title: &str,
+    content: String,
+    status: &Status,
+    project: Option<NativeId>,
+    metadata: BTreeMap<String, Value>,
+) -> Task {
+    Task {
+        id: NativeId("live-source-item".into()),
+        title: title.to_owned(),
+        content: Some(content),
+        status: status.clone(),
+        labels: vec![],
+        project,
+        url: None,
+        created_at: None,
+        updated_at: None,
+        metadata,
+        repositories: vec![],
+    }
+}
+
+/// The edge a written item records as one it depends on.
+///
+/// Only `to` decides where the relationship goes: the source names the near end from the
+/// item it is writing, which has no id of its own until GitHub creates it.
+fn blocks(far: &NativeId, kind: ItemKind) -> DependencyEdge {
+    DependencyEdge {
+        from: DependencyEndpoint::from_native(NativeId("live-source-item".into()), kind),
+        to: DependencyEndpoint::from_native(far.clone(), kind),
+        kind: DependencyKind::Blocks,
+    }
+}
+
+fn sorted(mut titles: Vec<String>) -> Vec<String> {
+    titles.sort();
+    titles
+}
+
+async fn task_titles(
+    source: &dyn TaskSource,
+    query: &TaskQuery,
+    what: &str,
+) -> Result<Vec<String>, String> {
+    Ok(sorted(
+        source
+            .query_tasks(query, &page(None))
+            .await
+            .map_err(|error| format!("live {what} failed: {error}"))?
+            .items
+            .into_iter()
+            .map(|task| task.title)
+            .collect(),
+    ))
+}
+
+async fn project_titles(
+    source: &dyn TaskSource,
+    query: &ProjectQuery,
+    what: &str,
+) -> Result<Vec<String>, String> {
+    Ok(sorted(
+        source
+            .query_projects(query, &page(None))
+            .await
+            .map_err(|error| format!("live {what} failed: {error}"))?
+            .items
+            .into_iter()
+            .map(|project| project.title)
+            .collect(),
+    ))
+}
+
+/// One page of the nominated board's items, asked for at exactly `first`.
+///
+/// Reads nothing this lane needs; what it establishes is whether GitHub's own connection
+/// accepts that page size, which is what `max_page_size` claims to describe.
+async fn board_items_page(token: &str, project_id: &str, first: u32) -> Result<Value, String> {
+    graphql_variables(
+        token,
+        "query($id:ID!,$first:Int!){node(id:$id){... on ProjectV2{items(first:$first){nodes{id}}}}}",
+        "board page size probe",
+        json!({"id":project_id,"first":first}),
+    )
+    .await
+}
+
+/// Waits until the board itself reports an item this run just created.
+///
+/// `addProjectV2ItemById` returns before GitHub's own `ProjectV2.items` connection lists
+/// the new item, and a write naming that item as a dependency resolves the far end
+/// through exactly that connection — so a fixture that referenced it the moment it was
+/// created would be refused for an item which by then certainly exists.
+async fn await_on_board(
+    writer: &dyn TaskSource,
+    id: &NativeId,
+    kind: ItemKind,
+) -> Result<(), String> {
+    for _ in 0..30 {
+        let seen = match kind {
+            ItemKind::Task => writer.get_task(id).await.map(|task| task.is_some()),
+            ItemKind::Project => writer.get_project(id).await.map(|project| project.is_some()),
+        }
+        .map_err(|error| {
+            format!(
+                "waiting for a created {} to reach the board failed: {error}",
+                kind.marker()
+            )
+        })?;
+        if seen {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    Err(format!(
+        "the board never reported the {} this run created ({})",
+        kind.marker(),
+        id.0
+    ))
+}
+
+/// Drives every field of the source's declared `Capabilities` against the real board.
+///
+/// The fixture is five items this run creates: two projects, one task filed under each,
+/// and one task filed under neither. That shape is what makes an honoured predicate and
+/// an ignored one *different answers* rather than the same one — a project filter over a
+/// board holding a single project, or a label filter over a board where every item
+/// carries the label, passes whether or not the source applies it, and a predicate
+/// declared and then not applied is exactly the defect this lane exists to catch.
+///
+/// Nothing here panics: every failure returns, so the caller's cleanup runs over a board
+/// this run is still holding artifacts on.
+async fn drive_every_declared_capability(
+    run: &LiveRun,
+    writer: &dyn TaskSource,
+) -> Result<(), String> {
+    let (alpha, beta) = (run.title(0), run.title(1));
+    let (first, second, orphan) = (run.title(2), run.title(3), run.title(4));
+    let prefix = run.prefix();
+    let body_marker = format!("livebodymarker{}x{}", run.process_id, run.stamp_micros);
+    let label_name = artifact_label(run.process_id, run.stamp_micros);
+    let open = Status {
+        category: StatusCategory::Todo,
+        name: run.status_option.clone(),
+    };
+    // The one category this board reaches without an option of its own: a closed issue
+    // carries `done` in its own state, so the fixture separates by status without needing
+    // a second column that however this board is set up may not exist.
+    let closed = Status {
+        category: StatusCategory::Done,
+        name: "Done".into(),
+    };
+    let by_prefix = || TaskQuery {
+        text: Some(TextQuery {
+            terms: prefix.clone(),
+            fields: TextFields::Title,
+        }),
+        ..Default::default()
+    };
+
+    let alpha_id = writer
+        .write_project(&ItemWrite {
+            target: None,
+            item: artifact_project(&alpha, &open),
+            depends_on: vec![],
+        })
+        .await
+        .map_err(|error| format!("live project write of {alpha:?} failed: {error}"))?;
+    await_on_board(writer, &alpha_id, ItemKind::Project).await?;
+    let beta_id = writer
+        .write_project(&ItemWrite {
+            target: None,
+            item: artifact_project(&beta, &open),
+            depends_on: vec![blocks(&alpha_id, ItemKind::Project)],
+        })
+        .await
+        .map_err(|error| format!("live project write of {beta:?} failed: {error}"))?;
+    let mut round_trip = BTreeMap::new();
+    round_trip.insert("live.round_trip".to_owned(), json!({"nested":[1,true,null]}));
+    let first_id = writer
+        .write_task(&ItemWrite {
+            target: None,
+            item: artifact_task(
+                &first,
+                format!("temporary credentialed write; {body_marker}"),
+                &open,
+                Some(alpha_id.clone()),
+                round_trip,
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .map_err(|error| format!("live task write of {first:?} failed: {error}"))?;
+    await_on_board(writer, &first_id, ItemKind::Task).await?;
+    let second_id = writer
+        .write_task(&ItemWrite {
+            target: None,
+            item: artifact_task(
+                &second,
+                "temporary credentialed write; the live lane removes this".into(),
+                &open,
+                Some(beta_id.clone()),
+                BTreeMap::new(),
+            ),
+            depends_on: vec![blocks(&first_id, ItemKind::Task)],
+        })
+        .await
+        .map_err(|error| format!("live task write of {second:?} failed: {error}"))?;
+    let orphan_id = writer
+        .write_task(&ItemWrite {
+            target: None,
+            item: artifact_task(
+                &orphan,
+                "temporary credentialed write; the live lane removes this".into(),
+                &closed,
+                None,
+                BTreeMap::new(),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .map_err(|error| format!("live task write of {orphan:?} failed: {error}"))?;
+    let label_id = create_artifact_label(&run.token, &run.repository, &label_name).await?;
+    attach_artifact_label(&run.token, &first_id.0, &label_id).await?;
+
+    // GitHub decides when a created issue appears on the board, so the reads below wait
+    // for the fixture rather than racing it.
+    let mut readable = None;
+    for _ in 0..20 {
+        let tasks = task_titles(writer, &by_prefix(), "fixture settling task read").await?;
+        let projects = project_titles(
+            writer,
+            &ProjectQuery {
+                text: Some(TextQuery {
+                    terms: prefix.clone(),
+                    fields: TextFields::Title,
+                }),
+                ..Default::default()
+            },
+            "fixture settling project read",
+        )
+        .await?;
+        if tasks.len() == 3 && projects.len() == 2 {
+            readable = Some((tasks, projects));
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let Some((run_tasks, run_projects)) = readable else {
+        return Err(format!(
+            "the live fixture never became readable: the board never reported all three \
+             tasks and both projects titled {prefix}*"
+        ));
+    };
+
+    // `search_title` and `projects`: one title search over the whole board selects exactly
+    // this run's five items, three of which are tasks and two of which are projects.
+    ensure!(
+        run_tasks == sorted(vec![first.clone(), second.clone(), orphan.clone()]),
+        "a title search for this run's own prefix returned {run_tasks:?}"
+    );
+    ensure!(
+        run_projects == sorted(vec![alpha.clone(), beta.clone()]),
+        "a title search for this run's own prefix returned the projects {run_projects:?}"
+    );
+    let read_alpha = writer
+        .get_project(&alpha_id)
+        .await
+        .map_err(|error| format!("live project read-back failed: {error}"))?;
+    ensure!(
+        read_alpha.as_ref().map(|project| project.title.as_str()) == Some(alpha.as_str()),
+        "the written project did not read back by its own id: {read_alpha:?}"
+    );
+
+    // `search_content`: the marker is in one body and in no title at all, so a content
+    // search finds that one task, a title search finds none, and an either-field search
+    // finds it again.
+    let searching = |fields| TaskQuery {
+        text: Some(TextQuery {
+            terms: body_marker.clone(),
+            fields,
+        }),
+        ..Default::default()
+    };
+    let in_content = task_titles(writer, &searching(TextFields::Content), "content search").await?;
+    ensure!(
+        in_content == vec![first.clone()],
+        "a content search for a marker only one body carries returned {in_content:?}"
+    );
+    let in_title = task_titles(writer, &searching(TextFields::Title), "title-only search").await?;
+    ensure!(
+        in_title.is_empty(),
+        "a title search read a marker that is in no title at all and returned {in_title:?}"
+    );
+    let in_either = task_titles(
+        writer,
+        &searching(TextFields::TitleOrContent),
+        "either-field search",
+    )
+    .await?;
+    ensure!(
+        in_either == vec![first.clone()],
+        "an either-field search for that same marker returned {in_either:?}"
+    );
+
+    // `projects`: a listing scoped to one project keeps the tasks filed under it and no
+    // other. Unscoped on purpose — the board holds tasks of its own, so a filter declared
+    // and then ignored returns them too.
+    let under = |project: &NativeId| TaskQuery {
+        project: ProjectFilter::Is(project.clone()),
+        ..Default::default()
+    };
+    let under_alpha = task_titles(writer, &under(&alpha_id), "project filter").await?;
+    ensure!(
+        under_alpha == vec![first.clone()],
+        "the tasks of one of this run's two projects came back as {under_alpha:?}"
+    );
+    let under_beta = task_titles(writer, &under(&beta_id), "project filter").await?;
+    ensure!(
+        under_beta == vec![second.clone()],
+        "the tasks of the other of this run's two projects came back as {under_beta:?}"
+    );
+
+    // `orphan_tasks`: the one task filed under neither project, and neither of the two
+    // filed under one.
+    let orphans = task_titles(
+        writer,
+        &TaskQuery {
+            project: ProjectFilter::Orphans,
+            ..by_prefix()
+        },
+        "orphan selection",
+    )
+    .await?;
+    ensure!(
+        orphans == vec![orphan.clone()],
+        "this run's tasks belonging to no project came back as {orphans:?}"
+    );
+
+    // `filter_by_label`: one of the three carries the label this run created, and the
+    // exclusion keeps exactly the other two.
+    let carrying = task_titles(
+        writer,
+        &TaskQuery {
+            labels: LabelFilter {
+                any_of: vec![label_name.clone()],
+                ..Default::default()
+            },
+            ..by_prefix()
+        },
+        "label filter",
+    )
+    .await?;
+    ensure!(
+        carrying == vec![first.clone()],
+        "this run's tasks carrying its own label came back as {carrying:?}"
+    );
+    let without = task_titles(
+        writer,
+        &TaskQuery {
+            labels: LabelFilter {
+                none_of: vec![label_name.clone()],
+                ..Default::default()
+            },
+            ..by_prefix()
+        },
+        "label exclusion",
+    )
+    .await?;
+    ensure!(
+        without == sorted(vec![second.clone(), orphan.clone()]),
+        "this run's tasks not carrying its own label came back as {without:?}"
+    );
+    let mut listed = Vec::new();
+    let mut cursor = None;
+    loop {
+        let step = writer
+            .labels(&page(cursor))
+            .await
+            .map_err(|error| format!("live label listing failed: {error}"))?;
+        listed.extend(step.items.into_iter().map(|label| label.name));
+        cursor = step.next;
+        if cursor.is_none() {
+            break;
+        }
+        ensure!(listed.len() < 10_000, "the label walk must terminate");
+    }
+    ensure!(
+        listed.contains(&label_name),
+        "the label this run attached is not in the source's own label listing"
+    );
+
+    // `filter_by_status`: two of the three sit in the board's own first column and one is
+    // closed, so the normalised categories separate them.
+    let todo = task_titles(
+        writer,
+        &TaskQuery {
+            statuses: vec![StatusCategory::Todo],
+            ..by_prefix()
+        },
+        "status filter",
+    )
+    .await?;
+    ensure!(
+        todo == sorted(vec![first.clone(), second.clone()]),
+        "this run's tasks in the board's first column came back as {todo:?}"
+    );
+    let done = task_titles(
+        writer,
+        &TaskQuery {
+            statuses: vec![StatusCategory::Done],
+            ..by_prefix()
+        },
+        "status filter",
+    )
+    .await?;
+    ensure!(
+        done == vec![orphan.clone()],
+        "this run's closed task came back as {done:?}"
+    );
+
+    // `task_dependencies` and `project_dependencies`, both directions each. One
+    // relationship reads the same from either end: the waiting item is `from` whichever
+    // connection GitHub answered from.
+    let task_edge = DependencyEdge {
+        from: DependencyEndpoint::from_native(second_id.clone(), ItemKind::Task),
+        to: DependencyEndpoint::from_native(first_id.clone(), ItemKind::Task),
+        kind: DependencyKind::Blocks,
+    };
+    let project_edge = DependencyEdge {
+        from: DependencyEndpoint::from_native(beta_id.clone(), ItemKind::Project),
+        to: DependencyEndpoint::from_native(alpha_id.clone(), ItemKind::Project),
+        kind: DependencyKind::Blocks,
+    };
+    for (near, direction, expected, level) in [
+        (&second_id, Direction::DependsOn, &task_edge, "task"),
+        (&first_id, Direction::DependedOnBy, &task_edge, "task"),
+        (&beta_id, Direction::DependsOn, &project_edge, "project"),
+        (&alpha_id, Direction::DependedOnBy, &project_edge, "project"),
+    ] {
+        let read = if level == "task" {
+            writer.task_dependencies(near, direction, &page(None)).await
+        } else {
+            writer
+                .project_dependencies(near, direction, &page(None))
+                .await
+        }
+        .map_err(|error| format!("live {level} {direction:?} dependency read failed: {error}"))?;
+        ensure!(
+            read.items == vec![expected.clone()],
+            "the {level} {direction:?} read of {} returned {:?}",
+            near.0,
+            read.items
+        );
+    }
+
+    // Paging: a limit smaller than the result set walks to exhaustion, reaching every row
+    // exactly once and in the order one whole page reports them.
+    let whole = writer
+        .query_tasks(&by_prefix(), &page(None))
+        .await
+        .map_err(|error| format!("live whole-page read failed: {error}"))?
+        .items
+        .into_iter()
+        .map(|task| task.title)
+        .collect::<Vec<_>>();
+    let mut walked = Vec::new();
+    let mut cursor = None;
+    loop {
+        let step = writer
+            .query_tasks(&by_prefix(), &PageRequest { cursor, limit: 1 })
+            .await
+            .map_err(|error| format!("live paged read failed: {error}"))?;
+        ensure!(
+            step.items.len() <= 1,
+            "a page of one returned {} rows",
+            step.items.len()
+        );
+        walked.extend(step.items.into_iter().map(|task| task.title));
+        cursor = step.next;
+        if cursor.is_none() {
+            break;
+        }
+        ensure!(
+            walked.len() <= 10,
+            "the paged walk over this run's own three tasks must terminate"
+        );
+    }
+    ensure!(
+        walked == whole,
+        "a walk in pages of one reached {walked:?} where one whole page reports {whole:?}"
+    );
+
+    // `max_page_size`: a limit above the declared ceiling is clamped rather than sent to
+    // GitHub, and the ceiling is GitHub's own connection maximum rather than a guess at
+    // one — the board serves a page of exactly that size and refuses one row more.
+    let ceiling = onetaskgraph_github_projects::MAX_PAGE_SIZE;
+    let clamped = writer
+        .query_tasks(
+            &by_prefix(),
+            &PageRequest {
+                cursor: None,
+                limit: ceiling + 1,
+            },
+        )
+        .await
+        .map_err(|error| {
+            format!("a limit above the declared ceiling was refused rather than clamped: {error}")
+        })?;
+    ensure!(
+        sorted(
+            clamped
+                .items
+                .into_iter()
+                .map(|task| task.title)
+                .collect::<Vec<_>>()
+        ) == run_tasks,
+        "a limit above the declared ceiling did not return this run's own three tasks"
+    );
+    board_items_page(&run.token, &run.project_id, ceiling)
+        .await
+        .map_err(|error| {
+            format!("GitHub refused a page of the declared maximum {ceiling}: {error}")
+        })?;
+    if board_items_page(&run.token, &run.project_id, ceiling + 1)
+        .await
+        .is_ok()
+    {
+        return Err(format!(
+            "GitHub served a page of {} board items, so {ceiling} is not its connection \
+             maximum and max_page_size no longer describes it",
+            ceiling + 1
+        ));
+    }
+
+    // The values a copy carries: caller metadata keeps its JSON types, and the column the
+    // write chose is the one the read reports.
+    let written = writer
+        .get_task(&first_id)
+        .await
+        .map_err(|error| format!("live task read-back failed: {error}"))?
+        .ok_or_else(|| "the written task was not readable by its own id".to_owned())?;
+    ensure!(
+        written.title == first
+            && written.metadata.get("live.round_trip") == Some(&json!({"nested":[1,true,null]})),
+        "the live write did not round-trip its title and metadata: {written:?}"
+    );
+    ensure!(
+        written.status.category == StatusCategory::Todo,
+        "the live write filed under todo read back as {:?}",
+        written.status.category
+    );
+    let closed_back = writer
+        .get_task(&orphan_id)
+        .await
+        .map_err(|error| format!("live closed-task read-back failed: {error}"))?
+        .ok_or_else(|| "the closed task was not readable by its own id".to_owned())?;
+    ensure!(
+        closed_back.status.category == StatusCategory::Done,
+        "the live write filed under done read back as {:?}",
+        closed_back.status.category
+    );
+    Ok(())
+}
+
 #[tokio::test]
 #[ignore = "the live lane: run it with `just test-live onetaskgraph-github-projects`"]
 async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
@@ -849,25 +1641,37 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     let project_id = nominated_project_id(&token, &owner, project_number)
         .await
         .unwrap_or_else(|error| panic!("GitHub Projects live board lookup failed: {error}"));
-    // Self-healing after an interrupted run: a process killed between its write and its cleanup
-    // never reaches `run_then_cleanup`, so the next run clears what it left. What bounds where
-    // this lane may write is `live_lane`, not this sweep.
+    // Self-healing after an interrupted run: a process killed between its writes and its
+    // cleanup never reaches `run_then_cleanup`, so the next run clears the items and the
+    // label it left. What bounds where this lane may write is `live_lane`, not this sweep.
     remove_live_artifacts(&token, &project_id, &is_artifact_title)
         .await
         .unwrap_or_else(|error| {
             panic!("live residue left by an earlier interrupted run could not be cleared: {error}")
         });
+    remove_artifact_labels(&token, &repository, &is_artifact_label)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("live label residue from an earlier interrupted run could not be cleared: {error}")
+        });
 
     assert!(source.health().await.unwrap().reachable);
-    let capabilities = source.capabilities();
-    assert_eq!(capabilities.projects, Support::Native);
-    assert_eq!(capabilities.filter_by_label, Support::Unsupported);
-    assert_eq!(capabilities.filter_by_status, Support::Unsupported);
-    assert_eq!(capabilities.search_title, Support::Unsupported);
-    assert_eq!(capabilities.search_content, Support::Unsupported);
+    // Every field of the contract's `Capabilities`, spelled out: the struct has no
+    // `Default`, so a field added to the contract fails to compile here rather than going
+    // unasserted, and the journey below drives each of these against the real board.
     assert_eq!(
-        capabilities.task_dependencies,
-        DependencySupport::BothDirections
+        source.capabilities(),
+        Capabilities {
+            projects: Support::Native,
+            orphan_tasks: Support::Native,
+            filter_by_label: Support::Native,
+            filter_by_status: Support::Native,
+            search_title: Support::Native,
+            search_content: Support::Native,
+            task_dependencies: DependencySupport::BothDirections,
+            project_dependencies: DependencySupport::BothDirections,
+            max_page_size: onetaskgraph_github_projects::MAX_PAGE_SIZE,
+        }
     );
     // A board is a container of projects now, so how many it holds is the board's business.
     let mut projects = Vec::new();
@@ -942,97 +1746,6 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     label_ids.dedup();
     assert_eq!(label_ids.len(), labels.items.len());
 
-    // GitHub cannot push these predicates into ProjectV2.items. The source must return the
-    // same wider page so the engine, which is covered by deterministic subprocess journeys,
-    // can apply label, status, and search predicates locally.
-    let mut unsupported = TaskQuery::default();
-    unsupported.labels.any_of.push("unlikely-live-label".into());
-    unsupported.statuses.push(StatusCategory::Done);
-    unsupported.text = Some(onetaskgraph_plugin_api::TextQuery {
-        terms: "unlikely-live-search".into(),
-        fields: onetaskgraph_plugin_api::TextFields::TitleOrContent,
-    });
-    let wider = source.query_tasks(&unsupported, &page(None)).await.unwrap();
-    let baseline = source
-        .query_tasks(&TaskQuery::default(), &page(None))
-        .await
-        .unwrap();
-    assert_eq!(wider.items, baseline.items);
-
-    // Find an Issue with a real blocked-by edge, then follow the blocker back through its
-    // blocking connection. Draft issues and pull requests simply contribute no Issue edges.
-    //
-    // Every edge is oriented from the item that depends, whichever connection reported it:
-    // `blockedBy` and `blocking` are one relationship read from either end, so the forward
-    // read names the waiting task as `from` and the reverse read of the blocker returns
-    // that same edge rather than its mirror.
-    let mut dependency_round_trip = false;
-    for task in &tasks {
-        let forward = source
-            .task_dependencies(&task.id, Direction::DependsOn, &page(None))
-            .await
-            .unwrap_or_else(|error| panic!("forward dependency read failed: {error}"));
-        let Some(edge) = forward.items.first() else {
-            continue;
-        };
-        assert_eq!(
-            edge.from, task.id,
-            "a forward edge is reported from the item that depends"
-        );
-        assert!(
-            tasks.iter().any(|candidate| edge.to == candidate.id),
-            "the forward dependency must resolve to another task on the project"
-        );
-        let reverse = source
-            .task_dependencies(
-                &NativeId(edge.to.id().to_owned()),
-                Direction::DependedOnBy,
-                &page(None),
-            )
-            .await
-            .unwrap_or_else(|error| panic!("reverse dependency read failed: {error}"));
-        assert!(
-            reverse.items.contains(edge),
-            "the blocker must name the blocked task through its reverse edge"
-        );
-        dependency_round_trip = true;
-        break;
-    }
-    // Whether any board item is blocked at all is the board's business and it changes
-    // between runs, so an empty graph is reported rather than failed: this lane says
-    // whether the product read the board correctly, not what somebody put on it.
-    if !dependency_round_trip {
-        eprintln!(
-            "live GitHub Projects journey exercised no task dependency: no item on this board \
-             has a non-empty Issue.blockedBy connection"
-        );
-    }
-
-    for project in &projects {
-        let forward_projects = source
-            .project_dependencies(&project.id, Direction::DependsOn, &page(None))
-            .await
-            .expect("forward project dependency read failed");
-        assert!(
-            forward_projects
-                .items
-                .iter()
-                .all(|edge| edge.from == project.id),
-            "a forward project edge is reported from the project that depends"
-        );
-        let reverse_projects = source
-            .project_dependencies(&project.id, Direction::DependedOnBy, &page(None))
-            .await
-            .expect("reverse project dependency read failed");
-        assert!(
-            reverse_projects
-                .items
-                .iter()
-                .all(|edge| edge.to == project.id),
-            "a reverse project edge is reported at the project that is depended on"
-        );
-    }
-
     let origin_field_created = match ensure_origin_field(&token, &project_id).await {
         Ok(created) => created,
         Err(error) => {
@@ -1053,6 +1766,14 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
             );
         }
     };
+    let run = LiveRun {
+        token: token.clone(),
+        repository: repository.clone(),
+        project_id: project_id.clone(),
+        process_id: std::process::id(),
+        stamp_micros: chrono::Utc::now().timestamp_micros(),
+        status_option: status_name.clone(),
+    };
     let writer = onetaskgraph_github_projects::Plugin
         .build(
             &SourceName::new("github-live").unwrap(),
@@ -1060,72 +1781,20 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
             &LiveSecret(token.clone().into()),
         )
         .unwrap_or_else(|error| panic!("the live write configuration was refused: {error}"));
-    let title = artifact_title(std::process::id(), chrono::Utc::now().timestamp_micros());
-    let written_title = title.clone();
-    let written_status = status_name.clone();
-    let cleanup_title = title.clone();
     run_then_cleanup(
-        || async {
-            let mut metadata = BTreeMap::new();
-            metadata.insert("live.round_trip".into(), json!({"nested":[1,true,null]}));
-            let id = writer
-                .write_task(&ItemWrite {
-                    target: None,
-                    item: Task {
-                        id: NativeId("live-source-item".into()),
-                        title: written_title.clone(),
-                        content: Some(
-                            "temporary credentialed write; the live lane removes this".into(),
-                        ),
-                        status: Status {
-                            category: StatusCategory::Todo,
-                            name: written_status.clone(),
-                        },
-                        labels: vec![],
-                        project: None,
-                        url: None,
-                        created_at: None,
-                        updated_at: None,
-                        metadata,
-                        repositories: vec![],
-                    },
-                    depends_on: vec![],
-                })
-                .await
-                .map_err(|error| format!("live GitHub write failed: {error}"))?;
-            let mut written = None;
-            for _ in 0..10 {
-                written = writer
-                    .get_task(&id)
-                    .await
-                    .map_err(|error| format!("live GitHub write read-back failed: {error}"))?;
-                if written.is_some() {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
-            let written = written
-                .ok_or_else(|| "live GitHub write was not readable after creation".to_owned())?;
-            if written.title != written_title
-                || written.metadata.get("live.round_trip") != Some(&json!({"nested":[1,true,null]}))
-            {
-                return Err("live GitHub write did not round-trip title and metadata".to_owned());
-            }
-            // The column this configuration gives `todo` is given to no other category, so
-            // reading it back reports the category that was written rather than another.
-            if written.status.category != StatusCategory::Todo {
-                return Err(format!(
-                    "live GitHub write filed under {:?} read back as {:?}",
-                    StatusCategory::Todo,
-                    written.status.category
-                ));
-            }
-            Ok(())
+        || drive_every_declared_capability(&run, writer.as_ref()),
+        || {
+            remove_live_state(
+                &token,
+                &project_id,
+                &repository,
+                run.process_id,
+                origin_field_created,
+            )
         },
-        || remove_live_state(&token, &project_id, &cleanup_title, origin_field_created),
     )
     .await
-    .unwrap_or_else(|error| panic!("GitHub live write journey failed: {error}"));
+    .unwrap_or_else(|error| panic!("GitHub live capability journey failed: {error}"));
 }
 
 #[tokio::test]
