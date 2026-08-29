@@ -73,6 +73,13 @@
 //! question the same way the local Markdown source's do, so one cross-source expectation
 //! holds for both.
 //!
+//! <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The declaration itself
+//! has one source, `capabilities`, and the note above is the reasoning behind it rather
+//! than a second copy of it: without the three facts recorded here a reader takes the
+//! uniform `Native` for a lie and reverts it. The drift gate on the declaration is this
+//! crate's own capabilities test, which pins every field of it against a fully spelled-out
+//! `Capabilities` literal — a struct with no `Default`, so a field added to the contract
+//! fails to compile there rather than going unasserted. -->
 //! Required checks use only the local fixture server; the ignored credentialed lane
 //! verifies the current schema, creates and reads back one uniquely named issue, then
 //! deletes every matching project item and verifies that no residue remains.
@@ -1759,7 +1766,6 @@ fn text_matches(title: &str, content: Option<&str>, query: &TextQuery) -> bool {
     }
 }
 
-/// Whether one task survives every predicate its query carries.
 fn task_matches(task: &Task, query: &TaskQuery) -> bool {
     labels_match(&task.labels, &query.labels)
         && status_matches(task.status.category, &query.statuses)
@@ -1774,7 +1780,6 @@ fn task_matches(task: &Task, query: &TaskQuery) -> bool {
             .is_none_or(|text| text_matches(&task.title, task.content.as_deref(), text))
 }
 
-/// Whether one project survives every predicate its query carries.
 fn project_matches(project: &Project, query: &ProjectQuery) -> bool {
     labels_match(&project.labels, &query.labels)
         && status_matches(project.status.category, &query.statuses)

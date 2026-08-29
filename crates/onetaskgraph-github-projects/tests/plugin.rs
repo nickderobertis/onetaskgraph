@@ -718,7 +718,6 @@ fn committed_board() -> Box<dyn TaskSource> {
     configured(&raw_server("200 OK", &fixture.to_string()), json!({}))
 }
 
-/// The ids `query` selects, in the order the source answers with.
 async fn selected_tasks(source: &dyn TaskSource, query: &TaskQuery) -> Vec<String> {
     source
         .query_tasks(query, &page(10))
@@ -730,7 +729,6 @@ async fn selected_tasks(source: &dyn TaskSource, query: &TaskQuery) -> Vec<Strin
         .collect()
 }
 
-/// The project ids `query` selects, in the order the source answers with.
 async fn selected_projects(source: &dyn TaskSource, query: &ProjectQuery) -> Vec<String> {
     source
         .query_projects(query, &page(10))
@@ -832,7 +830,6 @@ async fn every_predicate_a_task_query_carries_is_applied() {
     let none = LabelFilter::default();
 
     for (expected, query) in [
-        // Label membership, in each of its three forms.
         (
             vec!["I_task", "I_loose"],
             query(label_filter(&["bug"], &[], &[]), vec![], None),
@@ -858,7 +855,6 @@ async fn every_predicate_a_task_query_carries_is_applied() {
             vec!["I_task", "I_loose"],
             query(label_filter(&["BUG"], &[], &[]), vec![], None),
         ),
-        // Status categories.
         (
             vec!["I_task", "I_loose"],
             query(none.clone(), vec![StatusCategory::Todo], None),
@@ -1019,7 +1015,7 @@ async fn every_predicate_a_project_query_carries_is_applied() {
 }
 
 #[tokio::test]
-async fn a_filtered_result_is_paged_after_it_is_filtered() {
+async fn a_filtered_task_or_project_result_is_paged_after_it_is_filtered() {
     // Paging the board and then filtering the page would answer this walk with one item
     // and then stop: `I_2` would consume the first page and leave nothing in it.
     let fixture = board(
@@ -1032,6 +1028,16 @@ async fn a_filtered_result_is_paged_after_it_is_filtered() {
                     item.labelled(&[("L_drop", "drop")])
                 }
             })
+            .chain((1..=3).map(|n| {
+                let item = Item::issue(&format!("P_{n}"), "plan")
+                    .status("Todo")
+                    .sub_issues(1);
+                if n % 2 == 1 {
+                    item.labelled(&[("L_keep", "keep")])
+                } else {
+                    item.labelled(&[("L_drop", "drop")])
+                }
+            }))
             .collect(),
     );
     let source = source(&fixture);
@@ -1067,6 +1073,37 @@ async fn a_filtered_result_is_paged_after_it_is_filtered() {
         walked,
         ["I_1", "I_3", "I_5"],
         "a walk to exhaustion returns every survivor exactly once in a stable order"
+    );
+
+    // The same of a project listing, whose survivors also outnumber the page asked for.
+    let projects = ProjectQuery {
+        labels: label_filter(&["keep"], &[], &[]),
+        ..ProjectQuery::default()
+    };
+    let first = source.query_projects(&projects, &page(1)).await.unwrap();
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|project| project.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["P_1"]
+    );
+    let mut walked = Vec::new();
+    let mut cursor = None;
+    loop {
+        let request = cursor.map_or_else(|| page(1), |cursor: Cursor| resume(&cursor.0, 1));
+        let answered = source.query_projects(&projects, &request).await.unwrap();
+        walked.extend(answered.items.into_iter().map(|project| project.id.0));
+        match answered.next {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(
+        walked,
+        ["P_1", "P_3"],
+        "a page smaller than the surviving projects walks to exhaustion over survivors"
     );
 }
 
