@@ -53,9 +53,15 @@
 //! `onetaskgraph.depends_on` metadata key.
 //!
 //! Fixture provenance is recorded in `tests/fixtures/README.md`. The ignored live lane
-//! exercises reads by default; its mutation journey requires an explicitly named scratch
-//! team and immediately requests deletion of its scratch issue. A failed live cleanup is
-//! reported as a test failure and may require manual deletion from that scratch team.
+//! drives every field of the table above against Linear itself: it builds its own fixture
+//! on the scratch team `LINEAR_WRITE_TEAM` names — two projects, one issue filed under
+//! each, one filed under neither, two labels and two workflow states — because that shape
+//! is what tells an honoured predicate from an ignored one, and a workspace where every
+//! issue carries the label answers a filter the same way either way. The two searches are
+//! asserted as what they are declared: the wider set, unnarrowed. Everything the lane
+//! creates it deletes whether its assertions passed or failed, and it clears residue named
+//! the way it names its own before it starts. A failed live cleanup is reported as a test
+//! failure and may require manual deletion from that scratch team.
 #![deny(missing_docs)]
 
 use chrono::{DateTime, Utc};

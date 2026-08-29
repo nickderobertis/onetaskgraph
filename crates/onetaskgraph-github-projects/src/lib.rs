@@ -97,17 +97,22 @@
 //! `Capabilities` literal — a struct with no `Default`, so a field added to the contract
 //! fails to compile there rather than going unasserted. -->
 //! Required checks use only the local fixture server; the ignored credentialed lane
-//! verifies the current schema, creates and reads back one uniquely named issue, then
-//! deletes every matching project item and verifies that no residue remains.
+//! verifies the current schema, then drives every field of the table above against the
+//! real board. It builds its own fixture there — two projects, one task filed under each,
+//! one filed under neither, a label on one of the three and a closed status on another —
+//! because that shape is what tells an honoured predicate from an ignored one: a board
+//! holding a single project answers a project filter the same way whether or not this
+//! source applies it, which is exactly how the defect above went unseen.
 //!
 //! That lane writes only to the board `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` name,
 //! and only into the repository `GH_PROJECTS_REPOSITORY` names, and skips — as it does
 //! without `GH_PROJECTS_TOKEN` — when any of them is absent. Requiring both to be
 //! nominated is what keeps a credentialed write lane off a board and a repository nobody
 //! nominated; it never asks GitHub which project was updated most recently. Before it
-//! starts, the lane also clears any item titled the way it titles its own artifacts,
-//! which is self-healing after an interrupted run: a process killed between its write and
-//! its cleanup leaves an artifact the next run removes.
+//! starts, the lane also clears any item titled — and any repository label named — the way
+//! it titles and names its own artifacts, which is self-healing after an interrupted run:
+//! a process killed between its writes and its cleanup leaves artifacts the next run
+//! removes.
 #![deny(missing_docs)]
 
 use std::collections::BTreeMap;

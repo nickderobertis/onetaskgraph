@@ -1122,7 +1122,9 @@ async fn every_declared_capability_is_applied_to_the_held_work() {
         ids
     };
     let selected = async |query: TaskQuery| -> Vec<String> {
-        sorted(task_ids(&source.query_tasks(&query, &whole()).await.unwrap()))
+        sorted(task_ids(
+            &source.query_tasks(&query, &whole()).await.unwrap(),
+        ))
     };
 
     // `projects`: two are held, and a listing scoped to one keeps the tasks filed under
@@ -1215,7 +1217,10 @@ async fn every_declared_capability_is_applied_to_the_held_work() {
         }),
         ..TaskQuery::default()
     };
-    assert_eq!(selected(searching("loose", TextFields::Title)).await, ["T-4"]);
+    assert_eq!(
+        selected(searching("loose", TextFields::Title)).await,
+        ["T-4"]
+    );
     assert!(
         selected(searching("loose", TextFields::Content))
             .await
@@ -1283,7 +1288,12 @@ async fn every_declared_capability_is_applied_to_the_held_work() {
     // `max_page_size`: a limit above the declared ceiling is clamped rather than refused,
     // and a limit below the result set walks to exhaustion in the order one whole page
     // reports.
-    let whole_page = task_ids(&source.query_tasks(&TaskQuery::default(), &whole()).await.unwrap());
+    let whole_page = task_ids(
+        &source
+            .query_tasks(&TaskQuery::default(), &whole())
+            .await
+            .unwrap(),
+    );
     let clamped = source
         .query_tasks(
             &TaskQuery::default(),
@@ -1299,10 +1309,7 @@ async fn every_declared_capability_is_applied_to_the_held_work() {
     let mut cursor = None;
     loop {
         let step = source
-            .query_tasks(
-                &TaskQuery::default(),
-                &PageRequest { cursor, limit: 1 },
-            )
+            .query_tasks(&TaskQuery::default(), &PageRequest { cursor, limit: 1 })
             .await
             .unwrap();
         assert!(step.items.len() <= 1);

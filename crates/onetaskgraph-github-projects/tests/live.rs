@@ -1134,7 +1134,10 @@ async fn await_on_board(
     for _ in 0..30 {
         let seen = match kind {
             ItemKind::Task => writer.get_task(id).await.map(|task| task.is_some()),
-            ItemKind::Project => writer.get_project(id).await.map(|project| project.is_some()),
+            ItemKind::Project => writer
+                .get_project(id)
+                .await
+                .map(|project| project.is_some()),
         }
         .map_err(|error| {
             format!(
@@ -1211,7 +1214,10 @@ async fn drive_every_declared_capability(
         .await
         .map_err(|error| format!("live project write of {beta:?} failed: {error}"))?;
     let mut round_trip = BTreeMap::new();
-    round_trip.insert("live.round_trip".to_owned(), json!({"nested":[1,true,null]}));
+    round_trip.insert(
+        "live.round_trip".to_owned(),
+        json!({"nested":[1,true,null]}),
+    );
     let first_id = writer
         .write_task(&ItemWrite {
             target: None,
@@ -1652,7 +1658,9 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     remove_artifact_labels(&token, &repository, &is_artifact_label)
         .await
         .unwrap_or_else(|error| {
-            panic!("live label residue from an earlier interrupted run could not be cleared: {error}")
+            panic!(
+                "live label residue from an earlier interrupted run could not be cleared: {error}"
+            )
         });
 
     assert!(source.health().await.unwrap().reachable);
@@ -2000,6 +2008,39 @@ fn residue_recovery_matches_this_lanes_own_artifacts_and_nothing_else() {
         assert!(
             !is_artifact_title(foreign),
             "residue recovery must not match {foreign:?}"
+        );
+    }
+    // A run names its own by the process id every one of its artifacts shares, so it
+    // cleans up after itself without touching what an interrupted earlier run left for
+    // the sweep above.
+    assert!(is_run_artifact_title(
+        2533,
+        "onetaskgraph live cleanup 2533-17"
+    ));
+    for other in [
+        "onetaskgraph live cleanup 25330-17",
+        "onetaskgraph live cleanup 253-17",
+        "onetaskgraph live cleanup 12533-17",
+    ] {
+        assert!(
+            !is_run_artifact_title(2533, other),
+            "one run's cleanup must not match another run's {other:?}"
+        );
+    }
+    // The label is residue exactly as an item is, and is recognised the same way.
+    assert!(is_artifact_label("onetaskgraph-live-2533-1787816134627361"));
+    assert!(is_artifact_label(&artifact_label(std::process::id(), 1)));
+    for foreign in [
+        "bug",
+        "onetaskgraph-live-",
+        "onetaskgraph-live-2533",
+        "onetaskgraph-live-abc-1787816134627361",
+        "onetaskgraph-live-2533-",
+        "not-onetaskgraph-live-2533-1787816134627361",
+    ] {
+        assert!(
+            !is_artifact_label(foreign),
+            "label recovery must not match {foreign:?}"
         );
     }
 }
