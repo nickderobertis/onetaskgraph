@@ -40,13 +40,27 @@
 //! and the board's own `Sub-issues progress` field from closed sub-issues: a plan whose
 //! finished tasks were only moved to a "Done" column would read 0% complete forever.
 //!
-//! **What this source applies, and what `Native` means when it says so.** Every field of
-//! [`Capabilities`] this source declares is `Support::Native`: `projects`, `orphan_tasks`,
-//! `filter_by_label`, `filter_by_status`, `search_title` and `search_content`, with
-//! `DependencySupport::BothDirections` for both dependency fields and [`MAX_PAGE_SIZE`] —
-//! GitHub's own connection maximum — for the page size. A reader who takes `Native` to
-//! mean *the remote service filters* will read that as a lie, so the three facts behind it
-//! are recorded here rather than re-derived.
+//! **What this source applies, and what `Native` means when it says so.** One verdict per
+//! field of [`Capabilities`]. *Proven* means a shared journey drives it against the real
+//! binary over this source's own row in `crates/onetaskgraph/tests/e2e/fixtures.rs`, and
+//! `every_row_declares_exactly_what_its_plugin_reports` is what keeps this list and
+//! [`capabilities`](TaskSource::capabilities) from parting.
+//!
+//! | Field | Verdict |
+//! | --- | --- |
+//! | `projects` | **Supported and proven.** A task's project is the issue it is a sub-issue of, and a listing scoped to one keeps the items filed under that issue. This is the field that was declared and then not applied, which silently returned another project's tasks. |
+//! | `orphan_tasks` | **Supported and proven.** A task issue with no `parent` is in no project. |
+//! | `filter_by_label` | **Supported and proven,** over the issue's own labels. |
+//! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping`. |
+//! | `search_title` | **Supported and proven,** over `Issue.title`. |
+//! | `search_content` | **Supported and proven,** over the visible body — the trailing metadata comment is not part of it. |
+//! | `task_dependencies` | **Supported and proven,** in both directions: `blockedBy` and `blocking`. |
+//! | `project_dependencies` | **Supported and proven,** in both directions, over the same two connections, because a project here is an issue. |
+//! | `max_page_size` | **Supported and proven.** [`MAX_PAGE_SIZE`], GitHub's own connection maximum. |
+//!
+//! Nothing here is unsupported, and the three facts behind that are recorded below rather
+//! than re-derived — because a reader who takes `Native` to mean *the remote service
+//! filters* will read the uniform verdict as a lie.
 //!
 //! First, the plugin contract defines `Support::Native` as *the source applies this
 //! predicate itself*, and says nothing about where it applies it. What the declaration
