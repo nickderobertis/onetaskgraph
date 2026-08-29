@@ -9,7 +9,8 @@
 use std::process::Output;
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{ROWS, Row, SOURCE, dataset, document, qualified};
+use crate::fixtures::{Declared, ROWS, Row, SOURCE, dataset, document, qualified};
+use onetaskgraph_plugin_api::Capabilities;
 use serde_json::json;
 
 /// A sandbox holding this row's configuration document and nothing else.
@@ -203,6 +204,231 @@ fn github_projects_missing_credential_reaches_the_binary_user() {
     );
 }
 
+/// One capability field, the invocation that drives it, and what a correct answer is.
+///
+/// The rows a query keeps are the same whoever applies the predicate — that is the whole
+/// claim of this product — so `expected` does not vary by row. What varies is the *plan*,
+/// and that is read off the row's own declaration: `pushed down` where it declares the
+/// field native, and the field's own compensation wording where it does not.
+struct Probe {
+    /// The [`Capabilities`] field this drives.
+    field: &'static str,
+    /// The `--explain` invocation that exercises it.
+    arguments: Vec<String>,
+    /// The ids the answer must hold, in order.
+    expected: Vec<String>,
+    /// The name the plan reports this predicate under.
+    predicate: &'static str,
+    /// Whether the row declares this field native.
+    native: bool,
+    /// What the plan says when the engine did the work instead.
+    compensated: &'static str,
+    /// How ids are read out of this answer.
+    read: fn(&str) -> Vec<String>,
+}
+
+/// Every `Support`- and `DependencySupport`-typed field of the contract's capability
+/// value, one probe each, as this row declares them.
+fn probes(declared: &Declared) -> Vec<Probe> {
+    let filter = |field, arguments: &[&str], expected: &[&str], predicate, native| Probe {
+        field,
+        arguments: arguments
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect(),
+        expected: ours(expected),
+        predicate,
+        native,
+        compensated: "applied locally",
+        read: listed,
+    };
+    let reverse = |field, verb: &str, of: &str, expected: &[&str], native| Probe {
+        field,
+        arguments: vec![
+            verb.to_owned(),
+            "deps".to_owned(),
+            qualified(SOURCE, of),
+            "--direction".to_owned(),
+            "depended-on-by".to_owned(),
+            "--explain".to_owned(),
+        ],
+        expected: ours(expected),
+        predicate: "reverse-dependencies",
+        native,
+        compensated: "emulated",
+        read: edge_starts,
+    };
+    vec![
+        filter(
+            "projects",
+            &[
+                "task",
+                "list",
+                "--project",
+                &qualified(SOURCE, "P-1"),
+                "--explain",
+            ],
+            &["T-1", "T-2"],
+            "project",
+            declared.projects.is_native(),
+        ),
+        filter(
+            "orphan_tasks",
+            &["task", "list", "--no-project", "--explain"],
+            &["T-3"],
+            "project",
+            declared.orphan_tasks.is_native(),
+        ),
+        filter(
+            "filter_by_label",
+            &["task", "list", "--label", "bug", "--explain"],
+            &["T-1", "T-3"],
+            "label",
+            declared.filter_by_label.is_native(),
+        ),
+        filter(
+            "filter_by_status",
+            &["task", "list", "--status", "todo", "--explain"],
+            &["T-1", "T-3"],
+            "status",
+            declared.filter_by_status.is_native(),
+        ),
+        filter(
+            "search_title",
+            &[
+                "task",
+                "list",
+                "--search",
+                "alpha",
+                "--in",
+                "title",
+                "--explain",
+            ],
+            &["T-1"],
+            "search-title",
+            declared.search_title.is_native(),
+        ),
+        filter(
+            "search_content",
+            &[
+                "task",
+                "list",
+                "--search",
+                "alpha",
+                "--in",
+                "content",
+                "--explain",
+            ],
+            &["T-2"],
+            "search-content",
+            declared.search_content.is_native(),
+        ),
+        reverse(
+            "task_dependencies",
+            "task",
+            "T-2",
+            &["T-1", "T-3", "T-4"],
+            declared.task_dependencies.answers_reverse(),
+        ),
+        reverse(
+            "project_dependencies",
+            "project",
+            "P-2",
+            &["P-1"],
+            declared.project_dependencies.answers_reverse(),
+        ),
+    ]
+}
+
+#[test]
+fn every_row_declares_exactly_what_its_plugin_reports() {
+    // The table is what every shared journey's plan assertion is written against, so a row
+    // claiming a capability its plugin does not report makes those assertions prove the
+    // table rather than the product. `sources list` is where the binary reports what a
+    // configured source declares, so this reconciles the two at the same boundary a user
+    // reads them from — and names the row and the field when they part.
+    for row in ROWS {
+        let sandbox = host(row);
+        let listing: serde_json::Value =
+            serde_json::from_str(&ok(row, &sandbox, &["sources", "list", "--json"]))
+                .expect("sources list emits JSON");
+        let entry = listing
+            .as_array()
+            .expect("a list of configured sources")
+            .iter()
+            .find(|entry| entry["source"] == json!(SOURCE))
+            .unwrap_or_else(|| panic!("{}: no source called {SOURCE}:\n{listing:#}", row.name));
+        assert_eq!(
+            entry["state"],
+            json!("available"),
+            "{}: the row's own source must build:\n{entry:#}",
+            row.name
+        );
+        let reported: Capabilities = serde_json::from_value(entry["capabilities"].clone())
+            .expect("a source reports the contract's capability value");
+        let disagreements = row.declared().disagreements(&reported);
+        assert!(
+            disagreements.is_empty(),
+            "{}: the journey table and the plugin disagree — {}",
+            row.name,
+            disagreements.join("; ")
+        );
+    }
+}
+
+#[test]
+fn every_row_drives_every_capability_field_and_the_plan_says_who_applied_it() {
+    // One journey per row per field of the plugin contract's capability value. A field a
+    // row declares native is driven and the plan must say the source applied it; a field a
+    // row declares unsupported is driven to the *same answer* and the plan must say the
+    // engine did — which is the property that makes an unsupported declaration sound
+    // rather than merely honest.
+    for row in complete_dataset_rows() {
+        let sandbox = host(row);
+        for probe in probes(row.declared()) {
+            let arguments: Vec<&str> = probe.arguments.iter().map(String::as_str).collect();
+            let rendered = ok(row, &sandbox, &arguments);
+            assert_eq!(
+                (probe.read)(&rendered),
+                probe.expected,
+                "{}: {} returns the same answer however it is applied:\n{rendered}",
+                row.name,
+                probe.field
+            );
+            plan_says(
+                row,
+                &rendered,
+                if probe.native {
+                    "pushed down"
+                } else {
+                    probe.compensated
+                },
+                probe.predicate,
+            );
+        }
+
+        // `max_page_size` is the ninth field, and it is not a predicate: it is the ceiling
+        // the engine asks a source for rows in. So it is driven twice — the declaration as
+        // the binary reports it to a user, and the behaviour behind it: a caller asking for
+        // four rows gets four, assembled from as many source pages as the ceiling forces.
+        // The compensated row's ceiling is two, so that walk really is more than one page.
+        let ceiling = row.declared().max_page_size;
+        let sources = ok(row, &sandbox, &["sources", "list"]);
+        assert!(
+            sources.contains(&format!("page <= {ceiling}")),
+            "{}: the page ceiling a source declares reaches the user:\n{sources}",
+            row.name
+        );
+        let whole = ok(row, &sandbox, &["task", "list", "--limit", "4"]);
+        assert_eq!(
+            listed(&whole),
+            ours(&["T-1", "T-2", "T-3", "T-4"]),
+            "{}: a page larger than the source's ceiling is filled from several of them",
+            row.name
+        );
+    }
+}
+
 #[test]
 fn every_complete_dataset_source_lists_its_tasks_and_shows_one_by_its_qualified_id() {
     for row in complete_dataset_rows() {
@@ -383,13 +609,6 @@ fn every_source_orients_a_native_edge_from_the_item_that_depends() {
             row.name
         );
 
-        // The reverse project read is asked of P-2, and one GitHub source is exactly one
-        // board, so that row cannot be asked about another. Its reverse orientation is
-        // covered where it can be: `project_dependencies_map_reverse_edges_and_page_them`
-        // in that crate's own suite, over a real socket.
-        if !row.fixture.complete_dataset {
-            continue;
-        }
         let reverse_projects = items(&ok(
             row,
             &sandbox,
@@ -577,7 +796,7 @@ fn a_task_in_no_project_is_listed_by_default_and_can_be_selected_on_its_own() {
         plan_says(
             row,
             &orphans,
-            if declared.orphan_tasks {
+            if declared.orphan_tasks.is_native() {
                 "pushed down"
             } else {
                 "applied locally"
@@ -585,13 +804,32 @@ fn a_task_in_no_project_is_listed_by_default_and_can_be_selected_on_its_own() {
             "project",
         );
 
-        // The other way round: tasks of one project, qualified.
+        // The other way round: tasks of one project, qualified. The plan is asserted too,
+        // because `projects` is the field that says whether the source scoped the listing
+        // itself — a source declaring it native and then ignoring it returns another
+        // project's tasks, and the engine, trusting the declaration, applies nothing.
         let of_project = ok(
             row,
             &sandbox,
-            &["task", "list", "--project", &qualified(SOURCE, "P-1")],
+            &[
+                "task",
+                "list",
+                "--project",
+                &qualified(SOURCE, "P-1"),
+                "--explain",
+            ],
         );
         assert_eq!(listed(&of_project), ours(&["T-1", "T-2"]), "{}", row.name);
+        plan_says(
+            row,
+            &of_project,
+            if declared.projects.is_native() {
+                "pushed down"
+            } else {
+                "applied locally"
+            },
+            "project",
+        );
     }
 }
 
@@ -614,7 +852,7 @@ fn complete_dataset_sources_agree_on_label_filtering_wherever_it_is_applied() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
         let declared = row.declared();
-        let outcome = if declared.filter_by_label {
+        let outcome = if declared.filter_by_label.is_native() {
             "pushed down"
         } else {
             "applied locally"
@@ -657,7 +895,7 @@ fn complete_dataset_sources_agree_on_status_filtering_wherever_it_is_applied() {
         plan_says(
             row,
             &todo,
-            if declared.filter_by_status {
+            if declared.filter_by_status.is_native() {
                 "pushed down"
             } else {
                 "applied locally"
@@ -686,11 +924,16 @@ fn searching_covers_titles_bodies_or_either_over_tasks_and_projects() {
         let declared = row.declared();
 
         for (fields, predicate, native, expected) in [
-            ("title", "search-title", declared.search_title, vec!["T-1"]),
+            (
+                "title",
+                "search-title",
+                declared.search_title.is_native(),
+                vec!["T-1"],
+            ),
             (
                 "content",
                 "search-content",
-                declared.search_content,
+                declared.search_content.is_native(),
                 vec!["T-2"],
             ),
         ] {
@@ -800,7 +1043,7 @@ fn complete_dataset_sources_walk_task_dependencies_forwards_and_backwards() {
         plan_says(
             row,
             &reverse,
-            if declared.reverse_task_dependencies {
+            if declared.task_dependencies.answers_reverse() {
                 "pushed down"
             } else {
                 "emulated"
@@ -843,7 +1086,7 @@ fn complete_dataset_sources_walk_project_dependencies_forwards_and_backwards() {
         plan_says(
             row,
             &reverse,
-            if declared.reverse_project_dependencies {
+            if declared.project_dependencies.answers_reverse() {
                 "pushed down"
             } else {
                 "emulated"
@@ -871,7 +1114,7 @@ fn every_complete_dataset_source_filters_projects_by_label_status_and_text() {
         plan_says(
             row,
             &by_label,
-            if declared.filter_by_label {
+            if declared.filter_by_label.is_native() {
                 "pushed down"
             } else {
                 "applied locally"
@@ -891,7 +1134,7 @@ fn every_complete_dataset_source_filters_projects_by_label_status_and_text() {
         plan_says(
             row,
             &by_status,
-            if declared.filter_by_status {
+            if declared.filter_by_status.is_native() {
                 "pushed down"
             } else {
                 "applied locally"
@@ -920,7 +1163,7 @@ fn every_complete_dataset_source_filters_projects_by_label_status_and_text() {
         plan_says(
             row,
             &unheld,
-            if declared.filter_by_status {
+            if declared.filter_by_status.is_native() {
                 "pushed down"
             } else {
                 "applied locally"
@@ -1125,9 +1368,20 @@ fn a_shown_item_carries_the_fields_the_source_gave_it_and_says_when_it_has_none(
             "{}: a task in no project says so:\n{orphan}",
             row.name
         );
+
+        // And a field the source did not give is left out entirely. The field asserted
+        // absent is `labels`, not `url`: every GitHub issue has a url by construction, so
+        // a board fixture claiming an item without one would be modelling something GitHub
+        // cannot return — and the property under test is the renderer's, which any
+        // genuinely absent field proves. P-2 carries no label in any row's fixture.
+        let unlabelled = ok(
+            row,
+            &sandbox,
+            &["project", "show", &qualified(SOURCE, "P-2")],
+        );
         assert!(
-            !orphan.contains("url:"),
-            "{}: and a field the source did not give is left out entirely:\n{orphan}",
+            !unlabelled.contains("labels:"),
+            "{}: a field the source did not give is left out entirely:\n{unlabelled}",
             row.name
         );
 
