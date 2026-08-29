@@ -10,24 +10,23 @@
 //! its sub-issue, so leaving no residue means deleting the board item **and** the issue. The
 //! credential therefore needs to be able to delete an issue in `GH_PROJECTS_REPOSITORY`.
 
-use std::{collections::BTreeMap, env, future::Future};
+use std::{collections::BTreeMap, env};
 
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
     ItemKind, ItemWrite, LabelFilter, NativeId, PageRequest, Project, ProjectFilter, ProjectQuery,
-    SecretResolver, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
-    TaskSource, TextFields, TextQuery,
+    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource,
+    TextFields, TextQuery,
 };
-use secrecy::SecretString;
 use serde_json::{Value, json};
 
-struct LiveSecret(SecretString);
+mod lane;
 
-impl SecretResolver for LiveSecret {
-    fn get(&self, variable: &str) -> Option<SecretString> {
-        (variable == "GH_PROJECTS_TOKEN").then(|| self.0.clone())
-    }
-}
+use lane::{
+    ARTIFACT_PREFIX, LABEL_PREFIX, LiveLane, LiveSecret, artifact_label, artifact_title,
+    is_artifact_label, is_artifact_title, is_run_artifact_title, live_lane, live_write_config,
+    run_then_cleanup,
+};
 
 async fn graphql(token: &str, query: &str, query_name: &str) -> Result<Value, String> {
     graphql_variables(token, query, query_name, json!({})).await
@@ -142,25 +141,6 @@ async fn live_write_status(token: &str, project_id: &str) -> Result<String, Stri
         .ok_or_else(|| "live project has no selectable Status option".to_owned())
 }
 
-/// The write configuration this lane builds for the board it was pointed at.
-///
-/// Writes go by status *category*, and the board's own first Status option is the only
-/// column this lane knows exists — so `todo` is pointed at it and every other
-/// column-bearing category is disabled. Exactly one category writes a column, so however
-/// this board spells that option, no two categories can send it the same one and the
-/// source's own validation has nothing to refuse. Pointing `unknown` at that column
-/// instead is the collision itself: `unknown` and `draft` map to no column by design,
-/// precisely so neither can collide with a category that has one.
-fn live_write_config(
-    owner: &str,
-    project_number: u32,
-    repository: &str,
-    status_option: &str,
-) -> Value {
-    json!({"owner":owner,"project_number":project_number,"repository":repository,
-           "status_mapping":{"todo":status_option,"backlog":null,"in-progress":null}})
-}
-
 async fn remove_live_origin_field(token: &str, project_id: &str) -> Result<(), String> {
     for _ in 0..10 {
         let field_ids = writable_fields(token, project_id)
@@ -190,29 +170,6 @@ async fn remove_live_origin_field(token: &str, project_id: &str) -> Result<(), S
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
     Err("live origin field cleanup left the temporary field behind".to_owned())
-}
-
-/// The prefix of every board item this lane writes.
-///
-/// The rest of a title is `<process id>-<microsecond timestamp>`, which makes one run's artifact
-/// unique and makes any run's artifact recognisable to the next run.
-const ARTIFACT_PREFIX: &str = "onetaskgraph live cleanup ";
-
-fn artifact_title(process_id: u32, stamp_micros: i64) -> String {
-    format!("{ARTIFACT_PREFIX}{process_id}-{stamp_micros}")
-}
-
-/// Whether a board item is one this lane wrote, in this run or in an earlier one.
-fn is_artifact_title(title: &str) -> bool {
-    let Some(suffix) = title.strip_prefix(ARTIFACT_PREFIX) else {
-        return false;
-    };
-    let Some((process_id, stamp_micros)) = suffix.split_once('-') else {
-        return false;
-    };
-    [process_id, stamp_micros]
-        .iter()
-        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// One artifact this lane wrote: its board item, and the issue behind it when there is one.
@@ -340,40 +297,6 @@ macro_rules! ensure {
             return Err(format!($($message)+));
         }
     };
-}
-
-/// Whether a board item is one *this* run wrote.
-///
-/// Every artifact of one run carries this process's id, so a run names its own for
-/// cleanup without touching one an interrupted earlier run left for [`is_artifact_title`]
-/// to sweep.
-fn is_run_artifact_title(process_id: u32, title: &str) -> bool {
-    is_artifact_title(title) && title.starts_with(&format!("{ARTIFACT_PREFIX}{process_id}-"))
-}
-
-/// The prefix of the one repository label this lane creates.
-///
-/// A label this lane created is residue exactly as an issue is, so it is named the way
-/// board items are — this process's id and a timestamp — and swept the same way before a
-/// run starts. The grammar [`is_artifact_label`] accepts is letters, digits and hyphens
-/// only, which is what lets the cleanup below name one in a URL path unescaped.
-const LABEL_PREFIX: &str = "onetaskgraph-live-";
-
-fn artifact_label(process_id: u32, stamp_micros: i64) -> String {
-    format!("{LABEL_PREFIX}{process_id}-{stamp_micros}")
-}
-
-/// Whether a repository label is one this lane created, in this run or in an earlier one.
-fn is_artifact_label(name: &str) -> bool {
-    let Some(suffix) = name.strip_prefix(LABEL_PREFIX) else {
-        return false;
-    };
-    let Some((process_id, stamp_micros)) = suffix.split_once('-') else {
-        return false;
-    };
-    [process_id, stamp_micros]
-        .iter()
-        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// One REST call to GitHub, for the label lifecycle GraphQL puts behind a schema preview.
@@ -531,141 +454,6 @@ async fn remove_live_state(
     } else {
         Err(problems.join("; additionally, "))
     }
-}
-
-async fn run_then_cleanup<J, JF, C, CF>(journey: J, cleanup: C) -> Result<(), String>
-where
-    J: FnOnce() -> JF,
-    JF: Future<Output = Result<(), String>>,
-    C: FnOnce() -> CF,
-    CF: Future<Output = Result<(), String>>,
-{
-    let journey_result = journey().await;
-    let cleanup_result = cleanup().await;
-    match (journey_result, cleanup_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(journey), Ok(())) => Err(journey),
-        (Ok(()), Err(cleanup)) => Err(format!("live cleanup failed: {cleanup}")),
-        (Err(journey), Err(cleanup)) => Err(format!(
-            "{journey}; additionally, live cleanup failed: {cleanup}"
-        )),
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum LiveLane {
-    Run {
-        token: String,
-        owner: String,
-        project_number: u32,
-        repository: String,
-    },
-    Skip(String),
-}
-
-/// Decides whether this lane may run, and against which board.
-///
-/// The board comes from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, and the repository this
-/// source creates its issues in comes from `GH_PROJECTS_REPOSITORY`, or the lane does not run.
-/// Nothing here asks GitHub which project was updated most recently, for the viewer or for any
-/// organization: a credentialed lane that writes and deletes must reach only a board somebody
-/// nominated by name, and that requirement — rather than any cleanup — is what keeps it off a
-/// board nobody nominated. `ONETASKGRAPH_LIVE_REQUIRED=1` turns a skip into
-/// a failure, the same pairing an absent credential already has. `Err` is a misconfiguration,
-/// which fails whether or not the lane is required.
-fn live_lane(
-    token: Option<&str>,
-    owner: Option<&str>,
-    project_number: Option<&str>,
-    repository: Option<&str>,
-    required: Option<&str>,
-) -> Result<LiveLane, String> {
-    let required = match required.map(str::trim) {
-        None | Some("") | Some("0") => false,
-        Some("1") => true,
-        Some(other) => {
-            return Err(format!(
-                "ONETASKGRAPH_LIVE_REQUIRED must be 1, 0 or unset, not {other:?}"
-            ));
-        }
-    };
-    let skip = |reason: String| -> Result<LiveLane, String> {
-        if required {
-            return Err(format!(
-                "{reason}, and ONETASKGRAPH_LIVE_REQUIRED=1 requires the GitHub Projects live \
-                 lane to run"
-            ));
-        }
-        Ok(LiveLane::Skip(reason))
-    };
-    // llmlint: ignore[live_tier_compiles_and_requires_credential] An absent credential
-    // skipping is the recorded decision, not an oversight: AGENTS.md keeps this lane off
-    // the required checks because a required check a third party can turn red stops being
-    // trusted, and a Linear or GitHub outage must not block an unrelated merge. What makes
-    // the decision true rather than stated is that the lane is `#[ignore]`d and only
-    // `test-live` runs it — with `ONETASKGRAPH_LIVE_REQUIRED=1`, which turns every skip
-    // below into the failure this rule asks for.
-    let Some(token) = token else {
-        return skip("GH_PROJECTS_TOKEN is not set".to_owned());
-    };
-    if token.trim().is_empty() {
-        return skip("GH_PROJECTS_TOKEN is empty".to_owned());
-    }
-    let owner = owner.map(str::trim).filter(|owner| !owner.is_empty());
-    let project_number = project_number
-        .map(str::trim)
-        .filter(|number| !number.is_empty());
-    let (owner, project_number) = match (owner, project_number) {
-        (Some(owner), Some(project_number)) => (owner, project_number),
-        (None, None) => {
-            return skip(
-                "GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER are not set, and this lane writes only \
-                 to the board those two name rather than discovering one"
-                    .to_owned(),
-            );
-        }
-        (owner, _) => {
-            return Err(format!(
-                "GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER name one board together: {} is missing",
-                if owner.is_some() {
-                    "GH_PROJECTS_NUMBER"
-                } else {
-                    "GH_PROJECTS_OWNER"
-                }
-            ));
-        }
-    };
-    let number = project_number
-        .parse::<u32>()
-        .ok()
-        .filter(|number| *number > 0 && *number <= i32::MAX as u32)
-        .ok_or_else(|| {
-            format!("GH_PROJECTS_NUMBER must be a positive GraphQL Int, not {project_number:?}")
-        })?;
-    let Some(repository) = repository
-        .map(str::trim)
-        .filter(|repository| !repository.is_empty())
-    else {
-        return skip(
-            "GH_PROJECTS_REPOSITORY is not set, and this lane creates its artifact as an issue \
-             in the repository that name gives rather than discovering one"
-                .to_owned(),
-        );
-    };
-    if repository
-        .split_once('/')
-        .is_none_or(|(owner, name)| owner.is_empty() || name.is_empty() || name.contains('/'))
-    {
-        return Err(format!(
-            "GH_PROJECTS_REPOSITORY must be spelled owner/name, not {repository:?}"
-        ));
-    }
-    Ok(LiveLane::Run {
-        token: token.to_owned(),
-        owner: owner.to_owned(),
-        project_number: number,
-        repository: repository.to_owned(),
-    })
 }
 
 /// Reads the node id of the one nominated board, so residue can be cleared before the journey
@@ -1803,265 +1591,4 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     )
     .await
     .unwrap_or_else(|error| panic!("GitHub live capability journey failed: {error}"));
-}
-
-#[tokio::test]
-async fn cleanup_runs_after_a_successful_live_journey() {
-    let cleaned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let observed = cleaned.clone();
-    assert_eq!(
-        run_then_cleanup(
-            || async { Ok(()) },
-            || async move {
-                observed.store(true, std::sync::atomic::Ordering::SeqCst);
-                Ok(())
-            }
-        )
-        .await,
-        Ok(())
-    );
-    assert!(cleaned.load(std::sync::atomic::Ordering::SeqCst));
-}
-
-#[tokio::test]
-async fn cleanup_runs_after_a_failed_live_journey() {
-    let cleaned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let observed = cleaned.clone();
-    assert_eq!(
-        run_then_cleanup(
-            || async { Err("injected mutation failure".to_owned()) },
-            || async move {
-                observed.store(true, std::sync::atomic::Ordering::SeqCst);
-                Ok(())
-            }
-        )
-        .await,
-        Err("injected mutation failure".to_owned())
-    );
-    assert!(cleaned.load(std::sync::atomic::Ordering::SeqCst));
-}
-
-#[test]
-fn the_lane_takes_its_board_and_repository_only_from_the_names_it_is_given() {
-    assert_eq!(
-        live_lane(
-            Some("live-token"),
-            Some("nickderobertis"),
-            Some("1"),
-            Some("acme/work"),
-            None
-        ),
-        Ok(LiveLane::Run {
-            token: "live-token".to_owned(),
-            owner: "nickderobertis".to_owned(),
-            project_number: 1,
-            repository: "acme/work".to_owned(),
-        })
-    );
-}
-
-#[test]
-fn the_lanes_write_configuration_is_accepted_whatever_the_board_calls_its_first_column() {
-    // The lane discovers this option name from the board at run time, so its configuration
-    // has to be accepted whichever name comes back — including each name a shipped default
-    // already claims, which is where pointing `unknown` at the column collided.
-    for option in ["Todo", "Backlog", "In Progress", "Ready for review"] {
-        onetaskgraph_github_projects::Plugin
-            .build(
-                &SourceName::new("github-live").unwrap(),
-                &live_write_config("nickderobertis", 1, "acme/work", option),
-                &LiveSecret("live-token".into()),
-            )
-            .unwrap_or_else(|error| {
-                panic!(
-                    "the live write configuration was refused for a board whose first Status \
-                     option is {option:?}: {error}"
-                )
-            });
-    }
-}
-
-#[test]
-fn an_unnamed_board_skips_the_lane_and_says_which_two_names_it_needs() {
-    let Ok(LiveLane::Skip(reason)) =
-        live_lane(Some("live-token"), None, None, Some("acme/work"), None)
-    else {
-        panic!("a credential without a named board must skip rather than discover one");
-    };
-    assert!(
-        reason.contains("GH_PROJECTS_OWNER") && reason.contains("GH_PROJECTS_NUMBER"),
-        "the skip must name both variables, not just report a skip: {reason}"
-    );
-}
-
-#[test]
-fn an_unnamed_board_fails_the_lane_when_the_live_tier_is_required() {
-    let error = live_lane(Some("live-token"), None, None, Some("acme/work"), Some("1"))
-        .expect_err("ONETASKGRAPH_LIVE_REQUIRED=1 must turn the unnamed-board skip into a failure");
-    assert!(
-        error.contains("GH_PROJECTS_OWNER")
-            && error.contains("GH_PROJECTS_NUMBER")
-            && error.contains("ONETASKGRAPH_LIVE_REQUIRED"),
-        "the failure must name both variables and what demanded them: {error}"
-    );
-}
-
-#[test]
-fn an_absent_credential_keeps_its_own_skip_or_fail_pairing() {
-    let Ok(LiveLane::Skip(reason)) = live_lane(
-        None,
-        Some("nickderobertis"),
-        Some("1"),
-        Some("acme/work"),
-        None,
-    ) else {
-        panic!("an absent credential must skip");
-    };
-    assert!(reason.contains("GH_PROJECTS_TOKEN"), "{reason}");
-    let error = live_lane(
-        None,
-        Some("nickderobertis"),
-        Some("1"),
-        Some("acme/work"),
-        Some("1"),
-    )
-    .expect_err("ONETASKGRAPH_LIVE_REQUIRED=1 must turn the absent-credential skip into a failure");
-    assert!(error.contains("GH_PROJECTS_TOKEN"), "{error}");
-    let Ok(LiveLane::Skip(empty)) = live_lane(
-        Some("  "),
-        Some("nickderobertis"),
-        Some("1"),
-        Some("acme/work"),
-        None,
-    ) else {
-        panic!("an empty credential must skip");
-    };
-    assert!(empty.contains("GH_PROJECTS_TOKEN"), "{empty}");
-}
-
-#[test]
-fn half_a_board_and_an_unusable_number_are_misconfigurations_rather_than_skips() {
-    for (owner, number) in [
-        (Some("nickderobertis"), None),
-        (None, Some("1")),
-        (Some("nickderobertis"), Some("0")),
-        (Some("nickderobertis"), Some("not-a-number")),
-        (Some("nickderobertis"), Some("4294967295")),
-    ] {
-        live_lane(Some("live-token"), owner, number, Some("acme/work"), None).expect_err(&format!(
-            "GH_PROJECTS_OWNER={owner:?} with GH_PROJECTS_NUMBER={number:?} must fail rather than \
-             skip or select a board"
-        ));
-    }
-}
-
-#[test]
-fn an_unnamed_repository_skips_the_lane_and_a_malformed_one_is_a_misconfiguration() {
-    // A lane that creates issues names the repository it creates them in, for the reason it
-    // names the board: a credentialed write must not land somewhere nobody nominated.
-    let Ok(LiveLane::Skip(reason)) = live_lane(
-        Some("live-token"),
-        Some("nickderobertis"),
-        Some("1"),
-        None,
-        None,
-    ) else {
-        panic!("an unnamed repository must skip rather than discover one");
-    };
-    assert!(reason.contains("GH_PROJECTS_REPOSITORY"), "{reason}");
-    let required = live_lane(
-        Some("live-token"),
-        Some("nickderobertis"),
-        Some("1"),
-        None,
-        Some("1"),
-    )
-    .expect_err("ONETASKGRAPH_LIVE_REQUIRED=1 turns that skip into a failure");
-    assert!(required.contains("GH_PROJECTS_REPOSITORY"), "{required}");
-    for malformed in ["nameless", "acme/", "/work", "acme/work/extra"] {
-        live_lane(
-            Some("live-token"),
-            Some("nickderobertis"),
-            Some("1"),
-            Some(malformed),
-            None,
-        )
-        .expect_err(&format!("GH_PROJECTS_REPOSITORY={malformed:?} must fail"));
-    }
-}
-
-#[test]
-fn residue_recovery_matches_this_lanes_own_artifacts_and_nothing_else() {
-    // The stale item this lane's recovery exists for: another run's process id and timestamp.
-    assert!(is_artifact_title(
-        "onetaskgraph live cleanup 2533-1787816134627361"
-    ));
-    assert!(is_artifact_title(&artifact_title(std::process::id(), 1)));
-    for foreign in [
-        "AI Orchestrator plan",
-        "onetaskgraph live cleanup",
-        "onetaskgraph live cleanup 2533",
-        "onetaskgraph live cleanup abc-1787816134627361",
-        "onetaskgraph live cleanup 2533-",
-        "copy of onetaskgraph live cleanup 2533-1787816134627361",
-    ] {
-        assert!(
-            !is_artifact_title(foreign),
-            "residue recovery must not match {foreign:?}"
-        );
-    }
-    // A run names its own by the process id every one of its artifacts shares, so it
-    // cleans up after itself without touching what an interrupted earlier run left for
-    // the sweep above.
-    assert!(is_run_artifact_title(
-        2533,
-        "onetaskgraph live cleanup 2533-17"
-    ));
-    for other in [
-        "onetaskgraph live cleanup 25330-17",
-        "onetaskgraph live cleanup 253-17",
-        "onetaskgraph live cleanup 12533-17",
-    ] {
-        assert!(
-            !is_run_artifact_title(2533, other),
-            "one run's cleanup must not match another run's {other:?}"
-        );
-    }
-    // The label is residue exactly as an item is, and is recognised the same way.
-    assert!(is_artifact_label("onetaskgraph-live-2533-1787816134627361"));
-    assert!(is_artifact_label(&artifact_label(std::process::id(), 1)));
-    for foreign in [
-        "bug",
-        "onetaskgraph-live-",
-        "onetaskgraph-live-2533",
-        "onetaskgraph-live-abc-1787816134627361",
-        "onetaskgraph-live-2533-",
-        "not-onetaskgraph-live-2533-1787816134627361",
-    ] {
-        assert!(
-            !is_artifact_label(foreign),
-            "label recovery must not match {foreign:?}"
-        );
-    }
-}
-
-#[test]
-fn an_unreadable_live_tier_demand_is_a_misconfiguration() {
-    for unusable in ["yes", "true", "2", "on"] {
-        live_lane(
-            Some("live-token"),
-            Some("nickderobertis"),
-            Some("1"),
-            Some("acme/work"),
-            Some(unusable),
-        )
-        .expect_err(&format!(
-            "ONETASKGRAPH_LIVE_REQUIRED={unusable:?} must fail rather than quietly mean not-required"
-        ));
-    }
-    assert_eq!(
-        live_lane(Some("live-token"), None, None, Some("acme/work"), Some("0")),
-        live_lane(Some("live-token"), None, None, Some("acme/work"), None),
-        "0 and unset both mean the lane may skip"
-    );
 }
