@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.12](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.11...onetaskgraph-github-projects-v0.2.12) - 2026-08-29
+
+### Fixed
+
+- *(github-projects)* apply every predicate a query carries and declare it ([#65](https://github.com/nickderobertis/onetaskgraph/pull/65))
+
 ## [0.2.9](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.8...onetaskgraph-github-projects-v0.2.9) - 2026-08-28
 
 ### Added
