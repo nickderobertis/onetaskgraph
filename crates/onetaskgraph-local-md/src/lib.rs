@@ -1,4 +1,30 @@
 //! A stateless onetaskgraph source over hand-authored Markdown files.
+//!
+//! # What this source declares, field by field
+//!
+//! One verdict per field of [`Capabilities`]. This source reads the whole folder before it
+//! answers anything, so every predicate is applied here rather than pushed at a remote
+//! service — which is what `Support::Native` means in the plugin contract: *the source
+//! applies this predicate itself*, wherever it applies it. Nothing here is unsupported,
+//! and nothing here could be: a filter over documents already read is a filter over
+//! documents already read.
+//!
+//! *Proven* means a shared journey drives it against the real binary over this source's
+//! own row in `crates/onetaskgraph/tests/e2e/fixtures.rs`, and
+//! `every_row_declares_exactly_what_its_plugin_reports` is what keeps this list and
+//! [`capabilities`](TaskSource::capabilities) from parting.
+//!
+//! | Field | Verdict |
+//! | --- | --- |
+//! | `projects` | **Supported and proven.** `projects/` is a folder of its own, and a task's `project:` key is what files it under one. |
+//! | `orphan_tasks` | **Supported and proven.** A task document with no `project:` key belongs to none. |
+//! | `filter_by_label` | **Supported and proven,** over the `labels:` key, requiring every label asked for and excluding every label refused. |
+//! | `filter_by_status` | **Supported and proven,** over `status:` through this instance's own `status_mapping`. |
+//! | `search_title` | **Supported and proven,** over the `title:` key. |
+//! | `search_content` | **Supported and proven,** over the document body below the front matter. |
+//! | `task_dependencies` | **Supported and proven,** in both directions: the reverse read scans the folder's own `depends_on` keys, which is a read of data already in hand rather than an index. |
+//! | `project_dependencies` | **Supported and proven,** in both directions, the same way. |
+//! | `max_page_size` | **Supported and proven.** [`MAX_PAGE_SIZE`], the largest page one folder scan returns. |
 #![deny(missing_docs)]
 
 use std::{

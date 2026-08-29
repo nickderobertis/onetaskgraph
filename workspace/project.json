@@ -62,7 +62,8 @@
           "bash scripts/check-credential-names.sh",
           "bash scripts/check-journey-matrix.sh",
           "bash scripts/check-origin-key-spelling.sh",
-          "bash scripts/check-metadata-slot-encoding.sh"
+          "bash scripts/check-metadata-slot-encoding.sh",
+          "bash scripts/check-capability-verdicts.sh"
         ],
         "parallel": false
       },
@@ -97,7 +98,9 @@
         "{workspaceRoot}/crates/onetaskgraph-core/src/global_id.rs",
         "{workspaceRoot}/scripts/check-origin-key-spelling.sh",
         "{workspaceRoot}/docs/metadata.md",
-        "{workspaceRoot}/scripts/check-metadata-slot-encoding.sh"
+        "{workspaceRoot}/scripts/check-metadata-slot-encoding.sh",
+        "{workspaceRoot}/docs/follow-ups.md",
+        "{workspaceRoot}/scripts/check-capability-verdicts.sh"
       ]
     },
     "typecheck": {

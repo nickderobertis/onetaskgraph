@@ -1219,3 +1219,276 @@ async fn an_unstated_status_reads_as_backlog_and_draft_is_read_as_an_ordinary_st
         StatusCategory::Draft
     );
 }
+
+/// The folder every capability assertion below reads.
+///
+/// Two projects with one task filed under each, one task filed under neither, one label
+/// on one of the three and a closed status on another: that shape is what makes an
+/// honoured predicate and an ignored one *different answers*. A folder holding one
+/// project, or one where every task carries the label, answers a filter the same way
+/// whether or not the source applies it.
+fn capability_folder() -> (tempfile::TempDir, Box<dyn TaskSource>) {
+    let root = tempfile::tempdir().expect("temporary notes");
+    fs::create_dir_all(root.path().join("tasks")).expect("task folder");
+    fs::create_dir_all(root.path().join("projects")).expect("project folder");
+    fs::write(
+        root.path().join("projects/alpha.md"),
+        "---\ntitle: Alpha project\nstatus: todo\n---\nthe first plan\n",
+    )
+    .expect("project");
+    fs::write(
+        root.path().join("projects/beta.md"),
+        "---\ntitle: Beta project\nstatus: todo\ndepends_on: [alpha]\n---\nthe second plan\n",
+    )
+    .expect("project");
+    fs::write(
+        root.path().join("tasks/first.md"),
+        "---\ntitle: Alpha task\nstatus: todo\nlabels: [Backend]\nproject: alpha\n---\nordinary body\n",
+    )
+    .expect("task");
+    fs::write(
+        root.path().join("tasks/second.md"),
+        "---\ntitle: Beta task\nstatus: todo\nlabels: [Frontend]\nproject: beta\ndepends_on: [first]\n---\nordinary body\n",
+    )
+    .expect("task");
+    fs::write(
+        root.path().join("tasks/orphan.md"),
+        "---\ntitle: Loose task\nstatus: done\n---\na needle in this body alone\n",
+    )
+    .expect("task");
+    let source = onetaskgraph_local_md::Plugin
+        .build(
+            &SourceName::new("notes").unwrap(),
+            &serde_json::json!({"root":root.path()}),
+            &NoSecrets,
+        )
+        .expect("source builds");
+    (root, source)
+}
+
+async fn task_ids(source: &dyn TaskSource, query: &TaskQuery) -> Vec<String> {
+    let mut ids = source
+        .query_tasks(query, &page(50))
+        .await
+        .expect("the folder answers this query")
+        .items
+        .into_iter()
+        .map(|task| task.id.0)
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+#[tokio::test]
+async fn every_declared_capability_is_applied_to_the_real_folder() {
+    let (root, source) = capability_folder();
+    // Every field of the contract's `Capabilities`, spelled out: the struct has no
+    // `Default`, so a field added to the contract fails to compile here rather than going
+    // unasserted, and each one is driven against the folder below.
+    assert_eq!(
+        source.capabilities(),
+        onetaskgraph_plugin_api::Capabilities {
+            projects: onetaskgraph_plugin_api::Support::Native,
+            orphan_tasks: onetaskgraph_plugin_api::Support::Native,
+            filter_by_label: onetaskgraph_plugin_api::Support::Native,
+            filter_by_status: onetaskgraph_plugin_api::Support::Native,
+            search_title: onetaskgraph_plugin_api::Support::Native,
+            search_content: onetaskgraph_plugin_api::Support::Native,
+            task_dependencies: onetaskgraph_plugin_api::DependencySupport::BothDirections,
+            project_dependencies: onetaskgraph_plugin_api::DependencySupport::BothDirections,
+            max_page_size: onetaskgraph_local_md::MAX_PAGE_SIZE,
+        }
+    );
+
+    // `projects`: the folder holds two, and a listing scoped to one keeps the task filed
+    // under it and no other.
+    let mut projects = source
+        .query_projects(&ProjectQuery::default(), &page(50))
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|project| project.id.0)
+        .collect::<Vec<_>>();
+    projects.sort();
+    assert_eq!(projects, ["alpha", "beta"]);
+    assert_eq!(
+        source
+            .get_project(&NativeId("alpha".into()))
+            .await
+            .unwrap()
+            .map(|project| project.title),
+        Some("Alpha project".to_owned())
+    );
+    let under = |id: &str| TaskQuery {
+        project: ProjectFilter::Is(NativeId(id.into())),
+        ..TaskQuery::default()
+    };
+    assert_eq!(task_ids(source.as_ref(), &under("alpha")).await, ["first"]);
+    assert_eq!(task_ids(source.as_ref(), &under("beta")).await, ["second"]);
+
+    // `orphan_tasks`: the one document with no `project:` key, and neither of the two
+    // that have one.
+    assert_eq!(
+        task_ids(
+            source.as_ref(),
+            &TaskQuery {
+                project: ProjectFilter::Orphans,
+                ..TaskQuery::default()
+            }
+        )
+        .await,
+        ["orphan"]
+    );
+
+    // `filter_by_label`: one of the three carries it, matched however the file spells it.
+    let labelled = |filter: LabelFilter| TaskQuery {
+        labels: filter,
+        ..TaskQuery::default()
+    };
+    assert_eq!(
+        task_ids(
+            source.as_ref(),
+            &labelled(LabelFilter {
+                any_of: vec!["backend".into()],
+                ..LabelFilter::default()
+            })
+        )
+        .await,
+        ["first"]
+    );
+    assert_eq!(
+        task_ids(
+            source.as_ref(),
+            &labelled(LabelFilter {
+                none_of: vec!["backend".into()],
+                ..LabelFilter::default()
+            })
+        )
+        .await,
+        ["orphan", "second"]
+    );
+
+    // `filter_by_status`: two documents say `todo` and one says `done`.
+    let filed_under = |category| TaskQuery {
+        statuses: vec![category],
+        ..TaskQuery::default()
+    };
+    assert_eq!(
+        task_ids(source.as_ref(), &filed_under(StatusCategory::Todo)).await,
+        ["first", "second"]
+    );
+    assert_eq!(
+        task_ids(source.as_ref(), &filed_under(StatusCategory::Done)).await,
+        ["orphan"]
+    );
+
+    // `search_title` and `search_content`: "Loose" is in one title and no body, "needle"
+    // is in one body and no title, so each half finds its own and neither finds the
+    // other's.
+    let searching = |terms: &str, fields| TaskQuery {
+        text: Some(TextQuery {
+            terms: terms.into(),
+            fields,
+        }),
+        ..TaskQuery::default()
+    };
+    assert_eq!(
+        task_ids(source.as_ref(), &searching("loose", TextFields::Title)).await,
+        ["orphan"]
+    );
+    assert!(
+        task_ids(source.as_ref(), &searching("needle", TextFields::Title))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        task_ids(source.as_ref(), &searching("needle", TextFields::Content)).await,
+        ["orphan"]
+    );
+    assert!(
+        task_ids(source.as_ref(), &searching("loose", TextFields::Content))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        task_ids(
+            source.as_ref(),
+            &searching("needle", TextFields::TitleOrContent)
+        )
+        .await,
+        ["orphan"]
+    );
+
+    // `task_dependencies` and `project_dependencies`, both directions each: one
+    // relationship reads the same from either end, `from` being the document that waits.
+    let task_edge = DependencyEdge {
+        from: DependencyEndpoint::from_native(NativeId("second".into()), ItemKind::Task),
+        to: DependencyEndpoint::from_native(NativeId("first".into()), ItemKind::Task),
+        kind: DependencyKind::Blocks,
+    };
+    assert_eq!(
+        source
+            .task_dependencies(&NativeId("second".into()), Direction::DependsOn, &page(50))
+            .await
+            .unwrap()
+            .items,
+        std::slice::from_ref(&task_edge)
+    );
+    assert_eq!(
+        source
+            .task_dependencies(
+                &NativeId("first".into()),
+                Direction::DependedOnBy,
+                &page(50)
+            )
+            .await
+            .unwrap()
+            .items,
+        [task_edge]
+    );
+    let project_edge = DependencyEdge {
+        from: DependencyEndpoint::from_native(NativeId("beta".into()), ItemKind::Project),
+        to: DependencyEndpoint::from_native(NativeId("alpha".into()), ItemKind::Project),
+        kind: DependencyKind::Blocks,
+    };
+    assert_eq!(
+        source
+            .project_dependencies(&NativeId("beta".into()), Direction::DependsOn, &page(50))
+            .await
+            .unwrap()
+            .items,
+        std::slice::from_ref(&project_edge)
+    );
+    assert_eq!(
+        source
+            .project_dependencies(
+                &NativeId("alpha".into()),
+                Direction::DependedOnBy,
+                &page(50)
+            )
+            .await
+            .unwrap()
+            .items,
+        [project_edge]
+    );
+
+    // `max_page_size`: a folder holding one document more than the ceiling serves the
+    // ceiling and says the walk continues, rather than serving the folder.
+    for index in 0..=onetaskgraph_local_md::MAX_PAGE_SIZE {
+        fs::write(
+            root.path().join(format!("tasks/bulk-{index}.md")),
+            format!("---\ntitle: Bulk {index}\n---\nbulk\n"),
+        )
+        .unwrap();
+    }
+    let ceiling = source
+        .query_tasks(&TaskQuery::default(), &page(u32::MAX))
+        .await
+        .unwrap();
+    assert_eq!(
+        ceiling.items.len(),
+        onetaskgraph_local_md::MAX_PAGE_SIZE as usize
+    );
+    assert!(ceiling.next.is_some());
+}

@@ -13,9 +13,11 @@ use std::{
 };
 
 use onetaskgraph_plugin_api::{
-    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, ItemKind, ItemWrite,
-    Label, NativeId, PageRequest, Project, ProjectQuery, Repository, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery, TaskSource, WriteSupport,
+    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
+    Direction, ItemKind, ItemWrite, Label, LabelFilter, NativeId, PageRequest, Project,
+    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -627,7 +629,8 @@ fn write<T>(item: T) -> ItemWrite<T> {
 }
 
 #[tokio::test]
-async fn the_committed_board_fixture_maps_to_two_projects_one_task_and_no_pull_request() {
+async fn the_committed_board_fixture_maps_to_two_projects_their_tasks_an_orphan_and_no_pull_request()
+ {
     // The committed fixture is the drift artifact the pinned-schema test validates, so it
     // is read here through a real socket rather than paraphrased.
     let fixture: Value = serde_json::from_str(include_str!("fixtures/project.json")).unwrap();
@@ -644,8 +647,8 @@ async fn the_committed_board_fixture_maps_to_two_projects_one_task_and_no_pull_r
             .iter()
             .map(|project| project.id.0.as_str())
             .collect::<Vec<_>>(),
-        ["I_plan", "I_empty"],
-        "an issue with sub-issues and a marked empty issue are both projects"
+        ["I_plan", "I_next"],
+        "an issue with sub-issues and an issue carrying the kind marker are both projects"
     );
     assert_eq!(
         projects.items[0].content.as_deref(),
@@ -671,8 +674,18 @@ async fn the_committed_board_fixture_maps_to_two_projects_one_task_and_no_pull_r
             .iter()
             .map(|task| task.id.0.as_str())
             .collect::<Vec<_>>(),
-        ["I_task"],
-        "a sub-issue is the only task, and the pull request is neither"
+        ["I_task", "I_notes", "I_loose"],
+        "each project's own sub-issue is a task, so is the issue under no parent, and the \
+         pull request is neither"
+    );
+    assert_eq!(
+        tasks
+            .items
+            .iter()
+            .map(|task| task.project.as_ref().map(|id| id.0.as_str()))
+            .collect::<Vec<_>>(),
+        [Some("I_plan"), Some("I_next"), None],
+        "the board holds a task under each of its two projects and one under neither"
     );
     let one = &tasks.items[0];
     assert_eq!(one.project, Some(NativeId("I_plan".to_owned())));
@@ -693,6 +706,402 @@ async fn the_committed_board_fixture_maps_to_two_projects_one_task_and_no_pull_r
             .map(|label| label.name.as_str())
             .collect::<Vec<_>>(),
         ["bug", "team"]
+    );
+}
+
+/// The committed board fixture, served over a real socket.
+///
+/// It holds two projects, a task under each of them, a task under neither, and a pull
+/// request, so one board answers every shape of the project filter.
+fn committed_board() -> Box<dyn TaskSource> {
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/project.json")).unwrap();
+    configured(&raw_server("200 OK", &fixture.to_string()), json!({}))
+}
+
+async fn selected_tasks(source: &dyn TaskSource, query: &TaskQuery) -> Vec<String> {
+    source
+        .query_tasks(query, &page(10))
+        .await
+        .expect("the board answers a task query")
+        .items
+        .into_iter()
+        .map(|task| task.id.0)
+        .collect()
+}
+
+async fn selected_projects(source: &dyn TaskSource, query: &ProjectQuery) -> Vec<String> {
+    source
+        .query_projects(query, &page(10))
+        .await
+        .expect("the board answers a project query")
+        .items
+        .into_iter()
+        .map(|project| project.id.0)
+        .collect()
+}
+
+fn label_filter(any_of: &[&str], all_of: &[&str], none_of: &[&str]) -> LabelFilter {
+    let owned = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect();
+    LabelFilter {
+        any_of: owned(any_of),
+        all_of: owned(all_of),
+        none_of: owned(none_of),
+    }
+}
+
+fn text(terms: &str, fields: TextFields) -> Option<TextQuery> {
+    Some(TextQuery {
+        terms: terms.to_owned(),
+        fields,
+    })
+}
+
+#[tokio::test]
+async fn a_task_read_scoped_to_one_project_returns_only_that_projects_tasks() {
+    // This source declares `projects` native, so the engine pushes the filter down and
+    // applies nothing of its own. Ignoring it here returned every task on the board, which
+    // is how a second plan on one board corrupted the first.
+    let source = committed_board();
+
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &TaskQuery {
+                project: ProjectFilter::Is(NativeId("I_plan".to_owned())),
+                ..TaskQuery::default()
+            },
+        )
+        .await,
+        ["I_task"],
+        "a board holding a second project must not answer with that project's tasks"
+    );
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &TaskQuery {
+                project: ProjectFilter::Is(NativeId("I_next".to_owned())),
+                ..TaskQuery::default()
+            },
+        )
+        .await,
+        ["I_notes"]
+    );
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &TaskQuery {
+                project: ProjectFilter::Orphans,
+                ..TaskQuery::default()
+            },
+        )
+        .await,
+        ["I_loose"],
+        "a task under no parent is the one a project-less selection keeps"
+    );
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &TaskQuery {
+                project: ProjectFilter::Is(NativeId("I_nothing".to_owned())),
+                ..TaskQuery::default()
+            },
+        )
+        .await,
+        Vec::<String>::new(),
+        "a project the board does not hold selects nothing rather than everything"
+    );
+    assert_eq!(
+        selected_tasks(source.as_ref(), &TaskQuery::default()).await,
+        ["I_task", "I_notes", "I_loose"],
+        "an unconstrained query still answers with the whole board"
+    );
+}
+
+#[tokio::test]
+async fn every_predicate_a_task_query_carries_is_applied() {
+    let source = committed_board();
+    let query =
+        |labels: LabelFilter, statuses: Vec<StatusCategory>, text: Option<TextQuery>| TaskQuery {
+            text,
+            labels,
+            statuses,
+            project: ProjectFilter::Any,
+        };
+    let none = LabelFilter::default();
+
+    for (expected, query) in [
+        (
+            vec!["I_task", "I_loose"],
+            query(label_filter(&["bug"], &[], &[]), vec![], None),
+        ),
+        (
+            vec!["I_task", "I_notes", "I_loose"],
+            query(label_filter(&["bug", "docs"], &[], &[]), vec![], None),
+        ),
+        (
+            vec!["I_task"],
+            query(label_filter(&[], &["bug", "team"], &[]), vec![], None),
+        ),
+        (
+            vec!["I_notes"],
+            query(label_filter(&[], &[], &["bug"]), vec![], None),
+        ),
+        (
+            vec![],
+            query(label_filter(&["bug"], &[], &["bug"]), vec![], None),
+        ),
+        // Names match case-insensitively, the way the local Markdown source matches them.
+        (
+            vec!["I_task", "I_loose"],
+            query(label_filter(&["BUG"], &[], &[]), vec![], None),
+        ),
+        (
+            vec!["I_task", "I_loose"],
+            query(none.clone(), vec![StatusCategory::Todo], None),
+        ),
+        (
+            vec!["I_notes"],
+            query(none.clone(), vec![StatusCategory::InProgress], None),
+        ),
+        (
+            vec!["I_task", "I_notes", "I_loose"],
+            query(
+                none.clone(),
+                vec![StatusCategory::Todo, StatusCategory::InProgress],
+                None,
+            ),
+        ),
+        (
+            vec!["I_loose"],
+            query(none.clone(), vec![], text("sweep", TextFields::Title)),
+        ),
+        (
+            vec![],
+            query(none.clone(), vec![], text("filed", TextFields::Title)),
+        ),
+        (
+            vec!["I_loose"],
+            query(none.clone(), vec![], text("filed", TextFields::Content)),
+        ),
+        (
+            vec![],
+            query(none.clone(), vec![], text("sweep", TextFields::Content)),
+        ),
+        (
+            vec!["I_notes"],
+            query(
+                none.clone(),
+                vec![],
+                text("QUARTER", TextFields::TitleOrContent),
+            ),
+        ),
+        (
+            vec!["I_task"],
+            query(none.clone(), vec![], text("sHIP", TextFields::Title)),
+        ),
+        // Every predicate at once narrows rather than widens.
+        (
+            vec!["I_loose"],
+            TaskQuery {
+                text: text("work", TextFields::Content),
+                labels: label_filter(&["bug"], &[], &["team"]),
+                statuses: vec![StatusCategory::Todo],
+                project: ProjectFilter::Orphans,
+            },
+        ),
+    ] {
+        assert_eq!(
+            selected_tasks(source.as_ref(), &query).await,
+            expected,
+            "{query:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn every_predicate_a_project_query_carries_is_applied() {
+    let fixture = board(vec![
+        Item::issue("P_engine", "Engine plan")
+            .body("runtime work")
+            .status("Todo")
+            .sub_issues(1)
+            .labelled(&[("L_core", "core")]),
+        Item::issue("P_docs", "Docs plan")
+            .body("prose work")
+            .status("In Progress")
+            .sub_issues(1)
+            .labelled(&[("L_chore", "chore")]),
+        Item::issue("I_task", "a task").status("Todo"),
+    ]);
+    let source = source(&fixture);
+    let query = |labels: LabelFilter, statuses: Vec<StatusCategory>, text: Option<TextQuery>| {
+        ProjectQuery {
+            text,
+            labels,
+            statuses,
+        }
+    };
+    let none = LabelFilter::default();
+
+    for (expected, query) in [
+        (
+            vec!["P_engine", "P_docs"],
+            query(none.clone(), vec![], None),
+        ),
+        (
+            vec!["P_engine"],
+            query(label_filter(&["core"], &[], &[]), vec![], None),
+        ),
+        (
+            vec![],
+            query(label_filter(&[], &["core", "chore"], &[]), vec![], None),
+        ),
+        (
+            vec!["P_docs"],
+            query(label_filter(&[], &[], &["core"]), vec![], None),
+        ),
+        (
+            vec!["P_docs"],
+            query(none.clone(), vec![StatusCategory::InProgress], None),
+        ),
+        (
+            vec!["P_engine", "P_docs"],
+            query(
+                none.clone(),
+                vec![StatusCategory::Todo, StatusCategory::InProgress],
+                None,
+            ),
+        ),
+        (
+            vec!["P_docs"],
+            query(none.clone(), vec![], text("docs", TextFields::Title)),
+        ),
+        (
+            vec![],
+            query(none.clone(), vec![], text("prose", TextFields::Title)),
+        ),
+        (
+            vec!["P_docs"],
+            query(none.clone(), vec![], text("prose", TextFields::Content)),
+        ),
+        (
+            vec![],
+            query(none.clone(), vec![], text("docs", TextFields::Content)),
+        ),
+        (
+            vec!["P_engine", "P_docs"],
+            query(
+                none.clone(),
+                vec![],
+                text("work", TextFields::TitleOrContent),
+            ),
+        ),
+        (
+            vec!["P_docs"],
+            ProjectQuery {
+                text: text("plan", TextFields::Title),
+                labels: label_filter(&["chore"], &[], &[]),
+                statuses: vec![StatusCategory::InProgress],
+            },
+        ),
+    ] {
+        assert_eq!(
+            selected_projects(source.as_ref(), &query).await,
+            expected,
+            "{query:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_filtered_task_or_project_result_is_paged_after_it_is_filtered() {
+    // Paging the board and then filtering the page would answer this walk with one item
+    // and then stop: `I_2` would consume the first page and leave nothing in it.
+    let fixture = board(
+        (1..=5)
+            .map(|n| {
+                let item = Item::issue(&format!("I_{n}"), "step").status("Todo");
+                if n % 2 == 1 {
+                    item.labelled(&[("L_keep", "keep")])
+                } else {
+                    item.labelled(&[("L_drop", "drop")])
+                }
+            })
+            .chain((1..=3).map(|n| {
+                let item = Item::issue(&format!("P_{n}"), "plan")
+                    .status("Todo")
+                    .sub_issues(1);
+                if n % 2 == 1 {
+                    item.labelled(&[("L_keep", "keep")])
+                } else {
+                    item.labelled(&[("L_drop", "drop")])
+                }
+            }))
+            .collect(),
+    );
+    let source = source(&fixture);
+    let query = TaskQuery {
+        labels: label_filter(&["keep"], &[], &[]),
+        ..TaskQuery::default()
+    };
+
+    let first = source.query_tasks(&query, &page(2)).await.unwrap();
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|task| task.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["I_1", "I_3"],
+        "a page of a filtered result is a page of the survivors"
+    );
+    assert!(first.next.is_some(), "a third survivor is still owed");
+
+    let mut walked = Vec::new();
+    let mut cursor = None;
+    loop {
+        let request = cursor.map_or_else(|| page(1), |cursor: Cursor| resume(&cursor.0, 1));
+        let answered = source.query_tasks(&query, &request).await.unwrap();
+        walked.extend(answered.items.into_iter().map(|task| task.id.0));
+        match answered.next {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(
+        walked,
+        ["I_1", "I_3", "I_5"],
+        "a walk to exhaustion returns every survivor exactly once in a stable order"
+    );
+
+    let projects = ProjectQuery {
+        labels: label_filter(&["keep"], &[], &[]),
+        ..ProjectQuery::default()
+    };
+    let first = source.query_projects(&projects, &page(1)).await.unwrap();
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|project| project.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["P_1"]
+    );
+    let mut walked = Vec::new();
+    let mut cursor = None;
+    loop {
+        let request = cursor.map_or_else(|| page(1), |cursor: Cursor| resume(&cursor.0, 1));
+        let answered = source.query_projects(&projects, &request).await.unwrap();
+        walked.extend(answered.items.into_iter().map(|project| project.id.0));
+        match answered.next {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(
+        walked,
+        ["P_1", "P_3"],
+        "a page smaller than the surviving projects walks to exhaustion over survivors"
     );
 }
 
@@ -2013,11 +2422,27 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
     assert!(health.detail.unwrap().contains("Roadmap"));
     assert_eq!(source.kind(), onetaskgraph_github_projects::KIND);
     assert_eq!(source.writes(), WriteSupport::Supported);
-    let capabilities = source.capabilities();
-    assert_eq!(capabilities.max_page_size, 100);
+    // Every field, rather than a subset: this source applies every predicate a query
+    // carries, in process, over a board it has already walked in full, and GitHub's
+    // project-items connection has no filter argument to push any of them into.
     assert_eq!(
-        capabilities.project_dependencies,
-        onetaskgraph_plugin_api::DependencySupport::BothDirections
+        source.capabilities(),
+        Capabilities {
+            projects: Support::Native,
+            orphan_tasks: Support::Native,
+            filter_by_label: Support::Native,
+            filter_by_status: Support::Native,
+            search_title: Support::Native,
+            search_content: Support::Native,
+            task_dependencies: DependencySupport::BothDirections,
+            project_dependencies: DependencySupport::BothDirections,
+            max_page_size: onetaskgraph_github_projects::MAX_PAGE_SIZE,
+        }
+    );
+    assert_eq!(
+        onetaskgraph_github_projects::MAX_PAGE_SIZE,
+        100,
+        "the declared page size is GitHub's own connection maximum"
     );
 }
 

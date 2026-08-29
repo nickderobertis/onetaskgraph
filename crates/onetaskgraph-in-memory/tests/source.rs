@@ -1088,3 +1088,237 @@ async fn a_draft_status_is_configurable_listed_and_filtered_like_any_other() {
         .expect("answers");
     assert_eq!(task_ids(&todo), ["T-2"]);
 }
+
+/// Every field of the contract's `Capabilities`, under one configuration, driven against
+/// the store the source really answers from.
+///
+/// The fixture is what makes an honoured predicate and an ignored one *different
+/// answers*: two projects with tasks under each, a task under neither, a label two tasks
+/// carry and two do not, four statuses, and edges in both dependency tables. A source
+/// over a single project, or over work where every task carries the label, answers a
+/// filter the same way whether or not it applies it.
+#[tokio::test]
+async fn every_declared_capability_is_applied_to_the_held_work() {
+    let source = fully_capable();
+    // The struct has no `Default`, so a field added to the contract fails to compile here
+    // rather than going unasserted.
+    assert_eq!(
+        source.capabilities(),
+        onetaskgraph_plugin_api::Capabilities {
+            projects: Support::Native,
+            orphan_tasks: Support::Native,
+            filter_by_label: Support::Native,
+            filter_by_status: Support::Native,
+            search_title: Support::Native,
+            search_content: Support::Native,
+            task_dependencies: DependencySupport::BothDirections,
+            project_dependencies: DependencySupport::BothDirections,
+            max_page_size: 100,
+        }
+    );
+
+    let sorted = |mut ids: Vec<String>| {
+        ids.sort();
+        ids
+    };
+    let selected = async |query: TaskQuery| -> Vec<String> {
+        sorted(task_ids(
+            &source.query_tasks(&query, &whole()).await.unwrap(),
+        ))
+    };
+
+    // `projects`: two are held, and a listing scoped to one keeps the tasks filed under
+    // it and no other.
+    assert_eq!(
+        sorted(ids(
+            &source
+                .query_projects(&ProjectQuery::default(), &whole())
+                .await
+                .unwrap(),
+            |project| project.id.to_string()
+        )),
+        ["P-1", "P-2"]
+    );
+    let under = |id: &str| TaskQuery {
+        project: ProjectFilter::Is(NativeId(id.into())),
+        ..TaskQuery::default()
+    };
+    assert_eq!(selected(under("P-1")).await, ["T-1", "T-2"]);
+    assert_eq!(selected(under("P-2")).await, ["T-3"]);
+
+    // `orphan_tasks`: the one task belonging to no project.
+    assert_eq!(
+        selected(TaskQuery {
+            project: ProjectFilter::Orphans,
+            ..TaskQuery::default()
+        })
+        .await,
+        ["T-4"]
+    );
+
+    // `filter_by_label`: two tasks carry `infra` and two do not, and `all_of` narrows to
+    // the one carrying both.
+    let labelled = |filter: LabelFilter| TaskQuery {
+        labels: filter,
+        ..TaskQuery::default()
+    };
+    assert_eq!(
+        selected(labelled(LabelFilter {
+            any_of: vec!["infra".into()],
+            ..LabelFilter::default()
+        }))
+        .await,
+        ["T-1", "T-2"]
+    );
+    assert_eq!(
+        selected(labelled(LabelFilter {
+            none_of: vec!["infra".into()],
+            ..LabelFilter::default()
+        }))
+        .await,
+        ["T-3", "T-4"]
+    );
+    assert_eq!(
+        selected(labelled(LabelFilter {
+            all_of: vec!["infra".into(), "p1".into()],
+            ..LabelFilter::default()
+        }))
+        .await,
+        ["T-1"]
+    );
+
+    // `filter_by_status`: the four tasks sit in four categories, so each selects one.
+    let filed_under = |category| TaskQuery {
+        statuses: vec![category],
+        ..TaskQuery::default()
+    };
+    assert_eq!(
+        selected(filed_under(
+            onetaskgraph_plugin_api::StatusCategory::InProgress
+        ))
+        .await,
+        ["T-1"]
+    );
+    assert_eq!(
+        selected(filed_under(onetaskgraph_plugin_api::StatusCategory::Todo)).await,
+        ["T-2"]
+    );
+    assert_eq!(
+        selected(filed_under(onetaskgraph_plugin_api::StatusCategory::Done)).await,
+        ["T-4"]
+    );
+
+    // `search_title` and `search_content`: "loose" is in one title and no body, "belongs"
+    // is in one body and no title, so each half finds its own and neither the other's.
+    let searching = |terms: &str, fields| TaskQuery {
+        text: Some(TextQuery {
+            terms: terms.into(),
+            fields,
+        }),
+        ..TaskQuery::default()
+    };
+    assert_eq!(
+        selected(searching("loose", TextFields::Title)).await,
+        ["T-4"]
+    );
+    assert!(
+        selected(searching("loose", TextFields::Content))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        selected(searching("belongs", TextFields::Content)).await,
+        ["T-4"]
+    );
+    assert!(
+        selected(searching("belongs", TextFields::Title))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        selected(searching("belongs", TextFields::TitleOrContent)).await,
+        ["T-4"]
+    );
+
+    // `task_dependencies` and `project_dependencies`, both directions each: one
+    // relationship reads the same from either end, `from` being the item that waits.
+    let task_edge = DependencyEdge {
+        from: DependencyEndpoint::from_native(NativeId("T-2".into()), ItemKind::Task),
+        to: DependencyEndpoint::from_native(NativeId("T-1".into()), ItemKind::Task),
+        kind: DependencyKind::Blocks,
+    };
+    assert_eq!(
+        source
+            .task_dependencies(&NativeId("T-2".into()), Direction::DependsOn, &whole())
+            .await
+            .unwrap()
+            .items,
+        std::slice::from_ref(&task_edge)
+    );
+    assert!(
+        source
+            .task_dependencies(&NativeId("T-1".into()), Direction::DependedOnBy, &whole())
+            .await
+            .unwrap()
+            .items
+            .contains(&task_edge)
+    );
+    let project_edge = DependencyEdge {
+        from: DependencyEndpoint::from_native(NativeId("P-2".into()), ItemKind::Project),
+        to: DependencyEndpoint::from_native(NativeId("P-1".into()), ItemKind::Project),
+        kind: DependencyKind::Blocks,
+    };
+    assert_eq!(
+        source
+            .project_dependencies(&NativeId("P-2".into()), Direction::DependsOn, &whole())
+            .await
+            .unwrap()
+            .items,
+        std::slice::from_ref(&project_edge)
+    );
+    assert_eq!(
+        source
+            .project_dependencies(&NativeId("P-1".into()), Direction::DependedOnBy, &whole())
+            .await
+            .unwrap()
+            .items,
+        std::slice::from_ref(&project_edge)
+    );
+
+    // `max_page_size`: a limit above the declared ceiling is clamped rather than refused,
+    // and a limit below the result set walks to exhaustion in the order one whole page
+    // reports.
+    let whole_page = task_ids(
+        &source
+            .query_tasks(&TaskQuery::default(), &whole())
+            .await
+            .unwrap(),
+    );
+    let clamped = source
+        .query_tasks(
+            &TaskQuery::default(),
+            &PageRequest {
+                cursor: None,
+                limit: source.capabilities().max_page_size + 1,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(task_ids(&clamped), whole_page);
+    let mut walked = Vec::new();
+    let mut cursor = None;
+    loop {
+        let step = source
+            .query_tasks(&TaskQuery::default(), &PageRequest { cursor, limit: 1 })
+            .await
+            .unwrap();
+        assert!(step.items.len() <= 1);
+        walked.extend(task_ids(&step));
+        cursor = step.next;
+        if cursor.is_none() {
+            break;
+        }
+        assert!(walked.len() <= 10, "the paged walk must terminate");
+    }
+    assert_eq!(walked, whole_page);
+}

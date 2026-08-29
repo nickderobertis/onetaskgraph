@@ -10,6 +10,7 @@
 //! knows has no row here. Every registered plugin is implemented, so every row carries a
 //! working source fixture.
 
+use onetaskgraph_plugin_api::{Capabilities, DependencySupport, Support};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -42,21 +43,116 @@ pub struct Ready {
 }
 
 /// What one row's source declares, so a journey can assert the plan as well as the rows.
+///
+/// One field per field of [`Capabilities`], in that type's own order and spelled with that
+/// type's own values, so a capability no journey happens to drive is still represented
+/// here — a predicate a plugin declares and then ignores narrows the answer silently, and
+/// a field this table has no room for is a field nothing above the plugin can catch.
+///
+/// A struct of its own rather than a `Capabilities`, because a row's entry is a *claim
+/// about* what the plugin reports rather than a copy of it. [`Declared::claimed`] is where
+/// the two are made comparable, and `every_row_declares_exactly_what_its_plugin_reports`
+/// in `journeys.rs` fails, naming the row and the field, when they disagree.
 pub struct Declared {
-    /// Whether the source filters by label itself.
-    pub filter_by_label: bool,
-    /// Whether the source filters by status itself.
-    pub filter_by_status: bool,
-    /// Whether the source searches titles itself.
-    pub search_title: bool,
-    /// Whether the source searches bodies itself.
-    pub search_content: bool,
+    /// Whether the source filters tasks to a named project itself.
+    pub projects: Support,
     /// Whether the source can select tasks belonging to no project.
-    pub orphan_tasks: bool,
-    /// Whether the source answers reverse task dependencies itself.
-    pub reverse_task_dependencies: bool,
-    /// Whether the source answers reverse project dependencies itself.
-    pub reverse_project_dependencies: bool,
+    pub orphan_tasks: Support,
+    /// Whether the source filters by label itself.
+    pub filter_by_label: Support,
+    /// Whether the source filters by status itself.
+    pub filter_by_status: Support,
+    /// Whether the source searches titles itself.
+    pub search_title: Support,
+    /// Whether the source searches bodies itself.
+    pub search_content: Support,
+    /// How far the source walks task dependencies itself.
+    pub task_dependencies: DependencySupport,
+    /// How far the source walks project dependencies itself.
+    pub project_dependencies: DependencySupport,
+    /// The largest page the source will serve.
+    pub max_page_size: u32,
+}
+
+impl Declared {
+    /// This declaration as the capability value a plugin would report.
+    ///
+    /// Spelled out field by field over a type with no `Default`, so a field added to the
+    /// contract fails to compile here rather than going unreconciled.
+    #[must_use]
+    pub fn claimed(&self) -> Capabilities {
+        Capabilities {
+            projects: self.projects,
+            orphan_tasks: self.orphan_tasks,
+            filter_by_label: self.filter_by_label,
+            filter_by_status: self.filter_by_status,
+            search_title: self.search_title,
+            search_content: self.search_content,
+            task_dependencies: self.task_dependencies,
+            project_dependencies: self.project_dependencies,
+            max_page_size: self.max_page_size,
+        }
+    }
+
+    /// Every field where this declaration and `reported` differ, named.
+    ///
+    /// One entry per disagreeing field rather than one whole-value comparison, because
+    /// the failure a reader needs is *which capability* the table is lying about.
+    #[must_use]
+    pub fn disagreements(&self, reported: &Capabilities) -> Vec<String> {
+        let claimed = self.claimed();
+        let support = |field: &'static str, claimed: Support, reported: Support| {
+            (claimed != reported).then(|| {
+                format!("{field}: the table declares {claimed:?}, the plugin reports {reported:?}")
+            })
+        };
+        let dependencies = |field: &'static str,
+                            claimed: DependencySupport,
+                            reported: DependencySupport| {
+            (claimed != reported).then(|| {
+                format!("{field}: the table declares {claimed:?}, the plugin reports {reported:?}")
+            })
+        };
+        [
+            support("projects", claimed.projects, reported.projects),
+            support("orphan_tasks", claimed.orphan_tasks, reported.orphan_tasks),
+            support(
+                "filter_by_label",
+                claimed.filter_by_label,
+                reported.filter_by_label,
+            ),
+            support(
+                "filter_by_status",
+                claimed.filter_by_status,
+                reported.filter_by_status,
+            ),
+            support("search_title", claimed.search_title, reported.search_title),
+            support(
+                "search_content",
+                claimed.search_content,
+                reported.search_content,
+            ),
+            dependencies(
+                "task_dependencies",
+                claimed.task_dependencies,
+                reported.task_dependencies,
+            ),
+            dependencies(
+                "project_dependencies",
+                claimed.project_dependencies,
+                reported.project_dependencies,
+            ),
+            (claimed.max_page_size != reported.max_page_size).then(|| {
+                format!(
+                    "max_page_size: the table declares {}, the plugin reports {}",
+                    claimed.max_page_size, reported.max_page_size
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
 }
 
 impl Row {
@@ -150,31 +246,32 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: native_block,
             complete_dataset: true,
-            declared: Declared {
-                filter_by_label: true,
-                filter_by_status: true,
-                search_title: true,
-                search_content: true,
-                orphan_tasks: true,
-                reverse_task_dependencies: true,
-                reverse_project_dependencies: true,
-            },
+            declared: EVERYTHING_NATIVE,
         },
     },
     Row {
         plugin: "in-memory",
-        name: "in-memory (declares nothing native, forward-only)",
+        // `projects` is the one field this row cannot drop, and the name says so rather
+        // than reading as an oversight somebody would helpfully "fix": in the contract
+        // that field means *this source has projects at all*, so a source declaring it
+        // unsupported contributes no project rows and the engine reports the predicate
+        // unreachable instead of compensating. Every field where compensation is sound is
+        // unsupported here on purpose — this row is the engine's compensation path's only
+        // coverage, not a plugin someone forgot to finish.
+        name: "in-memory (compensated: nothing native but its project table, forward-only)",
         fixture: Ready {
             block: compensated_block,
             complete_dataset: true,
             declared: Declared {
-                filter_by_label: false,
-                filter_by_status: false,
-                search_title: false,
-                search_content: false,
-                orphan_tasks: false,
-                reverse_task_dependencies: false,
-                reverse_project_dependencies: false,
+                projects: Support::Native,
+                orphan_tasks: Support::Unsupported,
+                filter_by_label: Support::Unsupported,
+                filter_by_status: Support::Unsupported,
+                search_title: Support::Unsupported,
+                search_content: Support::Unsupported,
+                task_dependencies: DependencySupport::ForwardOnly,
+                project_dependencies: DependencySupport::ForwardOnly,
+                max_page_size: 2,
             },
         },
     },
@@ -184,15 +281,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: hosted_block,
             complete_dataset: true,
-            declared: Declared {
-                filter_by_label: true,
-                filter_by_status: true,
-                search_title: true,
-                search_content: true,
-                orphan_tasks: true,
-                reverse_task_dependencies: true,
-                reverse_project_dependencies: true,
-            },
+            declared: EVERYTHING_NATIVE,
         },
     },
     Row {
@@ -201,19 +290,9 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: local_md_block,
             complete_dataset: true,
-            // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The journeys use
-            // these expectations to assert the real binary's reported plan, whose values
-            // come from `LocalMdSource::capabilities`; changing that implementation without
-            // this fixture makes those public-boundary assertions fail, so the journeys are
-            // the drift gate rather than a second authoritative declaration.
             declared: Declared {
-                filter_by_label: true,
-                filter_by_status: true,
-                search_title: true,
-                search_content: true,
-                orphan_tasks: true,
-                reverse_task_dependencies: true,
-                reverse_project_dependencies: true,
+                max_page_size: 200,
+                ..EVERYTHING_NATIVE
             },
         },
     },
@@ -225,14 +304,16 @@ pub const ROWS: &[Row] = &[
             // Linear models the whole table: two projects, an orphan, and dependencies in
             // both directions, so it drives the shared complete-dataset journeys.
             complete_dataset: true,
+            // The two searches are unsupported, which is what makes this row the one that
+            // proves the engine's text compensation against a real remote protocol. That
+            // is a ruling rather than a finding: Linear's own API has issue search, so
+            // this is unimplemented rather than unsupportable — see the verdict table in
+            // `onetaskgraph-linear`'s own module documentation and `docs/follow-ups.md`.
             declared: Declared {
-                filter_by_label: true,
-                filter_by_status: true,
-                search_title: false,
-                search_content: false,
-                orphan_tasks: true,
-                reverse_task_dependencies: true,
-                reverse_project_dependencies: true,
+                search_title: Support::Unsupported,
+                search_content: Support::Unsupported,
+                max_page_size: 250,
+                ..EVERYTHING_NATIVE
             },
         },
     },
@@ -241,22 +322,40 @@ pub const ROWS: &[Row] = &[
         name: "github-projects",
         fixture: Ready {
             block: github_projects_block,
-            // One GitHub source is exactly one ProjectV2 board and every item belongs to
-            // it. It cannot faithfully represent the table's two projects and orphan.
-            // Focused journeys drive this working row over the subset GitHub can model.
-            complete_dataset: false,
+            // A board is a container of projects, not a project: a project is an issue and
+            // its tasks are that issue's sub-issues, which is what this source's own module
+            // documentation records and what the fixture board below is built as. So one
+            // GitHub source represents the whole shared dataset — two projects with tasks
+            // filed under each, and a task filed under neither — and drives every shared
+            // journey rather than a subset chosen for it.
+            complete_dataset: true,
+            // The source walks the whole board before it answers anything, so it applies
+            // every predicate a query carries itself; `GitHubProjectsSource`'s own module
+            // documentation records why that is what `Native` means here.
             declared: Declared {
-                filter_by_label: false,
-                filter_by_status: false,
-                search_title: false,
-                search_content: false,
-                orphan_tasks: false,
-                reverse_task_dependencies: false,
-                reverse_project_dependencies: false,
+                max_page_size: 100,
+                ..EVERYTHING_NATIVE
             },
         },
     },
 ];
+
+/// The declaration a source that applies every predicate itself carries.
+///
+/// A named constant because five of the six rows differ from it in at most two fields,
+/// and a row spelled out in full is a row whose one interesting difference is buried.
+/// `max_page_size` is the in-memory default; a row whose plugin picks its own overrides it.
+const EVERYTHING_NATIVE: Declared = Declared {
+    projects: Support::Native,
+    orphan_tasks: Support::Native,
+    filter_by_label: Support::Native,
+    filter_by_status: Support::Native,
+    search_title: Support::Native,
+    search_content: Support::Native,
+    task_dependencies: DependencySupport::BothDirections,
+    project_dependencies: DependencySupport::BothDirections,
+    max_page_size: 50,
+};
 fn github_projects_block(sandbox: &Sandbox) -> Value {
     github_projects_server(sandbox, None)
 }
@@ -274,12 +373,16 @@ pub fn github_projects_recording(sandbox: &Sandbox, recorded: Value) -> Value {
 /// A board is a container of projects: `T-1`..`T-4` are task issues, and `P-1` and `P-2`
 /// are project issues, readable as projects because they carry this source's own kind
 /// marker rather than because the board is one.
+///
+/// [`Placement::parent`] is what makes that structure real rather than asserted, and the
+/// board below sets it: the shared dataset's two projects hold their own tasks and one
+/// task is filed under neither. Before it carried parents, every task on this board was an
+/// orphan and no filter scoped to a project could have separated anything.
 fn github_item(
     id: &str,
     title: &str,
     body: &str,
-    status: &str,
-    state: (&str, Option<&str>),
+    at: Placement,
     labels: Value,
     slot: Value,
 ) -> Value {
@@ -289,9 +392,24 @@ fn github_item(
         format!("{body}\n\n<!-- onetaskgraph.metadata\n{slot}\n-->")
     };
     json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue","title":title,"body":body,
-           "state":state.0,"reason":state.1,"parent":Value::Null,
-           "repo":"nickderobertis/onetaskgraph","status":status,"origin":"",
+           "state":at.state.0,"reason":at.state.1,
+           "parent":at.parent.map_or(Value::Null, |id| json!(id)),
+           "repo":"nickderobertis/onetaskgraph","status":at.status,"origin":"",
            "labels":labels})
+}
+
+/// Where one fixture item sits on the board.
+///
+/// The three facts GitHub keeps about an issue's *position* rather than its content, in
+/// one value: which `Status` option the board gives it, whether the issue is open or
+/// closed and why, and which issue it is a sub-issue of.
+struct Placement<'a> {
+    /// The name of the board `Status` option on this item.
+    status: &'a str,
+    /// `IssueState`, and the `IssueStateReason` behind a closed one.
+    state: (&'a str, Option<&'a str>),
+    /// The issue this one is filed under, which is what project membership is here.
+    parent: Option<&'a str>,
 }
 
 fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
@@ -307,8 +425,11 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
             "T-1",
             "Alpha engine",
             "the engine core",
-            "Todo",
-            ("OPEN", None),
+            Placement {
+                status: "Todo",
+                state: ("OPEN", None),
+                parent: Some("P-1"),
+            },
             json!([["L-1", "bug"], ["L-3", "core"]]),
             json!({"onepipeline.turn_budget":12,"caller.flags":[true,null],
                    "onetaskgraph.depends_on":recorded.cloned().unwrap_or_else(||
@@ -318,8 +439,11 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
             "T-2",
             "Beta",
             "alpha in the body",
-            "Shipped",
-            ("CLOSED", Some("COMPLETED")),
+            Placement {
+                status: "Shipped",
+                state: ("CLOSED", Some("COMPLETED")),
+                parent: Some("P-1"),
+            },
             json!([["L-2", "chore"]]),
             json!({}),
         ),
@@ -327,8 +451,11 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
             "T-3",
             "Gamma",
             "unrelated",
-            "Todo",
-            ("OPEN", None),
+            Placement {
+                status: "Todo",
+                state: ("OPEN", None),
+                parent: None,
+            },
             json!([["L-1", "bug"]]),
             json!({}),
         ),
@@ -336,18 +463,24 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
             "T-4",
             "Delta docs",
             "documentation",
-            "Doing",
-            ("OPEN", None),
+            Placement {
+                status: "Doing",
+                state: ("OPEN", None),
+                parent: Some("P-2"),
+            },
             json!([["L-3", "core"]]),
             json!({}),
         ),
         github_item(
             "P-1",
             "Engine",
-            "alpha engine project",
-            "Doing",
-            ("OPEN", None),
-            json!([]),
+            "the engine",
+            Placement {
+                status: "Doing",
+                state: ("OPEN", None),
+                parent: None,
+            },
+            json!([["L-3", "core"]]),
             marked(json!({"onepipeline.publication":{"mode":"review"},
                           "onetaskgraph.depends_on":recorded_far_ends("project_dependencies", &json!("P-1"))})),
         ),
@@ -355,8 +488,11 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
             "P-2",
             "Docs",
             "alpha docs",
-            "Todo",
-            ("OPEN", None),
+            Placement {
+                status: "Todo",
+                state: ("OPEN", None),
+                parent: None,
+            },
             json!([]),
             marked(json!({})),
         ),
@@ -364,10 +500,16 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
 }
 
 /// The board's own `blockedBy` graph: which item waits on which.
+///
+/// The dataset's fourth task edge is `related` rather than `blocks`, and GitHub has no
+/// such relation — `blockedBy` is the only native one an issue has — so this board spells
+/// it the only way it can. The shared journeys assert the edge's *ends*, which is the
+/// property every backend owes; the kind a backend cannot express is not one of them.
 fn github_blockers() -> Vec<(String, Vec<String>)> {
     [
         ("T-1", vec!["T-2"]),
         ("T-3", vec!["T-2"]),
+        ("T-4", vec!["T-2"]),
         ("P-1", vec!["P-2"]),
     ]
     .into_iter()

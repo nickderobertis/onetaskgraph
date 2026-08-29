@@ -7,10 +7,43 @@
 //! project relations provide native dependency traversal in both directions.
 //!
 //! Label, workflow-state, project, and orphan filters are sent in the
-//! `issues(filter:)`/`projects(filter:)` variables. Linear's separate search
-//! connection cannot restrict matching to title versus description, so all
-//! three text predicates are deliberately unsupported and ignored here for
-//! sound engine compensation. Pagination uses Relay `first` and `after`.
+//! `issues(filter:)`/`projects(filter:)` variables. Pagination uses Relay `first` and
+//! `after`.
+//!
+//! # What this source declares, field by field
+//!
+//! One verdict per field of [`Capabilities`]. A field is *supported and proven* when this
+//! source applies it and a shared journey drives it against the real binary; the shared
+//! table is `crates/onetaskgraph/tests/e2e/fixtures.rs`, the journeys are beside it, and
+//! `every_row_declares_exactly_what_its_plugin_reports` is what keeps this list and
+//! [`capabilities`](TaskSource::capabilities) from parting.
+//!
+//! | Field | Verdict |
+//! | --- | --- |
+//! | `projects` | **Supported and proven.** `issues(filter:{project:{id:{eq:…}}})`. |
+//! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
+//! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{inIgnoreCase:…}}}` and `{eqIgnoreCase:…}` for what an item must carry, `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. |
+//! | `filter_by_status` | **Supported and proven.** `state:{type:{in:[…]}}`, over the `WorkflowState.type` vocabulary the category maps to. |
+//! | `search_title` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
+//! | `search_content` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
+//! | `task_dependencies` | **Supported and proven,** in both directions: `relations` and `inverseRelations`. |
+//! | `project_dependencies` | **Supported and proven,** in both directions, by the project relations of the same shape. |
+//! | `max_page_size` | **Supported and proven.** 250, Linear's own connection maximum; every read pages with Relay `first`/`after`. |
+//!
+//! ## Ruling: the two searches are unimplemented, not unsupportable
+//!
+//! Linear's published API *does* offer issue search — `searchIssues` is a documented
+//! operation of it — so there is no property of the remote service that makes a title-only
+//! or a body-only match impossible here. What is true today is narrower and is recorded as
+//! such: no production operation in this crate sends one, so declaring either predicate
+//! `Native` would break capability rule 1, and `Unsupported` is the only honest
+//! declaration for the code that exists.
+//!
+//! The engine compensates correctly for both — it over-fetches and narrows, and the shared
+//! journeys assert that this row returns the same rows every native row does with the plan
+//! naming the engine — so the declaration is sound as well as honest. It is still a gap
+//! rather than a limit, and reading it as a limit is what would leave it here forever.
+//! Implementing it is tracked in `docs/follow-ups.md`.
 //!
 //! Caller metadata is canonical JSON in a trailing
 //! `<!-- onetaskgraph.metadata ... -->` Markdown comment in the item's description. The
@@ -20,9 +53,15 @@
 //! `onetaskgraph.depends_on` metadata key.
 //!
 //! Fixture provenance is recorded in `tests/fixtures/README.md`. The ignored live lane
-//! exercises reads by default; its mutation journey requires an explicitly named scratch
-//! team and immediately requests deletion of its scratch issue. A failed live cleanup is
-//! reported as a test failure and may require manual deletion from that scratch team.
+//! drives every field of the table above against Linear itself: it builds its own fixture
+//! on the scratch team `LINEAR_WRITE_TEAM` names — two projects, one issue filed under
+//! each, one filed under neither, two labels and two workflow states — because that shape
+//! is what tells an honoured predicate from an ignored one, and a workspace where every
+//! issue carries the label answers a filter the same way either way. The two searches are
+//! asserted as what they are declared: the wider set, unnarrowed. Everything the lane
+//! creates it deletes whether its assertions passed or failed, and it clears residue named
+//! the way it names its own before it starts. A failed live cleanup is reported as a test
+//! failure and may require manual deletion from that scratch team.
 #![deny(missing_docs)]
 
 use chrono::{DateTime, Utc};
