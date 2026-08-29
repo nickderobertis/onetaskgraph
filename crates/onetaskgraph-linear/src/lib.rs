@@ -43,8 +43,7 @@
 //! journeys assert that this row returns the same rows every native row does with the plan
 //! naming the engine — so the declaration is sound as well as honest. It is still a gap
 //! rather than a limit, and reading it as a limit is what would leave it here forever.
-//! Implementing it is tracked in `docs/follow-ups.md` and is deliberately not part of the
-//! change that wrote this paragraph.
+//! Implementing it is tracked in `docs/follow-ups.md`.
 //!
 //! Caller metadata is canonical JSON in a trailing
 //! `<!-- onetaskgraph.metadata ... -->` Markdown comment in the item's description. The

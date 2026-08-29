@@ -40,8 +40,10 @@
 //! and the board's own `Sub-issues progress` field from closed sub-issues: a plan whose
 //! finished tasks were only moved to a "Done" column would read 0% complete forever.
 //!
-//! **What this source applies, and what `Native` means when it says so.** One verdict per
-//! field of [`Capabilities`]. *Proven* means a shared journey drives it against the real
+//! # What this source declares, field by field
+//!
+//! One verdict per field of [`Capabilities`], and what `Native` means when this source
+//! says it. *Proven* means a shared journey drives it against the real
 //! binary over this source's own row in `crates/onetaskgraph/tests/e2e/fixtures.rs`, and
 //! `every_row_declares_exactly_what_its_plugin_reports` is what keeps this list and
 //! [`capabilities`](TaskSource::capabilities) from parting.

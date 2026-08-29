@@ -12,18 +12,26 @@
 //!
 //! # What this source declares, field by field
 //!
-//! Every field of `Capabilities` — `projects`, `orphan_tasks`, `filter_by_label`,
-//! `filter_by_status`, `search_title`, `search_content`, `task_dependencies`,
-//! `project_dependencies` and `max_page_size` — is **supported and proven, and is the
-//! hosted source's own**: [`SubprocessSource`] reports the value the program behind the
-//! pipe sent in its handshake, unchanged, and holds no opinion of its own about any of
-//! them. There is nothing here that could be unsupported, because there is nothing here
-//! that decides.
+//! One verdict per field of `Capabilities`. Every one of them is **supported and proven,
+//! and is the hosted source's own**: [`SubprocessSource`] reports the value the program
+//! behind the pipe sent in its handshake, unchanged, and holds no opinion of its own about
+//! any of them. Nothing here could be unsupported, because nothing here decides.
 //!
-//! That is the claim worth proving rather than asserting, and it is: the journey table's
-//! `subprocess` row hosts the in-memory source over a real pipe and answers every shared
-//! journey — every capability field included — with the same rows and the same plan the
-//! in-process row does.
+//! | Field | Verdict |
+//! | --- | --- |
+//! | `projects` | **Supported and proven** — the hosted source's own, forwarded. |
+//! | `orphan_tasks` | **Supported and proven** — the hosted source's own, forwarded. |
+//! | `filter_by_label` | **Supported and proven** — the hosted source's own, forwarded. |
+//! | `filter_by_status` | **Supported and proven** — the hosted source's own, forwarded. |
+//! | `search_title` | **Supported and proven** — the hosted source's own, forwarded. |
+//! | `search_content` | **Supported and proven** — the hosted source's own, forwarded. |
+//! | `task_dependencies` | **Supported and proven** — the hosted source's own, forwarded. |
+//! | `project_dependencies` | **Supported and proven** — the hosted source's own, forwarded. |
+//! | `max_page_size` | **Supported and proven** — the hosted source's own, forwarded. |
+//!
+//! That is proven rather than asserted: the journey table's `subprocess` row hosts the
+//! in-memory source over a real pipe and answers every shared journey — every capability
+//! field included — with the same rows and the same plan the in-process row does.
 //!
 //! [`TaskSource`]: onetaskgraph_plugin_api::TaskSource
 

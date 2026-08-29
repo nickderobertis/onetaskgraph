@@ -871,7 +871,6 @@ async fn every_predicate_a_task_query_carries_is_applied() {
                 None,
             ),
         ),
-        // Free text, over whichever fields the query names and no others.
         (
             vec!["I_loose"],
             query(none.clone(), vec![], text("sweep", TextFields::Title)),
@@ -1075,7 +1074,6 @@ async fn a_filtered_task_or_project_result_is_paged_after_it_is_filtered() {
         "a walk to exhaustion returns every survivor exactly once in a stable order"
     );
 
-    // The same of a project listing, whose survivors also outnumber the page asked for.
     let projects = ProjectQuery {
         labels: label_filter(&["keep"], &[], &[]),
         ..ProjectQuery::default()

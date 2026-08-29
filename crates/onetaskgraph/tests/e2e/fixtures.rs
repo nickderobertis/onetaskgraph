@@ -44,18 +44,15 @@ pub struct Ready {
 
 /// What one row's source declares, so a journey can assert the plan as well as the rows.
 ///
-/// One field per field of [`Capabilities`], in that type's own order and spelled with
-/// that type's own values — because the table's earlier shape had a field per *predicate
-/// a journey happened to drive*, and `projects` was missing from it altogether. The one
-/// capability the GitHub source declares native was therefore not represented in the
-/// shared matrix in any form, and a plugin that declared it and then ignored it returned
-/// another project's tasks with nothing here able to notice.
+/// One field per field of [`Capabilities`], in that type's own order and spelled with that
+/// type's own values, so a capability no journey happens to drive is still represented
+/// here — a predicate a plugin declares and then ignores narrows the answer silently, and
+/// a field this table has no room for is a field nothing above the plugin can catch.
 ///
-/// It is a struct of its own rather than a `Capabilities`, because a row's entry is a
-/// *claim about* what the plugin reports rather than a copy of it; [`Declared::claimed`]
-/// is where the two are made comparable, and
-/// `every_row_declares_exactly_what_its_plugin_reports` in `journeys.rs` is what fails,
-/// naming the row and the field, when they disagree.
+/// A struct of its own rather than a `Capabilities`, because a row's entry is a *claim
+/// about* what the plugin reports rather than a copy of it. [`Declared::claimed`] is where
+/// the two are made comparable, and `every_row_declares_exactly_what_its_plugin_reports`
+/// in `journeys.rs` fails, naming the row and the field, when they disagree.
 pub struct Declared {
     /// Whether the source filters tasks to a named project itself.
     pub projects: Support,
@@ -450,7 +447,6 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
             json!([["L-2", "chore"]]),
             json!({}),
         ),
-        // The dataset's orphan, and on a board that means an issue filed under no parent.
         github_item(
             "T-3",
             "Gamma",

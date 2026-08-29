@@ -11,6 +11,8 @@ Closing an entry means deleting it in the same change that does the work.
 
 ## Linear: title and content search are unimplemented
 
+Unsupported fields: `onetaskgraph-linear` `search_title`, `search_content`
+
 `onetaskgraph-linear` declares `search_title` and `search_content` as
 `Support::Unsupported`, so the engine over-fetches and narrows in memory. That is correct
 and sound — capability rule 2 says an unsupported predicate is *ignored*, never
@@ -27,8 +29,7 @@ Closing it means: adding that operation, pinning it, flipping both fields to
 `Support::Native`, updating this plugin's row in
 `crates/onetaskgraph/tests/e2e/fixtures.rs` — which the reconciliation journey will
 otherwise fail, naming the row and the field — and deleting this entry and the ruling in
-`onetaskgraph-linear`'s module documentation.
+`onetaskgraph-linear`'s module documentation. `scripts/check-capability-verdicts.sh` reads
+the field line above and fails while it names a capability that plugin no longer calls
+unsupported, so the entry cannot outlive the gap it describes.
 
-Deliberately out of scope of the change that recorded it: that change's subject was making
-the journey table prove every declared capability, and implementing a new remote operation
-inside it would have been a second, unreviewed thing.
