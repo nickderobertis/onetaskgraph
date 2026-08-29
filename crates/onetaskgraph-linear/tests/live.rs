@@ -770,23 +770,39 @@ async fn drive_every_declared_capability(
         "a walk in pages of one reached {walked:?} where one whole page reports {whole:?}"
     );
 
-    // `max_page_size`: a limit above the declared ceiling is clamped rather than sent to
-    // Linear, and the ceiling is Linear's own connection maximum rather than a guess at
-    // one — the API serves a page of exactly that size and refuses one row more.
+    // `max_page_size`: the source clamps a limit one above its declared ceiling to that
+    // ceiling instead of passing it on, so the read succeeds rather than being refused
+    // for a page size Linear's connection cannot serve.
     let ceiling = source.capabilities().max_page_size;
-    let clamped = task_titles(
-        source,
-        &scoped(),
-        "read at a limit above the declared ceiling",
-    )
-    .await?;
+    let clamped = sorted(
+        source
+            .query_tasks(
+                &scoped(),
+                &PageRequest {
+                    cursor: None,
+                    limit: ceiling + 1,
+                },
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "a limit one above the declared ceiling was refused rather than clamped: \
+                     {error}"
+                )
+            })?
+            .items
+            .into_iter()
+            .map(|task| task.title)
+            .collect(),
+    );
     ensure!(
         clamped == all_three,
-        "a limit above the declared ceiling did not return this run's own three issues"
+        "a limit above the declared ceiling returned {clamped:?} rather than this run's own \
+         three issues"
     );
-    // Only that the declared ceiling is a page Linear really serves. What one row more
-    // does is Linear's own business and is not documented as a refusal, so asserting on
-    // it would fail this lane for something other than the source being wrong.
+    // And that the ceiling itself is a page Linear really serves, rather than a number
+    // this source guessed at. What Linear does with one row *more* is its own business and
+    // is documented nowhere, so nothing here asserts on it.
     linear(
         &run.key,
         ISSUE_PAGE_PROBE,
