@@ -24,8 +24,8 @@
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
 //! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{inIgnoreCase:…}}}` and `{eqIgnoreCase:…}` for what an item must carry, `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. |
 //! | `filter_by_status` | **Supported and proven.** `state:{type:{in:[…]}}`, over the `WorkflowState.type` vocabulary the category maps to. |
-//! | `search_title` | **Unsupported — and unimplemented rather than unsupportable.** See the ruling below. |
-//! | `search_content` | **Unsupported — and unimplemented rather than unsupportable.** See the ruling below. |
+//! | `search_title` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
+//! | `search_content` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
 //! | `task_dependencies` | **Supported and proven,** in both directions: `relations` and `inverseRelations`. |
 //! | `project_dependencies` | **Supported and proven,** in both directions, by the project relations of the same shape. |
 //! | `max_page_size` | **Supported and proven.** 250, Linear's own connection maximum; every read pages with Relay `first`/`after`. |

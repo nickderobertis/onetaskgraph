@@ -11,9 +11,12 @@
 #
 # So the verdicts are not prose alone. This reads them out of each plugin's own
 # documentation and reconciles them three ways: against the contract's field list, against
-# the plugin's own declaration, and — for a field recorded unsupported — against the entry
-# in docs/follow-ups.md that says so. Implementing an unsupported capability therefore
-# fails here until its verdict and its follow-up are brought with it.
+# the plugin's own declaration, and — for a field recorded unsupported — against
+# docs/follow-ups.md. That last reconciliation runs both ways, because both halves fail
+# silently: a capability nobody implemented with no follow-up is a gap read as a limit and
+# left forever, and a follow-up describing work already done is an open gap over closed
+# work. An unsupported verdict therefore says which it is, in one word — `unimplemented`
+# owes an entry there and `unsupportable` must not have one.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -43,7 +46,7 @@ PLUGINS = {
 }
 
 HEADING = "# What this source declares, field by field"
-VERDICT_ROW = re.compile(r"^//!\s*\|\s*`(\w+)`\s*\|\s*\*\*(Supported|Unsupported)")
+VERDICT_ROW = re.compile(r"^//!\s*\|\s*`(\w+)`\s*\|\s*\*\*(Supported|Unsupported)(.*)$")
 DECLARED_FIELD = re.compile(
     r"^\s*(\w+):\s*(?:Support::(\w+)|DependencySupport::(\w+)|.+),\s*$"
 )
@@ -83,13 +86,24 @@ if struct is None:
     )
 contract_fields = re.findall(r"^\s*pub (\w+):", struct.group(1), re.MULTILINE)
 if not contract_fields:
-    refuse("`Capabilities` appears to have no fields, which cannot be right.")
+    refuse(
+        "`Capabilities` parsed with no fields at all, so there is nothing to reconcile "
+        "any plugin's verdicts against.",
+        "restore the `pub <field>: <type>` lines of `pub struct Capabilities` in "
+        "crates/onetaskgraph-plugin-api/src/capability.rs, or — if that struct has been "
+        "reshaped deliberately — teach this check the new shape.",
+    )
 
 as_str = re.search(
     r"pub fn as_str\(self\) -> &'static str \{(.*?)\n    \}", registry_source, re.DOTALL
 )
 if as_str is None:
-    refuse("could not find `PluginKind::as_str` in the plugin registry.")
+    refuse(
+        "could not find `PluginKind::as_str` in the plugin registry, which is where this "
+        "check learns which plugins owe a verdict table.",
+        "restore that function in crates/onetaskgraph-core/src/registry.rs, or — if the "
+        "registry now names its kinds elsewhere — point this check at that instead.",
+    )
 registered = re.findall(r'=> "([^"]+)"', as_str.group(1))
 
 missing = [kind for kind in registered if kind not in PLUGINS]
@@ -110,6 +124,8 @@ if unregistered:
 
 problems = []
 unsupported = {}
+# Every field declared unsupported, and the verdict text that says why.
+owed = {}
 
 for kind in registered:
     path, shape = PLUGINS[kind]
@@ -122,10 +138,12 @@ for kind in registered:
         continue
 
     verdicts = {}
+    reasons = {}
     for line in source.splitlines():
         row = VERDICT_ROW.match(line)
         if row is not None:
             verdicts[row.group(1)] = row.group(2)
+            reasons[row.group(1)] = row.group(3).lower()
 
     for field in contract_fields:
         if field not in verdicts:
@@ -177,19 +195,21 @@ for kind in registered:
             )
         if declared == "Unsupported":
             unsupported.setdefault(kind, set()).add(name)
+            owed[(kind, name)] = reasons.get(name, "")
 
-# A follow-up describing a capability that has since been implemented is worse than none:
-# it reads as an open gap over work already done. So every field a follow-up names must
-# still be unsupported where it says it is.
+def crate_of(kind):
+    """The crate directory the plugin `kind` lives in."""
+    return PLUGINS[kind][0].split("/")[1]
+
+
+# Which (plugin, field) pairs docs/follow-ups.md says are tracked.
+tracked = set()
 for line in follow_ups.splitlines():
     entry = re.match(r"^Unsupported fields: `([\w-]+)` (.+)$", line.strip())
     if entry is None:
         continue
     crate, spelled = entry.group(1), entry.group(2)
-    kind = next(
-        (kind for kind, (path, _) in PLUGINS.items() if path.startswith(f"crates/{crate}/")),
-        None,
-    )
+    kind = next((kind for kind in PLUGINS if crate_of(kind) == crate), None)
     if kind is None:
         problems.append(
             f"docs/follow-ups.md names `{crate}`, which is not a crate this check knows "
@@ -197,11 +217,40 @@ for line in follow_ups.splitlines():
         )
         continue
     for field in re.findall(r"`(\w+)`", spelled):
-        if field not in unsupported.get(kind, set()):
-            problems.append(
-                f"docs/follow-ups.md still records `{field}` of `{crate}` as unsupported, "
-                "but that plugin now declares it supported."
-            )
+        tracked.add((kind, field))
+
+# Both directions. A follow-up describing a capability that has since been implemented is
+# an open gap over closed work; an unimplemented capability with no follow-up is a gap
+# nothing will ever come back to. Which of the two an unsupported verdict is has to be
+# stated, in the verdict itself, or neither direction can be checked at all.
+for kind, field in sorted(tracked):
+    if field not in unsupported.get(kind, set()):
+        problems.append(
+            f"docs/follow-ups.md still records `{field}` of `{crate_of(kind)}` as "
+            "unsupported, but that plugin now declares it supported."
+        )
+
+for (kind, field), reason in sorted(owed.items()):
+    crate, path = crate_of(kind), PLUGINS[kind][0]
+    says_unimplemented = "unimplemented" in reason
+    says_unsupportable = "unsupportable" in reason
+    if says_unimplemented == says_unsupportable:
+        problems.append(
+            f"{kind}: `{field}` is recorded Unsupported in {path} without saying which "
+            "it is — a verdict must call it `unimplemented` or `unsupportable`, and "
+            "exactly one of the two."
+        )
+    elif says_unimplemented and (kind, field) not in tracked:
+        problems.append(
+            f"{kind}: `{field}` is recorded Unsupported and unimplemented, but no "
+            "`Unsupported fields:` line in docs/follow-ups.md names it — an unimplemented "
+            "capability nobody tracks is a gap that will be read as a limit."
+        )
+    elif says_unsupportable and (kind, field) in tracked:
+        problems.append(
+            f"{kind}: `{field}` is recorded Unsupported and unsupportable, so "
+            "docs/follow-ups.md must not track it as work owed."
+        )
 
 if problems:
     for problem in problems:

@@ -2,10 +2,15 @@
 
 Work this repository has *decided* on and deliberately not done yet. An entry here is a
 ruling, not a wish: it says what is true today, why the state it describes is sound as it
-stands, and what would change if it were closed. A capability recorded as unsupported in a
-plugin's own documentation names its entry here when the reason is *unimplemented* rather
-than *unsupportable* — the difference between the two is what stops a gap being read as a
-limit and left forever.
+stands, and what would change if it were closed.
+
+A capability a source plugin records as unsupported says which of two things it is, in one
+word: `unimplemented` — nobody has written it — or `unsupportable` — the backend cannot do
+it. The difference is what stops a gap being read as a limit and left forever, and it is
+enforced rather than asked for. `scripts/check-capability-verdicts.sh`, a target in
+`just check`, reads every plugin's verdict table and holds it against the
+`Unsupported fields:` lines below in both directions: an unimplemented capability with no
+entry here fails, and an entry here naming a capability since implemented fails too.
 
 Closing an entry means deleting it in the same change that does the work.
 
