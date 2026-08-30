@@ -1322,3 +1322,185 @@ async fn every_declared_capability_is_applied_to_the_held_work() {
     }
     assert_eq!(walked, whole_page);
 }
+
+#[tokio::test]
+async fn a_title_this_source_will_not_create_refuses_the_create_and_takes_the_update() {
+    // The refusal a copy needs in order to be *interrupted* partway: a real destination
+    // refuses for its own reasons — a label it cannot set, a field it cannot carry, a rate
+    // limiter — and none of those is something a test can ask for on cue.
+    let source: Box<dyn TaskSource> = Box::new(
+        onetaskgraph_in_memory::InMemorySource::new(with_capabilities(json!({
+            "uncreatable_titles": ["Written"]
+        })))
+        .expect("the fixture graph is coherent"),
+    );
+
+    let Err(SourceError::Refused { message }) = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: outgoing("T-9", "Written"),
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a title this source will not create must refuse the create");
+    };
+    assert!(
+        message.contains("will not create an item titled \"Written\""),
+        "{message}"
+    );
+    assert!(
+        source
+            .get_task(&NativeId("T-9".into()))
+            .await
+            .unwrap()
+            .is_none(),
+        "and nothing landed"
+    );
+
+    // A create alone. An update names an item that is already here, so it is not what
+    // leaves a half-written destination behind, and it goes through.
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("T-1".into())),
+            item: outgoing("T-1", "Written"),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("an update of an item that is already here is not a create");
+    assert_eq!(
+        source
+            .get_task(&NativeId("T-1".into()))
+            .await
+            .unwrap()
+            .expect("T-1 is there")
+            .title,
+        "Written"
+    );
+
+    // The same for a project.
+    let Err(SourceError::Refused { message }) = source
+        .write_project(&ItemWrite {
+            target: None,
+            item: serde_json::from_value(json!({
+                "id": "P-9", "title": "Written",
+                "status": {"category": "todo", "name": "Todo"}, "labels": []
+            }))
+            .expect("a project"),
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a title this source will not create must refuse the create");
+    };
+    assert!(message.contains("Written"), "{message}");
+}
+
+#[tokio::test]
+async fn a_deleted_item_takes_its_edges_with_it_and_leaves_its_tasks_orphaned() {
+    // The engine deletes exactly one thing: an item it created itself, while undoing a
+    // copy that could not finish. What it must get back is the source as it was — so an
+    // edge to the item that is gone must go too, and a task filed under a project that is
+    // gone is an orphan rather than a member of a project no query can reach.
+    let source = fully_capable();
+
+    source
+        .delete_task(&NativeId("T-1".into()))
+        .await
+        .expect("this source removes a task");
+    assert!(
+        source
+            .get_task(&NativeId("T-1".into()))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // T-2 depended on T-1, and that edge went with it.
+    assert!(
+        source
+            .task_dependencies(&NativeId("T-2".into()), Direction::DependsOn, &whole())
+            .await
+            .expect("this source answers")
+            .items
+            .is_empty()
+    );
+
+    source
+        .delete_project(&NativeId("P-1".into()))
+        .await
+        .expect("this source removes a project");
+    assert!(
+        source
+            .get_project(&NativeId("P-1".into()))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        source
+            .project_dependencies(&NativeId("P-2".into()), Direction::DependsOn, &whole())
+            .await
+            .expect("this source answers")
+            .items
+            .is_empty()
+    );
+    assert_eq!(
+        source
+            .get_task(&NativeId("T-2".into()))
+            .await
+            .unwrap()
+            .expect("T-2 is still there")
+            .project,
+        None,
+        "a task filed under a project that is gone is an orphan, not a member of nothing"
+    );
+
+    // An id naming nothing is the state this asks for, not an error.
+    source
+        .delete_task(&NativeId("nothing".into()))
+        .await
+        .expect("an id naming nothing is already in the state this asks for");
+    source
+        .delete_project(&NativeId("nothing".into()))
+        .await
+        .expect("an id naming nothing is already in the state this asks for");
+}
+
+#[tokio::test]
+async fn a_source_with_no_write_side_or_one_that_holds_on_refuses_a_delete() {
+    let unwritable: Box<dyn TaskSource> = Box::new(
+        onetaskgraph_in_memory::InMemorySource::new(with_capabilities(json!({
+            "writes": "unsupported"
+        })))
+        .expect("the fixture graph is coherent"),
+    );
+    let Err(SourceError::Refused { message }) =
+        unwritable.delete_task(&NativeId("T-1".into())).await
+    else {
+        panic!("a source with no write side has no business removing anything");
+    };
+    assert_eq!(message, "the in-memory plugin cannot be written");
+
+    // And a destination that will not take one of its own items back, which is what makes
+    // the engine's "the copy could not be undone" refusal reachable at all.
+    let holds_on: Box<dyn TaskSource> = Box::new(
+        onetaskgraph_in_memory::InMemorySource::new(with_capabilities(json!({
+            "undeletable_ids": ["P-1"]
+        })))
+        .expect("the fixture graph is coherent"),
+    );
+    let Err(SourceError::Refused { message }) =
+        holds_on.delete_project(&NativeId("P-1".into())).await
+    else {
+        panic!("this source was configured not to remove P-1");
+    };
+    assert!(message.contains("will not remove P-1"), "{message}");
+    assert!(
+        holds_on
+            .get_project(&NativeId("P-1".into()))
+            .await
+            .unwrap()
+            .is_some(),
+        "and it is still there"
+    );
+}

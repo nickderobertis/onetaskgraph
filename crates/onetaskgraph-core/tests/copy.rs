@@ -898,3 +898,157 @@ async fn a_copy_that_cannot_be_undone_names_what_it_left_behind() {
     );
     assert!(listed(&engine, "into").await.is_empty());
 }
+
+/// One destination item recorded as the counterpart of `origin`, reading differently from
+/// the source so a copy of it is a real update rather than an `unchanged`.
+fn counterpart(id: &str, origin: &str, project: Option<&str>) -> Value {
+    let mut item = json!({
+        "id": id,
+        "title": format!("{id} as it was"),
+        "content": "as it was",
+        "status": {"category": "todo", "name": "Todo"},
+        "labels": [],
+        "metadata": {GlobalId::ORIGIN_KEY: origin},
+    });
+    if let Some(project) = project {
+        item["project"] = json!(project);
+    }
+    item
+}
+
+/// Every task and project one source holds, as `<id> <title>` pairs.
+async fn held(engine: &Engine, source: &str) -> Vec<String> {
+    let paging = || Paging {
+        limit: NonZeroU32::new(50).expect("a non-zero limit"),
+        token: None,
+    };
+    let projects = engine
+        .projects(&onetaskgraph_core::ProjectRequest {
+            sources: vec![name(source)],
+            filters: onetaskgraph_core::Filters::default(),
+            paging: paging(),
+        })
+        .await
+        .expect("the project list answers");
+    let tasks = engine
+        .tasks(&TaskRequest {
+            sources: vec![name(source)],
+            filters: onetaskgraph_core::Filters::default(),
+            project: onetaskgraph_core::ProjectSelector::Any,
+            paging: paging(),
+        })
+        .await
+        .expect("the task list answers");
+    projects
+        .items
+        .into_iter()
+        .map(|project| format!("{} {}", project.id, project.item.title))
+        .chain(
+            tasks
+                .items
+                .into_iter()
+                .map(|task| format!("{} {}", task.id, task.item.title)),
+        )
+        .collect()
+}
+
+/// A destination already holding a counterpart of every item of [`interlinked`] but `T-3`.
+fn already_holding() -> Value {
+    json!({
+        "projects": [
+            counterpart("D-P1", "from:P-1", None),
+            counterpart("D-P2", "from:P-2", None),
+        ],
+        "tasks": [
+            counterpart("D-T1", "from:T-1", Some("D-P1")),
+            counterpart("D-T2", "from:T-2", Some("D-P1")),
+        ],
+    })
+}
+
+#[tokio::test]
+async fn a_second_copy_updates_every_counterpart_and_repairs_the_edges_among_them() {
+    // The destination already holds a counterpart of everything but `T-3`, recorded by
+    // origin the way an earlier copy left it and reading differently from the source. So
+    // every one of them is a real update, and `P-1` and `T-1` are written twice — once as
+    // they land, once when the edges whose far ends did not exist yet are repaired.
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": already_holding()},
+    }));
+
+    let report = engine
+        .copy(&many(
+            &["from:P-1", "from:P-2"],
+            CopyScope::Projects { tasks: true },
+        ))
+        .await
+        .expect("the copy runs");
+    assert_eq!(
+        report
+            .items
+            .iter()
+            .map(|outcome| (outcome.source.to_string(), outcome.action.name()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("from:P-1".to_owned(), "updated".to_owned()),
+            ("from:T-1".to_owned(), "updated".to_owned()),
+            ("from:T-2".to_owned(), "updated".to_owned()),
+            ("from:P-2".to_owned(), "updated".to_owned()),
+            ("from:T-3".to_owned(), "created".to_owned()),
+        ]
+    );
+
+    // Every edge names the destination's own item, including the one whose far end was
+    // created in a project this copy reached after the item that points at it.
+    assert_eq!(
+        depends_on(&engine, "into:D-T1").await,
+        vec!["into:D-T2 Task".to_owned(), "into:T-3 Task".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn a_copy_that_cannot_finish_puts_back_the_items_it_overwrote() {
+    // Undoing is not only about the items a copy created. The four counterparts here were
+    // at the destination before this copy started and are overwritten by it, and `Gamma`
+    // is the item this destination will not create — so the copy refuses after four
+    // successful writes, and every one of those four has to read as it did before rather
+    // than as this copy's first pass left it.
+    let mut into = already_holding();
+    into["capabilities"] = json!({"uncreatable_titles": ["Gamma"]});
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": into},
+    }));
+    let before = held(&engine, "into").await;
+    assert_eq!(
+        before,
+        vec![
+            "into:D-P1 D-P1 as it was".to_owned(),
+            "into:D-P2 D-P2 as it was".to_owned(),
+            "into:D-T1 D-T1 as it was".to_owned(),
+            "into:D-T2 D-T2 as it was".to_owned(),
+        ]
+    );
+
+    let Err(refused) = engine
+        .copy(&many(
+            &["from:P-1", "from:P-2"],
+            CopyScope::Projects { tasks: true },
+        ))
+        .await
+    else {
+        panic!("a destination that will not create an item must refuse the copy");
+    };
+    assert!(refused.to_string().contains("Gamma"), "{refused}");
+    assert!(
+        !refused.to_string().contains("could not be undone"),
+        "this destination takes its items back: {refused}"
+    );
+
+    assert_eq!(
+        held(&engine, "into").await,
+        before,
+        "every item this copy overwrote reads as it did before it started"
+    );
+}

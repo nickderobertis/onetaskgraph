@@ -825,9 +825,13 @@ impl Engine {
                 if !unresolved.contains(&index) {
                     continue;
                 }
-                let Some(id) = outcomes[index].destination().cloned() else {
-                    continue;
-                };
+                // Every item a copy that is not a dry run lands has a destination id: the
+                // one outcome without one is a dry run that would have created, and this
+                // block does not run for a dry run.
+                let id = outcomes[index]
+                    .destination()
+                    .expect("a copy that writes lands every item it planned")
+                    .clone();
                 deferred.push(Deferred {
                     item,
                     filed: filed[index].clone(),
