@@ -85,6 +85,23 @@ def mode():
         return "record"
 
 
+def shape_of(document):
+    """What is wrong with this publication document, or `None` when nothing is."""
+    if not isinstance(document, dict):
+        return f"the publication is not a JSON object: {type(document).__name__}"
+    if not isinstance(document.get("name"), str):
+        return f"the publication names no package: {document.get('name')!r}"
+    versions = document.get("versions") or {}
+    if not isinstance(versions, dict):
+        return f"'versions' is not an object: {versions!r}"
+    for version, manifest in versions.items():
+        if not isinstance(manifest, dict):
+            return f"the manifest for version {version!r} is not an object: {manifest!r}"
+    if not isinstance(document.get("_attachments") or {}, dict):
+        return f"'_attachments' is not an object: {document.get('_attachments')!r}"
+    return None
+
+
 class Registry(BaseHTTPRequestHandler):
     def _answer(self, status, body):
         encoded = json.dumps(body).encode()
@@ -149,18 +166,31 @@ class Registry(BaseHTTPRequestHandler):
         except json.JSONDecodeError as error:
             self._answer(400, {"error": str(error)})
             return
+        # The body is untrusted for the same reason its length was: a publication that is
+        # not shaped like one is refused as a bad request, because reaching `.items()` or
+        # `.get()` on a member that is not a mapping raises out of the handler instead —
+        # which answers with a closed connection, and npm reports a closed connection as
+        # the registry being unreachable rather than as the malformed body it is. Every
+        # member is checked before anything is written down, so a document that is wrong
+        # part of the way through records none of itself.
+        refusal = shape_of(document)
+        if refusal is not None:
+            self._answer(400, {"error": refusal})
+            return
+        name = document["name"]
         versions = document.get("versions") or {}
+        attachments = sorted(document.get("_attachments") or {})
         with open(published, "a", encoding="utf-8") as record:
             for version, manifest in versions.items():
-                holdings.setdefault(document.get("name"), []).append(version)
+                holdings.setdefault(name, []).append(version)
                 record.write(
                     json.dumps(
                         {
                             "path": self.path,
-                            "name": document.get("name"),
+                            "name": name,
                             "version": version,
                             "manifest_name": manifest.get("name"),
-                            "attachments": sorted(document.get("_attachments") or {}),
+                            "attachments": attachments,
                         }
                     )
                     + "\n"
@@ -249,6 +279,52 @@ if [ -z "$port" ] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
     "report this — $PORT_FILE is written by this check's own registry and nothing else"
 fi
 readonly REGISTRY="http://127.0.0.1:$port/"
+
+# The registry's own refusals, driven over the wire before the publication is. A stub that
+# raises out of its handler answers with a closed connection, and npm reports that as the
+# registry being unreachable — so the one failure this check could not tell from a broken
+# publish path is its own server dying on a body. None of these is a body npm sends; what
+# they establish is that the server answers rather than falls over, so a later "npm could
+# not reach the registry" is about npm.
+malformed="$(python3 - "$REGISTRY" <<'PROBE'
+import json
+import sys
+import urllib.error
+import urllib.request
+
+registry = sys.argv[1]
+cases = {
+    "a body that is not JSON": b"{",
+    "a document that is not an object": b"[]",
+    "a versions member that is a list": json.dumps({"name": "x", "versions": [1]}).encode(),
+    "a versions member that is a string": json.dumps({"name": "x", "versions": "1"}).encode(),
+    "a manifest that is not an object": json.dumps(
+        {"name": "x", "versions": {"1.0.0": 7}}
+    ).encode(),
+    "a name that is not a string": json.dumps({"name": 7, "versions": {}}).encode(),
+}
+problems = []
+for described, body in cases.items():
+    request = urllib.request.Request(f"{registry}probe", data=body, method="PUT")
+    try:
+        with urllib.request.urlopen(request) as answer:
+            problems.append(f"{described} was accepted with {answer.status}")
+    except urllib.error.HTTPError as refusal:
+        if refusal.code != 400:
+            problems.append(f"{described} was answered {refusal.code}, not 400")
+    except OSError as error:
+        problems.append(f"{described} closed the connection: {error}")
+print("\n".join(problems))
+PROBE
+)" || fatal \
+  "could not drive the stub registry's own refusals" \
+  "see the diagnostic above; the registry answered at $REGISTRY a moment ago"
+[ -z "$malformed" ] || {
+  printf '%s\n' "$malformed" | sed 's/^/check-npm-publish:   /' >&2
+  fatal \
+    "the stub registry mishandled a malformed publication" \
+    "repair the registry's do_PUT in this file so each case above is answered 400"
+}
 
 # The carriers, built the way .github/workflows/release.yml builds them: one directory per
 # platform holding that platform's manifest and a binary, packed with `npm pack`. The
