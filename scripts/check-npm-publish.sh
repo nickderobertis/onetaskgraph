@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
 # Drive the release workflow's npm publication against a registry this check stands up.
 #
-# This repository is absent from npm although its release workflow has carried a
-# `publish-npm` job for several versions, and the reason that could sit there unnoticed is
-# that a release is the only thing which runs it: the path was unexercised until a version
-# had already been cut. So this runs the real `scripts/publish-npm.sh` — the same script
-# the job invokes — against a registry on loopback, and reads back the packages it would
-# send: their names, their versions, and the fact that each is this repository's own
-# package rather than somebody else's of a similar name.
-#
-# The carriers are built here the way the workflow builds them, out of the same
-# `npm/platforms/*/package.json` manifests, because a publication whose operands do not
-# exist proves nothing about the operands that will.
+# A release is otherwise the only thing that runs `publish-npm`, so the path is unexercised
+# until a version has already been cut. This runs the real `scripts/publish-npm.sh` — the
+# script that job invokes — against a registry on loopback, and reads back the packages it
+# would send: their names, their versions, and that each is this repository's own rather
+# than somebody else's of a similar name. The carriers are built here out of the same
+# `npm/platforms/*/package.json` manifests the workflow uses, because a publication whose
+# operands do not exist proves nothing about the operands that will.
 # llmlint: ignore-file[new_code_lands_in_a_project] scripts/ is deliberately outside the
 # Nx project graph (AGENTS.md, Conventions): Nx maps no project to it, which is why the
 # justfile invokes these from recipes of its own. Nothing here escapes the gate — it
@@ -216,6 +212,17 @@ if [ ! -s "$PORT_FILE" ]; then
     "run 'python3 -c \"import http.server\"' to check the interpreter, then rerun"
 fi
 port="$(cat "$PORT_FILE")"
+# What the file holds is a port only because the registry above put it there, and reading
+# it as one without saying so is how a truncated or half-written file becomes a URL that
+# fails several steps later as npm being unreachable.
+case $port in
+  '' | *[!0-9]*) port=""; ;;
+esac
+if [ -z "$port" ] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+  fatal \
+    "the stub registry reported '$(cat "$PORT_FILE")' where a port number belongs" \
+    "report this — $PORT_FILE is written by this check's own registry and nothing else"
+fi
 readonly REGISTRY="http://127.0.0.1:$port/"
 
 # The carriers, built the way .github/workflows/release.yml builds them: one directory per
@@ -281,27 +288,31 @@ sent_lines() {
   wc -l < "$PUBLISHED" | tr -d ' '
 }
 
-# A registry that is not an http(s) URL. npm would read it its own way and the npmrc built
-# from it authenticates nothing, so the publication refuses before it packs anything.
-refusal="$scratch/bad-registry.log"
-status=0
-NODE_AUTH_TOKEN=stub-token NPM_REGISTRY="registry.npmjs.org" NPM_CARRIERS="$carriers" \
-  RUNNER_TEMP="$scratch" scripts/publish-npm.sh > "$refusal" 2>&1 || status=$?
-[ "$status" -eq 64 ] || {
-  cat "$refusal" >&2
-  fatal "a registry that is not a URL was accepted (exit $status, expected 64)" \
-    "restore the NPM_REGISTRY guard in scripts/publish-npm.sh"
-}
-for term in "NPM_REGISTRY must be an http or https URL" "registry.npmjs.org" "next:"; do
-  grep -qF -- "$term" "$refusal" || {
+# A registry that is not an http(s) URL npm can reach. npm would read it its own way and
+# the npmrc built from it authenticates nothing, so the publication refuses before it packs
+# anything. A scheme is not a URL on its own, which is why the last two are here: each
+# satisfies a prefix test and then fails inside npm, about a value this script chose.
+for bad_registry in "registry.npmjs.org" "https://" "https://registry npmjs org/"; do
+  refusal="$scratch/bad-registry.log"
+  status=0
+  NODE_AUTH_TOKEN=stub-token NPM_REGISTRY="$bad_registry" NPM_CARRIERS="$carriers" \
+    RUNNER_TEMP="$scratch" scripts/publish-npm.sh > "$refusal" 2>&1 || status=$?
+  [ "$status" -eq 64 ] || {
     cat "$refusal" >&2
-    fatal "the invalid-registry refusal never mentions '$term'" \
-      "its message must name the value it refused and what to do about it"
+    fatal "the registry '$bad_registry' was accepted (exit $status, expected 64)" \
+      "restore the NPM_REGISTRY guard in scripts/publish-npm.sh"
   }
+  for term in "NPM_REGISTRY must be an http or https URL" "$bad_registry" "next:"; do
+    grep -qF -- "$term" "$refusal" || {
+      cat "$refusal" >&2
+      fatal "the refusal of '$bad_registry' never mentions '$term'" \
+        "its message must name the value it refused and what to do about it"
+    }
+  done
+  [ "$(sent_lines)" -eq 0 ] || fatal \
+    "the publication reached the registry with NPM_REGISTRY set to '$bad_registry'" \
+    "the guard must refuse before anything is sent"
 done
-[ "$(sent_lines)" -eq 0 ] || fatal \
-  "the publication reached the registry with NPM_REGISTRY set to something that is not a URL" \
-  "the guard must refuse before anything is sent"
 
 # A carriers directory that is not there is a download step that did not run. Left to npm
 # it surfaces one tarball at a time, after the first carrier has already landed.

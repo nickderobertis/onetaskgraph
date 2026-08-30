@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
 # Watch this repository's own tests catch the defect its fixtures used to hide.
 #
-# scripts/check-store-fixtures.sh reads the two discriminating properties back off every
-# store fixture, and scripts/check-store-fixtures-enforced.sh watches it refuse a fixture
-# that lacks one. Neither of those runs a test: together they prove the *rule* is enforced,
-# not that the fixtures obeying it actually separate the wrong answer from the right one.
-#
-# That gap is the whole failure this release repaired. `title: required_str(content, "id")`
-# — a board item titled with its own identifier — shipped, and every assertion over it
-# passed, because the fixture it was read through spelled the two the same string. The
-# fixtures now differ; whether that difference reaches an assertion is a question only the
-# assertions can answer.
+# The two checks beside this one prove the *rule* is enforced — every store fixture carries
+# the discriminating properties, and a fixture lacking one is refused. Neither runs a test,
+# so neither answers the question that matters: whether the difference the fixtures now
+# carry reaches an assertion. Under a fixture spelling an item's id and its title the same
+# string, `title: required_str(content, "id")` shipped green.
 #
 # So this reintroduces exactly that substitution, in a scratch copy, and asserts the crate's
 # real tests go red on it. Case 0 is the control: without it a suite that could not compile

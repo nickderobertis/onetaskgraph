@@ -61,14 +61,16 @@ readonly registry
 # publication fails in npm's words about a value this script chose. A carriers directory
 # that is not there is a download step that did not run, which npm otherwise reports one
 # tarball at a time, after the first carrier has already landed at the real registry.
-case $registry in
-  http://* | https://*) ;;
-  *)
-    echo "NPM_REGISTRY must be an http or https URL (received: $registry)" >&2
-    echo "next: unset NPM_REGISTRY to publish to https://registry.npmjs.org/" >&2
-    exit 64
-    ;;
-esac
+#
+# The scheme alone is not enough to make it a URL npm can reach: `https://` on its own, or
+# one carrying a space, satisfies a prefix test and then fails inside npm. So the host is
+# required here too, and `npm-registry-auth.sh` is handed nothing this did not accept.
+readonly REGISTRY_URL='^https?://[^[:space:]/?#]+(/[^[:space:]]*)?$'
+if ! [[ $registry =~ $REGISTRY_URL ]]; then
+  echo "NPM_REGISTRY must be an http or https URL naming a host (received: $registry)" >&2
+  echo "next: unset NPM_REGISTRY to publish to https://registry.npmjs.org/" >&2
+  exit 64
+fi
 [ -d "$CARRIERS" ] || {
   echo "no carrier directory at $CARRIERS" >&2
   echo "next: download the release workflow's carrier-* artifacts into it, or set" >&2
