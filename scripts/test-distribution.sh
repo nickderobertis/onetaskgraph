@@ -702,10 +702,13 @@ ONETASKGRAPH_NPM_CONFIG_DIR="$tmp/npm-config-default" "$root/scripts/npm-registr
 grep -Fq 'registry=https://registry.npmjs.org/' "$tmp/npm-config-default/.npmrc" || { cat "$tmp/npm-config-default/.npmrc" >&2; echo "the default npm configuration did not point at the public registry; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
 grep -Fq '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}' "$tmp/npm-config-default/.npmrc" || { cat "$tmp/npm-config-default/.npmrc" >&2; echo "the default npm configuration did not name NODE_AUTH_TOKEN for the public registry; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
 scratch_clone "$root" "$tmp/contract-repo"
-# The clone supplies the surrounding tree; the three files under test come from the working
+# The clone supplies the surrounding tree; the four files under test come from the working
 # copy, because what the gate has to refuse is the release path as it stands right now.
+# scripts/publish-npm.sh is one of them: the publication moved there out of the workflow,
+# so it is where the authentication the cases below remove now lives.
 restore_contract_repo() {
   cp "$root/.github/workflows/release.yml" "$tmp/contract-repo/.github/workflows/release.yml"
+  cp "$root/scripts/publish-npm.sh" "$tmp/contract-repo/scripts/publish-npm.sh"
   cp "$root/scripts/npm-registry-auth.sh" "$tmp/contract-repo/scripts/npm-registry-auth.sh"
   cp "$root/scripts/check-distribution-contract.sh" "$tmp/contract-repo/scripts/check-distribution-contract.sh"
 }
@@ -738,7 +741,7 @@ assert_contract_refuses() {
   grep -Fq 'next: restore the npm registry authentication' "$tmp/error" || { cat "$tmp/error" >&2; echo "the distribution contract refused '$relative' without a next action that repairs npm authentication; next: inspect its diagnostics" >&2; exit 1; }
   restore_contract_repo
 }
-assert_contract_refuses 'NODE_AUTH_TOKEN alone leaves the npm client logged out' .github/workflows/release.yml 'NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh'
-assert_contract_refuses 'must be exported as NPM_CONFIG_USERCONFIG' .github/workflows/release.yml 'export NPM_CONFIG_USERCONFIG'
+assert_contract_refuses 'NODE_AUTH_TOKEN alone leaves the npm client logged out' scripts/publish-npm.sh 'NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh'
+assert_contract_refuses 'must be exported as NPM_CONFIG_USERCONFIG' scripts/publish-npm.sh 'export NPM_CONFIG_USERCONFIG'
 assert_contract_refuses 'must name NODE_AUTH_TOKEN rather than carry a token value' scripts/npm-registry-auth.sh ':_authToken=${NODE_AUTH_TOKEN}'
 assert_contract_refuses 'no publish-npm job to authenticate' .github/workflows/release.yml '  publish-npm:'
