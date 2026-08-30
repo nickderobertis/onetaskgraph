@@ -331,6 +331,116 @@ done
   "the publication sent a carrier before noticing another was missing" \
   "read every operand before publishing any of them"
 
+# A sandbox checkout of the operands, so the manifest cases below can hand this
+# publication a file it cannot read without corrupting the tree the rest of this check
+# publishes out of. The publication resolves its own root from BASH_SOURCE, so a copy of
+# it under this tree reads that tree's manifests.
+sandbox="$scratch/sandbox"
+mkdir -p "$sandbox/scripts" "$sandbox/npm/cli" "$sandbox/sdks/typescript" || fatal \
+  "could not create the sandbox checkout at $sandbox" "check \$TMPDIR, then rerun"
+cp scripts/publish-npm.sh scripts/npm-registry-auth.sh "$sandbox/scripts/" || fatal \
+  "could not copy the publication into $sandbox/scripts" "check \$TMPDIR, then rerun"
+cp npm/cli/package.json "$sandbox/npm/cli/package.json" || fatal \
+  "could not copy npm/cli/package.json into $sandbox" "check \$TMPDIR, then rerun"
+cp sdks/typescript/package.json "$sandbox/sdks/typescript/package.json" || fatal \
+  "could not copy sdks/typescript/package.json into $sandbox" "check \$TMPDIR, then rerun"
+victim=""
+for package in npm/platforms/*; do
+  platform="${package##*/}"
+  [ -n "$victim" ] || victim="$platform"
+  mkdir -p "$sandbox/npm/platforms/$platform" || fatal \
+    "could not create $sandbox/npm/platforms/$platform" "check \$TMPDIR, then rerun"
+  cp "$package/package.json" "$sandbox/npm/platforms/$platform/package.json" || fatal \
+    "could not copy $package/package.json into $sandbox" "check \$TMPDIR, then rerun"
+done
+
+# A carrier manifest this publication cannot read. node has already said on stderr why it
+# could not read it, and what turns that stack trace into a diagnostic is the guard below
+# naming the manifest and the field to set — which happens only because the value node
+# could not produce is allowed to fall through instead of ending the script where it stood.
+printf 'this is not JSON\n' > "$sandbox/npm/platforms/$victim/package.json" || fatal \
+  "could not rewrite the $victim carrier manifest in $sandbox" "check \$TMPDIR, then rerun"
+refusal="$scratch/unreadable-carrier.log"
+status=0
+NODE_AUTH_TOKEN=stub-token NPM_REGISTRY="$REGISTRY" NPM_CARRIERS="$carriers" \
+  RUNNER_TEMP="$scratch" "$sandbox/scripts/publish-npm.sh" > "$refusal" 2>&1 || status=$?
+[ "$status" -eq 64 ] || {
+  cat "$refusal" >&2
+  fatal "a carrier manifest that is not JSON was accepted (exit $status, expected 64)" \
+    "the value node could not read must reach the name guard, which names the file to fix"
+}
+for term in "SyntaxError" "invalid carrier name" "npm/platforms/$victim/package.json" "next:"; do
+  grep -qF -- "$term" "$refusal" || {
+    cat "$refusal" >&2
+    fatal "the unreadable-carrier-manifest refusal never mentions '$term'" \
+      "it must replay node's own cause and name the manifest and the field to set"
+  }
+done
+[ "$(sent_lines)" -eq 0 ] || fatal \
+  "the publication reached the registry with a carrier manifest it could not read" \
+  "every manifest is read before anything is sent"
+cp "npm/platforms/$victim/package.json" "$sandbox/npm/platforms/$victim/package.json" || fatal \
+  "could not restore the $victim carrier manifest in $sandbox" "check \$TMPDIR, then rerun"
+
+# The launcher's manifest and the SDK's, unreadable the same way and owed the same
+# treatment: the version guards are what name the manifest and the command that sets it.
+for unreadable in "npm/cli:invalid CLI version" "sdks/typescript:invalid TypeScript SDK version"; do
+  directory="${unreadable%%:*}"
+  expected="${unreadable#*:}"
+  printf 'this is not JSON\n' > "$sandbox/$directory/package.json" || fatal \
+    "could not rewrite $directory/package.json in $sandbox" "check \$TMPDIR, then rerun"
+  refusal="$scratch/unreadable-${directory//\//-}.log"
+  status=0
+  NODE_AUTH_TOKEN=stub-token NPM_REGISTRY="$REGISTRY" NPM_CARRIERS="$carriers" \
+    RUNNER_TEMP="$scratch" "$sandbox/scripts/publish-npm.sh" > "$refusal" 2>&1 || status=$?
+  [ "$status" -eq 64 ] || {
+    cat "$refusal" >&2
+    fatal "a $directory manifest that is not JSON was accepted (exit $status, expected 64)" \
+      "the value node could not read must reach the version guard for $directory"
+  }
+  for term in "SyntaxError" "$expected" "$directory/package.json" "scripts/set-version.sh"; do
+    grep -qF -- "$term" "$refusal" || {
+      cat "$refusal" >&2
+      fatal "the unreadable-$directory-manifest refusal never mentions '$term'" \
+        "it must replay node's own cause and name the manifest and the command that sets it"
+    }
+  done
+  [ "$(sent_lines)" -eq 0 ] || fatal \
+    "the publication reached the registry with $directory/package.json unreadable" \
+    "every manifest is read before anything is sent"
+  cp "$directory/package.json" "$sandbox/$directory/package.json" || fatal \
+    "could not restore $directory/package.json in $sandbox" "check \$TMPDIR, then rerun"
+done
+
+# An npmrc this publication cannot write. Left to fall through, npm packs every tarball in
+# full and then fails ENEEDAUTH exactly as though it were logged out — which reads as the
+# registry refusing this package rather than as the setup problem it is. The directory is
+# blocked by a plain file rather than by permissions, so this case runs the same for a
+# root runner and on a platform with no POSIX mode bits.
+blocker="$scratch/npmrc-blocker"
+: > "$blocker" || fatal "could not create $blocker" "check \$TMPDIR, then rerun"
+refusal="$scratch/unwritable-npmrc.log"
+status=0
+NODE_AUTH_TOKEN=stub-token NPM_REGISTRY="$REGISTRY" NPM_CARRIERS="$carriers" \
+  RUNNER_TEMP="$scratch" ONETASKGRAPH_NPM_CONFIG_DIR="$blocker/inside" \
+  scripts/publish-npm.sh > "$refusal" 2>&1 || status=$?
+[ "$status" -eq 70 ] || {
+  cat "$refusal" >&2
+  fatal "an npmrc that could not be written was accepted (exit $status, expected 70)" \
+    "the publication must stop in its own words when it cannot configure authentication"
+}
+for term in "could not create the npm configuration directory" \
+  "could not write the npmrc that authenticates to $REGISTRY" "ENEEDAUTH" "next:"; do
+  grep -qF -- "$term" "$refusal" || {
+    cat "$refusal" >&2
+    fatal "the unwritable-npmrc refusal never mentions '$term'" \
+      "it must replay what scripts/npm-registry-auth.sh reported and say what to do about it"
+  }
+done
+[ "$(sent_lines)" -eq 0 ] || fatal \
+  "the publication reached the registry with no npmrc to authenticate with" \
+  "the npmrc is written before anything is sent"
+
 log="$scratch/publish.log"
 if ! NODE_AUTH_TOKEN=stub-token \
   NPM_REGISTRY="$REGISTRY" \
