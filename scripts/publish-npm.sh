@@ -193,7 +193,11 @@ done
   exit 64
 }
 
-# Nothing above published anything, so from here every operand is known to exist.
+# Every operand check is above this line rather than beside the publication that needs it,
+# and that placement is the point: a publication cannot be taken back, so a tarball missing
+# from the end of the list has to be found before the first package is sent. Interleaved,
+# the eighth operand's absence would be discovered with seven versions already public and
+# the ninth still to come.
 index=0
 while [ "$index" -lt "${#carrier_specs[@]}" ]; do
   publish_if_absent "${carrier_specs[$index]}" "${carrier_files[$index]}"

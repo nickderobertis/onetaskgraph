@@ -48,7 +48,6 @@ cd "$ROOT" || {
 # not one push per missing tool.
 missing=""
 
-# require <command> <how to install it>
 require() {
   command -v "$1" >/dev/null 2>&1 || missing="${missing}${1} — $2
 "
