@@ -17,10 +17,11 @@ use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{
-    ROWS, SOURCE, document, empty_folder, github_projects_failing_a_field_write_and_its_cleanup,
+    LINEAR_REFUSED_WRITE, ROWS, SOURCE, document, empty_folder,
+    github_projects_failing_a_field_write_and_its_cleanup,
     github_projects_failing_a_field_write_once, github_projects_failing_to_file_and_its_cleanup,
     github_projects_failing_to_file_once, github_projects_reading_one_item_behind,
-    github_projects_with_board, linear_block, qualified,
+    github_projects_with_board, linear_block, linear_failing_a_relation_write_once, qualified,
 };
 
 /// The folder every copy journey copies into, configured beside the source under test.
@@ -1521,6 +1522,73 @@ fn a_copy_that_cannot_finish_leaves_the_board_as_it_found_it() {
     let again = ok(
         &sandbox,
         &["project", "copy", "plans:P-1", "--to", "board", "--json"],
+    );
+    assert_eq!(
+        reported(&again)
+            .iter()
+            .map(|(source, _, action)| (source.as_str(), action.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("plans:P-1", "created"),
+            ("plans:A", "created"),
+            ("plans:B", "created"),
+        ]
+    );
+}
+
+#[test]
+fn a_copy_into_linear_that_cannot_finish_leaves_the_workspace_as_it_found_it() {
+    // The same rule as the board above, against the other hosted destination this
+    // repository ships: a copy is either complete or it never happened. Linear could not
+    // take a project back until `projectDelete` was pinned, so a project copy that failed
+    // part way left the project it had created behind — which is the state this asserts
+    // is gone.
+    //
+    // The workspace here fails the relation between two issues it has already created, so
+    // the refusal arrives with the project and both of its tasks landed: every kind of
+    // item this copy can create is there to be taken back.
+    let sandbox = Sandbox::new();
+    plans_with_a_dependency(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root": sandbox.subdirectory("plans"),
+            "status_mapping": {"Todo":"todo","Doing":"in-progress","Shipped":"done"}}},
+        "work": {"plugin":"linear","config":linear_failing_a_relation_write_once(&sandbox)}
+    })));
+
+    let said = refused(
+        &sandbox,
+        &["project", "copy", "plans:P-1", "--to", "work"],
+        1,
+    );
+    assert!(
+        said.contains(LINEAR_REFUSED_WRITE),
+        "the failure Linear reported is what the caller is told: {said}"
+    );
+    assert!(
+        !said.contains("could not be undone"),
+        "this workspace takes its items back, so the copy must not report otherwise: {said}"
+    );
+
+    // Nothing of that copy is in the workspace: not the project written first, and not
+    // either task whose creation landed before the refusal.
+    let projects = ok(&sandbox, &["project", "list", "--source", "work"]);
+    assert!(
+        !projects.contains("Published roadmap"),
+        "the destination holds none of that copy's items:\n{projects}"
+    );
+    let tasks = ok(&sandbox, &["task", "list", "--source", "work"]);
+    for title in ["First step", "Second step"] {
+        assert!(
+            !tasks.contains(title),
+            "the destination holds none of that copy's items:\n{tasks}"
+        );
+    }
+
+    // And the retry is a clean one: the failure is spent, so the same copy now completes.
+    let again = ok(
+        &sandbox,
+        &["project", "copy", "plans:P-1", "--to", "work", "--json"],
     );
     assert_eq!(
         reported(&again)

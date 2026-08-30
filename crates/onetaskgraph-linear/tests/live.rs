@@ -107,7 +107,6 @@ const LABEL_DELETE: &str = "mutation($id:String!){issueLabelDelete(id:$id){succe
 const LABELS_PAGE: &str = "query($first:Int!,$after:String){issueLabels(first:$first,after:$after){nodes{id name} pageInfo{hasNextPage endCursor}}}";
 const ISSUES_BY_TITLE: &str = "query($first:Int!,$after:String,$prefix:String!){issues(first:$first,after:$after,filter:{title:{startsWith:$prefix}}){nodes{id title} pageInfo{hasNextPage endCursor}}}";
 const PROJECTS_BY_NAME: &str = "query($first:Int!,$after:String,$prefix:String!){projects(first:$first,after:$after,filter:{name:{startsWith:$prefix}}){nodes{id name} pageInfo{hasNextPage endCursor}}}";
-const PROJECT_DELETE: &str = "mutation($id:String!){projectDelete(id:$id){success}}";
 const ISSUE_PAGE_PROBE: &str = "query($first:Int!){issues(first:$first){nodes{id}}}";
 
 /// Every `(id, name)` a paged Linear connection reports.
@@ -209,7 +208,7 @@ async fn remove_artifacts(key: &str, matches: &dyn Fn(&str, &str) -> bool) -> Re
     {
         let data = linear(
             key,
-            PROJECT_DELETE,
+            onetaskgraph_linear::graphql::PROJECT_DELETE,
             json!({"id":id}),
             "live project cleanup",
         )

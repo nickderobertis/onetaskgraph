@@ -1,5 +1,6 @@
 # llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Linear exposes its schema only through an authenticated, unversioned explorer, so an authoritative automated freshness check would require the credential that this repository's explicitly non-required live lane must skip when absent; this documentation-derived subset pins the acceptance criterion's recorded 2026-08-24 contract instead.
-# Documentation-derived Linear GraphQL schema subset, pinned 2026-08-24.
+# Documentation-derived Linear GraphQL schema subset, pinned 2026-08-24, with
+# `projectDelete` re-observed and pinned 2026-08-29 from the same published schema.
 # Only the read/write contract exercised by this plugin is retained.
 type Query {
   viewer: User!
@@ -23,6 +24,7 @@ type Mutation {
   issueRelationDelete(id: String!): DeletePayload!
   projectRelationDelete(id: String!): DeletePayload!
   issueDelete(id: String!): DeletePayload!
+  projectDelete(id: String!): ProjectArchivePayload!
 }
 
 type User {
@@ -138,6 +140,9 @@ type ProjectRelationPayload {
   projectRelation: ProjectRelation
 }
 type DeletePayload {
+  success: Boolean!
+}
+type ProjectArchivePayload {
   success: Boolean!
 }
 type PageInfo {

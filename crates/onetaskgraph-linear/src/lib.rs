@@ -137,6 +137,8 @@ pub mod graphql {
         "mutation($id:String!){ projectRelationDelete(id:$id){success} }";
     /// Delete an issue, so a copy that could not finish can take back what it created.
     pub const ISSUE_DELETE: &str = "mutation($id:String!){ issueDelete(id:$id){success} }";
+    /// Delete a project, for the same reason and on the same terms.
+    pub const PROJECT_DELETE: &str = "mutation($id:String!){ projectDelete(id:$id){success} }";
 }
 
 use graphql::{
@@ -321,6 +323,7 @@ enum MutationRoot {
     IssueRelationDelete,
     ProjectRelationDelete,
     IssueDelete,
+    ProjectDelete,
 }
 impl MutationRoot {
     fn as_str(self) -> &'static str {
@@ -334,6 +337,7 @@ impl MutationRoot {
             Self::IssueRelationDelete => "issueRelationDelete",
             Self::ProjectRelationDelete => "projectRelationDelete",
             Self::IssueDelete => "issueDelete",
+            Self::ProjectDelete => "projectDelete",
         }
     }
 }
@@ -919,20 +923,17 @@ impl TaskSource for LinearSource {
         mutation_payload(&data, MutationRoot::IssueDelete)?;
         Ok(())
     }
-    async fn delete_project(&self, _id: &NativeId) -> Result<(), SourceError> {
-        // The pinned schema subset this plugin is written against
-        // (`tests/fixtures/schema.graphql`, recorded 2026-08-24) carries `issueDelete` and
-        // no project delete, and inventing a mutation nobody observed is how a plugin
-        // starts sending Linear operations this repository cannot check. So this refuses,
-        // naming what the refusal costs, rather than guessing: a copy of a project into
-        // Linear that fails partway reports what it left behind instead of removing it.
-        // Recorded in docs/follow-ups.md.
-        Err(SourceError::Refused {
-            message: "the linear plugin cannot remove a project: the schema subset it is \
-                      written against records no project delete, so a copy that fails partway \
-                      names the project it created rather than taking it back"
-                .into(),
-        })
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        // An id naming nothing is the state this asks for, on exactly the terms
+        // `delete_task` reads it on.
+        if self.get_project(id).await?.is_none() {
+            return Ok(());
+        }
+        let data = self
+            .send(graphql::PROJECT_DELETE, json!({"id":id.0}))
+            .await?;
+        mutation_payload(&data, MutationRoot::ProjectDelete)?;
+        Ok(())
     }
 }
 

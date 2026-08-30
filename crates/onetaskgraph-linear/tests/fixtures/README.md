@@ -4,7 +4,11 @@
 
 `schema.graphql` pins the read-only subset from Linear's published GraphQL schema and
 Relay connection shape as documented in Linear's API documentation and schema explorer
-on 2026-08-24. The contract test parses every production operation against the pinned
+on 2026-08-24. One mutation carries a later date: `projectDelete(id: String!):
+ProjectArchivePayload!` was re-observed in that same published schema on 2026-08-29 and
+pinned then, which is what let `delete_project` stop refusing — a copy into Linear can
+now take back a project it created, the way `issueDelete` already let it take back an
+issue. The contract test parses every production operation against the pinned
 field and argument types and recursively validates each selected response-fixture shape.
 `issues.json` covers `Issue`, `WorkflowState`, `IssueLabel`, and `PageInfo`;
 `projects.json` covers `Project`, its status, and `ProjectLabel`; `labels.json` covers the

@@ -1085,7 +1085,7 @@ fn read_http_json(stream: &mut impl Read) -> Value {
 
 /// A socket-level Linear GraphQL fixture used by the shared binary journeys.
 pub fn linear_block(sandbox: &Sandbox) -> Value {
-    linear_server(sandbox, None)
+    linear_server(sandbox, None, &[])
 }
 
 /// The same workspace, with the item a dependency read asks about recording `recorded`
@@ -1095,14 +1095,40 @@ pub fn linear_block(sandbox: &Sandbox) -> Value {
 /// the shared row is the one every other journey reads, so a workspace holding a key it
 /// must not cannot be that row.
 pub fn linear_recording(sandbox: &Sandbox, recorded: Value) -> Value {
-    linear_server(sandbox, Some(recorded))
+    linear_server(sandbox, Some(recorded), &[])
 }
 
-fn linear_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
+/// What the workspace below says when it refuses a write it has been told to fail.
+///
+/// The journey asserts the caller is told this, so the message the fixture sends and the
+/// message the assertion reads are one string rather than two that can part.
+pub const LINEAR_REFUSED_WRITE: &str = "Linear could not complete that mutation";
+
+/// The same workspace, failing the first native relation it is asked to create.
+///
+/// The last write of a project copy: the project and both of its tasks have landed, and
+/// the edge between the two tasks is what does not — so the copy has real items of its own
+/// making to take back, of both kinds. Linear reports a refused mutation as an `errors`
+/// entry on an otherwise successful response, which is the shape this sends. The failure
+/// is spent once, so the same workspace answers the retry.
+pub fn linear_failing_a_relation_write_once(sandbox: &Sandbox) -> Value {
+    linear_server(
+        sandbox,
+        None,
+        &[onetaskgraph_linear::graphql::ISSUE_RELATION_CREATE],
+    )
+}
+
+fn linear_server(sandbox: &Sandbox, recorded: Option<Value>, failing: &[&str]) -> Value {
     sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
     let state = Arc::new(Mutex::new(dataset()));
+    let failing: Vec<String> = failing
+        .iter()
+        .map(|operation| (*operation).into())
+        .collect();
+    let failing = Arc::new(Mutex::new(failing));
     thread::spawn(move || {
         for mut stream in listener.incoming().flatten() {
             let mut bytes = Vec::new();
@@ -1187,6 +1213,24 @@ fn linear_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 let _ = write!(
                     stream,
                     "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
+            let refused = {
+                let mut pending = failing.lock().unwrap();
+                let operation = request["query"].as_str().unwrap_or_default();
+                pending
+                    .iter()
+                    .position(|failing| failing == operation)
+                    .map(|at| pending.remove(at))
+                    .is_some()
+            };
+            if refused {
+                let text = json!({"errors":[{"message":LINEAR_REFUSED_WRITE}]}).to_string();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
                     text.len()
                 );
                 continue;
@@ -1328,7 +1372,10 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     &[],
                 )
         }
-        graphql::ISSUE_RELATION_DELETE | graphql::PROJECT_RELATION_DELETE => {
+        graphql::ISSUE_RELATION_DELETE
+        | graphql::PROJECT_RELATION_DELETE
+        | graphql::ISSUE_DELETE
+        | graphql::PROJECT_DELETE => {
             exact_linear_variable_keys(variables, &["id"])
                 && variables
                     .get("id")
@@ -1442,6 +1489,8 @@ fn linear_response(
         graphql::PROJECT_RELATION_CREATE,
         graphql::ISSUE_RELATION_DELETE,
         graphql::PROJECT_RELATION_DELETE,
+        graphql::ISSUE_DELETE,
+        graphql::PROJECT_DELETE,
     ]
     .contains(&operation)
     {
@@ -1475,6 +1524,19 @@ fn linear_response(
         graphql::ISSUE_RELATION_CREATE | graphql::PROJECT_RELATION_CREATE
     ) {
         return linear_write_relation(data, &vars, operation == graphql::PROJECT_RELATION_CREATE);
+    }
+    if matches!(operation, graphql::ISSUE_DELETE | graphql::PROJECT_DELETE) {
+        let project = operation == graphql::PROJECT_DELETE;
+        let id = vars["id"].as_str().ok_or("delete id must be a string")?;
+        let rows = data[if project { "projects" } else { "tasks" }]
+            .as_array_mut()
+            .ok_or("fixture collection is not an array")?;
+        rows.retain(|row| row["id"] != json!(id));
+        return Ok(if project {
+            json!({"projectDelete":{"success":true}})
+        } else {
+            json!({"issueDelete":{"success":true}})
+        });
     }
     if matches!(
         operation,

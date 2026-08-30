@@ -401,6 +401,7 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::ISSUE_RELATION_DELETE, true),
         (graphql::PROJECT_RELATION_DELETE, true),
         (graphql::ISSUE_DELETE, true),
+        (graphql::PROJECT_DELETE, true),
     ] {
         let parsed = query::parse_query::<String>(document).unwrap();
         let (selection_set, variables) = match &parsed.definitions[0] {
@@ -457,6 +458,55 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
             selection_set,
         );
     }
+}
+
+#[tokio::test]
+async fn a_project_this_source_created_is_removed_again_over_real_http() {
+    // What makes a copy into Linear atomic: the engine undoes a failed copy's own writes,
+    // and a project is one of the two things it can have written. An id naming nothing is
+    // the state the caller asked for, so it is answered without a mutation — the same
+    // reading `delete_task` gives it.
+    let project = |id: &str| serde_json::json!({"project":{"id":id,"name":"One","description":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Done","type":"completed"},"labels":{"nodes":[]}}});
+    let (endpoint, wire) = response_server(vec![
+        project("P-GONE"),
+        serde_json::json!({"projectDelete":{"success":true}}),
+    ]);
+    source(&endpoint)
+        .delete_project(&"P-GONE".into())
+        .await
+        .expect("the project this copy created is taken back");
+    let read = wire.recv().unwrap();
+    assert!(read.contains("project(id:$id)"), "it is read first: {read}");
+    let removal = wire.recv().unwrap();
+    assert!(
+        removal.contains("projectDelete(id:$id)") && removal.contains("P-GONE"),
+        "the pinned project delete is what removes it: {removal}"
+    );
+
+    let (endpoint, wire) = response_server(vec![serde_json::json!({"project":null})]);
+    source(&endpoint)
+        .delete_project(&"never-there".into())
+        .await
+        .expect("an id naming nothing is the state this asks for");
+    assert!(wire.recv().unwrap().contains("project(id:$id)"));
+    assert!(
+        wire.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "nothing is deleted when there was nothing there"
+    );
+
+    let (endpoint, _) = response_server(vec![
+        project("P-KEPT"),
+        serde_json::json!({"projectDelete":{"success":false}}),
+    ]);
+    let refusal = source(&endpoint)
+        .delete_project(&"P-KEPT".into())
+        .await
+        .expect_err("a removal Linear did not confirm is not a removal");
+    assert!(
+        matches!(&refusal, SourceError::Refused { message } if message.contains("projectDelete")),
+        "the refusal names the operation that did not succeed: {refusal:?}"
+    );
 }
 
 #[tokio::test]
