@@ -58,7 +58,7 @@ fn handshake() -> Value {
         "id": "0",
         "method": "initialize",
         "params": {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "engine": {"name": "onetaskgraph", "version": "0.1.0"},
             "source_name": "work",
             "config": {"tasks": [{
@@ -99,7 +99,7 @@ fn the_shipped_host_answers_a_connection_on_its_standard_input_and_exits_zero() 
         .collect();
     assert_eq!(lines.len(), 2, "one answer per request: {answered}");
     assert_eq!(lines[0]["id"], "0");
-    assert_eq!(lines[0]["result"]["protocol_version"], 1);
+    assert_eq!(lines[0]["result"]["protocol_version"], 2);
     assert_eq!(lines[0]["result"]["kind"], "in-memory");
     assert_eq!(lines[1]["id"], "1");
     assert!(lines[1]["result"]["items"].is_array(), "{answered}");
@@ -141,7 +141,7 @@ fn the_shipped_host_reports_malformed_plugin_settings_on_the_wire() {
 #[test]
 fn a_protocol_version_the_shipped_host_does_not_know_is_refused_and_it_exits_zero() {
     let mut asked = handshake();
-    asked["params"]["protocol_version"] = json!(2);
+    asked["params"]["protocol_version"] = json!(3);
 
     let mut child = source_host()
         .stdin(Stdio::piped())
@@ -164,7 +164,7 @@ fn a_protocol_version_the_shipped_host_does_not_know_is_refused_and_it_exits_zer
         .as_str()
         .expect("a message to read");
     assert!(
-        message.contains("version 2") && message.contains("version 1"),
+        message.contains("version 3") && message.contains("version 2"),
         "{message}"
     );
 }
@@ -244,7 +244,7 @@ impl Hosted {
             "id": "0",
             "method": "initialize",
             "params": {
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "engine": {"name": "onetaskgraph", "version": "0.1.0"},
                 "source_name": "work",
                 "config": self.config,
@@ -276,7 +276,7 @@ fn answers(mut command: Command, handshake: &Value, requests: &[Value]) -> Vec<V
         .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
         .collect();
     assert_eq!(lines.len(), requests.len() + 1, "{answered}");
-    assert_eq!(lines[0]["result"]["protocol_version"], 1, "{answered}");
+    assert_eq!(lines[0]["result"]["protocol_version"], 2, "{answered}");
     lines[1..].to_vec()
 }
 
@@ -348,4 +348,85 @@ fn the_shipped_host_refuses_a_recorded_cursor_no_walk_of_its_own_reported() {
             hosted.kind
         );
     }
+}
+
+/// One `initialize` request over a source holding a task and the project it belongs to.
+///
+/// `capabilities` is the plugin's own block, which is how a removal is made to fail on
+/// cue: `undeletable_ids` names what this source will not take back.
+fn removal_handshake(capabilities: Value) -> Value {
+    json!({
+        "id": "0",
+        "method": "initialize",
+        "params": {
+            "protocol_version": 2,
+            "engine": {"name": "onetaskgraph", "version": "0.1.0"},
+            "source_name": "work",
+            "config": {
+                "tasks": [{
+                    "id": "T-1", "title": "Alpha",
+                    "status": {"category": "todo", "name": "Todo"},
+                    "labels": [], "project": "P-1"
+                }],
+                "projects": [{
+                    "id": "P-1", "title": "Engine",
+                    "status": {"category": "todo", "name": "Todo"}, "labels": []
+                }],
+                "capabilities": capabilities
+            },
+            "secrets": {}
+        }
+    })
+}
+
+#[test]
+fn the_shipped_host_removes_a_task_and_a_project_and_they_are_gone_afterwards() {
+    // §4.10, the half a copy that cannot finish depends on: undoing this engine's own
+    // writes goes through the plugin, so over a subprocess-hosted source it goes over the
+    // wire. Both removals are read back through the same connection, because a host that
+    // answered `{}` and removed nothing would look identical from the answer alone.
+    let answered = answers(
+        source_host(),
+        &removal_handshake(json!({})),
+        &[
+            json!({"id": "1", "method": "delete_task", "params": {"id": "T-1"}}),
+            json!({"id": "2", "method": "get_task", "params": {"id": "T-1"}}),
+            json!({"id": "3", "method": "delete_project", "params": {"id": "P-1"}}),
+            json!({"id": "4", "method": "get_project", "params": {"id": "P-1"}}),
+        ],
+    );
+
+    assert_eq!(answered[0]["result"], json!({}), "{answered:?}");
+    assert_eq!(answered[1]["result"]["task"], Value::Null, "{answered:?}");
+    assert_eq!(answered[2]["result"], json!({}), "{answered:?}");
+    assert_eq!(
+        answered[3]["result"]["project"],
+        Value::Null,
+        "{answered:?}"
+    );
+}
+
+#[test]
+fn a_removal_the_hosted_source_refuses_crosses_the_wire_as_its_own_reason() {
+    // The destination that will not take an item back is what a copy reports as still
+    // there, so its reason has to survive the boundary rather than becoming a transport
+    // failure — and the item has to still be there afterwards.
+    let answered = answers(
+        source_host(),
+        &removal_handshake(json!({"undeletable_ids": ["T-1"]})),
+        &[
+            json!({"id": "1", "method": "delete_task", "params": {"id": "T-1"}}),
+            json!({"id": "2", "method": "get_task", "params": {"id": "T-1"}}),
+        ],
+    );
+
+    assert_eq!(answered[0]["error"]["kind"], "refused", "{answered:?}");
+    let message = answered[0]["error"]["message"]
+        .as_str()
+        .expect("a message to read");
+    assert!(
+        message.contains("will not remove T-1"),
+        "the plugin's own reason names the item: {message}"
+    );
+    assert_eq!(answered[1]["result"]["task"]["id"], "T-1", "{answered:?}");
 }

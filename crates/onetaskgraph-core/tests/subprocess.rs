@@ -292,7 +292,7 @@ async fn a_plugin_that_says_nothing_about_writing_is_read_as_one_that_cannot() {
     // §3.3: the member is optional, and absent means unsupported — which is what a
     // version-1 plugin written before there was a write side sends.
     let silent = scripted(vec![
-        json!({"id":"0","result":{"protocol_version":1,"kind":"ancient","capabilities":{
+        json!({"id":"0","result":{"protocol_version":2,"kind":"ancient","capabilities":{
             "projects":"native","orphan_tasks":"native","filter_by_label":"native",
             "filter_by_status":"native","search_title":"native","search_content":"native",
             "task_dependencies":"both-directions","project_dependencies":"both-directions",
@@ -325,7 +325,7 @@ async fn an_existing_stream_applies_its_deadline_after_initialization() {
         writeln!(
             from_plugin,
             "{}",
-            json!({"id": "0", "result": {"protocol_version": 1,
+            json!({"id": "0", "result": {"protocol_version": 2,
                 "kind": "silent", "capabilities": capabilities()}})
         )
         .expect("the handshake answer");
@@ -374,7 +374,7 @@ async fn a_request_deadline_turns_a_silent_child_into_a_named_source_error() {
     // POSIX supplies one ubiquitous executable that can answer the real handshake and
     // then stay silent. Windows lacks an equivalent system program; the transport code
     // is platform-neutral and its functional journeys still run there.
-    let answer = json!({"id": "0", "result": {"protocol_version": 1,
+    let answer = json!({"id": "0", "result": {"protocol_version": 2,
         "kind": "silent", "capabilities": capabilities()}})
     .to_string();
     let source = SubprocessSource::connect_with_deadline(
@@ -503,7 +503,7 @@ async fn an_id_that_names_nothing_is_null_rather_than_a_failure() {
 
 #[test]
 fn a_protocol_version_this_plugin_does_not_know_is_refused_by_name() {
-    let answers = served(&[handshake(2, hosted_settings())]);
+    let answers = served(&[handshake(3, hosted_settings())]);
 
     assert_eq!(
         answers.len(),
@@ -512,7 +512,7 @@ fn a_protocol_version_this_plugin_does_not_know_is_refused_by_name() {
     );
     assert_eq!(refusal(&answers[0]), "config");
     assert!(
-        because(&answers[0]).contains("version 2") && because(&answers[0]).contains("version 1"),
+        because(&answers[0]).contains("version 3") && because(&answers[0]).contains("version 2"),
         "the refusal names both versions: {}",
         because(&answers[0])
     );
@@ -534,8 +534,8 @@ fn a_request_before_the_handshake_is_refused_rather_than_answered() {
 #[test]
 fn a_second_handshake_on_one_connection_is_refused() {
     let answers = served(&[
-        handshake(1, hosted_settings()),
-        handshake(1, hosted_settings()),
+        handshake(2, hosted_settings()),
+        handshake(2, hosted_settings()),
     ]);
 
     assert!(answers[0]["result"].is_object(), "{answers:?}");
@@ -552,7 +552,7 @@ fn a_line_with_no_request_id_is_skipped_and_the_next_request_still_answered() {
     let mut input = String::from("this is not JSON at all\n");
     input.push_str("{\"method\":\"labels\"}\n");
     input.push('\n');
-    input.push_str(&serde_json::to_string(&handshake(1, hosted_settings())).expect("a request"));
+    input.push_str(&serde_json::to_string(&handshake(2, hosted_settings())).expect("a request"));
     input.push('\n');
     let mut output: Vec<u8> = Vec::new();
     tokio::runtime::Builder::new_current_thread()
@@ -568,7 +568,7 @@ fn a_line_with_no_request_id_is_skipped_and_the_next_request_still_answered() {
         1,
         "only the handshake is answerable: {answered}"
     );
-    assert!(answered.contains("\"protocol_version\":1"), "{answered}");
+    assert!(answered.contains("\"protocol_version\":2"), "{answered}");
 }
 
 #[test]
@@ -587,7 +587,7 @@ fn a_line_that_is_addressed_but_is_not_a_request_is_answered_rather_than_dropped
 #[test]
 fn a_method_this_version_does_not_have_is_refused_by_name() {
     let answers = served(&[
-        handshake(1, hosted_settings()),
+        handshake(2, hosted_settings()),
         json!({"id": "1", "method": "delete_everything", "params": {}}),
     ]);
 
@@ -602,7 +602,7 @@ fn a_method_this_version_does_not_have_is_refused_by_name() {
 #[test]
 fn parameters_of_the_wrong_shape_are_refused_naming_the_method() {
     let answers = served(&[
-        handshake(1, hosted_settings()),
+        handshake(2, hosted_settings()),
         json!({"id": "1", "method": "get_task", "params": {}}),
     ]);
 
@@ -616,7 +616,7 @@ fn parameters_of_the_wrong_shape_are_refused_naming_the_method() {
 
 #[test]
 fn settings_naming_no_plugin_of_this_build_are_refused_with_the_kinds_it_knows() {
-    let answers = served(&[handshake(1, json!({"kind": "jira", "config": {}}))]);
+    let answers = served(&[handshake(2, json!({"kind": "jira", "config": {}}))]);
 
     assert_eq!(refusal(&answers[0]), "config");
     assert!(
@@ -628,7 +628,7 @@ fn settings_naming_no_plugin_of_this_build_are_refused_with_the_kinds_it_knows()
 
 #[test]
 fn settings_this_host_cannot_read_are_refused_for_what_they_are_missing() {
-    let answers = served(&[handshake(1, json!({"config": {}}))]);
+    let answers = served(&[handshake(2, json!({"config": {}}))]);
 
     assert_eq!(refusal(&answers[0]), "config");
     assert!(
@@ -640,7 +640,7 @@ fn settings_this_host_cannot_read_are_refused_for_what_they_are_missing() {
 
 #[test]
 fn a_hosted_plugin_that_refuses_to_build_answers_with_its_own_error() {
-    let answers = served(&[handshake(1, json!({"kind": "linear", "config": {}}))]);
+    let answers = served(&[handshake(2, json!({"kind": "linear", "config": {}}))]);
 
     // Linear has no forwarded credential, proving a build failure crosses the wire as
     // the plugin's own authentication error rather than as a transport failure.
@@ -655,7 +655,7 @@ fn a_hosted_plugin_that_refuses_to_build_answers_with_its_own_error() {
 #[test]
 fn a_plugin_answering_in_a_version_the_engine_did_not_ask_for_is_refused() {
     let error = scripted(vec![
-        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+        json!({"id": "0", "result": {"protocol_version": 3, "kind": "made-up",
                "capabilities": capabilities()}})
         .to_string(),
     ])
@@ -665,7 +665,7 @@ fn a_plugin_answering_in_a_version_the_engine_did_not_ask_for_is_refused() {
         panic!("a version disagreement is a configuration refusal: {error:?}");
     };
     assert!(
-        message.contains("version 1") && message.contains("version 2"),
+        message.contains("version 2") && message.contains("version 3"),
         "{message}"
     );
 }
@@ -696,7 +696,7 @@ fn a_handshake_answer_that_is_not_an_initialize_result_is_malformed() {
 fn a_plugin_kind_with_no_name_is_rejected_at_the_handshake_boundary() {
     for kind in ["", " \t"] {
         let error = scripted(vec![
-            json!({"id": "0", "result": {"protocol_version": 1, "kind": kind,
+            json!({"id": "0", "result": {"protocol_version": 2, "kind": kind,
                    "capabilities": capabilities()}})
             .to_string(),
         ])
@@ -750,7 +750,7 @@ fn a_plugin_that_says_nothing_at_all_is_reported_as_unreachable() {
 #[tokio::test]
 async fn a_plugin_answering_an_id_nobody_asked_is_a_protocol_violation() {
     let source = scripted(vec![
-        json!({"id": "0", "result": {"protocol_version": 1, "kind": "made-up",
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
                "capabilities": capabilities()}})
         .to_string(),
         json!({"id": "999", "result": {"reachable": true}}).to_string(),
@@ -767,7 +767,7 @@ async fn a_plugin_answering_an_id_nobody_asked_is_a_protocol_violation() {
 async fn a_plugin_line_that_is_not_json_is_quoted_back_at_a_readable_length() {
     let long = "x".repeat(500);
     let source = scripted(vec![
-        json!({"id": "0", "result": {"protocol_version": 1, "kind": "made-up",
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
                "capabilities": capabilities()}})
         .to_string(),
         long,
@@ -782,9 +782,40 @@ async fn a_plugin_line_that_is_not_json_is_quoted_back_at_a_readable_length() {
 }
 
 #[tokio::test]
+async fn a_delete_result_is_read_as_an_object_rather_than_as_exactly_the_empty_one() {
+    // §4.10 answers `{}`, and §2.1 is what says how strictly to read that: a reader ignores
+    // members it does not know, at every level, so a later version can add an optional one
+    // without a version bump. A decoder refusing the unknown member here would refuse that
+    // plugin outright — and would be the only one of this boundary that did. What is
+    // refused is an answer that is not an object at all, which no version of §4.10 permits.
+    let source = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": capabilities()}})
+        .to_string(),
+        json!({"id": "1", "result": {"removed_at": "2026-08-30T00:00:00Z"}}).to_string(),
+        json!({"id": "2", "result": "done"}).to_string(),
+    ])
+    .expect("the handshake succeeds");
+
+    source
+        .delete_task(&NativeId("T-1".to_owned()))
+        .await
+        .expect("a member this version does not know is ignored, not refused");
+
+    let SourceError::Malformed { message } = source
+        .delete_project(&NativeId("P-1".to_owned()))
+        .await
+        .expect_err("a result that is not an object")
+    else {
+        panic!("a delete result that is not an object is a protocol violation");
+    };
+    assert!(message.contains("delete_project"), "{message}");
+}
+
+#[tokio::test]
 async fn a_plugin_that_stops_answering_fails_this_call_and_every_later_one() {
     let source = scripted(vec![
-        json!({"id": "0", "result": {"protocol_version": 1, "kind": "made-up",
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
                "capabilities": capabilities()}})
         .to_string(),
     ])
@@ -971,7 +1002,7 @@ fn a_handshake_answer_that_is_not_a_line_of_json_is_a_violation() {
 #[tokio::test]
 async fn an_answer_that_is_json_but_not_the_promised_shape_is_a_violation() {
     let source = scripted(vec![
-        json!({"id": "0", "result": {"protocol_version": 1, "kind": "made-up",
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
                "capabilities": capabilities()}})
         .to_string(),
         json!({"id": "1", "result": {"reachable": "yes please"}}).to_string(),
@@ -988,7 +1019,7 @@ async fn an_answer_that_is_json_but_not_the_promised_shape_is_a_violation() {
 #[tokio::test]
 async fn an_answer_carrying_both_members_after_the_handshake_is_a_violation() {
     let source = scripted(vec![
-        json!({"id": "0", "result": {"protocol_version": 1, "kind": "made-up",
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
                "capabilities": capabilities()}})
         .to_string(),
         json!({"id": "1", "result": {"reachable": true},
@@ -1024,7 +1055,7 @@ fn capturing(secrets: BTreeMap<String, String>) -> (SubprocessSource, Value) {
             .lock()
             .expect("nothing else holds this")
             .push_str(&request);
-        let answer = json!({"id": "0", "result": {"protocol_version": 1, "kind": "recorder",
+        let answer = json!({"id": "0", "result": {"protocol_version": 2, "kind": "recorder",
                             "capabilities": capabilities()}});
         let _ = writeln!(from_peer, "{answer}");
         let _ = from_peer.flush();
@@ -1049,7 +1080,7 @@ fn the_handshake_carries_the_named_credentials_the_settings_and_the_source_name(
     let (_source, handshake) = capturing(secrets);
 
     let params = &handshake["params"];
-    assert_eq!(params["protocol_version"], 1);
+    assert_eq!(params["protocol_version"], 2);
     assert_eq!(params["source_name"], "work");
     assert_eq!(params["config"], json!({"root": "/somewhere"}));
     // Exactly the one named variable, so a plugin cannot be handed a credential its
@@ -1067,7 +1098,7 @@ fn a_handshake_carrying_no_named_credentials_forwards_none_at_all() {
 #[test]
 fn a_handshake_answer_addressed_to_another_request_is_a_violation() {
     let Err(error) = scripted(vec![
-        json!({"id": "17", "result": {"protocol_version": 1, "kind": "made-up",
+        json!({"id": "17", "result": {"protocol_version": 2, "kind": "made-up",
                "capabilities": capabilities()}})
         .to_string(),
     ]) else {
@@ -1110,7 +1141,7 @@ async fn a_plugin_that_never_ends_its_line_has_the_connection_closed_on_it() {
         let mut asked = BufReader::new(to_liar);
         let mut request = String::new();
         let _ = asked.read_line(&mut request);
-        let answer = json!({"id": "0", "result": {"protocol_version": 1, "kind": "made-up",
+        let answer = json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
                             "capabilities": capabilities()}});
         let _ = writeln!(from_liar, "{answer}");
         let _ = from_liar.flush();
@@ -1138,7 +1169,7 @@ async fn a_plugin_that_never_ends_its_line_has_the_connection_closed_on_it() {
 
 #[test]
 fn a_request_that_never_ends_its_line_closes_the_connection_rather_than_being_framed() {
-    let mut input = serde_json::to_string(&handshake(1, hosted_settings())).expect("a request");
+    let mut input = serde_json::to_string(&handshake(2, hosted_settings())).expect("a request");
     input.push('\n');
     input.push_str(&"x".repeat(usize::try_from(MAX_LINE).expect("the bound fits a usize") + 1));
 
@@ -1154,7 +1185,7 @@ fn a_request_that_never_ends_its_line_closes_the_connection_rather_than_being_fr
     // The handshake is answered; nothing after the unterminated line is, because nothing
     // after it can be framed as a request rather than as the tail of one.
     assert_eq!(answered.lines().count(), 1, "{answered}");
-    assert!(answered.contains("\"protocol_version\":1"), "{answered}");
+    assert!(answered.contains("\"protocol_version\":2"), "{answered}");
 }
 
 /// A `Capabilities` the scripted answers can carry, in the protocol's own spelling.

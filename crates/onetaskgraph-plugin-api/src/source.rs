@@ -178,6 +178,41 @@ pub trait TaskSource: Send + Sync {
         let _ = write;
         Err(unwritable(self.kind()))
     }
+
+    /// Remove one task this destination holds, so a copy that could not finish can put
+    /// the destination back the way it found it.
+    ///
+    /// This is not a verb of the product: nothing a user types deletes anything, and a
+    /// copy never deletes an item it did not itself create in the run that is failing.
+    /// It exists because a copy is either complete or it never happened — a half-written
+    /// project has to be run again, and the re-run is the mutation burst that trips a
+    /// hosted destination's rate limiter. Undoing this run's own creates is what removes
+    /// that retry at source.
+    ///
+    /// A source declaring [`WriteSupport::Supported`] owes a real implementation, for the
+    /// reason it owes [`write_task`](Self::write_task) one: the engine will create items
+    /// there, so it has to be able to remove the ones it created. An `id` naming nothing
+    /// is **not** an error — the item is already gone, which is the state this asks for.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source has no write side, and whatever
+    /// else the source could not remove the item for.
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        let _ = id;
+        Err(unwritable(self.kind()))
+    }
+
+    /// Remove one project this destination holds, on exactly the terms of
+    /// [`delete_task`](Self::delete_task).
+    ///
+    /// # Errors
+    ///
+    /// As [`delete_task`](Self::delete_task).
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        let _ = id;
+        Err(unwritable(self.kind()))
+    }
 }
 
 /// The factory that turns one configuration block into a live [`TaskSource`].

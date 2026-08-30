@@ -11,6 +11,16 @@
           "updatedAt": "2026-08-02T12:00:00Z",
           "status": { "name": "Started", "type": "started" },
           "labels": { "nodes": [{ "id": "pl1", "name": "Roadmap", "color": "#00ff00" }] }
+        },
+        {
+          "id": "p2",
+          "name": "Second fixture project",
+          "description": "Another project body",
+          "url": "https://linear.app/acme/project/p2",
+          "createdAt": "2026-08-03T12:00:00Z",
+          "updatedAt": "2026-08-04T12:00:00Z",
+          "status": { "name": "Backlog", "type": "backlog" },
+          "labels": { "nodes": [{ "id": "pl2", "name": "Platform", "color": "#0000ff" }] }
         }
       ],
       "pageInfo": { "hasNextPage": false, "endCursor": null }

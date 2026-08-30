@@ -37,4 +37,3 @@ otherwise fail, naming the row and the field — and deleting this entry and the
 `onetaskgraph-linear`'s module documentation. `scripts/check-capability-verdicts.sh` reads
 the field line above and fails while it names a capability that plugin no longer calls
 unsupported, so the entry cannot outlive the gap it describes.
-

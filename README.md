@@ -148,8 +148,16 @@ Every field a copy read is written — title, content, status, labels, project,
 repositories, metadata and the edges — except `url`, `created_at` and `updated_at`, which
 are the destination's own. Nothing is silently dropped: a field the destination cannot
 represent, or a metadata key it cannot carry, refuses the write and names it. A copy never
-deletes either, so a destination item the source no longer holds is left exactly as it is
-and reported as `orphaned`.
+deletes work either, so a destination item the source no longer holds is left exactly as it
+is and reported as `orphaned`.
+
+**A copy either completes or leaves the destination as it found it.** A copy that cannot
+finish — a field the destination refuses, a credential that expires, a rate limiter —
+undoes what it has already written and takes back the items it created in that run, so the
+retry starts from the destination you started from. That is what stops a half-written
+project having to be re-run, and the re-run is the burst of writes that trips a hosted
+destination's rate limiter. When the destination will not take one of them back, the
+refusal says so and names what is still there rather than leaving you to find it.
 
 `--json` gives one entry per item for a script to read:
 

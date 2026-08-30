@@ -59,6 +59,8 @@ distribution-check:
         fi
     @scripts/check-distribution-contract.sh
     @scripts/check-distribution-contract-enforced.sh
+    @scripts/check-store-fixtures.sh
+    @scripts/check-store-fixtures-enforced.sh
     @scripts/check-release-pr-sync.sh
     @scripts/check-release-tooling-selection.sh
     @scripts/check-real-release-preparation.sh
@@ -70,6 +72,8 @@ distribution-test:
             echo "distribution journey failed; next: run 'scripts/test-distribution.sh' and fix the named installer or launcher assertion" >&2; \
             exit 1; \
         fi
+    @scripts/check-npm-publish.sh
+    @scripts/check-fixture-discrimination.sh
 
 # Tests only, for the affected projects.
 test:

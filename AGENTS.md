@@ -130,6 +130,18 @@ the user's explicit request, is not the state `DependencyEdge`'s own documentati
 forbids, because the engine holds nothing between calls and reads nothing back to answer a
 later query.
 
+**A copy is either complete or it never happened, and undoing one is not a delete verb.**
+A copy that cannot finish removes the items *it created in that run* and writes back the
+items it overwrote, through `TaskSource::delete_task` and `TaskSource::delete_project`.
+Nothing a user types deletes anything, and no item this run did not write is ever touched:
+what is undone is this engine's own writes, from a journal that lives for the length of one
+`copy` call and is dropped with it. The reason is not tidiness — a half-written project has
+to be run again, and the re-run is the mutation burst that trips a hosted destination's
+secondary rate limiter, which then refuses even reads for the next fifty minutes. A
+destination that will not take one of its items back is not papered over: the copy refuses
+with `EngineError::CopyNotUndone`, naming why it failed, why it could not be undone, and
+what is still there.
+
 1. `deny.toml` refuses every embedded store, index and cache crate, and `deny` is a
    required check — so reaching for one cannot merge.
 2. `crates/onetaskgraph/tests/e2e/no_persistence.rs` sandboxes `HOME`, every `XDG_*` and
@@ -226,7 +238,7 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 The Linear row is backed by a real local HTTP server in the shared e2e process. Its
 responses and the crate fixtures under `crates/onetaskgraph-linear/tests/fixtures/`
 follow Linear's published GraphQL schema and Relay connection documentation as recorded
-on 2026-08-24. The checked-in `schema.graphql` there is the pinned source artifact, and
+on 2026-08-24, and `projectDelete` as re-observed there on 2026-08-29. The checked-in `schema.graphql` there is the pinned source artifact, and
 `pinned_schema_checks_selected_fields_arguments_and_fixture_keys` fails when a production
 operation drifts from it. Each fixture records whether it was live-captured or
 documentation-derived.
@@ -298,6 +310,13 @@ them do; this is the inventory of what is owed, not a status board.
 30. A project copy carries the tasks in it, matches each independently on a second copy,
     and reports a destination item the source no longer holds as orphaned rather than
     deleting it.
+31. A copy that cannot finish leaves the destination as it found it: an item's write is
+    made to fail after another item has already landed, and the destination afterwards
+    holds none of that copy's items. A destination that will not take one back is refused
+    with both halves of the reason and the name of what is still there.
+32. A copy resolves a dependency on an item it created earlier in the same run — including
+    one in another project of the same command, and against a destination whose own read
+    of itself is behind. No item a copy created is ever reported as not found.
 
 ## Recorded decisions
 

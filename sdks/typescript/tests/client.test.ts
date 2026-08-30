@@ -74,11 +74,23 @@ beforeAll(() => {
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-test("every emitted command has a client method", async () => {
-  assertCompleteCommandSurface();
-  const bundle = await client.schema();
-  expect(bundle).toHaveProperty("commands", [...clientCommands]);
-});
+// This file's first command is the first time anything here starts the debug binary, and
+// that first exec is not the same cost as the ones after it: on a loaded macOS runner,
+// paging in an unstripped debug build and validating its signature has outlasted bun's 5s
+// default on its own, while the test below drove a dozen commands through the warm binary
+// in under two seconds. A bound this wide still catches a command that hangs; what it stops
+// doing is reporting a cold start as one.
+const COLD_START_TIMEOUT_MS = 60_000;
+
+test(
+  "every emitted command has a client method",
+  async () => {
+    assertCompleteCommandSurface();
+    const bundle = await client.schema();
+    expect(bundle).toHaveProperty("commands", [...clientCommands]);
+  },
+  COLD_START_TIMEOUT_MS,
+);
 
 test("typed methods drive every real binary command", async () => {
   expect((await client.configShow()).settings.length).toBeGreaterThan(0);

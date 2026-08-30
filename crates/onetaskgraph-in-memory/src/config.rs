@@ -249,6 +249,39 @@ pub struct CapabilityConfig {
     /// key owes the caller a refusal naming the keys rather than a silent drop, and
     /// proving that needs a source whose limits a document can choose.
     pub unwritable_metadata_keys: Vec<String>,
+    /// Titles this source refuses to *create*, naming the title in the refusal.
+    ///
+    /// Empty by default. Configurable for the reason [`Self::unwritable_metadata_keys`]
+    /// is, and for one more: a copy is either complete or it leaves the destination as it
+    /// found it, and the only way to drive that is a destination where one item's creation
+    /// fails after another item's has already landed. A real destination refuses for its
+    /// own reasons — a label it cannot set, a field it cannot carry, a rate limiter — and
+    /// none of those is something a test can ask for on cue.
+    ///
+    /// It reaches creates alone. An update names an item that is already there, so it is
+    /// not what leaves a half-written destination behind.
+    pub uncreatable_titles: Vec<String>,
+    /// Titles this source applies and *then* refuses, on an update.
+    ///
+    /// Empty by default, and configurable for the reason [`Self::uncreatable_titles`] is,
+    /// from the other end of a write. A destination's own write is several calls —
+    /// `docs/plugin-protocol.md` §4.9 — and one of them failing leaves the ones before it
+    /// applied. No source can put those back: only the engine's copy journal holds what
+    /// was there, so a copy that recorded that journal after the write was the one way it
+    /// could stop and leave the destination altered.
+    ///
+    /// It reaches updates alone. A create that fails leaves nothing to put back, and
+    /// [`Self::uncreatable_titles`] is that half.
+    pub half_written_titles: Vec<String>,
+    /// Ids this source refuses to *remove*, naming the id in the refusal.
+    ///
+    /// Empty by default, and configurable for the reason [`Self::uncreatable_titles`] is,
+    /// one step further on: a copy that cannot finish undoes its own writes, and a
+    /// destination that will not take one of them back leaves work behind that the copy
+    /// owes the user the name of. A real destination refuses for its own reasons — a
+    /// permission its credential lacks, an item kind it cannot delete — and none of those
+    /// is something a test can ask for on cue.
+    pub undeletable_ids: Vec<NativeId>,
 }
 
 /// Refuse a zero page ceiling, naming the setting a user has to correct.
@@ -277,6 +310,9 @@ impl Default for CapabilityConfig {
             max_page_size: DEFAULT_MAX_PAGE_SIZE,
             writes: WriteSupport::Supported,
             unwritable_metadata_keys: Vec::new(),
+            uncreatable_titles: Vec::new(),
+            half_written_titles: Vec::new(),
+            undeletable_ids: Vec::new(),
         }
     }
 }

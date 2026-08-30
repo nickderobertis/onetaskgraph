@@ -22,8 +22,8 @@ use serde_json::{Value, json};
 
 use super::connection::{Connection, Peer};
 use super::wire::{
-    DependencyParams, EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams,
-    PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request,
+    DeleteParams, DependencyParams, EngineIdentity, IdParams, InitializeParams, InitializeResult,
+    LabelParams, PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request,
     TaskQueryParams, TaskResult, TaskWriteParams, WriteResult,
 };
 
@@ -442,7 +442,32 @@ impl TaskSource for SubprocessSource {
             .await?;
         Ok(result.id)
     }
+
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        let _: IgnoredResult = self
+            .ask("delete_task", params(&DeleteParams { id: id.clone() }))
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        let _: IgnoredResult = self
+            .ask("delete_project", params(&DeleteParams { id: id.clone() }))
+            .await?;
+        Ok(())
+    }
 }
+
+/// The object §4.10 answers with, decoded so that `ask` has a type to hand back.
+///
+/// A named type rather than `serde_json::Value` so a plugin answering with something other
+/// than an object is still refused where every other method's answer is. It does **not**
+/// require that object to be empty, and no `deny_unknown_fields` belongs here: §2.1 is that
+/// a reader ignores members it does not know, at every level, which is what lets a later
+/// version add an optional one without a version bump. Refusing an unknown member here
+/// would refuse that plugin outright, and would be the only type of this boundary that did.
+#[derive(serde::Deserialize)]
+struct IgnoredResult {}
 
 /// One method's parameters as the object the envelope carries.
 ///

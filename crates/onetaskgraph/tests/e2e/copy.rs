@@ -17,8 +17,11 @@ use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{
-    ROWS, SOURCE, document, empty_folder, github_projects_failing_a_field_write_once,
-    github_projects_failing_to_file_once, github_projects_with_board, linear_block, qualified,
+    LINEAR_REFUSED_WRITE, ROWS, SOURCE, document, empty_folder,
+    github_projects_failing_a_field_write_and_its_cleanup,
+    github_projects_failing_a_field_write_once, github_projects_failing_to_file_and_its_cleanup,
+    github_projects_failing_to_file_once, github_projects_reading_one_item_behind,
+    github_projects_with_board, linear_block, linear_failing_a_relation_write_once, qualified,
 };
 
 /// The folder every copy journey copies into, configured beside the source under test.
@@ -712,11 +715,16 @@ fn a_dependency_naming_a_board_item_as_the_wrong_kind_is_refused_before_anything
 }
 
 #[test]
-fn a_field_write_that_fails_after_an_issue_is_filed_leaves_it_findable_by_title() {
+fn a_field_write_that_fails_after_an_issue_is_filed_takes_the_issue_back() {
     // The later half of the same sequence: the issue exists and is on the board, and the
-    // copy origin that would let the next copy find it is what did not land. So a plain
-    // retry cannot match it — `--match-by title` is the escape that re-establishes the
-    // correspondence instead of filing a second issue for the same plan.
+    // board field that would let the next copy find it is what did not land.
+    //
+    // That state used to be left behind, and `--match-by title` was the escape a person
+    // had to know to reach for. It is not left behind any more: creating an item here is
+    // several calls, GitHub can fail at any of them, and a write that refused must not
+    // leave an item nobody asked for — so the source takes back the issue it created and
+    // the plain retry is a clean one. The escape itself is unaffected and is proven where
+    // it belongs, over a correspondence a *person* removed.
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("plans");
     std::fs::create_dir_all(root.join("tasks")).unwrap();
@@ -740,30 +748,23 @@ fn a_field_write_that_fails_after_an_issue_is_filed_leaves_it_findable_by_title(
     let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
     assert_eq!(
         listed.matches("First step").count(),
-        1,
-        "the issue was filed before the field write failed, so the board holds it: {listed}"
+        0,
+        "the issue the failed write created is not left on the board: {listed}"
     );
 
+    // The failure is spent, so the plain retry — no escape, no flag — creates the one
+    // issue this plan owes, with the status the failed attempt could not write.
     let copied = ok(
         &sandbox,
-        &[
-            "task",
-            "copy",
-            "plans:A",
-            "--to",
-            "board",
-            "--match-by",
-            "title",
-            "--json",
-        ],
+        &["task", "copy", "plans:A", "--to", "board", "--json"],
     );
     let landed = reported(&copied);
     assert_eq!(landed.len(), 1, "{copied}");
-    assert_eq!(landed[0].2, "updated", "{copied}");
+    assert_eq!(landed[0].2, "created", "{copied}");
     let finished = shown(&sandbox, "task", landed[0].1.as_str().expect("an id"));
     assert_eq!(
         finished["status"]["category"], "in-progress",
-        "the status the failed attempt could not write is what the retry finishes"
+        "the status the failed attempt could not write is what the retry lands"
     );
     let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
     assert_eq!(
@@ -1381,4 +1382,338 @@ fn a_copy_that_cannot_run_at_all_exits_non_zero_with_a_suggested_next_action() {
         assert!(said.contains(expected), "{arguments:?}: {said}");
         assert!(said.contains("next:"), "{arguments:?}: {said}");
     }
+}
+
+/// A folder holding one project and two tasks in it, the second blocking the first.
+///
+/// The shape a plan is authored in: `A` cannot start until `B` is done, and both are part
+/// of one project. Copying it is what needs the far end of that edge — an item the same
+/// run is creating — to be findable at the destination.
+fn plans_with_a_dependency(sandbox: &Sandbox) -> std::path::PathBuf {
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("projects")).unwrap();
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("projects/P-1.md"),
+        "---\ntitle: Published roadmap\nstatus: Doing\n---\nThe permanent plan\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Todo\nproject: P-1\n\
+         depends_on: [B]\n---\ndo this after B\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("tasks/B.md"),
+        "---\ntitle: Second step\nstatus: Todo\nproject: P-1\n---\nthen this\n",
+    )
+    .unwrap();
+    root
+}
+
+#[test]
+fn a_copy_resolves_a_dependency_on_an_item_it_created_in_the_same_run() {
+    // The defect: three runs of one project copy each created some items and then refused,
+    // naming "GitHub dependency item <node-id> was not found" — an item that same run had
+    // just created. GitHub's board read is eventually consistent, so the far end of an edge
+    // written moments after its creation was routinely absent from the read that looked it
+    // up. The board this runs against never shows the item most recently filed on it, which
+    // is that hazard with the timing taken out of it.
+    let sandbox = Sandbox::new();
+    plans_with_a_dependency(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root": sandbox.subdirectory("plans"),
+            "status_mapping": {"Todo":"todo","Doing":"in-progress","Shipped":"done"}}},
+        "board": {"plugin":"github-projects",
+                  "config": github_projects_reading_one_item_behind(&sandbox)}
+    })));
+
+    let output = run(
+        &sandbox,
+        &["project", "copy", "plans:P-1", "--to", "board", "--json"],
+    );
+    let said = stderr(&output);
+    assert!(
+        !said.contains("was not found"),
+        "no item this run created is reported as missing: {said}"
+    );
+    assert_eq!(output.status.code(), Some(0), "{said}");
+
+    let landed = reported(&stdout(&output));
+    assert_eq!(
+        landed
+            .iter()
+            .map(|(source, _, action)| (source.as_str(), action.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("plans:P-1", "created"),
+            ("plans:A", "created"),
+            ("plans:B", "created"),
+        ]
+    );
+
+    // The edge is really there, read back through the binary's own dependency verb, and it
+    // names the destination's item rather than the id it had at its source.
+    let first = landed[1].1.as_str().expect("a created task id");
+    let second = landed[2].1.as_str().expect("a created task id");
+    let edges = ok(&sandbox, &["task", "deps", first]);
+    assert!(
+        edges.contains(second),
+        "{first} depends on {second} at the destination:\n{edges}"
+    );
+    assert!(
+        !edges.contains("plans:B"),
+        "the far end is the destination's own item, not the id it had at its source:\n{edges}"
+    );
+}
+
+#[test]
+fn a_copy_that_cannot_finish_leaves_the_board_as_it_found_it() {
+    // A copy is either complete or it never happened. Half of one has to be run again, and
+    // the re-run is the mutation burst that trips GitHub's secondary rate limiter — which
+    // then refuses even reads for the next fifty minutes. So the copy undoes the items it
+    // created and the retry starts from the board it started from.
+    //
+    // The board here fails the first field write onto an item it has already filed: the
+    // issue exists and is on the board when the refusal arrives, which is exactly the state
+    // that used to be left behind.
+    let sandbox = Sandbox::new();
+    plans_with_a_dependency(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root": sandbox.subdirectory("plans"),
+            "status_mapping": {"Todo":"todo","Doing":"in-progress","Shipped":"done"}}},
+        "board": {"plugin":"github-projects",
+                  "config": github_projects_failing_a_field_write_once(&sandbox)}
+    })));
+
+    let said = refused(
+        &sandbox,
+        &["project", "copy", "plans:P-1", "--to", "board"],
+        1,
+    );
+    assert!(
+        said.contains("Something went wrong while executing your query"),
+        "the failure GitHub reported is what the caller is told: {said}"
+    );
+    assert!(
+        !said.contains("could not be undone"),
+        "this board takes its items back, so the copy must not report otherwise: {said}"
+    );
+
+    // Nothing of that copy is on the board: not the project written first, and not the
+    // task whose creation landed before the refusal.
+    let projects = ok(&sandbox, &["project", "list", "--source", "board"]);
+    assert!(
+        !projects.contains("Published roadmap"),
+        "the destination holds none of that copy's items:\n{projects}"
+    );
+    let tasks = ok(&sandbox, &["task", "list", "--source", "board"]);
+    for title in ["First step", "Second step"] {
+        assert!(
+            !tasks.contains(title),
+            "the destination holds none of that copy's items:\n{tasks}"
+        );
+    }
+
+    // And the retry is a clean one: the failure is spent, so the same copy now completes.
+    let again = ok(
+        &sandbox,
+        &["project", "copy", "plans:P-1", "--to", "board", "--json"],
+    );
+    assert_eq!(
+        reported(&again)
+            .iter()
+            .map(|(source, _, action)| (source.as_str(), action.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("plans:P-1", "created"),
+            ("plans:A", "created"),
+            ("plans:B", "created"),
+        ]
+    );
+}
+
+#[test]
+fn a_copy_into_linear_that_cannot_finish_leaves_the_workspace_as_it_found_it() {
+    // The same rule as the board above, against the other hosted destination this
+    // repository ships: a copy is either complete or it never happened. Linear could not
+    // take a project back until `projectDelete` was pinned, so a project copy that failed
+    // part way left the project it had created behind — which is the state this asserts
+    // is gone.
+    //
+    // The workspace here fails the relation between two issues it has already created, so
+    // the refusal arrives with the project and both of its tasks landed: every kind of
+    // item this copy can create is there to be taken back.
+    let sandbox = Sandbox::new();
+    plans_with_a_dependency(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root": sandbox.subdirectory("plans"),
+            "status_mapping": {"Todo":"todo","Doing":"in-progress","Shipped":"done"}}},
+        "work": {"plugin":"linear","config":linear_failing_a_relation_write_once(&sandbox)}
+    })));
+
+    let said = refused(
+        &sandbox,
+        &["project", "copy", "plans:P-1", "--to", "work"],
+        1,
+    );
+    assert!(
+        said.contains(LINEAR_REFUSED_WRITE),
+        "the failure Linear reported is what the caller is told: {said}"
+    );
+    assert!(
+        !said.contains("could not be undone"),
+        "this workspace takes its items back, so the copy must not report otherwise: {said}"
+    );
+
+    // Nothing of that copy is in the workspace: not the project written first, and not
+    // either task whose creation landed before the refusal.
+    let projects = ok(&sandbox, &["project", "list", "--source", "work"]);
+    assert!(
+        !projects.contains("Published roadmap"),
+        "the destination holds none of that copy's items:\n{projects}"
+    );
+    let tasks = ok(&sandbox, &["task", "list", "--source", "work"]);
+    for title in ["First step", "Second step"] {
+        assert!(
+            !tasks.contains(title),
+            "the destination holds none of that copy's items:\n{tasks}"
+        );
+    }
+
+    // And the retry is a clean one: the failure is spent, so the same copy now completes.
+    let again = ok(
+        &sandbox,
+        &["project", "copy", "plans:P-1", "--to", "work", "--json"],
+    );
+    assert_eq!(
+        reported(&again)
+            .iter()
+            .map(|(source, _, action)| (source.as_str(), action.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("plans:P-1", "created"),
+            ("plans:A", "created"),
+            ("plans:B", "created"),
+        ]
+    );
+}
+
+#[test]
+fn a_cleanup_that_also_fails_reports_the_write_that_failed_rather_than_the_tidy_up() {
+    // Filing an item on a board is several calls, so a failure after the first leaves an
+    // issue this run created and nobody asked for — which the source takes back. GitHub can
+    // refuse that removal too, and what the caller is owed then is *why the copy stopped*.
+    // The tidy-up's own failure is about an item they never asked to exist; reporting it
+    // instead would leave them reading a deletion error for a copy they made.
+    //
+    // This board refuses the field write and then refuses the removal, so both failures are
+    // real and the copy has to choose which one to say.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Doing\n---\ndo this first\n",
+    )
+    .unwrap();
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root": root, "status_mapping": {"Doing":"in-progress"}}},
+        "board": {"plugin":"github-projects",
+                  "config": github_projects_failing_a_field_write_and_its_cleanup(&sandbox)}
+    })));
+
+    let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
+    assert!(
+        said.contains("updateProjectV2ItemFieldValue"),
+        "the failure that stopped the copy is what the caller is told: {said}"
+    );
+    assert!(
+        !said.contains("deleteIssue"),
+        "and not the failure of the tidy-up that followed it: {said}"
+    );
+
+    // The item the removal could not take back really is still there — the refusal above is
+    // the whole of what the caller gets, so this is the state they are left in.
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(
+        listed.matches("First step").count(),
+        1,
+        "the removal failed, so the item it could not take back is on the board: {listed}"
+    );
+
+    // Both failures are spent, so the copy the caller runs next matches that item by title
+    // rather than filing a second one for the same plan.
+    let again = ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "plans:A",
+            "--to",
+            "board",
+            "--match-by",
+            "title",
+            "--json",
+        ],
+    );
+    let landed = reported(&again);
+    assert_eq!(landed.len(), 1, "{again}");
+    assert_eq!(landed[0].2, "updated", "{again}");
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(
+        listed.matches("First step").count(),
+        1,
+        "and one plan is one issue rather than two: {listed}"
+    );
+}
+
+#[test]
+fn a_creation_whose_filing_and_cleanup_both_fail_still_reports_the_filing() {
+    // The earlier half of the same sequence: `createIssue` lands, filing it on the board
+    // does not, and the removal that would take the created issue back is refused as well.
+    // The caller is told why the copy stopped — an issue they never asked to exist failing
+    // to be removed is not something they can act on, and reporting it would replace the
+    // reason with a consequence.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Doing\n---\ndo this first\n",
+    )
+    .unwrap();
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root": root, "status_mapping": {"Doing":"in-progress"}}},
+        "board": {"plugin":"github-projects",
+                  "config": github_projects_failing_to_file_and_its_cleanup(&sandbox)}
+    })));
+
+    let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
+    assert!(
+        said.contains("addProjectV2ItemById"),
+        "the failure that stopped the copy is what the caller is told: {said}"
+    );
+    assert!(
+        !said.contains("deleteIssue"),
+        "and not the failure of the tidy-up that followed it: {said}"
+    );
+
+    // The issue never reached the board, so nothing there answers for this plan — and the
+    // retry, with both failures spent, files exactly one.
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(listed.matches("First step").count(), 0, "{listed}");
+    let again = ok(
+        &sandbox,
+        &["task", "copy", "plans:A", "--to", "board", "--json"],
+    );
+    assert_eq!(reported(&again)[0].2, "created", "{again}");
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(listed.matches("First step").count(), 1, "{listed}");
 }

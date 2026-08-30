@@ -20,8 +20,12 @@ use onetaskgraph_plugin_api::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The protocol version this build speaks. `docs/plugin-protocol.md` specifies 1.
-pub(crate) const PROTOCOL_VERSION: u32 = 1;
+/// The protocol version this build speaks. `docs/plugin-protocol.md` specifies 2.
+///
+/// Version 2 added `delete_task` and `delete_project` (§4.10). The handshake matches
+/// versions exactly, so a plugin speaking 1 is refused by name rather than being asked
+/// for a method it has never heard of halfway through undoing a copy.
+pub(crate) const PROTOCOL_VERSION: u32 = 2;
 
 /// One request line: `{ "id": …, "method": …, "params": … }` (§2).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,6 +245,13 @@ pub(crate) struct TaskWriteParams {
 pub(crate) struct ProjectWriteParams {
     /// The item to create or update, and what to write into it.
     pub(crate) write: ItemWrite<Project>,
+}
+
+/// `delete_task` and `delete_project` parameters (§4.10).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DeleteParams {
+    /// The destination item to remove.
+    pub(crate) id: NativeId,
 }
 
 /// The result of either write method (§4.9): the id the destination holds the item under.

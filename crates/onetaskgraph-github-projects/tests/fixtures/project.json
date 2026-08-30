@@ -11,8 +11,14 @@
               "id": "FIELD_status",
               "name": "Status",
               "options": [
-                { "id": "OPT_todo", "name": "Todo" },
-                { "id": "OPT_doing", "name": "In Progress" }
+                {
+                  "id": "OPT_todo",
+                  "name": "Todo"
+                },
+                {
+                  "id": "OPT_doing",
+                  "name": "In Progress"
+                }
               ]
             },
             {
@@ -21,7 +27,9 @@
               "name": "onetaskgraph.origin"
             }
           ],
-          "pageInfo": { "hasNextPage": false }
+          "pageInfo": {
+            "hasNextPage": false
+          }
         },
         "items": {
           "nodes": [
@@ -35,14 +43,28 @@
                       "id": "FIELD_status",
                       "name": "Status",
                       "options": [
-                        { "id": "OPT_todo", "name": "Todo" },
-                        { "id": "OPT_doing", "name": "In Progress" }
+                        {
+                          "id": "OPT_todo",
+                          "name": "Todo"
+                        },
+                        {
+                          "id": "OPT_doing",
+                          "name": "In Progress"
+                        }
                       ]
                     }
                   },
-                  { "text": "", "field": { "id": "FIELD_origin", "name": "onetaskgraph.origin" } }
+                  {
+                    "text": "",
+                    "field": {
+                      "id": "FIELD_origin",
+                      "name": "onetaskgraph.origin"
+                    }
+                  }
                 ],
-                "pageInfo": { "hasNextPage": false }
+                "pageInfo": {
+                  "hasNextPage": false
+                }
               },
               "content": {
                 "__typename": "Issue",
@@ -54,10 +76,19 @@
                 "updatedAt": "2026-02-01T00:00:00Z",
                 "state": "OPEN",
                 "stateReason": null,
-                "repository": { "nameWithOwner": "acme/work" },
+                "repository": {
+                  "nameWithOwner": "acme/work"
+                },
                 "parent": null,
-                "subIssuesSummary": { "total": 1 },
-                "labels": { "nodes": [], "pageInfo": { "hasNextPage": false } }
+                "subIssuesSummary": {
+                  "total": 1
+                },
+                "labels": {
+                  "nodes": [],
+                  "pageInfo": {
+                    "hasNextPage": false
+                  }
+                }
               }
             },
             {
@@ -70,23 +101,42 @@
                       "id": "FIELD_status",
                       "name": "Status",
                       "options": [
-                        { "id": "OPT_todo", "name": "Todo" },
-                        { "id": "OPT_doing", "name": "In Progress" }
+                        {
+                          "id": "OPT_todo",
+                          "name": "Todo"
+                        },
+                        {
+                          "id": "OPT_doing",
+                          "name": "In Progress"
+                        }
                       ]
                     }
                   },
                   {
                     "text": "notes:T-1",
-                    "field": { "id": "FIELD_origin", "name": "onetaskgraph.origin" }
+                    "field": {
+                      "id": "FIELD_origin",
+                      "name": "onetaskgraph.origin"
+                    }
                   },
                   {
                     "labels": {
-                      "nodes": [{ "id": "L_field", "name": "team", "color": "00ff00" }],
-                      "pageInfo": { "hasNextPage": false }
+                      "nodes": [
+                        {
+                          "id": "L_field",
+                          "name": "team",
+                          "color": "00ff00"
+                        }
+                      ],
+                      "pageInfo": {
+                        "hasNextPage": false
+                      }
                     }
                   }
                 ],
-                "pageInfo": { "hasNextPage": false }
+                "pageInfo": {
+                  "hasNextPage": false
+                }
               },
               "content": {
                 "__typename": "Issue",
@@ -98,12 +148,26 @@
                 "updatedAt": "2026-01-03T00:00:00Z",
                 "state": "OPEN",
                 "stateReason": null,
-                "repository": { "nameWithOwner": "acme/work" },
-                "parent": { "id": "I_plan" },
-                "subIssuesSummary": { "total": 0 },
+                "repository": {
+                  "nameWithOwner": "acme/work"
+                },
+                "parent": {
+                  "id": "I_plan"
+                },
+                "subIssuesSummary": {
+                  "total": 0
+                },
                 "labels": {
-                  "nodes": [{ "id": "L_bug", "name": "bug", "color": "ff0000" }],
-                  "pageInfo": { "hasNextPage": false }
+                  "nodes": [
+                    {
+                      "id": "L_bug",
+                      "name": "bug",
+                      "color": "ff0000"
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": false
+                  }
                 }
               }
             },
@@ -117,13 +181,21 @@
                       "id": "FIELD_status",
                       "name": "Status",
                       "options": [
-                        { "id": "OPT_todo", "name": "Todo" },
-                        { "id": "OPT_doing", "name": "In Progress" }
+                        {
+                          "id": "OPT_todo",
+                          "name": "Todo"
+                        },
+                        {
+                          "id": "OPT_doing",
+                          "name": "In Progress"
+                        }
                       ]
                     }
                   }
                 ],
-                "pageInfo": { "hasNextPage": false }
+                "pageInfo": {
+                  "hasNextPage": false
+                }
               },
               "content": {
                 "__typename": "Issue",
@@ -135,10 +207,19 @@
                 "updatedAt": "2026-01-04T00:00:00Z",
                 "state": "OPEN",
                 "stateReason": null,
-                "repository": { "nameWithOwner": "acme/work" },
+                "repository": {
+                  "nameWithOwner": "acme/work"
+                },
                 "parent": null,
-                "subIssuesSummary": { "total": 1 },
-                "labels": { "nodes": [], "pageInfo": { "hasNextPage": false } }
+                "subIssuesSummary": {
+                  "total": 1
+                },
+                "labels": {
+                  "nodes": [],
+                  "pageInfo": {
+                    "hasNextPage": false
+                  }
+                }
               }
             },
             {
@@ -151,19 +232,35 @@
                       "id": "FIELD_status",
                       "name": "Status",
                       "options": [
-                        { "id": "OPT_todo", "name": "Todo" },
-                        { "id": "OPT_doing", "name": "In Progress" }
+                        {
+                          "id": "OPT_todo",
+                          "name": "Todo"
+                        },
+                        {
+                          "id": "OPT_doing",
+                          "name": "In Progress"
+                        }
                       ]
                     }
                   },
                   {
                     "labels": {
-                      "nodes": [{ "id": "L_docs", "name": "docs", "color": "0000ff" }],
-                      "pageInfo": { "hasNextPage": false }
+                      "nodes": [
+                        {
+                          "id": "L_docs",
+                          "name": "docs",
+                          "color": "0000ff"
+                        }
+                      ],
+                      "pageInfo": {
+                        "hasNextPage": false
+                      }
                     }
                   }
                 ],
-                "pageInfo": { "hasNextPage": false }
+                "pageInfo": {
+                  "hasNextPage": false
+                }
               },
               "content": {
                 "__typename": "Issue",
@@ -175,10 +272,21 @@
                 "updatedAt": "2026-01-05T00:00:00Z",
                 "state": "OPEN",
                 "stateReason": null,
-                "repository": { "nameWithOwner": "acme/work" },
-                "parent": { "id": "I_next" },
-                "subIssuesSummary": { "total": 0 },
-                "labels": { "nodes": [], "pageInfo": { "hasNextPage": false } }
+                "repository": {
+                  "nameWithOwner": "acme/work"
+                },
+                "parent": {
+                  "id": "I_next"
+                },
+                "subIssuesSummary": {
+                  "total": 0
+                },
+                "labels": {
+                  "nodes": [],
+                  "pageInfo": {
+                    "hasNextPage": false
+                  }
+                }
               }
             },
             {
@@ -191,13 +299,21 @@
                       "id": "FIELD_status",
                       "name": "Status",
                       "options": [
-                        { "id": "OPT_todo", "name": "Todo" },
-                        { "id": "OPT_doing", "name": "In Progress" }
+                        {
+                          "id": "OPT_todo",
+                          "name": "Todo"
+                        },
+                        {
+                          "id": "OPT_doing",
+                          "name": "In Progress"
+                        }
                       ]
                     }
                   }
                 ],
-                "pageInfo": { "hasNextPage": false }
+                "pageInfo": {
+                  "hasNextPage": false
+                }
               },
               "content": {
                 "__typename": "Issue",
@@ -209,22 +325,45 @@
                 "updatedAt": "2026-01-06T00:00:00Z",
                 "state": "OPEN",
                 "stateReason": null,
-                "repository": { "nameWithOwner": "acme/work" },
+                "repository": {
+                  "nameWithOwner": "acme/work"
+                },
                 "parent": null,
-                "subIssuesSummary": { "total": 0 },
+                "subIssuesSummary": {
+                  "total": 0
+                },
                 "labels": {
-                  "nodes": [{ "id": "L_bug", "name": "bug", "color": "ff0000" }],
-                  "pageInfo": { "hasNextPage": false }
+                  "nodes": [
+                    {
+                      "id": "L_chore",
+                      "name": "chore",
+                      "color": "00ff00"
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": false
+                  }
                 }
               }
             },
             {
               "id": "PVTI_pull",
-              "fieldValues": { "nodes": [], "pageInfo": { "hasNextPage": false } },
-              "content": { "__typename": "PullRequest", "id": "PR_1" }
+              "fieldValues": {
+                "nodes": [],
+                "pageInfo": {
+                  "hasNextPage": false
+                }
+              },
+              "content": {
+                "__typename": "PullRequest",
+                "id": "PR_1"
+              }
             }
           ],
-          "pageInfo": { "hasNextPage": false, "endCursor": null }
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          }
         }
       }
     }

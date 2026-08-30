@@ -35,6 +35,10 @@ type Mutation {
   removeSubIssue(input: RemoveSubIssueInput!): RemoveSubIssuePayload
   addBlockedBy(input: AddBlockedByInput!): AddBlockedByPayload
   removeBlockedBy(input: RemoveBlockedByInput!): RemoveBlockedByPayload
+  deleteIssue(input: DeleteIssueInput!): DeleteIssuePayload
+}
+input DeleteIssueInput {
+  issueId: ID!
 }
 input CreateIssueInput {
   repositoryId: ID!
@@ -121,6 +125,9 @@ type AddBlockedByPayload {
 type RemoveBlockedByPayload {
   issue: Issue
   blockingIssue: Issue
+}
+type DeleteIssuePayload {
+  repository: Repository
 }
 interface Node {
   id: ID!

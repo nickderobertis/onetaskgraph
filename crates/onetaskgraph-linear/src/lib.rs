@@ -135,8 +135,10 @@ pub mod graphql {
     /// Delete a native project dependency before replacing its full edge set.
     pub const PROJECT_RELATION_DELETE: &str =
         "mutation($id:String!){ projectRelationDelete(id:$id){success} }";
-    /// Delete an issue created only by the ignored live write journey.
+    /// Delete an issue, so a copy that could not finish can take back what it created.
     pub const ISSUE_DELETE: &str = "mutation($id:String!){ issueDelete(id:$id){success} }";
+    /// Delete a project, for the same reason and on the same terms.
+    pub const PROJECT_DELETE: &str = "mutation($id:String!){ projectDelete(id:$id){success} }";
 }
 
 use graphql::{
@@ -320,6 +322,8 @@ enum MutationRoot {
     ProjectRelationCreate,
     IssueRelationDelete,
     ProjectRelationDelete,
+    IssueDelete,
+    ProjectDelete,
 }
 impl MutationRoot {
     fn as_str(self) -> &'static str {
@@ -332,6 +336,8 @@ impl MutationRoot {
             Self::ProjectRelationCreate => "projectRelationCreate",
             Self::IssueRelationDelete => "issueRelationDelete",
             Self::ProjectRelationDelete => "projectRelationDelete",
+            Self::IssueDelete => "issueDelete",
+            Self::ProjectDelete => "projectDelete",
         }
     }
 }
@@ -905,6 +911,29 @@ impl TaskSource for LinearSource {
         self.write_relations(&id, &edges, WriteKind::Project)
             .await?;
         Ok(id)
+    }
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        // An id naming nothing is the state this asks for, not an error — Linear reports
+        // an unknown issue as an errored response rather than an unsuccessful payload, and
+        // `get_task` answering `None` is what says the item is already gone.
+        if self.get_task(id).await?.is_none() {
+            return Ok(());
+        }
+        let data = self.send(graphql::ISSUE_DELETE, json!({"id":id.0})).await?;
+        mutation_payload(&data, MutationRoot::IssueDelete)?;
+        Ok(())
+    }
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        // An id naming nothing is the state this asks for, on exactly the terms
+        // `delete_task` reads it on.
+        if self.get_project(id).await?.is_none() {
+            return Ok(());
+        }
+        let data = self
+            .send(graphql::PROJECT_DELETE, json!({"id":id.0}))
+            .await?;
+        mutation_payload(&data, MutationRoot::ProjectDelete)?;
+        Ok(())
     }
 }
 

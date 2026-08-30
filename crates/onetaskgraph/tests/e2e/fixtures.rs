@@ -529,6 +529,13 @@ struct GitHubBoard {
     pending: Vec<Value>,
     blocked_by: Vec<(String, Vec<String>)>,
     created: usize,
+    /// How many of the most recently filed items a board read leaves out.
+    ///
+    /// GitHub's `projectV2.items` is eventually consistent: an issue put on a board with
+    /// `addProjectV2ItemById` is routinely absent from the very next read of that board.
+    /// The board still holds it — every mutation below finds it — and only the *read* is
+    /// behind, which is exactly what this models.
+    lagging_reads: usize,
     /// The board's **own** title, description and readme — a person's, not this
     /// product's. `updateProjectV2` is answered here rather than refused so that a
     /// journey asserting these are byte-identical after a copy fails when something
@@ -673,12 +680,12 @@ impl GitHubBoard {
 }
 
 fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
-    github_projects_board(sandbox, recorded, None).0
+    github_projects_board(sandbox, recorded, &[]).0
 }
 
 /// The same board, with a handle on the fields this source must never write.
 pub fn github_projects_with_board(sandbox: &Sandbox) -> (Value, GitHubBoardFields) {
-    github_projects_board(sandbox, None, None)
+    github_projects_board(sandbox, None, &[])
 }
 
 /// The same board again, failing the first attempt to file a created issue on it.
@@ -689,7 +696,7 @@ pub fn github_projects_with_board(sandbox: &Sandbox) -> (Value, GitHubBoardField
 /// journey rather than a reading of the code. The failure is spent once, so the same
 /// board answers the retry.
 pub fn github_projects_failing_to_file_once(sandbox: &Sandbox) -> Value {
-    github_projects_board(sandbox, None, Some("addProjectV2ItemById(input:$input)")).0
+    github_projects_board(sandbox, None, &["addProjectV2ItemById(input:$input)"]).0
 }
 
 /// The same board, failing the first field write onto an item it has already filed.
@@ -700,15 +707,76 @@ pub fn github_projects_failing_a_field_write_once(sandbox: &Sandbox) -> Value {
     github_projects_board(
         sandbox,
         None,
-        Some("updateProjectV2ItemFieldValue(input:$input)"),
+        &["updateProjectV2ItemFieldValue(input:$input)"],
     )
     .0
+}
+
+/// The same board, failing to file a created issue *and* the tidy-up that would remove it.
+///
+/// The earlier half of the same sequence: the issue exists in the repository and is on no
+/// board, so the source deletes it — and this board refuses that too. The caller is owed
+/// the failure that stopped the copy, for the reason the sibling below gives.
+pub fn github_projects_failing_to_file_and_its_cleanup(sandbox: &Sandbox) -> Value {
+    github_projects_board(
+        sandbox,
+        None,
+        &[
+            "addProjectV2ItemById(input:$input)",
+            "deleteIssue(input:$input)",
+        ],
+    )
+    .0
+}
+
+/// The same board, failing a field write *and* the tidy-up that would take the issue back.
+///
+/// The source removes an issue it created when the rest of the write fails, so a caller is
+/// not left an item nobody asked for. GitHub can refuse that removal too — a permission,
+/// a rate limiter — and what the caller is owed then is the failure that made the write
+/// fail, not the one that made the tidy-up fail: the second is about an item they never
+/// asked to exist, and reporting it would hide why the copy stopped.
+pub fn github_projects_failing_a_field_write_and_its_cleanup(sandbox: &Sandbox) -> Value {
+    github_projects_board(
+        sandbox,
+        None,
+        &[
+            "updateProjectV2ItemFieldValue(input:$input)",
+            "deleteIssue(input:$input)",
+        ],
+    )
+    .0
+}
+
+/// The same board, whose reads never show the item most recently filed on it.
+///
+/// GitHub's `projectV2.items` is eventually consistent, and a copy that created a task and
+/// then wrote the task depending on it looked the far end up, did not find it, and refused
+/// naming an item that same run had just created. The board here holds every item — every
+/// mutation finds them — and only its read is behind, which is the whole of the hazard.
+pub fn github_projects_reading_one_item_behind(sandbox: &Sandbox) -> Value {
+    github_projects_board_lagging(sandbox, 1)
 }
 
 fn github_projects_board(
     sandbox: &Sandbox,
     recorded: Option<Value>,
-    fail_first: Option<&'static str>,
+    fail_first: &'static [&'static str],
+) -> (Value, GitHubBoardFields) {
+    github_projects_board_at(sandbox, recorded, fail_first, 0)
+}
+
+fn github_projects_board_lagging(sandbox: &Sandbox, lagging_reads: usize) -> Value {
+    github_projects_board_at(sandbox, None, &[], lagging_reads).0
+}
+
+/// `fail_first` names the operations this board refuses, each once — so a retry, and the
+/// tidy-up that follows a refusal, meet the board answering normally again.
+fn github_projects_board_at(
+    sandbox: &Sandbox,
+    recorded: Option<Value>,
+    fail_first: &'static [&'static str],
+    lagging_reads: usize,
 ) -> (Value, GitHubBoardFields) {
     sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
@@ -721,25 +789,39 @@ fn github_projects_board(
         pending: Vec::new(),
         blocked_by: github_blockers(),
         created: 0,
+        lagging_reads,
         own: json!({"title":"Fixture board",
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
     }));
-    let mut owed_failure = fail_first;
+    let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
             let request = read_http_json(&mut stream);
-            let query = request["query"].as_str().expect("GraphQL query string");
-            graphql_parser::parse_query::<String>(query).expect("valid GraphQL document");
-            let variables = request["variables"]
-                .as_object()
-                .expect("GraphQL variables object");
+            // Every one of these refuses a request the plugin should not have sent, and
+            // each names the request it refused: a shape assumed silently here surfaces as
+            // a journey failing about something else entirely.
+            let query = request["query"]
+                .as_str()
+                .unwrap_or_else(|| panic!("GraphQL request carries no query string: {request}"));
+            graphql_parser::parse_query::<String>(query)
+                .unwrap_or_else(|problem| panic!("invalid GraphQL document ({problem}): {query}"));
+            let variables = request["variables"].as_object().unwrap_or_else(|| {
+                panic!("GraphQL request carries no variables object: {request}")
+            });
             let variables = Value::Object(variables.clone());
-            let body = if owed_failure.is_some_and(|operation| query.contains(operation)) {
-                owed_failure = None;
+            let owed = owed_failures
+                .iter()
+                .position(|operation| query.contains(operation));
+            let body = if let Some(at) = owed {
+                // The operation is named in the message so a journey can tell *which*
+                // failure reached the caller — a copy whose write failed and whose tidy-up
+                // then failed too has two, and which one it reports is the behaviour.
+                let operation = owed_failures.remove(at);
                 json!({"data":Value::Null,
-                       "errors":[{"message":"Something went wrong while executing your query"}]})
+                       "errors":[{"message":format!(
+                           "Something went wrong while executing your query: {operation}")}]})
                 .to_string()
             } else {
                 json!({ "data": github_answer(&board, query, &variables) }).to_string()
@@ -861,6 +943,17 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         };
         return json!({root:{"issue":{"id":parent},"subIssue":{"id":child}}});
     }
+    if query.contains("deleteIssue(input:$input)") {
+        let id = input["issueId"].clone();
+        board.items.retain(|item| item["id"] != id);
+        board.pending.retain(|item| item["id"] != id);
+        let id = id.as_str().expect("an issue id").to_owned();
+        board.blocked_by.retain(|(near, _)| *near != id);
+        for (_, blockers) in &mut board.blocked_by {
+            blockers.retain(|blocker| blocker != &id);
+        }
+        return json!({"deleteIssue":{"repository":{"id":"REPO-1"}}});
+    }
     if query.contains("addBlockedBy(input:$input)")
         || query.contains("removeBlockedBy(input:$input)")
     {
@@ -947,15 +1040,18 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         offset <= board.items.len(),
         "GraphQL after cursor is out of range"
     );
-    let end = (offset + first).min(board.items.len());
-    let nodes = board.items[offset..end]
+    // The rows a read behind the board's own state can see. `lagging_reads` is how many of
+    // the most recently filed ones it cannot yet; see the field's own documentation.
+    let visible = board.items.len().saturating_sub(board.lagging_reads);
+    let end = (offset + first).min(visible);
+    let nodes = board.items[offset.min(visible)..end]
         .iter()
         .map(|item| board.rendered(item))
         .collect::<Vec<_>>();
     let title = board.own["title"].clone();
     json!({"owner":{"projectV2":{"id":"PVT-board","title":title,
         "fields":GitHubBoard::fields(),
-        "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < board.items.len(),
+        "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < visible,
                                            "endCursor":end.to_string()}}}}})
 }
 
@@ -990,12 +1086,21 @@ fn read_http_json(stream: &mut impl Read) -> Value {
         assert!(count > 0, "fixture request ended before its declared body");
         bytes.extend_from_slice(&chunk[..count]);
     }
-    serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
+    let body = &bytes[header_end..header_end + length];
+    // Named rather than asserted away: this fixture's only client is the binary under
+    // test, so a body that is not JSON is that binary's defect, and the bytes it sent are
+    // what says which one.
+    serde_json::from_slice(body).unwrap_or_else(|problem| {
+        panic!(
+            "fixture request body is not JSON ({problem}): {}",
+            String::from_utf8_lossy(body)
+        )
+    })
 }
 
 /// A socket-level Linear GraphQL fixture used by the shared binary journeys.
 pub fn linear_block(sandbox: &Sandbox) -> Value {
-    linear_server(sandbox, None)
+    linear_server(sandbox, None, &[])
 }
 
 /// The same workspace, with the item a dependency read asks about recording `recorded`
@@ -1005,14 +1110,40 @@ pub fn linear_block(sandbox: &Sandbox) -> Value {
 /// the shared row is the one every other journey reads, so a workspace holding a key it
 /// must not cannot be that row.
 pub fn linear_recording(sandbox: &Sandbox, recorded: Value) -> Value {
-    linear_server(sandbox, Some(recorded))
+    linear_server(sandbox, Some(recorded), &[])
 }
 
-fn linear_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
+/// What the workspace below says when it refuses a write it has been told to fail.
+///
+/// The journey asserts the caller is told this, so the message the fixture sends and the
+/// message the assertion reads are one string rather than two that can part.
+pub const LINEAR_REFUSED_WRITE: &str = "Linear could not complete that mutation";
+
+/// The same workspace, failing the first native relation it is asked to create.
+///
+/// The last write of a project copy: the project and both of its tasks have landed, and
+/// the edge between the two tasks is what does not — so the copy has real items of its own
+/// making to take back, of both kinds. Linear reports a refused mutation as an `errors`
+/// entry on an otherwise successful response, which is the shape this sends. The failure
+/// is spent once, so the same workspace answers the retry.
+pub fn linear_failing_a_relation_write_once(sandbox: &Sandbox) -> Value {
+    linear_server(
+        sandbox,
+        None,
+        &[onetaskgraph_linear::graphql::ISSUE_RELATION_CREATE],
+    )
+}
+
+fn linear_server(sandbox: &Sandbox, recorded: Option<Value>, failing: &[&str]) -> Value {
     sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
     let state = Arc::new(Mutex::new(dataset()));
+    let failing: Vec<String> = failing
+        .iter()
+        .map(|operation| (*operation).into())
+        .collect();
+    let failing = Arc::new(Mutex::new(failing));
     thread::spawn(move || {
         for mut stream in listener.incoming().flatten() {
             let mut bytes = Vec::new();
@@ -1097,6 +1228,24 @@ fn linear_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
                 let _ = write!(
                     stream,
                     "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
+            let refused = {
+                let mut pending = failing.lock().unwrap();
+                let operation = request["query"].as_str().unwrap_or_default();
+                pending
+                    .iter()
+                    .position(|failing| failing == operation)
+                    .map(|at| pending.remove(at))
+                    .is_some()
+            };
+            if refused {
+                let text = json!({"errors":[{"message":LINEAR_REFUSED_WRITE}]}).to_string();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
                     text.len()
                 );
                 continue;
@@ -1238,7 +1387,10 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     &[],
                 )
         }
-        graphql::ISSUE_RELATION_DELETE | graphql::PROJECT_RELATION_DELETE => {
+        graphql::ISSUE_RELATION_DELETE
+        | graphql::PROJECT_RELATION_DELETE
+        | graphql::ISSUE_DELETE
+        | graphql::PROJECT_DELETE => {
             exact_linear_variable_keys(variables, &["id"])
                 && variables
                     .get("id")
@@ -1352,6 +1504,8 @@ fn linear_response(
         graphql::PROJECT_RELATION_CREATE,
         graphql::ISSUE_RELATION_DELETE,
         graphql::PROJECT_RELATION_DELETE,
+        graphql::ISSUE_DELETE,
+        graphql::PROJECT_DELETE,
     ]
     .contains(&operation)
     {
@@ -1385,6 +1539,19 @@ fn linear_response(
         graphql::ISSUE_RELATION_CREATE | graphql::PROJECT_RELATION_CREATE
     ) {
         return linear_write_relation(data, &vars, operation == graphql::PROJECT_RELATION_CREATE);
+    }
+    if matches!(operation, graphql::ISSUE_DELETE | graphql::PROJECT_DELETE) {
+        let project = operation == graphql::PROJECT_DELETE;
+        let id = vars["id"].as_str().ok_or("delete id must be a string")?;
+        let rows = data[if project { "projects" } else { "tasks" }]
+            .as_array_mut()
+            .ok_or("fixture collection is not an array")?;
+        rows.retain(|row| row["id"] != json!(id));
+        return Ok(if project {
+            json!({"projectDelete":{"success":true}})
+        } else {
+            json!({"issueDelete":{"success":true}})
+        });
     }
     if matches!(
         operation,

@@ -3,7 +3,7 @@
   "name": "workspace",
   "projectType": "library",
   "tags": ["layer:workspace"],
-  "//": "Depends on every other project so the cross-cutting checks run whenever anything they check can change. Without these edges a crate-only change would skip the graph check that keeps affected selection honest.",
+  "//": "Depends on every other project so the cross-cutting checks run whenever anything they check can change. Without these edges a crate-only change would skip the graph check that keeps affected selection honest. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to the `test` target below, which is what it is about. Those clone-based checks are cross-cutting by construction: what each drives \u2014 the git hooks, the gate's provisioning, the Nx graph itself, the plugin-isolation rule \u2014 is owned by no product project, so there is no narrower project to put them behind, and the edges above are exactly what makes them run when anything they check changes.",
   "implicitDependencies": [
     "onetaskgraph",
     "onetaskgraph-core",
@@ -122,6 +122,7 @@
       "options": {
         "commands": [
           "bash scripts/check-hook-safety.sh",
+          "bash scripts/check-pre-push-provisioning.sh",
           "bash scripts/check-test-live-boundary.sh",
           "bash scripts/check-affected-selection.sh",
           "bash scripts/check-plugin-isolation-concurrent.sh",
@@ -130,7 +131,7 @@
         "parallel": false
       },
       "cache": false,
-      "//": "Uncached: three checks clone a repository and read git history, which no input glob in this tree describes \u2014 a cached pass would assert about a graph that has since changed. Serial because those checks each clone into a scratch tree and run cargo or Nx there; racing them would contend for the same registry lock for no gain. The isolation concurrency check creates its own intentional fan-out inside that serial target. check-hook-safety runs first and takes milliseconds: it proves the scratch-clone helper the two later cloning checks depend on still survives the environment a git hook gives it, and if that has broken, their results below are about the wrong repository."
+      "//": "Uncached: three checks clone a repository and read git history, which no input glob in this tree describes \u2014 a cached pass would assert about a graph that has since changed. Serial because those checks each clone into a scratch tree and run cargo or Nx there; racing them would contend for the same registry lock for no gain. The isolation concurrency check creates its own intentional fan-out inside that serial target. check-hook-safety runs first and takes milliseconds: it proves the scratch-clone helper the three later cloning checks depend on still survives the environment a git hook gives it, and if that has broken, their results below are about the wrong repository. check-pre-push-provisioning drives the real hook in an unprovisioned clone, which is what keeps a fresh worktree's missing toolchain from reading as a rejected push."
     },
     "coverage": {
       "executor": "nx:run-commands",

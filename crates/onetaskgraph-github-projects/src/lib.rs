@@ -116,6 +116,7 @@
 #![deny(missing_docs)]
 
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
@@ -196,6 +197,13 @@ pub mod graphql {
     pub const ADD_BLOCKED_BY: &str = r#"mutation($input:AddBlockedByInput!){addBlockedBy(input:$input){issue{id} blockingIssue{id}}}"#;
     /// Removes one native issue blocked-by relationship.
     pub const REMOVE_BLOCKED_BY: &str = r#"mutation($input:RemoveBlockedByInput!){removeBlockedBy(input:$input){issue{id} blockingIssue{id}}}"#;
+    /// Deletes one issue, which takes its board item with it.
+    ///
+    /// The engine sends this in one situation only: undoing a copy that could not finish,
+    /// over the items that same copy created. Deleting the issue removes the board item
+    /// too, so there is no second `deleteProjectV2Item` to keep in step with it.
+    pub const DELETE_ISSUE: &str =
+        r#"mutation($input:DeleteIssueInput!){deleteIssue(input:$input){repository{id}}}"#;
 }
 
 fn default_token_env() -> String {
@@ -536,6 +544,20 @@ pub struct GitHubProjectsSource {
     credential_name: String, // llmlint: ignore[invalid_states_unrepresentable] Private diagnostic value constructed only after environment-name validation.
     statuses: StatusMapping,
     client: Client,
+    /// Every item this source has created since it was built, in the order it created
+    /// them.
+    ///
+    /// GitHub's `projectV2.items` is eventually consistent: an issue added to a board with
+    /// `addProjectV2ItemById` is routinely absent from the very next read of that board, so
+    /// a copy resolving a dependency on an item it had just created refused it as not
+    /// found. A board read is completed from this — an item remembered here and absent from
+    /// the read is added back, because the board really does hold it and only the read is
+    /// behind.
+    ///
+    /// It is not a cache of a user's work: nothing is remembered that this process did not
+    /// itself just write, it lives and dies with the process, and it is never consulted for
+    /// an item this source did not create.
+    created: Mutex<Vec<Resolved>>,
 }
 
 impl GitHubProjectsSource {
@@ -603,6 +625,7 @@ impl GitHubProjectsSource {
                 .map_err(|e| SourceError::Config {
                     message: format!("cannot build HTTP client: {e}"),
                 })?,
+            created: Mutex::new(Vec::new()),
         })
     }
 
@@ -749,10 +772,24 @@ impl GitHubProjectsSource {
                 None => break,
             }
         }
+        for own in self.created()?.iter() {
+            if !items.iter().any(|item| item.id == own.id) {
+                items.push(own.clone());
+            }
+        }
         Ok(Board {
             id: required_str(&board, "id")?.to_owned(),
             fields: board.get("fields").cloned().unwrap_or(Value::Null),
             items,
+        })
+    }
+
+    /// The items this source has created, for completing a board read that is behind.
+    fn created(&self) -> Result<std::sync::MutexGuard<'_, Vec<Resolved>>, SourceError> {
+        self.created.lock().map_err(|_| SourceError::Unavailable {
+            message: "this source's record of what it created in this run was left \
+                      inconsistent by an earlier failure; next: run the command again"
+                .into(),
         })
     }
 
@@ -1347,15 +1384,95 @@ impl GitHubProjectsSource {
             }
         };
 
-        if let Some(field_id) = &origin_field {
-            self.set_item_field(&board.id, &item_id, field_id, json!({"text":origin}))
+        // Creating an item here is several calls — `createIssue`, `addProjectV2ItemById`,
+        // then each board field, the parent and the dependencies — and GitHub can fail at
+        // any of them. Everything this source can refuse *before* the first of those is
+        // already checked above, so what is left is GitHub itself failing part way. When it
+        // does over an item this call created, the issue is taken back: a write that
+        // refused must not leave an item behind that nobody asked for, and one that does
+        // makes the retry create a second.
+        let landed = self
+            .finish_write(
+                &board,
+                incoming,
+                &content_id,
+                &item_id,
+                content_kind,
+                existing,
+                origin_field.as_deref(),
+                origin,
+                column,
+                &native,
+            )
+            .await;
+        if let Err(error) = landed {
+            if existing.is_none() {
+                // Best effort, and the write's own failure is what the caller is told: a
+                // refusal naming the tidy-up would hide why the write failed at all.
+                let _ = self.delete_issue(&content_id).await;
+            }
+            return Err(error);
+        }
+
+        if existing.is_none() {
+            // Remember it, so the next board read in this run holds it whether or not
+            // GitHub's own has caught up. See the field's own documentation.
+            let remembered = Resolved {
+                item_id,
+                id: content_id.clone(),
+                content_kind,
+                kind: incoming.kind,
+                title: incoming.title.to_owned(),
+                body: body.clone(),
+                status: incoming.status.clone(),
+                labels: incoming.labels.to_vec(),
+                parent: incoming.parent.cloned(),
+                origin: (!origin.is_empty()).then(|| origin.to_owned()),
+                url: None,
+                created_at: None,
+                updated_at: None,
+                own_repository,
+                repositories: incoming.repositories.to_vec(),
+                slot,
+            };
+            self.created()?.push(remembered);
+        }
+        Ok(content_id)
+    }
+
+    /// Everything a write does after the item exists: its board fields, its parent, and
+    /// its dependencies.
+    ///
+    /// Split out of `write_item` so there is one place a failure past the point of no
+    /// return is caught, rather than a tidy-up repeated at each `?` above.
+    // llmlint: ignore[suppressions_justified] This is the tail of `write_item` lifted out
+    // so there is one place a failure past the point of no return is caught, and its
+    // arguments are exactly the values that tail already had in scope. Bundling them into a
+    // struct would describe no concept — it would be "the arguments of this function" — and
+    // would put the whole of `write_item`'s locals behind one more indirection.
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_write(
+        &self,
+        board: &Board,
+        incoming: &Incoming<'_>,
+        content_id: &NativeId,
+        item_id: &str,
+        content_kind: ContentKind,
+        existing: Option<&Resolved>,
+        origin_field: Option<&str>,
+        origin: &str,
+        column: Option<(String, String)>,
+        native: &[String],
+    ) -> Result<(), SourceError> {
+        if let Some(field_id) = origin_field {
+            self.set_item_field(&board.id, item_id, field_id, json!({"text":origin}))
                 .await?;
         }
 
         if let Some((field_id, option_id)) = column {
             self.set_item_field(
                 &board.id,
-                &item_id,
+                item_id,
                 &field_id,
                 json!({"singleSelectOptionId":option_id}),
             )
@@ -1365,13 +1482,59 @@ impl GitHubProjectsSource {
         if content_kind == ContentKind::Issue {
             self.reparent(
                 existing.and_then(|item| item.parent.clone()),
-                &content_id,
+                content_id,
                 incoming.parent,
             )
             .await?;
-            self.reconcile_blocked_by(&content_id, &native).await?;
+            self.reconcile_blocked_by(content_id, native).await?;
         }
-        Ok(content_id)
+        Ok(())
+    }
+
+    /// Delete one issue, which takes its board item with it.
+    async fn delete_issue(&self, id: &NativeId) -> Result<(), SourceError> {
+        let data = self
+            .graphql(graphql::DELETE_ISSUE, json!({"input":{"issueId":id.0}}))
+            .await?;
+        data.pointer("/deleteIssue/repository")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub issue deletion returned no repository".into(),
+            })?;
+        self.created()?.retain(|own| own.id != *id);
+        Ok(())
+    }
+
+    /// Remove one item this copy created, so a copy that could not finish leaves the board
+    /// as it found it.
+    ///
+    /// Deleting the issue takes its board item with it, so there is no second mutation to
+    /// keep in step. An id the board does not hold is not an error: the item is already
+    /// gone, which is the state this asks for.
+    async fn delete_item(&self, id: &NativeId) -> Result<(), SourceError> {
+        let board = self.board().await?;
+        let Some(item) = board.items.iter().find(|item| item.id == *id) else {
+            return Ok(());
+        };
+        if item.content_kind == ContentKind::DraftIssue {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "GitHub item {} is a draft, and this source removes an item by deleting \
+                     its issue; next: remove it from the board by hand",
+                    id.0
+                ),
+            });
+        }
+        let data = self
+            .graphql(graphql::DELETE_ISSUE, json!({"input":{"issueId":id.0}}))
+            .await?;
+        data.pointer("/deleteIssue/repository")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub issue deletion returned no repository".into(),
+            })?;
+        self.created()?.retain(|own| own.id != *id);
+        Ok(())
     }
 
     /// Which far ends this item's own `blockedBy` relationship holds, and which it cannot.
@@ -1507,12 +1670,22 @@ impl GitHubProjectsSource {
                 message: "GitHub issue creation returned no issue".into(),
             })?;
         let content_id = NativeId(required_str(created, "id")?.to_owned());
-        let added = self
+        // The issue exists from here on, so a failure filing it on the board takes it
+        // back: an issue in the repository that is on no board is an item nobody asked for
+        // and nothing here would find again.
+        let added = match self
             .graphql(
                 graphql::ADD_TO_BOARD,
                 json!({"input":{"projectId":board.id,"contentId":content_id.0}}),
             )
-            .await?;
+            .await
+        {
+            Ok(added) => added,
+            Err(error) => {
+                let _ = self.delete_issue(&content_id).await;
+                return Err(error);
+            }
+        };
         let item = added
             .pointer("/addProjectV2ItemById/item")
             .filter(|value| !value.is_null())
@@ -1665,6 +1838,7 @@ impl Board {
 }
 
 /// One board item, resolved into everything this source reports about it.
+#[derive(Clone)]
 struct Resolved {
     item_id: String,
     id: NativeId,
@@ -1980,6 +2154,14 @@ impl TaskSource for GitHubProjectsSource {
             &write.depends_on,
         )
         .await
+    }
+
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.delete_item(id).await
+    }
+
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.delete_item(id).await
     }
 }
 

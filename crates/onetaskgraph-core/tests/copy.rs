@@ -11,10 +11,10 @@
 use std::num::NonZeroU32;
 
 use onetaskgraph_core::{
-    Config, CopyAction, CopyItems, CopyOutcome, CopyRequest, CopyScope, Engine, EngineError,
-    GlobalId, MatchBy, Paging, TaskRequest,
+    Config, CopyAction, CopyItems, CopyOutcome, CopyRequest, CopyScope, DependencyRequest, Engine,
+    EngineError, GlobalId, MatchBy, Paging, TaskRequest,
 };
-use onetaskgraph_plugin_api::{SecretResolver, SourceName};
+use onetaskgraph_plugin_api::{Direction, SecretResolver, SourceName};
 use secrecy::SecretString;
 use serde_json::{Value, json};
 
@@ -689,5 +689,608 @@ async fn the_scan_that_finds_a_counterpart_walks_the_destination_a_page_at_a_tim
     assert_eq!(
         landed(&copied.items[0]),
         (Some("into:C".to_owned()), "updated".to_owned())
+    );
+}
+
+/// Two projects, with the dependencies that only one copied set can resolve: a task on its
+/// sibling, a task on a task in the *other* named project, and a project on that project.
+fn interlinked() -> Value {
+    json!({"plugin": "in-memory", "config": {
+        "projects": [
+            {"id": "P-1", "title": "Engine",
+             "status": {"category": "todo", "name": "Todo"}, "labels": []},
+            {"id": "P-2", "title": "Docs",
+             "status": {"category": "todo", "name": "Todo"}, "labels": []},
+        ],
+        "tasks": [
+            {"id": "T-1", "title": "Alpha engine",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"},
+            {"id": "T-2", "title": "Beta",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"},
+            {"id": "T-3", "title": "Gamma",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-2"},
+        ],
+        "task_dependencies": [
+            {"from": "T-1", "to": "T-2", "kind": "blocks"},
+            {"from": "T-1", "to": "T-3", "kind": "blocks"},
+        ],
+        "project_dependencies": [
+            {"from": "P-1", "to": "P-2", "kind": "blocks"},
+        ],
+    }})
+}
+
+/// Every forward edge at one item, as `<far id> <kind>` pairs.
+async fn depends_on(engine: &Engine, near: &str) -> Vec<String> {
+    let response = engine
+        .task_dependencies(&DependencyRequest {
+            id: id(near),
+            direction: Direction::DependsOn,
+            paging: Paging {
+                limit: NonZeroU32::new(50).expect("a non-zero limit"),
+                token: None,
+            },
+        })
+        .await
+        .expect("the dependency verb answers");
+    assert!(
+        response.errors.is_empty(),
+        "a dependency read must not fail: {:?}",
+        response.errors
+    );
+    response
+        .items
+        .into_iter()
+        .map(|edge| format!("{} {:?}", edge.to.id, edge.to.kind))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_copy_resolves_a_dependency_on_an_item_it_created_in_the_same_run() {
+    // The defect: a copy could not see the items it had itself created. Every project was
+    // copied on its own, so a task's edge to a sibling in *another* named project, and a
+    // task's edge to the project it belongs to, were both written as the id the far end
+    // had at its **source** — a reference the destination has never heard of — or refused
+    // outright by a destination that checks its far ends, naming an item that same run had
+    // just created.
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": {}},
+    }));
+
+    let report = engine
+        .copy(&many(
+            &["from:P-1", "from:P-2"],
+            CopyScope::Projects { tasks: true },
+        ))
+        .await
+        .expect("the copy runs");
+    assert!(
+        report
+            .items
+            .iter()
+            .all(|outcome| outcome.action.name() == "created"),
+        "{report:?}"
+    );
+
+    // Every edge points at the destination's own item, by the destination's own id.
+    assert_eq!(
+        depends_on(&engine, "into:T-1").await,
+        vec!["into:T-2 Task".to_owned(), "into:T-3 Task".to_owned()]
+    );
+    // Including the project's own edge to the other project of the same copy.
+    let projects = engine
+        .project_dependencies(&DependencyRequest {
+            id: id("into:P-1"),
+            direction: Direction::DependsOn,
+            paging: Paging {
+                limit: NonZeroU32::new(50).expect("a non-zero limit"),
+                token: None,
+            },
+        })
+        .await
+        .expect("the dependency verb answers");
+    assert_eq!(
+        projects
+            .items
+            .iter()
+            .map(|edge| edge.to.id.to_string())
+            .collect::<Vec<_>>(),
+        vec!["into:P-2".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn a_copy_that_cannot_finish_leaves_the_destination_as_it_found_it() {
+    // A copy is either complete or it never happened. A half-written project has to be run
+    // again, and the re-run is the mutation burst that trips a hosted destination's
+    // secondary rate limiter — so undoing this run's own writes is what removes the retry
+    // at source. `Beta` is the item this destination will not create, and it is the second
+    // task of the project, so the project and the first task have already landed when it
+    // refuses.
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"uncreatable_titles": ["Beta"]},
+        }},
+    }));
+
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("a destination that will not create an item must refuse the copy");
+    };
+    let rendered = refused.to_string();
+    assert!(rendered.contains("Beta"), "{rendered}");
+    assert!(
+        !rendered.contains("could not be undone"),
+        "the destination can be put back, so the copy must not report otherwise: {rendered}"
+    );
+
+    // The destination holds none of that copy's items — not the project written first, and
+    // not the task that landed before the refusal.
+    assert!(listed(&engine, "into").await.is_empty());
+    let projects = engine
+        .projects(&onetaskgraph_core::ProjectRequest {
+            sources: vec![name("into")],
+            filters: onetaskgraph_core::Filters::default(),
+            paging: Paging {
+                limit: NonZeroU32::new(50).expect("a non-zero limit"),
+                token: None,
+            },
+        })
+        .await
+        .expect("the project list answers");
+    assert!(projects.items.is_empty(), "{:?}", projects.items);
+}
+
+#[tokio::test]
+async fn a_copy_that_cannot_be_undone_names_what_it_left_behind() {
+    // Undoing is best effort, and a destination that will not take one of its own items
+    // back leaves work the copy owes the user the name of. Told only that the copy failed,
+    // they would copy again over a destination nobody has described to them — which is the
+    // retry this whole mechanism exists to remove. So the refusal carries both halves: why
+    // the copy failed, why it could not be undone, and what is still there.
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {
+                "uncreatable_titles": ["Beta"],
+                "undeletable_ids": ["P-1"],
+            },
+        }},
+    }));
+
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("the copy must refuse");
+    };
+    let rendered = refused.to_string();
+    assert!(rendered.contains("could not be undone"), "{rendered}");
+    // Why it failed, why the undo failed, and the qualified id still sitting there.
+    assert!(rendered.contains("Beta"), "{rendered}");
+    assert!(rendered.contains("will not remove P-1"), "{rendered}");
+    assert!(rendered.contains("into:P-1"), "{rendered}");
+
+    // And it is telling the truth: the project it names is there, and the task it managed
+    // to take back is not.
+    let projects = engine
+        .projects(&onetaskgraph_core::ProjectRequest {
+            sources: vec![name("into")],
+            filters: onetaskgraph_core::Filters::default(),
+            paging: Paging {
+                limit: NonZeroU32::new(50).expect("a non-zero limit"),
+                token: None,
+            },
+        })
+        .await
+        .expect("the project list answers");
+    assert_eq!(
+        projects
+            .items
+            .iter()
+            .map(|project| project.id.to_string())
+            .collect::<Vec<_>>(),
+        vec!["into:P-1".to_owned()]
+    );
+    assert!(listed(&engine, "into").await.is_empty());
+}
+
+/// One destination item recorded as the counterpart of `origin`, reading differently from
+/// the source so a copy of it is a real update rather than an `unchanged`.
+fn counterpart(id: &str, origin: &str, project: Option<&str>) -> Value {
+    let mut item = json!({
+        "id": id,
+        "title": format!("{id} as it was"),
+        "content": "as it was",
+        "status": {"category": "todo", "name": "Todo"},
+        "labels": [],
+        "metadata": {GlobalId::ORIGIN_KEY: origin},
+    });
+    if let Some(project) = project {
+        item["project"] = json!(project);
+    }
+    item
+}
+
+/// Every task and project one source holds, as `<id> <title>` pairs.
+async fn held(engine: &Engine, source: &str) -> Vec<String> {
+    let paging = || Paging {
+        limit: NonZeroU32::new(50).expect("a non-zero limit"),
+        token: None,
+    };
+    let projects = engine
+        .projects(&onetaskgraph_core::ProjectRequest {
+            sources: vec![name(source)],
+            filters: onetaskgraph_core::Filters::default(),
+            paging: paging(),
+        })
+        .await
+        .expect("the project list answers");
+    let tasks = engine
+        .tasks(&TaskRequest {
+            sources: vec![name(source)],
+            filters: onetaskgraph_core::Filters::default(),
+            project: onetaskgraph_core::ProjectSelector::Any,
+            paging: paging(),
+        })
+        .await
+        .expect("the task list answers");
+    projects
+        .items
+        .into_iter()
+        .map(|project| format!("{} {}", project.id, project.item.title))
+        .chain(
+            tasks
+                .items
+                .into_iter()
+                .map(|task| format!("{} {}", task.id, task.item.title)),
+        )
+        .collect()
+}
+
+/// A destination already holding a counterpart of every item of [`interlinked`] but `T-3`.
+fn already_holding() -> Value {
+    json!({
+        "projects": [
+            counterpart("D-P1", "from:P-1", None),
+            counterpart("D-P2", "from:P-2", None),
+        ],
+        "tasks": [
+            counterpart("D-T1", "from:T-1", Some("D-P1")),
+            counterpart("D-T2", "from:T-2", Some("D-P1")),
+        ],
+    })
+}
+
+#[tokio::test]
+async fn a_second_copy_updates_every_counterpart_and_repairs_the_edges_among_them() {
+    // The destination already holds a counterpart of everything but `T-3`, recorded by
+    // origin the way an earlier copy left it and reading differently from the source. So
+    // every one of them is a real update, and `P-1` and `T-1` are written twice — once as
+    // they land, once when the edges whose far ends did not exist yet are repaired.
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": already_holding()},
+    }));
+
+    let report = engine
+        .copy(&many(
+            &["from:P-1", "from:P-2"],
+            CopyScope::Projects { tasks: true },
+        ))
+        .await
+        .expect("the copy runs");
+    assert_eq!(
+        report
+            .items
+            .iter()
+            .map(|outcome| (outcome.source.to_string(), outcome.action.name()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("from:P-1".to_owned(), "updated".to_owned()),
+            ("from:T-1".to_owned(), "updated".to_owned()),
+            ("from:T-2".to_owned(), "updated".to_owned()),
+            ("from:P-2".to_owned(), "updated".to_owned()),
+            ("from:T-3".to_owned(), "created".to_owned()),
+        ]
+    );
+
+    // Every edge names the destination's own item, including the one whose far end was
+    // created in a project this copy reached after the item that points at it.
+    assert_eq!(
+        depends_on(&engine, "into:D-T1").await,
+        vec!["into:D-T2 Task".to_owned(), "into:T-3 Task".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn a_copy_that_cannot_finish_puts_back_the_items_it_overwrote() {
+    // Undoing is not only about the items a copy created. The four counterparts here were
+    // at the destination before this copy started and are overwritten by it, and `Gamma`
+    // is the item this destination will not create — so the copy refuses after four
+    // successful writes, and every one of those four has to read as it did before rather
+    // than as this copy's first pass left it.
+    let mut into = already_holding();
+    into["capabilities"] = json!({"uncreatable_titles": ["Gamma"]});
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": into},
+    }));
+    let before = held(&engine, "into").await;
+    assert_eq!(
+        before,
+        vec![
+            "into:D-P1 D-P1 as it was".to_owned(),
+            "into:D-P2 D-P2 as it was".to_owned(),
+            "into:D-T1 D-T1 as it was".to_owned(),
+            "into:D-T2 D-T2 as it was".to_owned(),
+        ]
+    );
+
+    let Err(refused) = engine
+        .copy(&many(
+            &["from:P-1", "from:P-2"],
+            CopyScope::Projects { tasks: true },
+        ))
+        .await
+    else {
+        panic!("a destination that will not create an item must refuse the copy");
+    };
+    assert!(refused.to_string().contains("Gamma"), "{refused}");
+    assert!(
+        !refused.to_string().contains("could not be undone"),
+        "this destination takes its items back: {refused}"
+    );
+
+    assert_eq!(
+        held(&engine, "into").await,
+        before,
+        "every item this copy overwrote reads as it did before it started"
+    );
+}
+
+/// One source project of two tasks, the second of which no destination here will create.
+fn one_project_of_two_tasks() -> Value {
+    json!({"plugin": "in-memory", "config": {
+        "projects": [
+            {"id": "P-1", "title": "Engine",
+             "status": {"category": "todo", "name": "Todo"}, "labels": []},
+        ],
+        "tasks": [
+            {"id": "T-1", "title": "Alpha engine",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"},
+            {"id": "T-9", "title": "Gamma",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"},
+        ],
+    }})
+}
+
+/// A destination whose task table and project table each hold something called `SHARED`.
+///
+/// Nothing makes a destination number its two kinds in one namespace, and nothing stops it
+/// either: a Markdown store filing `shared.md` as a task beside `shared.md` as a project is
+/// the ordinary case rather than the contrived one. So a destination id says which item is
+/// meant only once the kind is beside it.
+fn sharing_one_id() -> Value {
+    let mut project = counterpart("SHARED", "from:P-1", None);
+    project["title"] = json!("the project as it was");
+    let mut task = counterpart("SHARED", "from:T-1", Some("SHARED"));
+    task["title"] = json!("the task as it was");
+    json!({
+        "projects": [project],
+        "tasks": [task],
+        "capabilities": {"uncreatable_titles": ["Gamma"]},
+    })
+}
+
+#[tokio::test]
+async fn an_undo_tells_a_task_from_a_project_sharing_one_destination_id() {
+    // Both counterparts are updated by this copy and both are journalled under `SHARED`,
+    // so a journal that identifies an entry by id alone reads the second as a repeat of
+    // the first and drops it. Then `Gamma` cannot be created, the copy undoes itself, and
+    // the entry it dropped is the one item nothing puts back — a destination left holding
+    // half of a copy that reported it had left nothing behind.
+    let engine = engine_over(json!({
+        "from": one_project_of_two_tasks(),
+        "into": {"plugin": "in-memory", "config": sharing_one_id()},
+    }));
+    let before = held(&engine, "into").await;
+    assert_eq!(
+        before,
+        vec![
+            "into:SHARED the project as it was".to_owned(),
+            "into:SHARED the task as it was".to_owned(),
+        ]
+    );
+
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("a destination that will not create an item must refuse the copy");
+    };
+    assert!(refused.to_string().contains("Gamma"), "{refused}");
+    assert!(
+        !refused.to_string().contains("could not be undone"),
+        "this destination takes its items back: {refused}"
+    );
+
+    assert_eq!(
+        held(&engine, "into").await,
+        before,
+        "both items sharing that id are put back, not whichever of them was journalled first"
+    );
+}
+
+/// A source whose task carries the id the destination already files a project under.
+fn a_task_named_like_the_destinations_project() -> Value {
+    json!({"plugin": "in-memory", "config": {
+        "projects": [
+            {"id": "P-1", "title": "Engine",
+             "status": {"category": "todo", "name": "Todo"}, "labels": []},
+        ],
+        "tasks": [
+            {"id": "SHARED", "title": "Alpha engine",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"},
+            {"id": "T-9", "title": "Gamma",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"},
+        ],
+    }})
+}
+
+/// A destination holding only the project `SHARED`, and refusing to create `Gamma`.
+fn holding_only_the_project() -> Value {
+    let mut project = counterpart("SHARED", "from:P-1", None);
+    project["title"] = json!("the project as it was");
+    json!({
+        "projects": [project],
+        "capabilities": {"uncreatable_titles": ["Gamma"]},
+    })
+}
+
+#[tokio::test]
+async fn an_item_created_under_one_kind_does_not_hold_back_the_others_restore() {
+    // The far side of the same confusion. An undo removes what this copy created rather
+    // than restoring it, so every created id is one the restores must skip — and this copy
+    // creates a *task* called `SHARED` while updating a *project* that was called `SHARED`
+    // before it started. Skipped by id alone, the project is left reading as this copy
+    // wrote it: the one item a "nothing was left behind" refusal did leave behind.
+    let engine = engine_over(json!({
+        "from": a_task_named_like_the_destinations_project(),
+        "into": {"plugin": "in-memory", "config": holding_only_the_project()},
+    }));
+    let before = held(&engine, "into").await;
+    assert_eq!(before, vec!["into:SHARED the project as it was".to_owned()]);
+
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("a destination that will not create an item must refuse the copy");
+    };
+    assert!(refused.to_string().contains("Gamma"), "{refused}");
+    assert!(
+        !refused.to_string().contains("could not be undone"),
+        "this destination takes its items back: {refused}"
+    );
+
+    assert_eq!(
+        held(&engine, "into").await,
+        before,
+        "the project is restored, and the task this copy created under its id is gone"
+    );
+}
+
+#[tokio::test]
+async fn a_copy_that_stops_part_way_through_an_update_puts_that_item_back_too() {
+    // The other half of undoing an overwrite. A destination's own write is several calls —
+    // `docs/plugin-protocol.md` §4.9, and the GitHub source's own suite drives one failing
+    // after an earlier one landed — so an update can end with the item already changed. No
+    // source can put that back: only this journal holds what was there. Recorded after a
+    // successful write, this was the one way a copy could stop and leave a destination
+    // altered, which is exactly what "either complete or it never happened" forbids.
+    //
+    // `Beta` is the title this destination applies and then refuses, and it is the third
+    // of three updates — so the two before it have landed and the third is half written.
+    let mut into = already_holding();
+    into["capabilities"] = json!({"half_written_titles": ["Beta"]});
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": into},
+    }));
+    let before = held(&engine, "into").await;
+    assert_eq!(
+        before,
+        vec![
+            "into:D-P1 D-P1 as it was".to_owned(),
+            "into:D-P2 D-P2 as it was".to_owned(),
+            "into:D-T1 D-T1 as it was".to_owned(),
+            "into:D-T2 D-T2 as it was".to_owned(),
+        ]
+    );
+
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("a destination that stops part way through a write must refuse the copy");
+    };
+    let rendered = refused.to_string();
+    assert!(rendered.contains("Beta"), "{rendered}");
+    assert!(
+        !rendered.contains("could not be undone"),
+        "this destination takes its items back: {rendered}"
+    );
+
+    assert_eq!(
+        held(&engine, "into").await,
+        before,
+        "the item the write had already changed reads as it did before the copy started"
+    );
+}
+
+#[tokio::test]
+async fn a_restore_the_destination_refuses_names_the_item_left_holding_this_copys_writing() {
+    // The item a destination will not take back need not be one this copy created. `D-T2`
+    // was here before it started, carrying a key set at the destination that this source
+    // will not accept in a write — so the copy overwrites it happily, using metadata of
+    // its own, and cannot write the original back. `Gamma` then fails, and the undo that
+    // follows puts three of the four items back and is refused the fourth.
+    //
+    // Both halves have to reach the user: told only that the copy failed, they would copy
+    // again over a destination holding one item's content from a run nobody described.
+    let mut into = already_holding();
+    into["tasks"][1]["metadata"]["reviewed-by"] = json!("a person at the destination");
+    into["capabilities"] = json!({
+        "uncreatable_titles": ["Gamma"],
+        "unwritable_metadata_keys": ["reviewed-by"],
+    });
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": into},
+    }));
+
+    let Err(refused) = engine
+        .copy(&many(
+            &["from:P-1", "from:P-2"],
+            CopyScope::Projects { tasks: true },
+        ))
+        .await
+    else {
+        panic!("a destination that will not create an item must refuse the copy");
+    };
+
+    let EngineError::CopyNotUndone { left_behind, .. } = &refused else {
+        panic!("a refused restore must report the copy as not undone: {refused}");
+    };
+    assert_eq!(
+        left_behind
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        vec!["into:D-T2".to_owned()],
+        "only the item the destination refused is still this copy's"
+    );
+
+    let rendered = refused.to_string();
+    // Why the copy failed, why the undo failed, and the one item still holding its writing.
+    assert!(rendered.contains("Gamma"), "{rendered}");
+    assert!(rendered.contains("reviewed-by"), "{rendered}");
+    assert!(rendered.contains("into:D-T2"), "{rendered}");
+
+    // And it is telling the truth about which item that is: everything else reads as it
+    // did before the copy, and `D-T2` reads as this copy left it.
+    assert_eq!(
+        held(&engine, "into").await,
+        vec![
+            "into:D-P1 D-P1 as it was".to_owned(),
+            "into:D-P2 D-P2 as it was".to_owned(),
+            "into:D-T1 D-T1 as it was".to_owned(),
+            "into:D-T2 Beta".to_owned(),
+        ]
     );
 }

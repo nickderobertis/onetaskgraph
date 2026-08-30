@@ -32,6 +32,13 @@ fragment type conditions, and fixture keys against it; the credentialed live lan
 introspects the current mutation fields and input types as its mutation freshness check,
 then exercises reads without changing the configured board.
 
+`deleteIssue`, `DeleteIssueInput` and `DeleteIssuePayload` are here from the same
+observation the credentialed live lane's mutation-freshness check reads: `live.rs` pins
+`DeleteIssueInput{issueId}` and `DeleteIssuePayload{repository}` and introspects the real
+API for them on every credentialed run. The source sends it in one situation only — undoing
+a copy that could not finish, over the items that same copy created — and deleting the
+issue takes its board item with it, which is why no `deleteProjectV2Item` is here beside it.
+
 Two absences in `schema.graphql` are load-bearing rather than incidental.
 `ProjectV2.shortDescription` and `ProjectV2.readme` are not there, and neither is
 `updateProjectV2`: a board is a container of projects and this source never writes the

@@ -217,22 +217,43 @@ restore scripts/crate-publication-status.sh
 
 # 5. The npm defect itself: without the explicit ./ prefix npm interprets npm/cli as the
 #    GitHub shorthand for npm's own CLI repository and tries to publish that remote package.
-substitute .github/workflows/release.yml \
+substitute scripts/publish-npm.sh \
   'publish_if_absent "@onetaskgraph/cli@$cli_version" ./npm/cli' \
   'publish_if_absent "@onetaskgraph/cli@$cli_version" npm/cli'
 run_guard
 expect_refused "a bare owner/name operand in place of the local CLI directory" \
   "installable npm packages must publish from explicit local directories"
-restore .github/workflows/release.yml
+restore scripts/publish-npm.sh
 
 # 6. The same ambiguity applies to the SDK package: sdks/typescript can also be parsed as
 #    an owner/name remote spec unless the workflow marks it as a local directory.
-substitute .github/workflows/release.yml \
+substitute scripts/publish-npm.sh \
   'publish_if_absent "@onetaskgraph/sdk@$sdk_version" ./sdks/typescript' \
   'publish_if_absent "@onetaskgraph/sdk@$sdk_version" sdks/typescript'
 run_guard
 expect_refused "a bare owner/name operand in place of the local SDK directory" \
   "installable npm packages must publish from explicit local directories"
+restore scripts/publish-npm.sh
+
+# 7. The publication moved back into the job as a copy of itself. Nothing drives that copy —
+#    a release is the only thing that runs the job — which is how this repository shipped a
+#    publish-npm job for several versions and stayed absent from npm.
+substitute .github/workflows/release.yml \
+  'run: scripts/publish-npm.sh' \
+  'run: npm publish ./npm/cli --access public'
+run_guard
+expect_refused "the publication inlined into the job instead of the script anything can run" \
+  "must run scripts/publish-npm.sh"
+restore .github/workflows/release.yml
+
+# 8. The registry override, which exists so the check can point one run at its own stub,
+#    set in the workflow — where it would send a real release somewhere else entirely.
+substitute .github/workflows/release.yml \
+  '      - env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }' \
+  '      - env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}", NPM_REGISTRY: "https://example.invalid/" }'
+run_guard
+expect_refused "the release workflow choosing a registry of its own" \
+  "must not set NPM_REGISTRY"
 restore .github/workflows/release.yml
 
 if [ "$failures" -ne 0 ]; then

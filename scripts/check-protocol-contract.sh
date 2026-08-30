@@ -27,6 +27,7 @@ API_SRC="$ROOT/crates/onetaskgraph-plugin-api/src" \
 TRANSPORT="$ROOT/crates/onetaskgraph-core/src/subprocess/connection.rs" \
 DEADLINE_SOURCE="$ROOT/crates/onetaskgraph-core/src/subprocess/source.rs" \
 SUBPROCESS_CONFIG="$ROOT/crates/onetaskgraph-core/src/subprocess/plugin.rs" \
+WIRE="$ROOT/crates/onetaskgraph-core/src/subprocess/wire.rs" \
 python3 <<'PY'
 import os
 import re
@@ -89,6 +90,8 @@ METHOD_SECTIONS = {
     "project_dependencies": "### 4.8 `task_dependencies` and `project_dependencies`",
     "write_task": "### 4.9 `write_task` and `write_project`",
     "write_project": "### 4.9 `write_task` and `write_project`",
+    "delete_task": "### 4.10 `delete_task` and `delete_project`",
+    "delete_project": "### 4.10 `delete_task` and `delete_project`",
 }
 
 ENUM_SECTIONS = {
@@ -121,6 +124,7 @@ ENUM_VALUE_CROSS_REFERENCES = {
 ENUMS_CHECKED_BY_A_TABLE = {"SourceError"}
 
 failures = []
+
 
 
 def section(heading):
@@ -201,6 +205,36 @@ def compare(what, declared, documented, exceptions, where):
             f"declares it. Drop its entry."
         )
 
+
+# The protocol version is one number written in two places — the constant the engine speaks
+# and the version the normative document specifies — and a peer is refused unless the two
+# match exactly. So a bump made in one place and not the other refuses every plugin written
+# from the document, which is the one drift no test above the handshake can see.
+wire = read(os.environ["WIRE"], "the subprocess wire types")
+declared = re.search(r"const PROTOCOL_VERSION: u32 = (\d+);", wire)
+if declared is None:
+    refuse(
+        "could not read `PROTOCOL_VERSION` from "
+        "crates/onetaskgraph-core/src/subprocess/wire.rs.",
+        "restore the constant, or teach this script the shape it has now.",
+    )
+specified = re.search(
+    r"This document specifies version \*\*(\d+)\*\*\.", section("## 6. Versions")
+)
+if specified is None:
+    refuse(
+        "docs/plugin-protocol.md's `## 6. Versions` no longer states which version it "
+        "specifies.",
+        "restore the sentence \"This document specifies version **N**.\", or teach this "
+        "script the shape it has now.",
+    )
+if declared.group(1) != specified.group(1):
+    failures.append(
+        f"the engine speaks protocol version {declared.group(1)} and "
+        f"docs/plugin-protocol.md specifies version {specified.group(1)}. The handshake "
+        "matches versions exactly, so a plugin written from that document would be refused "
+        "by this engine. Bump both, in the same change."
+    )
 
 trait = re.search(r"pub trait TaskSource: Send \+ Sync \{(.*?)\n\}", source_rs, re.DOTALL)
 if trait is None:

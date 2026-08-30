@@ -12,6 +12,17 @@
           "state": { "name": "In Progress", "type": "started" },
           "labels": { "nodes": [{ "id": "l1", "name": "Bug", "color": "#ff0000" }] },
           "project": { "id": "p1" }
+        },
+        {
+          "id": "i2",
+          "title": "Second fixture issue",
+          "description": "Another recorded body",
+          "url": "https://linear.app/acme/issue/ENG-2",
+          "createdAt": "2026-08-03T12:00:00Z",
+          "updatedAt": "2026-08-04T12:00:00Z",
+          "state": { "name": "Todo", "type": "unstarted" },
+          "labels": { "nodes": [{ "id": "l2", "name": "Chore", "color": "#0000ff" }] },
+          "project": { "id": "p2" }
         }
       ],
       "pageInfo": { "hasNextPage": true, "endCursor": "next-1" }

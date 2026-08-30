@@ -26,12 +26,24 @@ plugins:
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/languages/python.llmlint.yml@1"
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/languages/typescript.llmlint.yml@1"
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/ci.llmlint.yml@1"
-  - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/monorepo.llmlint.yml@1"
+  - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/project-graph.llmlint.yml@1"
 
 # Tuned in place with `override: true`, which inherits the imported rule and changes only
 # the field named. Every violation of this rule points at a concrete `any` or non-null
 # token, so a finding without a line is one a reader has to go hunting for.
 rules:
   - name: no_unjustified_any_or_non_null
+    override: true
+    require_line_attribution: true
+  # The same for this one, whose findings are always about a declaration that is there to
+  # point at: the test, or the `dependsOn`, import or implicit dependency that drags it in.
+  # With nine Nx projects across three toolchains, a finding that names none of them is one
+  # a reader has to go hunting for through every project.json in the workspace.
+  #
+  # Its neighbour `new_projects_keep_the_graph_uniform` is deliberately NOT tuned this way.
+  # That rule fires on an omitted standard target or a missing boundary tag, and an absence
+  # has no line — so requiring one there would buy a reader nothing and cost the rule the
+  # findings it exists for.
+  - name: expensive_tests_stay_behind_their_own_edge
     override: true
     require_line_attribution: true

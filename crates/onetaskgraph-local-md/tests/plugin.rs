@@ -1492,3 +1492,72 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
     );
     assert!(ceiling.next.is_some());
 }
+
+#[tokio::test]
+async fn a_deleted_document_leaves_the_folder_as_it_was_and_a_missing_one_is_not_an_error() {
+    // The engine removes exactly one thing: a document it wrote itself, while undoing a
+    // copy that could not finish. So the file goes, and the folder is left as it was.
+    let (root, source) = source();
+    assert!(root.path().join("tasks/b.md").exists());
+
+    source
+        .delete_task(&NativeId("b".into()))
+        .await
+        .expect("this folder gives a task up");
+    assert!(!root.path().join("tasks/b.md").exists());
+    assert!(
+        source
+            .get_task(&NativeId("b".into()))
+            .await
+            .expect("this source answers")
+            .is_none()
+    );
+
+    source
+        .delete_project(&NativeId("p".into()))
+        .await
+        .expect("this folder gives a project up");
+    assert!(!root.path().join("projects/p.md").exists());
+
+    // An id naming no document is not an error: the file is already gone, which is the
+    // state this asks for. An *update* of a missing document is a caller mistake and is
+    // refused; this is not one.
+    source
+        .delete_task(&NativeId("b".into()))
+        .await
+        .expect("a document that is already gone is the state this asks for");
+    source
+        .delete_project(&NativeId("nothing".into()))
+        .await
+        .expect("a document that is already gone is the state this asks for");
+
+    // Everything else the folder held is untouched.
+    assert!(root.path().join("tasks/nested/a.md").exists());
+}
+
+#[tokio::test]
+async fn a_delete_naming_a_path_out_of_the_root_is_refused_rather_than_followed() {
+    // The same containment every read and write here keeps: an id is a document under the
+    // configured root, and a link out of it is a configuration error rather than a file
+    // this source removes on somebody's behalf.
+    let outside = tempfile::tempdir().expect("a folder outside the root");
+    let target = outside.path().join("elsewhere.md");
+    fs::write(&target, "---\ntitle: Elsewhere\nstatus: todo\n---\n").expect("the outside task");
+
+    let (root, source) = source();
+    let link = root.path().join("tasks/escape.md");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, &link).expect("a link out of the root");
+    #[cfg(not(unix))]
+    std::os::windows::fs::symlink_file(&target, &link).expect("a link out of the root");
+
+    let Err(SourceError::Config { message }) = source.delete_task(&NativeId("escape".into())).await
+    else {
+        panic!("a document that resolves outside the root must be refused");
+    };
+    assert!(message.contains("escapes configured root"), "{message}");
+    assert!(
+        target.exists(),
+        "and the file outside the root is still there"
+    );
+}
