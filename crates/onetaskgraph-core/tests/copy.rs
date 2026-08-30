@@ -1052,3 +1052,65 @@ async fn a_copy_that_cannot_finish_puts_back_the_items_it_overwrote() {
         "every item this copy overwrote reads as it did before it started"
     );
 }
+
+#[tokio::test]
+async fn a_restore_the_destination_refuses_names_the_item_left_holding_this_copys_writing() {
+    // The item a destination will not take back need not be one this copy created. `D-T2`
+    // was here before it started, carrying a key set at the destination that this source
+    // will not accept in a write — so the copy overwrites it happily, using metadata of
+    // its own, and cannot write the original back. `Gamma` then fails, and the undo that
+    // follows puts three of the four items back and is refused the fourth.
+    //
+    // Both halves have to reach the user: told only that the copy failed, they would copy
+    // again over a destination holding one item's content from a run nobody described.
+    let mut into = already_holding();
+    into["tasks"][1]["metadata"]["reviewed-by"] = json!("a person at the destination");
+    into["capabilities"] = json!({
+        "uncreatable_titles": ["Gamma"],
+        "unwritable_metadata_keys": ["reviewed-by"],
+    });
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": into},
+    }));
+
+    let Err(refused) = engine
+        .copy(&many(
+            &["from:P-1", "from:P-2"],
+            CopyScope::Projects { tasks: true },
+        ))
+        .await
+    else {
+        panic!("a destination that will not create an item must refuse the copy");
+    };
+
+    let EngineError::CopyNotUndone { left_behind, .. } = &refused else {
+        panic!("a refused restore must report the copy as not undone: {refused}");
+    };
+    assert_eq!(
+        left_behind
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        vec!["into:D-T2".to_owned()],
+        "only the item the destination refused is still this copy's"
+    );
+
+    let rendered = refused.to_string();
+    // Why the copy failed, why the undo failed, and the one item still holding its writing.
+    assert!(rendered.contains("Gamma"), "{rendered}");
+    assert!(rendered.contains("reviewed-by"), "{rendered}");
+    assert!(rendered.contains("into:D-T2"), "{rendered}");
+
+    // And it is telling the truth about which item that is: everything else reads as it
+    // did before the copy, and `D-T2` reads as this copy left it.
+    assert_eq!(
+        held(&engine, "into").await,
+        vec![
+            "into:D-P1 D-P1 as it was".to_owned(),
+            "into:D-P2 D-P2 as it was".to_owned(),
+            "into:D-T1 D-T1 as it was".to_owned(),
+            "into:D-T2 Beta".to_owned(),
+        ]
+    );
+}
