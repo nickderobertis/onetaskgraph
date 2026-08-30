@@ -206,10 +206,20 @@ for _ in $(seq 1 100); do
   sleep 0.1
 done
 if [ ! -s "$PORT_FILE" ]; then
-  [ ! -s "$REGISTRY_LOG" ] || sed 's/^/check-npm-publish:   /' "$REGISTRY_LOG" >&2
+  if [ -s "$REGISTRY_LOG" ]; then
+    sed 's/^/check-npm-publish:   /' "$REGISTRY_LOG" >&2
+    fatal \
+      "the stub registry never reported a port, and said above why it could not" \
+      "fix what it reported there, then rerun"
+  fi
+  # Silence is a different failure from a traceback, and it owes a different next step. An
+  # interpreter without http.server raises on import and would have printed it above, so
+  # naming that import here sent the reader to the one thing already ruled out — which is
+  # what the macOS lane's whole install path was read as. What is left when nothing was
+  # printed is the bind, so that is what the next step below reaches for.
   fatal \
-    "the stub registry never reported a port" \
-    "run 'python3 -c \"import http.server\"' to check the interpreter, then rerun"
+    "the stub registry bound no port within 10s and printed nothing about why" \
+    "run: python3 -c 'import socket; s = socket.socket(); s.bind((\"127.0.0.1\", 0)); print(s.getsockname())' — which is all this registry does before it writes the file — then rerun"
 fi
 port="$(cat "$PORT_FILE")"
 # What the file holds is a port only because the registry above put it there, and reading
