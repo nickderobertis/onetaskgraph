@@ -35,13 +35,15 @@ rules:
   - name: no_unjustified_any_or_non_null
     override: true
     require_line_attribution: true
-  # The same, for the two project-graph rules whose findings are always about a concrete
-  # declaration: a test, a `dependsOn` entry, a dependency, a target or a tag. With nine
-  # Nx projects across three toolchains, a finding that names none of them is one a reader
-  # has to go hunting for through every project.json in the workspace.
+  # The same for this one, whose findings are always about a declaration that is there to
+  # point at: the test, or the `dependsOn`, import or implicit dependency that drags it in.
+  # With nine Nx projects across three toolchains, a finding that names none of them is one
+  # a reader has to go hunting for through every project.json in the workspace.
+  #
+  # Its neighbour `new_projects_keep_the_graph_uniform` is deliberately NOT tuned this way.
+  # That rule fires on an omitted standard target or a missing boundary tag, and an absence
+  # has no line — so requiring one there would buy a reader nothing and cost the rule the
+  # findings it exists for.
   - name: expensive_tests_stay_behind_their_own_edge
-    override: true
-    require_line_attribution: true
-  - name: new_projects_keep_the_graph_uniform
     override: true
     require_line_attribution: true
