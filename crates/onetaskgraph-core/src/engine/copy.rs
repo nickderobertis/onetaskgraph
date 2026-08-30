@@ -268,7 +268,7 @@ struct Deferred {
 }
 
 /// What one item's undo has to do to put the destination back.
-enum Undone {
+enum Undo {
     /// The copy created it, so undoing means removing it.
     Created {
         /// Which write interface removes it.
@@ -289,7 +289,7 @@ enum Undone {
     },
 }
 
-impl Undone {
+impl Undo {
     /// The destination id this entry is about.
     fn id(&self) -> &NativeId {
         match self {
@@ -311,7 +311,7 @@ impl Undone {
 #[derive(Default)]
 struct Journal {
     /// One entry per destination item this copy first touched, in that order.
-    entries: Vec<Undone>,
+    entries: Vec<Undo>,
 }
 
 impl Journal {
@@ -320,7 +320,7 @@ impl Journal {
     /// The *first* entry for an id is the one that matters and later ones are dropped: an
     /// item written twice — once as it lands, once when its edges are repaired — was only
     /// ever one thing before this copy started, and that is what undoing it restores.
-    fn record(&mut self, entry: Undone) {
+    fn record(&mut self, entry: Undo) {
         if self.entries.iter().any(|held| held.id() == entry.id()) {
             return;
         }
@@ -527,19 +527,19 @@ impl Engine {
             .entries
             .iter()
             .filter_map(|entry| match entry {
-                Undone::Created { id, .. } => Some(id),
-                Undone::Updated { .. } => None,
+                Undo::Created { id, .. } => Some(id),
+                Undo::Updated { .. } => None,
             })
             .collect();
         let mut left_behind = Vec::new();
         let mut refusal = None;
         for entry in journal.entries.iter().rev() {
             let outcome = match entry {
-                Undone::Created { kind, id } => remove(destination, *kind, id).await,
-                Undone::Updated { id, prior, .. } if !created.contains(&id) => {
+                Undo::Created { kind, id } => remove(destination, *kind, id).await,
+                Undo::Updated { id, prior, .. } if !created.contains(&id) => {
                     restore(destination, id, prior).await
                 }
-                Undone::Updated { .. } => Ok(()),
+                Undo::Updated { .. } => Ok(()),
             };
             if let Err(problem) = outcome {
                 left_behind.push(GlobalId::new(
@@ -1171,11 +1171,11 @@ impl Engine {
                 .map_err(|error| refused(destination, error))?,
         };
         match (target, prior) {
-            (None, _) => journal.record(Undone::Created {
+            (None, _) => journal.record(Undo::Created {
                 kind: created_kind,
                 id: landed.clone(),
             }),
-            (Some(id), Some(prior)) => journal.record(Undone::Updated { id, prior }),
+            (Some(id), Some(prior)) => journal.record(Undo::Updated { id, prior }),
             // A target the destination did not hold: the write above would have refused
             // rather than created, so there is nothing here to take back.
             (Some(_), None) => {}
