@@ -73,6 +73,7 @@ distribution-test:
             exit 1; \
         fi
     @scripts/check-npm-publish.sh
+    @scripts/check-fixture-discrimination.sh
 
 # Tests only, for the affected projects.
 test:
