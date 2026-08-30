@@ -201,8 +201,20 @@ readonly REGISTRY_LOG="$scratch/registry.log"
 python3 "$scratch/registry.py" "$PUBLISHED" "$PORT_FILE" "$MODE_FILE" 2>"$REGISTRY_LOG" &
 REGISTRY_PID=$!
 
-for _ in $(seq 1 100); do
+# Thirty seconds, which is what scripts/test-distribution.sh gives the three servers it
+# stands up the same way. That script's servers bound on the macOS runner in the very job
+# where this one was killed for reporting nothing, and the wait is the only thing that
+# differed — so a start-up this host is slow at is a slow lane there and a failed lane here.
+# The liveness break keeps that generosity off the one case it would only make slower: a
+# registry that has already exited is never going to write the file.
+registry_exit=""
+for _ in $(seq 1 300); do
   [ -s "$PORT_FILE" ] && break
+  if ! kill -0 "$REGISTRY_PID" 2>/dev/null; then
+    if wait "$REGISTRY_PID"; then registry_exit=0; else registry_exit=$?; fi
+    REGISTRY_PID=""
+    break
+  fi
   sleep 0.1
 done
 if [ ! -s "$PORT_FILE" ]; then
@@ -212,13 +224,16 @@ if [ ! -s "$PORT_FILE" ]; then
       "the stub registry never reported a port, and said above why it could not" \
       "fix what it reported there, then rerun"
   fi
+  [ -z "$registry_exit" ] || fatal \
+    "the stub registry exited with status $registry_exit before reporting a port, printing nothing on its way out" \
+    "run 'python3 -V' — nothing was captured from the registry, so start with whether this interpreter runs at all — then rerun"
   # Silence is a different failure from a traceback, and it owes a different next step. An
   # interpreter without http.server raises on import and would have printed it above, so
   # naming that import here sent the reader to the one thing already ruled out — which is
   # what the macOS lane's whole install path was read as. What is left when nothing was
   # printed is the bind, so that is what the next step below reaches for.
   fatal \
-    "the stub registry bound no port within 10s and printed nothing about why" \
+    "the stub registry bound no port within 30s and printed nothing about why" \
     "run: python3 -c 'import socket; s = socket.socket(); s.bind((\"127.0.0.1\", 0)); print(s.getsockname())' — which is all this registry does before it writes the file — then rerun"
 fi
 port="$(cat "$PORT_FILE")"
