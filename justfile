@@ -72,6 +72,7 @@ distribution-test:
             echo "distribution journey failed; next: run 'scripts/test-distribution.sh' and fix the named installer or launcher assertion" >&2; \
             exit 1; \
         fi
+    @scripts/check-npm-publish.sh
 
 # Tests only, for the affected projects.
 test:
