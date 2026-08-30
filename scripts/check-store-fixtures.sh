@@ -157,8 +157,13 @@ def one(value, path):
     return reached[0] if len(reached) == 1 else None
 
 
+# `as_posix()` rather than `str()`: python renders a path with the running platform's
+# separator, so on the Windows runner every discovered fixture read
+# `crates\...\fixtures\issues.json` — matching no MANIFEST key and no NOT_A_STORE key, and
+# so reporting all seven of them as fixtures this check had never been told about. The
+# keys below are the contract and they are spelled with forward slashes on every platform.
 discovered = sorted(
-    str(path)
+    path.as_posix()
     for path in root.glob("crates/*/tests/fixtures/*.json")
 )
 if not discovered:

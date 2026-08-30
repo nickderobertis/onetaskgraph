@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Prove the bash 4 array-builtin guard names a script the same way whatever separator the
-# host spells paths with.
+# Prove the guards that report a path name it the same way whatever separator the host
+# spells paths with.
 #
 # The guard reports through python, and python renders a path with the running platform's
 # separator. So the same guard that says `scripts/check-distribution-contract.sh` on Linux
@@ -10,10 +10,16 @@
 # (windows-latest)` on a guard that was doing its job, and which no Linux or macOS lane
 # could reproduce.
 #
-# This is that lane, on this one. The real guard and the real enforcement are run twice over
-# a real planted fixture: once as the host renders paths, and once through a python whose
-# pathlib spells them the way Windows does. Nothing stands in for the scan — only for the
-# platform, which is the variable under test.
+# This is that lane, on this one. The real guards and the real enforcement are run twice over
+# real fixtures: once as the host renders paths, and once through a python whose pathlib
+# spells them the way Windows does. Nothing stands in for the scan — only for the platform,
+# which is the variable under test.
+#
+# It covers every guard here that discovers files through pathlib and then names them,
+# because a path a guard renders is also a path it compares: `check-store-fixtures.sh`
+# matches what it discovered against a manifest keyed by forward slashes, so on the Windows
+# runner it reported all seven of this repository's fixtures as ones it had never been told
+# about and failed `check (windows-latest)` a second time on this same class.
 set -euo pipefail
 
 fatal() {
@@ -80,7 +86,7 @@ report_output() {
 # real python3 by absolute path, never the shim below: this rewrites the fixture, it is not
 # part of what is being simulated.
 substitute() {
-  "$real_python3" - "$scratch/scripts/$1" "$2" "$3" <<'PY' || fatal \
+  "$real_python3" - "$1" "$2" "$3" <<'PY' || fatal \
     "the helper that rewrites the scratch guard did not finish, so that case was never run" \
     "run 'python3 --version' to confirm a working python3 is on PATH, then rerun"
 import pathlib
@@ -141,6 +147,17 @@ class ForeignPath:
 
     def rglob(self, pattern):
         return (ForeignPath(found) for found in self._real.rglob(pattern))
+
+    # Spelled out for the same reason `rglob` is: both hand back an iterator rather than a
+    # path, so `__getattr__`'s "wrap a PurePath result" would let the elements through
+    # unwrapped and a scan using this one would walk real paths outside the simulation.
+    def glob(self, pattern):
+        return (ForeignPath(found) for found in self._real.glob(pattern))
+
+    # Operators are looked up on the type, never through `__getattr__`, so a scan that
+    # joins a path the ordinary way would raise here instead of being simulated.
+    def __truediv__(self, other):
+        return ForeignPath(self._real / other)
 
     # Anything the scan reaches for that is not spelled above is the real object's, with a
     # path it hands back wrapped again — so a scan that grows a new call stays simulated
@@ -255,7 +272,7 @@ fi
 #    changed nothing, so the normalisation is removed from the scratch guard and the
 #    backslash spelling has to appear — which is both what the Windows runner really printed
 #    and the evidence that `display_path` is what stops it.
-substitute "$GUARD" "return path.as_posix()" "return str(path)"
+substitute "$scratch/scripts/$GUARD" "return path.as_posix()" "return str(path)"
 run_foreign "$GUARD"
 if ! grep -qF -- "$FOREIGN_PLANTED" <<<"$OUTPUT"; then
   echo "check-guard-path-spelling: with the path normalisation removed, the guard still did not" >&2
@@ -297,10 +314,82 @@ if [ "$STATUS" -ne 0 ]; then
   failures=$((failures + 1))
 fi
 
+# The other guard that discovers files through pathlib and then compares what it found
+# against forward-slash keys of its own. It reads fixtures rather than scripts, so it needs
+# a root carrying both: its own copy of the guard, and the real fixture files at the paths
+# the guard's manifest names them by.
+readonly STORE_GUARD="check-store-fixtures.sh"
+# One of the fixtures its manifest keys, spelled the way the Windows runner rendered it.
+readonly FOREIGN_FIXTURE='crates\onetaskgraph-linear\tests\fixtures\issues.json'
+
+fixture mkdir -p "$scratch/store/scripts"
+fixture cp "$ROOT/scripts/$STORE_GUARD" "$scratch/store/scripts/$STORE_GUARD"
+# A glob rather than `git ls-files`: this runs from a hook too, where git exports GIT_DIR
+# and would answer about a repository other than the one being checked.
+for fixture_file in "$ROOT"/crates/*/tests/fixtures/*.json; do
+  [ -f "$fixture_file" ] || fatal \
+    "found no fixture under $ROOT/crates/*/tests/fixtures/, so the store guard would refuse for want of input rather than for the spelling these cases are about" \
+    "restore the fixtures, or teach scripts/$STORE_GUARD where they moved to, then rerun"
+  relative="${fixture_file#"$ROOT"/}"
+  fixture mkdir -p "$scratch/store/$(dirname "$relative")"
+  fixture cp "$fixture_file" "$scratch/store/$relative"
+done
+
+run_store_native() {
+  OUTPUT="$(bash "$scratch/store/scripts/$STORE_GUARD" 2>&1)" && STATUS=0 || STATUS=$?
+}
+
+run_store_foreign() {
+  OUTPUT="$(PATH="$scratch/bin:$PATH" bash "$scratch/store/scripts/$STORE_GUARD" 2>&1)" \
+    && STATUS=0 || STATUS=$?
+}
+
+# 6. The store guard on this host's own separator. The baseline: without it, case 7 would be
+#    satisfied by a guard that is broken on every platform equally.
+run_store_native
+if [ "$STATUS" -ne 0 ]; then
+  echo "check-guard-path-spelling: scripts/$STORE_GUARD refuses this repository's own fixtures" >&2
+  echo "check-guard-path-spelling: on this host, so the cases below would be reading a failure" >&2
+  echo "check-guard-path-spelling: that has nothing to do with path spelling. It said:" >&2
+  report_output
+  failures=$((failures + 1))
+fi
+
+# 7. The same guard, the same fixtures, on a host that spells paths with a backslash. This is
+#    the case `check (windows-latest)` runs, and the one it failed.
+run_store_foreign
+if [ "$STATUS" -ne 0 ]; then
+  echo "check-guard-path-spelling: scripts/$STORE_GUARD refuses this repository's own fixtures on" >&2
+  echo "check-guard-path-spelling: a backslash-separator host while passing on this one, so what" >&2
+  echo "check-guard-path-spelling: it compares depends on where it runs. It said:" >&2
+  report_output
+  failures=$((failures + 1))
+fi
+
+# 8. The control on the simulation, as case 3 is for the guard above: with the normalisation
+#    removed the backslash spelling has to come back, which is both what the Windows runner
+#    really printed and the evidence that `as_posix()` is what stops it.
+substitute "$scratch/store/scripts/$STORE_GUARD" "path.as_posix()" "str(path)"
+run_store_foreign
+if [ "$STATUS" -eq 0 ]; then
+  echo "check-guard-path-spelling: with the path normalisation removed, scripts/$STORE_GUARD still" >&2
+  echo "check-guard-path-spelling: passed on a backslash-separator host — so the simulation is not" >&2
+  echo "check-guard-path-spelling: reproducing that host and case 7 proves nothing." >&2
+  failures=$((failures + 1))
+elif ! grep -qF -- "$FOREIGN_FIXTURE" <<<"$OUTPUT"; then
+  echo "check-guard-path-spelling: with the path normalisation removed, scripts/$STORE_GUARD refused" >&2
+  echo "check-guard-path-spelling: on a backslash-separator host without naming '$FOREIGN_FIXTURE'," >&2
+  echo "check-guard-path-spelling: so this case is no longer reproducing that failure. It said:" >&2
+  report_output
+  failures=$((failures + 1))
+fi
+fixture cp "$ROOT/scripts/$STORE_GUARD" "$scratch/store/scripts/$STORE_GUARD"
+
 if [ "$failures" -ne 0 ]; then
   echo "check-guard-path-spelling: $failures case(s) failed." >&2
-  echo "check-guard-path-spelling: repair the reporting in scripts/$GUARD rather than relaxing a" >&2
-  echo "check-guard-path-spelling: case: every path it names goes through display_path so that all" >&2
-  echo "check-guard-path-spelling: three required lanes read the same report." >&2
+  echo "check-guard-path-spelling: repair the reporting in the guard the case names rather than" >&2
+  echo "check-guard-path-spelling: relaxing the case: every path a guard renders goes through" >&2
+  echo "check-guard-path-spelling: as_posix(), so that all three required lanes read — and compare" >&2
+  echo "check-guard-path-spelling: against — the same spelling." >&2
   exit 1
 fi
