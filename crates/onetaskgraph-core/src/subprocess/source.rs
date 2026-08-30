@@ -458,10 +458,14 @@ impl TaskSource for SubprocessSource {
     }
 }
 
-/// The empty object §4.10 answers with, decoded so that `ask` has a type to hand back.
+/// The object §4.10 answers with, decoded so that `ask` has a type to hand back.
 ///
 /// A named type rather than `serde_json::Value` so a plugin answering with something other
-/// than an object is still refused where every other method's answer is.
+/// than an object is still refused where every other method's answer is. It does **not**
+/// require that object to be empty, and no `deny_unknown_fields` belongs here: §2.1 is that
+/// a reader ignores members it does not know, at every level, which is what lets a later
+/// version add an optional one without a version bump. Refusing an unknown member here
+/// would refuse that plugin outright, and would be the only type of this boundary that did.
 #[derive(serde::Deserialize)]
 struct IgnoredResult {}
 

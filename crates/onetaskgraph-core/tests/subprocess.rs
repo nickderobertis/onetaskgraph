@@ -782,6 +782,37 @@ async fn a_plugin_line_that_is_not_json_is_quoted_back_at_a_readable_length() {
 }
 
 #[tokio::test]
+async fn a_delete_result_is_read_as_an_object_rather_than_as_exactly_the_empty_one() {
+    // §4.10 answers `{}`, and §2.1 is what says how strictly to read that: a reader ignores
+    // members it does not know, at every level, so a later version can add an optional one
+    // without a version bump. A decoder refusing the unknown member here would refuse that
+    // plugin outright — and would be the only one of this boundary that did. What is
+    // refused is an answer that is not an object at all, which no version of §4.10 permits.
+    let source = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": capabilities()}})
+        .to_string(),
+        json!({"id": "1", "result": {"removed_at": "2026-08-30T00:00:00Z"}}).to_string(),
+        json!({"id": "2", "result": "done"}).to_string(),
+    ])
+    .expect("the handshake succeeds");
+
+    source
+        .delete_task(&NativeId("T-1".to_owned()))
+        .await
+        .expect("a member this version does not know is ignored, not refused");
+
+    let SourceError::Malformed { message } = source
+        .delete_project(&NativeId("P-1".to_owned()))
+        .await
+        .expect_err("a result that is not an object")
+    else {
+        panic!("a delete result that is not an object is a protocol violation");
+    };
+    assert!(message.contains("delete_project"), "{message}");
+}
+
+#[tokio::test]
 async fn a_plugin_that_stops_answering_fails_this_call_and_every_later_one() {
     let source = scripted(vec![
         json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
