@@ -94,7 +94,19 @@ NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh "$registry") || fatal \
 every tarball in full and then fails ENEEDAUTH, exactly as though it were logged out"
 export NPM_CONFIG_USERCONFIG
 
+# Where the two held outputs below are written. It arrives from the environment like the
+# registry does, and the step above does not stand in for checking it: that one writes to
+# ONETASKGRAPH_NPM_CONFIG_DIR when it is set, and falls back to TMPDIR here where it does
+# not. So an unusable one is caught here rather than by a shell redirection several steps
+# in, which ends the publication on bash's own "No such file or directory" about a path
+# nobody named — after carriers have already reached the real registry.
 readonly SCRATCH="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+if [ ! -d "$SCRATCH" ] || [ ! -w "$SCRATCH" ]; then
+  echo "no writable scratch directory at $SCRATCH" >&2
+  echo "next: set RUNNER_TEMP (or TMPDIR) to a directory this can write, then re-run —" >&2
+  echo "next: npm's own output is held there and replayed when a publication fails" >&2
+  exit 64
+fi
 
 # publish_if_absent <name@version> <local directory or tarball>
 publish_if_absent() {

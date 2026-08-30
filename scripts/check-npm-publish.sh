@@ -336,6 +336,32 @@ done
   "the publication reached the registry with no carriers to send" \
   "the guard must refuse before anything is sent"
 
+# A scratch directory that is not there. It is where npm's own output is held and replayed
+# when a publication fails, so left to a shell redirection it ends the publication on
+# bash's `No such file or directory` about a path nobody named — after carriers have
+# already gone to the registry. The npmrc is pointed elsewhere here because that step reads
+# RUNNER_TEMP too, and would otherwise create the very directory this case is about.
+refusal="$scratch/no-scratch.log"
+status=0
+NODE_AUTH_TOKEN=stub-token NPM_REGISTRY="$REGISTRY" NPM_CARRIERS="$carriers" \
+  ONETASKGRAPH_NPM_CONFIG_DIR="$scratch" \
+  RUNNER_TEMP="$scratch/absent-scratch" scripts/publish-npm.sh > "$refusal" 2>&1 || status=$?
+[ "$status" -eq 64 ] || {
+  cat "$refusal" >&2
+  fatal "a scratch directory that is not there was accepted (exit $status, expected 64)" \
+    "restore the RUNNER_TEMP guard in scripts/publish-npm.sh"
+}
+for term in "no writable scratch directory at $scratch/absent-scratch" "RUNNER_TEMP" "next:"; do
+  grep -qF -- "$term" "$refusal" || {
+    cat "$refusal" >&2
+    fatal "the missing-scratch refusal never mentions '$term'" \
+      "its message must name the directory it looked in and what to do about it"
+  }
+done
+[ "$(sent_lines)" -eq 0 ] || fatal \
+  "the publication reached the registry with nowhere to hold what npm reported" \
+  "the guard must refuse before anything is sent"
+
 # A carriers directory that is there and is one carrier short. The publication reads every
 # operand before it sends any, so this is found before the first carrier lands rather than
 # at the fourth — a release half at npm is what the whole re-run path exists to survive.
