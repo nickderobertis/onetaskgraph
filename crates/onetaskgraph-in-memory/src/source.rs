@@ -402,6 +402,9 @@ impl TaskSource for InMemorySource {
                 id
             }
         };
+        // The item above has already changed; this is the call after it failing. See
+        // [`CapabilityConfig::half_written_titles`].
+        self.half_written(write.target.as_ref(), &write.item.title)?;
         held.adopt_labels(&write.item.labels);
         let edges = rooted(&write.depends_on, &id, ItemKind::Task);
         replace_edges(&mut held.task_dependencies, &id, edges);
@@ -434,6 +437,7 @@ impl TaskSource for InMemorySource {
                 id
             }
         };
+        self.half_written(write.target.as_ref(), &write.item.title)?;
         held.adopt_labels(&write.item.labels);
         let edges = rooted(&write.depends_on, &id, ItemKind::Project);
         replace_edges(&mut held.project_dependencies, &id, edges);
@@ -520,6 +524,30 @@ impl InMemorySource {
             message: format!(
                 "this source will not create an item titled {title:?}; next: retitle it, or \
                  copy into a source that takes it"
+            ),
+        })
+    }
+
+    /// Refuse an *update* this source's configuration says it stops part way through.
+    ///
+    /// Called once the item has already been changed, which is the whole point: what is
+    /// under test above this source is an engine that meets a destination it has half
+    /// written, and no refusal made before the change would pose that question.
+    fn half_written(&self, target: Option<&NativeId>, title: &str) -> Result<(), SourceError> {
+        if target.is_none() {
+            return Ok(());
+        }
+        if !self
+            .declared()
+            .half_written_titles
+            .iter()
+            .any(|refused| refused == title)
+        {
+            return Ok(());
+        }
+        Err(SourceError::Refused {
+            message: format!(
+                "this source stopped part way through updating an item titled {title:?};                  next: the item is half written, so put it back before copying again"
             ),
         })
     }

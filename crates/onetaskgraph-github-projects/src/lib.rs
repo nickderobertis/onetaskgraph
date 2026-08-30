@@ -548,17 +548,15 @@ pub struct GitHubProjectsSource {
     /// them.
     ///
     /// GitHub's `projectV2.items` is eventually consistent: an issue added to a board with
-    /// `addProjectV2ItemById` is routinely absent from the very next read of that board.
-    /// So a copy that created a task and then wrote the task that depends on it looked up
-    /// the far end, did not find it, and refused with *"GitHub dependency item … was not
-    /// found"* — naming an item that same run had just created. Three runs of one project
-    /// copy failed that way, each leaving a different half of the project behind.
+    /// `addProjectV2ItemById` is routinely absent from the very next read of that board, so
+    /// a copy resolving a dependency on an item it had just created refused it as not
+    /// found. A board read is completed from this — an item remembered here and absent from
+    /// the read is added back, because the board really does hold it and only the read is
+    /// behind.
     ///
-    /// This is what a board read is completed from: an item remembered here and absent
-    /// from the read is added back, because the board really does hold it and only the
-    /// read is behind. It is not a cache of a user's work — nothing is remembered that
-    /// this process did not itself just write, it lives and dies with the process, and it
-    /// is never consulted for an item this source did not create.
+    /// It is not a cache of a user's work: nothing is remembered that this process did not
+    /// itself just write, it lives and dies with the process, and it is never consulted for
+    /// an item this source did not create.
     created: Mutex<Vec<Resolved>>,
 }
 

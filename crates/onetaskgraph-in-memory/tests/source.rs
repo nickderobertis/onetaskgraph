@@ -1397,6 +1397,84 @@ async fn a_title_this_source_will_not_create_refuses_the_create_and_takes_the_up
 }
 
 #[tokio::test]
+async fn a_title_this_source_stops_part_way_through_leaves_the_item_already_changed() {
+    // The other half of the refusal above, and the one no source can repair: a real
+    // destination's write is several calls, so one of them failing leaves the ones before
+    // it applied. What is under test above this source is an engine that meets a
+    // destination it has half written, and a refusal made *before* the change would pose
+    // no such question — so this one is made after it, and the change is still there.
+    let source: Box<dyn TaskSource> = Box::new(
+        onetaskgraph_in_memory::InMemorySource::new(with_capabilities(json!({
+            "half_written_titles": ["Half"]
+        })))
+        .expect("the fixture graph is coherent"),
+    );
+
+    let Err(SourceError::Refused { message }) = source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("T-1".into())),
+            item: outgoing("T-1", "Half"),
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a title this source stops part way through must refuse the update");
+    };
+    assert!(message.contains("part way through updating"), "{message}");
+    assert_eq!(
+        source
+            .get_task(&NativeId("T-1".into()))
+            .await
+            .unwrap()
+            .expect("T-1 is still there")
+            .title,
+        "Half",
+        "the call before the refusal landed, which is what makes this half written"
+    );
+
+    // An update alone. A create that fails leaves nothing to put back, and
+    // `uncreatable_titles` is that half.
+    let created = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: outgoing("T-9", "Half"),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("a create is not what this refuses");
+    assert!(
+        source.get_task(&created).await.unwrap().is_some(),
+        "and it landed"
+    );
+
+    // The same for a project.
+    let Err(SourceError::Refused { message }) = source
+        .write_project(&ItemWrite {
+            target: Some(NativeId("P-1".into())),
+            item: serde_json::from_value(json!({
+                "id": "P-1", "title": "Half",
+                "status": {"category": "todo", "name": "Todo"}, "labels": []
+            }))
+            .expect("a project"),
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a title this source stops part way through must refuse the update");
+    };
+    assert!(message.contains("Half"), "{message}");
+    assert_eq!(
+        source
+            .get_project(&NativeId("P-1".into()))
+            .await
+            .unwrap()
+            .expect("P-1 is still there")
+            .title,
+        "Half"
+    );
+}
+
+#[tokio::test]
 async fn a_deleted_item_takes_its_edges_with_it_and_leaves_its_tasks_orphaned() {
     // The engine deletes exactly one thing: an item it created itself, while undoing a
     // copy that could not finish. What it must get back is the source as it was — so an

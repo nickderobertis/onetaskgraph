@@ -261,6 +261,18 @@ pub struct CapabilityConfig {
     /// It reaches creates alone. An update names an item that is already there, so it is
     /// not what leaves a half-written destination behind.
     pub uncreatable_titles: Vec<String>,
+    /// Titles this source applies and *then* refuses, on an update.
+    ///
+    /// Empty by default, and configurable for the reason [`Self::uncreatable_titles`] is,
+    /// from the other end of a write. A destination's own write is several calls —
+    /// `docs/plugin-protocol.md` §4.9 — and one of them failing leaves the ones before it
+    /// applied. No source can put those back: only the engine's copy journal holds what
+    /// was there, so a copy that recorded that journal after the write was the one way it
+    /// could stop and leave the destination altered.
+    ///
+    /// It reaches updates alone. A create that fails leaves nothing to put back, and
+    /// [`Self::uncreatable_titles`] is that half.
+    pub half_written_titles: Vec<String>,
     /// Ids this source refuses to *remove*, naming the id in the refusal.
     ///
     /// Empty by default, and configurable for the reason [`Self::uncreatable_titles`] is,
@@ -299,6 +311,7 @@ impl Default for CapabilityConfig {
             writes: WriteSupport::Supported,
             unwritable_metadata_keys: Vec::new(),
             uncreatable_titles: Vec::new(),
+            half_written_titles: Vec::new(),
             undeletable_ids: Vec::new(),
         }
     }

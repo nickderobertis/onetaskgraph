@@ -298,12 +298,8 @@ impl Undo {
     }
 }
 
-/// Everything one copy has written, in the order it wrote it.
-///
-/// A copy is either complete or it never happened. Half of one leaves a project the user
-/// has to run again, and the re-run is the mutation burst that trips a hosted
-/// destination's secondary rate limiter — which then refuses even reads for the next fifty
-/// minutes. Undoing this run's own writes is what removes the retry at source.
+/// Everything one copy has written, in the order it wrote it, so a copy that cannot finish
+/// can undo its own writes.
 ///
 /// This is not state the engine keeps: it lives for the length of one `copy` call and is
 /// dropped with it, so the invariant that nothing of a user's work is written down outside
@@ -1153,6 +1149,17 @@ impl Engine {
     ) -> Result<NativeId, EngineError> {
         let created_kind = item.item.kind();
         let suggested = target.clone().unwrap_or_else(|| item.item.id().clone());
+        // Recorded *before* the write rather than after it. A destination's own write is
+        // several calls — `docs/plugin-protocol.md` §4.9 — and one of them failing leaves
+        // the ones before it applied. No source can put those back, because only this
+        // journal holds what was there; recorded after a successful write, an update that
+        // stopped part way was the one way a copy could end and leave the destination
+        // altered. A restore of an item the write never reached rewrites what is already
+        // there, which costs one mutation and is what "either complete or it never
+        // happened" is worth.
+        if let (Some(id), Some(prior)) = (target.clone(), prior) {
+            journal.record(Undo::Updated { id, prior });
+        }
         let landed = match outgoing(item, suggested, project) {
             Item::Task(task) => destination
                 .source()
@@ -1173,15 +1180,15 @@ impl Engine {
                 .await
                 .map_err(|error| refused(destination, error))?,
         };
-        match (target, prior) {
-            (None, _) => journal.record(Undo::Created {
+        // A created item can only be journalled here: its id is what the write answers
+        // with. A create that fails leaves nothing behind — §4.9 makes taking the item
+        // back the source's own duty, because a write that refused must not leave an item
+        // nobody asked for.
+        if target.is_none() {
+            journal.record(Undo::Created {
                 kind: created_kind,
                 id: landed.clone(),
-            }),
-            (Some(id), Some(prior)) => journal.record(Undo::Updated { id, prior }),
-            // A target the destination did not hold: the write above would have refused
-            // rather than created, so there is nothing here to take back.
-            (Some(_), None) => {}
+            });
         }
         Ok(landed)
     }

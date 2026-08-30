@@ -1054,6 +1054,54 @@ async fn a_copy_that_cannot_finish_puts_back_the_items_it_overwrote() {
 }
 
 #[tokio::test]
+async fn a_copy_that_stops_part_way_through_an_update_puts_that_item_back_too() {
+    // The other half of undoing an overwrite. A destination's own write is several calls —
+    // `docs/plugin-protocol.md` §4.9, and the GitHub source's own suite drives one failing
+    // after an earlier one landed — so an update can end with the item already changed. No
+    // source can put that back: only this journal holds what was there. Recorded after a
+    // successful write, this was the one way a copy could stop and leave a destination
+    // altered, which is exactly what "either complete or it never happened" forbids.
+    //
+    // `Beta` is the title this destination applies and then refuses, and it is the third
+    // of three updates — so the two before it have landed and the third is half written.
+    let mut into = already_holding();
+    into["capabilities"] = json!({"half_written_titles": ["Beta"]});
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": into},
+    }));
+    let before = held(&engine, "into").await;
+    assert_eq!(
+        before,
+        vec![
+            "into:D-P1 D-P1 as it was".to_owned(),
+            "into:D-P2 D-P2 as it was".to_owned(),
+            "into:D-T1 D-T1 as it was".to_owned(),
+            "into:D-T2 D-T2 as it was".to_owned(),
+        ]
+    );
+
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("a destination that stops part way through a write must refuse the copy");
+    };
+    let rendered = refused.to_string();
+    assert!(rendered.contains("Beta"), "{rendered}");
+    assert!(
+        !rendered.contains("could not be undone"),
+        "this destination takes its items back: {rendered}"
+    );
+
+    assert_eq!(
+        held(&engine, "into").await,
+        before,
+        "the item the write had already changed reads as it did before the copy started"
+    );
+}
+
+#[tokio::test]
 async fn a_restore_the_destination_refuses_names_the_item_left_holding_this_copys_writing() {
     // The item a destination will not take back need not be one this copy created. `D-T2`
     // was here before it started, carrying a key set at the destination that this source
