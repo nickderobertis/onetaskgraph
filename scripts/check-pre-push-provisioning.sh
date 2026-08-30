@@ -91,6 +91,24 @@ chmod +x "$STUB_BIN/just" || fatal \
   "could not make the stub 'just' executable" \
   "check the permissions of \$TMPDIR, then rerun"
 
+BASH_BIN="$(command -v bash)" || fatal \
+  "could not resolve the bash this check runs the hook with" \
+  "install bash, or run this check from a shell whose PATH carries it"
+readonly BASH_BIN
+
+# Put one tool into a whitelist directory, as a shim that runs the real one where it is.
+#
+# A symlink cannot do this on every platform this gate runs on: git-bash on Windows copies
+# instead of linking, and a copied `bash.exe` cannot find the runtime libraries that sit
+# beside the original — so cases 2 and 3 below ran a bash that could not start, and read
+# its silence as the hook having said nothing about what was missing. A shim leaves every
+# binary where it is and decides only which names this PATH can reach. Its interpreter is
+# named absolutely because `bash` itself is one of the names being decided.
+shim() {
+  printf '#!%s\nexec "%s" "$@"\n' "$BASH_BIN" "$3" > "$1/$2" \
+    && chmod +x "$1/$2"
+}
+
 failures=0
 HOOK_OUTPUT=""
 HOOK_STATUS=0
@@ -98,7 +116,9 @@ HOOK_STATUS=0
 # Run the real hook out of the scratch clone, under a PATH this case chose.
 run_hook() {
   rm -f "$GATE_MARKER"
-  HOOK_OUTPUT="$(PATH="$1" bash "$CLONE/.githooks/pre-push" 2>&1)" \
+  # By absolute path: what each case varies is what the hook can *find*, and a hook that
+  # could not be started at all would report that as the same silence.
+  HOOK_OUTPUT="$(PATH="$1" "$BASH_BIN" "$CLONE/.githooks/pre-push" 2>&1)" \
     && HOOK_STATUS=0 || HOOK_STATUS=$?
 }
 
@@ -158,10 +178,18 @@ cp "$STUB_BIN/just" "$CLEAN_BIN/just" || fatal \
 # scripts/provision-gate.sh looks up.
 for tool in env bash sed grep git python3 uv cargo cargo-llvm-cov cargo-deny cargo-machete node; do
   resolved="$(command -v "$tool" 2>/dev/null)" || continue
-  ln -sf "$resolved" "$CLEAN_BIN/$tool" || fatal \
-    "could not link $tool into $CLEAN_BIN" \
+  shim "$CLEAN_BIN" "$tool" "$resolved" || fatal \
+    "could not shim $tool into $CLEAN_BIN" \
     "check the permissions of \$TMPDIR, then rerun"
 done
+# The sanitisation is a precondition of the case, not part of what it proves: a PATH that
+# still reaches bun would make the hook's silence about it look like a passing case.
+PATH="$CLEAN_BIN" command -v bun >/dev/null 2>&1 && fatal \
+  "bun is still reachable from $CLEAN_BIN, so this case cannot pose the question it asks" \
+  "report this — the whitelist directory is built here and should hold no bun"
+PATH="$CLEAN_BIN" command -v git >/dev/null 2>&1 || fatal \
+  "git is not reachable from $CLEAN_BIN, so the hook would fail on that rather than on bun" \
+  "install git, or report this if it is installed — the shims above should have found it"
 
 run_hook "$CLEAN_BIN"
 if [ "$HOOK_STATUS" -eq 0 ]; then
@@ -196,10 +224,13 @@ mkdir -p "$NO_JUST" || fatal \
   "check the permissions of \$TMPDIR, then rerun"
 for tool in env bash sed grep git python3 uv cargo bun node; do
   resolved="$(command -v "$tool" 2>/dev/null)" || continue
-  ln -sf "$resolved" "$NO_JUST/$tool" || fatal \
-    "could not link $tool into $NO_JUST" \
+  shim "$NO_JUST" "$tool" "$resolved" || fatal \
+    "could not shim $tool into $NO_JUST" \
     "check the permissions of \$TMPDIR, then rerun"
 done
+PATH="$NO_JUST" command -v just >/dev/null 2>&1 && fatal \
+  "just is still reachable from $NO_JUST, so this case cannot pose the question it asks" \
+  "report this — the whitelist directory is built here and should hold no just"
 
 run_hook "$NO_JUST"
 if [ "$HOOK_STATUS" -eq 0 ]; then
