@@ -302,6 +302,35 @@ done
   "the publication reached the registry with no carriers to send" \
   "the guard must refuse before anything is sent"
 
+# A carriers directory that is there and is one carrier short. The publication reads every
+# operand before it sends any, so this is found before the first carrier lands rather than
+# at the fourth — a release half at npm is what the whole re-run path exists to survive.
+short="$scratch/short-carriers"
+mkdir -p "$short" || fatal "could not create $short" "check \$TMPDIR, then rerun"
+cp "$carriers"/*.tgz "$short/" || fatal \
+  "could not copy the carriers into $short" "check \$TMPDIR, then rerun"
+withheld="$(ls "$short"/*.tgz | tail -1)"
+rm "$withheld" || fatal "could not remove $withheld" "check \$TMPDIR, then rerun"
+refusal="$scratch/short-carriers.log"
+status=0
+NODE_AUTH_TOKEN=stub-token NPM_REGISTRY="$REGISTRY" NPM_CARRIERS="$short" \
+  RUNNER_TEMP="$scratch" scripts/publish-npm.sh > "$refusal" 2>&1 || status=$?
+[ "$status" -eq 64 ] || {
+  cat "$refusal" >&2
+  fatal "a carriers directory missing a tarball was accepted (exit $status, expected 64)" \
+    "every package operand must be checked before the first one is published"
+}
+for term in "not there" "$withheld" "next:"; do
+  grep -qF -- "$term" "$refusal" || {
+    cat "$refusal" >&2
+    fatal "the missing-tarball refusal never mentions '$term'" \
+      "it must name the operand it could not find and what to do about it"
+  }
+done
+[ "$(sent_lines)" -eq 0 ] || fatal \
+  "the publication sent a carrier before noticing another was missing" \
+  "read every operand before publishing any of them"
+
 log="$scratch/publish.log"
 if ! NODE_AUTH_TOKEN=stub-token \
   NPM_REGISTRY="$REGISTRY" \

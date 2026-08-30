@@ -120,6 +120,14 @@ publish_if_absent() {
   exit 69
 }
 
+# Every operand is read and checked before any of them is published. A tarball the
+# download step never produced, or a package directory that is not in this checkout,
+# stops the publication at the fourth carrier otherwise — three carriers after the first
+# has already landed at the registry, which is the half-published release this script is
+# shaped to avoid and the state a re-run then has to be safe against.
+carrier_specs=()
+carrier_files=()
+absent=""
 for package in npm/platforms/*; do
   # A manifest node cannot read leaves these empty rather than ending the script: node
   # has already said why on stderr, and the guards below are what name the file to fix.
@@ -137,7 +145,11 @@ for package in npm/platforms/*; do
     echo "next: npm/platforms/$platform/package.json included — to one semantic version" >&2
     exit 64
   }
-  publish_if_absent "$name@$version" "$CARRIERS/onetaskgraph-cli-${platform}-${version}.tgz"
+  tarball="$CARRIERS/onetaskgraph-cli-${platform}-${version}.tgz"
+  [ -f "$tarball" ] || absent="$absent
+  $tarball"
+  carrier_specs+=("$name@$version")
+  carrier_files+=("$tarball")
 done
 
 # Unreadable for the same reason and handled the same way: the version guards below name
@@ -156,5 +168,22 @@ printf '%s\n' "$sdk_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(
   echo "next: version, then rerun" >&2
   exit 64
 }
+for directory in ./npm/cli ./sdks/typescript; do
+  [ -d "$directory" ] || absent="$absent
+  $directory"
+done
+[ -z "$absent" ] || {
+  echo "these package operands are not there:$absent" >&2
+  echo "next: for a tarball, run the release workflow's carrier download (or 'npm pack')" >&2
+  echo "next: into $CARRIERS; for a directory, run this from a full checkout" >&2
+  exit 64
+}
+
+# Nothing above published anything, so from here every operand is known to exist.
+index=0
+while [ "$index" -lt "${#carrier_specs[@]}" ]; do
+  publish_if_absent "${carrier_specs[$index]}" "${carrier_files[$index]}"
+  index=$((index + 1))
+done
 publish_if_absent "@onetaskgraph/cli@$cli_version" ./npm/cli
 publish_if_absent "@onetaskgraph/sdk@$sdk_version" ./sdks/typescript
