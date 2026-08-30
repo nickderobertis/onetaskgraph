@@ -5,7 +5,7 @@
 //! GraphQL document, answered by a fixture that keeps board state the way GitHub does.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::{Read, Write},
     net::TcpListener,
     sync::{Arc, Mutex},
@@ -159,6 +159,10 @@ struct State {
     origin_field: bool,
     status_field: bool,
     blocked_by: BTreeMap<String, Vec<String>>,
+    /// Mutations this board answers with a GraphQL error rather than performing. GitHub
+    /// fails one call of the several a write is, and what the source does about the calls
+    /// that already landed is only readable if one of them can be made to fail.
+    refuses: BTreeSet<String>,
     seen: Vec<Value>,
     next: usize,
 }
@@ -217,6 +221,25 @@ impl Fixture {
             .expect("the fixture holds that item")
             .clone()
     }
+    /// Whether this board still holds an item, which is a different question from
+    /// `item` — one asserts on what it carries, this on whether it is there at all.
+    fn holds(&self, content_id: &str) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .items
+            .iter()
+            .any(|item| item.content_id == content_id)
+    }
+    /// Fail this mutation from here on, the way GitHub fails one call part way through a
+    /// write: everything before it has landed, and nothing after it runs.
+    fn refuse(&self, operation: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .refuses
+            .insert(operation.to_owned());
+    }
 }
 
 fn board(items: Vec<Item>) -> Fixture {
@@ -236,6 +259,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         origin_field,
         status_field,
         blocked_by: BTreeMap::new(),
+        refuses: BTreeSet::new(),
         seen: Vec::new(),
         next: 0,
     }));
@@ -249,8 +273,10 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             let query = request["query"].as_str().expect("a GraphQL document");
             graphql_parser::parse_query::<String>(query).expect("a valid GraphQL document");
             let variables = &request["variables"];
-            let data = answer(&served, query, variables);
-            let body = json!({ "data": data }).to_string();
+            let body = match refused(&served, query, variables) {
+                Some(message) => json!({"errors":[{"message":message}]}).to_string(),
+                None => json!({ "data": answer(&served, query, variables) }).to_string(),
+            };
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -259,6 +285,23 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         }
     });
     Fixture { endpoint, state }
+}
+
+/// The GraphQL error a refused mutation answers with, or `None` to perform it.
+///
+/// A refused call is still recorded as seen and still changes nothing: that is what GitHub
+/// failing one mutation of a write looks like from here.
+fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<String> {
+    let mut state = state.lock().unwrap();
+    let operation = operation_name(query);
+    if !state.refuses.contains(operation) {
+        return None;
+    }
+    let input = variables.get("input").cloned().unwrap_or(Value::Null);
+    if !input.is_null() {
+        state.seen.push(json!([operation, input]));
+    }
+    Some(format!("{operation} is refused by this board"))
 }
 
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
@@ -275,6 +318,11 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         } else {
             json!({"repository":{"id":"REPO_1","nameWithOwner":format!("{}/{}", variables["owner"].as_str().unwrap(), variables["name"].as_str().unwrap())}})
         };
+    }
+    if query.contains("deleteIssue(input:$input)") {
+        let id = input["issueId"].as_str().expect("an issue id").to_owned();
+        state.items.retain(|item| item.content_id != id);
+        return json!({"deleteIssue":{"repository":{"id":"REPO_1"}}});
     }
     if query.contains("createIssue(input:$input)") {
         state.next += 1;
@@ -450,6 +498,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
 fn operation_name(query: &str) -> &str {
     for name in [
         "createIssue",
+        "deleteIssue",
         "addProjectV2ItemById",
         "updateIssue",
         "updateProjectV2DraftIssue",
@@ -3459,5 +3508,82 @@ async fn a_board_that_cannot_carry_the_origin_refuses_before_it_creates_anything
             .items
             .is_empty(),
         "and no issue was left on the board"
+    );
+}
+
+#[tokio::test]
+async fn a_write_that_fails_part_way_takes_back_only_the_item_it_created() {
+    // Everything this source can refuse before the first mutation is refused there, so what
+    // is left is GitHub failing part way — and the two halves of that are different. An item
+    // this call created is taken back, because a retry would otherwise create a second. An
+    // item that was already there is not: taking it back would destroy the very state the
+    // engine's copy journal exists to write back, and nothing a user typed asked for a
+    // delete.
+    let created = board(vec![]);
+    let maker = source(&created);
+    created.refuse("updateProjectV2ItemFieldValue");
+    let message = refusal(
+        maker
+            .write_task(&write(task(
+                "T-1",
+                "Publish",
+                status(StatusCategory::Todo, "Todo"),
+            )))
+            .await
+            .expect_err("the board refused the field update"),
+    );
+    assert!(
+        message.contains("updateProjectV2ItemFieldValue"),
+        "the write's own failure is what the caller is told: {message}"
+    );
+    assert!(
+        created.seen().iter().any(|call| call[0] == "deleteIssue"),
+        "the issue this call created was left behind: {:?}",
+        created.seen()
+    );
+    assert!(
+        maker
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .unwrap()
+            .items
+            .is_empty(),
+        "and the board holds nothing this failed write made"
+    );
+
+    let held = board(vec![Item::issue("I_1", "one").body("first").status("Todo")]);
+    let holder = source(&held);
+    held.refuse("updateProjectV2ItemFieldValue");
+    let mut revised = task("T-1", "one, revised", status(StatusCategory::Todo, "Todo"));
+    revised.repositories = vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
+    let message = refusal(
+        holder
+            .write_task(&ItemWrite {
+                target: Some(NativeId("I_1".to_owned())),
+                item: revised,
+                depends_on: vec![],
+            })
+            .await
+            .expect_err("the board refused the field update"),
+    );
+    assert!(
+        message.contains("updateProjectV2ItemFieldValue"),
+        "the write's own failure is what the caller is told: {message}"
+    );
+    assert!(
+        held.holds("I_1"),
+        "a write took back an item it did not create: {:?}",
+        held.seen()
+    );
+    assert!(
+        held.seen().iter().all(|call| call[0] != "deleteIssue"),
+        "a write that did not create the item asked for it to be deleted: {:?}",
+        held.seen()
+    );
+    assert_eq!(
+        held.item("I_1").title,
+        "one, revised",
+        "the mutation before the failure landed, and writing that back is the engine's \
+         journal's job — which it can only do while the item is still there"
     );
 }
