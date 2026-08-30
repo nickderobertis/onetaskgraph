@@ -63,6 +63,7 @@ readonly MODE_FILE="$scratch/mode"
 # package, the version and the tarball it carried.
 cat > "$scratch/registry.py" <<'PY'
 import json
+import socketserver
 import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -174,7 +175,22 @@ class Registry(BaseHTTPRequestHandler):
         """Quiet: this check's own output is the signal."""
 
 
-server = HTTPServer(("127.0.0.1", 0), Registry)
+class Loopback(HTTPServer):
+    """Bound without the reverse DNS lookup `HTTPServer` does on its own account.
+
+    `HTTPServer.server_bind` calls `socket.getfqdn(host)` to name itself, and on the
+    macOS runner that lookup of 127.0.0.1 outlasted the start-up window the shell below
+    waits out — so a registry that had in fact bound was reported as one that never
+    reported a port, and the whole install-path lane failed on a name nothing reads.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
+
+
+server = Loopback(("127.0.0.1", 0), Registry)
 with open(port_file, "w", encoding="utf-8") as handle:
     handle.write(str(server.server_address[1]))
 server.serve_forever()
@@ -182,16 +198,23 @@ PY
 
 : > "$PUBLISHED"
 printf 'record\n' > "$MODE_FILE"
-python3 "$scratch/registry.py" "$PUBLISHED" "$PORT_FILE" "$MODE_FILE" &
+# Its own stderr, kept rather than let out: a registry that cannot start says why there,
+# and the wait below is the only thing that would otherwise notice — reporting the silence
+# and not the reason.
+readonly REGISTRY_LOG="$scratch/registry.log"
+python3 "$scratch/registry.py" "$PUBLISHED" "$PORT_FILE" "$MODE_FILE" 2>"$REGISTRY_LOG" &
 REGISTRY_PID=$!
 
 for _ in $(seq 1 100); do
   [ -s "$PORT_FILE" ] && break
   sleep 0.1
 done
-[ -s "$PORT_FILE" ] || fatal \
-  "the stub registry never reported a port" \
-  "run 'python3 -c \"import http.server\"' to check the interpreter, then rerun"
+if [ ! -s "$PORT_FILE" ]; then
+  [ ! -s "$REGISTRY_LOG" ] || sed 's/^/check-npm-publish:   /' "$REGISTRY_LOG" >&2
+  fatal \
+    "the stub registry never reported a port" \
+    "run 'python3 -c \"import http.server\"' to check the interpreter, then rerun"
+fi
 port="$(cat "$PORT_FILE")"
 readonly REGISTRY="http://127.0.0.1:$port/"
 
