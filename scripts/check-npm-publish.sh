@@ -78,7 +78,15 @@ class Registry(BaseHTTPRequestHandler):
         self._answer(404, {"error": "Not found"})
 
     def do_PUT(self):
-        length = int(self.headers.get("Content-Length", "0"))
+        # The header is untrusted input like any other: a length that is not a
+        # non-negative decimal is refused as a bad request rather than raising out of
+        # the handler, which would answer the publication with a closed connection and
+        # report a framing mistake as npm being unreachable.
+        raw = self.headers.get("Content-Length", "0")
+        if not raw.strip().isdigit():
+            self._answer(400, {"error": f"Content-Length is not a length: {raw!r}"})
+            return
+        length = int(raw)
         try:
             document = json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError as error:
