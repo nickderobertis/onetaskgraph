@@ -152,6 +152,29 @@ remove_stand_in() {
 }
 trap 'remove_stand_in; cleanup' EXIT
 
+# Without a token, npm packs every tarball in full and then fails ENEEDAUTH as though it
+# were logged out — so the publication refuses first, saying what to set. The token is read
+# through a default before its length is taken, because under `set -u` an unset one would
+# end the script on bash's own diagnostic instead of this message.
+refusal="$scratch/no-token.log"
+if NPM_REGISTRY="$REGISTRY" NPM_CARRIERS="$carriers" RUNNER_TEMP="$scratch" \
+  scripts/publish-npm.sh > "$refusal" 2>&1; then
+  cat "$refusal" >&2
+  fatal "scripts/publish-npm.sh published with no NPM_TOKEN set" \
+    "restore the token guard at the top of it"
+fi
+for term in "NPM_TOKEN is required" "received 0 characters" "gh-secrets.json"; do
+  grep -qF -- "$term" "$refusal" || {
+    cat "$refusal" >&2
+    fatal "the missing-token refusal never mentions '$term'" \
+      "restore the token guard's message in scripts/publish-npm.sh, which must say what to set"
+  }
+done
+if [ -s "$PUBLISHED" ]; then
+  fatal "scripts/publish-npm.sh reached the registry with no NPM_TOKEN set" \
+    "the token guard must refuse before anything is sent"
+fi
+
 log="$scratch/publish.log"
 if ! NODE_AUTH_TOKEN=stub-token \
   NPM_REGISTRY="$REGISTRY" \

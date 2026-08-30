@@ -269,7 +269,7 @@ pub struct CapabilityConfig {
     /// owes the user the name of. A real destination refuses for its own reasons — a
     /// permission its credential lacks, an item kind it cannot delete — and none of those
     /// is something a test can ask for on cue.
-    pub undeletable_ids: Vec<String>,
+    pub undeletable_ids: Vec<NativeId>,
 }
 
 /// Refuse a zero page ceiling, naming the setting a user has to correct.

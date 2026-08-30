@@ -534,7 +534,7 @@ impl InMemorySource {
             .declared()
             .undeletable_ids
             .iter()
-            .any(|refused| refused == &id.0)
+            .any(|refused| refused == id)
         {
             return Ok(());
         }

@@ -17,7 +17,8 @@ use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{
-    ROWS, SOURCE, document, empty_folder, github_projects_failing_a_field_write_once,
+    ROWS, SOURCE, document, empty_folder, github_projects_failing_a_field_write_and_its_cleanup,
+    github_projects_failing_a_field_write_once, github_projects_failing_to_file_and_its_cleanup,
     github_projects_failing_to_file_once, github_projects_reading_one_item_behind,
     github_projects_with_board, linear_block, qualified,
 };
@@ -1532,4 +1533,119 @@ fn a_copy_that_cannot_finish_leaves_the_board_as_it_found_it() {
             ("plans:B", "created"),
         ]
     );
+}
+
+#[test]
+fn a_cleanup_that_also_fails_reports_the_write_that_failed_rather_than_the_tidy_up() {
+    // Filing an item on a board is several calls, so a failure after the first leaves an
+    // issue this run created and nobody asked for — which the source takes back. GitHub can
+    // refuse that removal too, and what the caller is owed then is *why the copy stopped*.
+    // The tidy-up's own failure is about an item they never asked to exist; reporting it
+    // instead would leave them reading a deletion error for a copy they made.
+    //
+    // This board refuses the field write and then refuses the removal, so both failures are
+    // real and the copy has to choose which one to say.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Doing\n---\ndo this first\n",
+    )
+    .unwrap();
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root": root, "status_mapping": {"Doing":"in-progress"}}},
+        "board": {"plugin":"github-projects",
+                  "config": github_projects_failing_a_field_write_and_its_cleanup(&sandbox)}
+    })));
+
+    let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
+    assert!(
+        said.contains("updateProjectV2ItemFieldValue"),
+        "the failure that stopped the copy is what the caller is told: {said}"
+    );
+    assert!(
+        !said.contains("deleteIssue"),
+        "and not the failure of the tidy-up that followed it: {said}"
+    );
+
+    // The item the removal could not take back really is still there — the refusal above is
+    // the whole of what the caller gets, so this is the state they are left in.
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(
+        listed.matches("First step").count(),
+        1,
+        "the removal failed, so the item it could not take back is on the board: {listed}"
+    );
+
+    // Both failures are spent, so the copy the caller runs next matches that item by title
+    // rather than filing a second one for the same plan.
+    let again = ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "plans:A",
+            "--to",
+            "board",
+            "--match-by",
+            "title",
+            "--json",
+        ],
+    );
+    let landed = reported(&again);
+    assert_eq!(landed.len(), 1, "{again}");
+    assert_eq!(landed[0].2, "updated", "{again}");
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(
+        listed.matches("First step").count(),
+        1,
+        "and one plan is one issue rather than two: {listed}"
+    );
+}
+
+#[test]
+fn a_creation_whose_filing_and_cleanup_both_fail_still_reports_the_filing() {
+    // The earlier half of the same sequence: `createIssue` lands, filing it on the board
+    // does not, and the removal that would take the created issue back is refused as well.
+    // The caller is told why the copy stopped — an issue they never asked to exist failing
+    // to be removed is not something they can act on, and reporting it would replace the
+    // reason with a consequence.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Doing\n---\ndo this first\n",
+    )
+    .unwrap();
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root": root, "status_mapping": {"Doing":"in-progress"}}},
+        "board": {"plugin":"github-projects",
+                  "config": github_projects_failing_to_file_and_its_cleanup(&sandbox)}
+    })));
+
+    let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
+    assert!(
+        said.contains("addProjectV2ItemById"),
+        "the failure that stopped the copy is what the caller is told: {said}"
+    );
+    assert!(
+        !said.contains("deleteIssue"),
+        "and not the failure of the tidy-up that followed it: {said}"
+    );
+
+    // The issue never reached the board, so nothing there answers for this plan — and the
+    // retry, with both failures spent, files exactly one.
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(listed.matches("First step").count(), 0, "{listed}");
+    let again = ok(
+        &sandbox,
+        &["task", "copy", "plans:A", "--to", "board", "--json"],
+    );
+    assert_eq!(reported(&again)[0].2, "created", "{again}");
+    let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
+    assert_eq!(listed.matches("First step").count(), 1, "{listed}");
 }

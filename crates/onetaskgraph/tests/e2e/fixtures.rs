@@ -680,12 +680,12 @@ impl GitHubBoard {
 }
 
 fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
-    github_projects_board(sandbox, recorded, None).0
+    github_projects_board(sandbox, recorded, &[]).0
 }
 
 /// The same board, with a handle on the fields this source must never write.
 pub fn github_projects_with_board(sandbox: &Sandbox) -> (Value, GitHubBoardFields) {
-    github_projects_board(sandbox, None, None)
+    github_projects_board(sandbox, None, &[])
 }
 
 /// The same board again, failing the first attempt to file a created issue on it.
@@ -696,7 +696,7 @@ pub fn github_projects_with_board(sandbox: &Sandbox) -> (Value, GitHubBoardField
 /// journey rather than a reading of the code. The failure is spent once, so the same
 /// board answers the retry.
 pub fn github_projects_failing_to_file_once(sandbox: &Sandbox) -> Value {
-    github_projects_board(sandbox, None, Some("addProjectV2ItemById(input:$input)")).0
+    github_projects_board(sandbox, None, &["addProjectV2ItemById(input:$input)"]).0
 }
 
 /// The same board, failing the first field write onto an item it has already filed.
@@ -707,7 +707,43 @@ pub fn github_projects_failing_a_field_write_once(sandbox: &Sandbox) -> Value {
     github_projects_board(
         sandbox,
         None,
-        Some("updateProjectV2ItemFieldValue(input:$input)"),
+        &["updateProjectV2ItemFieldValue(input:$input)"],
+    )
+    .0
+}
+
+/// The same board, failing to file a created issue *and* the tidy-up that would remove it.
+///
+/// The earlier half of the same sequence: the issue exists in the repository and is on no
+/// board, so the source deletes it — and this board refuses that too. The caller is owed
+/// the failure that stopped the copy, for the reason the sibling below gives.
+pub fn github_projects_failing_to_file_and_its_cleanup(sandbox: &Sandbox) -> Value {
+    github_projects_board(
+        sandbox,
+        None,
+        &[
+            "addProjectV2ItemById(input:$input)",
+            "deleteIssue(input:$input)",
+        ],
+    )
+    .0
+}
+
+/// The same board, failing a field write *and* the tidy-up that would take the issue back.
+///
+/// The source removes an issue it created when the rest of the write fails, so a caller is
+/// not left an item nobody asked for. GitHub can refuse that removal too — a permission,
+/// a rate limiter — and what the caller is owed then is the failure that made the write
+/// fail, not the one that made the tidy-up fail: the second is about an item they never
+/// asked to exist, and reporting it would hide why the copy stopped.
+pub fn github_projects_failing_a_field_write_and_its_cleanup(sandbox: &Sandbox) -> Value {
+    github_projects_board(
+        sandbox,
+        None,
+        &[
+            "updateProjectV2ItemFieldValue(input:$input)",
+            "deleteIssue(input:$input)",
+        ],
     )
     .0
 }
@@ -725,19 +761,21 @@ pub fn github_projects_reading_one_item_behind(sandbox: &Sandbox) -> Value {
 fn github_projects_board(
     sandbox: &Sandbox,
     recorded: Option<Value>,
-    fail_first: Option<&'static str>,
+    fail_first: &'static [&'static str],
 ) -> (Value, GitHubBoardFields) {
     github_projects_board_at(sandbox, recorded, fail_first, 0)
 }
 
 fn github_projects_board_lagging(sandbox: &Sandbox, lagging_reads: usize) -> Value {
-    github_projects_board_at(sandbox, None, None, lagging_reads).0
+    github_projects_board_at(sandbox, None, &[], lagging_reads).0
 }
 
+/// `fail_first` names the operations this board refuses, each once — so a retry, and the
+/// tidy-up that follows a refusal, meet the board answering normally again.
 fn github_projects_board_at(
     sandbox: &Sandbox,
     recorded: Option<Value>,
-    fail_first: Option<&'static str>,
+    fail_first: &'static [&'static str],
     lagging_reads: usize,
 ) -> (Value, GitHubBoardFields) {
     sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
@@ -756,7 +794,7 @@ fn github_projects_board_at(
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
     }));
-    let mut owed_failure = fail_first;
+    let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
@@ -767,10 +805,17 @@ fn github_projects_board_at(
                 .as_object()
                 .expect("GraphQL variables object");
             let variables = Value::Object(variables.clone());
-            let body = if owed_failure.is_some_and(|operation| query.contains(operation)) {
-                owed_failure = None;
+            let owed = owed_failures
+                .iter()
+                .position(|operation| query.contains(operation));
+            let body = if let Some(at) = owed {
+                // The operation is named in the message so a journey can tell *which*
+                // failure reached the caller — a copy whose write failed and whose tidy-up
+                // then failed too has two, and which one it reports is the behaviour.
+                let operation = owed_failures.remove(at);
                 json!({"data":Value::Null,
-                       "errors":[{"message":"Something went wrong while executing your query"}]})
+                       "errors":[{"message":format!(
+                           "Something went wrong while executing your query: {operation}")}]})
                 .to_string()
             } else {
                 json!({ "data": github_answer(&board, query, &variables) }).to_string()

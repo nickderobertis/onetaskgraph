@@ -13,7 +13,11 @@
 #   1. It provisions what this worktree can heal and runs the gate; or
 #   2. it declines, naming the provisioning that is missing, and does NOT run the gate.
 #
-# `just` is stubbed in both cases. What is under test is the hook's provisioning decision,
+# The cases below drive both, and then the one precondition the hook owes on its own
+# account: `just` itself absent, which no provisioner it could call would be reached to
+# report.
+#
+# `just` is stubbed where it is present. What is under test is the hook's provisioning decision,
 # and a real `just gate` here would be this repository's whole gate run twice — from inside
 # itself, since this check is one of the things that gate runs.
 set -euo pipefail
@@ -175,6 +179,38 @@ else
     report_hook_output
     failures=$((failures + 1))
   fi
+fi
+
+# 3. `just` itself is absent. It is the hook's own precondition — the hook cannot invoke
+#    the provisioner and then the gate without it — so the hook owes its own refusal
+#    rather than the provisioner's, and it must say that nothing has been checked.
+readonly NO_JUST="$scratch/no-just-bin"
+mkdir -p "$NO_JUST" || fatal \
+  "could not create the just-free bin directory at $NO_JUST" \
+  "check the permissions of \$TMPDIR, then rerun"
+for tool in env bash sed grep git python3 uv cargo bun node; do
+  resolved="$(command -v "$tool" 2>/dev/null)" || continue
+  ln -sf "$resolved" "$NO_JUST/$tool" || fatal \
+    "could not link $tool into $NO_JUST" \
+    "check the permissions of \$TMPDIR, then rerun"
+done
+
+run_hook "$NO_JUST"
+if [ "$HOOK_STATUS" -eq 0 ]; then
+  echo "check-pre-push-provisioning: the hook accepted a worktree with no 'just' installed," >&2
+  echo "check-pre-push-provisioning: so the gate it reports as green was never run at all." >&2
+  report_hook_output
+  failures=$((failures + 1))
+else
+  for term in just "has been checked"; do
+    if ! names "$term"; then
+      echo "check-pre-push-provisioning: 'just' is absent and the hook refused, but its" >&2
+      echo "check-pre-push-provisioning: diagnostic never mentions '$term', so it reads as a" >&2
+      echo "check-pre-push-provisioning: rejection of the push rather than a missing tool. It said:" >&2
+      report_hook_output
+      failures=$((failures + 1))
+    fi
+  done
 fi
 
 if [ "$failures" -ne 0 ]; then

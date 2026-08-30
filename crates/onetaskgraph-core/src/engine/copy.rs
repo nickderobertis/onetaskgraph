@@ -553,11 +553,7 @@ impl Engine {
             None => error,
             Some(refusal) => EngineError::CopyNotUndone {
                 error: Box::new(error),
-                left_behind: left_behind
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                left_behind,
                 refusal,
             },
         }
@@ -586,6 +582,12 @@ impl Engine {
     }
 
     /// Copy one project and, unless they are excluded, every task in it.
+    // llmlint: ignore[suppressions_justified] Five of these are the copy's own running
+    // state — the copied set, the ids written so far, the items held back for repair and
+    // the undo journal — and every one of them is shared across the whole request rather
+    // than per project, which is the defect this signature exists to close. Bundling them
+    // into a context struct would put a lifetime and a borrow split around state that is
+    // threaded through three call sites and read nowhere else.
     #[allow(clippy::too_many_arguments)]
     async fn copy_project(
         &self,
@@ -758,6 +760,9 @@ impl Engine {
     /// without that edge and is handed to `deferred`. [`Engine::repair`] finishes it once
     /// the *whole* request has landed — not once this call has, because the far end may
     /// be in another project of the same command.
+    // llmlint: ignore[suppressions_justified] The same running state `copy_project` threads,
+    // for the same reason: it belongs to one `copy` call and is shared across every item of
+    // it, and a struct around it would add a borrow split for no reader's benefit.
     #[allow(clippy::too_many_arguments)]
     async fn copy_items(
         &self,
@@ -1128,6 +1133,10 @@ impl Engine {
 
     /// Hand one item to the destination's own write interface, recording how to take it
     /// back.
+    // llmlint: ignore[suppressions_justified] A write is the item, where it is going, what
+    // it is filed under, its edges, what was there before and the journal that records how
+    // to put it back. Each is a distinct decision made by a different part of the copy, and
+    // grouping them would only move the argument list to a constructor.
     #[allow(clippy::too_many_arguments)]
     async fn write(
         &self,

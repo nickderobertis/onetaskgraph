@@ -32,8 +32,12 @@ readonly CARRIERS="${NPM_CARRIERS:-dist/carriers}"
 registry=${NPM_REGISTRY:-https://registry.npmjs.org/}
 readonly registry
 
-[ -n "${NODE_AUTH_TOKEN:-}" ] || {
-  echo "NPM_TOKEN is required (received ${#NODE_AUTH_TOKEN} characters)" >&2
+# Read through a default before its length is taken: under `set -u` an unset
+# NODE_AUTH_TOKEN makes `${#NODE_AUTH_TOKEN}` end the script on bash's own
+# "unbound variable", replacing the message below — the one case this guard exists for.
+token=${NODE_AUTH_TOKEN:-}
+[ -n "$token" ] || {
+  echo "NPM_TOKEN is required (received ${#token} characters)" >&2
   echo "next: set the NPM_TOKEN repository secret — gh-secrets.json declares it" >&2
   exit 1
 }
@@ -50,7 +54,17 @@ publish_if_absent() {
   error="$SCRATCH/npm-view-error.$$"
   if npm view "$spec" --registry "$registry" >/dev/null 2>"$error"; then return; fi
   if grep -Eq 'E404|404 Not Found' "$error"; then
-    npm publish "$@" --registry "$registry" --access public
+    # npm reports a successful publication in a dozen lines of tarball inventory. That is
+    # progress, not the answer, so it is held and replayed only when the publish fails —
+    # at which point every line of it is worth reading.
+    published="$SCRATCH/npm-publish-output.$$"
+    if ! npm publish "$@" --registry "$registry" --access public > "$published" 2>&1; then
+      cat "$published" >&2
+      echo "npm refused to publish $spec" >&2
+      echo "next: fix what npm reported above, then re-run — a package already at this" >&2
+      echo "next: version is left alone rather than republished, so this is safe to retry" >&2
+      exit 1
+    fi
     return
   fi
   cat "$error" >&2

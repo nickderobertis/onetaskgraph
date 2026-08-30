@@ -351,14 +351,19 @@ pub enum EngineError {
         "the copy failed and could not be undone.\n\
          it failed because: {error}\n\
          it could not be undone because: {refusal}\n\
-         so the destination still holds: {left_behind}\n\
-         next: remove those items at the destination, then copy again."
+         so the destination still holds: {}\n\
+         next: remove those items at the destination, then copy again.",
+        left_behind.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
     )]
     CopyNotUndone {
         /// Why the copy failed in the first place.
         error: Box<EngineError>,
-        /// The qualified ids the copy created or overwrote and could not take back.
-        left_behind: String,
+        /// The items the copy created or overwrote and could not take back.
+        ///
+        /// The ids themselves rather than a sentence about them: a caller acting on this —
+        /// removing them, or reporting them — needs the ids, and a joined string is a form
+        /// only the message needs. The message builds one where it is written.
+        left_behind: Vec<GlobalId>,
         /// What the destination said when the copy tried to take them back.
         refusal: SourceError,
     },

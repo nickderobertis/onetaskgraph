@@ -51,7 +51,8 @@ grep -Fq 'published) ;;' <<< "$crate_job" || fail "a crate already on crates.io 
 grep -Fq 'absent) RUSTFLAGS=' <<< "$crate_job" || fail "a crate absent from crates.io must be published"
 grep -Fq -- '--user-agent "$agent"' scripts/crate-publication-status.sh || fail "the crates.io existence query must send an explicit user agent; the registry answers curl's default with 403"
 grep -Fq 'agent="onetaskgraph-release (https://github.com/nickderobertis/onetaskgraph)"' scripts/crate-publication-status.sh || fail "the crates.io user agent must name this release and a contact URL for it"
-grep -Fq 'NPM_TOKEN is required (received ${#NODE_AUTH_TOKEN} characters)' scripts/publish-npm.sh || fail "the npm token guard must report only the received token length"
+grep -Fq 'NPM_TOKEN is required (received ${#token} characters)' scripts/publish-npm.sh || fail "the npm token guard must report only the received token length"
+grep -Fq 'token=${NODE_AUTH_TOKEN:-}' scripts/publish-npm.sh || fail "the npm token must be read through a default before its length is taken; under 'set -u' an unset one ends the script on bash's own diagnostic instead of the guard's message"
 # npm authentication drift is repaired in the publication path rather than in the
 # manifests the generic next action names, so it reports its own.
 fail_npm_auth() { echo "distribution contract drift: $1" >&2; echo "next: restore the npm registry authentication in .github/workflows/release.yml and scripts/npm-registry-auth.sh together" >&2; exit 1; }

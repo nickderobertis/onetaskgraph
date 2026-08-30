@@ -1447,6 +1447,11 @@ impl GitHubProjectsSource {
     ///
     /// Split out of `write_item` so there is one place a failure past the point of no
     /// return is caught, rather than a tidy-up repeated at each `?` above.
+    // llmlint: ignore[suppressions_justified] This is the tail of `write_item` lifted out
+    // so there is one place a failure past the point of no return is caught, and its
+    // arguments are exactly the values that tail already had in scope. Bundling them into a
+    // struct would describe no concept — it would be "the arguments of this function" — and
+    // would put the whole of `write_item`'s locals behind one more indirection.
     #[allow(clippy::too_many_arguments)]
     async fn finish_write(
         &self,
