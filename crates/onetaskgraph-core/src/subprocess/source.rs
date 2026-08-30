@@ -22,8 +22,8 @@ use serde_json::{Value, json};
 
 use super::connection::{Connection, Peer};
 use super::wire::{
-    DependencyParams, EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams,
-    PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request,
+    DeleteParams, DependencyParams, EngineIdentity, IdParams, InitializeParams, InitializeResult,
+    LabelParams, PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request,
     TaskQueryParams, TaskResult, TaskWriteParams, WriteResult,
 };
 
@@ -442,7 +442,28 @@ impl TaskSource for SubprocessSource {
             .await?;
         Ok(result.id)
     }
+
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        let _: IgnoredResult = self
+            .ask("delete_task", params(&DeleteParams { id: id.clone() }))
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        let _: IgnoredResult = self
+            .ask("delete_project", params(&DeleteParams { id: id.clone() }))
+            .await?;
+        Ok(())
+    }
 }
+
+/// The empty object §4.10 answers with, decoded so that `ask` has a type to hand back.
+///
+/// A named type rather than `serde_json::Value` so a plugin answering with something other
+/// than an object is still refused where every other method's answer is.
+#[derive(serde::Deserialize)]
+struct IgnoredResult {}
 
 /// One method's parameters as the object the envelope carries.
 ///

@@ -529,6 +529,13 @@ struct GitHubBoard {
     pending: Vec<Value>,
     blocked_by: Vec<(String, Vec<String>)>,
     created: usize,
+    /// How many of the most recently filed items a board read leaves out.
+    ///
+    /// GitHub's `projectV2.items` is eventually consistent: an issue put on a board with
+    /// `addProjectV2ItemById` is routinely absent from the very next read of that board.
+    /// The board still holds it — every mutation below finds it — and only the *read* is
+    /// behind, which is exactly what this models.
+    lagging_reads: usize,
     /// The board's **own** title, description and readme — a person's, not this
     /// product's. `updateProjectV2` is answered here rather than refused so that a
     /// journey asserting these are byte-identical after a copy fails when something
@@ -705,10 +712,33 @@ pub fn github_projects_failing_a_field_write_once(sandbox: &Sandbox) -> Value {
     .0
 }
 
+/// The same board, whose reads never show the item most recently filed on it.
+///
+/// GitHub's `projectV2.items` is eventually consistent, and a copy that created a task and
+/// then wrote the task depending on it looked the far end up, did not find it, and refused
+/// naming an item that same run had just created. The board here holds every item — every
+/// mutation finds them — and only its read is behind, which is the whole of the hazard.
+pub fn github_projects_reading_one_item_behind(sandbox: &Sandbox) -> Value {
+    github_projects_board_lagging(sandbox, 1)
+}
+
 fn github_projects_board(
     sandbox: &Sandbox,
     recorded: Option<Value>,
     fail_first: Option<&'static str>,
+) -> (Value, GitHubBoardFields) {
+    github_projects_board_at(sandbox, recorded, fail_first, 0)
+}
+
+fn github_projects_board_lagging(sandbox: &Sandbox, lagging_reads: usize) -> Value {
+    github_projects_board_at(sandbox, None, None, lagging_reads).0
+}
+
+fn github_projects_board_at(
+    sandbox: &Sandbox,
+    recorded: Option<Value>,
+    fail_first: Option<&'static str>,
+    lagging_reads: usize,
 ) -> (Value, GitHubBoardFields) {
     sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
@@ -721,6 +751,7 @@ fn github_projects_board(
         pending: Vec::new(),
         blocked_by: github_blockers(),
         created: 0,
+        lagging_reads,
         own: json!({"title":"Fixture board",
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
@@ -861,6 +892,17 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         };
         return json!({root:{"issue":{"id":parent},"subIssue":{"id":child}}});
     }
+    if query.contains("deleteIssue(input:$input)") {
+        let id = input["issueId"].clone();
+        board.items.retain(|item| item["id"] != id);
+        board.pending.retain(|item| item["id"] != id);
+        let id = id.as_str().expect("an issue id").to_owned();
+        board.blocked_by.retain(|(near, _)| *near != id);
+        for (_, blockers) in &mut board.blocked_by {
+            blockers.retain(|blocker| blocker != &id);
+        }
+        return json!({"deleteIssue":{"repository":{"id":"REPO-1"}}});
+    }
     if query.contains("addBlockedBy(input:$input)")
         || query.contains("removeBlockedBy(input:$input)")
     {
@@ -947,15 +989,18 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         offset <= board.items.len(),
         "GraphQL after cursor is out of range"
     );
-    let end = (offset + first).min(board.items.len());
-    let nodes = board.items[offset..end]
+    // The rows a read behind the board's own state can see. `lagging_reads` is how many of
+    // the most recently filed ones it cannot yet; see the field's own documentation.
+    let visible = board.items.len().saturating_sub(board.lagging_reads);
+    let end = (offset + first).min(visible);
+    let nodes = board.items[offset.min(visible)..end]
         .iter()
         .map(|item| board.rendered(item))
         .collect::<Vec<_>>();
     let title = board.own["title"].clone();
     json!({"owner":{"projectV2":{"id":"PVT-board","title":title,
         "fields":GitHubBoard::fields(),
-        "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < board.items.len(),
+        "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < visible,
                                            "endCursor":end.to_string()}}}}})
 }
 

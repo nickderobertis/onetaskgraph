@@ -339,6 +339,29 @@ pub enum EngineError {
         /// What it said.
         error: SourceError,
     },
+
+    /// A copy failed, and the destination could not be put back the way it was found.
+    ///
+    /// A copy is either complete or it never happened, and the engine undoes its own
+    /// writes to make that true. When the destination will not take one of them back, the
+    /// failure has to say so and name what is still there: a user told only that the copy
+    /// failed would copy again over a destination nobody has described to them, which is
+    /// the retry that trips a hosted destination's rate limiter.
+    #[error(
+        "the copy failed and could not be undone.\n\
+         it failed because: {error}\n\
+         it could not be undone because: {refusal}\n\
+         so the destination still holds: {left_behind}\n\
+         next: remove those items at the destination, then copy again."
+    )]
+    CopyNotUndone {
+        /// Why the copy failed in the first place.
+        error: Box<EngineError>,
+        /// The qualified ids the copy created or overwrote and could not take back.
+        left_behind: String,
+        /// What the destination said when the copy tried to take them back.
+        refusal: SourceError,
+    },
 }
 
 /// One configured source, in exactly one of the two states a configured source has.

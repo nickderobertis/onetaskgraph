@@ -89,6 +89,8 @@ METHOD_SECTIONS = {
     "project_dependencies": "### 4.8 `task_dependencies` and `project_dependencies`",
     "write_task": "### 4.9 `write_task` and `write_project`",
     "write_project": "### 4.9 `write_task` and `write_project`",
+    "delete_task": "### 4.10 `delete_task` and `delete_project`",
+    "delete_project": "### 4.10 `delete_task` and `delete_project`",
 }
 
 ENUM_SECTIONS = {

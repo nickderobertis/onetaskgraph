@@ -678,6 +678,12 @@ impl TaskSource for LocalMdSource {
             &write.depends_on,
         )
     }
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.delete_document(DocumentKind::Task, id)
+    }
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.delete_document(DocumentKind::Project, id)
+    }
 }
 impl LocalMdSource {
     fn edges(
@@ -849,6 +855,22 @@ impl LocalMdSource {
             message: format!("cannot write {}: {e}", path.display()),
         })?;
         Ok(id)
+    }
+
+    /// Remove one document, so a copy that could not finish leaves this folder as it was.
+    ///
+    /// An id naming no document is not an error: the file is already gone, which is the
+    /// state this asks for. `existing` refuses that case because an *update* of a missing
+    /// document is a caller mistake, and this is not one.
+    fn delete_document(&self, kind: DocumentKind, id: &NativeId) -> Result<(), SourceError> {
+        let path = match self.existing(kind, id) {
+            Ok(path) => path,
+            Err(SourceError::Refused { .. }) => return Ok(()),
+            Err(other) => return Err(other),
+        };
+        fs::remove_file(&path).map_err(|e| SourceError::Unavailable {
+            message: format!("cannot remove {}: {e}", path.display()),
+        })
     }
 
     /// The path of the document `id` names, refusing when this source holds no such one.

@@ -146,7 +146,7 @@ the source can do natively, and what configuration it is being built with.
   "id": "0",
   "method": "initialize",
   "params": {
-    "protocol_version": 1,
+    "protocol_version": 2,
     "engine": { "name": "onetaskgraph", "version": "0.1.0" },
     "source_name": "work",
     "config": { "root": "/home/someone/notes/tasks" },
@@ -170,7 +170,7 @@ the source can do natively, and what configuration it is being built with.
 {
   "id": "0",
   "result": {
-    "protocol_version": 1,
+    "protocol_version": 2,
     "kind": "local-md",
     "capabilities": {
       "projects": "native",
@@ -267,6 +267,8 @@ its `result`; the JSON shape of every contract type in them is what
 | `project_dependencies` | `TaskSource::project_dependencies` |
 | `write_task` | `TaskSource::write_task` |
 | `write_project` | `TaskSource::write_project` |
+| `delete_task` | `TaskSource::delete_task` |
+| `delete_project` | `TaskSource::delete_project` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -525,6 +527,29 @@ source cannot represent, and a metadata key it cannot carry, are each a
 is refused the same way rather than created, because the engine established that id
 before asking.
 
+### 4.10 `delete_task` and `delete_project`
+
+Only a plugin that answered `"supported"` to §3.3 is ever sent either of these.
+
+```json
+{ "id": "7", "method": "delete_task", "params": { "id": "ENG-1" } }
+```
+
+`id` is the `NativeId` of the item at **this** source to remove. `result` is the empty
+object `{}` — the trait method carries `()`, so there is nothing for it to say beyond
+having done it.
+
+This is not a verb of the product: nothing a user types deletes anything, and the engine
+sends it in one situation only — a copy that could not finish, undoing the items it
+itself created in that run. A copy is either complete or it never happened, because a
+half-written project has to be run again and the re-run is the mutation burst that trips a
+hosted destination's rate limiter.
+
+**An `id` naming nothing is not an error.** The item is already gone, which is the state
+this method asks for, so a plugin answers `{}` rather than refusing. What a plugin does
+refuse is what it refuses everywhere else: no write side at all, or an item it cannot
+remove, each as a `{"kind": "refused"}` saying which.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every
@@ -553,7 +578,13 @@ allowed partial results.
 ## 6. Versions
 
 The protocol version is a single positive integer, carried in the handshake and
-nowhere else. This document specifies version **1**.
+nowhere else. This document specifies version **2**.
+
+Version 2 added §4.10 — `delete_task` and `delete_project`. Adding a method is not safe
+under §2.1: a plugin speaking version 1 has never heard of either, and the one moment the
+engine sends them is while it is undoing a copy that has already written to that plugin.
+Refusing such a plugin at the handshake, by name, is the only place that difference can be
+reported before anything has been written.
 
 A version is bumped when a change is **not** safe under §2.1 — a member removed, a
 type narrowed, a meaning changed, a method removed or renamed. Adding an optional
@@ -580,7 +611,7 @@ The engine sends `initialize` with the version it speaks. Then:
     "id": "0",
     "error": {
       "kind": "config",
-      "message": "protocol version 2 is not supported by this plugin; it speaks version 1"
+      "message": "protocol version 3 is not supported by this plugin; it speaks version 2"
     }
   }
   ```
@@ -618,7 +649,7 @@ line from the other.
 Engine to plugin:
 
 ```
-{"id":"0","method":"initialize","params":{"protocol_version":1,"engine":{"name":"onetaskgraph","version":"0.1.0"},"source_name":"notes","config":{"root":"/home/someone/notes/tasks"},"secrets":{}}}
+{"id":"0","method":"initialize","params":{"protocol_version":2,"engine":{"name":"onetaskgraph","version":"0.1.0"},"source_name":"notes","config":{"root":"/home/someone/notes/tasks"},"secrets":{}}}
 {"id":"1","method":"query_tasks","params":{"query":{"text":null,"labels":{"any_of":[],"all_of":[],"none_of":[]},"statuses":["todo"],"project":"any"},"page":{"cursor":null,"limit":2}}}
 {"id":"2","method":"task_dependencies","params":{"id":"tasks/migrate.md","direction":"depends-on","page":{"cursor":null,"limit":50}}}
 ```
@@ -626,7 +657,7 @@ Engine to plugin:
 Plugin to engine:
 
 ```
-{"id":"0","result":{"protocol_version":1,"kind":"local-md","capabilities":{"projects":"native","orphan_tasks":"native","filter_by_label":"native","filter_by_status":"unsupported","search_title":"native","search_content":"unsupported","task_dependencies":"forward-only","project_dependencies":"forward-only","max_page_size":200}}}
+{"id":"0","result":{"protocol_version":2,"kind":"local-md","capabilities":{"projects":"native","orphan_tasks":"native","filter_by_label":"native","filter_by_status":"unsupported","search_title":"native","search_content":"unsupported","task_dependencies":"forward-only","project_dependencies":"forward-only","max_page_size":200}}}
 {"id":"1","result":{"items":[{"id":"tasks/migrate.md","title":"Migrate the store","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"url":null,"created_at":null,"updated_at":null},{"id":"tasks/schema.md","title":"Settle the schema","content":null,"status":{"category":"in-progress","name":"Doing"},"labels":[],"project":null,"url":null,"created_at":null,"updated_at":null}],"next":"b2Zmc2V0PTI"}}
 {"id":"2","result":{"items":[{"from":"tasks/migrate.md","to":"tasks/schema.md","kind":"blocks"}],"next":null}}
 ```

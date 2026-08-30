@@ -238,6 +238,96 @@ impl Wanted {
     }
 }
 
+/// What the destination held before this copy touched one item.
+///
+/// Read once, in [`Engine::land`], and used three times over: to decide whether the write
+/// would change anything, to repair the item's edges once the rest of the copy has landed,
+/// and — if the copy cannot finish — to put the item back exactly as it was.
+#[derive(Clone)]
+struct Prior {
+    /// The item as the destination held it.
+    item: Item,
+    /// Its forward edges there.
+    edges: Vec<DependencyEdge>,
+}
+
+/// One item that landed with an edge whose far end was not written yet.
+///
+/// Held until every item of the whole copy has landed, because the far end may be in
+/// another project of the same command: a copy of two projects at once is one copied set,
+/// not two, and an edge across them is remapped rather than written as a foreign id.
+struct Deferred {
+    /// The item, as it was read and resolved.
+    item: Planned,
+    /// The destination project it was filed under.
+    filed: Option<NativeId>,
+    /// Where it landed.
+    destination: NativeId,
+    /// What the destination held there before, when it held anything.
+    prior: Option<Prior>,
+}
+
+/// What one item's undo has to do to put the destination back.
+enum Undone {
+    /// The copy created it, so undoing means removing it.
+    Created {
+        /// Which write interface removes it.
+        kind: ItemKind,
+        /// The destination id it was created under.
+        id: NativeId,
+    },
+    /// The copy overwrote something, so undoing means writing that something back.
+    ///
+    /// No `kind` beside the id, unlike the variant above: what was there says which of the
+    /// two write interfaces takes it back, and a second spelling of that could disagree
+    /// with it.
+    Updated {
+        /// The destination id that was overwritten.
+        id: NativeId,
+        /// What was there before.
+        prior: Prior,
+    },
+}
+
+impl Undone {
+    /// The destination id this entry is about.
+    fn id(&self) -> &NativeId {
+        match self {
+            Self::Created { id, .. } | Self::Updated { id, .. } => id,
+        }
+    }
+}
+
+/// Everything one copy has written, in the order it wrote it.
+///
+/// A copy is either complete or it never happened. Half of one leaves a project the user
+/// has to run again, and the re-run is the mutation burst that trips a hosted
+/// destination's secondary rate limiter — which then refuses even reads for the next fifty
+/// minutes. Undoing this run's own writes is what removes the retry at source.
+///
+/// This is not state the engine keeps: it lives for the length of one `copy` call and is
+/// dropped with it, so the invariant that nothing of a user's work is written down outside
+/// the plugin that owns it is untouched.
+#[derive(Default)]
+struct Journal {
+    /// One entry per destination item this copy first touched, in that order.
+    entries: Vec<Undone>,
+}
+
+impl Journal {
+    /// Record what has to happen to put one destination item back.
+    ///
+    /// The *first* entry for an id is the one that matters and later ones are dropped: an
+    /// item written twice — once as it lands, once when its edges are repaired — was only
+    /// ever one thing before this copy started, and that is what undoing it restores.
+    fn record(&mut self, entry: Undone) {
+        if self.entries.iter().any(|held| held.id() == entry.id()) {
+            return;
+        }
+        self.entries.push(entry);
+    }
+}
+
 /// One item, read and resolved, on its way into the destination.
 struct Planned {
     /// Where it came from.
@@ -251,6 +341,7 @@ struct Planned {
 }
 
 /// A task or a project, so the copy path is written once.
+#[derive(Clone)]
 enum Item {
     /// A task.
     Task(Box<Task>),
@@ -290,28 +381,185 @@ impl Engine {
     /// carry, which it names rather than dropping.
     pub async fn copy(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
         let destination = self.writable(&request.destination)?;
+        let mut journal = Journal::default();
+        match self.copy_all(destination, request, &mut journal).await {
+            Ok(report) => Ok(report),
+            Err(error) => Err(self.undo(destination, journal, error).await),
+        }
+    }
+
+    /// The copy itself, with everything it writes recorded so a failure can be undone.
+    ///
+    /// The ids named together are **one** copied set, and that is what makes an edge
+    /// between any two of them a real edge at the destination: a copy of two projects at
+    /// once knows that a task in the first depends on a task in the second, and a task
+    /// knows that the project it belongs to is being created beside it. Copying them one
+    /// at a time could not, and wrote the far end as the id it had at its *source* — a
+    /// dangling reference to somewhere the destination has never heard of.
+    async fn copy_all(
+        &self,
+        destination: &ResolvedSource,
+        request: &CopyRequest,
+        journal: &mut Journal,
+    ) -> Result<CopyReport, EngineError> {
+        // Keyed by the qualified id's own rendering, which is what a recorded origin holds
+        // anyway — making `GlobalId` orderable for one local map would put an ordering on
+        // a contract type for a reason no caller of it has.
+        let mut written: BTreeMap<String, NativeId> = BTreeMap::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
+        // The whole copied set, established before anything is written. For a project
+        // copy that means reading every named project's membership first: the set is the
+        // whole request rather than one project of it.
+        let mut membership = Vec::new();
+        let mut copied = Vec::new();
         match request.scope {
-            // Every id at once, because the ids named together are the copied set: an
-            // edge between two of them is recreated at the destination, and one item at a
-            // time could not know that the far end was coming.
-            CopyScope::Tasks => Ok(CopyReport {
-                items: self
-                    .copy_items(
-                        destination,
-                        request,
-                        ItemKind::Task,
-                        request.items.as_slice(),
-                        None,
-                    )
-                    .await?,
-            }),
+            CopyScope::Tasks => copied.extend(request.items.as_slice().iter().cloned()),
+            CopyScope::Projects { tasks } => {
+                for id in request.items.as_slice() {
+                    let members = if tasks {
+                        self.project_members(id).await?
+                    } else {
+                        Vec::new()
+                    };
+                    copied.push(id.clone());
+                    copied.extend(members.iter().cloned());
+                    membership.push((id.clone(), members));
+                }
+            }
+        }
+        let items = match request.scope {
+            CopyScope::Tasks => {
+                self.copy_items(
+                    destination,
+                    request,
+                    ItemKind::Task,
+                    request.items.as_slice(),
+                    None,
+                    &copied,
+                    &mut written,
+                    &mut deferred,
+                    journal,
+                )
+                .await?
+            }
             CopyScope::Projects { tasks } => {
                 let mut items = Vec::new();
-                for id in request.items.as_slice() {
-                    items.extend(self.copy_project(destination, request, id, tasks).await?);
+                for (id, members) in &membership {
+                    items.extend(
+                        self.copy_project(
+                            destination,
+                            request,
+                            id,
+                            members,
+                            tasks,
+                            &copied,
+                            &mut written,
+                            &mut deferred,
+                            journal,
+                        )
+                        .await?,
+                    );
                 }
-                Ok(CopyReport { items })
+                items
             }
+        };
+        self.repair(destination, request, &copied, &written, deferred, journal)
+            .await?;
+        Ok(CopyReport { items })
+    }
+
+    /// Write every deferred item again, now that every destination id is known.
+    ///
+    /// This is the second half of the two passes an edge between two items of one copy
+    /// needs: the far end's destination id does not exist until it has been created, so
+    /// the item that points at it lands first without that edge and is completed here.
+    /// It runs once for the whole request rather than once per project, because a far end
+    /// may be in a project this copy has not reached yet.
+    async fn repair(
+        &self,
+        destination: &ResolvedSource,
+        request: &CopyRequest,
+        copied: &[GlobalId],
+        written: &BTreeMap<String, NativeId>,
+        deferred: Vec<Deferred>,
+        journal: &mut Journal,
+    ) -> Result<(), EngineError> {
+        if request.dry_run {
+            return Ok(());
+        }
+        for entry in deferred {
+            let edges = mapped_edges(
+                &entry.item.edges,
+                &entry.item.source.source,
+                destination,
+                copied,
+                written,
+            );
+            self.write(
+                destination,
+                &entry.item,
+                Some(entry.destination),
+                entry.filed,
+                &resolved(&edges),
+                entry.prior,
+                journal,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Put the destination back the way this copy found it, then report why it failed.
+    ///
+    /// Undone in reverse, and an item this copy created is removed rather than restored —
+    /// the entry recording what it looked like a moment after creation is not a state
+    /// anybody asked for. When the destination cannot take one of them back, the refusal
+    /// says so and names what is still there, because a user told "the copy failed" about
+    /// a destination that is not as they left it will copy again over a tree nobody
+    /// described.
+    async fn undo(
+        &self,
+        destination: &ResolvedSource,
+        journal: Journal,
+        error: EngineError,
+    ) -> EngineError {
+        let created: Vec<&NativeId> = journal
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Undone::Created { id, .. } => Some(id),
+                Undone::Updated { .. } => None,
+            })
+            .collect();
+        let mut left_behind = Vec::new();
+        let mut refusal = None;
+        for entry in journal.entries.iter().rev() {
+            let outcome = match entry {
+                Undone::Created { kind, id } => remove(destination, *kind, id).await,
+                Undone::Updated { id, prior, .. } if !created.contains(&id) => {
+                    restore(destination, id, prior).await
+                }
+                Undone::Updated { .. } => Ok(()),
+            };
+            if let Err(problem) = outcome {
+                left_behind.push(GlobalId::new(
+                    destination.name().clone(),
+                    entry.id().clone(),
+                ));
+                refusal.get_or_insert(problem);
+            }
+        }
+        match refusal {
+            None => error,
+            Some(refusal) => EngineError::CopyNotUndone {
+                error: Box::new(error),
+                left_behind: left_behind
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                refusal,
+            },
         }
     }
 
@@ -338,31 +586,30 @@ impl Engine {
     }
 
     /// Copy one project and, unless they are excluded, every task in it.
+    #[allow(clippy::too_many_arguments)]
     async fn copy_project(
         &self,
         destination: &ResolvedSource,
         request: &CopyRequest,
         id: &GlobalId,
+        members: &[GlobalId],
         tasks: bool,
+        copied: &[GlobalId],
+        written: &mut BTreeMap<String, NativeId>,
+        deferred: &mut Vec<Deferred>,
+        journal: &mut Journal,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
-        let members = if tasks {
-            self.project_members(id).await?
-        } else {
-            Vec::new()
-        };
         // On a repeat copy, compare the project with its final remapped edges before the
         // first pass temporarily rewrites it. This preserves an `unchanged` outcome when
         // the project and every copied member already have counterparts.
         let project_plan = self
             .plan(destination, request, ItemKind::Project, id)
             .await?;
-        let mut copied = vec![id.clone()];
-        copied.extend(members.iter().cloned());
         let mut known = BTreeMap::new();
         if let Target::Update(target) = &project_plan.target {
             known.insert(id.to_string(), target.clone());
         }
-        for member in &members {
+        for member in members {
             let member_plan = self
                 .plan(destination, request, ItemKind::Task, member)
                 .await?;
@@ -371,17 +618,16 @@ impl Engine {
             }
         }
         let project_was_unchanged = if let Target::Update(target) = &project_plan.target {
-            let edges = mapped_edges(
-                &project_plan.edges,
-                &id.source,
-                destination,
-                &copied,
-                &known,
-            );
+            let edges = mapped_edges(&project_plan.edges, &id.source, destination, copied, &known);
+            let held = self.prior(destination, ItemKind::Project, target).await?;
             !edges.iter().any(Option::is_none)
-                && !self
-                    .changes(destination, &project_plan, target, &None, &resolved(&edges))
-                    .await?
+                && !changes(
+                    held.as_ref(),
+                    &project_plan,
+                    target,
+                    &None,
+                    &resolved(&edges),
+                )
         } else {
             false
         };
@@ -392,6 +638,10 @@ impl Engine {
                 ItemKind::Project,
                 std::slice::from_ref(id),
                 None,
+                copied,
+                written,
+                deferred,
+                journal,
             )
             .await?;
         if !tasks {
@@ -406,47 +656,23 @@ impl Engine {
                 destination,
                 request,
                 ItemKind::Task,
-                &members,
+                members,
                 project.as_ref().map(|project| project.native.clone()),
+                copied,
+                written,
+                deferred,
+                journal,
             )
             .await?;
         outcomes.extend(task_outcomes);
         if let Some(project) = project {
-            if !request.dry_run {
-                // The project was necessarily written before its members so they could
-                // be filed under it. Now every destination id is known, repair project
-                // edges whose far ends are tasks in the copied set.
-                let planned = self
-                    .plan(destination, request, ItemKind::Project, id)
-                    .await?;
-                let mut copied = vec![id.clone()];
-                copied.extend(members.iter().cloned());
-                let written: BTreeMap<String, NativeId> = outcomes
-                    .iter()
-                    .filter_map(|outcome| {
-                        outcome.destination().map(|destination| {
-                            (outcome.source.to_string(), destination.native.clone())
-                        })
-                    })
-                    .collect();
-                let edges =
-                    mapped_edges(&planned.edges, &id.source, destination, &copied, &written);
-                self.write(
-                    destination,
-                    &planned,
-                    Some(project.native.clone()),
-                    self.filed(destination, &planned, None).await?,
-                    &resolved(&edges),
-                )
-                .await?;
-            }
             if project_was_unchanged {
                 outcomes[0].action = CopyAction::Unchanged {
                     destination: project.clone(),
                 };
             }
             outcomes.extend(
-                self.orphans(destination, id, &project.native, &members)
+                self.orphans(destination, id, &project.native, members)
                     .await?,
             );
         }
@@ -524,11 +750,15 @@ impl Engine {
         }
     }
 
-    /// Read, resolve and write every item named, then repair the edges among them.
+    /// Read, resolve and write every item named, holding back the ones whose edges are
+    /// not resolvable yet.
     ///
-    /// Two passes, because an edge between two items of one copy can point at a member
-    /// whose destination id is not known until it has been created. The second pass runs
-    /// only for the items that had one.
+    /// An edge between two items of one copy can point at a member whose destination id
+    /// does not exist until it has been created, so the item that points at it lands
+    /// without that edge and is handed to `deferred`. [`Engine::repair`] finishes it once
+    /// the *whole* request has landed — not once this call has, because the far end may
+    /// be in another project of the same command.
+    #[allow(clippy::too_many_arguments)]
     async fn copy_items(
         &self,
         destination: &ResolvedSource,
@@ -536,24 +766,23 @@ impl Engine {
         kind: ItemKind,
         items: &[GlobalId],
         project: Option<NativeId>,
+        copied: &[GlobalId],
+        written: &mut BTreeMap<String, NativeId>,
+        deferred: &mut Vec<Deferred>,
+        journal: &mut Journal,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
         let mut planned = Vec::new();
         for id in items {
             planned.push(self.plan(destination, request, kind, id).await?);
         }
 
-        let copied: Vec<GlobalId> = planned.iter().map(|item| item.source.clone()).collect();
-        // Keyed by the qualified id's own rendering, which is what a recorded origin holds
-        // anyway — making `GlobalId` orderable for one local map would put an ordering on
-        // a contract type for a reason no caller of it has.
-        let mut written: BTreeMap<String, NativeId> = BTreeMap::new();
         for item in &planned {
             if let Target::Update(id) = &item.target {
                 written.insert(item.source.to_string(), id.clone());
             }
         }
 
-        // Resolved once per item, and used by both passes: the second pass writes the
+        // Resolved once per item, and used by both passes: the repair pass writes the
         // same item again, and re-deriving this there could file it somewhere else.
         let mut filed = Vec::new();
         for item in &planned {
@@ -561,50 +790,51 @@ impl Engine {
         }
 
         let mut outcomes = Vec::new();
-        let mut deferred = Vec::new();
+        let mut unresolved = Vec::new();
+        let mut priors = Vec::new();
         for (index, item) in planned.iter().enumerate() {
             let edges = mapped_edges(
                 &item.edges,
                 &item.source.source,
                 destination,
-                &copied,
-                &written,
+                copied,
+                written,
             );
             if edges.iter().any(Option::is_none) {
-                deferred.push(index);
+                unresolved.push(index);
             }
-            let outcome = self
-                .land(destination, request, item, filed[index].clone(), &edges)
+            let (outcome, prior) = self
+                .land(
+                    destination,
+                    request,
+                    item,
+                    filed[index].clone(),
+                    &edges,
+                    journal,
+                )
                 .await?;
             if let Some(id) = outcome.destination() {
                 written.insert(item.source.to_string(), id.native.clone());
             }
             outcomes.push(outcome);
+            priors.push(prior);
         }
 
-        if request.dry_run {
-            return Ok(outcomes);
-        }
-        for index in deferred {
-            let item = &planned[index];
-            let Some(id) = outcomes[index].destination().cloned() else {
-                continue;
-            };
-            let edges = mapped_edges(
-                &item.edges,
-                &item.source.source,
-                destination,
-                &copied,
-                &written,
-            );
-            self.write(
-                destination,
-                item,
-                Some(id.native),
-                filed[index].clone(),
-                &resolved(&edges),
-            )
-            .await?;
+        if !request.dry_run {
+            for (index, item) in planned.into_iter().enumerate() {
+                if !unresolved.contains(&index) {
+                    continue;
+                }
+                let Some(id) = outcomes[index].destination().cloned() else {
+                    continue;
+                };
+                deferred.push(Deferred {
+                    item,
+                    filed: filed[index].clone(),
+                    destination: id.native,
+                    prior: priors[index].clone(),
+                });
+            }
         }
         Ok(outcomes)
     }
@@ -735,6 +965,10 @@ impl Engine {
     }
 
     /// Write one planned item, or say what a dry run would have done.
+    ///
+    /// Answers with what the destination held there beforehand as well, which is what
+    /// makes an item written twice restorable to what it was rather than to what this
+    /// copy's first pass left.
     async fn land(
         &self,
         destination: &ResolvedSource,
@@ -742,54 +976,76 @@ impl Engine {
         item: &Planned,
         project: Option<NativeId>,
         edges: &[Option<DependencyEdge>],
-    ) -> Result<CopyOutcome, EngineError> {
+        journal: &mut Journal,
+    ) -> Result<(CopyOutcome, Option<Prior>), EngineError> {
         let target = match &item.target {
             Target::Update(id) => Some(id.clone()),
             Target::Create => None,
         };
+        // One read of the destination item, used to decide whether the write changes
+        // anything and — if the copy cannot finish — to put that item back.
+        let prior = match &target {
+            Some(id) => self.prior(destination, item.item.kind(), id).await?,
+            None => None,
+        };
         let edges = resolved(edges);
         let qualified = |native: NativeId| GlobalId::new(destination.name().clone(), native);
         if let Some(id) = &target
-            && !self
-                .changes(destination, item, id, &project, &edges)
-                .await?
+            && !changes(prior.as_ref(), item, id, &project, &edges)
         {
-            return Ok(CopyOutcome {
-                source: item.source.clone(),
-                action: CopyAction::Unchanged {
-                    destination: qualified(id.clone()),
+            return Ok((
+                CopyOutcome {
+                    source: item.source.clone(),
+                    action: CopyAction::Unchanged {
+                        destination: qualified(id.clone()),
+                    },
                 },
-            });
+                prior,
+            ));
         }
         if request.dry_run {
-            return Ok(CopyOutcome {
-                source: item.source.clone(),
-                action: match target {
-                    Some(id) => CopyAction::Updated {
-                        destination: qualified(id),
+            return Ok((
+                CopyOutcome {
+                    source: item.source.clone(),
+                    action: match target {
+                        Some(id) => CopyAction::Updated {
+                            destination: qualified(id),
+                        },
+                        // Null only here: nothing was created, so there is no id to report.
+                        None => CopyAction::Created { destination: None },
                     },
-                    // Null only here: nothing was created, so there is no id to report.
-                    None => CopyAction::Created { destination: None },
                 },
-            });
+                prior,
+            ));
         }
         let updating = target.is_some();
         let written = qualified(
-            self.write(destination, item, target, project, &edges)
-                .await?,
+            self.write(
+                destination,
+                item,
+                target,
+                project,
+                &edges,
+                prior.clone(),
+                journal,
+            )
+            .await?,
         );
-        Ok(CopyOutcome {
-            source: item.source.clone(),
-            action: if updating {
-                CopyAction::Updated {
-                    destination: written,
-                }
-            } else {
-                CopyAction::Created {
-                    destination: Some(written),
-                }
+        Ok((
+            CopyOutcome {
+                source: item.source.clone(),
+                action: if updating {
+                    CopyAction::Updated {
+                        destination: written,
+                    }
+                } else {
+                    CopyAction::Created {
+                        destination: Some(written),
+                    }
+                },
             },
-        })
+            prior,
+        ))
     }
 
     /// Which destination project this item is filed under, when it is filed at all.
@@ -834,41 +1090,41 @@ impl Engine {
         Ok(Some(found.unwrap_or_else(|| project.clone())))
     }
 
-    /// Whether writing this item would change what the destination already holds.
-    async fn changes(
+    /// What the destination holds at one id, item and forward edges together.
+    ///
+    /// One read for both purposes it serves — deciding whether a write changes anything,
+    /// and putting the item back if the copy cannot finish — because a second read of the
+    /// same item is a second round trip against a hosted destination for nothing.
+    async fn prior(
         &self,
         destination: &ResolvedSource,
-        item: &Planned,
-        target: &NativeId,
-        project: &Option<NativeId>,
-        edges: &[DependencyEdge],
-    ) -> Result<bool, EngineError> {
-        let held = match &item.item {
-            Item::Task(_) => destination
+        kind: ItemKind,
+        id: &NativeId,
+    ) -> Result<Option<Prior>, EngineError> {
+        let held = match kind {
+            ItemKind::Task => destination
                 .source()
-                .get_task(target)
+                .get_task(id)
                 .await
                 .map_err(|error| refused(destination, error))?
                 .map(|task| Item::Task(Box::new(task))),
-            Item::Project(_) => destination
+            ItemKind::Project => destination
                 .source()
-                .get_project(target)
+                .get_project(id)
                 .await
                 .map_err(|error| refused(destination, error))?
                 .map(|project| Item::Project(Box::new(project))),
         };
-        let Some(held) = held else {
-            return Ok(true);
+        let Some(item) = held else {
+            return Ok(None);
         };
-        let outgoing = outgoing(item, target.clone(), project.clone());
-        if !same(&held, &outgoing) {
-            return Ok(true);
-        }
-        let at_destination = forward_edges(destination, target, item.item.kind()).await?;
-        Ok(!same_edges(&at_destination, edges))
+        let edges = forward_edges(destination, id, kind).await?;
+        Ok(Some(Prior { item, edges }))
     }
 
-    /// Hand one item to the destination's own write interface.
+    /// Hand one item to the destination's own write interface, recording how to take it
+    /// back.
+    #[allow(clippy::too_many_arguments)]
     async fn write(
         &self,
         destination: &ResolvedSource,
@@ -876,28 +1132,42 @@ impl Engine {
         target: Option<NativeId>,
         project: Option<NativeId>,
         edges: &[DependencyEdge],
+        prior: Option<Prior>,
+        journal: &mut Journal,
     ) -> Result<NativeId, EngineError> {
+        let created_kind = item.item.kind();
         let suggested = target.clone().unwrap_or_else(|| item.item.id().clone());
-        match outgoing(item, suggested, project) {
+        let landed = match outgoing(item, suggested, project) {
             Item::Task(task) => destination
                 .source()
                 .write_task(&ItemWrite {
-                    target,
+                    target: target.clone(),
                     item: *task,
                     depends_on: edges.to_vec(),
                 })
                 .await
-                .map_err(|error| refused(destination, error)),
+                .map_err(|error| refused(destination, error))?,
             Item::Project(project) => destination
                 .source()
                 .write_project(&ItemWrite {
-                    target,
+                    target: target.clone(),
                     item: *project,
                     depends_on: edges.to_vec(),
                 })
                 .await
-                .map_err(|error| refused(destination, error)),
+                .map_err(|error| refused(destination, error))?,
+        };
+        match (target, prior) {
+            (None, _) => journal.record(Undone::Created {
+                kind: created_kind,
+                id: landed.clone(),
+            }),
+            (Some(id), Some(prior)) => journal.record(Undone::Updated { id, prior }),
+            // A target the destination did not hold: the write above would have refused
+            // rather than created, so there is nothing here to take back.
+            (Some(_), None) => {}
         }
+        Ok(landed)
     }
 
     /// A configured source that built, for reading an item out of.
@@ -926,6 +1196,65 @@ fn request_for(
     PageRequest {
         cursor,
         limit: source.source().capabilities().max_page_size.max(1),
+    }
+}
+
+/// Whether writing this item would change what the destination already holds.
+///
+/// A free function over the state already read rather than a method that reads it again:
+/// the same answer is wanted where the item is landed and where a repeat copy of a project
+/// decides whether it settled, and a second read there is a second round trip for nothing.
+fn changes(
+    held: Option<&Prior>,
+    item: &Planned,
+    target: &NativeId,
+    project: &Option<NativeId>,
+    edges: &[DependencyEdge],
+) -> bool {
+    let Some(held) = held else {
+        return true;
+    };
+    let outgoing = outgoing(item, target.clone(), project.clone());
+    !same(&held.item, &outgoing) || !same_edges(&held.edges, edges)
+}
+
+/// Remove one item this copy created, through the destination's own write interface.
+async fn remove(
+    destination: &ResolvedSource,
+    kind: ItemKind,
+    id: &NativeId,
+) -> Result<(), SourceError> {
+    match kind {
+        ItemKind::Task => destination.source().delete_task(id).await,
+        ItemKind::Project => destination.source().delete_project(id).await,
+    }
+}
+
+/// Write one item back exactly as the destination held it before this copy.
+async fn restore(
+    destination: &ResolvedSource,
+    id: &NativeId,
+    prior: &Prior,
+) -> Result<(), SourceError> {
+    match &prior.item {
+        Item::Task(task) => destination
+            .source()
+            .write_task(&ItemWrite {
+                target: Some(id.clone()),
+                item: (**task).clone(),
+                depends_on: prior.edges.clone(),
+            })
+            .await
+            .map(|_| ()),
+        Item::Project(project) => destination
+            .source()
+            .write_project(&ItemWrite {
+                target: Some(id.clone()),
+                item: (**project).clone(),
+                depends_on: prior.edges.clone(),
+            })
+            .await
+            .map(|_| ()),
     }
 }
 

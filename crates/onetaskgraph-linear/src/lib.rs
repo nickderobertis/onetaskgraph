@@ -135,7 +135,7 @@ pub mod graphql {
     /// Delete a native project dependency before replacing its full edge set.
     pub const PROJECT_RELATION_DELETE: &str =
         "mutation($id:String!){ projectRelationDelete(id:$id){success} }";
-    /// Delete an issue created only by the ignored live write journey.
+    /// Delete an issue, so a copy that could not finish can take back what it created.
     pub const ISSUE_DELETE: &str = "mutation($id:String!){ issueDelete(id:$id){success} }";
 }
 
@@ -320,6 +320,7 @@ enum MutationRoot {
     ProjectRelationCreate,
     IssueRelationDelete,
     ProjectRelationDelete,
+    IssueDelete,
 }
 impl MutationRoot {
     fn as_str(self) -> &'static str {
@@ -332,6 +333,7 @@ impl MutationRoot {
             Self::ProjectRelationCreate => "projectRelationCreate",
             Self::IssueRelationDelete => "issueRelationDelete",
             Self::ProjectRelationDelete => "projectRelationDelete",
+            Self::IssueDelete => "issueDelete",
         }
     }
 }
@@ -905,6 +907,32 @@ impl TaskSource for LinearSource {
         self.write_relations(&id, &edges, WriteKind::Project)
             .await?;
         Ok(id)
+    }
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        // An id naming nothing is the state this asks for, not an error — Linear reports
+        // an unknown issue as an errored response rather than an unsuccessful payload, and
+        // `get_task` answering `None` is what says the item is already gone.
+        if self.get_task(id).await?.is_none() {
+            return Ok(());
+        }
+        let data = self.send(graphql::ISSUE_DELETE, json!({"id":id.0})).await?;
+        mutation_payload(&data, MutationRoot::IssueDelete)?;
+        Ok(())
+    }
+    async fn delete_project(&self, _id: &NativeId) -> Result<(), SourceError> {
+        // The pinned schema subset this plugin is written against
+        // (`tests/fixtures/schema.graphql`, recorded 2026-08-24) carries `issueDelete` and
+        // no project delete, and inventing a mutation nobody observed is how a plugin
+        // starts sending Linear operations this repository cannot check. So this refuses,
+        // naming what the refusal costs, rather than guessing: a copy of a project into
+        // Linear that fails partway reports what it left behind instead of removing it.
+        // Recorded in docs/follow-ups.md.
+        Err(SourceError::Refused {
+            message: "the linear plugin cannot remove a project: the schema subset it is \
+                      written against records no project delete, so a copy that fails partway \
+                      names the project it created rather than taking it back"
+                .into(),
+        })
     }
 }
 

@@ -381,6 +381,7 @@ impl TaskSource for InMemorySource {
 
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.writable(&write.item.metadata)?;
+        self.creatable(write.target.as_ref(), &write.item.title)?;
         let mut held = self.held()?;
         let id = match &write.target {
             Some(target) => {
@@ -409,6 +410,7 @@ impl TaskSource for InMemorySource {
 
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
         self.writable(&write.item.metadata)?;
+        self.creatable(write.target.as_ref(), &write.item.title)?;
         let mut held = self.held()?;
         let id = match &write.target {
             Some(target) => {
@@ -436,6 +438,32 @@ impl TaskSource for InMemorySource {
         let edges = rooted(&write.depends_on, &id, ItemKind::Project);
         replace_edges(&mut held.project_dependencies, &id, edges);
         Ok(id)
+    }
+
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.deletable(id)?;
+        let mut held = self.held()?;
+        held.tasks.retain(|task| &task.id != id);
+        held.task_dependencies
+            .retain(|edge| edge.from.id() != id.0 && edge.to.id() != id.0);
+        Ok(())
+    }
+
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.deletable(id)?;
+        let mut held = self.held()?;
+        held.projects.retain(|project| &project.id != id);
+        held.project_dependencies
+            .retain(|edge| edge.from.id() != id.0 && edge.to.id() != id.0);
+        // A task filed under a project that is gone is an orphan, not a task filed under
+        // nothing that exists: leaving the id would make `get_task` report membership of
+        // a project no query can reach.
+        for task in &mut held.tasks {
+            if task.project.as_ref() == Some(id) {
+                task.project = None;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -467,6 +495,53 @@ impl InMemorySource {
                 "cannot carry the metadata key(s) {}; next: remove them from the item being \
                  copied, or copy into a source that holds them",
                 refused.join(", ")
+            ),
+        })
+    }
+
+    /// Refuse a *create* this source's configuration says it will not take.
+    ///
+    /// A write naming a target is an update of an item that is already here, and an update
+    /// is not what leaves a half-written destination behind — so only the create is
+    /// checked. See [`CapabilityConfig::uncreatable_titles`] for why this is configurable.
+    fn creatable(&self, target: Option<&NativeId>, title: &str) -> Result<(), SourceError> {
+        if target.is_some() {
+            return Ok(());
+        }
+        if !self
+            .declared()
+            .uncreatable_titles
+            .iter()
+            .any(|refused| refused == title)
+        {
+            return Ok(());
+        }
+        Err(SourceError::Refused {
+            message: format!(
+                "this source will not create an item titled {title:?}; next: retitle it, or \
+                 copy into a source that takes it"
+            ),
+        })
+    }
+
+    /// Refuse a delete a source with no write side has no business doing, and one its
+    /// configuration says it will not take.
+    fn deletable(&self, id: &NativeId) -> Result<(), SourceError> {
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        if !self
+            .declared()
+            .undeletable_ids
+            .iter()
+            .any(|refused| refused == &id.0)
+        {
+            return Ok(());
+        }
+        Err(SourceError::Refused {
+            message: format!(
+                "this source will not remove {id}; next: remove it here by hand, or copy \
+                 into a source that takes it back"
             ),
         })
     }

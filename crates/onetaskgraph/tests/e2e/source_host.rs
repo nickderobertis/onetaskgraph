@@ -58,7 +58,7 @@ fn handshake() -> Value {
         "id": "0",
         "method": "initialize",
         "params": {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "engine": {"name": "onetaskgraph", "version": "0.1.0"},
             "source_name": "work",
             "config": {"tasks": [{
@@ -99,7 +99,7 @@ fn the_shipped_host_answers_a_connection_on_its_standard_input_and_exits_zero() 
         .collect();
     assert_eq!(lines.len(), 2, "one answer per request: {answered}");
     assert_eq!(lines[0]["id"], "0");
-    assert_eq!(lines[0]["result"]["protocol_version"], 1);
+    assert_eq!(lines[0]["result"]["protocol_version"], 2);
     assert_eq!(lines[0]["result"]["kind"], "in-memory");
     assert_eq!(lines[1]["id"], "1");
     assert!(lines[1]["result"]["items"].is_array(), "{answered}");
@@ -141,7 +141,7 @@ fn the_shipped_host_reports_malformed_plugin_settings_on_the_wire() {
 #[test]
 fn a_protocol_version_the_shipped_host_does_not_know_is_refused_and_it_exits_zero() {
     let mut asked = handshake();
-    asked["params"]["protocol_version"] = json!(2);
+    asked["params"]["protocol_version"] = json!(3);
 
     let mut child = source_host()
         .stdin(Stdio::piped())
@@ -164,7 +164,7 @@ fn a_protocol_version_the_shipped_host_does_not_know_is_refused_and_it_exits_zer
         .as_str()
         .expect("a message to read");
     assert!(
-        message.contains("version 2") && message.contains("version 1"),
+        message.contains("version 3") && message.contains("version 2"),
         "{message}"
     );
 }
@@ -244,7 +244,7 @@ impl Hosted {
             "id": "0",
             "method": "initialize",
             "params": {
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "engine": {"name": "onetaskgraph", "version": "0.1.0"},
                 "source_name": "work",
                 "config": self.config,
@@ -276,7 +276,7 @@ fn answers(mut command: Command, handshake: &Value, requests: &[Value]) -> Vec<V
         .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
         .collect();
     assert_eq!(lines.len(), requests.len() + 1, "{answered}");
-    assert_eq!(lines[0]["result"]["protocol_version"], 1, "{answered}");
+    assert_eq!(lines[0]["result"]["protocol_version"], 2, "{answered}");
     lines[1..].to_vec()
 }
 

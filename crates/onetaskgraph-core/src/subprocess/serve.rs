@@ -21,9 +21,9 @@ use serde_json::{Value, json};
 
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
-    DependencyParams, HandshakePluginKind, IdParams, InitializeParams, InitializeResult,
-    LabelParams, PROTOCOL_VERSION, ProjectQueryParams, ProjectWriteParams, Request, Response,
-    TaskQueryParams, TaskWriteParams,
+    DeleteParams, DependencyParams, HandshakePluginKind, IdParams, InitializeParams,
+    InitializeResult, LabelParams, PROTOCOL_VERSION, ProjectQueryParams, ProjectWriteParams,
+    Request, Response, TaskQueryParams, TaskWriteParams,
 };
 use crate::registry::PluginKind;
 
@@ -336,6 +336,16 @@ async fn dispatch(
         "write_project" => {
             let params: ProjectWriteParams = decode(method, params)?;
             encode(json!({ "id": source.write_project(&params.write).await? }))
+        }
+        "delete_task" => {
+            let params: DeleteParams = decode(method, params)?;
+            source.delete_task(&params.id).await?;
+            encode(json!({}))
+        }
+        "delete_project" => {
+            let params: DeleteParams = decode(method, params)?;
+            source.delete_project(&params.id).await?;
+            encode(json!({}))
         }
         other => Err(SourceError::Malformed {
             message: format!("protocol version {PROTOCOL_VERSION} has no method called {other:?}"),

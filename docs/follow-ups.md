@@ -38,3 +38,26 @@ otherwise fail, naming the row and the field — and deleting this entry and the
 the field line above and fails while it names a capability that plugin no longer calls
 unsupported, so the entry cannot outlive the gap it describes.
 
+
+## Linear: a project this source created cannot be removed again
+
+A copy is either complete or it leaves the destination as it found it, and the engine makes
+that true by undoing the writes of a copy that could not finish — through
+`TaskSource::delete_task` and `TaskSource::delete_project`. `onetaskgraph-linear` implements
+the first with `issueDelete` and refuses the second, naming what the refusal costs. So a
+*project* copy into Linear that fails part way reports the project it created and leaves it
+there, rather than taking it back; every other destination this repository ships takes both
+back, and `EngineError::CopyNotUndone` is what names the difference to the user rather than
+their discovering it on the board.
+
+It is a gap rather than a limit, and the gap is deliberate about *evidence*. This crate is
+written against a pinned subset of Linear's schema —
+`crates/onetaskgraph-linear/tests/fixtures/schema.graphql`, recorded on 2026-08-24 — and
+that subset carries `issueDelete` and no project delete. Adding a mutation nobody observed
+is how a plugin starts sending Linear operations this repository cannot check, and the
+pinned-schema test would be checking an invention against itself.
+
+Closing it means: re-observing Linear's published schema, pinning the project-delete
+mutation there if it carries one, implementing `delete_project` against it, and deleting
+this entry and the comment on that method in the same change. If the observation says
+Linear has no such mutation, this stops being a gap and the comment becomes the ruling.

@@ -11,10 +11,10 @@
 use std::num::NonZeroU32;
 
 use onetaskgraph_core::{
-    Config, CopyAction, CopyItems, CopyOutcome, CopyRequest, CopyScope, Engine, EngineError,
-    GlobalId, MatchBy, Paging, TaskRequest,
+    Config, CopyAction, CopyItems, CopyOutcome, CopyRequest, CopyScope, DependencyRequest, Engine,
+    EngineError, GlobalId, MatchBy, Paging, TaskRequest,
 };
-use onetaskgraph_plugin_api::{SecretResolver, SourceName};
+use onetaskgraph_plugin_api::{Direction, SecretResolver, SourceName};
 use secrecy::SecretString;
 use serde_json::{Value, json};
 
@@ -690,4 +690,211 @@ async fn the_scan_that_finds_a_counterpart_walks_the_destination_a_page_at_a_tim
         landed(&copied.items[0]),
         (Some("into:C".to_owned()), "updated".to_owned())
     );
+}
+
+/// Two projects, with the dependencies that only one copied set can resolve: a task on its
+/// sibling, a task on a task in the *other* named project, and a project on that project.
+fn interlinked() -> Value {
+    json!({"plugin": "in-memory", "config": {
+        "projects": [
+            {"id": "P-1", "title": "Engine",
+             "status": {"category": "todo", "name": "Todo"}, "labels": []},
+            {"id": "P-2", "title": "Docs",
+             "status": {"category": "todo", "name": "Todo"}, "labels": []},
+        ],
+        "tasks": [
+            {"id": "T-1", "title": "Alpha engine",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"},
+            {"id": "T-2", "title": "Beta",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"},
+            {"id": "T-3", "title": "Gamma",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-2"},
+        ],
+        "task_dependencies": [
+            {"from": "T-1", "to": "T-2", "kind": "blocks"},
+            {"from": "T-1", "to": "T-3", "kind": "blocks"},
+        ],
+        "project_dependencies": [
+            {"from": "P-1", "to": "P-2", "kind": "blocks"},
+        ],
+    }})
+}
+
+/// Every forward edge at one item, as `<far id> <kind>` pairs.
+async fn depends_on(engine: &Engine, near: &str) -> Vec<String> {
+    let response = engine
+        .task_dependencies(&DependencyRequest {
+            id: id(near),
+            direction: Direction::DependsOn,
+            paging: Paging {
+                limit: NonZeroU32::new(50).expect("a non-zero limit"),
+                token: None,
+            },
+        })
+        .await
+        .expect("the dependency verb answers");
+    assert!(
+        response.errors.is_empty(),
+        "a dependency read must not fail: {:?}",
+        response.errors
+    );
+    response
+        .items
+        .into_iter()
+        .map(|edge| format!("{} {:?}", edge.to.id, edge.to.kind))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_copy_resolves_a_dependency_on_an_item_it_created_in_the_same_run() {
+    // The defect: a copy could not see the items it had itself created. Every project was
+    // copied on its own, so a task's edge to a sibling in *another* named project, and a
+    // task's edge to the project it belongs to, were both written as the id the far end
+    // had at its **source** — a reference the destination has never heard of — or refused
+    // outright by a destination that checks its far ends, naming an item that same run had
+    // just created.
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": {}},
+    }));
+
+    let report = engine
+        .copy(&many(
+            &["from:P-1", "from:P-2"],
+            CopyScope::Projects { tasks: true },
+        ))
+        .await
+        .expect("the copy runs");
+    assert!(
+        report
+            .items
+            .iter()
+            .all(|outcome| outcome.action.name() == "created"),
+        "{report:?}"
+    );
+
+    // Every edge points at the destination's own item, by the destination's own id.
+    assert_eq!(
+        depends_on(&engine, "into:T-1").await,
+        vec!["into:T-2 Task".to_owned(), "into:T-3 Task".to_owned()]
+    );
+    // Including the project's own edge to the other project of the same copy.
+    let projects = engine
+        .project_dependencies(&DependencyRequest {
+            id: id("into:P-1"),
+            direction: Direction::DependsOn,
+            paging: Paging {
+                limit: NonZeroU32::new(50).expect("a non-zero limit"),
+                token: None,
+            },
+        })
+        .await
+        .expect("the dependency verb answers");
+    assert_eq!(
+        projects
+            .items
+            .iter()
+            .map(|edge| edge.to.id.to_string())
+            .collect::<Vec<_>>(),
+        vec!["into:P-2".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn a_copy_that_cannot_finish_leaves_the_destination_as_it_found_it() {
+    // A copy is either complete or it never happened. A half-written project has to be run
+    // again, and the re-run is the mutation burst that trips a hosted destination's
+    // secondary rate limiter — so undoing this run's own writes is what removes the retry
+    // at source. `Beta` is the item this destination will not create, and it is the second
+    // task of the project, so the project and the first task have already landed when it
+    // refuses.
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"uncreatable_titles": ["Beta"]},
+        }},
+    }));
+
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("a destination that will not create an item must refuse the copy");
+    };
+    let rendered = refused.to_string();
+    assert!(rendered.contains("Beta"), "{rendered}");
+    assert!(
+        !rendered.contains("could not be undone"),
+        "the destination can be put back, so the copy must not report otherwise: {rendered}"
+    );
+
+    // The destination holds none of that copy's items — not the project written first, and
+    // not the task that landed before the refusal.
+    assert!(listed(&engine, "into").await.is_empty());
+    let projects = engine
+        .projects(&onetaskgraph_core::ProjectRequest {
+            sources: vec![name("into")],
+            filters: onetaskgraph_core::Filters::default(),
+            paging: Paging {
+                limit: NonZeroU32::new(50).expect("a non-zero limit"),
+                token: None,
+            },
+        })
+        .await
+        .expect("the project list answers");
+    assert!(projects.items.is_empty(), "{:?}", projects.items);
+}
+
+#[tokio::test]
+async fn a_copy_that_cannot_be_undone_names_what_it_left_behind() {
+    // Undoing is best effort, and a destination that will not take one of its own items
+    // back leaves work the copy owes the user the name of. Told only that the copy failed,
+    // they would copy again over a destination nobody has described to them — which is the
+    // retry this whole mechanism exists to remove. So the refusal carries both halves: why
+    // the copy failed, why it could not be undone, and what is still there.
+    let engine = engine_over(json!({
+        "from": interlinked(),
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {
+                "uncreatable_titles": ["Beta"],
+                "undeletable_ids": ["P-1"],
+            },
+        }},
+    }));
+
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("the copy must refuse");
+    };
+    let rendered = refused.to_string();
+    assert!(rendered.contains("could not be undone"), "{rendered}");
+    // Why it failed, why the undo failed, and the qualified id still sitting there.
+    assert!(rendered.contains("Beta"), "{rendered}");
+    assert!(rendered.contains("will not remove P-1"), "{rendered}");
+    assert!(rendered.contains("into:P-1"), "{rendered}");
+
+    // And it is telling the truth: the project it names is there, and the task it managed
+    // to take back is not.
+    let projects = engine
+        .projects(&onetaskgraph_core::ProjectRequest {
+            sources: vec![name("into")],
+            filters: onetaskgraph_core::Filters::default(),
+            paging: Paging {
+                limit: NonZeroU32::new(50).expect("a non-zero limit"),
+                token: None,
+            },
+        })
+        .await
+        .expect("the project list answers");
+    assert_eq!(
+        projects
+            .items
+            .iter()
+            .map(|project| project.id.to_string())
+            .collect::<Vec<_>>(),
+        vec!["into:P-1".to_owned()]
+    );
+    assert!(listed(&engine, "into").await.is_empty());
 }
