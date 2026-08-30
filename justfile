@@ -59,6 +59,8 @@ distribution-check:
         fi
     @scripts/check-distribution-contract.sh
     @scripts/check-distribution-contract-enforced.sh
+    @scripts/check-store-fixtures.sh
+    @scripts/check-store-fixtures-enforced.sh
     @scripts/check-release-pr-sync.sh
     @scripts/check-release-tooling-selection.sh
     @scripts/check-real-release-preparation.sh

@@ -829,13 +829,20 @@ async fn every_predicate_a_task_query_carries_is_applied() {
         };
     let none = LabelFilter::default();
 
+    // `I_loose` carries `chore` and `I_task` carries `bug`, so a label filter that is
+    // applied and one that is dropped answer with different rows. Under a board where both
+    // carried `bug` the two answers were the same list.
     for (expected, query) in [
         (
-            vec!["I_task", "I_loose"],
+            vec!["I_task"],
             query(label_filter(&["bug"], &[], &[]), vec![], None),
         ),
         (
-            vec!["I_task", "I_notes", "I_loose"],
+            vec!["I_task", "I_loose"],
+            query(label_filter(&["bug", "chore"], &[], &[]), vec![], None),
+        ),
+        (
+            vec!["I_task", "I_notes"],
             query(label_filter(&["bug", "docs"], &[], &[]), vec![], None),
         ),
         (
@@ -843,7 +850,7 @@ async fn every_predicate_a_task_query_carries_is_applied() {
             query(label_filter(&[], &["bug", "team"], &[]), vec![], None),
         ),
         (
-            vec!["I_notes"],
+            vec!["I_notes", "I_loose"],
             query(label_filter(&[], &[], &["bug"]), vec![], None),
         ),
         (
@@ -852,7 +859,7 @@ async fn every_predicate_a_task_query_carries_is_applied() {
         ),
         // Names match case-insensitively, the way the local Markdown source matches them.
         (
-            vec!["I_task", "I_loose"],
+            vec!["I_task"],
             query(label_filter(&["BUG"], &[], &[]), vec![], None),
         ),
         (
@@ -904,7 +911,7 @@ async fn every_predicate_a_task_query_carries_is_applied() {
             vec!["I_loose"],
             TaskQuery {
                 text: text("work", TextFields::Content),
-                labels: label_filter(&["bug"], &[], &["team"]),
+                labels: label_filter(&["chore"], &[], &["team"]),
                 statuses: vec![StatusCategory::Todo],
                 project: ProjectFilter::Orphans,
             },

@@ -1569,3 +1569,54 @@ fn ok_at(sandbox: &Sandbox, arguments: &[&str]) -> String {
     );
     stdout(&output)
 }
+
+#[test]
+fn writing_an_items_identifier_where_its_title_belongs_is_caught_by_every_row() {
+    // A shipped defect wrote a project's *identifier* into the field its *title* belongs
+    // in, and no test could have caught it: every fixture spelled the two the same, so the
+    // wrong value and the right value were the same bytes.
+    //
+    // This is the property that makes the assertions everywhere else in this suite able to
+    // fail. For every source kind, over every task and project it serves, it takes the
+    // value the defect would have written — the item's own identifier — and asserts that
+    // the assertion a journey makes about the title *rejects* it. A fixture that stops
+    // discriminating fails here rather than quietly making its whole row untestable.
+    //
+    // `scripts/check-store-fixtures.sh` holds the same rule over the JSON fixtures the
+    // plugin suites serve; this holds it over the datasets these journeys are written
+    // against, which are Rust and out of that check's reach.
+    for row in ROWS {
+        let sandbox = host(row);
+        for (verb, noun) in [("task", "tasks"), ("project", "projects")] {
+            let rendered = ok(row, &sandbox, &[verb, "list", "--json"]);
+            let response: serde_json::Value =
+                serde_json::from_str(&rendered).expect("a list emits JSON");
+            let items = response["items"]
+                .as_array()
+                .expect("a list response carries items");
+            assert!(
+                !items.is_empty(),
+                "{}: this row serves no {noun}, so nothing below is being checked",
+                row.name
+            );
+            for item in items {
+                let qualified = item["id"].as_str().expect("a qualified id");
+                let native = qualified
+                    .split_once(':')
+                    .expect("a qualified id is <source>:<native>")
+                    .1;
+                let title = item["item"]["title"].as_str().expect("a title");
+                // What a journey asserts is that the title is what the source said. The
+                // substitution under test writes the identifier there instead — so this
+                // fixture discriminates exactly when that assertion would fail.
+                assert_ne!(
+                    native, title,
+                    "{}: {qualified} is titled with its own identifier, so writing the \
+                     identifier where the title belongs is a change no assertion over this \
+                     row can see",
+                    row.name
+                );
+            }
+        }
+    }
+}
