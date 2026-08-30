@@ -1053,6 +1053,138 @@ async fn a_copy_that_cannot_finish_puts_back_the_items_it_overwrote() {
     );
 }
 
+/// One source project of two tasks, the second of which no destination here will create.
+fn one_project_of_two_tasks() -> Value {
+    json!({"plugin": "in-memory", "config": {
+        "projects": [
+            {"id": "P-1", "title": "Engine",
+             "status": {"category": "todo", "name": "Todo"}, "labels": []},
+        ],
+        "tasks": [
+            {"id": "T-1", "title": "Alpha engine",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"},
+            {"id": "T-9", "title": "Gamma",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"},
+        ],
+    }})
+}
+
+/// A destination whose task table and project table each hold something called `SHARED`.
+///
+/// Nothing makes a destination number its two kinds in one namespace, and nothing stops it
+/// either: a Markdown store filing `shared.md` as a task beside `shared.md` as a project is
+/// the ordinary case rather than the contrived one. So a destination id says which item is
+/// meant only once the kind is beside it.
+fn sharing_one_id() -> Value {
+    let mut project = counterpart("SHARED", "from:P-1", None);
+    project["title"] = json!("the project as it was");
+    let mut task = counterpart("SHARED", "from:T-1", Some("SHARED"));
+    task["title"] = json!("the task as it was");
+    json!({
+        "projects": [project],
+        "tasks": [task],
+        "capabilities": {"uncreatable_titles": ["Gamma"]},
+    })
+}
+
+#[tokio::test]
+async fn an_undo_tells_a_task_from_a_project_sharing_one_destination_id() {
+    // Both counterparts are updated by this copy and both are journalled under `SHARED`,
+    // so a journal that identifies an entry by id alone reads the second as a repeat of
+    // the first and drops it. Then `Gamma` cannot be created, the copy undoes itself, and
+    // the entry it dropped is the one item nothing puts back — a destination left holding
+    // half of a copy that reported it had left nothing behind.
+    let engine = engine_over(json!({
+        "from": one_project_of_two_tasks(),
+        "into": {"plugin": "in-memory", "config": sharing_one_id()},
+    }));
+    let before = held(&engine, "into").await;
+    assert_eq!(
+        before,
+        vec![
+            "into:SHARED the project as it was".to_owned(),
+            "into:SHARED the task as it was".to_owned(),
+        ]
+    );
+
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("a destination that will not create an item must refuse the copy");
+    };
+    assert!(refused.to_string().contains("Gamma"), "{refused}");
+    assert!(
+        !refused.to_string().contains("could not be undone"),
+        "this destination takes its items back: {refused}"
+    );
+
+    assert_eq!(
+        held(&engine, "into").await,
+        before,
+        "both items sharing that id are put back, not whichever of them was journalled first"
+    );
+}
+
+/// A source whose task carries the id the destination already files a project under.
+fn a_task_named_like_the_destinations_project() -> Value {
+    json!({"plugin": "in-memory", "config": {
+        "projects": [
+            {"id": "P-1", "title": "Engine",
+             "status": {"category": "todo", "name": "Todo"}, "labels": []},
+        ],
+        "tasks": [
+            {"id": "SHARED", "title": "Alpha engine",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"},
+            {"id": "T-9", "title": "Gamma",
+             "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"},
+        ],
+    }})
+}
+
+/// A destination holding only the project `SHARED`, and refusing to create `Gamma`.
+fn holding_only_the_project() -> Value {
+    let mut project = counterpart("SHARED", "from:P-1", None);
+    project["title"] = json!("the project as it was");
+    json!({
+        "projects": [project],
+        "capabilities": {"uncreatable_titles": ["Gamma"]},
+    })
+}
+
+#[tokio::test]
+async fn an_item_created_under_one_kind_does_not_hold_back_the_others_restore() {
+    // The far side of the same confusion. An undo removes what this copy created rather
+    // than restoring it, so every created id is one the restores must skip — and this copy
+    // creates a *task* called `SHARED` while updating a *project* that was called `SHARED`
+    // before it started. Skipped by id alone, the project is left reading as this copy
+    // wrote it: the one item a "nothing was left behind" refusal did leave behind.
+    let engine = engine_over(json!({
+        "from": a_task_named_like_the_destinations_project(),
+        "into": {"plugin": "in-memory", "config": holding_only_the_project()},
+    }));
+    let before = held(&engine, "into").await;
+    assert_eq!(before, vec!["into:SHARED the project as it was".to_owned()]);
+
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("a destination that will not create an item must refuse the copy");
+    };
+    assert!(refused.to_string().contains("Gamma"), "{refused}");
+    assert!(
+        !refused.to_string().contains("could not be undone"),
+        "this destination takes its items back: {refused}"
+    );
+
+    assert_eq!(
+        held(&engine, "into").await,
+        before,
+        "the project is restored, and the task this copy created under its id is gone"
+    );
+}
+
 #[tokio::test]
 async fn a_copy_that_stops_part_way_through_an_update_puts_that_item_back_too() {
     // The other half of undoing an overwrite. A destination's own write is several calls —

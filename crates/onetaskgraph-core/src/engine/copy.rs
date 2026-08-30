@@ -296,6 +296,21 @@ impl Undo {
             Self::Created { id, .. } | Self::Updated { id, .. } => id,
         }
     }
+
+    /// Which of the destination's two write interfaces this entry belongs to.
+    ///
+    /// An id alone does not identify a destination item: nothing stops a destination
+    /// numbering its tasks and its projects in one namespace, and a local-Markdown store
+    /// filing `alpha.md` under both is the ordinary case rather than the contrived one.
+    /// So this pairs with `id` wherever one entry has to be told from another.
+    fn kind(&self) -> ItemKind {
+        match self {
+            Self::Created { kind, .. } => *kind,
+            // Read off what was there, for the reason the variant carries no `kind` of
+            // its own: two spellings of one fact can disagree, and this one cannot.
+            Self::Updated { prior, .. } => prior.item.kind(),
+        }
+    }
 }
 
 /// Everything one copy has written, in the order it wrote it, so a copy that cannot finish
@@ -317,7 +332,11 @@ impl Journal {
     /// item written twice — once as it lands, once when its edges are repaired — was only
     /// ever one thing before this copy started, and that is what undoing it restores.
     fn record(&mut self, entry: Undo) {
-        if self.entries.iter().any(|held| held.id() == entry.id()) {
+        if self
+            .entries
+            .iter()
+            .any(|held| held.kind() == entry.kind() && held.id() == entry.id())
+        {
             return;
         }
         self.entries.push(entry);
@@ -519,11 +538,11 @@ impl Engine {
         journal: Journal,
         error: EngineError,
     ) -> EngineError {
-        let created: Vec<&NativeId> = journal
+        let created: Vec<(ItemKind, &NativeId)> = journal
             .entries
             .iter()
             .filter_map(|entry| match entry {
-                Undo::Created { id, .. } => Some(id),
+                Undo::Created { kind, id } => Some((*kind, id)),
                 Undo::Updated { .. } => None,
             })
             .collect();
@@ -535,7 +554,7 @@ impl Engine {
         for entry in journal.entries.iter().rev() {
             let outcome = match entry {
                 Undo::Created { kind, id } => remove(destination, *kind, id).await,
-                Undo::Updated { id, prior, .. } if !created.contains(&id) => {
+                Undo::Updated { id, prior, .. } if !created.contains(&(prior.item.kind(), id)) => {
                     restore(destination, id, prior).await
                 }
                 Undo::Updated { .. } => Ok(()),
