@@ -51,16 +51,41 @@ trap cleanup EXIT
 
 readonly PUBLISHED="$scratch/published.jsonl"
 readonly PORT_FILE="$scratch/port"
+# What the registry stands in for at any moment, read per request so one server covers
+# every branch the publication has: `record` accepts publications and remembers them,
+# `refuse-reads` answers every query 403, and `refuse-writes` reports every package
+# absent and then refuses the publication itself.
+readonly MODE_FILE="$scratch/mode"
 
-# The registry. It answers every read 404 — nothing has been published to it — and records
-# each publication as one JSON line naming the package, the version and the tarball it
-# carried, which is what this check reads back.
+# The registry. Recording, it answers a read 404 until that exact version has been
+# published to it and 200 afterwards — which is what makes the re-run of a partly finished
+# publication readable here — and records each publication as one JSON line naming the
+# package, the version and the tarball it carried.
 cat > "$scratch/registry.py" <<'PY'
 import json
 import sys
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-published, port_file = sys.argv[1], sys.argv[2]
+published, port_file, mode_file = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# package name -> the versions this registry has been sent. A publication asks about a
+# version before sending it, and a registry that forgets what it was given cannot tell
+# the "already there, leave it alone" branch from the "absent, send it" one.
+holdings = {}
+
+
+def mode():
+    """Which registry this is standing in for right now.
+
+    Read per request rather than once at startup: the check moves this one server between
+    modes, and a mode read once would answer every later case as the first one.
+    """
+    try:
+        with open(mode_file, encoding="utf-8") as handle:
+            return handle.read().strip() or "record"
+    except FileNotFoundError:
+        return "record"
 
 
 class Registry(BaseHTTPRequestHandler):
@@ -69,13 +94,41 @@ class Registry(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(encoded)))
+        # npm caches registry reads, and a cached 404 would answer the re-run below
+        # instead of this server — reporting a package this registry holds as absent.
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(encoded)
 
     def do_GET(self):
-        # Nothing is published here, so every read is a 404 — which is the answer that
-        # tells the publication this version is absent and must be sent.
-        self._answer(404, {"error": "Not found"})
+        current = mode()
+        if current == "refuse-reads":
+            self._answer(403, {"error": "Forbidden"})
+            return
+        name = urllib.parse.unquote(self.path.split("?", 1)[0].lstrip("/"))
+        versions = [] if current == "refuse-writes" else holdings.get(name, [])
+        if not versions:
+            # Absent, which is the answer that tells the publication to send it.
+            self._answer(404, {"error": "Not found"})
+            return
+        self._answer(
+            200,
+            {
+                "name": name,
+                "dist-tags": {"latest": versions[-1]},
+                "versions": {
+                    version: {
+                        "name": name,
+                        "version": version,
+                        "dist": {
+                            "tarball": f"http://127.0.0.1/{name}/-/{version}.tgz",
+                            "shasum": "0" * 40,
+                        },
+                    }
+                    for version in versions
+                },
+            },
+        )
 
     def do_PUT(self):
         # The header is untrusted input like any other: a length that is not a
@@ -87,14 +140,22 @@ class Registry(BaseHTTPRequestHandler):
             self._answer(400, {"error": f"Content-Length is not a length: {raw!r}"})
             return
         length = int(raw)
+        # Read either way, and before answering: a refusal sent while the body is still
+        # arriving closes the connection under npm, which reports it as the registry
+        # being unreachable rather than as the refusal it is.
+        body = self.rfile.read(length)
+        if mode() == "refuse-writes":
+            self._answer(403, {"error": "Forbidden"})
+            return
         try:
-            document = json.loads(self.rfile.read(length) or b"{}")
+            document = json.loads(body or b"{}")
         except json.JSONDecodeError as error:
             self._answer(400, {"error": str(error)})
             return
         versions = document.get("versions") or {}
         with open(published, "a", encoding="utf-8") as record:
             for version, manifest in versions.items():
+                holdings.setdefault(document.get("name"), []).append(version)
                 record.write(
                     json.dumps(
                         {
@@ -120,7 +181,8 @@ server.serve_forever()
 PY
 
 : > "$PUBLISHED"
-python3 "$scratch/registry.py" "$PUBLISHED" "$PORT_FILE" &
+printf 'record\n' > "$MODE_FILE"
+python3 "$scratch/registry.py" "$PUBLISHED" "$PORT_FILE" "$MODE_FILE" &
 REGISTRY_PID=$!
 
 for _ in $(seq 1 100); do
@@ -188,6 +250,57 @@ if [ -s "$PUBLISHED" ]; then
   fatal "scripts/publish-npm.sh reached the registry with no NPM_TOKEN set" \
     "the token guard must refuse before anything is sent"
 fi
+
+# How many packages have reached the registry so far. Every refusal below is a refusal to
+# send anything, and a refusal that sends first is the one failure this whole check exists
+# to catch — so each case reads this before and after.
+sent_lines() {
+  wc -l < "$PUBLISHED" | tr -d ' '
+}
+
+# A registry that is not an http(s) URL. npm would read it its own way and the npmrc built
+# from it authenticates nothing, so the publication refuses before it packs anything.
+refusal="$scratch/bad-registry.log"
+status=0
+NODE_AUTH_TOKEN=stub-token NPM_REGISTRY="registry.npmjs.org" NPM_CARRIERS="$carriers" \
+  RUNNER_TEMP="$scratch" scripts/publish-npm.sh > "$refusal" 2>&1 || status=$?
+[ "$status" -eq 64 ] || {
+  cat "$refusal" >&2
+  fatal "a registry that is not a URL was accepted (exit $status, expected 64)" \
+    "restore the NPM_REGISTRY guard in scripts/publish-npm.sh"
+}
+for term in "NPM_REGISTRY must be an http or https URL" "registry.npmjs.org" "next:"; do
+  grep -qF -- "$term" "$refusal" || {
+    cat "$refusal" >&2
+    fatal "the invalid-registry refusal never mentions '$term'" \
+      "its message must name the value it refused and what to do about it"
+  }
+done
+[ "$(sent_lines)" -eq 0 ] || fatal \
+  "the publication reached the registry with NPM_REGISTRY set to something that is not a URL" \
+  "the guard must refuse before anything is sent"
+
+# A carriers directory that is not there is a download step that did not run. Left to npm
+# it surfaces one tarball at a time, after the first carrier has already landed.
+refusal="$scratch/no-carriers.log"
+status=0
+NODE_AUTH_TOKEN=stub-token NPM_REGISTRY="$REGISTRY" NPM_CARRIERS="$scratch/absent" \
+  RUNNER_TEMP="$scratch" scripts/publish-npm.sh > "$refusal" 2>&1 || status=$?
+[ "$status" -eq 64 ] || {
+  cat "$refusal" >&2
+  fatal "a missing carrier directory was accepted (exit $status, expected 64)" \
+    "restore the NPM_CARRIERS guard in scripts/publish-npm.sh"
+}
+for term in "no carrier directory at $scratch/absent" "NPM_CARRIERS" "next:"; do
+  grep -qF -- "$term" "$refusal" || {
+    cat "$refusal" >&2
+    fatal "the missing-carriers refusal never mentions '$term'" \
+      "its message must name the directory it looked in and what to do about it"
+  }
+done
+[ "$(sent_lines)" -eq 0 ] || fatal \
+  "the publication reached the registry with no carriers to send" \
+  "the guard must refuse before anything is sent"
 
 log="$scratch/publish.log"
 if ! NODE_AUTH_TOKEN=stub-token \
@@ -273,3 +386,70 @@ if wrong:
         "run 'scripts/set-version.sh <VERSION>' so every manifest agrees, then rerun.",
     )
 PY
+
+# The recovery this script's own documentation promises: a release that partly published
+# is re-run, and a package already at the registry at that exact version is left alone
+# rather than republished. The registry now holds everything the run above sent, so a
+# second run must reach it and send nothing.
+before="$(sent_lines)"
+rerun="$scratch/rerun.log"
+if ! NODE_AUTH_TOKEN=stub-token \
+  NPM_REGISTRY="$REGISTRY" \
+  NPM_CARRIERS="$carriers" \
+  RUNNER_TEMP="$scratch" \
+  scripts/publish-npm.sh > "$rerun" 2>&1; then
+  cat "$rerun" >&2
+  fatal "re-running the publication against a registry that already holds it failed" \
+    "a version already published must be left alone, so a partly published release can be re-run"
+fi
+[ "$(sent_lines)" -eq "$before" ] || {
+  cat "$rerun" >&2
+  fatal "the re-run republished packages the registry already held" \
+    "restore the 'npm view' check in publish_if_absent, which is what makes a re-run safe"
+}
+
+# A registry that answers the query with something other than a 404 is not saying the
+# package is absent, and publishing over that answer is how a release sends a package
+# nobody could see. It stops, distinguishably: exit 69, and the registry it could not ask.
+printf 'refuse-reads\n' > "$MODE_FILE"
+refusal="$scratch/unreadable.log"
+status=0
+NODE_AUTH_TOKEN=stub-token NPM_REGISTRY="$REGISTRY" NPM_CARRIERS="$carriers" \
+  RUNNER_TEMP="$scratch" scripts/publish-npm.sh > "$refusal" 2>&1 || status=$?
+[ "$status" -eq 69 ] || {
+  cat "$refusal" >&2
+  fatal "a registry that refused the query was published to anyway (exit $status, expected 69)" \
+    "publish_if_absent must only publish on a 404 — every other answer is a stop"
+}
+for term in "could not query npm for" "$REGISTRY" "next:"; do
+  grep -qF -- "$term" "$refusal" || {
+    cat "$refusal" >&2
+    fatal "the unreadable-registry refusal never mentions '$term'" \
+      "its message must name the registry it could not ask and what to do about it"
+  }
+done
+
+# And a registry that refuses the publication itself: npm reports it in a dozen lines this
+# script holds until it matters, and the failure replays them and names what was refused.
+printf 'refuse-writes\n' > "$MODE_FILE"
+before="$(sent_lines)"
+refusal="$scratch/refused.log"
+status=0
+NODE_AUTH_TOKEN=stub-token NPM_REGISTRY="$REGISTRY" NPM_CARRIERS="$carriers" \
+  RUNNER_TEMP="$scratch" scripts/publish-npm.sh > "$refusal" 2>&1 || status=$?
+[ "$status" -eq 1 ] || {
+  cat "$refusal" >&2
+  fatal "a refused publication reported success (exit $status, expected 1)" \
+    "publish_if_absent must exit non-zero when 'npm publish' does"
+}
+for term in "npm refused to publish" "@onetaskgraph/cli-" "next:"; do
+  grep -qF -- "$term" "$refusal" || {
+    cat "$refusal" >&2
+    fatal "the refused-publication message never mentions '$term'" \
+      "it must name the package npm refused and replay what npm said"
+  }
+done
+[ "$(sent_lines)" -eq "$before" ] || fatal \
+  "the registry recorded a publication it refused" \
+  "this is the stub registry disagreeing with itself; check its refuse-writes branch"
+printf 'record\n' > "$MODE_FILE"

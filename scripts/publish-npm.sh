@@ -107,10 +107,13 @@ for package in npm/platforms/*; do
   platform=${package##*/}
   [[ $name == "@onetaskgraph/cli-$platform" ]] || {
     echo "invalid carrier name: $name" >&2
+    echo "next: set \"name\" to @onetaskgraph/cli-$platform in npm/platforms/$platform/package.json" >&2
     exit 64
   }
   printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || {
     echo "invalid carrier version: $version" >&2
+    echo "next: run 'scripts/set-version.sh <VERSION>', which brings every manifest —" >&2
+    echo "next: npm/platforms/$platform/package.json included — to one semantic version" >&2
     exit 64
   }
   publish_if_absent "$name@$version" "$CARRIERS/onetaskgraph-cli-${platform}-${version}.tgz"
@@ -120,10 +123,14 @@ cli_version=$(node -p "require('./npm/cli/package.json').version")
 sdk_version=$(node -p "require('./sdks/typescript/package.json').version")
 printf '%s\n' "$cli_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || {
   echo "invalid CLI version: $cli_version" >&2
+  echo "next: run 'scripts/set-version.sh <VERSION>' to set npm/cli/package.json's" >&2
+  echo "next: version, then rerun" >&2
   exit 64
 }
 printf '%s\n' "$sdk_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || {
   echo "invalid TypeScript SDK version: $sdk_version" >&2
+  echo "next: run 'scripts/set-version.sh <VERSION>' to set sdks/typescript/package.json's" >&2
+  echo "next: version, then rerun" >&2
   exit 64
 }
 publish_if_absent "@onetaskgraph/cli@$cli_version" ./npm/cli
