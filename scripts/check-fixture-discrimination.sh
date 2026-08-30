@@ -8,8 +8,8 @@
 # string, `title: required_str(content, "id")` shipped green.
 #
 # So this reintroduces exactly that substitution, in a scratch copy, and asserts the crate's
-# real tests go red on it. Case 0 is the control: without it a suite that could not compile
-# at all would look like the strictest suite in the repository.
+# real tests go red on it — after running them unmutated, without which a suite that could
+# not compile at all would look like the strictest suite in the repository.
 # llmlint: ignore-file[new_code_lands_in_a_project] scripts/ is deliberately outside the
 # Nx project graph (AGENTS.md, Conventions): Nx maps no project to it, which is why the
 # justfile invokes these from recipes of its own. Nothing here escapes the gate — it
@@ -86,7 +86,6 @@ report_suite_output() {
   printf '%s\n' "$SUITE_OUTPUT" | sed 's/^/    /' >&2
 }
 
-# 0. The control.
 run_suite
 if [ "$SUITE_STATUS" -ne 0 ]; then
   echo "check-fixture-discrimination: $CRATE's tests do not pass on the tree under test, so" >&2
@@ -98,7 +97,7 @@ if [ "$SUITE_STATUS" -ne 0 ]; then
   exit 1
 fi
 
-# 1. The defect exactly as it shipped: the board item's own identifier written into the
+# The defect exactly as it shipped: the board item's own identifier written into the
 #    field its title belongs in. One site, and the count is asserted rather than assumed —
 #    a substitution that matched nothing would leave the suite green and read as the
 #    fixtures having caught nothing.
