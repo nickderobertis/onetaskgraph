@@ -1,6 +1,6 @@
 {
   "name": "@onetaskgraph/cli",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "description": "Platform-selecting launcher for onetaskgraph",
   "x-exit-codes": {
     "64": "unsupported platform",
@@ -15,11 +15,11 @@
     "bin"
   ],
   "optionalDependencies": {
-    "@onetaskgraph/cli-linux-x64": "0.2.12",
-    "@onetaskgraph/cli-linux-arm64": "0.2.12",
-    "@onetaskgraph/cli-darwin-x64": "0.2.12",
-    "@onetaskgraph/cli-darwin-arm64": "0.2.12",
-    "@onetaskgraph/cli-win32-x64": "0.2.12"
+    "@onetaskgraph/cli-linux-x64": "0.2.13",
+    "@onetaskgraph/cli-linux-arm64": "0.2.13",
+    "@onetaskgraph/cli-darwin-x64": "0.2.13",
+    "@onetaskgraph/cli-darwin-arm64": "0.2.13",
+    "@onetaskgraph/cli-win32-x64": "0.2.13"
   },
   "publishConfig": {
     "access": "public"

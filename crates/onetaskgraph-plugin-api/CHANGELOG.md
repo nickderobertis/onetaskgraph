@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.13](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.12...onetaskgraph-plugin-api-v0.2.13) - 2026-08-30
+
+### Fixed
+
+- make project copy atomic, publish the npm package, and provision the pre-push gate ([#87](https://github.com/nickderobertis/onetaskgraph/pull/87))
+
 ## [0.2.9](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.8...onetaskgraph-plugin-api-v0.2.9) - 2026-08-28
 
 ### Added
