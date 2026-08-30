@@ -23,6 +23,12 @@
 # not install for you; 74 (EX_IOERR) provisioning was attempted and failed.
 #
 # Usage: scripts/provision-gate.sh
+# llmlint: ignore-file[new_code_lands_in_a_project] scripts/ is deliberately outside the
+# Nx project graph (AGENTS.md, Conventions): Nx maps no project to it, which is why the
+# justfile invokes these from recipes of its own. Nothing here escapes the gate — it
+# runs from `.githooks/pre-push`, and `scripts/check-pre-push-provisioning.sh` drives it
+# from the workspace project's `test` target — so the graph's absence costs an
+# optimisation rather than the coverage this rule protects.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || {

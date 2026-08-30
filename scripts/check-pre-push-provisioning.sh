@@ -20,6 +20,12 @@
 # `just` is stubbed where it is present. What is under test is the hook's provisioning decision,
 # and a real `just gate` here would be this repository's whole gate run twice — from inside
 # itself, since this check is one of the things that gate runs.
+# llmlint: ignore-file[new_code_lands_in_a_project] scripts/ is deliberately outside the
+# Nx project graph (AGENTS.md, Conventions): Nx maps no project to it, which is why the
+# justfile invokes these from recipes of its own. Nothing here escapes the gate — it
+# runs from the workspace project's `test` target, beside the other clone-based checks —
+# so the graph's absence costs an optimisation rather than the coverage this rule
+# protects.
 set -euo pipefail
 
 fatal() {

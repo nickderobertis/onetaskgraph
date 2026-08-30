@@ -3,7 +3,7 @@
   "name": "workspace",
   "projectType": "library",
   "tags": ["layer:workspace"],
-  "//": "Depends on every other project so the cross-cutting checks run whenever anything they check can change. Without these edges a crate-only change would skip the graph check that keeps affected selection honest.",
+  "//": "Depends on every other project so the cross-cutting checks run whenever anything they check can change. Without these edges a crate-only change would skip the graph check that keeps affected selection honest. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to the `test` target below, which is what it is about. Those clone-based checks are cross-cutting by construction: what each drives \u2014 the git hooks, the gate's provisioning, the Nx graph itself, the plugin-isolation rule \u2014 is owned by no product project, so there is no narrower project to put them behind, and the edges above are exactly what makes them run when anything they check changes.",
   "implicitDependencies": [
     "onetaskgraph",
     "onetaskgraph-core",

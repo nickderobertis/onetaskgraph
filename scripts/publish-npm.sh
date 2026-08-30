@@ -23,6 +23,12 @@
 #
 # Inputs: NODE_AUTH_TOKEN (required), and NPM_REGISTRY (optional — the public registry by
 # default; the check above is the only thing that sets it).
+# llmlint: ignore-file[new_code_lands_in_a_project] scripts/ is deliberately outside the
+# Nx project graph (AGENTS.md, Conventions): Nx maps no project to it, which is why the
+# justfile invokes these from recipes of its own. Nothing here escapes the gate — it
+# runs from `.github/workflows/release.yml`, and `scripts/check-npm-publish.sh` drives
+# it from `just distribution-test` — so the graph's absence costs an optimisation rather
+# than the coverage this rule protects.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
