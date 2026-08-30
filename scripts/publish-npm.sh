@@ -32,8 +32,24 @@
 # than the coverage this rule protects.
 set -euo pipefail
 
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+# Every failure below this point says what went wrong and what to do about it. This one
+# exists for the failures that are the environment rather than the publication: an
+# unwritable npmrc or a checkout this cannot find is not something npm's own diagnostic
+# names an action for, and a release job stopping on a bare shell message reads as the
+# publication having refused.
+fatal() {
+  echo "publish-npm: $1" >&2
+  echo "publish-npm: next: $2" >&2
+  exit 70
+}
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
+  "could not resolve this repository's root from ${BASH_SOURCE[0]}" \
+  "run this from a checkout of this repository, as .github/workflows/release.yml does"
+readonly ROOT
+cd "$ROOT" || fatal \
+  "could not enter $ROOT" \
+  "check that directory's permissions, then re-run"
 
 readonly CARRIERS="${NPM_CARRIERS:-dist/carriers}"
 registry=${NPM_REGISTRY:-https://registry.npmjs.org/}
@@ -70,7 +86,10 @@ token=${NODE_AUTH_TOKEN:-}
   exit 1
 }
 
-NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh "$registry")
+NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh "$registry") || fatal \
+  "could not write the npmrc that authenticates to $registry" \
+  "fix what scripts/npm-registry-auth.sh reported above — without that file npm packs \
+every tarball in full and then fails ENEEDAUTH, exactly as though it were logged out"
 export NPM_CONFIG_USERCONFIG
 
 readonly SCRATCH="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
@@ -102,8 +121,10 @@ publish_if_absent() {
 }
 
 for package in npm/platforms/*; do
-  name=$(node -p "require('./$package/package.json').name")
-  version=$(node -p "require('./$package/package.json').version")
+  # A manifest node cannot read leaves these empty rather than ending the script: node
+  # has already said why on stderr, and the guards below are what name the file to fix.
+  name=$(node -p "require('./$package/package.json').name") || true
+  version=$(node -p "require('./$package/package.json').version") || true
   platform=${package##*/}
   [[ $name == "@onetaskgraph/cli-$platform" ]] || {
     echo "invalid carrier name: $name" >&2
@@ -119,8 +140,10 @@ for package in npm/platforms/*; do
   publish_if_absent "$name@$version" "$CARRIERS/onetaskgraph-cli-${platform}-${version}.tgz"
 done
 
-cli_version=$(node -p "require('./npm/cli/package.json').version")
-sdk_version=$(node -p "require('./sdks/typescript/package.json').version")
+# Unreadable for the same reason and handled the same way: the version guards below name
+# the manifest and the command that sets it.
+cli_version=$(node -p "require('./npm/cli/package.json').version") || true
+sdk_version=$(node -p "require('./sdks/typescript/package.json').version") || true
 printf '%s\n' "$cli_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || {
   echo "invalid CLI version: $cli_version" >&2
   echo "next: run 'scripts/set-version.sh <VERSION>' to set npm/cli/package.json's" >&2
