@@ -32,7 +32,7 @@ use crate::GlobalId;
 use crate::resolve::ResolvedSource;
 
 use super::local::ProjectSelector;
-use super::{Engine, EngineError, Filters, Paging, TaskRequest};
+use super::{Engine, EngineError, Filters, LeftBehind, Paging, TaskRequest};
 
 /// A request to copy work into one configured destination.
 #[derive(Debug, Clone)]
@@ -531,8 +531,11 @@ impl Engine {
                 Undo::Updated { .. } => None,
             })
             .collect();
-        let mut left_behind = Vec::new();
-        let mut refusal = None;
+        // The ids and the refusal are one value rather than two, because they are one
+        // fact: an item is only left behind because the destination refused to take it
+        // back, so the first refusal carries the first id and neither half can be
+        // recorded without the other.
+        let mut unrestored: Option<(LeftBehind, SourceError)> = None;
         for entry in journal.entries.iter().rev() {
             let outcome = match entry {
                 Undo::Created { kind, id } => remove(destination, *kind, id).await,
@@ -542,16 +545,16 @@ impl Engine {
                 Undo::Updated { .. } => Ok(()),
             };
             if let Err(problem) = outcome {
-                left_behind.push(GlobalId::new(
-                    destination.name().clone(),
-                    entry.id().clone(),
-                ));
-                refusal.get_or_insert(problem);
+                let id = GlobalId::new(destination.name().clone(), entry.id().clone());
+                match &mut unrestored {
+                    Some((left_behind, _)) => left_behind.push(id),
+                    None => unrestored = Some((LeftBehind::new(id), problem)),
+                }
             }
         }
-        match refusal {
+        match unrestored {
             None => error,
-            Some(refusal) => EngineError::CopyNotUndone {
+            Some((left_behind, refusal)) => EngineError::CopyNotUndone {
                 error: Box::new(error),
                 left_behind,
                 refusal,

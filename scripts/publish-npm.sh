@@ -21,8 +21,9 @@
 # A package already at the registry at that exact version is left alone rather than
 # republished, so a release that partly published can be re-run.
 #
-# Inputs: NODE_AUTH_TOKEN (required), and NPM_REGISTRY (optional — the public registry by
-# default; the check above is the only thing that sets it).
+# Inputs: NODE_AUTH_TOKEN (required); NPM_REGISTRY (optional — the public registry by
+# default; the check above is the only thing that sets it); and NPM_CARRIERS (optional —
+# `dist/carriers`, where the release workflow downloads the per-platform tarballs).
 # llmlint: ignore-file[new_code_lands_in_a_project] scripts/ is deliberately outside the
 # Nx project graph (AGENTS.md, Conventions): Nx maps no project to it, which is why the
 # justfile invokes these from recipes of its own. Nothing here escapes the gate — it
@@ -37,6 +38,27 @@ cd "$ROOT"
 readonly CARRIERS="${NPM_CARRIERS:-dist/carriers}"
 registry=${NPM_REGISTRY:-https://registry.npmjs.org/}
 readonly registry
+
+# Both arrive from the environment, so both are checked here rather than by npm several
+# publications later. A registry that is not an http(s) URL is handed to npm as a flag it
+# reads its own way — and the npmrc built from it below authenticates nothing — so the
+# publication fails in npm's words about a value this script chose. A carriers directory
+# that is not there is a download step that did not run, which npm otherwise reports one
+# tarball at a time, after the first carrier has already landed at the real registry.
+case $registry in
+  http://* | https://*) ;;
+  *)
+    echo "NPM_REGISTRY must be an http or https URL (received: $registry)" >&2
+    echo "next: unset NPM_REGISTRY to publish to https://registry.npmjs.org/" >&2
+    exit 64
+    ;;
+esac
+[ -d "$CARRIERS" ] || {
+  echo "no carrier directory at $CARRIERS" >&2
+  echo "next: download the release workflow's carrier-* artifacts into it, or set" >&2
+  echo "next: NPM_CARRIERS to the directory holding the per-platform .tgz files" >&2
+  exit 64
+}
 
 # Read through a default before its length is taken: under `set -u` an unset
 # NODE_AUTH_TOKEN makes `${#NODE_AUTH_TOKEN}` end the script on bash's own

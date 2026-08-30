@@ -799,11 +799,17 @@ fn github_projects_board_at(
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
             let request = read_http_json(&mut stream);
-            let query = request["query"].as_str().expect("GraphQL query string");
-            graphql_parser::parse_query::<String>(query).expect("valid GraphQL document");
-            let variables = request["variables"]
-                .as_object()
-                .expect("GraphQL variables object");
+            // Every one of these refuses a request the plugin should not have sent, and
+            // each names the request it refused: a shape assumed silently here surfaces as
+            // a journey failing about something else entirely.
+            let query = request["query"]
+                .as_str()
+                .unwrap_or_else(|| panic!("GraphQL request carries no query string: {request}"));
+            graphql_parser::parse_query::<String>(query)
+                .unwrap_or_else(|problem| panic!("invalid GraphQL document ({problem}): {query}"));
+            let variables = request["variables"].as_object().unwrap_or_else(|| {
+                panic!("GraphQL request carries no variables object: {request}")
+            });
             let variables = Value::Object(variables.clone());
             let owed = owed_failures
                 .iter()
@@ -1080,7 +1086,16 @@ fn read_http_json(stream: &mut impl Read) -> Value {
         assert!(count > 0, "fixture request ended before its declared body");
         bytes.extend_from_slice(&chunk[..count]);
     }
-    serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
+    let body = &bytes[header_end..header_end + length];
+    // Named rather than asserted away: this fixture's only client is the binary under
+    // test, so a body that is not JSON is that binary's defect, and the bytes it sent are
+    // what says which one.
+    serde_json::from_slice(body).unwrap_or_else(|problem| {
+        panic!(
+            "fixture request body is not JSON ({problem}): {}",
+            String::from_utf8_lossy(body)
+        )
+    })
 }
 
 /// A socket-level Linear GraphQL fixture used by the shared binary journeys.

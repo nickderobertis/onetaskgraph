@@ -351,9 +351,8 @@ pub enum EngineError {
         "the copy failed and could not be undone.\n\
          it failed because: {error}\n\
          it could not be undone because: {refusal}\n\
-         so the destination still holds: {}\n\
-         next: remove those items at the destination, then copy again.",
-        left_behind.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+         so the destination still holds: {left_behind}\n\
+         next: remove those items at the destination, then copy again."
     )]
     CopyNotUndone {
         /// Why the copy failed in the first place.
@@ -361,12 +360,60 @@ pub enum EngineError {
         /// The items the copy created or overwrote and could not take back.
         ///
         /// The ids themselves rather than a sentence about them: a caller acting on this —
-        /// removing them, or reporting them — needs the ids, and a joined string is a form
-        /// only the message needs. The message builds one where it is written.
-        left_behind: Vec<GlobalId>,
+        /// removing them, or reporting them — needs the ids, and the joined form only the
+        /// message needs is [`LeftBehind`]'s own `Display`.
+        left_behind: LeftBehind,
         /// What the destination said when the copy tried to take them back.
         refusal: SourceError,
     },
+}
+
+/// The items a failed copy left at the destination — one of them at least, always.
+///
+/// A plain `Vec` here would let [`EngineError::CopyNotUndone`] be built naming nothing
+/// still there, and naming what is still there is the whole reason that failure is
+/// distinct from the one it wraps: a user told only that the copy could not be undone,
+/// and then handed an empty list, has been told about a destination nobody described to
+/// them, which is exactly the blind retry this mechanism exists to remove. The first id
+/// is a field of its own, so the empty case cannot be written down.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LeftBehind {
+    /// The first item the destination would not take back.
+    first: GlobalId,
+    /// The ones it would not take back after that, in the order it refused them.
+    rest: Vec<GlobalId>,
+}
+
+impl LeftBehind {
+    /// The list holding the one item every such refusal has to name.
+    #[must_use]
+    pub fn new(first: GlobalId) -> Self {
+        Self {
+            first,
+            rest: Vec::new(),
+        }
+    }
+
+    /// Record another item the destination would not take back.
+    pub fn push(&mut self, id: GlobalId) {
+        self.rest.push(id);
+    }
+
+    /// Every item still at the destination, in the order the destination refused them.
+    pub fn iter(&self) -> impl Iterator<Item = &GlobalId> {
+        std::iter::once(&self.first).chain(self.rest.iter())
+    }
+}
+
+impl std::fmt::Display for LeftBehind {
+    /// The qualified ids, comma-separated — the form the failure message reads in.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.first)?;
+        for id in &self.rest {
+            write!(formatter, ", {id}")?;
+        }
+        Ok(())
+    }
 }
 
 /// One configured source, in exactly one of the two states a configured source has.
