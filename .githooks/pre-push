@@ -9,6 +9,13 @@
 # It runs the FULL sweep rather than the affected set on purpose: a push is the last
 # moment the whole tree is cheap to check, and affected selection is an optimisation for
 # the inner loop, not a reason to let an unrelated project go unproven.
+#
+# Provisioning comes first, and its refusal is deliberately not spelled like the gate's.
+# A fresh worktree has no node_modules and no synced Python environment, so a hook that
+# went straight to `just gate` reported an unprovisioned machine as "the gate failed" —
+# which reads as this push being rejected for what it contains. It is not: nothing has
+# been checked yet. scripts/provision-gate.sh heals what this worktree can heal and names
+# what only the machine can supply, and the two refusals below say which happened.
 set -euo pipefail
 
 readonly ROOT="$(git rev-parse --show-toplevel)"
@@ -16,7 +23,16 @@ cd "$ROOT"
 
 if ! command -v just >/dev/null 2>&1; then
   echo "pre-push: just is not installed, so the gate cannot run." >&2
+  echo "pre-push: nothing about this push has been checked — this is a provisioning" >&2
+  echo "pre-push: refusal, not a rejection of what you are pushing." >&2
   echo "pre-push: install it (scripts/session-setup.sh does), then push again." >&2
+  exit 1
+fi
+
+if ! bash scripts/provision-gate.sh; then
+  echo "pre-push: this worktree is not provisioned, so the gate did not run." >&2
+  echo "pre-push: nothing about this push has been checked — the message above names what" >&2
+  echo "pre-push: is missing. Provision it and push again." >&2
   exit 1
 fi
 
