@@ -56,6 +56,14 @@ pub struct Ready {
 pub struct Declared {
     /// Whether the source filters tasks to a named project itself.
     pub projects: Support,
+    /// Whether the source has documents at all.
+    ///
+    /// Not a predicate, and so unlike every other `Support` here: it says what the source
+    /// *holds*, the engine reads it once at the handshake rather than compensating for it,
+    /// and a source declaring it unsupported is never asked for a document. Every row
+    /// declares unsupported because no plugin has documents yet — the row is what makes
+    /// that a claim this table is held to rather than an assumption.
+    pub documents: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether the source filters by label itself.
@@ -83,6 +91,7 @@ impl Declared {
     pub fn claimed(&self) -> Capabilities {
         Capabilities {
             projects: self.projects,
+            documents: self.documents,
             orphan_tasks: self.orphan_tasks,
             filter_by_label: self.filter_by_label,
             filter_by_status: self.filter_by_status,
@@ -115,6 +124,7 @@ impl Declared {
         };
         [
             support("projects", claimed.projects, reported.projects),
+            support("documents", claimed.documents, reported.documents),
             support("orphan_tasks", claimed.orphan_tasks, reported.orphan_tasks),
             support(
                 "filter_by_label",
@@ -264,6 +274,7 @@ pub const ROWS: &[Row] = &[
             complete_dataset: true,
             declared: Declared {
                 projects: Support::Native,
+                documents: Support::Unsupported,
                 orphan_tasks: Support::Unsupported,
                 filter_by_label: Support::Unsupported,
                 filter_by_status: Support::Unsupported,
@@ -347,6 +358,10 @@ pub const ROWS: &[Row] = &[
 /// `max_page_size` is the in-memory default; a row whose plugin picks its own overrides it.
 const EVERYTHING_NATIVE: Declared = Declared {
     projects: Support::Native,
+    // Unsupported even here, because `documents` is not a predicate and "native" would
+    // claim this source holds documents rather than that it filters them itself. No plugin
+    // has any yet; docs/follow-ups.md tracks each one.
+    documents: Support::Unsupported,
     orphan_tasks: Support::Native,
     filter_by_label: Support::Native,
     filter_by_status: Support::Native,

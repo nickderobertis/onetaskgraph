@@ -16,8 +16,9 @@ use onetaskgraph_core::{
     MAX_LINE, RequestDeadline, SubprocessConfig, SubprocessSource, plugin_for, serve,
 };
 use onetaskgraph_plugin_api::{
-    Direction, ItemWrite, LabelFilter, NativeId, PageRequest, ProjectFilter, ProjectQuery,
-    SecretResolver, SourceError, SourceName, Task, TaskQuery, TaskSource, WriteSupport,
+    Direction, Document, DocumentQuery, ItemWrite, LabelFilter, NativeId, PageRequest,
+    ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, Support, Task, TaskQuery,
+    TaskSource, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -810,6 +811,91 @@ async fn a_delete_result_is_read_as_an_object_rather_than_as_exactly_the_empty_o
         panic!("a delete result that is not an object is a protocol violation");
     };
     assert!(message.contains("delete_project"), "{message}");
+}
+
+#[tokio::test]
+async fn a_document_refusal_crosses_the_wire_as_the_hosted_plugin_s_own_reason() {
+    // Both halves of §4.11 and §4.12, driven against each other over a real pipe. The
+    // engine's side forwards these four the way it forwards every other method, and the
+    // reason that comes back is the *hosted* plugin's — `in-memory`, not `subprocess` —
+    // because this side holds no opinion about documents any more than it holds one about
+    // anything else.
+    let source = a_process_away(hosted_settings()).expect("the handshake succeeds");
+
+    // What the engine reads once, at the handshake, and never asks again.
+    assert_eq!(source.capabilities().documents, Support::Unsupported);
+
+    for refusal in [
+        source
+            .get_document(&NativeId("D-1".to_owned()))
+            .await
+            .map(|found| format!("{found:?}")),
+        source
+            .query_documents(&DocumentQuery::default(), &page(2))
+            .await
+            .map(|answered| format!("{answered:?}")),
+    ] {
+        let Err(SourceError::Refused { message }) = refusal else {
+            panic!("a source with no documents refuses a document read: {refusal:?}");
+        };
+        assert_eq!(message, "the in-memory plugin has no documents");
+    }
+
+    // The two writes refuse for the reason every other write refuses, which this hosted
+    // source does have: it is writable, and it has nowhere to put a document.
+    assert!(source.writes().is_supported());
+    for refusal in [
+        source
+            .write_document(&ItemWrite {
+                target: None,
+                item: filed(),
+                depends_on: Vec::new(),
+            })
+            .await
+            .map(|id| format!("{id:?}")),
+        source
+            .delete_document(&NativeId("D-1".to_owned()))
+            .await
+            .map(|()| String::new()),
+    ] {
+        let Err(SourceError::Refused { message }) = refusal else {
+            panic!("a source with no document side refuses a document write: {refusal:?}");
+        };
+        assert_eq!(message, "the in-memory plugin cannot be written");
+    }
+}
+
+#[tokio::test]
+async fn a_handshake_that_says_nothing_about_documents_is_read_as_having_none() {
+    // §2.1 and §4.2 together: `documents` is an optional member with a documented default,
+    // so a plugin written before there were documents — which is what `capabilities()`
+    // below spells, omitting it — is read as the document-free source it is rather than
+    // refused for a member it has never heard of.
+    let source = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": capabilities()}})
+        .to_string(),
+    ])
+    .expect("the handshake succeeds");
+
+    assert_eq!(source.capabilities().documents, Support::Unsupported);
+}
+
+/// The document a write test hands the far side, which never gets as far as holding one.
+fn filed() -> Document {
+    Document {
+        id: NativeId("D-1".to_owned()),
+        title: "Why the store holds a document".to_owned(),
+        content: None,
+        project: Some(NativeId("P-1".to_owned())),
+        labels: Vec::new(),
+        url: None,
+        location: None,
+        created_at: None,
+        updated_at: None,
+        metadata: BTreeMap::new(),
+        repositories: Vec::new(),
+    }
 }
 
 #[tokio::test]

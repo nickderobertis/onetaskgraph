@@ -57,12 +57,13 @@ silence. See the note on `Health` below for the one difference it carries delibe
 
 - **`onetaskgraph-plugin-api`** — exactly what a plugin author needs, and nothing else:
   the traits `TaskSource`, `SourcePlugin` and `SecretResolver`; the work types `Task`,
-  `Project`, `Label`, `Status`, `StatusCategory`, `Repository`, `DependencyEdge`,
-  `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
+  `Project`, `Document`, `Location`, `Label`, `Status`, `StatusCategory`, `Repository`,
+  `DependencyEdge`, `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
   `Direction`, `NativeId`, `SourceName`; the query and paging types `TaskQuery`,
-  `ProjectQuery`, `TextQuery`, `TextFields`, `LabelFilter`, `ProjectFilter`, `PageRequest`,
-  `Page`, `Cursor`; the capability types `Capabilities`, `Support`, `DependencySupport`;
-  the write types `ItemWrite` and `WriteSupport`; and `SourceError`.
+  `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,
+  `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
+  `Support`, `DependencySupport`; the write types `ItemWrite` and `WriteSupport`; and
+  `SourceError`.
   **It depends on no other crate of this workspace.**
 - **`onetaskgraph-core`** — the engine, plus the reporting types `QueryResponse`,
   `QueryPlan`, `SourcePlan`, `Predicate`, `PageToken`, `SourceFailure` and `GlobalId`.
@@ -107,6 +108,24 @@ is only correct while they hold:
    nothing written down. For a `ForwardOnly` source it answers `DependedOnBy` by a bounded
    page-by-page scan and reports it as emulated. A dependency read is never ignored and
    never silently empty.
+
+`Capabilities.documents` is `Support`-typed and is nevertheless **not** one of the
+predicates rule 2 reaches. It says whether the source has documents at all, in the shape
+`projects` uses, so there is no wider result set to return and nothing to compensate: the
+engine reads it once at the handshake, exactly as it reads `writes`, never asks a source
+declaring `Unsupported` for a document, and reports such a source as holding none rather
+than as having failed. A source with no documents therefore *refuses* a document read
+rather than answering an empty page — a plugin says what it cannot do and is then not
+asked, instead of degrading into an answer indistinguishable from a source that has
+documents and holds none.
+
+A `Document` carries **no status** and **no dependencies**, and both omissions are the
+contract: a document is not work, so it has no place in a status filter and none in a
+dependency graph. `ItemKind` therefore gains no document variant — that enum names what a
+dependency endpoint points at, and nothing may point at a document. `Location` is where an
+entity is, as a link (`{"url": …}`) or as an absolute path on the machine the source runs
+on (`{"path": …}`); it sits on `Task`, `Project` and `Document`, defaults to absent, and
+does not touch, replace or derive from the `url` field those types already carry.
 
 `DependencySupport` has no unsupported variant on purpose: dependency traversal is a
 guaranteed capability of this product, not one a source may opt out of. `Support` — which

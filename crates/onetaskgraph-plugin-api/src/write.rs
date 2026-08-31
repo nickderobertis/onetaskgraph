@@ -1,4 +1,5 @@
-//! The write seam a destination is reached through.
+//! The write seam a destination is reached through, and the two refusals a source with
+//! nothing on one side of the contract answers with.
 //!
 //! [`TaskSource`](crate::TaskSource) is a read interface, and it stays one for every
 //! source that has nothing to write into: both write methods are defaulted, so a source
@@ -74,5 +75,23 @@ pub struct ItemWrite<T> {
 pub fn unwritable(kind: &str) -> SourceError {
     SourceError::Refused {
         message: format!("the {kind} plugin cannot be written"),
+    }
+}
+
+/// The refusal a source with no documents answers a document read with.
+///
+/// Spelled once beside [`unwritable`], and here rather than beside the reads it answers,
+/// because the two are the same kind of thing: a source saying it does not have that side
+/// of the contract at all. Every document-free source therefore refuses in the same words,
+/// and a plugin's refusal cannot describe something different from the engine's own
+/// message about it.
+///
+/// The two document *writes* reuse [`unwritable`]: a source with no write side refuses a
+/// document write for the reason it refuses every other write, and saying it twice in two
+/// wordings would make one refusal read as two.
+#[must_use]
+pub fn documentless(kind: &str) -> SourceError {
+    SourceError::Refused {
+        message: format!("the {kind} plugin has no documents"),
     }
 }

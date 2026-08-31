@@ -5,8 +5,9 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Capabilities, DependencyEdge, Direction, ItemWrite, Label, NativeId, Page, PageRequest,
-    Project, ProjectQuery, SourceError, SourceName, Task, TaskQuery, WriteSupport, unwritable,
+    Capabilities, DependencyEdge, Direction, Document, DocumentQuery, ItemWrite, Label, NativeId,
+    Page, PageRequest, Project, ProjectQuery, SourceError, SourceName, Task, TaskQuery,
+    WriteSupport, documentless, unwritable,
 };
 
 /// Whether a source is answering right now.
@@ -56,7 +57,10 @@ pub struct Health {
 ///    Silently dropping rows for a predicate you did not declare is the one
 ///    failure no test above the plugin can catch.
 /// 3. Never return a silently empty dependency read. Rule 2 reaches the
-///    `Support`-typed predicates alone; a dependency read is always real.
+///    `Support`-typed *predicates* alone; a dependency read is always real, and so is a
+///    document read — [`Capabilities::documents`] says whether this source has documents
+///    at all, and a source that says it has none is never asked for one rather than
+///    answering an empty page.
 #[async_trait::async_trait]
 pub trait TaskSource: Send + Sync {
     /// The plugin kind that built this source, for display and for plan output.
@@ -210,6 +214,65 @@ pub trait TaskSource: Send + Sync {
     ///
     /// As [`delete_task`](Self::delete_task).
     async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        let _ = id;
+        Err(unwritable(self.kind()))
+    }
+
+    /// Fetch one document by its native id, or `None` when there is no such document.
+    ///
+    /// Defaulted to [`documentless`], which is what keeps documents an addition rather
+    /// than a break: a source with none needs no edit, keeps working, and says so in the
+    /// same words every other document-free source does. A source that has documents
+    /// declares [`Support::Native`](crate::Support::Native) for
+    /// [`Capabilities::documents`] and owes a real implementation here, because that
+    /// declaration is what makes the engine ask.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source has no documents, and whatever
+    /// else the source could not answer for.
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        let _ = id;
+        Err(documentless(self.kind()))
+    }
+
+    /// One page of the documents matching `query`.
+    ///
+    /// Defaulted on exactly the terms of [`get_document`](Self::get_document). A source
+    /// with no documents refuses rather than answering an empty page: an empty page reads
+    /// as a source that has documents and holds none matching, which is the one wrong
+    /// answer this method can give.
+    ///
+    /// # Errors
+    ///
+    /// As [`get_document`](Self::get_document).
+    async fn query_documents(
+        &self,
+        query: &DocumentQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        let _ = (query, page);
+        Err(documentless(self.kind()))
+    }
+
+    /// Create or update one document, on exactly the terms of
+    /// [`write_task`](Self::write_task).
+    ///
+    /// # Errors
+    ///
+    /// As [`write_task`](Self::write_task).
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        let _ = write;
+        Err(unwritable(self.kind()))
+    }
+
+    /// Remove one document this destination holds, on exactly the terms of
+    /// [`delete_task`](Self::delete_task).
+    ///
+    /// # Errors
+    ///
+    /// As [`delete_task`](Self::delete_task).
+    async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
         let _ = id;
         Err(unwritable(self.kind()))
     }

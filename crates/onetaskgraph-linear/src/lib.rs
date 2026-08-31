@@ -21,6 +21,7 @@
 //! | Field | Verdict |
 //! | --- | --- |
 //! | `projects` | **Supported and proven.** `issues(filter:{project:{id:{eq:…}}})`. |
+//! | `documents` | **Unsupported, and unimplemented.** Linear has documents of its own, so nothing about the service makes this impossible; what is missing is a production operation in this crate that reads one, pinned against `tests/fixtures/schema.graphql` the way every other operation here is. docs/follow-ups.md tracks it. |
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
 //! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{inIgnoreCase:…}}}` and `{eqIgnoreCase:…}` for what an item must carry, `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. |
 //! | `filter_by_status` | **Supported and proven.** `state:{type:{in:[…]}}`, over the `WorkflowState.type` vocabulary the category maps to. |
@@ -735,6 +736,7 @@ impl TaskSource for LinearSource {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
+            documents: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -1115,6 +1117,7 @@ fn map_task(v: &Value) -> Result<Task, SourceError> {
             Some(p) => Some(NativeId(str_at(p, "id")?.into())),
         },
         url: optional_string(v, "url")?,
+        location: None,
         created_at: time(v, "createdAt")?,
         updated_at: time(v, "updatedAt")?,
         metadata,
@@ -1136,6 +1139,7 @@ fn map_project(v: &Value) -> Result<Project, SourceError> {
             message: "missing project labels".into(),
         })?)?,
         url: optional_string(v, "url")?,
+        location: None,
         created_at: time(v, "createdAt")?,
         updated_at: time(v, "updatedAt")?,
         metadata,

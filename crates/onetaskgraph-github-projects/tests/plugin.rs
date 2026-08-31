@@ -640,6 +640,7 @@ fn task(id: &str, title: &str, status: Status) -> Task {
         labels: vec![],
         project: None,
         url: None,
+        location: None,
         created_at: None,
         updated_at: None,
         metadata: BTreeMap::new(),
@@ -655,6 +656,7 @@ fn project(id: &str, title: &str, status: Status) -> Project {
         status,
         labels: vec![],
         url: None,
+        location: None,
         created_at: None,
         updated_at: None,
         metadata: BTreeMap::new(),
@@ -2485,6 +2487,7 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
         source.capabilities(),
         Capabilities {
             projects: Support::Native,
+            documents: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

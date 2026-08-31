@@ -27,6 +27,14 @@ pub struct Task {
     // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this restates at a new site the justification already recorded at `Capabilities.max_page_size` (capability.rs) and `PageRequest.limit` (query.rs), and in AGENTS.md's "The plugin contract": this crate's field types ARE the approved contract, six undispatched nodes compile against `Option<String>` here, and only the contract's owner may narrow one. No code change is available that clears this without editing that frozen surface.
     // llmlint: ignore[boundary_inputs_validated] parsing this into a URL type would narrow the same frozen surface, and would add a URL dependency to the crate AGENTS.md says to keep still ("Keep the api crate still" — every change here re-tests every plugin). A plugin that returns a string this interface cannot represent is what `SourceError::Malformed` is for. Contract owner's call; recorded in AGENTS.md, "The plugin contract".
     pub url: Option<String>,
+    /// Where this task is, when the source says (see [`Location`]).
+    ///
+    /// Absent by default, so a source that predates this field — and every source that
+    /// simply does not say — reads as `None`, which means *the source did not say where
+    /// this is* rather than *this is nowhere*. It neither replaces nor derives from
+    /// [`url`](Self::url), which goes on meaning exactly what it always did.
+    #[serde(default)]
+    pub location: Option<Location>,
     /// When the source says the task was created.
     pub created_at: Option<DateTime<Utc>>,
     /// When the source says the task last changed.
@@ -63,6 +71,9 @@ pub struct Project {
     // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this restates at a new site the justification already recorded at `Capabilities.max_page_size` (capability.rs) and `PageRequest.limit` (query.rs), and in AGENTS.md's "The plugin contract": this crate's field types ARE the approved contract, six undispatched nodes compile against `Option<String>` here, and only the contract's owner may narrow one. No code change is available that clears this without editing that frozen surface.
     // llmlint: ignore[boundary_inputs_validated] parsing this into a URL type would narrow the same frozen surface, and would add a URL dependency to the crate AGENTS.md says to keep still ("Keep the api crate still" — every change here re-tests every plugin). A plugin that returns a string this interface cannot represent is what `SourceError::Malformed` is for. Contract owner's call; recorded in AGENTS.md, "The plugin contract".
     pub url: Option<String>,
+    /// Where this project is, on exactly the terms of [`Task::location`].
+    #[serde(default)]
+    pub location: Option<Location>,
     /// When the source says the project was created.
     pub created_at: Option<DateTime<Utc>>,
     /// When the source says the project last changed.
@@ -75,6 +86,75 @@ pub struct Project {
     /// repeats.
     #[serde(default, deserialize_with = "unique_repositories")]
     pub repositories: Vec<Repository>,
+}
+
+/// One piece of information that lives in a project and is not work.
+///
+/// A document carries **no status** and **no dependencies**, and both omissions are the
+/// contract rather than an oversight: a document is not work, so it has no place in a
+/// status filter and no place in a dependency graph. [`ItemKind`] therefore gains no
+/// document variant — that enum names what a dependency endpoint points at, and nothing
+/// may point at a document.
+///
+/// A source says whether it has documents at all through
+/// [`Capabilities::documents`](crate::Capabilities::documents), and one that says it has
+/// none is never asked for one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Document {
+    /// The source's own opaque identifier.
+    pub id: NativeId,
+    /// The one-line summary a person recognises it by.
+    pub title: String,
+    /// The long-form body, when the source has one.
+    pub content: Option<String>,
+    /// The project it lives in; `None` is an orphan document, exactly as it is on a
+    /// [`Task`].
+    pub project: Option<NativeId>,
+    /// Inline, on the same terms as a [`Task`]'s.
+    pub labels: Vec<Label>,
+    /// Where a person can open it, on the same terms as a [`Task`]'s.
+    // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this restates at a new site the justification already recorded at `Task::url` and `Project::url` in this module, at `Capabilities.max_page_size` (capability.rs) and `PageRequest.limit` (query.rs), and in AGENTS.md's "The plugin contract": this crate's field types ARE the approved contract, this field is `Option<String>` because a task's and a project's are, and only the contract's owner may narrow one. Narrowing it here alone would leave the three entities describing the same thing in two different types.
+    // llmlint: ignore[boundary_inputs_validated] parsing this into a URL type would narrow the same frozen surface, and would add a URL dependency to the crate AGENTS.md says to keep still ("Keep the api crate still" — every change here re-tests every plugin). A plugin that returns a string this interface cannot represent is what `SourceError::Malformed` is for. Contract owner's call; recorded in AGENTS.md, "The plugin contract".
+    pub url: Option<String>,
+    /// Where it is, when the source says (see [`Location`]).
+    #[serde(default)]
+    pub location: Option<Location>,
+    /// When the source says it was created.
+    pub created_at: Option<DateTime<Utc>>,
+    /// When the source says it last changed.
+    pub updated_at: Option<DateTime<Utc>>,
+    /// Caller-defined attributes, preserving their JSON types, with the same reserved
+    /// prefixes [`Task::metadata`] carries.
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
+    /// Normalized repository origins this document concerns, in source order and without
+    /// repeats, as a [`Task`]'s.
+    #[serde(default, deserialize_with = "unique_repositories")]
+    pub repositories: Vec<Repository>,
+}
+
+/// Where an entity is, in the one form a consumer can act on without knowing the backend.
+///
+/// Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
+/// `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
+/// handed one of these knows what to *do* with it — open a link, or print a path and read
+/// the file out — which is what a bare string could not have said.
+///
+/// It carries no third case on purpose. `None` on the field is the third case, and it
+/// means the source did not say where the entity is, which is not the same as saying it is
+/// nowhere.
+///
+/// This does **not** redefine, replace or derive from the `url` field of [`Task`],
+/// [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
+/// it, and every existing consumer sees exactly what it saw.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Location {
+    /// The entity lives at an external website, and this is a link a reader can open.
+    Url(String),
+    /// The entity is a file on the machine the source runs on, and this is that file's
+    /// absolute path, so a reader can print the path or read the contents out.
+    Path(String),
 }
 
 /// A repository identified by its normalized origin, without a URL scheme or `.git` suffix.

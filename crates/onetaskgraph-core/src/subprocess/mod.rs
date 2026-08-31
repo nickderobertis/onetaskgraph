@@ -15,11 +15,14 @@
 //! One verdict per field of `Capabilities`. Every one of them is **supported and proven,
 //! and is the hosted source's own**: [`SubprocessSource`] reports the value the program
 //! behind the pipe sent in its handshake, unchanged, and holds no opinion of its own about
-//! any of them. Nothing here could be unsupported, because nothing here decides.
+//! any of them. Nothing here could be unsupported, because nothing here decides — a
+//! hosted source with no documents declares that itself, and this source forwards the
+//! declaration rather than holding one.
 //!
 //! | Field | Verdict |
 //! | --- | --- |
 //! | `projects` | **Supported and proven** — the hosted source's own, forwarded. |
+//! | `documents` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `orphan_tasks` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `filter_by_label` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `filter_by_status` | **Supported and proven** — the hosted source's own, forwarded. |

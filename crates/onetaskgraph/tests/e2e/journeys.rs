@@ -378,11 +378,17 @@ fn every_row_declares_exactly_what_its_plugin_reports() {
 
 #[test]
 fn every_row_drives_every_capability_field_and_the_plan_says_who_applied_it() {
-    // One journey per row per field of the plugin contract's capability value. A field a
-    // row declares native is driven and the plan must say the source applied it; a field a
-    // row declares unsupported is driven to the *same answer* and the plan must say the
-    // engine did — which is the property that makes an unsupported declaration sound
-    // rather than merely honest.
+    // One journey per row per *predicate* field of the plugin contract's capability value.
+    // A field a row declares native is driven and the plan must say the source applied it;
+    // a field a row declares unsupported is driven to the *same answer* and the plan must
+    // say the engine did — which is the property that makes an unsupported declaration
+    // sound rather than merely honest.
+    //
+    // `documents` has no probe here and must not grow one while it stays unsupported
+    // everywhere: it is not a predicate, no verb reaches it, and there is nothing for the
+    // engine to compensate. What holds it honest is the reconciliation above — every row
+    // declares it and every plugin is made to report the same — and the plugin-host journey
+    // in `source_host.rs`, which drives the refusal itself over a real pipe.
     for row in complete_dataset_rows() {
         let sandbox = host(row);
         for probe in probes(row.declared()) {
@@ -407,7 +413,7 @@ fn every_row_drives_every_capability_field_and_the_plan_says_who_applied_it() {
             );
         }
 
-        // `max_page_size` is the ninth field, and it is not a predicate: it is the ceiling
+        // `max_page_size` is the last field, and it is not a predicate: it is the ceiling
         // the engine asks a source for rows in. So it is driven twice — the declaration as
         // the binary reports it to a user, and the behaviour behind it: a caller asking for
         // four rows gets four, assembled from as many source pages as the ceiling forces.

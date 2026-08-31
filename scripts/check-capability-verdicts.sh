@@ -9,6 +9,11 @@
 # a capability declared and not applied, invisible because nothing reconciled the claim
 # with the code.
 #
+# A plugin whose capabilities are configured per source has no value of its own to
+# reconcile, so its verdicts are Supported by construction — except for a field it FIXES
+# rather than configures, which the map below names with its reason and which is then held
+# to everything a literal plugin's field is held to.
+#
 # So the verdicts are not prose alone. This reads them out of each plugin's own
 # documentation and reconciles them three ways: against the contract's field list, against
 # the plugin's own declaration, and — for a field recorded unsupported — against
@@ -43,6 +48,29 @@ PLUGINS = {
     "linear": ("crates/onetaskgraph-linear/src/lib.rs", "literal"),
     "local-md": ("crates/onetaskgraph-local-md/src/lib.rs", "literal"),
     "subprocess": ("crates/onetaskgraph-core/src/subprocess/mod.rs", "configured"),
+}
+
+# The fields a `configured` plugin FIXES rather than reads from its configuration, each
+# with the reason. `configured` above means "every field is whatever something else
+# decided, so there is no value of this plugin's own to reconcile" — and one field of
+# `in-memory` is not that, which would otherwise leave two bad options: a verdict row
+# claiming a capability the plugin does not have, or a configuration key that could claim
+# one it cannot serve.
+#
+# A fixed field is held to exactly what a `literal` plugin's field is held to: its verdict
+# must be Unsupported, must say `unimplemented` or `unsupportable`, and an unimplemented one
+# must be tracked in docs/follow-ups.md. What is not reconciled here is the declaration
+# itself, because it is not in the file this check reads — the shared journey
+# `every_row_declares_exactly_what_its_plugin_reports` is what holds `in-memory`'s real
+# declaration against the table, at the boundary a user reads it from.
+FIXED = {
+    ("in-memory", "documents"): (
+        "this source holds no documents at all, so a `CapabilityConfig` key that could "
+        "declare it native would let a configuration claim something no code there can "
+        "serve — which is capability rule 1's failure, and the one this product has "
+        "already shipped once. The value is fixed in `impl From<&CapabilityConfig> for "
+        "Capabilities` (crates/onetaskgraph-in-memory/src/config.rs)"
+    ),
 }
 
 HEADING = "# What this source declares, field by field"
@@ -122,6 +150,30 @@ if unregistered:
         "remove them from PLUGINS in this script.",
     )
 
+for (kind, field), reason in sorted(FIXED.items()):
+    if kind not in PLUGINS:
+        refuse(
+            f"FIXED names the plugin `{kind}`, which this check has no verdict table for.",
+            "correct the plugin name, or drop the entry.",
+        )
+    if PLUGINS[kind][1] != "configured":
+        refuse(
+            f"FIXED names `{field}` of `{kind}`, which is not a `configured` plugin — a "
+            "literal plugin's fields are already reconciled against its declaration.",
+            "drop the entry.",
+        )
+    if field not in contract_fields:
+        refuse(
+            f"FIXED names `{field}`, which is not a field of the contract's `Capabilities`.",
+            "correct the field name, or drop the entry.",
+        )
+    if not reason.strip():
+        refuse(
+            f"FIXED carries `{field}` of `{kind}` with no reason.",
+            "say why that plugin fixes the field rather than configuring it, or drop the "
+            "entry.",
+        )
+
 problems = []
 unsupported = {}
 # Every field declared unsupported, and the verdict text that says why.
@@ -160,12 +212,24 @@ for kind in registered:
 
     if shape == "configured":
         for field, verdict in verdicts.items():
-            if verdict != "Supported":
+            if (kind, field) not in FIXED:
+                if verdict != "Supported":
+                    problems.append(
+                        f"{kind}: `{field}` is recorded {verdict}, but this plugin reports "
+                        "whatever its configuration or its hosted source declares rather "
+                        "than a value of its own. If this plugin fixes this field instead, "
+                        "record it in FIXED in this script with the reason."
+                    )
+            elif verdict != "Unsupported":
                 problems.append(
-                    f"{kind}: `{field}` is recorded {verdict}, but this plugin reports "
-                    "whatever its configuration or its hosted source declares rather "
-                    "than a value of its own."
+                    f"{kind}: FIXED records `{field}` as a value this plugin fixes rather "
+                    f"than configures, and a fixed field is fixed at Unsupported — but its "
+                    f"verdict reads {verdict}. Drop the FIXED entry if this plugin now "
+                    "configures the field."
                 )
+            else:
+                unsupported.setdefault(kind, set()).add(field)
+                owed[(kind, field)] = reasons.get(field, "")
         continue
 
     declaration = re.search(

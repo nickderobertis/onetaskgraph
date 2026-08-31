@@ -21,9 +21,9 @@ use serde_json::{Value, json};
 
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
-    DeleteParams, DependencyParams, HandshakePluginKind, IdParams, InitializeParams,
-    InitializeResult, LabelParams, PROTOCOL_VERSION, ProjectQueryParams, ProjectWriteParams,
-    Request, Response, TaskQueryParams, TaskWriteParams,
+    DeleteParams, DependencyParams, DocumentQueryParams, DocumentWriteParams, HandshakePluginKind,
+    IdParams, InitializeParams, InitializeResult, LabelParams, PROTOCOL_VERSION,
+    ProjectQueryParams, ProjectWriteParams, Request, Response, TaskQueryParams, TaskWriteParams,
 };
 use crate::registry::PluginKind;
 
@@ -345,6 +345,23 @@ async fn dispatch(
         "delete_project" => {
             let params: DeleteParams = decode(method, params)?;
             source.delete_project(&params.id).await?;
+            encode(json!({}))
+        }
+        "get_document" => {
+            let params: IdParams = decode(method, params)?;
+            encode(json!({ "document": source.get_document(&params.id).await? }))
+        }
+        "query_documents" => {
+            let params: DocumentQueryParams = decode(method, params)?;
+            encode(source.query_documents(&params.query, &params.page).await?)
+        }
+        "write_document" => {
+            let params: DocumentWriteParams = decode(method, params)?;
+            encode(json!({ "id": source.write_document(&params.write).await? }))
+        }
+        "delete_document" => {
+            let params: DeleteParams = decode(method, params)?;
+            source.delete_document(&params.id).await?;
             encode(json!({}))
         }
         other => Err(SourceError::Malformed {

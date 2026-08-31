@@ -599,6 +599,7 @@ fn a_response_carries_the_plan_that_produced_it_and_round_trips() {
             labels: Vec::new(),
             project: None,
             url: None,
+            location: None,
             created_at: None,
             updated_at: None,
             metadata: Default::default(),
