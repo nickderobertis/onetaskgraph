@@ -1,0 +1,112 @@
+# The published interface of every registry scripts/release-probe.sh reads, pinned.
+#
+# The probe turns a declared release target into one HTTP request and reads one
+# field out of the answer. Both halves are a third party's interface rather than
+# this repository's, so both are pinned here the way
+# crates/onetaskgraph-linear/tests/fixtures/schema.graphql pins Linear's: a
+# recorded observation, with its provenance, that a deterministic check holds the
+# code to. scripts/check-release-probe.sh fails when the probe asks for a URL this
+# file does not describe, reads a field it does not name, or reads one of the
+# neighbouring fields it names as a decoy.
+#
+# **This is what makes the offline test trustworthy, rather than a registry being
+# reachable.** The three answers a probe can give are stood in for by the bodies
+# below; a body invented to suit a test would prove only that the test and the
+# code agree with each other. So a served body here is the shape of a real capture
+# — the field the probe reads, plus every neighbouring field that looks like a
+# version and must not be read instead — and the versions in it are invented, so a
+# case that somehow reached the real registry answers 0.2.13 and fails rather than
+# passing on the wrong evidence.
+#
+# **Re-observing is the live lane's job.** `just test-live` runs
+# crates/onetaskgraph/tests/live.rs, which asks the real registries for every
+# declared target through this same probe. Those tests carry `#[ignore]`, so no
+# required check ever waits on a registry being up; when one of these interfaces
+# changes, that lane is what says so, and the fix is to re-observe the interface
+# here and bring the probe with it.
+
+# crates.io. Its `max_stable_version` is what `cargo add` resolves: the greatest
+# version the registry serves with yanked versions and prereleases already
+# excluded, which the four neighbouring fields below do not promise. `null` there
+# is a crate whose every version is yanked or a prerelease, which serves nothing
+# and is therefore no release rather than an unreadable answer.
+[[registry]]
+registry = "crate"
+service = "crates.io"
+documentation = "https://crates.io/data-access"
+observed = "2026-08-31"
+observed_from = "https://crates.io/api/v1/crates/onetaskgraph"
+method = "GET"
+url = "https://crates.io/api/v1/crates/{name}"
+name_in_url = "verbatim"
+# crates.io answers 403 to a request that does not say who is asking, which is
+# also why scripts/crate-publication-status.sh sends one.
+user_agent_required = true
+version_path = "crate.max_stable_version"
+decoy_paths = ["crate.max_version", "crate.newest_version", "crate.default_version"]
+# crates.io documents this field as nullable, and null there is the registry
+# itself saying it serves no stable version — the empty answer, not an
+# unreadable one. The other two registries answer 404 instead and never null.
+null_means_no_release = true
+served_status = 200
+absent_status = 404
+served_version = "9.9.9"
+served_body = '''
+{"categories":[],"crate":{"id":"onetaskgraph","name":"onetaskgraph","max_stable_version":"9.9.9","max_version":"10.0.0-rc.1","newest_version":"10.0.0-rc.1","default_version":"9.9.9","num_versions":14,"description":"One interface over the ticketing systems your work lives in."},"keywords":[],"versions":[]}
+'''
+absent_body = '''
+{"errors":[{"detail":"crate `onetaskgraph-absent` does not exist"}]}
+'''
+
+# PyPI. `info.version` is the release the project serves as its current one — the
+# version `pip install <name>` resolves. The per-file `python_version` under
+# `urls` is the neighbour that must not answer for it.
+[[registry]]
+registry = "pypi"
+service = "PyPI"
+documentation = "https://docs.pypi.org/api/json/"
+observed = "2026-08-31"
+observed_from = "https://pypi.org/pypi/onetaskgraph-sdk/json"
+method = "GET"
+url = "https://pypi.org/pypi/{name}/json"
+name_in_url = "verbatim"
+user_agent_required = false
+version_path = "info.version"
+decoy_paths = ["urls.0.python_version"]
+null_means_no_release = false
+served_status = 200
+absent_status = 404
+served_version = "9.9.9"
+served_body = '''
+{"info":{"name":"onetaskgraph-sdk","version":"9.9.9","requires_python":">=3.14","yanked":false},"last_serial":1,"releases":{},"urls":[{"filename":"onetaskgraph_sdk-9.9.9-py3-none-any.whl","packagetype":"bdist_wheel","python_version":"py3"}],"vulnerabilities":[]}
+'''
+absent_body = '''
+{"message": "Not Found"}
+'''
+
+# npm, through the `latest` dist-tag's own document — the version an
+# `npm install <name>` resolves — rather than the whole packument, which carries
+# every version ever published and says nothing about which one is served. A
+# scoped name is one path segment, so its `/` is percent-encoded.
+[[registry]]
+registry = "npm"
+service = "npm"
+documentation = "https://github.com/npm/registry/blob/master/docs/responses/package-metadata.md"
+observed = "2026-08-31"
+observed_from = "https://registry.npmjs.org/@onetaskgraph%2Fsdk/latest"
+method = "GET"
+url = "https://registry.npmjs.org/{name}/latest"
+name_in_url = "percent-encoded"
+user_agent_required = false
+version_path = "version"
+decoy_paths = ["_npmVersion", "_nodeVersion"]
+null_means_no_release = false
+served_status = 200
+absent_status = 404
+served_version = "9.9.9"
+served_body = '''
+{"name":"@onetaskgraph/sdk","version":"9.9.9","description":"The TypeScript SDK for onetaskgraph.","license":"MIT","_id":"@onetaskgraph/sdk@9.9.9","_nodeVersion":"22.23.2","_npmVersion":"10.9.8","dist":{"tarball":"https://registry.npmjs.org/@onetaskgraph/sdk/-/sdk-9.9.9.tgz"}}
+'''
+absent_body = '''
+"Not Found"
+'''
