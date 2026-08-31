@@ -1,6 +1,133 @@
-// llmlint: ignore-file[live_tier_compiles_and_requires_credential] empty live lane passes by design
-//! The credential-gated live lane for this crate.
+// llmlint: ignore-file[live_tier_compiles_and_requires_credential] The registries this
+// lane reads — crates.io, PyPI and npm — are public, so there is no credential for it to
+// require and none whose absence it could fail fast on. The half of that rule this lane
+// does keep is the half it can: it stays compiled by `cargo test -p onetaskgraph`, it is
+// never `#[cfg]`'d out, and a registry that does not answer fails it rather than passing
+// green.
+//! The live lane for this crate: what the public registries really serve.
 //!
-//! `just test-live` runs this target for every project, uniformly. The binary's
-//! live journeys reach a service only through a hosted plugin, so they land with
-//! those plugins; until then the lane passes with nothing to run.
+//! `release-targets.toml` declares what this repository publishes, and
+//! `config/registry-interfaces.toml` pins the interface each registry answers
+//! through. The deterministic gate holds the probe to that pin and drives its
+//! three answers against documents built from it, so no required check waits on a
+//! registry being up. This is the other half: it asks the real registries, so the
+//! day one of them changes its published interface there is something that says
+//! so and the pin can be re-observed.
+//!
+//! `#[ignore]`, like every live test here, which is what keeps a third party out
+//! of a required check. `just test-live` is what runs it.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// The repository root, from this crate's own location rather than from the
+/// working directory a runner happened to choose.
+fn repository_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .canonicalize()
+        .expect("the repository root is two directories above this crate")
+}
+
+/// Every `[[target]]` id the declaration carries.
+///
+/// A deliberately lenient scan rather than a TOML parse: what the document *is* —
+/// every required field, every identifier, every short name — is held by
+/// `scripts/check-release-targets.sh` and by the canonical reader it runs, and
+/// what this lane needs is only the list of things a consumer waits on.
+fn declared_target_ids(root: &Path) -> Vec<String> {
+    let declaration = root.join("release-targets.toml");
+    let text = std::fs::read_to_string(&declaration)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", declaration.display()));
+    let mut ids = Vec::new();
+    let mut in_target = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            in_target = line.starts_with("[[target]]");
+            continue;
+        }
+        if !in_target {
+            continue;
+        }
+        let Some(value) = line.strip_prefix("id") else {
+            continue;
+        };
+        let Some(value) = value.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"');
+        if !value.is_empty() {
+            ids.push(value.to_string());
+        }
+    }
+    assert!(
+        !ids.is_empty(),
+        "{} declares no target, so there is nothing to ask a registry about",
+        declaration.display()
+    );
+    ids
+}
+
+/// Every artifact this repository declares answers the version its own registry
+/// serves right now, through the probe a consumer runs.
+///
+/// A target that does not answer lands here whether the registry was unreachable
+/// or its published interface moved, and the failure says which to look at: the
+/// probe's own reason distinguishes a transport failure from a document that no
+/// longer carries the pinned field.
+#[test]
+#[ignore = "reaches the public registries; run it with `just test-live`"]
+fn every_declared_target_answers_from_its_real_registry() {
+    let root = repository_root();
+    let probe = root.join("scripts").join("release-probe.sh");
+    let mut failures = Vec::new();
+
+    for identifier in declared_target_ids(&root) {
+        let answer = Command::new("bash")
+            .arg(&probe)
+            .arg(&identifier)
+            .current_dir(&root)
+            .output()
+            .unwrap_or_else(|error| panic!("could not run {}: {error}", probe.display()));
+        let stdout = String::from_utf8_lossy(&answer.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&answer.stderr).trim().to_string();
+
+        if !answer.status.success() {
+            failures.push(format!(
+                "{identifier}: not answered ({}). The probe said: {stderr}",
+                answer.status
+            ));
+            continue;
+        }
+        if stdout.is_empty() {
+            failures.push(format!(
+                "{identifier}: its registry answered that it serves nothing. Every declared \
+                 target here has been released, so this is the lookup reaching the wrong \
+                 place — re-observe that registry's interface and bring \
+                 config/registry-interfaces.toml and scripts/release-probe.sh to it. A target \
+                 declared before its own first release is the one other way to land here."
+            ));
+            continue;
+        }
+        if !stdout.starts_with(|character: char| character.is_ascii_digit())
+            || !stdout
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || ".+-".contains(character))
+        {
+            failures.push(format!(
+                "{identifier}: answered {stdout:?}, which is not a version"
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "the public registries did not answer for every declared target:\n  {}",
+        failures.join("\n  ")
+    );
+}
