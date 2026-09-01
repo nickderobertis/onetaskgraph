@@ -77,11 +77,45 @@ case "$reader_required" in
     ;;
 esac
 
+# Whether the onevcs on PATH can read an npm scoped name at all, asked of a
+# document that carries one and nothing else.
+#
+# A reader's refusal is only evidence about release-targets.toml if that reader
+# can read the spellings release-targets.toml uses. `onevcs` gained the npm scoped
+# form in 0.16.1 — "accept an npm scoped name as a registry identifier", its
+# CHANGELOG — and every build before it refuses `npm:@onetaskgraph/cli` as a name
+# no registry serves, at every schema_version, whatever else the document says. So
+# an older reader on PATH reports this repository's four scoped identifiers as
+# four defects in a document that is in fact exactly what the schema documents,
+# and points whoever reads it at the wrong file.
+#
+# A behaviour rather than a version comparison, deliberately: a pinned minimum
+# version is a second copy of a third party's history that goes stale in silence,
+# and what this needs to know is not which release a build is but whether it can
+# read a name this repository really publishes under.
+reader_reads_scoped_names() {
+  mkdir -p "$work/capability" || return 1
+  cat > "$work/capability/release-targets.toml" <<'PROBE' || return 1
+schema_version = 2
+[[target]]
+id = "npm:@scope/name"
+name = "scoped"
+what = "A probe document, carrying one npm scoped identifier and nothing else."
+published_by = "Nothing publishes it. It exists to ask a reader whether it reads a scoped name."
+PROBE
+  onevcs release declaration "$work/capability" --json >/dev/null 2>&1
+}
+
 # The reader that actually consumes this document, run over the real file. It is
 # the whole point of writing one, so where it is installed it is not optional.
 reader_status=0
 if command -v onevcs >/dev/null 2>&1; then
   if ! onevcs release declaration "$ROOT" --json > "$work/declaration.json" 2> "$work/declaration.err"; then
+    # Which of the two this is, before anything is said about the document.
+    if ! reader_reads_scoped_names; then
+      fatal "the onevcs on PATH ($(command -v onevcs), $(onevcs --version 2>/dev/null || echo 'version unknown')) cannot read an npm scoped identifier, so its refusal of release-targets.toml is about the reader rather than the document" \
+        "upgrade onevcs to 0.16.1 or newer, which is where 'accept an npm scoped name as a registry identifier' landed, then rerun; this repository really publishes @onetaskgraph/cli and @onetaskgraph/sdk, so the scoped spelling is not the declaration's to give up"
+    fi
     cat "$work/declaration.err" >&2
     fatal "the canonical reader refused release-targets.toml (its refusal is above)" \
       "fix the field it names; a document this reader refuses is one a consumer cannot read at all"
