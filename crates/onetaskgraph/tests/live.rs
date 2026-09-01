@@ -151,15 +151,11 @@ fn every_declared_target_answers_from_its_real_registry() {
             ));
             continue;
         }
-        if !stdout.starts_with(|character: char| character.is_ascii_digit())
-            || !stdout
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || ".+-".contains(character))
-        {
-            failures.push(format!(
-                "{identifier}: answered {stdout:?}, which is not a version"
-            ));
-        }
+        // What a version may look like is not restated here. The probe holds its
+        // own answer closed — a body that is not a version is refused there, and
+        // the three registries' grammars differ — so a second copy of that shape
+        // in this lane would be one nothing reconciles, and it would refuse the
+        // PEP 440 epoch the probe deliberately answers.
     }
 
     assert!(

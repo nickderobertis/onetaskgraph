@@ -154,7 +154,6 @@ except (OSError, tomllib.TOMLDecodeError) as problem:
     print("  fix that file; it is the one thing a consumer reads to learn what to wait on", file=sys.stderr)
     raise SystemExit(1)
 
-# The shape.
 version = declared.get("schema_version")
 if version != SCHEMA_VERSION:
     problems.append(
@@ -265,7 +264,8 @@ if probe is None:
 elif not Path(probe).is_file():
     problems.append(f"{DECLARATION} names the probe '{probe}', which this repository does not carry")
 
-# The short names, in both directions.
+# A short name that moved, in both directions: one declared here that no
+# consumer knows, and one a consumer knows that is no longer declared.
 for name, identifier in EXPECTED_NAMES.items():
     position = seen_names.get(name)
     if position is None:
@@ -285,7 +285,8 @@ for name in sorted(set(seen_names) - set(EXPECTED_NAMES)):
         "target is a new thing consumers may wait on: add it here in the same change."
     )
 
-# The contents, derived from the real release configuration.
+# What this repository really publishes, derived from the release configuration
+# rather than transcribed, because a transcription is what goes stale in silence.
 workflow = read(WORKFLOW, "the release workflow")
 published = {}
 

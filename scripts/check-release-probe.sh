@@ -50,7 +50,7 @@ work="$(mktemp -d)" || fatal \
   "check the temporary directory's permissions and free space, then rerun"
 trap 'rm -rf "$work"' EXIT
 
-# Half one: the probe against the pin. Text only, so it runs on every platform.
+# Text only, so this half runs on every platform.
 python3 - "$PIN" "$PROBE" "$DECLARATION" "$work" <<'PY' || fatal \
   "scripts/release-probe.sh and config/registry-interfaces.toml disagree (the drift is above)" \
   "bring the probe back to the pinned interface, or re-observe that registry's interface and record the new observation in the pin"
@@ -87,11 +87,17 @@ pin = load(pin_path)
 declaration = load(declaration_path)
 
 # Both documents are input to this check rather than something it wrote, so every
-# field is held to its type here — one named refusal a reader can act on, rather
-# than a traceback from the first place a string turned out to be a list.
+# field the pin declares is held to its type here — one named refusal a reader can
+# act on, rather than a traceback from the first place a string turned out to be a
+# list.
 PINNED_FIELDS = {
     "registry": str,
     "service": str,
+    # The provenance: what was read, where, and when. A pin carrying none is a
+    # recollection rather than an observation, so it is required like the rest.
+    "documentation": str,
+    "observed": str,
+    "observed_from": str,
     "method": str,
     "url": str,
     "name_in_url": str,
@@ -128,6 +134,16 @@ for position, registry in enumerate(registries, start=1):
     for decoy in registry["decoy_paths"]:
         if not isinstance(decoy, str):
             refuse([f"{pin_path} [[registry]] #{position} has a decoy path that is not a string"])
+seen = {}
+for position, registry in enumerate(registries, start=1):
+    # Two tables for one registry would collapse into whichever came last, and the
+    # probe would be reconciled against half a pin without anything saying so.
+    if registry["registry"] in seen:
+        refuse([
+            f"{pin_path} pins '{registry['registry']}' twice, in [[registry]] "
+            f"#{seen[registry['registry']]} and #{position}"
+        ])
+    seen[registry["registry"]] = position
 
 probe_source = probe_path.read_text(encoding="utf-8")
 # Instructions, not prose: the header deliberately explains which field must not
@@ -262,7 +278,6 @@ for target in targets:
 (work / "plan.tsv").write_text("\n".join(plan) + "\n", encoding="utf-8")
 PY
 
-# Half two: the three answers, driven through the real probe.
 # The stub is an extensionless executable earlier on PATH than curl, which is a
 # Unix shape — the same reason scripts/check-real-release-preparation.sh names for
 # its own skip. Windows keeps the reconciliation above, which is where a drifted
@@ -330,7 +345,6 @@ run_probe() {
 while IFS=$'\t' read -r identifier expected_method expected_url served_status served_version absent_status directory nulled; do
   [ -n "$identifier" ] || continue
 
-  # 1. The registry serves a version.
   run_probe "$identifier" "$served_status" "$directory/served.json" 0
   answered="$probe_status|$(cat "$work/out")"
   if [ "$probe_status" -ne 0 ]; then
@@ -350,7 +364,6 @@ while IFS=$'\t' read -r identifier expected_method expected_url served_status se
     fail "$identifier was looked up without a user agent, which crates.io answers 403"
   fi
 
-  # 2. The registry serves nothing yet.
   run_probe "$identifier" "$absent_status" "$directory/absent.json" 0
   empty="$probe_status|$(cat "$work/out")"
   if [ "$probe_status" -ne 0 ]; then
@@ -359,7 +372,6 @@ while IFS=$'\t' read -r identifier expected_method expected_url served_status se
     fail "$identifier answered '$(cat "$work/out")' where the registry answered $absent_status; nothing published is the empty answer"
   fi
 
-  # 3. The lookup could not be made.
   run_probe "$identifier" "$served_status" "$directory/served.json" 1
   refused="$probe_status|$(cat "$work/out")"
   if [ "$probe_status" -eq 0 ]; then
@@ -383,18 +395,17 @@ while IFS=$'\t' read -r identifier expected_method expected_url served_status se
     fail "$identifier's refusal '$refused' (exit status and stdout) is indistinguishable from one of its two answers; a consumer reads a refusal as 'ask again' and an empty answer as 'not released yet'"
   fi
 
-  # 4. The pinned field is gone and its version-shaped neighbours remain: not
-  #    answered, because the probe reads the field the pin names and no other.
+  # The pinned field gone and its version-shaped neighbours left standing: not
+  # answered, because the probe reads the field the pin names and no other.
   run_probe "$identifier" "$served_status" "$directory/decoyed.json" 0
   if [ "$probe_status" -eq 0 ]; then
     fail "$identifier answered '$(cat "$work/out")' from a document with the pinned field removed; scripts/release-probe.sh is reading a neighbouring field config/registry-interfaces.toml names as a decoy"
   fi
 
-  # 5. The registry answers null in the field the probe reads, and what that
-  #    means is per registry: crates.io says by it that it serves no stable
-  #    version, and the other two never answer it at all, so reading one there as
-  #    "nothing published" would end a wait on a document nobody understood. Both
-  #    sides are driven, from the pin's own `null_means_no_release`.
+  # What a null in that field means is per registry: crates.io says by it that
+  # it serves no stable version, and the other two never answer it at all, so
+  # reading one there as "nothing published" would end a wait on a document nobody
+  # understood. Both sides are driven, from the pin's own `null_means_no_release`.
   run_probe "$identifier" "$served_status" "$directory/nulled.json" 0
   if [ "$nulled" = "empty" ]; then
     if [ "$probe_status" -ne 0 ] || [ -s "$work/out" ]; then
@@ -405,7 +416,6 @@ while IFS=$'\t' read -r identifier expected_method expected_url served_status se
   fi
 done < "$work/plan.tsv"
 
-# Half three: every other way the probe declines to answer.
 # Each of these is a branch that ends without a version, and the one thing none
 # of them may do is end at exit 0 with empty output — that is the registry's
 # answer "no release yet", and a consumer stops waiting on it. So each is driven
