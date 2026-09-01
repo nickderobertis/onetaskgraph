@@ -15,7 +15,7 @@ use std::process::Output;
 
 use serde_json::{Value, json};
 
-use crate::common::{Sandbox, stderr, stdout};
+use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
 use crate::fixtures::{
     LINEAR_REFUSED_WRITE, ROWS, SOURCE, document, empty_folder,
     github_projects_failing_a_field_write_and_its_cleanup,
@@ -1738,7 +1738,7 @@ fn a_document_copy_into_a_source_that_has_none_is_refused_naming_it_and_its_plug
     // first — the same shape the write-support refusal already has.
     for row in documentary_rows() {
         let sandbox = Sandbox::new();
-        sandbox.project_document(&row.document_with_folder(&sandbox, NOTES));
+        sandbox.project_document(&row.document_with_documentless(&sandbox, NOTES));
 
         let complaint = refused(
             &sandbox,
@@ -1746,7 +1746,7 @@ fn a_document_copy_into_a_source_that_has_none_is_refused_naming_it_and_its_plug
             1,
         );
         assert!(
-            complaint.contains(NOTES) && complaint.contains("local-md"),
+            complaint.contains(NOTES) && complaint.contains("in-memory"),
             "{}: the refusal names the source and its plugin:\n{complaint}",
             row.name
         );
@@ -1781,6 +1781,171 @@ fn a_document_copy_out_of_a_source_that_has_none_is_refused_naming_it_and_its_pl
             complaint.contains("has no documents"),
             "{}: and says what is wrong with it:\n{complaint}",
             row.name
+        );
+    }
+}
+
+/// The Markdown folder these document journeys read out of, at one boundary or the other.
+///
+/// Both sources are the same plugin, and both go behind the boundary under test: a copy is
+/// a read and a write, so putting only one side over the pipe would leave half the seam
+/// driven by the in-process source.
+fn markdown_pair(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
+    document(&json!({
+        SOURCE: boundary.source("local-md", crate::fixtures::local_md_config(sandbox)),
+        NOTES: boundary.source("local-md", empty_folder(sandbox, NOTES)),
+    }))
+}
+
+/// Where the Markdown folder `name` holds the entity `id` of kind `verb`.
+fn markdown_path(sandbox: &Sandbox, name: &str, verb: &str, id: &str) -> String {
+    let path = sandbox
+        .subdirectory(name)
+        .join(format!("{verb}s"))
+        .join(format!("{id}.md"));
+    std::fs::canonicalize(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[test]
+fn a_document_copies_into_a_folder_of_markdown_and_the_next_invocation_reads_it_all_back() {
+    // A folder of Markdown outlives the invocation that wrote it, so this is the whole
+    // round trip through the command line a user types: list, show, copy, and then a
+    // *separate* run that reads back what landed. Driven at both boundaries, because a
+    // plugin a process away must answer exactly what the in-process one does.
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&markdown_pair(&sandbox, boundary));
+
+        // Listed, with the title and the file behind each one.
+        let listing = ok(&sandbox, &["document", "list", "--source", SOURCE]);
+        for id in ["D-1", "D-2", "D-3"] {
+            assert!(
+                listing.contains(&qualified(SOURCE, id)),
+                "{boundary:?}: the folder lists {id}:\n{listing}"
+            );
+        }
+        assert!(
+            listing.contains("Alpha design") && listing.contains("Loose note"),
+            "{boundary:?}: a document list carries each title:\n{listing}"
+        );
+
+        // Shown, and where each of the three kinds is is the path of the file behind it.
+        for (verb, id) in [("document", "D-1"), ("task", "T-1"), ("project", "P-1")] {
+            let shown = ok(&sandbox, &[verb, "show", &qualified(SOURCE, id), "--json"]);
+            let response: Value = serde_json::from_str(&shown).expect("a show emits JSON");
+            assert_eq!(
+                response["items"][0]["item"]["location"],
+                json!({"path": markdown_path(&sandbox, "local-md", verb, id)}),
+                "{boundary:?}: `{verb} show {id}` reports the file behind it:\n{shown}"
+            );
+        }
+
+        let held = shown(&sandbox, "document", &qualified(SOURCE, "D-1"));
+
+        // Copied in.
+        let created = reported(&ok(
+            &sandbox,
+            &[
+                "document",
+                "copy",
+                &qualified(SOURCE, "D-1"),
+                "--to",
+                NOTES,
+                "--json",
+            ],
+        ));
+        assert_eq!(
+            created,
+            vec![(
+                qualified(SOURCE, "D-1"),
+                json!(qualified(NOTES, "D-1")),
+                "created".to_owned()
+            )],
+            "{boundary:?}"
+        );
+        // One file, under `documents/` and nowhere else.
+        assert!(
+            sandbox
+                .subdirectory(NOTES)
+                .join("documents/D-1.md")
+                .is_file(),
+            "{boundary:?}: the copy landed as one file under documents/"
+        );
+
+        // And a *later* invocation reads back every field the copy carried, with its JSON
+        // types intact.
+        let landed = shown(&sandbox, "document", &qualified(NOTES, "D-1"));
+        for field in ["title", "content", "labels", "project", "repositories"] {
+            assert_eq!(
+                landed[field], held[field],
+                "{boundary:?}: the folder holds {field} as the source reported it"
+            );
+        }
+        for key in ["onepipeline.turn_budget", "caller.flags"] {
+            assert_eq!(
+                landed["metadata"][key], held["metadata"][key],
+                "{boundary:?}: the folder holds the metadata key {key} with its JSON type intact"
+            );
+        }
+        assert_eq!(
+            landed["metadata"]["onetaskgraph.origin"],
+            json!(qualified(SOURCE, "D-1")),
+            "{boundary:?}: and the origin the copy recorded"
+        );
+
+        // The three a copy never writes, and so the only three a reader finds different:
+        // the location is this folder's own file, and the URL and the times are absent
+        // because this destination has none of its own to report.
+        assert_eq!(
+            landed["location"],
+            json!({"path": markdown_path(&sandbox, NOTES, "document", "D-1")}),
+            "{boundary:?}: the destination reports where *it* holds the document"
+        );
+        assert_ne!(
+            landed["location"], held["location"],
+            "{boundary:?}: which is not where the source held it"
+        );
+        for own in ["url", "created_at", "updated_at"] {
+            assert_eq!(
+                landed[own],
+                json!(null),
+                "{boundary:?}: {own} is the destination's own and was never written"
+            );
+        }
+
+        // A second copy updates the one already there rather than adding a duplicate.
+        let again = reported(&ok(
+            &sandbox,
+            &[
+                "document",
+                "copy",
+                &qualified(SOURCE, "D-1"),
+                "--to",
+                NOTES,
+                "--json",
+            ],
+        ));
+        assert_eq!(
+            again[0].1,
+            json!(qualified(NOTES, "D-1")),
+            "{boundary:?}: the second copy found the first one's document"
+        );
+        assert!(
+            matches!(again[0].2.as_str(), "updated" | "unchanged"),
+            "{boundary:?}: a second copy is not a second create: {:?}",
+            again[0]
+        );
+        let listed = ok(&sandbox, &["document", "list", "--source", NOTES]);
+        assert_eq!(
+            listed
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count(),
+            1,
+            "{boundary:?}: exactly one where there was one before:\n{listed}"
         );
     }
 }

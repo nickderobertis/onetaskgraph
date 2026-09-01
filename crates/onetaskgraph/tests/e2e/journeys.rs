@@ -9,7 +9,7 @@
 use std::process::Output;
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{Declared, ROWS, Row, SOURCE, dataset, document, qualified};
+use crate::fixtures::{Declared, Placed, ROWS, Row, SOURCE, dataset, document, qualified};
 use onetaskgraph_plugin_api::Capabilities;
 use serde_json::json;
 
@@ -1821,47 +1821,33 @@ fn a_document_list_narrows_by_project_by_label_and_by_text_and_has_no_status_fil
 
 #[test]
 fn both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_alike() {
-    for row in documentary_rows() {
+    // Every row, not only the ones holding documents: where an entity is is a claim each
+    // source makes about all three kinds, and the rows differ in what they claim. A source
+    // over a remote service reports the link it holds; one over a folder of files reports
+    // the path of the file behind each item; one that says nothing leaves the field out.
+    // The table is what says which, so the journey drives the claim rather than a constant
+    // of its own.
+    for row in ROWS {
         let sandbox = host(row);
+        let places = row.fixture.place;
 
-        // The human rendering says which kind of place it is, so a reader knows whether to
-        // open a link or read a file out.
-        for (verb, id, expected) in [
-            ("document", "D-1", "url https://example.invalid/D-1"),
-            ("document", "D-2", "path /srv/notes/D-2.md"),
-            ("task", "T-1", "url https://example.invalid/T-1"),
-            ("project", "P-1", "path /srv/engine"),
-        ] {
+        for (verb, id) in entities(row) {
+            let expected = places(&sandbox, verb, id);
             let shown = ok(row, &sandbox, &[verb, "show", &qualified(SOURCE, id)]);
+
+            // The human rendering says which kind of place it is, so a reader knows
+            // whether to open a link or read a file out — and a location the source did
+            // not give is left out entirely, which is not the same as saying it is
+            // nowhere.
             assert_eq!(
-                field(&shown, "location").as_deref(),
-                Some(expected),
+                field(&shown, "location"),
+                expected.as_ref().map(Placed::rendered),
                 "{}: `{verb} show {id}` must say where it is and which kind of place:\n{shown}",
                 row.name
             );
-        }
 
-        // A source that did not say where an entity is leaves the line out entirely,
-        // which is not the same as saying it is nowhere.
-        let unplaced = ok(
-            row,
-            &sandbox,
-            &["document", "show", &qualified(SOURCE, "D-3")],
-        );
-        assert!(
-            field(&unplaced, "location").is_none(),
-            "{}: a location the source did not give is left out:\n{unplaced}",
-            row.name
-        );
-
-        // The machine rendering carries the contract type's own JSON, so a consumer
-        // branches on which key is present rather than parsing a sentence.
-        for (verb, id, key, place) in [
-            ("document", "D-1", "url", "https://example.invalid/D-1"),
-            ("document", "D-2", "path", "/srv/notes/D-2.md"),
-            ("task", "T-1", "url", "https://example.invalid/T-1"),
-            ("project", "P-1", "path", "/srv/engine"),
-        ] {
+            // The machine rendering carries the contract type's own JSON, so a consumer
+            // branches on which key is present rather than parsing a sentence.
             let response: serde_json::Value = serde_json::from_str(&ok(
                 row,
                 &sandbox,
@@ -1871,34 +1857,53 @@ fn both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_al
             let location = &response["items"][0]["item"]["location"];
             assert_eq!(
                 location,
-                &json!({key: place}),
+                &expected
+                    .as_ref()
+                    .map_or_else(|| json!(null), |place| json!({place.key: place.value})),
                 "{}: `{verb} show {id} --json` carries the location's own JSON:\n{location}",
                 row.name
             );
         }
-        let none: serde_json::Value = serde_json::from_str(&ok(
-            row,
-            &sandbox,
-            &["document", "show", &qualified(SOURCE, "D-3"), "--json"],
-        ))
-        .expect("a show emits JSON");
-        assert_eq!(
-            none["items"][0]["item"]["location"],
-            json!(null),
-            "{}: a source that did not say reports null, not a third variant",
-            row.name
-        );
 
-        // And the list rendering says it too, because a document list is where a reader
-        // finds the thing they were asked to open.
-        let listing = ok(row, &sandbox, &["document", "list"]);
-        assert!(
-            listing.contains("url https://example.invalid/D-1")
-                && listing.contains("path /srv/notes/D-2.md"),
-            "{}: a document list says where each one is:\n{listing}",
-            row.name
-        );
+        // And the *document* list says it too, because a document listing is where a
+        // reader finds the thing they were asked to open. A task list prints a status
+        // where this line would go and is not where a reader goes looking for a file.
+        if row.declared().documents.is_native() {
+            let listing = ok(row, &sandbox, &["document", "list"]);
+            for id in ["D-1", "D-2", "D-3"] {
+                let Some(place) = places(&sandbox, "document", id) else {
+                    continue;
+                };
+                assert!(
+                    listing.contains(&place.rendered()),
+                    "{}: a document list says where {id} is:\n{listing}",
+                    row.name
+                );
+            }
+        }
     }
+}
+
+/// The entities this row serves, one of each kind that carries a location and one that
+/// does not — plus the document verbs only where the row's source holds documents.
+///
+/// A row that holds none has no document to place, and the honest refusal it answers a
+/// document read with is what that row's own journey asserts.
+fn entities(row: &Row) -> Vec<(&'static str, &'static str)> {
+    let mut entities = vec![
+        ("task", "T-1"),
+        ("task", "T-2"),
+        ("project", "P-1"),
+        ("project", "P-2"),
+    ];
+    if row.declared().documents.is_native() {
+        entities.extend([
+            ("document", "D-1"),
+            ("document", "D-2"),
+            ("document", "D-3"),
+        ]);
+    }
+    entities
 }
 
 #[test]
