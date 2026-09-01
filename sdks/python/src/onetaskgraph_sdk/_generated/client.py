@@ -17,6 +17,25 @@ from .models import (
     SourceListing,
 )
 
+POSITIONALS: dict[tuple[str, ...], str] = {
+    ("document", "copy"): "ids",
+    ("document", "show"): "id",
+    ("project", "copy"): "id",
+    ("project", "deps"): "id",
+    ("project", "show"): "id",
+    ("search",): "text",
+    ("task", "copy"): "ids",
+    ("task", "deps"): "id",
+    ("task", "show"): "id",
+}
+"""The operand each command takes ahead of its options, by command.
+
+The runtime client builds the argument vector from this rather than from a second
+table of its own: a verb whose operand was named in one place and forgotten in the
+other generates a method that cannot do what it is named for, and nothing would say
+so until the binary refused the invocation.
+"""
+
 
 class GeneratedClient:
     """Methods generated from the binary command surface."""
@@ -42,6 +61,7 @@ class GeneratedClient:
 
     async def document_copy(
         self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
@@ -55,6 +75,7 @@ class GeneratedClient:
         return await self._invoke(
             ["document", "copy"],
             CopyReport,
+            ids=ids,
             default_sources=default_sources,
             dry_run=dry_run,
             match_by=match_by,
@@ -104,6 +125,7 @@ class GeneratedClient:
 
     async def document_show(
         self,
+        id: GlobalId | str,
         *,
         allow_partial: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -115,6 +137,7 @@ class GeneratedClient:
         return await self._invoke(
             ["document", "show"],
             QueryResponseOfQualifiedDocument,
+            id=id,
             allow_partial=allow_partial,
             default_sources=default_sources,
             explain=explain,

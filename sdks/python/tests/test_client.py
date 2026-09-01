@@ -48,6 +48,22 @@ def configured(tmp_path: Path, *, failing: bool = False) -> Path:
         "memory": {
             "plugin": "in-memory",
             "config": {
+                # A source holding documents has to say so: the engine reads the
+                # declaration once at the handshake and never asks a source that says it
+                # has none, so a `documents:` list without this key is refused.
+                "capabilities": {"documents": "native"},
+                "documents": [
+                    {
+                        "id": "D-1",
+                        "title": "Memory document",
+                        "content": "the engine core, reviewed",
+                        "project": "P-1",
+                        "labels": [{"id": "L-1", "name": "sdk"}],
+                        "location": {"url": "https://example.invalid/D-1"},
+                        "metadata": {"caller.note": "a string"},
+                        "repositories": ["github.com/nickderobertis/onetaskgraph"],
+                    }
+                ],
                 "tasks": [
                     {
                         "id": "T-1",
@@ -151,6 +167,8 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
     assert run(client.project_list(source=["memory"])).items
     assert run(client.project_show(id="memory:P-1")).items
     assert run(client.project_deps(id="memory:P-1")).items
+    assert run(client.document_list(source=["memory"], limit=2, explain=True)).items
+    assert run(client.document_show(id=GlobalId(root="memory:D-1"))).items
     assert run(client.label_list(source=["memory"])).items
     assert run(client.search(text="Memory", kind="task")).items
     assert run(client.sources_list())
@@ -254,6 +272,45 @@ def test_project_copy_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     second = run(client.project_copy(id="from:P-1", to="into"))
     assert [item.root.action for item in second.items] == ["unchanged", "unchanged"]
     assert [item.id.root for item in run(client.task_list(source=["into"])).items] == ["into:T-1"]
+
+
+def test_document_copy_drives_the_binary_and_refuses_a_destination_with_no_documents(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Copy a document by id through the real binary, and be refused by a source with none.
+
+    One SDK call is one process, so an in-memory destination cannot be read back by the
+    next call — the round trip is proven end to end against a persistent peer in
+    `crates/onetaskgraph/tests/e2e/document_store.rs`. What this owes is that the generated
+    method carries the operands the verb requires: a `document copy` invoked without its
+    ids is refused by clap as a bad invocation, so a method that dropped them could not
+    reach a report at all.
+    """
+    root = configured(tmp_path)
+    document = json.loads((root / "onetaskgraph.yaml").read_text(encoding="utf-8"))
+    document["sources"]["store"] = {
+        "plugin": "in-memory",
+        "config": {"capabilities": {"documents": "native"}},
+    }
+    (root / "onetaskgraph.yaml").write_text(json.dumps(document), encoding="utf-8")
+    client = Client(binary, cwd=root)
+
+    planned = run(client.document_copy(ids=["memory:D-1"], to="store", dry_run=True))
+    assert [
+        (item.root.source.root, item.root.destination, item.root.action) for item in planned.items
+    ] == [("memory:D-1", None, "created")]
+
+    created = run(client.document_copy(ids=[GlobalId(root="memory:D-1")], to="store"))
+    assert [(item.root.source.root, landed(item), item.root.action) for item in created.items] == [
+        ("memory:D-1", "store:D-1", "created")
+    ]
+
+    # `markdown` is a `local-md` source, which declares it holds no documents: the refusal
+    # comes from the handshake, before anything is read.
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.document_copy(ids=["memory:D-1"], to="markdown"))
+    assert refused.value.exit_code == 1
+    assert "has no documents" in str(refused.value)
 
 
 def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
