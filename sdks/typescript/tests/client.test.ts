@@ -374,10 +374,11 @@ test("a document copy drives the real binary and is refused by a source with non
     // making, and reading also fails outright when the reported path names nothing — as
     // comparing two strings does not. The extended-length prefix is dropped first, because
     // it is a spelling for Windows' own API rather than for a file call of this runtime.
-    const located = (document?.location as { path: string }).path.replace(/^\\\\\?\\/, "");
+    const located = document?.location as { path: string };
+    const openable = located.path.replace(/^\\\\\?\\/, "");
     const sentinel = "read back through the location this source reported";
     appendFileSync(resolve(documentRoot, "notes/documents/D-1.md"), `\n${sentinel}\n`);
-    expect(readFileSync(located, "utf8")).toContain(sentinel);
+    expect(readFileSync(openable, "utf8")).toContain(sentinel);
     expect(document).toMatchObject({
       title: "Alpha design",
       content: "reviewed",

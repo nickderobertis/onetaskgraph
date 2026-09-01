@@ -75,14 +75,19 @@ Windows that answers with an extended-length path — `\\?\C:\…` — and that 
 what `docs/local-md.md` implies when it says a reader "can print the path or read the
 contents out for a person, without knowing anything about this plugin": no other language
 in this repository writes a path that way, and many tools a person would hand it to refuse
-it. It is nevertheless *the* canonicalized absolute path on that platform, which is what
-the source promises, so both readings stand and the choice between them is the contract's
-rather than a test's.
+it. The TypeScript SDK's own test runner is one of them — `fs.realpathSync` there returns
+an extended-length path unchanged rather than resolving it — which is evidence for that
+reading rather than an argument against it. The spelling is nevertheless *the* canonicalized
+absolute path on that platform, which is what the source promises, so both readings stand
+and the choice between them is the contract's rather than a test's.
 
 Nothing is wrong today. Every assertion over a location compares the file named rather
-than the string: the Rust tests canonicalize on the expectation side too, and the two SDK
-tests resolve both sides through the operating system (`Path.samefile`, `fs.realpathSync`),
-which is also what makes them independent of the symlinked temporary tree macOS hands out.
+than the string, and none of them depends on how a runtime spells a canonical path: the
+Rust tests canonicalize on the expectation side too, the Python SDK test asks the operating
+system with `Path.samefile`, and the TypeScript SDK test writes a sentinel through the path
+it built itself and reads it back through the path the source reported, which one file
+holds and no other file can. That is also what makes them independent of the symlinked
+temporary tree macOS hands out.
 
 Settling it means deciding whether `local-md` strips the `\\?\` prefix before reporting —
 so a Windows location reads `C:\…` — and if so, saying that in `docs/local-md.md` beside
