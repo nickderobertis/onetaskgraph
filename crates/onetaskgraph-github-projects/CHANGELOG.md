@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.17](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.16...onetaskgraph-github-projects-v0.2.17) - 2026-09-01
+
+### Added
+
+- *(github-projects)* hold documents as design-titled issues and report their locations ([#161](https://github.com/nickderobertis/onetaskgraph/pull/161))
+
 ## [0.2.14](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.13...onetaskgraph-github-projects-v0.2.14) - 2026-09-01
 
 ### Added
