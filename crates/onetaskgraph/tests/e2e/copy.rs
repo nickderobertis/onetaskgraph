@@ -950,7 +950,7 @@ fn authored_document_beside(sandbox: &Sandbox) {
         "authored": {"plugin":"in-memory","config":{
             "capabilities": {"documents": "native"},
             "documents": [{
-                "id": "DESIGN-1",
+                "id": "HARNESS-1",
                 "title": "Harness plan",
                 "content": "the plan a manager reviews",
                 "project": null,
@@ -978,7 +978,7 @@ fn a_document_copies_into_a_github_board_as_an_issue_and_reads_back_unchanged() 
         &[
             "document",
             "copy",
-            "authored:DESIGN-1",
+            "authored:HARNESS-1",
             "--to",
             "board",
             "--json",
@@ -990,7 +990,7 @@ fn a_document_copies_into_a_github_board_as_an_issue_and_reads_back_unchanged() 
 
     // A later invocation, against the board the first one wrote.
     let landed = shown(&sandbox, "document", &landed_id);
-    let source = shown(&sandbox, "document", "authored:DESIGN-1");
+    let source = shown(&sandbox, "document", "authored:HARNESS-1");
     for field in ["title", "content", "repositories"] {
         assert_eq!(
             landed[field], source[field],
@@ -1040,7 +1040,7 @@ fn a_document_copies_into_a_github_board_as_an_issue_and_reads_back_unchanged() 
         &[
             "document",
             "copy",
-            "authored:DESIGN-1",
+            "authored:HARNESS-1",
             "--to",
             "board",
             "--json",

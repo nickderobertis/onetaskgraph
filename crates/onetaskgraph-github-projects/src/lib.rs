@@ -1319,7 +1319,7 @@ impl GitHubProjectsSource {
         // this board spells a document would land as an issue this same source reads back
         // as a document, so the field this destination cannot carry is named rather than
         // written and silently reclassified.
-        if let BoardKind::Work(kind) = incoming.kind
+        if let Written::Work(kind, _) = incoming.written
             && incoming.title.starts_with(DESIGN_TITLE_PREFIX)
         {
             return Err(SourceError::Refused {
@@ -1335,10 +1335,11 @@ impl GitHubProjectsSource {
         }
         let board = self.board().await?;
         let status_target = incoming
-            .status
+            .written
+            .status()
             .map(|status| self.resolved_target(status.category))
             .transpose()?;
-        let column = match (incoming.status, status_target.as_ref()) {
+        let column = match (incoming.written.status(), status_target.as_ref()) {
             (Some(status), Some(target)) => self.column_for(&board, status, target)?,
             _ => None,
         };
@@ -1356,7 +1357,7 @@ impl GitHubProjectsSource {
         let content_kind = existing.map_or(ContentKind::Issue, |item| item.content_kind);
         if content_kind == ContentKind::DraftIssue {
             if let (Some(StatusTarget::Closed(_)), Some(status)) =
-                (status_target.as_ref(), incoming.status)
+                (status_target.as_ref(), incoming.written.status())
             {
                 return Err(SourceError::Refused {
                     message: format!(
@@ -1400,7 +1401,7 @@ impl GitHubProjectsSource {
                 .map_err(|message| SourceError::Config { message })?,
         };
         let (native, fallback) = self
-            .partition_edges(&board, incoming.kind, content_kind, depends_on)
+            .partition_edges(&board, incoming.written.kind(), content_kind, depends_on)
             .await?;
         let slot = slot_metadata(incoming, own_repository.as_ref(), &fallback);
         let body = compose_body(incoming.content, &slot)?;
@@ -1497,15 +1498,19 @@ impl GitHubProjectsSource {
                 item_id,
                 id: content_id.clone(),
                 content_kind,
-                kind: incoming.kind,
+                kind: incoming.written.kind(),
                 title: incoming.title.to_owned(),
                 body: body.clone(),
                 // A document has no status of its own; what it reads back as is whatever
                 // the issue's own state says, which is what a re-read reports.
-                status: incoming.status.cloned().unwrap_or_else(|| Status {
-                    category: StatusCategory::Unknown,
-                    name: "Open".to_owned(),
-                }),
+                status: incoming
+                    .written
+                    .status()
+                    .cloned()
+                    .unwrap_or_else(|| Status {
+                        category: StatusCategory::Unknown,
+                        name: "Open".to_owned(),
+                    }),
                 labels: incoming.labels.to_vec(),
                 parent: incoming.parent.cloned(),
                 origin: (!origin.is_empty()).then(|| origin.to_owned()),
@@ -1572,7 +1577,7 @@ impl GitHubProjectsSource {
             // against the empty list a document write carries would *delete* whatever
             // relationships a person had made on that issue, which is a write nobody
             // asked for.
-            if incoming.kind != BoardKind::Document {
+            if incoming.written.kind() != BoardKind::Document {
                 self.reconcile_blocked_by(content_id, native).await?;
             }
         }
@@ -2035,16 +2040,46 @@ impl Resolved {
     }
 }
 
+/// What one write is, and the status that comes with being it.
+///
+/// One value rather than a [`BoardKind`] beside an `Option<Status>`: a document has no
+/// status and a task or a project always has one, so "a document carrying a status" and
+/// "a task carrying none" are states a write cannot be in rather than states every use
+/// site below has to defend against.
+enum Written<'a> {
+    /// A document, which is not work and so has no status at all.
+    Document,
+    /// A task or a project, and the status it is being written with.
+    Work(ItemKind, &'a Status),
+}
+
+impl Written<'_> {
+    /// Which of the board's three kinds this write is.
+    const fn kind(&self) -> BoardKind {
+        match self {
+            Self::Document => BoardKind::Document,
+            Self::Work(kind, _) => BoardKind::Work(*kind),
+        }
+    }
+
+    /// The status this write carries. A document carries none, so a write of one says
+    /// nothing about the issue's open or closed state and selects no board `Status`
+    /// option.
+    const fn status(&self) -> Option<&Status> {
+        match self {
+            Self::Document => None,
+            Self::Work(_, status) => Some(status),
+        }
+    }
+}
+
 /// The item being written, in the one shape all three write methods reach.
 struct Incoming<'a> {
-    kind: BoardKind,
+    written: Written<'a>,
     /// The title a person wrote. A document's goes onto the issue with
     /// [`DESIGN_TITLE_PREFIX`] put back, so a round trip returns the title that went in.
     title: &'a str,
     content: Option<&'a str>,
-    /// `None` for a document, which has no status: a write of one says nothing about the
-    /// issue's open or closed state and selects no board `Status` option.
-    status: Option<&'a Status>,
     labels: &'a [Label],
     metadata: &'a BTreeMap<String, Value>,
     repositories: &'a [Repository],
@@ -2054,9 +2089,9 @@ struct Incoming<'a> {
 impl Incoming<'_> {
     /// The title this write puts on the issue.
     fn written_title(&self) -> String {
-        match self.kind {
-            BoardKind::Document => format!("{DESIGN_TITLE_PREFIX}{}", self.title),
-            BoardKind::Work(_) => self.title.to_owned(),
+        match self.written {
+            Written::Document => format!("{DESIGN_TITLE_PREFIX}{}", self.title),
+            Written::Work(..) => self.title.to_owned(),
         }
     }
 }
@@ -2345,10 +2380,9 @@ impl TaskSource for GitHubProjectsSource {
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.write_item(
             &Incoming {
-                kind: BoardKind::Work(ItemKind::Task),
+                written: Written::Work(ItemKind::Task, &write.item.status),
                 title: &write.item.title,
                 content: write.item.content.as_deref(),
-                status: Some(&write.item.status),
                 labels: &write.item.labels,
                 metadata: &write.item.metadata,
                 repositories: &write.item.repositories,
@@ -2363,10 +2397,9 @@ impl TaskSource for GitHubProjectsSource {
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
         self.write_item(
             &Incoming {
-                kind: BoardKind::Work(ItemKind::Project),
+                written: Written::Work(ItemKind::Project, &write.item.status),
                 title: &write.item.title,
                 content: write.item.content.as_deref(),
-                status: Some(&write.item.status),
                 labels: &write.item.labels,
                 metadata: &write.item.metadata,
                 repositories: &write.item.repositories,
@@ -2401,10 +2434,9 @@ impl TaskSource for GitHubProjectsSource {
         }
         self.write_item(
             &Incoming {
-                kind: BoardKind::Document,
+                written: Written::Document,
                 title: &write.item.title,
                 content: write.item.content.as_deref(),
-                status: None,
                 labels: &write.item.labels,
                 metadata: &write.item.metadata,
                 repositories: &write.item.repositories,
@@ -2565,7 +2597,7 @@ fn slot_metadata(
 ) -> BTreeMap<String, Value> {
     let mut metadata = incoming.metadata.clone();
     metadata.remove(ORIGIN_KEY);
-    match incoming.kind {
+    match incoming.written.kind() {
         BoardKind::Work(kind) => metadata.insert(
             ItemKind::METADATA_KEY.to_owned(),
             Value::String(kind.marker().to_owned()),

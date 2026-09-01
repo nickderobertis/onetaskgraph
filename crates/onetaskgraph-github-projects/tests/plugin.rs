@@ -3872,7 +3872,7 @@ async fn every_predicate_a_document_query_carries_is_applied_before_it_is_paged(
 }
 
 #[tokio::test]
-async fn every_entity_this_source_reports_says_where_it_is_as_a_link() {
+async fn an_issue_says_where_it_is_as_a_link_and_a_draft_says_nothing_at_all() {
     // A draft has no web address of its own, so this source does not say where it is —
     // which is not the same as saying it is nowhere. Read first, before the binding below
     // shadows the constructor.
