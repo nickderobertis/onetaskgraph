@@ -38,7 +38,7 @@ type SearchResultItemConnection {
   nodes: [SearchResultItem]
   pageInfo: PageInfo!
 }
-union SearchResultItem = Issue | PullRequest | Repository
+union SearchResultItem = Issue | PullRequest
 type Mutation {
   createIssue(input: CreateIssueInput!): CreateIssuePayload
   addProjectV2ItemById(input: AddProjectV2ItemByIdInput!): AddProjectV2ItemByIdPayload

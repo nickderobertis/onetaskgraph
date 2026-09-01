@@ -74,6 +74,17 @@ board to a single request. The read is completed from what this process has itse
 and replaced where this process has itself written, so nothing this source did is ever
 missing from its own view.
 
+**This is now narrower than it was, and the part it no longer covers is settled.** A read
+that is *not* about the whole board does not read the board at all: one item by its own id
+resolves that id, one project's tasks come from that project issue's own sub-issues, and
+the projects a board holds come from an issue search scoped to it. Those three are answered
+by GitHub each time they are asked, so a change something else made to that item is visible
+to a source that has already read the board — which is the thing this entry says a
+long-lived caller has no verb for, for the reads where the question is about one item. What
+is left is the reads whose cost is the board's size anyway: an unconstrained task list, a
+document list, the label list, and every write. Those still answer from the one board read,
+and that is what the rest of this entry is about.
+
 The proxy for "one command" is the source object's lifetime, and for the binary that proxy
 is exact: one invocation is one process, one source and one read. It is not exact for a
 caller that links the crate and holds a source across what would be several commands — the
@@ -92,12 +103,15 @@ site.
 What is true today is pinned rather than only described:
 `a_board_changed_by_something_else_is_seen_by_the_next_source_and_not_by_this_one` retitles
 a board item without going through the source, asserts that source still reports the title
-it read, and asserts that a source built the way the next command builds one reports the
-new one. So the behaviour this entry rules on fails a test when it moves rather than
-turning a live lane red.
+it read *through a whole-board read*, asserts that a source built the way the next command
+builds one reports the new one, and asserts that the same source reading that item **by its
+id** reports the new one too without buying a second board read. So the behaviour this entry
+rules on fails a test when it moves rather than turning a live lane red — and so does the
+half of it that has already moved.
 
-Settling it means deciding what a long-lived caller is owed: a source-level way to discard
-the cached board, a bound on how long a read may be answered from it, or a ruling that
-holding a source across commands is not a supported shape and saying that in the crate's
-own documentation. The first two both cost the single-request guarantee above, so whichever
-is chosen has to say what the three tests named here should assert instead.
+Settling what is left means deciding what a long-lived caller is owed for the whole-board
+reads: a source-level way to discard the cached board, a bound on how long a read may be
+answered from it, or a ruling that holding a source across commands is not a supported
+shape and saying that in the crate's own documentation. The first two both cost the
+single-request guarantee above, so whichever is chosen has to say what the three tests
+named here should assert instead.
