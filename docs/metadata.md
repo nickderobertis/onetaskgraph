@@ -50,6 +50,33 @@ folder per kind and Linear has native projects, so each already knows which kind
 is without being told. To them the key is ordinary caller metadata: they hand it back with
 its value and JSON type intact, exactly as they hand back every other key they do not own.
 
+### A `github-projects` document is told by its title, not by a key
+
+A board has no document type either, and this one is **not** solved with a metadata key. A
+document there is an ordinary issue whose title begins `DESIGN: ` — spelled once, as
+`onetaskgraph_github_projects::DESIGN_TITLE_PREFIX`, and never guessed at elsewhere. An
+issue whose title starts with it is a document; every other issue is the task or the
+project the sub-issue rule above makes it.
+
+Three consequences, settled here rather than discovered:
+
+- **The reported title is the title a person wrote**, with the prefix taken off — the same
+  way this source takes its metadata slot off the body so `content` is what the person
+  wrote. Writing a document puts the prefix back on, so a document copied out and copied
+  back returns the title it started with.
+- **The prefix is read before the sub-issue rule.** A document is never a project and never
+  a task, whatever sub-issues it has or does not have; reading the prefix later would make
+  a design issue with no sub-issues an *empty project*, which is the one state the
+  `onetaskgraph.item_kind` marker exists to make readable.
+- **A document carries no `onetaskgraph.item_kind`.** That key names what a dependency
+  endpoint points at, and nothing may point at a document, so writing one neither sets the
+  marker nor keeps a marker an earlier write left behind. A caller's own keys travel in the
+  body slot exactly as a task's do.
+
+The prefix is a *title*, so it is visible to a person reading the board — which is the
+point: a design document on a board a person reviews should read as one in GitHub's own
+interface, not only through this product.
+
 ## Repositories
 
 A repository is identified by its **normalized origin as one string**:
@@ -87,6 +114,13 @@ and will not accept:
 | `github-projects` task issue | task issues of this board | another source, or a project |
 | `github-projects` project issue | project issues of this board | another source, or a task |
 | `github-projects` draft item | nothing | anything |
+| `github-projects` document issue | nothing | nothing |
+
+A document is the one row that holds nothing at either end, and that is the contract
+rather than a limit of this backend: a document is not work, so it takes part in no
+dependency graph. A write naming a dependency for one is refused, and a board relationship
+this source finds pointing at a design issue is refused by name too — reporting it as a
+task or as a project would name an id no task or project read of that source can find.
 
 An edge is always oriented `from` **depends on** `to`, whichever way the backend spells it.
 GitHub's `blockedBy` and `blocking` are one relationship read from either end, so both
@@ -98,7 +132,7 @@ report the same edge with the waiting item as `from`, rather than two mirrored o
 | --- | --- |
 | `local-md` | a `metadata:` mapping in the YAML front matter |
 | `in-memory` | as given in its configuration |
-| `github-projects` | canonical JSON in a trailing comment slot at the end of the issue body, for a project issue and a task issue alike |
+| `github-projects` | canonical JSON in a trailing comment slot at the end of the issue body, for a project issue, a task issue and a document issue alike |
 | `linear` | canonical JSON in a slot the source owns on the item itself |
 
 ### Linear's slot, settled

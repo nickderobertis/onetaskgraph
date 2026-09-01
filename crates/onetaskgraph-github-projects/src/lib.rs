@@ -11,14 +11,33 @@
 //! source creates its project and task issues in; a write without it is refused naming
 //! the field.
 //!
-//! **Telling a project from a task.** A board issue is a project when *either* it has
+//! **A document is an ordinary issue whose title begins [`DESIGN_TITLE_PREFIX`].** A
+//! board has no document type and nothing but issues to hold one in, so the title is the
+//! discriminator and it is the whole of it. The title this source *reports* is the one a
+//! person wrote, with the prefix taken off — the same way the metadata slot is taken off
+//! the body so `content` is what the person wrote — and writing a document puts the prefix
+//! back, so a round trip returns the title that went in.
+//!
+//! **Telling a document from a project from a task.** The design prefix is read **first**:
+//! a document is never a project and never a task, whatever sub-issues it has or does not
+//! have. Only then does the rest apply — a board issue is a project when *either* it has
 //! sub-issues *or* it carries [`ItemKind::METADATA_KEY`]; otherwise it is a task. A
 //! sub-issue is always a task, whatever it carries. The marker is sufficient and never
 //! necessary: it is what makes an *empty* project — the state a project copy passes
 //! through between creating the project and filing its first task — readable as a
 //! project, while the sub-issue arm lets a person author a project on the board by hand
-//! with no knowledge of this product's metadata at all. Pull requests are neither a
-//! project nor a task and are ignored.
+//! with no knowledge of this product's metadata at all. Reading the prefix later than the
+//! sub-issue rule would make a design issue with no sub-issues an empty project, which is
+//! exactly the state that rule exists to catch. Pull requests are neither a project nor a
+//! task nor a document and are ignored.
+//!
+//! **Where an entity is, is a link.** Every project, task and document this source reports
+//! carries a [`Location::Url`] naming the issue's own web address — the same address the
+//! `url` field already reports, in the shape that says a reader can open it. That is the
+//! contrast the location contract exists for: a reader holding an entity from this source
+//! is handed something to link to and one holding an entity from a folder of Markdown is
+//! handed a path, and neither has to know which plugin answered. It does not replace or
+//! derive from `url`; that field goes on reporting what it always reported.
 //!
 //! **Where metadata lives.** Short typed things go to typed fields and native relations:
 //! status to the board's `Status` single-select and the issue's own state, the copy
@@ -51,7 +70,7 @@
 //! | Field | Verdict |
 //! | --- | --- |
 //! | `projects` | **Supported and proven.** A task's project is the issue it is a sub-issue of, and a listing scoped to one keeps the items filed under that issue. This is the field that was declared and then not applied, which silently returned another project's tasks. |
-//! | `documents` | **Unsupported, and unimplemented.** A board holds issues, and this source reads them as tasks and as projects; nothing here reads a document. A repository holds files a board item could name, so this is work nobody has written rather than something the backend forbids; docs/follow-ups.md tracks it. |
+//! | `documents` | **Supported and proven.** A board holds issues, so a document is one: the issue whose title begins [`DESIGN_TITLE_PREFIX`]. Reads, filters and paging answer on exactly the terms a task read does, and a write puts the prefix back. |
 //! | `orphan_tasks` | **Supported and proven.** A task issue with no `parent` is in no project. |
 //! | `filter_by_label` | **Supported and proven,** over the issue's own labels. |
 //! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping`. |
@@ -61,11 +80,11 @@
 //! | `project_dependencies` | **Supported and proven,** in both directions, over the same two connections, because a project here is an issue. |
 //! | `max_page_size` | **Supported and proven.** [`MAX_PAGE_SIZE`], GitHub's own connection maximum. |
 //!
-//! No *predicate* here is unsupported — `documents` is the one unsupported field, and it
-//! is not a predicate but a statement that this source has no documents at all — and the
-//! three facts behind the uniform `Native` are recorded below rather than re-derived,
-//! because a reader who takes `Native` to mean *the remote service filters* will read that
-//! uniformity as a lie.
+//! Nothing here is unsupported. `documents` is not a predicate — it says this source has
+//! documents, which it does — and the three facts behind the uniform `Native` on the
+//! predicates beside it are recorded below rather than re-derived, because a reader who
+//! takes `Native` to mean *the remote service filters* will read that uniformity as a
+//! lie.
 //!
 //! First, the plugin contract defines `Support::Native` as *the source applies this
 //! predicate itself*, and says nothing about where it applies it. What the declaration
@@ -133,10 +152,10 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Health, ItemKind, ItemWrite, Label, LabelFilter, NativeId, Page, PageRequest,
-    Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName,
-    SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
-    TextQuery, WriteSupport,
+    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location,
+    NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
+    TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -150,6 +169,20 @@ pub const KIND: &str = "github-projects";
 pub const MAX_PAGE_SIZE: u32 = 100;
 /// Nested connection size which keeps GitHub's worst-case query below its node limit.
 const NESTED_PAGE_SIZE: u32 = 50;
+
+/// The issue-title prefix that makes a board issue a document.
+///
+/// A GitHub Projects board has no document type — it holds issues — so the discriminator
+/// is the title, and this is the whole of it: an issue whose title begins with these bytes
+/// is a document and every other issue is the task or project the sub-issue rule makes it.
+///
+/// It is spelled **once**, here, and read rather than restated everywhere else — including
+/// by the shared journeys, which take it from this constant so a board fixture cannot
+/// drift from what this source reads. `docs/metadata.md` records the two consequences that
+/// are not obvious from the bytes: the reported title has this prefix taken off, exactly
+/// as the body's metadata slot is taken off `content`, and this prefix is read *before*
+/// the sub-issue rule, so a design issue with no sub-issues is never an empty project.
+pub const DESIGN_TITLE_PREFIX: &str = "DESIGN: ";
 
 /// Exact GraphQL query documents issued by this plugin.
 ///
@@ -187,10 +220,10 @@ pub mod graphql {
       ... on Issue{
         blockedBy(first:$first,after:$after){nodes{...Related}pageInfo{hasNextPage endCursor}}
         blocking(first:$first,after:$after){nodes{...Related}pageInfo{hasNextPage endCursor}}
-      }}} fragment Related on Issue{id body parent{id} subIssuesSummary{total}}"#;
+      }}} fragment Related on Issue{id title body parent{id} subIssuesSummary{total}}"#;
     /// Creates one issue in the configured repository.
     pub const CREATE_ISSUE: &str =
-        r#"mutation($input:CreateIssueInput!){createIssue(input:$input){issue{id}}}"#;
+        r#"mutation($input:CreateIssueInput!){createIssue(input:$input){issue{id url}}}"#;
     /// Puts an existing issue on the configured board.
     pub const ADD_TO_BOARD: &str = r#"mutation($input:AddProjectV2ItemByIdInput!){addProjectV2ItemById(input:$input){item{id}}}"#;
     /// Updates an issue's visible fields and its open or closed state in one call.
@@ -1380,10 +1413,23 @@ impl GitHubProjectsSource {
     /// eventual consistency has left behind. An item that was already there is replaced
     /// where it sits, so a second write of it in the same command reads its real parent
     /// rather than the one it had before the first write.
+    ///
+    /// "Where it sits" is two places, and missing the first leaves a stale record that
+    /// wins: an item this same run created is held in `created` and not in the cached
+    /// board, and `board` completes the cached board *from* `created`, so replacing only
+    /// the cached copy of such an item replaces nothing and the read still reports the
+    /// title it was created with.
     fn remember_written(&self, item: Resolved, created: bool) -> Result<(), SourceError> {
         if created {
             self.created()?.push(item);
             return Ok(());
+        }
+        {
+            let mut own = self.created()?;
+            if let Some(held) = own.iter_mut().find(|held| held.id == item.id) {
+                *held = item;
+                return Ok(());
+            }
         }
         if let Some(board) = self.board_cache()?.as_mut()
             && let Some(held) = board.items.iter_mut().find(|held| held.id == item.id)
@@ -1504,14 +1550,28 @@ impl GitHubProjectsSource {
         let marked = ItemKind::from_metadata(&slot).map_err(|message| SourceError::Malformed {
             message: format!("GitHub issue {content_id}: {message}"),
         })?;
-        // Being a sub-issue wins outright, and no marker overrides it: an issue filed
-        // under a project is that project's task even when it has sub-issues of its own.
-        let kind = if parent.is_some() {
-            ItemKind::Task
+        let raw_title = required_str(content, "title")?;
+        // The design prefix is read *first*, before either of the two rules that separate
+        // a project from a task. A document is not work whatever sub-issues it has and
+        // whatever marker it carries, and reading the prefix later would make a design
+        // issue with none of either an empty project.
+        let kind = if raw_title.starts_with(DESIGN_TITLE_PREFIX) {
+            BoardKind::Document
+        } else if parent.is_some() {
+            // Being a sub-issue wins outright, and no marker overrides it: an issue filed
+            // under a project is that project's task even when it has sub-issues of its
+            // own.
+            BoardKind::Work(ItemKind::Task)
         } else if sub_issues > 0 || marked == Some(ItemKind::Project) {
-            ItemKind::Project
+            BoardKind::Work(ItemKind::Project)
         } else {
-            ItemKind::Task
+            BoardKind::Work(ItemKind::Task)
+        };
+        // The title a person wrote, which for a document is the one without the prefix —
+        // the same way `content` above is the body without this source's metadata slot.
+        let title = match kind {
+            BoardKind::Document => raw_title[DESIGN_TITLE_PREFIX.len()..].to_owned(),
+            BoardKind::Work(_) => raw_title.to_owned(),
         };
         let own_repository = content
             .pointer("/repository/nameWithOwner")
@@ -1530,7 +1590,7 @@ impl GitHubProjectsSource {
             id: NativeId(content_id.to_owned()),
             content_kind,
             kind,
-            title: required_str(content, "title")?.to_owned(),
+            title,
             body: body.filter(|value| !value.is_empty()),
             status: self.status(item, content)?,
             labels: labels(content, nodes)?,
@@ -1944,9 +2004,34 @@ impl GitHubProjectsSource {
         target: Option<&NativeId>,
         depends_on: &[DependencyEdge],
     ) -> Result<NativeId, SourceError> {
+        // Refused before anything is read or written: a task or a project titled the way
+        // this board spells a document would land as an issue this same source reads back
+        // as a document, so the field this destination cannot carry is named rather than
+        // written and silently reclassified.
+        if let Written::Work(kind, _) = incoming.written
+            && incoming.title.starts_with(DESIGN_TITLE_PREFIX)
+        {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "the title of this {} begins {DESIGN_TITLE_PREFIX:?}, which is how source {} \
+                     spells a document, so it would read back as one rather than as a {}; \
+                     retitle it, or copy it as a document",
+                    kind.marker(),
+                    self.name,
+                    kind.marker()
+                ),
+            });
+        }
         let board = self.board().await?;
-        let status_target = self.resolved_target(incoming.status.category)?;
-        let column = self.column_for(&board, incoming.status, &status_target)?;
+        let status_target = incoming
+            .written
+            .status()
+            .map(|status| self.resolved_target(status.category))
+            .transpose()?;
+        let column = match (incoming.written.status(), status_target.as_ref()) {
+            (Some(status), Some(target)) => self.column_for(&board, status, target)?,
+            _ => None,
+        };
         let existing = target
             .map(|target| {
                 board
@@ -1960,12 +2045,14 @@ impl GitHubProjectsSource {
             .transpose()?;
         let content_kind = existing.map_or(ContentKind::Issue, |item| item.content_kind);
         if content_kind == ContentKind::DraftIssue {
-            if let StatusTarget::Closed(_) = status_target {
+            if let (Some(StatusTarget::Closed(_)), Some(status)) =
+                (status_target.as_ref(), incoming.written.status())
+            {
                 return Err(SourceError::Refused {
                     message: format!(
                         "status {} of source {} closes the item's issue, and GitHub draft items \
                          have no open or closed state",
-                        category_name(incoming.status.category),
+                        category_name(status.category),
                         self.name
                     ),
                 });
@@ -2003,7 +2090,7 @@ impl GitHubProjectsSource {
                 .map_err(|message| SourceError::Config { message })?,
         };
         let (native, fallback) = self
-            .partition_edges(&board, incoming.kind, content_kind, depends_on)
+            .partition_edges(&board, incoming.written.kind(), content_kind, depends_on)
             .await?;
         let slot = slot_metadata(incoming, own_repository.as_ref(), &fallback);
         let body = compose_body(incoming.content, &slot)?;
@@ -2051,14 +2138,14 @@ impl GitHubProjectsSource {
             None => None,
         };
 
-        let (content_id, item_id) = match existing {
+        let (content_id, item_id, url) = match existing {
             Some(item) => {
-                self.update_existing(item, incoming, &body, &status_target)
+                self.update_existing(item, incoming, &body, status_target.as_ref())
                     .await?;
-                (item.id.clone(), item.item_id.clone())
+                (item.id.clone(), item.item_id.clone(), item.url.clone())
             }
             None => {
-                self.create_and_file_issue(&board, incoming, &body, &status_target)
+                self.create_and_file_issue(&board, incoming, &body, status_target.as_ref())
                     .await?
             }
         };
@@ -2099,22 +2186,29 @@ impl GitHubProjectsSource {
             item_id,
             id: content_id.clone(),
             content_kind,
-            kind: incoming.kind,
+            kind: incoming.written.kind(),
             title: incoming.title.to_owned(),
-            // The item's *visible* prose, which is what `resolve` reads back out of a
-            // board item's body and therefore what the rest of this command has to see.
-            // The composed `body` above is that prose plus the trailing metadata comment,
-            // and remembering it would read back as an item whose content held its own
-            // encoding.
-            body: incoming
-                .content
-                .filter(|content| !content.is_empty())
-                .map(str::to_owned),
-            status: incoming.status.clone(),
+            // The visible half of the body this write composed, split back off it the
+            // way a read splits it — so what this record reports is what a read of the
+            // same issue reports, rather than the person's text with the metadata slot
+            // still on the end of it.
+            body: metadata_body(body.clone())?.0,
+            // A document has no status of its own; what it reads back as is whatever
+            // the issue's own state says, which is what a re-read reports.
+            status: incoming
+                .written
+                .status()
+                .cloned()
+                .unwrap_or_else(|| Status {
+                    category: StatusCategory::Unknown,
+                    name: "Open".to_owned(),
+                }),
             labels: incoming.labels.to_vec(),
             parent: incoming.parent.cloned(),
             origin: (!origin.is_empty()).then(|| origin.to_owned()),
-            url: existing.and_then(|item| item.url.clone()),
+            // In the update path this is the item's own url, read off `existing` where the
+            // tuple above was bound, so one expression serves both halves.
+            url,
             created_at: existing.and_then(|item| item.created_at),
             updated_at: existing.and_then(|item| item.updated_at),
             own_repository,
@@ -2171,7 +2265,14 @@ impl GitHubProjectsSource {
                 incoming.parent,
             )
             .await?;
-            self.reconcile_blocked_by(content_id, native).await?;
+            // A document takes part in no dependency graph, so writing one neither reads
+            // nor changes the issue's own `blockedBy` relationships. Reconciling them
+            // against the empty list a document write carries would *delete* whatever
+            // relationships a person had made on that issue, which is a write nobody
+            // asked for.
+            if incoming.written.kind() != BoardKind::Document {
+                self.reconcile_blocked_by(content_id, native).await?;
+            }
         }
         Ok(())
     }
@@ -2226,7 +2327,7 @@ impl GitHubProjectsSource {
     async fn partition_edges(
         &self,
         board: &Board,
-        near_kind: ItemKind,
+        near_kind: BoardKind,
         near_content: ContentKind,
         depends_on: &[DependencyEdge],
     ) -> Result<(Vec<String>, Vec<DependencyEdge>), SourceError> {
@@ -2267,12 +2368,17 @@ impl GitHubProjectsSource {
             // wrong kind would read back as a cross-level edge that never existed; written
             // natively, it would name a relationship of a different level than the caller
             // asked for.
-            if let Some(disagreeing) = far.filter(|far| far.kind != edge.to.kind) {
+            //
+            // A far end this board holds as a *document* fails the same comparison and is
+            // refused by the same sentence: `ItemKind` has no document variant because
+            // nothing may point at one, so no caller can name it correctly and the refusal
+            // is the only honest answer.
+            if let Some(disagreeing) = far.filter(|far| far.kind != BoardKind::Work(edge.to.kind)) {
                 return Err(SourceError::Refused {
                     message: format!(
                         "GitHub dependency item {far_id} is a {} of this board, and this item \
                          names it as a {}; record the kind it is",
-                        disagreeing.kind.marker(),
+                        disagreeing.kind.describes(),
                         edge.to.kind.marker()
                     ),
                 });
@@ -2282,7 +2388,8 @@ impl GitHubProjectsSource {
             // written nowhere at all, because a draft's native reconciliation never runs.
             let native_here = near_content == ContentKind::Issue
                 && far.is_some_and(|far| {
-                    far.content_kind == ContentKind::Issue && edge.to.kind == near_kind
+                    far.content_kind == ContentKind::Issue
+                        && BoardKind::Work(edge.to.kind) == near_kind
                 });
             if native_here {
                 native.push(far_id.to_owned());
@@ -2298,17 +2405,18 @@ impl GitHubProjectsSource {
         item: &Resolved,
         incoming: &Incoming<'_>,
         body: &Option<String>,
-        status_target: &StatusTarget,
+        status_target: Option<&StatusTarget>,
     ) -> Result<(), SourceError> {
+        let title = incoming.written_title();
         let (operation, input, pointer) = match item.content_kind {
             ContentKind::DraftIssue => (
                 graphql::UPDATE_DRAFT,
-                json!({"draftIssueId":item.id.0,"title":incoming.title,"body":body}),
+                json!({"draftIssueId":item.id.0,"title":title,"body":body}),
                 "/updateProjectV2DraftIssue/draftIssue",
             ),
             ContentKind::Issue => (
                 graphql::UPDATE_ISSUE,
-                json!({"id":item.id.0,"title":incoming.title,"body":body,
+                json!({"id":item.id.0,"title":title,"body":body,
                        "stateInput":state_input(status_target)}),
                 "/updateIssue/issue",
             ),
@@ -2332,19 +2440,26 @@ impl GitHubProjectsSource {
     /// Three calls rather than one: `createIssue` needs a repository and answers with an
     /// issue that is on no board, `addProjectV2ItemById` is what puts it there, and a
     /// closed status is a state of the issue rather than a field of the board item.
+    /// Creates the issue, files it on the board, and reports what a read of it would say:
+    /// its content id, its board item id, and the web address GitHub gave it.
+    ///
+    /// The address comes back here because this is the only place it is known before
+    /// GitHub's own board read catches up — an item this run created answers the reads
+    /// that follow it out of the record below, and one remembered without its address
+    /// would report no location for the rest of the run.
     async fn create_and_file_issue(
         &self,
         board: &Board,
         incoming: &Incoming<'_>,
         body: &Option<String>,
-        status_target: &StatusTarget,
-    ) -> Result<(NativeId, String), SourceError> {
+        status_target: Option<&StatusTarget>,
+    ) -> Result<(NativeId, String, Option<String>), SourceError> {
         let repository_id = self.repository_id().await?;
         let data = self
             .graphql(
                 graphql::CREATE_ISSUE,
                 json!({"input":{
-                    "repositoryId":repository_id,"title":incoming.title,"body":body
+                    "repositoryId":repository_id,"title":incoming.written_title(),"body":body
                 }}),
             )
             .await?;
@@ -2355,6 +2470,10 @@ impl GitHubProjectsSource {
                 message: "GitHub issue creation returned no issue".into(),
             })?;
         let content_id = NativeId(required_str(created, "id")?.to_owned());
+        // Optional although GitHub's schema makes it non-null: the issue exists by now, so
+        // a response without it is not worth failing a landed write over — the item simply
+        // reports no location until the board read catches up, which is what it did before.
+        let url = optional_str(created, "url")?.map(str::to_owned);
         // The issue exists from here on, so a failure filing it on the board takes it
         // back: an issue in the repository that is on no board is an item nobody asked for
         // and nothing here would find again.
@@ -2377,7 +2496,7 @@ impl GitHubProjectsSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub board addition returned no project item".into(),
             })?;
-        if let StatusTarget::Closed(_) = status_target {
+        if let Some(StatusTarget::Closed(_)) = status_target {
             let closed = self
                 .graphql(
                     graphql::UPDATE_ISSUE,
@@ -2396,7 +2515,7 @@ impl GitHubProjectsSource {
                 });
             }
         }
-        Ok((content_id, required_str(item, "id")?.to_owned()))
+        Ok((content_id, required_str(item, "id")?.to_owned(), url))
     }
 
     /// Move one issue under the project it now belongs to, or out of the one it left.
@@ -2529,7 +2648,7 @@ struct Resolved {
     item_id: String,
     id: NativeId,
     content_kind: ContentKind,
-    kind: ItemKind,
+    kind: BoardKind,
     title: String,
     body: Option<String>,
     status: Status,
@@ -2559,6 +2678,23 @@ impl Resolved {
         metadata
     }
 
+    /// Where this item is, as a link a reader can open.
+    ///
+    /// A board is a hosted place and every issue on it has a web address, so that address
+    /// is what "where is this?" means here — and [`Location::Url`] is what says which kind
+    /// of place it is, so a reader knows to open it rather than to read a file out. It
+    /// does not replace or derive from `url`: the field goes on reporting exactly what it
+    /// reported before, and this says what that address *is*.
+    ///
+    /// An item GitHub gave no `url` for — a draft has none — reports no location at all
+    /// rather than a third variant, which is the contract's "the source did not say". An
+    /// issue this run created is not one of those: its address comes back from the
+    /// creating mutation, so it is somewhere a reader can open from the moment it exists
+    /// rather than from whenever the board read catches up.
+    fn location(&self) -> Option<Location> {
+        self.url.clone().map(Location::Url)
+    }
+
     fn task(&self) -> Task {
         Task {
             id: self.id.clone(),
@@ -2568,7 +2704,7 @@ impl Resolved {
             labels: self.labels.clone(),
             project: self.parent.clone(),
             url: self.url.clone(),
-            location: None,
+            location: self.location(),
             created_at: self.created_at,
             updated_at: self.updated_at,
             metadata: self.metadata(),
@@ -2584,7 +2720,25 @@ impl Resolved {
             status: self.status.clone(),
             labels: self.labels.clone(),
             url: self.url.clone(),
-            location: None,
+            location: self.location(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            metadata: self.metadata(),
+            repositories: self.repositories.clone(),
+        }
+    }
+
+    /// The same issue as a document: the project it is filed under, and no status and no
+    /// dependencies, because a document is not work.
+    fn document(&self) -> Document {
+        Document {
+            id: self.id.clone(),
+            title: self.title.clone(),
+            content: self.body.clone(),
+            project: self.parent.clone(),
+            labels: self.labels.clone(),
+            url: self.url.clone(),
+            location: self.location(),
             created_at: self.created_at,
             updated_at: self.updated_at,
             metadata: self.metadata(),
@@ -2593,22 +2747,92 @@ impl Resolved {
     }
 }
 
-/// The item being written, in the one shape both write methods reach.
+/// What one write is, and the status that comes with being it.
+///
+/// One value rather than a [`BoardKind`] beside an `Option<Status>`: a document has no
+/// status and a task or a project always has one, so "a document carrying a status" and
+/// "a task carrying none" are states a write cannot be in rather than states every use
+/// site below has to defend against.
+enum Written<'a> {
+    /// A document, which is not work and so has no status at all.
+    Document,
+    /// A task or a project, and the status it is being written with.
+    Work(ItemKind, &'a Status),
+}
+
+impl Written<'_> {
+    /// Which of the board's three kinds this write is.
+    const fn kind(&self) -> BoardKind {
+        match self {
+            Self::Document => BoardKind::Document,
+            Self::Work(kind, _) => BoardKind::Work(*kind),
+        }
+    }
+
+    /// The status this write carries. A document carries none, so a write of one says
+    /// nothing about the issue's open or closed state and selects no board `Status`
+    /// option.
+    const fn status(&self) -> Option<&Status> {
+        match self {
+            Self::Document => None,
+            Self::Work(_, status) => Some(status),
+        }
+    }
+}
+
+/// The item being written, in the one shape all three write methods reach.
 struct Incoming<'a> {
-    kind: ItemKind,
+    written: Written<'a>,
+    /// The title a person wrote. A document's goes onto the issue with
+    /// [`DESIGN_TITLE_PREFIX`] put back, so a round trip returns the title that went in.
     title: &'a str,
     content: Option<&'a str>,
-    status: &'a Status,
     labels: &'a [Label],
     metadata: &'a BTreeMap<String, Value>,
     repositories: &'a [Repository],
     parent: Option<&'a NativeId>,
 }
 
+impl Incoming<'_> {
+    /// The title this write puts on the issue.
+    fn written_title(&self) -> String {
+        match self.written {
+            Written::Document => format!("{DESIGN_TITLE_PREFIX}{}", self.title),
+            Written::Work(..) => self.title.to_owned(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ContentKind {
     DraftIssue,
     Issue,
+}
+
+/// What one board issue is: a document, or the work an [`ItemKind`] names.
+///
+/// A type of this source's own rather than an `ItemKind` with a third variant, because
+/// `ItemKind` names what a dependency endpoint points at and nothing may point at a
+/// document — the contract keeps a document out of that enum deliberately. Holding the
+/// board's three answers in one value is what makes every place that asks "which is this?"
+/// answer all three, rather than a `document: bool` beside a `kind` that means nothing for
+/// two thirds of the board.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BoardKind {
+    /// An issue whose title begins [`DESIGN_TITLE_PREFIX`].
+    Document,
+    /// Every other issue, and every draft.
+    Work(ItemKind),
+}
+
+impl BoardKind {
+    /// How a refusal names this kind to the person reading it.
+    const fn describes(self) -> &'static str {
+        match self {
+            Self::Document => "document",
+            Self::Work(kind) => kind.marker(),
+        }
+    }
 }
 
 /// Whether `labels` satisfies `filter`, matching by name, case-insensitively.
@@ -2672,6 +2896,25 @@ fn project_matches(project: &Project, query: &ProjectQuery) -> bool {
             .is_none_or(|text| text_matches(&project.title, project.content.as_deref(), text))
 }
 
+/// The same three predicates a task query carries, minus the status filter.
+///
+/// A document is not work, so it has no status for one to compare against and the query
+/// type carries none. The project predicate is the same one — a design issue filed under a
+/// project issue is in that project, and one filed under nothing is in none — so it is
+/// spelled the same way here rather than answered differently.
+fn document_matches(document: &Document, query: &DocumentQuery) -> bool {
+    labels_match(&document.labels, &query.labels)
+        && match &query.project {
+            ProjectFilter::Any => true,
+            ProjectFilter::Orphans => document.project.is_none(),
+            ProjectFilter::Is(id) => document.project.as_ref() == Some(id),
+        }
+        && query
+            .text
+            .as_ref()
+            .is_none_or(|text| text_matches(&document.title, document.content.as_deref(), text))
+}
+
 #[async_trait::async_trait]
 impl TaskSource for GitHubProjectsSource {
     fn kind(&self) -> &'static str {
@@ -2680,7 +2923,7 @@ impl TaskSource for GitHubProjectsSource {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
-            documents: Support::Unsupported,
+            documents: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -2709,7 +2952,7 @@ impl TaskSource for GitHubProjectsSource {
             .await?
             .items
             .iter()
-            .find(|item| item.id == *id && item.kind == ItemKind::Task)
+            .find(|item| item.id == *id && item.kind == BoardKind::Work(ItemKind::Task))
             .map(Resolved::task))
     }
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
@@ -2718,7 +2961,7 @@ impl TaskSource for GitHubProjectsSource {
             .await?
             .items
             .iter()
-            .find(|item| item.id == *id && item.kind == ItemKind::Project)
+            .find(|item| item.id == *id && item.kind == BoardKind::Work(ItemKind::Project))
             .map(Resolved::project))
     }
     async fn query_tasks(
@@ -2734,7 +2977,7 @@ impl TaskSource for GitHubProjectsSource {
             .await?
             .items
             .iter()
-            .filter(|item| item.kind == ItemKind::Task)
+            .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
             .map(Resolved::task)
             .filter(|task| task_matches(task, query))
             .collect();
@@ -2755,12 +2998,44 @@ impl TaskSource for GitHubProjectsSource {
             .await?
             .items
             .iter()
-            .filter(|item| item.kind == ItemKind::Project)
+            .filter(|item| item.kind == BoardKind::Work(ItemKind::Project))
             .map(Resolved::project)
             .filter(|project| project_matches(project, query))
             .collect();
         Ok(offset_page(
             projects,
+            numeric_cursor(page.cursor.as_ref())?,
+            page.limit.min(MAX_PAGE_SIZE) as usize,
+        ))
+    }
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        Ok(self
+            .board()
+            .await?
+            .items
+            .iter()
+            .find(|item| item.id == *id && item.kind == BoardKind::Document)
+            .map(Resolved::document))
+    }
+    async fn query_documents(
+        &self,
+        query: &DocumentQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        validate_page(page)?;
+        // Filtered before paged, exactly as a task read is: a page of a filtered result is
+        // a page of the survivors, never the survivors of a page.
+        let documents = self
+            .board()
+            .await?
+            .items
+            .iter()
+            .filter(|item| item.kind == BoardKind::Document)
+            .map(Resolved::document)
+            .filter(|document| document_matches(document, query))
+            .collect();
+        Ok(offset_page(
+            documents,
             numeric_cursor(page.cursor.as_ref())?,
             page.limit.min(MAX_PAGE_SIZE) as usize,
         ))
@@ -2812,10 +3087,9 @@ impl TaskSource for GitHubProjectsSource {
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.write_item(
             &Incoming {
-                kind: ItemKind::Task,
+                written: Written::Work(ItemKind::Task, &write.item.status),
                 title: &write.item.title,
                 content: write.item.content.as_deref(),
-                status: &write.item.status,
                 labels: &write.item.labels,
                 metadata: &write.item.metadata,
                 repositories: &write.item.repositories,
@@ -2830,10 +3104,9 @@ impl TaskSource for GitHubProjectsSource {
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
         self.write_item(
             &Incoming {
-                kind: ItemKind::Project,
+                written: Written::Work(ItemKind::Project, &write.item.status),
                 title: &write.item.title,
                 content: write.item.content.as_deref(),
-                status: &write.item.status,
                 labels: &write.item.labels,
                 metadata: &write.item.metadata,
                 repositories: &write.item.repositories,
@@ -2845,11 +3118,54 @@ impl TaskSource for GitHubProjectsSource {
         .await
     }
 
+    /// Create or update one document, which is one issue titled the way this board spells
+    /// a document.
+    ///
+    /// Everything else is exactly a task write: caller metadata goes to the same canonical
+    /// JSON slot at the end of the body and comes back with its JSON types intact, a key
+    /// or a field this board cannot carry is refused by name rather than dropped, a target
+    /// naming an issue this board does not hold is refused rather than created, and an
+    /// issue this call created is taken back when the rest of the write fails.
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        // A document takes part in no dependency graph, so there is no far end to write
+        // natively and none to record: a caller naming one is told so rather than having it
+        // stored under the reserved key, where a later read would report an edge the
+        // contract says cannot exist.
+        if !write.depends_on.is_empty() {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "this write names {} dependencies for a document, and a document takes \
+                     part in no dependency graph; next: put the dependency on the task or \
+                     project the document is about",
+                    write.depends_on.len()
+                ),
+            });
+        }
+        self.write_item(
+            &Incoming {
+                written: Written::Document,
+                title: &write.item.title,
+                content: write.item.content.as_deref(),
+                labels: &write.item.labels,
+                metadata: &write.item.metadata,
+                repositories: &write.item.repositories,
+                parent: write.item.project.as_ref(),
+            },
+            write.target.as_ref(),
+            &[],
+        )
+        .await
+    }
+
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         self.delete_item(id).await
     }
 
     async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.delete_item(id).await
+    }
+
+    async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
         self.delete_item(id).await
     }
 }
@@ -2919,16 +3235,34 @@ fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Pag
 
 /// The kind of one issue reached through a dependency connection.
 ///
-/// The same three questions the board scan asks, over the fields the dependency document
-/// selects: a sub-issue is a task, and anything else with sub-issues or the marker is a
-/// project.
+/// The same questions the board scan asks, over the fields the dependency document
+/// selects, and in the same order: the design prefix first, then a sub-issue is a task,
+/// then anything with sub-issues or the marker is a project.
+///
+/// # Errors
+///
+/// A far end this board holds as a document is refused rather than reported. The two
+/// answers that are not refusals would both be wrong: reporting it as a task names an id
+/// no task read of this source can find, and reporting it as a project names one no
+/// project read can. There is no third value to return — `ItemKind` has no document
+/// variant, because nothing may point at a document — so the relationship itself is what
+/// the person is told about.
 fn related_kind(value: &Value) -> Result<ItemKind, SourceError> {
+    let id = required_str(value, "id")?;
+    if required_str(value, "title")?.starts_with(DESIGN_TITLE_PREFIX) {
+        return Err(SourceError::Refused {
+            message: format!(
+                "GitHub issue {id} is a document of this board — its title begins \
+                 {DESIGN_TITLE_PREFIX:?} — and nothing may depend on a document or be depended \
+                 on by one; next: remove that issue's blocking relationship on this board"
+            ),
+        });
+    }
     let parent = optional_str(value.get("parent").unwrap_or(&Value::Null), "id")?;
     if parent.is_some() {
         return Ok(ItemKind::Task);
     }
     let (_, slot) = metadata_body(optional_str(value, "body")?.map(str::to_owned))?;
-    let id = required_str(value, "id")?;
     let marked = ItemKind::from_metadata(&slot).map_err(|message| SourceError::Malformed {
         message: format!("GitHub issue {id}: {message}"),
     })?;
@@ -2945,11 +3279,17 @@ fn related_kind(value: &Value) -> Result<ItemKind, SourceError> {
 /// `stateInput` and `state` are mutually exclusive on `UpdateIssueInput`, and only this
 /// one is ever sent. A non-terminal status always asks for `OPEN`, which is what reopens
 /// a currently-closed issue: without that the item would read back `Unknown` and a copy
-/// would report a change forever.
-fn state_input(target: &StatusTarget) -> Value {
+/// would report a change forever. A document has no status at all, and asks for neither.
+fn state_input(target: Option<&StatusTarget>) -> Value {
     match target {
-        StatusTarget::Closed(reason) => json!({"value":"CLOSED","stateReason":reason.reason()}),
-        StatusTarget::Column(_) | StatusTarget::Disabled => json!({"value":"OPEN"}),
+        Some(StatusTarget::Closed(reason)) => {
+            json!({"value":"CLOSED","stateReason":reason.reason()})
+        }
+        Some(StatusTarget::Column(_) | StatusTarget::Disabled) => json!({"value":"OPEN"}),
+        // A document has no status, so a write of one says nothing about the issue's open
+        // or closed state rather than forcing it open: `stateInput` is what carries that
+        // instruction, and an explicit null asks for no change to it.
+        None => Value::Null,
     }
 }
 
@@ -2966,10 +3306,15 @@ fn slot_metadata(
 ) -> BTreeMap<String, Value> {
     let mut metadata = incoming.metadata.clone();
     metadata.remove(ORIGIN_KEY);
-    metadata.insert(
-        ItemKind::METADATA_KEY.to_owned(),
-        Value::String(incoming.kind.marker().to_owned()),
-    );
+    match incoming.written.kind() {
+        BoardKind::Work(kind) => metadata.insert(
+            ItemKind::METADATA_KEY.to_owned(),
+            Value::String(kind.marker().to_owned()),
+        ),
+        // A document is told by its title, so it carries no kind marker: that key names
+        // what a dependency endpoint points at, and nothing may point at a document.
+        BoardKind::Document => metadata.remove(ItemKind::METADATA_KEY),
+    };
     let derivable = own_repository
         .map(|own| incoming.repositories == [own.clone()])
         .unwrap_or(incoming.repositories.is_empty());

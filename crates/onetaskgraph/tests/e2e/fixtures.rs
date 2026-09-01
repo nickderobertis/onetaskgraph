@@ -117,8 +117,8 @@ pub struct Declared {
     /// Not a predicate, and so unlike every other `Support` here: it says what the source
     /// *holds*, the engine reads it once at the handshake rather than compensating for it,
     /// and a source declaring it unsupported is never asked for a document. The table
-    /// carries rows of both kinds on purpose — the `in-memory` and `local-md` rows hold
-    /// documents, the two remaining hosted plugins hold none yet — so the shared document
+    /// carries rows of both kinds on purpose — the `in-memory`, `local-md` and GitHub
+    /// Projects rows hold documents and `linear` holds none yet — so the shared document
     /// journeys drive the answer and the honest refusal against real difference rather than
     /// against a mock.
     pub documents: Support,
@@ -449,8 +449,9 @@ pub const ROWS: &[Row] = &[
         name: "github-projects",
         fixture: Ready {
             block: github_projects_block,
-            // As Linear: no location reported for anything yet.
-            place: nowhere,
+            // Every entity here is an issue and every issue has a web address, so this row
+            // is the one whose places are all links.
+            place: github_place,
             // A board is a container of projects, not a project: a project is an issue and
             // its tasks are that issue's sub-issues, which is what this source's own module
             // documentation records and what the fixture board below is built as. So one
@@ -461,13 +462,33 @@ pub const ROWS: &[Row] = &[
             // The source walks the whole board before it answers anything, so it applies
             // every predicate a query carries itself; `GitHubProjectsSource`'s own module
             // documentation records why that is what `Native` means here.
+            //
+            // `documents` included: a board has no document type, so this source spells
+            // one as an issue whose title begins its own design prefix — which is what the
+            // three `D-*` items of the fixture board above are.
             declared: Declared {
+                documents: Support::Native,
                 max_page_size: 100,
                 ..EVERY_PREDICATE_NATIVE
             },
         },
     },
 ];
+
+/// Every entity a GitHub Projects board reports is an issue, and every issue has a web
+/// address, so every one of them is a link and none of them is absent.
+///
+/// This is the contrast the location contract exists for, and it is real difference rather
+/// than a second copy of `local-md`'s: one reader is handed something to open and another
+/// a path to read out, and neither has to know which plugin answered. The address is the
+/// one the fixture board's own GraphQL responses carry, so the row and the board it is
+/// built from cannot disagree about where an item is.
+fn github_place(_sandbox: &Sandbox, _verb: &str, id: &str) -> Option<Placed> {
+    Some(Placed {
+        key: "url",
+        value: format!("https://example.invalid/{id}"),
+    })
+}
 
 /// The declaration a source that applies every predicate itself carries.
 ///
@@ -634,7 +655,67 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
             json!([]),
             marked(json!({})),
         ),
+        // The shared dataset's three documents. A board has no document type, so each is an
+        // ordinary issue whose title begins with this source's own design prefix — taken
+        // from the plugin rather than spelled again here, so this fixture cannot drift from
+        // what the source reads. The prefix is what makes them documents: `D-1` carries the
+        // *project* marker and sub-issues of its own, `D-3` has neither and would otherwise
+        // be an empty project, and `D-2` is a sub-issue, so each of the three arms that
+        // separate a project from a task is present on one of them and each must lose.
+        github_document(
+            "D-1",
+            "Alpha design",
+            "the engine core, reviewed",
+            Some("P-1"),
+            json!([["L-1", "bug"]]),
+            json!({"onepipeline.turn_budget":12,"caller.flags":[true,null]}),
+        ),
+        github_document(
+            "D-2",
+            "Runbook",
+            "how to read the alpha design",
+            Some("P-2"),
+            json!([["L-3", "core"]]),
+            json!({}),
+        ),
+        github_document(
+            "D-3",
+            "Loose note",
+            "filed nowhere",
+            None,
+            json!([]),
+            json!({}),
+        ),
     ]
+}
+
+/// One document on the fixture board: an issue titled the way this source spells one.
+///
+/// A document has no status, so this takes none — the issue sits open in whatever column
+/// the board gives it, and nothing this source reports about a document reads it.
+fn github_document(
+    id: &str,
+    title: &str,
+    body: &str,
+    parent: Option<&str>,
+    labels: Value,
+    slot: Value,
+) -> Value {
+    github_item(
+        id,
+        &format!(
+            "{}{title}",
+            onetaskgraph_github_projects::DESIGN_TITLE_PREFIX
+        ),
+        body,
+        Placement {
+            status: "Todo",
+            state: ("OPEN", None),
+            parent,
+        },
+        labels,
+        slot,
+    )
 }
 
 /// The board's own `blockedBy` graph: which item waits on which.
@@ -807,6 +888,7 @@ impl GitHubBoard {
                 .map(|id| {
                     let far = self.items.iter().find(|item| item["id"] == json!(id));
                     json!({"id":id,
+                           "title":far.map(|item| item["title"].clone()),
                            "body":far.map(|item| item["body"].clone()),
                            "parent":far.and_then(|item| item["parent"].as_str())
                                .map(|parent| json!({"id":parent})),
@@ -1014,7 +1096,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             "parent":Value::Null,"repo":"nickderobertis/onetaskgraph","status":"Todo",
             "origin":"","labels":[]});
         board.pending.push(created);
-        return json!({"createIssue":{"issue":{"id":id}}});
+        // GitHub answers the creating mutation with the issue's own web address, which is
+        // the only place a run learns where an item it just created is before this board's
+        // read catches up.
+        return json!({"createIssue":{"issue":{"id":id,
+            "url":format!("https://example.invalid/{id}")}}});
     }
     if query.contains("addProjectV2ItemById(input:$input)") {
         assert_eq!(input["projectId"], "PVT-board");
