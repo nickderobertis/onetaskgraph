@@ -928,6 +928,7 @@ impl TaskSource for LocalMdSource {
     /// `write.depends_on` reaches nothing here, which is the contract rather than an
     /// omission: nothing may point at a document, so [`Outgoing::Document`] has nowhere to
     /// carry an edge and no status to disagree with this folder's mapping.
+    // llmlint: ignore[boundary_inputs_validated] `ItemWrite` carries `depends_on` for all three kinds and the frozen contract says nothing about a document's being empty, so a non-empty one is not an input this plugin may rule on. `in-memory`, the reference implementation of this method, ignores it for the same recorded reason; refusing here would make this the one source that rejects a call every other source accepts, which is a change to the contract rather than to this plugin and is its owner's to make.
     async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
         let document = &write.item;
         self.write_entry(
@@ -1164,11 +1165,11 @@ impl LocalMdSource {
         Ok(id)
     }
 
-    /// Remove one document, so a copy that could not finish leaves this folder as it was.
+    /// Remove one item, so a copy that could not finish leaves this folder as it was.
     ///
-    /// An id naming no document is not an error: the file is already gone, which is the
-    /// state this asks for. `existing` refuses that case because an *update* of a missing
-    /// document is a caller mistake, and this is not one.
+    /// An id naming no file is not an error: it is already gone, which is the state this
+    /// asks for. `existing` refuses that case because an *update* of a missing item is a
+    /// caller mistake, and this is not one.
     fn delete_entry(&self, kind: Kind, id: &NativeId) -> Result<(), SourceError> {
         let path = match self.existing(kind, id) {
             Ok(path) => path,
@@ -1180,7 +1181,7 @@ impl LocalMdSource {
         })
     }
 
-    /// The path of the document `id` names, refusing when this source holds no such one.
+    /// The path of the item `id` names in that folder, refusing when there is no such file.
     fn existing(&self, kind: Kind, id: &NativeId) -> Result<PathBuf, SourceError> {
         let base = self.directory(kind)?;
         let candidate = base.join(&id.0).with_extension("md");
@@ -1208,7 +1209,7 @@ impl LocalMdSource {
         Ok(canonical)
     }
 
-    /// A path no document occupies, and the id it will be read back under.
+    /// A path nothing in that folder occupies, and the id it will be read back under.
     fn unused(&self, kind: Kind, id: &NativeId) -> Result<(NativeId, PathBuf), SourceError> {
         let base = self.directory(kind)?;
         let stem = document_stem(id)?;
