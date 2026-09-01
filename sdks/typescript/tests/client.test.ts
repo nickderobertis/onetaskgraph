@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {
+  appendFileSync,
   chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -364,13 +364,20 @@ test("a document copy drives the real binary and is refused by a source with non
     // The location is compared by the file it names rather than by how it is spelled: this
     // source canonicalizes, and a canonical path is spelled differently on each platform —
     // macOS resolves the temporary tree's symlink under `/var/folders`, and Windows answers
-    // with an extended-length `\\?\` path that no other language writes. Resolving both
-    // sides asks the operating system the question this assertion is really making, and it
-    // throws outright when the path names no file, which comparing two strings does not.
-    const located = document?.location as { path: string };
-    expect(realpathSync(located.path)).toBe(
-      realpathSync(resolve(documentRoot, "notes/documents/D-1.md")),
-    );
+    // with an extended-length `\\?\` path over an account name no other language here
+    // writes. Resolving both sides through `fs.realpathSync` does not settle that: on
+    // Windows this runtime returns each path unchanged, so the comparison stayed
+    // `\\?\C:\Users\runneradmin\…` against the `C:\Users\RUNNER~1\…` short form this test
+    // built, which is what `check (windows-latest)` refused. Write a sentinel through the
+    // path this test built and read it back through the path the source reported instead:
+    // one file has it and no other file can, which is the question the assertion is really
+    // making, and reading also fails outright when the reported path names nothing — as
+    // comparing two strings does not. The extended-length prefix is dropped first, because
+    // it is a spelling for Windows' own API rather than for a file call of this runtime.
+    const located = (document?.location as { path: string }).path.replace(/^\\\\\?\\/, "");
+    const sentinel = "read back through the location this source reported";
+    appendFileSync(resolve(documentRoot, "notes/documents/D-1.md"), `\n${sentinel}\n`);
+    expect(readFileSync(located, "utf8")).toContain(sentinel);
     expect(document).toMatchObject({
       title: "Alpha design",
       content: "reviewed",
