@@ -1114,6 +1114,78 @@ fn a_silent_handshake_is_stopped_at_its_configured_deadline() {
 
 #[cfg(unix)]
 #[test]
+fn a_rate_limited_handshake_keeps_its_wait_and_gains_what_the_plugin_wrote() {
+    // A plugin that refuses the handshake has usually said why on standard error and
+    // nowhere else, and the engine appends that to the refusal it reports. `rate-limited`
+    // was the one kind that could not take it — the variant had no message — so what the
+    // plugin wrote was dropped. It has one now.
+    //
+    // What must survive alongside it is `retry_after_seconds`: that is the piece of this
+    // refusal the engine acts on, and a diagnostic that replaced it with prose would leave
+    // the caller with a reason and no wait. A real child writes both halves.
+    let script = r#"read -r _request
+printf '%s\n' 'the board is refusing bursts; slow down' >&2
+printf '%s\n' '{"id":"0","error":{"kind":"rate-limited","retry_after_seconds":45}}'"#;
+    let error = SubprocessSource::connect(
+        "/bin/sh",
+        &["-c".to_owned(), script.to_owned()],
+        &name(),
+        &json!({}),
+        BTreeMap::new(),
+    )
+    .expect_err("a handshake the plugin rate-limited");
+
+    let SourceError::RateLimited {
+        retry_after_seconds,
+        message,
+    } = error
+    else {
+        panic!("a rate-limited handshake reported as {error:?}");
+    };
+    assert_eq!(
+        retry_after_seconds,
+        Some(45),
+        "the wait the plugin asked for was replaced by the diagnostic"
+    );
+    let said = message.expect("what the plugin wrote reaches the caller");
+    assert!(
+        said.contains("the board is refusing bursts"),
+        "the plugin's own words were dropped: {said}"
+    );
+    assert!(
+        said.contains("the source rate-limited the request"),
+        "the refusal it was appended to is no longer in it: {said}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rate_limited_handshake_from_a_silent_plugin_reads_exactly_as_it_did_before() {
+    // The other half: a plugin that wrote nothing has nothing to add, and the refusal it
+    // earns is the one shape every caller was already written against.
+    let script = r#"read -r _request
+printf '%s\n' '{"id":"0","error":{"kind":"rate-limited","retry_after_seconds":45}}'"#;
+    let error = SubprocessSource::connect(
+        "/bin/sh",
+        &["-c".to_owned(), script.to_owned()],
+        &name(),
+        &json!({}),
+        BTreeMap::new(),
+    )
+    .expect_err("a handshake the plugin rate-limited");
+
+    assert_eq!(
+        error,
+        SourceError::RateLimited {
+            retry_after_seconds: Some(45),
+            message: None,
+        }
+    );
+    assert_eq!(error.to_string(), "the source rate-limited the request");
+}
+
+#[cfg(unix)]
+#[test]
 fn a_spawned_plugin_inherits_no_unrelated_host_environment() {
     // `HOME` is deliberately not one of the named credentials handed to `connect`.
     // A real child shell reports which side of the boundary it observed through the
