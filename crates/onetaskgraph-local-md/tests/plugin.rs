@@ -1,10 +1,10 @@
 use std::fs;
 
 use onetaskgraph_plugin_api::{
-    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, ItemKind, ItemWrite,
-    Label, LabelFilter, NativeId, PageRequest, Project, ProjectFilter, ProjectQuery,
-    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery,
-    TaskSource, TextFields, TextQuery,
+    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
+    ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId, PageRequest, Project,
+    ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
+    StatusCategory, Task, TaskQuery, TaskSource, TextFields, TextQuery,
 };
 use secrecy::SecretString;
 
@@ -375,6 +375,15 @@ async fn public_results_expose_fallback_titles_unknown_statuses_deduplicated_lab
     assert_eq!(task.title, "fallback");
     assert_eq!(task.status.category, StatusCategory::Unknown);
 
+    // A label only a document carries is a label of this source: the document folder is
+    // read for these exactly as the other two are.
+    fs::create_dir_all(root.path().join("documents")).expect("document folder");
+    fs::write(
+        root.path().join("documents/design.md"),
+        "---\ntitle: Alpha design\nlabels: [Spec]\n---\nthe design\n",
+    )
+    .unwrap();
+
     let labels = source.labels(&page(200)).await.unwrap();
     assert_eq!(
         labels
@@ -383,6 +392,14 @@ async fn public_results_expose_fallback_titles_unknown_statuses_deduplicated_lab
             .filter(|label| label.name.eq_ignore_ascii_case("bug"))
             .count(),
         1
+    );
+    assert!(
+        labels
+            .items
+            .iter()
+            .any(|label| label.name.eq_ignore_ascii_case("spec")),
+        "a label only a document carries is still one of this source's: {:?}",
+        labels.items
     );
 
     let health = source.health().await.unwrap();
@@ -698,7 +715,8 @@ fn outgoing(id: &str, title: &str, status: &str, category: StatusCategory) -> Ta
         project: Some(NativeId("p".into())),
         // The destination's own, and never written.
         url: Some("https://example.invalid/ignored".into()),
-        // The destination's own too: this source says nothing about where it holds an item.
+        // The destination's own too: this source reports the path of the file it wrote,
+        // which is nothing to do with wherever the item came from.
         location: None,
         created_at: None,
         updated_at: None,
@@ -812,10 +830,7 @@ async fn a_write_updates_the_document_it_targets_and_refuses_one_that_is_not_the
     else {
         panic!("a target this folder does not hold must be refused rather than created");
     };
-    assert!(
-        message.contains("names no tasks document here"),
-        "{message}"
-    );
+    assert!(message.contains("names no task here"), "{message}");
     assert!(message.contains("--recreate"), "{message}");
 }
 
@@ -1260,6 +1275,20 @@ fn capability_folder() -> (tempfile::TempDir, Box<dyn TaskSource>) {
         "---\ntitle: Loose task\nstatus: done\n---\na needle in this body alone\n",
     )
     .expect("task");
+    // `documents/`, on the same shape and for the same reason: one filed under a project
+    // and one under none, one carrying a label the other does not, and one matching in its
+    // title where the other matches in its body.
+    fs::create_dir_all(root.path().join("documents/nested")).expect("document folder");
+    fs::write(
+        root.path().join("documents/design.md"),
+        "---\ntitle: Alpha design\nlabels: [Backend]\nproject: alpha\n---\nthe first design\n",
+    )
+    .expect("document");
+    fs::write(
+        root.path().join("documents/nested/loose.md"),
+        "---\ntitle: Loose note\n---\na needle in this note alone\n",
+    )
+    .expect("document");
     let source = onetaskgraph_local_md::Plugin
         .build(
             &SourceName::new("notes").unwrap(),
@@ -1268,6 +1297,19 @@ fn capability_folder() -> (tempfile::TempDir, Box<dyn TaskSource>) {
         )
         .expect("source builds");
     (root, source)
+}
+
+async fn document_ids(source: &dyn TaskSource, query: &DocumentQuery) -> Vec<String> {
+    let mut ids = source
+        .query_documents(query, &page(50))
+        .await
+        .expect("the folder answers this document query")
+        .items
+        .into_iter()
+        .map(|document| document.id.0)
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
 }
 
 async fn task_ids(source: &dyn TaskSource, query: &TaskQuery) -> Vec<String> {
@@ -1293,7 +1335,7 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
         source.capabilities(),
         onetaskgraph_plugin_api::Capabilities {
             projects: onetaskgraph_plugin_api::Support::Native,
-            documents: onetaskgraph_plugin_api::Support::Unsupported,
+            documents: onetaskgraph_plugin_api::Support::Native,
             orphan_tasks: onetaskgraph_plugin_api::Support::Native,
             filter_by_label: onetaskgraph_plugin_api::Support::Native,
             filter_by_status: onetaskgraph_plugin_api::Support::Native,
@@ -1331,6 +1373,136 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
     };
     assert_eq!(task_ids(source.as_ref(), &under("alpha")).await, ["first"]);
     assert_eq!(task_ids(source.as_ref(), &under("beta")).await, ["second"]);
+
+    // `documents`: the folder holds two, read recursively, each identified by its path
+    // under `documents/` without `.md` — and every predicate a document query carries is
+    // applied here, exactly as a task query's is.
+    assert_eq!(
+        document_ids(source.as_ref(), &DocumentQuery::default()).await,
+        ["design", "nested/loose"]
+    );
+    assert_eq!(
+        source
+            .get_document(&NativeId("nested/loose".into()))
+            .await
+            .unwrap()
+            .map(|document| document.title),
+        Some("Loose note".to_owned())
+    );
+    assert_eq!(
+        source
+            .get_document(&NativeId("nothing".into()))
+            .await
+            .unwrap()
+            .map(|document| document.title),
+        None
+    );
+    assert_eq!(
+        document_ids(
+            source.as_ref(),
+            &DocumentQuery {
+                project: ProjectFilter::Is(NativeId("alpha".into())),
+                ..DocumentQuery::default()
+            }
+        )
+        .await,
+        ["design"]
+    );
+    assert_eq!(
+        document_ids(
+            source.as_ref(),
+            &DocumentQuery {
+                project: ProjectFilter::Orphans,
+                ..DocumentQuery::default()
+            }
+        )
+        .await,
+        ["nested/loose"]
+    );
+    assert_eq!(
+        document_ids(
+            source.as_ref(),
+            &DocumentQuery {
+                labels: LabelFilter {
+                    any_of: vec!["backend".into()],
+                    ..LabelFilter::default()
+                },
+                ..DocumentQuery::default()
+            }
+        )
+        .await,
+        ["design"]
+    );
+    assert_eq!(
+        document_ids(
+            source.as_ref(),
+            &DocumentQuery {
+                labels: LabelFilter {
+                    none_of: vec!["backend".into()],
+                    ..LabelFilter::default()
+                },
+                ..DocumentQuery::default()
+            }
+        )
+        .await,
+        ["nested/loose"]
+    );
+    let documents_matching = |terms: &str, fields| DocumentQuery {
+        text: Some(TextQuery {
+            terms: terms.into(),
+            fields,
+        }),
+        ..DocumentQuery::default()
+    };
+    assert_eq!(
+        document_ids(
+            source.as_ref(),
+            &documents_matching("loose", TextFields::Title)
+        )
+        .await,
+        ["nested/loose"]
+    );
+    assert_eq!(
+        document_ids(
+            source.as_ref(),
+            &documents_matching("needle", TextFields::Content)
+        )
+        .await,
+        ["nested/loose"]
+    );
+    assert_eq!(
+        document_ids(
+            source.as_ref(),
+            &documents_matching("design", TextFields::TitleOrContent)
+        )
+        .await,
+        ["design"]
+    );
+    // A document is not work: its front matter has neither a status nor a dependency list,
+    // and both are refused naming the key rather than read and quietly dropped.
+    for (file, refused) in [
+        ("status: todo", "status"),
+        ("depends_on: [design]", "depends_on"),
+    ] {
+        fs::write(
+            root.path().join("documents/rejected.md"),
+            format!("---\ntitle: Rejected\n{file}\n---\nbody\n"),
+        )
+        .expect("document");
+        let Err(SourceError::Malformed { message }) =
+            source.get_document(&NativeId("rejected".into())).await
+        else {
+            panic!("a document carrying `{file}` must be refused");
+        };
+        assert!(message.contains(refused), "{message}");
+        // And a file this source cannot read is skipped by a listing rather than failing
+        // it, exactly as an unreadable task is.
+        assert_eq!(
+            document_ids(source.as_ref(), &DocumentQuery::default()).await,
+            ["design", "nested/loose"]
+        );
+    }
+    fs::remove_file(root.path().join("documents/rejected.md")).expect("the rejected document");
 
     // `orphan_tasks`: the one document with no `project:` key, and neither of the two
     // that have one.
@@ -1565,4 +1737,274 @@ async fn a_delete_naming_a_path_out_of_the_root_is_refused_rather_than_followed(
         target.exists(),
         "and the file outside the root is still there"
     );
+}
+
+/// One document on its way into this folder, with a caller-defined key of every JSON type.
+fn outgoing_document(id: &str, title: &str) -> Document {
+    Document {
+        id: NativeId(id.into()),
+        title: title.into(),
+        content: Some("the design, reviewed".into()),
+        project: Some(NativeId("p".into())),
+        labels: vec![Label {
+            id: NativeId("L-1".into()),
+            name: "spec".into(),
+            color: Some("red".into()),
+        }],
+        // The destination's own, and never written: this folder answers with the file it
+        // holds the document in, whatever the source it came from said.
+        url: Some("https://example.invalid/ignored".into()),
+        location: Some(Location::Url("https://example.invalid/elsewhere".into())),
+        created_at: None,
+        updated_at: None,
+        metadata: [
+            ("caller.count".to_owned(), serde_json::json!(3)),
+            ("caller.flag".to_owned(), serde_json::json!(true)),
+            ("caller.absent".to_owned(), serde_json::Value::Null),
+            ("caller.text".to_owned(), serde_json::json!("3")),
+            (
+                "caller.shape".to_owned(),
+                serde_json::json!({"nested": [1, "two", false]}),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+        repositories: vec![
+            serde_json::from_value(serde_json::json!("github.com/nickderobertis/onetaskgraph"))
+                .expect("a normalized origin"),
+        ],
+    }
+}
+
+#[tokio::test]
+async fn a_written_document_reads_back_with_every_value_and_json_type_intact() {
+    let (root, source) = source();
+
+    let written = source
+        .write_document(&ItemWrite {
+            target: None,
+            item: outgoing_document("D-1", "Alpha design"),
+            // Nothing may point at a document, so a caller handing edges over is handing
+            // over something this folder has nowhere to write.
+            depends_on: vec![DependencyEdge {
+                from: DependencyEndpoint::from_native(NativeId("D-1".into()), ItemKind::Task),
+                to: DependencyEndpoint::from_native(NativeId("b".into()), ItemKind::Task),
+                kind: DependencyKind::Blocks,
+            }],
+        })
+        .await
+        .expect("the folder takes the write");
+    assert_eq!(written, NativeId("D-1".into()));
+    // One file, under `documents/` and nowhere else.
+    assert!(root.path().join("documents/D-1.md").is_file());
+    assert!(!root.path().join("tasks/D-1.md").exists());
+
+    let read = source
+        .get_document(&written)
+        .await
+        .expect("the folder answers")
+        .expect("the document is there");
+    assert_eq!(read.title, "Alpha design");
+    assert_eq!(read.content.as_deref(), Some("the design, reviewed"));
+    assert_eq!(read.labels[0].name, "spec");
+    assert_eq!(read.labels[0].color.as_deref(), Some("red"));
+    assert_eq!(read.project, Some(NativeId("p".into())));
+    assert_eq!(
+        read.repositories[0].as_str(),
+        "github.com/nickderobertis/onetaskgraph"
+    );
+    // Value and JSON type alike: a 3 does not come back as "3", and a null is not absent.
+    assert_eq!(read.metadata["caller.count"], serde_json::json!(3));
+    assert_eq!(read.metadata["caller.text"], serde_json::json!("3"));
+    assert_eq!(read.metadata["caller.flag"], serde_json::json!(true));
+    assert_eq!(read.metadata["caller.absent"], serde_json::Value::Null);
+    assert_eq!(
+        read.metadata["caller.shape"],
+        serde_json::json!({"nested": [1, "two", false]})
+    );
+    // The three a copy never writes: the URL, the times, and the location — which is this
+    // folder's own answer, the file it just wrote, rather than the one it was handed.
+    assert_eq!(read.url, None);
+    assert_eq!(read.created_at, None);
+    assert_eq!(read.updated_at, None);
+    assert_eq!(
+        read.location,
+        Some(Location::Path(
+            std::fs::canonicalize(root.path().join("documents/D-1.md"))
+                .expect("the written file")
+                .to_string_lossy()
+                .into_owned()
+        ))
+    );
+
+    // No status and no `depends_on` reach the file, which is what makes it readable as a
+    // document at all: this source refuses either key under `documents/`.
+    let text = fs::read_to_string(root.path().join("documents/D-1.md")).expect("the file");
+    assert!(!text.contains("status:"), "{text}");
+    assert!(!text.contains("depends_on:"), "{text}");
+}
+
+#[tokio::test]
+async fn a_document_write_updates_its_target_refuses_a_missing_one_and_never_overwrites() {
+    let (root, source) = source();
+    source
+        .write_document(&ItemWrite {
+            target: None,
+            item: outgoing_document("D-1", "Alpha design"),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("the first write");
+
+    // A target this folder holds is updated in place.
+    let updated = source
+        .write_document(&ItemWrite {
+            target: Some(NativeId("D-1".into())),
+            item: outgoing_document("D-1", "Alpha design, revised"),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("the folder takes the update");
+    assert_eq!(updated, NativeId("D-1".into()));
+    assert_eq!(
+        source.get_document(&updated).await.unwrap().unwrap().title,
+        "Alpha design, revised"
+    );
+
+    // A create never takes a name a document already answers to.
+    let second = source
+        .write_document(&ItemWrite {
+            target: None,
+            item: outgoing_document("D-1", "A second design"),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("the folder takes the write");
+    assert_eq!(second, NativeId("D-1-2".into()));
+    assert_eq!(
+        source
+            .get_document(&NativeId("D-1".into()))
+            .await
+            .unwrap()
+            .unwrap()
+            .title,
+        "Alpha design, revised",
+        "the document already there is left exactly as it is"
+    );
+
+    // A target naming a document this folder does not hold is refused rather than created.
+    let Err(SourceError::Refused { message }) = source
+        .write_document(&ItemWrite {
+            target: Some(NativeId("absent".into())),
+            item: outgoing_document("D-1", "Alpha design"),
+            depends_on: Vec::new(),
+        })
+        .await
+    else {
+        panic!("a target this folder does not hold must be refused rather than created");
+    };
+    assert!(message.contains("names no document here"), "{message}");
+    assert!(!root.path().join("documents/absent.md").exists());
+
+    // And a document this folder wrote is one it can give back, so a copy that cannot
+    // finish leaves the folder as it found it.
+    source
+        .delete_document(&NativeId("D-1-2".into()))
+        .await
+        .expect("this folder gives a document up");
+    assert!(!root.path().join("documents/D-1-2.md").exists());
+    source
+        .delete_document(&NativeId("D-1-2".into()))
+        .await
+        .expect("a document that is already gone is the state this asks for");
+}
+
+#[tokio::test]
+async fn every_entity_reports_the_absolute_path_of_the_file_it_was_read_from() {
+    // What this backend's location contract is for: a reader holding one of these can
+    // print the path or read the contents out, knowing nothing about this plugin.
+    let (root, source) = source();
+    fs::create_dir_all(root.path().join("documents")).expect("document folder");
+    fs::write(
+        root.path().join("documents/design.md"),
+        "---\ntitle: Alpha design\n---\nthe design\n",
+    )
+    .expect("document");
+
+    let at = |relative: &str| {
+        Some(Location::Path(
+            std::fs::canonicalize(root.path().join(relative))
+                .expect("the file behind the entity")
+                .to_string_lossy()
+                .into_owned(),
+        ))
+    };
+
+    let task = source
+        .get_task(&NativeId("nested/a".into()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.location, at("tasks/nested/a.md"));
+    let project = source
+        .get_project(&NativeId("p".into()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(project.location, at("projects/p.md"));
+    let document = source
+        .get_document(&NativeId("design".into()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(document.location, at("documents/design.md"));
+
+    // A listing says it too, not only a read by id.
+    let listed = source
+        .query_documents(&DocumentQuery::default(), &page(10))
+        .await
+        .unwrap();
+    assert_eq!(listed.items[0].location, at("documents/design.md"));
+    let tasks = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .unwrap();
+    assert_eq!(tasks.items[0].location, at("tasks/b.md"));
+    let projects = source
+        .query_projects(&ProjectQuery::default(), &page(10))
+        .await
+        .unwrap();
+    assert_eq!(projects.items[0].location, at("projects/p.md"));
+}
+
+#[tokio::test]
+async fn a_document_that_resolves_outside_the_root_is_refused_rather_than_read() {
+    // The same containment every other read here keeps: a path escaping the configured
+    // root is a configuration error, and the file outside it is never opened.
+    let outside = tempfile::tempdir().expect("a folder outside the root");
+    let target = outside.path().join("elsewhere.md");
+    fs::write(&target, "---\ntitle: Elsewhere\n---\nsecrets\n").expect("the outside document");
+
+    let (root, source) = source();
+    fs::create_dir_all(root.path().join("documents")).expect("document folder");
+    let link = root.path().join("documents/escape.md");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, &link).expect("a link out of the root");
+    #[cfg(not(unix))]
+    std::os::windows::fs::symlink_file(&target, &link).expect("a link out of the root");
+
+    let Err(SourceError::Config { message }) =
+        source.get_document(&NativeId("escape".into())).await
+    else {
+        panic!("a document that resolves outside the root must be refused");
+    };
+    assert!(message.contains("escapes configured root"), "{message}");
+
+    let Err(SourceError::Config { message }) = source
+        .query_documents(&DocumentQuery::default(), &page(10))
+        .await
+    else {
+        panic!("a scan reaching outside the root must be refused");
+    };
+    assert!(message.contains("escapes configured root"), "{message}");
 }

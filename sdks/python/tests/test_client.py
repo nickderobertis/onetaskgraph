@@ -279,36 +279,57 @@ def test_document_copy_drives_the_binary_and_refuses_a_destination_with_no_docum
 ) -> None:
     """Copy a document by id through the real binary, and be refused by a source with none.
 
-    One SDK call is one process, so an in-memory destination cannot be read back by the
-    next call — the round trip is proven end to end against a persistent peer in
-    `crates/onetaskgraph/tests/e2e/document_store.rs`. What this owes is that the generated
-    method carries the operands the verb requires: a `document copy` invoked without its
-    ids is refused by clap as a bad invocation, so a method that dropped them could not
-    reach a report at all.
+    `markdown` is a `local-md` source, whose documents are files that outlive the process,
+    so what one SDK call copied the next one reads back — which is what proves the copy
+    landed rather than only that a report was printed. `sealed` is an `in-memory` source
+    without the `documents` capability, so it holds none: the refusal comes from the
+    handshake, before anything is read.
     """
     root = configured(tmp_path)
     document = json.loads((root / "onetaskgraph.yaml").read_text(encoding="utf-8"))
-    document["sources"]["store"] = {
-        "plugin": "in-memory",
-        "config": {"capabilities": {"documents": "native"}},
-    }
+    document["sources"]["sealed"] = {"plugin": "in-memory", "config": {}}
     (root / "onetaskgraph.yaml").write_text(json.dumps(document), encoding="utf-8")
     client = Client(binary, cwd=root)
 
-    planned = run(client.document_copy(ids=["memory:D-1"], to="store", dry_run=True))
+    planned = run(client.document_copy(ids=["memory:D-1"], to="markdown", dry_run=True))
     assert [
         (item.root.source.root, item.root.destination, item.root.action) for item in planned.items
     ] == [("memory:D-1", None, "created")]
+    assert not (root / "markdown" / "documents").exists()
 
-    created = run(client.document_copy(ids=[GlobalId(root="memory:D-1")], to="store"))
+    created = run(client.document_copy(ids=[GlobalId(root="memory:D-1")], to="markdown"))
     assert [(item.root.source.root, landed(item), item.root.action) for item in created.items] == [
-        ("memory:D-1", "store:D-1", "created")
+        ("memory:D-1", "markdown:D-1", "created")
     ]
 
-    # `markdown` is a `local-md` source, which declares it holds no documents: the refusal
-    # comes from the handshake, before anything is read.
+    # The destination really holds it, read back through the same binary: every field the
+    # copy carried with its JSON types intact, and — the whole model, so what is absent is
+    # asserted too — a location that is the destination's own, the path of the file this
+    # folder put it in rather than the URL the source reported, and no URL or timestamps,
+    # which this destination does not have for a document it just wrote.
+    copied = run(client.document_show(id="markdown:D-1")).items[0].item
+    dumped = copied.model_dump(mode="json", exclude_none=True)
+    # The location is compared by the file it names rather than by how it is spelled: this
+    # source canonicalizes, and a canonical path is spelled differently on each platform —
+    # macOS resolves the temporary tree's symlink, and Windows answers with an
+    # extended-length `\\?\` path that no other language writes. `samefile` asks the
+    # operating system the question the assertion is really making, and answers it on all
+    # three; it also proves the path names a file that is really there, which comparing two
+    # strings does not.
+    located = Path(dumped.pop("location")["path"])
+    assert located.samefile(root / "markdown" / "documents" / "D-1.md")
+    assert dumped == {
+        "id": "D-1",
+        "title": "Memory document",
+        "content": "the engine core, reviewed",
+        "project": "P-1",
+        "labels": [{"id": "L-1", "name": "sdk"}],
+        "metadata": {"caller.note": "a string", "onetaskgraph.origin": "memory:D-1"},
+        "repositories": ["github.com/nickderobertis/onetaskgraph"],
+    }
+
     with pytest.raises(OnetaskgraphError) as refused:
-        run(client.document_copy(ids=["memory:D-1"], to="markdown"))
+        run(client.document_copy(ids=["memory:D-1"], to="sealed"))
     assert refused.value.exit_code == 1
     assert "has no documents" in str(refused.value)
 
