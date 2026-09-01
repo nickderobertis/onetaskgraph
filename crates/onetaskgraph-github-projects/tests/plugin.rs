@@ -4515,3 +4515,130 @@ async fn a_mutation_refused_for_a_rate_limit_is_retried_and_lands() {
         "a refused call never ran, so exactly one creation reached the board"
     );
 }
+
+#[tokio::test]
+async fn every_wording_github_refuses_a_burst_with_is_read_as_the_secondary_limiter() {
+    // GitHub has renamed this limiter and reworded its refusal more than once, and the
+    // older wordings still come back from some endpoints. Each is a separate arm of the
+    // classification, so each is driven rather than one standing in for the rest — and a
+    // wording GitHub sends that this source does not know is a credential problem again.
+    for said in [
+        "You have exceeded a secondary rate limit and have been temporarily blocked from \
+         content creation.",
+        "You have exceeded a secondary rate limit. Please wait a few minutes.",
+        "You have triggered an abuse detection mechanism.",
+        "You have exceeded a secondary rate limit for this endpoint.",
+        "Your request was submitted too quickly. Please wait and try again.",
+    ] {
+        let error = paced(
+            &always(&Refusal {
+                status: "403 Forbidden",
+                headers: String::new(),
+                body: json!({ "message": said }).to_string(),
+            }),
+            no_waiting(),
+        )
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect_err(said);
+        let SourceError::RateLimited {
+            message: Some(diagnostic),
+            ..
+        } = &error
+        else {
+            panic!("{said:?} was not read as a rate limit: {error:?}");
+        };
+        assert!(diagnostic.contains("secondary rate limit"), "{diagnostic}");
+    }
+
+    // A failing response that is not JSON at all — a proxy's own page, say. There is
+    // nothing structured to read, so the text it did send is what classification has.
+    let error = paced(
+        &always(&Refusal {
+            status: "403 Forbidden",
+            headers: String::new(),
+            body: "<html><body>You have exceeded a secondary rate limit</body></html>".to_owned(),
+        }),
+        no_waiting(),
+    )
+    .query_tasks(&TaskQuery::default(), &page(10))
+    .await
+    .expect_err("a secondary limit that did not arrive as JSON");
+    assert!(
+        matches!(error, SourceError::RateLimited { .. }),
+        "a non-JSON refusal naming the limiter reported as {error:?}"
+    );
+
+    // And the same shape saying nothing about a limit is still the credential it is.
+    let error = paced(
+        &always(&Refusal {
+            status: "403 Forbidden",
+            headers: String::new(),
+            body: "<html><body>Forbidden</body></html>".to_owned(),
+        }),
+        no_waiting(),
+    )
+    .query_tasks(&TaskQuery::default(), &page(10))
+    .await
+    .expect_err("a plain forbidden page");
+    assert!(
+        matches!(error, SourceError::Auth { .. }),
+        "a forbidden response saying nothing about a limit reported as {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_diagnostic_names_whichever_call_the_limiter_caught() {
+    // "what the source was doing" is per operation, and a copy is many of them — the one
+    // an operator needs named is whichever was refused, not whichever happens to come
+    // first. Each is refused on its own, by name, against a board that answers the rest.
+    let cases: Vec<(&str, &str)> = vec![
+        ("repository", "reading the destination repository"),
+        ("createIssue", "creating an issue"),
+        ("addProjectV2ItemById", "adding an issue to the board"),
+        ("updateProjectV2ItemFieldValue", "writing a board field"),
+        ("addSubIssue", "filing an issue under its project"),
+        ("addBlockedBy", "recording a dependency"),
+    ];
+    for (operation, doing) in cases {
+        let fixture = board(vec![Item::issue("I_far", "the far end").status("Todo")]);
+        fixture.script_for(operation, vec![Refusal::secondary_forbidden()]);
+        let source = paced(&fixture.endpoint, no_waiting());
+        let plan = source
+            .write_project(&write(project(
+                "P-1",
+                "Published roadmap",
+                status(StatusCategory::InProgress, "In Progress"),
+            )))
+            .await;
+        // A project write is `repository`, `createIssue`, `addProjectV2ItemById` and the
+        // board fields; the two dependency operations need an item with a far end, so
+        // those reach the refusal through the task written under the project instead.
+        let error = match plan {
+            Err(error) => error,
+            Ok(plan) => {
+                let mut child = task("T-1", "a step", status(StatusCategory::Todo, "Todo"));
+                child.project = Some(plan);
+                source
+                    .write_task(&ItemWrite {
+                        target: None,
+                        item: child,
+                        depends_on: vec![edge(("T-1", ItemKind::Task), ("I_far", ItemKind::Task))],
+                    })
+                    .await
+                    .expect_err(operation)
+            }
+        };
+        let SourceError::RateLimited {
+            message: Some(said),
+            ..
+        } = &error
+        else {
+            panic!("{operation} refused for a rate limit reported as {error:?}");
+        };
+        assert!(
+            said.contains(doing),
+            "a limiter that caught {operation} says {said:?} rather than naming {doing:?}"
+        );
+    }
+}

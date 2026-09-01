@@ -131,11 +131,7 @@ test("a description in several paragraphs generates without trailing whitespace"
     expect(result.status, result.stderr).toBe(0);
     const models = readFileSync(resolve(generated, "models.ts"), "utf8");
     expect(models).toContain("The second, after a blank line.");
-    const offending = models
-      .split("\n")
-      .map((line, index) => [index + 1, line] as const)
-      .filter(([, line]) => /[ \t]+$/.test(line));
-    expect(offending).toEqual([]);
+    expect(models.split("\n").filter((line) => /[ \t]+$/.test(line))).toEqual([]);
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
     rmSync(generated, { recursive: true, force: true });

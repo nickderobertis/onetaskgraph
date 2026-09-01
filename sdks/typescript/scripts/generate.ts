@@ -134,19 +134,10 @@ for (const [name, schema] of Object.entries(bundle.roots)) {
   );
 }
 
-/// Generated output as this repository commits it: no line ends in whitespace.
-///
-/// `json-schema-to-typescript` renders a multi-paragraph schema `description` into a JSDoc
-/// block by prefixing every line with `" * "`, so a paragraph break becomes a line that is
-/// exactly `" * "` — trailing whitespace, which `git diff --check` reports against every
-/// commit that adds a field documented in more than one paragraph. Rewording the Rust doc
-/// comment to dodge that would leave the trap armed for the next field.
-///
-/// The Python generator has never had the problem because it hands its output to `ruff
-/// format`, which strips this. `compile` is called with `format: false` here — prettier
-/// would reflow the declarations this file then wraps in namespaces — so the one thing
-/// that formatter was doing for us is done here instead.
-function trimmed(source: string): string {
+/// `json-schema-to-typescript` renders a JSDoc paragraph break as a line that is exactly
+/// `" * "`, which `git diff --check` reports. `compile` runs with `format: false` here, so
+/// there is no formatter to strip it as the Python generator's `ruff format` does.
+function withoutTrailingWhitespace(source: string): string {
   return source
     .split("\n")
     .map((line) => line.replace(/[ \t]+$/, ""))
@@ -170,7 +161,9 @@ const emittedFiles = new Map<string, string>([
 ]);
 // Every file, rather than only the one that has the problem today: the rule is about what
 // this repository commits, not about which renderer happens to break it.
-const files = new Map([...emittedFiles].map(([name, content]) => [name, trimmed(content)]));
+const files = new Map(
+  [...emittedFiles].map(([name, content]) => [name, withoutTrailingWhitespace(content)]),
+);
 
 let stale = false;
 for (const [relative, content] of files) {
