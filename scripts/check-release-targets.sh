@@ -1,35 +1,23 @@
 #!/usr/bin/env bash
 # Drift gate for release-targets.toml: the shape it is written in, and whether it
-# still says what this repository really publishes.
+# still says what this repository really publishes. Three things can go wrong for a
+# consumer reading that document, and this holds all three.
 #
-# A consumer sequencing work across repositories reads this document to learn
-# which artifact to wait on, and it reads it without knowing anything else about
-# this repository. Three things can go wrong with that, and this holds all three.
+# **The shape.** It is the canonical release-target schema, which
+# nickderobertis/onevcs defines and reads with `onevcs release declaration`. This
+# loads the real file back through that reader — the one authority on whether a
+# consumer can read it at all — running a PINNED reader rather than whichever build
+# a machine puts first on PATH, because a verdict that follows PATH order is not a
+# verdict about this repository. Where none can be resolved, the restatement below
+# holds the document to the same shape, and
+# `ONETASKGRAPH_RELEASE_READER_REQUIRED=1` turns that skip into a failure.
 #
-# **The shape.** The document is the canonical release-target schema, which
-# nickderobertis/onevcs defines in its docs/contract.md and reads with `onevcs
-# release declaration`. This loads the real file back through that reader — the
-# one authority on whether a consumer can read this document at all — and it runs
-# a PINNED reader rather than whichever build a machine happens to put first on
-# PATH, because a verdict that follows PATH order is not a verdict about this
-# repository. Where no capable reader can be resolved, the restatement below holds
-# the document to the same shape, so a malformed declaration cannot land on a
-# machine that carries no reader. `ONETASKGRAPH_RELEASE_READER_REQUIRED=1` turns
-# that skip into a failure, which is the pairing this repository already gives a
-# check whose third-party input may be absent.
+# **The short names.** They are what a consumer in another repository names, and it
+# cannot see this file to notice one moved or a sixth appeared. So the map is
+# spelled here as well as there, deliberately, and refused in either direction.
 #
-# **The short names.** `crate`, `pypi`, `sdk-pypi`, `npm` and `sdk-npm` are how a
-# consumer in another repository names one of these artifacts, and that consumer
-# cannot see this file to notice one moved — or that a sixth appeared it was never
-# told about. So the map from short name to identifier is spelled here as well as
-# there, deliberately: this is the drift gate that makes the second spelling safe,
-# and it refuses a name in either direction, because the set is frozen at those
-# five. Anything else this repository publishes is covered by one of them.
-#
-# **The contents.** A hand-written inventory is exactly what goes stale in
-# silence — a repository publishing something it declares no target for grants no
-# hold at all, and nobody learns the hold stopped happening. So the published set
-# is DERIVED from the release configuration itself rather than transcribed:
+# **The contents.** A hand-written inventory goes stale in silence, so the published
+# set is DERIVED from the release configuration rather than transcribed:
 #
 #   crates — the crate names the publish-crates job of .github/workflows/release.yml
 #            iterates over.
@@ -37,8 +25,8 @@
 #   npm    — the specs scripts/publish-npm.sh publishes, plus the per-platform
 #            carrier manifests under npm/platforms/ that it sends first.
 #
-# It fails in both directions: a name this repository publishes that no target
-# declares or covers, and a name declared or covered that it does not publish.
+# It fails both ways: a name published that no target declares or covers, and a name
+# declared or covered that nothing publishes.
 #
 # Quiet on success. On failure it names each drift and the fix.
 set -euo pipefail

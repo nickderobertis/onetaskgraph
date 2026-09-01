@@ -3,7 +3,7 @@
   "name": "onetaskgraph",
   "projectType": "application",
   "tags": ["lang:rust", "layer:binary"],
-  "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to the `test-live` target below, which is what it is about. No edge above can select that lane: `just test-live` runs `nx run-many -t test-live`, never `nx affected`, and every test in tests/live.rs carries `#[ignore]`, so the `test` target above compiles it and runs nothing. scripts/check-live-lane.sh asserts both halves, so neither can lapse without a check failing. Dropping an edge is not the alternative either: they mirror this crate's real Cargo dependencies, and the graph check named above fails when they do not.",
+  "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `test-live`, which is what it is about: that lane runs only under `nx run-many`, never `nx affected`, and scripts/check-live-lane.sh asserts it.",
   "implicitDependencies": ["onetaskgraph-core", "onetaskgraph-linear", "onetaskgraph-plugin-api"],
   "targets": {
     "bootstrap": {

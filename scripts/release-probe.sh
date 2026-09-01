@@ -8,50 +8,36 @@
 #   * exit 0 with one line on stdout — the version that registry serves now;
 #   * exit 0 with nothing on stdout — that registry has no release of it yet;
 #   * a non-zero exit with the reason on stderr — not answered. Exit 2 is
-#     reserved for a usage error, which is the caller having asked wrongly rather
-#     than anything about a release; every other refusal exits 1.
+#     reserved for a usage error; every other refusal exits 1.
 #
-# **A probe is not a gate.** It rules on no change and refuses no publication. It
-# answers what version is out there, and a caller decides what that means.
+# **A probe is not a gate.** It rules on no change and refuses no publication.
 #
 # **"Not answered" is not "not released".** A consumer holds indefinitely on the
 # first and stops holding on the second, so nothing here degrades a registry that
 # did not answer into an empty answer: "no release" is only ever a registry saying
 # so — a 404, or a `max_stable_version` the registry itself set to null — never a
-# body this script could not read, never a tool it could not run, and never an
-# identifier it does not recognise. Reporting a failed lookup as "nothing
-# published" is the single most damaging thing this script can get wrong.
+# body this could not read, a tool it could not run, or an identifier it does not
+# recognise. Reporting a failed lookup as "nothing published" is the single most
+# damaging thing this script can get wrong.
 #
-# The identifiers it answers for are exactly the `[[target]]` ids of
-# release-targets.toml, resolved from this script's own location rather than from
-# $PWD — a probe answering about whatever repository it was started in is a probe
-# answering about the wrong artifact. A `covers` id is not among them: nothing
-# waits on one by name, so asking about one is not answered rather than answered
-# emptily.
+# It answers for the `[[target]]` ids of release-targets.toml, resolved from this
+# script's own location rather than $PWD — a probe answering about whatever
+# repository it was started in is answering about the wrong artifact. A `covers` id
+# is not among them: nothing waits on one by name, so asking is not answered rather
+# than answered emptily. Each URL and field below matches
+# config/registry-interfaces.toml byte for byte; scripts/check-release-probe.sh
+# fails when they part.
 #
-# The request each lookup makes and the field it reads out of the answer are a
-# third party's interface, pinned with its provenance in
-# config/registry-interfaces.toml; the URL templates and paths below are spelled
-# to match it byte for byte, and scripts/check-release-probe.sh fails when they
-# part. That check also drives all three answers here against stood-in registry
-# documents built from that pin, so what makes them trustworthy is the pin rather
-# than a registry being reachable.
+# What it may assume, and nothing beyond it: a direct subprocess with no shell
+# interposed, little more than PATH and HOME, and no credential — every target is on
+# a public registry. `curl -q` follows from the same rule: a ~/.curlrc is the
+# caller's configuration, not this probe's.
 #
-# What it may assume, and nothing beyond it: it is spawned as a direct subprocess
-# with no shell interposed, with an environment carrying little more than PATH and
-# HOME, and no credential of any kind. Every target here is on a public registry,
-# so an unauthenticated read is all it needs and all it may need. `curl -q`
-# follows from the same rule — a ~/.curlrc is the caller's configuration, not this
-# probe's.
-#
-# `curl` and `python3` are the whole of what it runs, so a host missing one is
-# told which rather than failing somewhere inside a pipeline. python3 because a
-# registry document is JSON and has to be *parsed*: a pattern that matched the
-# wrong occurrence of a version-shaped key would answer a version nobody
-# published, which is the failure mode this file exists to make impossible. Its
-# bound is curl's own: one request per invocation, --max-time 25, well inside the
-# sixty seconds a caller allows. There is no retry — a second attempt could double
-# that — and a transient failure is "not answered", which the caller re-asks later.
+# `curl` and `python3` are the whole of what it runs, so a host missing one is told
+# which. python3 because a registry document is JSON and has to be *parsed*: a
+# pattern matching the wrong version-shaped key would answer a version nobody
+# published. One request per invocation, --max-time 25, and no retry — a transient
+# failure is "not answered", which the caller re-asks later.
 set -euo pipefail
 
 # Identifies this probe to crates.io, which answers 403 to a request that does not

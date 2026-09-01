@@ -1,21 +1,12 @@
 // llmlint: ignore-file[live_tier_compiles_and_requires_credential] The registries this
-// lane reads — crates.io, PyPI and npm — are public, so there is no credential for it to
-// require and none whose absence it could fail fast on. The half of that rule this lane
-// does keep is the half it can: it stays compiled by `cargo test -p onetaskgraph`, it is
-// never `#[cfg]`'d out, and a registry that does not answer fails it rather than passing
-// green.
+// lane reads — crates.io, PyPI and npm — are public, so there is no credential to require
+// and none whose absence it could fail fast on. It keeps the half it can: it stays
+// compiled by `cargo test -p onetaskgraph`, and a registry that does not answer fails it.
 //! The live lane for this crate: what the public registries really serve.
 //!
-//! `release-targets.toml` declares what this repository publishes, and
-//! `config/registry-interfaces.toml` pins the interface each registry answers
-//! through. The deterministic gate holds the probe to that pin and drives its
-//! three answers against documents built from it, so no required check waits on a
-//! registry being up. This is the other half: it asks the real registries, so the
-//! day one of them changes its published interface there is something that says
-//! so and the pin can be re-observed.
-//!
-//! `#[ignore]`, like every live test here, which is what keeps a third party out
-//! of a required check. `just test-live` is what runs it.
+//! The deterministic gate proves the probe against config/registry-interfaces.toml
+//! without reaching a registry. This is the half that asks the real ones, so a
+//! registry that changes its published interface is noticed and the pin re-observed.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

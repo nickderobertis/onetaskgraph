@@ -2,29 +2,19 @@
 # Hold scripts/release-probe.sh to the registries it really consumes, and drive
 # every answer it can give without reaching one.
 #
-# Two halves, and neither stands without the other.
-#
 # **The pin.** config/registry-interfaces.toml records each registry's published
-# interface — the request the probe makes and the field it reads out of the
-# answer — with the date and the URL it was observed from. This reconciles the
-# probe against it in both directions: a lookup the pin does not describe, a field
-# the pin does not name, a registry one side handles and the other does not, and a
-# field the pin names as a decoy — a version-shaped neighbour of the one that
-# means what the probe wants — all fail here. That reconciliation is what makes
-# the stood-in answers below evidence: a probe that could not really query a
-# registry cannot pass, because the request it makes is held to the pin rather
-# than to whatever shape a stub found convenient.
+# interface with the date and URL it was observed from. This reconciles the probe
+# against it both ways — a lookup the pin does not describe, a field it does not
+# name, a registry one side handles and the other does not, and a field it names as
+# a decoy. That reconciliation is what makes the stood-in answers below evidence: a
+# probe that could not really query a registry cannot pass.
 #
-# **The answers.** The probe's three answers are driven end to end through the
-# real script, against a curl that answers as each pinned document says the
-# registry does. A version, nothing, and a refusal have to come back different
-# from each other — a lookup that could not be made must never read as nothing
-# having been released — so this asserts on all three and on their being
-# distinct, for every target release-targets.toml declares.
-#
-# The versions in the pinned bodies are invented, so a case that somehow reached
-# the real registry answers this repository's real version and fails here instead
-# of passing on the wrong evidence.
+# **The answers.** All three are driven end to end through the real script, against
+# a curl answering as each pinned document says the registry does, for every target
+# release-targets.toml declares — and asserted to come back distinct, because a
+# lookup that could not be made must never read as nothing having been released.
+# The versions in those bodies are invented, so a case that somehow reached the real
+# registry fails here instead of passing on the wrong evidence.
 #
 # Quiet on success. On failure it names the drift and what to do about it.
 set -euo pipefail

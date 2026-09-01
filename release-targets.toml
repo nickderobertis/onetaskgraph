@@ -1,76 +1,40 @@
 # What this repository publishes, and the only identifiers scripts/release-probe.sh
-# will answer for.
+# will answer for. The schema is the canonical release-target schema that
+# nickderobertis/onevcs defines and reads; scripts/check-release-targets.sh holds
+# this document to it, loads it back through that reader, and reconciles it against
+# the real release workflow both ways.
 #
-# One TOML document at the repository root, under the canonical name, because a
-# consumer reads it across repositories it does not own and cannot discover a
-# location it has to be told. The schema is the canonical release-target schema
-# that nickderobertis/onevcs defines in its docs/contract.md and reads with
-# `onevcs release declaration .`; scripts/check-release-targets.sh holds this
-# document to it and, where that reader is installed, loads this file back through
-# the reader itself rather than through a second opinion about the shape.
+# **Every `id` is `<registry>:<name>`, and the qualification is load-bearing.**
+# This repository publishes `onetaskgraph` to crates.io and `onetaskgraph-cli` to
+# PyPI from one version, so a bare name says which registry serves it only by
+# accident. The name is exactly what that registry serves — `@onetaskgraph/cli`
+# scoped, because that is npm's own spelling of it.
 #
-# **The registry qualification is load-bearing rather than decorative.** This
-# repository publishes `onetaskgraph` to crates.io and `onetaskgraph-cli` to PyPI
-# from one version, and a bare name says which registry serves it only by
-# accident. Every `id` here is `<registry>:<name>`, where the name is exactly the
-# name that registry serves — `@onetaskgraph/cli` scoped, because that is npm's
-# own spelling of it.
+# **The five short names are frozen**, because they are what another repository's
+# plan waits on and it cannot read this file to learn that one moved or a sixth
+# appeared. A name is one of the five when a dependent writes it down, which is why
+# both SDKs are targets: `sdk-npm` is to `npm` what `sdk-pypi` is to `pypi`.
 #
-# **There are exactly five targets, and which five is not this file's to decide.**
-# `crate`, `pypi`, `sdk-pypi`, `npm` and `sdk-npm` are the frozen set: they are
-# the names another repository's plan waits on, and that repository cannot read
-# this file to learn that a sixth appeared or that one moved. So everything else
-# this repository publishes is a `covers` entry under the target whose release
-# carries it — which is what keeps the reconciliation below whole in both
-# directions without adding a name nobody agreed to.
+# Everything else this repository publishes is a `covers` entry under the target
+# whose release carries it — the five `@onetaskgraph/cli-<platform>` carriers, which
+# exist only so the launcher can resolve one at its own exact version, and the six
+# sibling crates, which publish at the one `[workspace.package]` version in the same
+# run. Nothing names either kind on its own, so a target apiece would be several
+# identical answers under several names.
 #
-# What earns a name a place among the five is that a dependent writes it down: a
-# Rust crate names `onetaskgraph`, a Python project names `onetaskgraph-cli` or
-# `onetaskgraph-sdk`, a TypeScript project names `@onetaskgraph/cli` or
-# `@onetaskgraph/sdk`. `sdk-npm` is a target of its own for exactly the reason
-# `sdk-pypi` is, and the symmetry between the two SDKs is the point: an SDK a
-# consumer imports is something it waits on in its own right, not something
-# another artifact's release merely carries. That the launcher's job happens to
-# ship the TypeScript SDK in the same run says when the wait resolves; it does not
-# make the SDK a thing nobody names.
+# **The GitHub Release archives are deliberately not a target, and cannot be one.**
+# A target identifier is registry-qualified, and the per-platform `.tar.gz`/`.zip`
+# archives attached to the GitHub Release belong to no registry — there is no
+# `<registry>:<name>` that names one, so a sixth target for them could not be
+# spelled. They are not `[[retired]]` either: that records something no longer
+# published, and these ship on every release. A consumer that installs them
+# (scripts/install.sh does) waits on `pypi`, which is sound because that job uploads
+# the archives before the wheels it then publishes are built from the same run.
 #
-# Two kinds of published name are therefore recorded as `covers`:
-#
-#   * The five `@onetaskgraph/cli-<platform>` carriers. They exist only so the
-#     launcher can resolve one at its own exact version — npm/cli/package.json
-#     pins all five as optionalDependencies — and nothing else names one.
-#   * The six sibling crates. Every crate in this workspace carries the one
-#     `[workspace.package]` version and the publish-crates job sends all seven at
-#     that version in one run, so a dependent naming `onetaskgraph-plugin-api` is
-#     waiting on exactly the release `crate:onetaskgraph` answers for. They differ
-#     from the carriers in that a plugin author does name one — what makes them a
-#     `covers` list rather than six more targets is that there is one release to
-#     wait on and one version to wait for, so six targets would be six identical
-#     answers under six names.
-#
-# **The GitHub Release archives are deliberately not a target, and cannot be
-# one.** A target identifier is registry-qualified, and the per-platform
-# `.tar.gz`/`.zip` archives the native-assets-and-carriers job attaches to the
-# GitHub Release belong to no registry — there is no `<registry>:<name>` that
-# names one, so a sixth target for them could not be spelled. They are not a
-# `[[retired]]` entry either: that records something this repository once
-# published and does not any more, and these ship on every release. A consumer
-# that installs them — scripts/install.sh does — waits on `pypi`, which is sound
-# because that job uploads the archives before the wheels this then publishes are
-# built from the same run.
-#
-# scripts/check-release-targets.sh reconciles this document against the *real*
-# release configuration — .github/workflows/release.yml, scripts/publish-npm.sh,
-# and every manifest named below — in both directions, so an artifact this
-# repository starts publishing cannot go undeclared and a target declared here for
-# something it does not publish fails the gate rather than misleading a consumer
-# into waiting for a release that will never come.
-
-# `schema_version` states what shape this document is written in; it is not a
-# second gate the identifiers below are put through. `2` is the version that
-# admits npm's scoped `@scope/name` spelling, which two targets here use. Nothing
-# here declares `adoption_instructions`, the key version 3 adds, so 2 is what this
-# document is.
+# `schema_version` states what shape this document is written in; it is not a second
+# gate the identifiers are put through. `2` is the version that admits npm's scoped
+# spelling, which this file uses. Nothing here declares `adoption_instructions`, the
+# key version 3 adds.
 schema_version = 2
 probe = "scripts/release-probe.sh"
 
