@@ -373,9 +373,11 @@ test("a document copy drives the real binary and is refused by a source with non
     // one file has it and no other file can, which is the question the assertion is really
     // making, and reading also fails outright when the reported path names nothing — as
     // comparing two strings does not. The extended-length prefix is dropped first, because
-    // it is a spelling for Windows' own API rather than for a file call of this runtime.
+    // it is a spelling for Windows' own API rather than for a file call of this runtime —
+    // and only ahead of a drive letter, the one form a temporary tree takes, so the `UNC\\`
+    // spelling this test never produces is left whole rather than turned into a bad path.
     const located = document?.location as { path: string };
-    const openable = located.path.replace(/^\\\\\?\\/, "");
+    const openable = located.path.replace(/^\\\\\?\\(?=[A-Za-z]:\\)/, "");
     const sentinel = "read back through the location this source reported";
     appendFileSync(resolve(documentRoot, "notes/documents/D-1.md"), `\n${sentinel}\n`);
     expect(readFileSync(openable, "utf8")).toContain(sentinel);
