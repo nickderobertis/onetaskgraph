@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.15](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.14...v0.2.15) - 2026-09-01
+
+### Added
+
+- *(in-memory)* serve documents and both location shapes ([#138](https://github.com/nickderobertis/onetaskgraph/pull/138))
+- declare the release targets this repository publishes ([#127](https://github.com/nickderobertis/onetaskgraph/pull/127))
+
 ## [0.2.14](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.13...v0.2.14) - 2026-09-01
 
 ### Added
