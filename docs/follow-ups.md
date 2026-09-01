@@ -38,39 +38,6 @@ otherwise fail, naming the row and the field — and deleting this entry and the
 the field line above and fails while it names a capability that plugin no longer calls
 unsupported, so the entry cannot outlive the gap it describes.
 
-## Documents: one of the four hosted sources has none yet
-
-Unsupported fields: `onetaskgraph-linear` `documents`
-
-The plugin contract carries documents — `Document`, `Location`, `DocumentQuery`, the
-`documents` capability, and the four `TaskSource` methods — and `in-memory`, `local-md` and
-`github-projects` implement them. The one above declares `documents: Support::Unsupported`
-and keeps the four methods' defaults, which refuse: `documentless` for the two reads,
-`unwritable` for the two writes.
-
-That is sound as it stands, and it is what the capability rules ask for. `documents` is
-not a predicate the engine compensates for; it says whether a source has documents at all,
-the engine reads it once at the handshake exactly as it reads `writes`, and a source that
-says it has none is never asked for one. So no caller can reach a refusal by accident, and
-a document read across several sources reports such a source as holding none rather than
-as having failed. What a plugin must never do here is answer an empty page, which reads as
-a source that has documents and holds none matching.
-
-It is a gap rather than a limit for both, and each plugin's own verdict row says why:
-Linear has documents of its own.
-
-Closing an entry means: implementing that plugin's four methods, flipping its `documents`
-to `Support::Native`, updating its row in `crates/onetaskgraph/tests/e2e/fixtures.rs` —
-which the reconciliation journey will otherwise fail, naming the row and the field — and
-deleting that plugin's line above together with the verdict row's wording. That is what
-`in-memory` did: its `documents` is a `CapabilityConfig` key a document sets, and a
-configuration listing documents without declaring it is refused where it is read. It is
-what `local-md` did: `documents/` is a folder beside the `tasks/` and `projects/` it
-already read, and `docs/local-md.md` records why the folder is the discriminator. And it
-is what `github-projects` did, from a backend with no document type at all: a board holds
-issues, so a document there is the issue whose title begins `DESIGN: `, and
-`docs/metadata.md` settles what that discriminator implies.
-
 ## What a Windows location is spelled like, and who decides
 
 `local-md` reports a location by handing `std::fs::canonicalize` to `Location::Path`. On

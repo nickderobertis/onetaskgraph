@@ -1,9 +1,10 @@
 //! Public factory and real-HTTP fixture journeys.
 
 use onetaskgraph_plugin_api::{
-    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, ItemKind, ItemWrite,
-    LabelFilter, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
-    SourceName, SourcePlugin, StatusCategory, Task, TaskQuery, TaskSource,
+    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
+    ItemKind, ItemWrite, Label, LabelFilter, Location, PageRequest, Project, ProjectFilter,
+    ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, StatusCategory, Task,
+    TaskQuery, TaskSource,
 };
 use secrecy::SecretString;
 use std::{
@@ -176,6 +177,14 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
             "ProjectRelationCreateInput",
             &["projectId", "relatedProjectId", "type"][..],
         ),
+        (
+            "DocumentCreateInput",
+            &["title", "content", "projectId", "teamId"][..],
+        ),
+        (
+            "DocumentUpdateInput",
+            &["title", "content", "projectId"][..],
+        ),
     ] {
         let actual = inputs[name]
             .fields
@@ -256,6 +265,11 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         (
             graphql::PROJECT_RELATIONS,
             Some(include_str!("fixtures/project-relations.json")),
+        ),
+        (graphql::DOCUMENT, None),
+        (
+            graphql::DOCUMENTS,
+            Some(include_str!("fixtures/documents.json")),
         ),
     ] {
         let document = query::parse_query::<String>(operation).unwrap();
@@ -402,6 +416,9 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::PROJECT_RELATION_DELETE, true),
         (graphql::ISSUE_DELETE, true),
         (graphql::PROJECT_DELETE, true),
+        (graphql::DOCUMENT_CREATE, true),
+        (graphql::DOCUMENT_UPDATE, true),
+        (graphql::DOCUMENT_DELETE, true),
     ] {
         let parsed = query::parse_query::<String>(document).unwrap();
         let (selection_set, variables) = match &parsed.definitions[0] {
@@ -1148,6 +1165,12 @@ async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
         page.items[0].url.as_deref(),
         Some("https://linear.app/acme/issue/ENG-1")
     );
+    // Where it is: the issue's own Linear page, as a link. It sits beside the `url` field
+    // rather than replacing it, which is what lets a reader branch on the shape.
+    assert_eq!(
+        page.items[0].location,
+        Some(Location::Url("https://linear.app/acme/issue/ENG-1".into()))
+    );
     assert_eq!(
         page.items[0].created_at.unwrap().to_rfc3339(),
         "2026-08-01T12:00:00+00:00"
@@ -1284,6 +1307,11 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
     assert_eq!(
         projects.items[0].url.as_deref(),
         Some("https://linear.app/acme/project/p1")
+    );
+    assert_eq!(
+        projects.items[0].location,
+        Some(Location::Url("https://linear.app/acme/project/p1".into())),
+        "a project says where it is, on the terms an issue and a document do"
     );
     assert!(projects.items[0].created_at.is_some() && projects.items[0].updated_at.is_some());
     let (endpoint, _) = server("200 OK", "", include_str!("fixtures/labels.json"));
@@ -2232,4 +2260,531 @@ async fn a_draft_filter_names_no_linear_workflow_state_the_way_an_unknown_one_do
         sent[1].split("\r\n\r\n").nth(1),
         "draft and unknown send the same filter"
     );
+}
+
+#[tokio::test]
+async fn documents_use_real_http_parse_mapping_paging_and_report_their_linear_address() {
+    let body = include_str!("fixtures/documents.json");
+    let (endpoint, request) = server("200 OK", "", body);
+    let page = source(&endpoint)
+        .query_documents(
+            &DocumentQuery::default(),
+            &PageRequest {
+                cursor: None,
+                limit: 3,
+            },
+        )
+        .await
+        .expect("the fixture documents read");
+
+    assert_eq!(page.items[0].title, "Fixture design note");
+    assert_eq!(page.items[0].content.as_deref(), Some("Recorded body"));
+    assert_eq!(page.items[0].project.as_ref().unwrap().0, "p1");
+    assert_eq!(
+        page.items[0].metadata["caller.number"],
+        serde_json::json!(7),
+        "a caller's own key keeps its JSON type through the slot"
+    );
+    assert_eq!(
+        page.items[0].repositories[0].as_str(),
+        "github.com/acme/work"
+    );
+    assert_eq!(
+        page.items[0].created_at.unwrap().to_rfc3339(),
+        "2026-08-01T12:00:00+00:00"
+    );
+    assert_eq!(
+        page.items[0].updated_at.unwrap().to_rfc3339(),
+        "2026-08-02T12:00:00+00:00"
+    );
+    // Where it is: the document's own Linear page, as a link rather than a path, beside
+    // the `url` field it does not replace.
+    assert_eq!(
+        page.items[0].url.as_deref(),
+        Some("https://linear.app/acme/document/fixture-design-note-aaaaaaaaaaaa")
+    );
+    assert_eq!(
+        page.items[0].location,
+        Some(Location::Url(
+            "https://linear.app/acme/document/fixture-design-note-aaaaaaaaaaaa".into()
+        ))
+    );
+    // Linear's own document type has no labels, so this source reports none.
+    assert!(page.items[0].labels.is_empty());
+    assert_eq!(
+        page.items[1].project.as_ref().expect("a second project").0,
+        "p2",
+        "two projects, so a predicate applied and one dropped are different answers"
+    );
+    assert_eq!(page.items[2].project, None, "a document in no project");
+    assert_eq!(page.next.unwrap().0, "next-1");
+
+    let wire = request.recv().unwrap();
+    assert!(wire.contains("documents(first:$first"), "{wire}");
+    assert!(wire.contains("fixture-key"), "{wire}");
+}
+
+#[tokio::test]
+async fn a_document_read_pushes_down_a_project_and_applies_orphans_and_labels_itself() {
+    // The two predicates Linear cannot be asked for are still applied, over a page this
+    // source fetched: `DocumentFilter.project` carries no `null:` member, and a Linear
+    // document carries no label at all.
+    // One page, holding exactly what Linear would have returned for the filter under test:
+    // the project predicate is the one this source pushes down, so its page is narrowed,
+    // and the orphan and label predicates are the ones it applies to a page of everything.
+    let page = |kept: &[&str]| {
+        let mut body: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/documents.json")).unwrap();
+        let nodes = body["data"]["documents"]["nodes"]
+            .as_array()
+            .expect("the fixture documents")
+            .iter()
+            .filter(|node| kept.contains(&node["id"].as_str().unwrap_or_default()))
+            .cloned()
+            .collect::<Vec<_>>();
+        body["data"]["documents"]["nodes"] = serde_json::Value::Array(nodes);
+        body["data"]["documents"]["pageInfo"] =
+            serde_json::json!({"hasNextPage": false, "endCursor": null});
+        body.to_string()
+    };
+
+    let (endpoint, request) = server("200 OK", "", page(&["d1"]));
+    let narrowed = source(&endpoint)
+        .query_documents(
+            &DocumentQuery {
+                project: ProjectFilter::Is("p1".into()),
+                ..Default::default()
+            },
+            &PageRequest {
+                cursor: None,
+                limit: 5,
+            },
+        )
+        .await
+        .expect("a document read narrowed to one project");
+    assert_eq!(narrowed.items.len(), 1);
+    assert_eq!(narrowed.items[0].id.0, "d1");
+    let wire = request.recv().unwrap();
+    assert!(
+        wire.contains(r#""project":{"id":{"eq":"p1"}}"#),
+        "the project predicate is pushed into the documents filter: {wire}"
+    );
+
+    let (endpoint, request) = server("200 OK", "", page(&["d1", "d2", "d3"]));
+    let orphans = source(&endpoint)
+        .query_documents(
+            &DocumentQuery {
+                project: ProjectFilter::Orphans,
+                ..Default::default()
+            },
+            &PageRequest {
+                cursor: None,
+                limit: 5,
+            },
+        )
+        .await
+        .expect("a document read narrowed to the orphans");
+    assert_eq!(
+        orphans
+            .items
+            .iter()
+            .map(|document| document.id.0.as_str())
+            .collect::<Vec<_>>(),
+        vec!["d3"],
+        "the document in no project, kept by this source rather than by Linear"
+    );
+    let wire = request.recv().unwrap();
+    assert!(
+        !wire.contains(r#""null""#),
+        "Linear is never asked for a predicate its DocumentFilter has no member for: {wire}"
+    );
+
+    let (endpoint, _) = server("200 OK", "", page(&["d1", "d2", "d3"]));
+    let demanded = source(&endpoint)
+        .query_documents(
+            &DocumentQuery {
+                labels: LabelFilter {
+                    any_of: vec!["bug".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            &PageRequest {
+                cursor: None,
+                limit: 5,
+            },
+        )
+        .await
+        .expect("a document read demanding a label");
+    assert!(
+        demanded.items.is_empty(),
+        "no Linear document carries a label, so a query demanding one keeps nothing"
+    );
+
+    let (endpoint, _) = server("200 OK", "", page(&["d1", "d2", "d3"]));
+    let excluded = source(&endpoint)
+        .query_documents(
+            &DocumentQuery {
+                labels: LabelFilter {
+                    none_of: vec!["bug".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            &PageRequest {
+                cursor: None,
+                limit: 5,
+            },
+        )
+        .await
+        .expect("a document read excluding a label");
+    assert_eq!(
+        excluded.items.len(),
+        3,
+        "and a query excluding one keeps every document, rather than narrowing"
+    );
+}
+
+#[tokio::test]
+async fn a_document_walk_asks_only_for_what_is_still_owed_and_never_returns_more() {
+    // A page this source narrowed itself is short, so the walk goes back for the rest —
+    // and asks for exactly the remainder, which is what keeps a caller's limit a limit.
+    let node = |id: &str, project: serde_json::Value| {
+        serde_json::json!({"id":id,"title":format!("Note {id}"),"content":null,
+            "url":format!("https://linear.app/acme/document/{id}"),
+            "createdAt":null,"updatedAt":null,"project":project})
+    };
+    let (endpoint, request) = response_server(vec![
+        serde_json::json!({"documents":{
+            "nodes":[node("d1", serde_json::json!({"id":"p1"})), node("d2", serde_json::Value::Null)],
+            "pageInfo":{"hasNextPage":true,"endCursor":"c1"}}}),
+        serde_json::json!({"documents":{
+            "nodes":[node("d3", serde_json::Value::Null)],
+            "pageInfo":{"hasNextPage":true,"endCursor":"c2"}}}),
+    ]);
+    let page = source(&endpoint)
+        .query_documents(
+            &DocumentQuery {
+                project: ProjectFilter::Orphans,
+                ..Default::default()
+            },
+            &PageRequest {
+                cursor: None,
+                limit: 2,
+            },
+        )
+        .await
+        .expect("the walk fills the page it was asked for");
+
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|d| d.id.0.as_str())
+            .collect::<Vec<_>>(),
+        vec!["d2", "d3"]
+    );
+    assert_eq!(
+        page.next.expect("more to walk").0,
+        "c2",
+        "and resumes where Linear left off rather than where this source did"
+    );
+    assert!(request.recv().unwrap().contains("\"first\":2"));
+    assert!(
+        request.recv().unwrap().contains("\"first\":1"),
+        "the second request asks only for the one document still owed"
+    );
+}
+
+#[tokio::test]
+async fn one_document_is_shown_by_its_id_and_an_unknown_one_is_no_document() {
+    let (endpoint, request) = response_server(vec![
+        serde_json::json!({"document":{"id":"d1","title":"Fixture design note","content":"Body",
+            "url":"https://linear.app/acme/document/d1","createdAt":null,"updatedAt":null,
+            "project":{"id":"p1"}}}),
+        serde_json::json!({ "document": serde_json::Value::Null }),
+    ]);
+    let source = source(&endpoint);
+    let shown = source
+        .get_document(&"d1".into())
+        .await
+        .expect("the document reads")
+        .expect("and is there");
+    assert_eq!(shown.title, "Fixture design note");
+    assert_eq!(
+        shown.location,
+        Some(Location::Url("https://linear.app/acme/document/d1".into()))
+    );
+    assert!(request.recv().unwrap().contains("document(id:$id)"));
+
+    assert!(
+        source
+            .get_document(&"never-there".into())
+            .await
+            .expect("an id naming nothing is an answer")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_document_is_created_updated_and_removed_again_over_real_http() {
+    let document = |id: &str| {
+        serde_json::json!({"document":{"id":id,"title":"Design","content":"Body",
+            "url":format!("https://linear.app/acme/document/{id}"),
+            "createdAt":null,"updatedAt":null,"project":{"id":"p1"}}})
+    };
+    let written = |title: &str, content: Option<&str>, project: Option<&str>| ItemWrite {
+        target: None,
+        item: Document {
+            id: "ignored".into(),
+            title: title.into(),
+            content: content.map(str::to_owned),
+            project: project.map(Into::into),
+            labels: Vec::new(),
+            url: None,
+            location: None,
+            created_at: None,
+            updated_at: None,
+            metadata: [("caller.count".to_owned(), serde_json::json!(3))]
+                .into_iter()
+                .collect(),
+            repositories: vec![
+                onetaskgraph_plugin_api::Repository::try_from("github.com/acme/work".to_owned())
+                    .expect("an origin"),
+            ],
+        },
+        depends_on: Vec::new(),
+    };
+
+    // Created into a project: the team is not asked for, because the project is the home.
+    let (endpoint, wire) = response_server(vec![
+        serde_json::json!({"documentCreate":{"success":true,"document":{"id":"D-NEW"}}}),
+    ]);
+    let created = writable_source(&endpoint)
+        .write_document(&written("Design", Some("Body"), Some("p1")))
+        .await
+        .expect("the document is created");
+    assert_eq!(created.0, "D-NEW");
+    let request = wire.recv().unwrap();
+    assert!(
+        request.contains("documentCreate(input:$input)"),
+        "{request}"
+    );
+    assert!(
+        request.contains("onetaskgraph.metadata"),
+        "the caller's metadata goes back into this source's own slot: {request}"
+    );
+    assert!(
+        request.contains("caller.count") && request.contains("onetaskgraph.repositories"),
+        "{request}"
+    );
+    assert!(
+        !request.contains("teamId"),
+        "a document filed under a project has a home already: {request}"
+    );
+
+    // Created under no project: the configured team is what gives it one.
+    let (endpoint, wire) = response_server(vec![
+        serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
+        serde_json::json!({"documentCreate":{"success":true,"document":{"id":"D-LOOSE"}}}),
+    ]);
+    writable_source(&endpoint)
+        .write_document(&written("Loose", None, None))
+        .await
+        .expect("the orphan document is created");
+    assert!(wire.recv().unwrap().contains("teams(filter:"));
+    let request = wire.recv().unwrap();
+    assert!(request.contains(r#""teamId":"TEAM""#), "{request}");
+
+    // Updated: the target is read first, so a second copy addresses the one already there.
+    let (endpoint, wire) = response_server(vec![
+        document("D-NEW"),
+        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"D-NEW"}}}),
+    ]);
+    let updated = writable_source(&endpoint)
+        .write_document(&ItemWrite {
+            target: Some("D-NEW".into()),
+            ..written("Design", Some("Revised"), Some("p1"))
+        })
+        .await
+        .expect("the document is updated");
+    assert_eq!(updated.0, "D-NEW");
+    assert!(wire.recv().unwrap().contains("document(id:$id)"));
+    let request = wire.recv().unwrap();
+    assert!(request.contains("documentUpdate(id:$id"), "{request}");
+    assert!(request.contains("Revised"), "{request}");
+
+    // And removed again, which is what lets a copy that could not finish take it back.
+    let (endpoint, wire) = response_server(vec![
+        document("D-NEW"),
+        serde_json::json!({"documentDelete":{"success":true}}),
+    ]);
+    writable_source(&endpoint)
+        .delete_document(&"D-NEW".into())
+        .await
+        .expect("the document this copy created is taken back");
+    assert!(wire.recv().unwrap().contains("document(id:$id)"));
+    assert!(
+        wire.recv().unwrap().contains("documentDelete(id:$id)"),
+        "the pinned document delete is what removes it"
+    );
+
+    let (endpoint, _) = response_server(vec![serde_json::json!({
+        "document": serde_json::Value::Null
+    })]);
+    writable_source(&endpoint)
+        .delete_document(&"never-there".into())
+        .await
+        .expect("an id naming nothing is the state this asks for");
+}
+
+#[tokio::test]
+async fn a_document_write_refuses_by_name_what_this_source_cannot_carry() {
+    let document = Document {
+        id: "ignored".into(),
+        title: "Design".into(),
+        content: None,
+        project: None,
+        labels: Vec::new(),
+        url: None,
+        location: None,
+        created_at: None,
+        updated_at: None,
+        metadata: Default::default(),
+        repositories: Vec::new(),
+    };
+
+    // A label, which Linear's own document type has no field for.
+    let (endpoint, wire) = response_server(Vec::new());
+    let refusal = writable_source(&endpoint)
+        .write_document(&ItemWrite {
+            target: None,
+            item: Document {
+                labels: vec![Label {
+                    id: "L-1".into(),
+                    name: "bug".into(),
+                    color: None,
+                }],
+                ..document.clone()
+            },
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect_err("a label is refused rather than dropped");
+    assert!(
+        matches!(&refusal, SourceError::Refused { message }
+            if message.contains("bug") && message.contains("labels")),
+        "the refusal names the label: {refusal:?}"
+    );
+    assert!(
+        wire.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "and nothing was written before it"
+    );
+
+    // A dependency, which a document cannot have at all — as an edge, and as the reserved
+    // key an edge would be recorded under.
+    for write in [
+        ItemWrite {
+            target: None,
+            item: document.clone(),
+            depends_on: vec![DependencyEdge {
+                from: DependencyEndpoint::from_native("d1".into(), ItemKind::Task),
+                to: DependencyEndpoint::from_native("t1".into(), ItemKind::Task),
+                kind: DependencyKind::Blocks,
+            }],
+        },
+        ItemWrite {
+            target: None,
+            item: Document {
+                metadata: [(
+                    onetaskgraph_plugin_api::DependencyEdge::RECORDED_KEY.to_owned(),
+                    serde_json::json!([{"id": "elsewhere:T-9", "kind": "task"}]),
+                )]
+                .into_iter()
+                .collect(),
+                ..document.clone()
+            },
+            depends_on: Vec::new(),
+        },
+    ] {
+        let (endpoint, _) = response_server(Vec::new());
+        let refusal = writable_source(&endpoint)
+            .write_document(&write)
+            .await
+            .expect_err("a document depends on nothing");
+        assert!(
+            matches!(&refusal, SourceError::Refused { message }
+                if message.contains("onetaskgraph.depends_on")),
+            "the refusal names the key: {refusal:?}"
+        );
+    }
+
+    // And a target this workspace does not hold is refused rather than created.
+    let (endpoint, wire) = response_server(vec![serde_json::json!({
+        "document": serde_json::Value::Null
+    })]);
+    let refusal = writable_source(&endpoint)
+        .write_document(&ItemWrite {
+            target: Some("D-GONE".into()),
+            item: document,
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect_err("a target that is not there is not a create");
+    assert!(
+        matches!(&refusal, SourceError::Refused { message }
+            if message.contains("D-GONE") && message.contains("work")),
+        "the refusal names the source and the document: {refusal:?}"
+    );
+    assert!(wire.recv().unwrap().contains("document(id:$id)"));
+    assert!(
+        wire.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "nothing was created in its place"
+    );
+}
+
+#[tokio::test]
+async fn malformed_document_shapes_are_rejected_rather_than_read_past() {
+    for (description, body) in [
+        (
+            "a node with no title",
+            serde_json::json!({"documents":{"nodes":[{"id":"d1","content":null,"url":"u",
+                "createdAt":null,"updatedAt":null,"project":null}],
+                "pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        ),
+        (
+            "a node with no project field at all",
+            serde_json::json!({"documents":{"nodes":[{"id":"d1","title":"T","content":null,
+                "url":"u","createdAt":null,"updatedAt":null}],
+                "pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        ),
+        (
+            "an unterminated metadata slot",
+            serde_json::json!({"documents":{"nodes":[{"id":"d1","title":"T",
+                "content":"body\n<!-- onetaskgraph.metadata\n{}","url":"u",
+                "createdAt":null,"updatedAt":null,"project":null}],
+                "pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        ),
+        (
+            "no documents connection",
+            serde_json::json!({ "viewer": {"id": "u"} }),
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![body]);
+        let failure = source(&endpoint)
+            .query_documents(
+                &DocumentQuery::default(),
+                &PageRequest {
+                    cursor: None,
+                    limit: 5,
+                },
+            )
+            .await
+            .expect_err(description);
+        assert!(
+            matches!(failure, SourceError::Malformed { .. }),
+            "{description}: {failure:?}"
+        );
+    }
 }

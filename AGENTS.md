@@ -274,7 +274,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 The Linear row is backed by a real local HTTP server in the shared e2e process. Its
 responses and the crate fixtures under `crates/onetaskgraph-linear/tests/fixtures/`
 follow Linear's published GraphQL schema and Relay connection documentation as recorded
-on 2026-08-24, and `projectDelete` as re-observed there on 2026-08-29. The checked-in `schema.graphql` there is the pinned source artifact, and
+on 2026-08-24, `projectDelete` as re-observed there on 2026-08-29, and the whole document
+contract — `document`, `documents`, `Document`, its connection, filter, two inputs and both
+payloads, and the three document mutations — as re-observed there on 2026-09-01. The checked-in `schema.graphql` there is the pinned source artifact, and
 `pinned_schema_checks_selected_fields_arguments_and_fixture_keys` fails when a production
 operation drifts from it. Each fixture records whether it was live-captured or
 documentation-derived.

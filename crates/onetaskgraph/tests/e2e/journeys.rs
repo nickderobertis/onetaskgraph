@@ -1737,10 +1737,27 @@ fn every_row_lists_the_documents_it_holds_and_shows_one_by_its_qualified_id() {
             &sandbox,
             &["document", "show", &qualified(SOURCE, "D-1")],
         );
-        for expected in ["Alpha design", "bug", "the engine core, reviewed"] {
+        for expected in ["Alpha design", "the engine core, reviewed"] {
             assert!(
                 shown.contains(expected),
                 "{}: `document show` omits {expected}:\n{shown}",
+                row.name
+            );
+        }
+        // A label, where the source's documents have any. Where they do not, the field is
+        // left out entirely rather than shown empty — a document of a backend whose
+        // document type has no labels really carries none, and saying so is the honest
+        // answer this table exists to let a row make.
+        assert_eq!(
+            shown.contains("bug"),
+            row.fixture.labels_its_documents,
+            "{}: a document's labels are what its source really holds:\n{shown}",
+            row.name
+        );
+        if !row.fixture.labels_its_documents {
+            assert!(
+                field(&shown, "labels").is_none(),
+                "{}: and are absent rather than empty:\n{shown}",
                 row.name
             );
         }
@@ -1838,12 +1855,25 @@ fn a_document_list_narrows_by_project_by_label_and_by_text_and_has_no_status_fil
         assert_eq!(listed(&orphans), ours(&["D-3"]), "{}", row.name);
 
         // The same rows whoever applied the predicate, and a plan that says which it was.
+        // What "the same rows" *are* is the row's own claim: a source whose documents carry
+        // no labels keeps nothing when one is demanded and everything when one is excluded,
+        // which is that source applying the predicate over the labels its documents really
+        // have rather than ignoring it.
         let labelled = ok(
             row,
             &sandbox,
             &["document", "list", "--label", "bug", "--explain"],
         );
-        assert_eq!(listed(&labelled), ours(&["D-1"]), "{}", row.name);
+        assert_eq!(
+            listed(&labelled),
+            if row.fixture.labels_its_documents {
+                ours(&["D-1"])
+            } else {
+                Vec::new()
+            },
+            "{}",
+            row.name
+        );
         plan_says(
             row,
             &labelled,
@@ -1856,7 +1886,16 @@ fn a_document_list_narrows_by_project_by_label_and_by_text_and_has_no_status_fil
         );
 
         let excluded = ok(row, &sandbox, &["document", "list", "--not-label", "bug"]);
-        assert_eq!(listed(&excluded), ours(&["D-2", "D-3"]), "{}", row.name);
+        assert_eq!(
+            listed(&excluded),
+            if row.fixture.labels_its_documents {
+                ours(&["D-2", "D-3"])
+            } else {
+                ours(&["D-1", "D-2", "D-3"])
+            },
+            "{}",
+            row.name
+        );
 
         // `D-1` matches in its title and `D-2` in its body, so a search over either has to
         // return both — which is what a source that can only search one half must not

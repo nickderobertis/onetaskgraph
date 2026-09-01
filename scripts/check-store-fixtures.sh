@@ -77,6 +77,17 @@ MANIFEST = {
             "label": ["labels", "nodes", [], "name"],
         },
     },
+    "crates/onetaskgraph-linear/tests/fixtures/documents.json": {
+        "items": ["data", "documents", "nodes"],
+        "id": ["id"],
+        "title": ["title"],
+        # No label facet, and that is Linear's own schema rather than a thin fixture:
+        # `Document` has no `labels` field, so the project a document is filed under is the
+        # one thing a document query over this store selects by.
+        "facets": {
+            "project": ["project", "id"],
+        },
+    },
     "crates/onetaskgraph-linear/tests/fixtures/labels.json": {
         "items": ["data", "issueLabels", "nodes"],
         "id": ["id"],

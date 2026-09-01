@@ -1,11 +1,11 @@
 //! Every capability this source declares, driven against Linear's real API.
 //!
 //! The lane builds its own fixture on the scratch team `LINEAR_WRITE_TEAM` names — two
-//! projects, one issue filed under each, one issue filed under neither, two labels and
-//! two workflow states — because that shape is what makes an honoured predicate and an
-//! ignored one *different answers*. A workspace holding one project, or one where every
-//! issue carries the label, answers a filter the same way whether or not the source
-//! applies it.
+//! projects, one issue filed under each, one issue filed under neither, two documents
+//! filed the same way, two labels and two workflow states — because that shape is what
+//! makes an honoured predicate and an ignored one *different answers*. A workspace holding
+//! one project, or one where every issue carries the label, answers a filter the same way
+//! whether or not the source applies it.
 //!
 //! It skips, printing why, without `LINEAR_API_KEY` or without the scratch team: this
 //! lane is non-required by decision (AGENTS.md), because a required check a third party
@@ -19,9 +19,9 @@ use std::{collections::BTreeMap, env, future::Future};
 
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
-    ItemKind, ItemWrite, Label, LabelFilter, NativeId, PageRequest, Project, ProjectFilter,
-    ProjectQuery, SecretResolver, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
-    TaskQuery, TaskSource, TextFields, TextQuery,
+    Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId,
+    PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -108,6 +108,7 @@ const LABELS_PAGE: &str = "query($first:Int!,$after:String){issueLabels(first:$f
 const ISSUES_BY_TITLE: &str = "query($first:Int!,$after:String,$prefix:String!){issues(first:$first,after:$after,filter:{title:{startsWith:$prefix}}){nodes{id title} pageInfo{hasNextPage endCursor}}}";
 const PROJECTS_BY_NAME: &str = "query($first:Int!,$after:String,$prefix:String!){projects(first:$first,after:$after,filter:{name:{startsWith:$prefix}}){nodes{id name} pageInfo{hasNextPage endCursor}}}";
 const ISSUE_PAGE_PROBE: &str = "query($first:Int!){issues(first:$first){nodes{id}}}";
+const DOCUMENTS_BY_TITLE: &str = "query($first:Int!,$after:String,$prefix:String!){documents(first:$first,after:$after,filter:{title:{startsWith:$prefix}}){nodes{id title} pageInfo{hasNextPage endCursor}}}";
 
 /// Every `(id, name)` a paged Linear connection reports.
 async fn walk(
@@ -163,7 +164,7 @@ async fn walk(
     Err(format!("{what} did not terminate"))
 }
 
-/// Deletes every issue, project and label whose name `matches`.
+/// Deletes every issue, project, document and label whose name `matches`.
 ///
 /// Called twice: once before the journey, over any run's naming, which is what heals a
 /// run killed between its writes and its cleanup; and once after it, over this run's own,
@@ -215,6 +216,32 @@ async fn remove_artifacts(key: &str, matches: &dyn Fn(&str, &str) -> bool) -> Re
         .await?;
         if data.pointer("/projectDelete/success") != Some(&Value::Bool(true)) {
             return Err(format!("Linear did not confirm deleting project {name:?}"));
+        }
+    }
+    let documents = walk(
+        key,
+        DOCUMENTS_BY_TITLE,
+        "documents",
+        "title",
+        Some(ARTIFACT_PREFIX),
+        "live document residue lookup",
+    )
+    .await?;
+    for (id, title) in documents
+        .iter()
+        .filter(|(_, title)| matches(ARTIFACT_PREFIX, title))
+    {
+        let data = linear(
+            key,
+            onetaskgraph_linear::graphql::DOCUMENT_DELETE,
+            json!({"id":id}),
+            "live document cleanup",
+        )
+        .await?;
+        if data.pointer("/documentDelete/success") != Some(&Value::Bool(true)) {
+            return Err(format!(
+                "Linear did not confirm deleting document {title:?}"
+            ));
         }
     }
     let labels = walk(
@@ -832,6 +859,174 @@ async fn drive_every_declared_capability(
         "the live write filed under done read back as {:?}",
         closed_back.status.category
     );
+
+    drive_documents(run, source, &alpha_id, &title(5), &title(6)).await
+}
+
+/// `documents`, against Linear's own first-class document type.
+///
+/// Two of them, filed the way the issues above are — one under a project, one under none —
+/// because that difference is what tells a project predicate this source applied from one
+/// it ignored, and because a document under no project is the case that needs the
+/// configured team to give it a home.
+async fn drive_documents(
+    run: &LiveRun,
+    source: &dyn TaskSource,
+    under: &NativeId,
+    filed: &str,
+    loose: &str,
+) -> Result<(), String> {
+    let document = |title: &str, project: Option<&NativeId>| Document {
+        id: NativeId("live-source-item".into()),
+        title: title.to_owned(),
+        content: Some("temporary credentialed write; the live lane removes this".into()),
+        project: project.cloned(),
+        // Linear's own document type has no labels; a write carrying one is refused by
+        // name, which is asserted below rather than assumed.
+        labels: vec![],
+        url: None,
+        location: None,
+        created_at: None,
+        updated_at: None,
+        metadata: [("caller.count".to_owned(), json!(3))]
+            .into_iter()
+            .collect(),
+        repositories: vec![],
+    };
+    let write = |item: Document| ItemWrite {
+        target: None,
+        item,
+        depends_on: vec![],
+    };
+
+    let filed_id = source
+        .write_document(&write(document(filed, Some(under))))
+        .await
+        .map_err(|error| format!("live document write of {filed:?} failed: {error}"))?;
+    let loose_id = source
+        .write_document(&write(document(loose, None)))
+        .await
+        .map_err(|error| format!("live document write of {loose:?} failed: {error}"))?;
+
+    // Read back by its own id: the caller's key keeps its JSON type through the slot, the
+    // visible body is the text without the slot, and where it is is a link.
+    let read = source
+        .get_document(&filed_id)
+        .await
+        .map_err(|error| format!("live document read-back failed: {error}"))?
+        .ok_or_else(|| "the written document was not readable by its own id".to_owned())?;
+    ensure!(
+        read.title == filed,
+        "the live document write did not round-trip its title: {read:?}"
+    );
+    ensure!(
+        read.content.as_deref() == Some("temporary credentialed write; the live lane removes this"),
+        "the visible body a read reports is the text a person wrote: {:?}",
+        read.content
+    );
+    ensure!(
+        read.metadata.get("caller.count") == Some(&json!(3)),
+        "a caller's key did not round-trip with its JSON type: {:?}",
+        read.metadata
+    );
+    ensure!(
+        read.labels.is_empty(),
+        "Linear's own document type has no labels, so a read reports none: {:?}",
+        read.labels
+    );
+    ensure!(
+        matches!(&read.location, Some(Location::Url(url)) if url.starts_with("https://")),
+        "a document says where it is, as a link: {:?}",
+        read.location
+    );
+    ensure!(
+        read.project.as_ref() == Some(under),
+        "the document filed under this run's project read back filed under {:?}",
+        read.project
+    );
+
+    // A label is a field this source cannot carry, and it is refused by name rather than
+    // dropped — the one answer a copy must never turn into a silent success.
+    let refusal = source
+        .write_document(&write(Document {
+            labels: vec![label(&artifact_label(run.process_id, run.stamp_micros))],
+            ..document(filed, Some(under))
+        }))
+        .await;
+    ensure!(
+        refusal
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.to_string().contains("labels")),
+        "a document write carrying a label must be refused by name, and was {refusal:?}"
+    );
+
+    // Both this run's documents come back, the project predicate keeps one and the orphan
+    // predicate the other, and a label demanded of a document keeps neither.
+    let titles = |query: DocumentQuery| async move {
+        let mut found = source
+            .query_documents(&query, &page(250))
+            .await
+            .map_err(|error| format!("live document read failed: {error}"))?
+            .items
+            .into_iter()
+            .map(|document| document.title)
+            .filter(|title| is_artifact(ARTIFACT_PREFIX, title))
+            .collect::<Vec<_>>();
+        found.sort();
+        Ok::<_, String>(found)
+    };
+    let both = sorted(vec![filed.to_owned(), loose.to_owned()]);
+    ensure!(
+        titles(DocumentQuery::default()).await? == both,
+        "the two documents this run created did not come back as {both:?}"
+    );
+    ensure!(
+        titles(DocumentQuery {
+            project: ProjectFilter::Is(under.clone()),
+            ..DocumentQuery::default()
+        })
+        .await?
+            == vec![filed.to_owned()],
+        "a document listing narrowed to this run's project kept the wrong documents"
+    );
+    ensure!(
+        titles(DocumentQuery {
+            project: ProjectFilter::Orphans,
+            ..DocumentQuery::default()
+        })
+        .await?
+            == vec![loose.to_owned()],
+        "a document listing narrowed to the orphans kept the wrong documents"
+    );
+    ensure!(
+        titles(DocumentQuery {
+            labels: LabelFilter {
+                any_of: vec![artifact_label(run.process_id, run.stamp_micros)],
+                ..LabelFilter::default()
+            },
+            ..DocumentQuery::default()
+        })
+        .await?
+        .is_empty(),
+        "no Linear document carries a label, so a query demanding one keeps nothing"
+    );
+
+    // And removed again, which is what lets a copy that could not finish take one back.
+    // The sweep would clear them anyway; driving the verb is what proves it works.
+    for id in [&filed_id, &loose_id] {
+        source
+            .delete_document(id)
+            .await
+            .map_err(|error| format!("live document removal failed: {error}"))?;
+    }
+    ensure!(
+        source
+            .get_document(&loose_id)
+            .await
+            .is_ok_and(|held| held.is_none()),
+        "a document this run removed is still readable"
+    );
     Ok(())
 }
 
@@ -873,7 +1068,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         source.capabilities(),
         Capabilities {
             projects: Support::Native,
-            documents: Support::Unsupported,
+            documents: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

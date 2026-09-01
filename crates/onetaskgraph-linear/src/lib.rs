@@ -1,14 +1,19 @@
 //! A read/write source over Linear's published GraphQL API.
 //!
-//! Linear `Issue` maps to [`Task`], `Project` to [`Project`], `IssueLabel` and
-//! `ProjectLabel` to [`Label`], and `WorkflowState.name` is preserved while its
-//! `type` (`backlog`, `unstarted`, `started`, `completed`, or `canceled`) maps to
+//! Linear `Issue` maps to [`Task`], `Project` to [`Project`], `Document` to [`Document`],
+//! `IssueLabel` and `ProjectLabel` to [`Label`], and `WorkflowState.name` is preserved
+//! while its `type` (`backlog`, `unstarted`, `started`, `completed`, or `canceled`) maps to
 //! the normalized status category. Issue `relations`/`inverseRelations` and
 //! project relations provide native dependency traversal in both directions.
 //!
 //! Label, workflow-state, project, and orphan filters are sent in the
 //! `issues(filter:)`/`projects(filter:)` variables. Pagination uses Relay `first` and
 //! `after`.
+//!
+//! Every issue, project and document reports its own Linear web address as its
+//! [`Location`], as a link rather than a path — the counterpart of a folder of Markdown
+//! reporting the path of the file behind an item. It does not replace the `url` field
+//! those types already carry; it is the same address said in the shape a reader can act on.
 //!
 //! # What this source declares, field by field
 //!
@@ -21,7 +26,7 @@
 //! | Field | Verdict |
 //! | --- | --- |
 //! | `projects` | **Supported and proven.** `issues(filter:{project:{id:{eq:…}}})`. |
-//! | `documents` | **Unsupported, and unimplemented.** Linear has documents of its own, so nothing about the service makes this impossible; what is missing is a production operation in this crate that reads one, pinned against `tests/fixtures/schema.graphql` the way every other operation here is. docs/follow-ups.md tracks it. |
+//! | `documents` | **Supported and proven.** Linear's own first-class `Document`, read through `documents(first:,after:,filter:)` and `document(id:)`, written through `documentCreate`/`documentUpdate` and taken back by `documentDelete`. See the ruling below on what a Linear document cannot hold. |
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
 //! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{inIgnoreCase:…}}}` and `{eqIgnoreCase:…}` for what an item must carry, `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. |
 //! | `filter_by_status` | **Supported and proven.** `state:{type:{in:[…]}}`, over the `WorkflowState.type` vocabulary the category maps to. |
@@ -46,6 +51,25 @@
 //! rather than a limit, and reading it as a limit is what would leave it here forever.
 //! Implementing it is tracked in `docs/follow-ups.md`.
 //!
+//! ## Ruling: a Linear document carries no label, and that is Linear's
+//!
+//! Unlike the two searches above, this one *is* a property of the remote service. The
+//! types of Linear's published schema carrying a `labels` field are `Issue`, `Project`,
+//! `Team`, `Initiative` and `Organization`; `Document` is not among them, re-observed
+//! 2026-09-01 and pinned in `tests/fixtures/schema.graphql`. So this source reports a
+//! document's labels as none and **refuses by name** a document write carrying one, rather
+//! than dropping it or standing a slot up beside a first-class type. The shared journey
+//! table's row says so, and the shared document journeys drive that claim.
+//!
+//! Two predicates therefore reach a fetched page rather than the `documents(filter:)`
+//! variables, and both are still *applied* — which is what `Native` means here, and why
+//! the declaration stays honest. Labels, for the reason above. And orphans, because
+//! `DocumentFilter.project` is a `ProjectFilter` where `IssueFilter.project` is a
+//! `NullableProjectFilter`: only the nullable one carries `null:`, so Linear cannot be
+//! asked for the documents belonging to no project. The page-by-page walk asks for only
+//! what is still owed, so neither predicate can make a read return more than the caller
+//! asked for, and neither can drop a document the walk already fetched.
+//!
 //! Caller metadata is canonical JSON in a trailing
 //! `<!-- onetaskgraph.metadata ... -->` Markdown comment in the item's description. The
 //! visible description is returned unchanged without that slot. Writes put the same
@@ -68,9 +92,10 @@
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Health, ItemKind, ItemWrite, Label, NativeId, Page, PageRequest, Project,
-    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, WriteSupport,
+    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location,
+    NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
+    TaskSource, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -140,10 +165,24 @@ pub mod graphql {
     pub const ISSUE_DELETE: &str = "mutation($id:String!){ issueDelete(id:$id){success} }";
     /// Delete a project, for the same reason and on the same terms.
     pub const PROJECT_DELETE: &str = "mutation($id:String!){ projectDelete(id:$id){success} }";
+    /// Fetch one document.
+    pub const DOCUMENT: &str = "query($id:String!){ document(id:$id){ id title content url createdAt updatedAt project{id} } }";
+    /// List documents.
+    ///
+    /// `first` is an `Int` rather than an `Int!` because that is what Linear's `documents`
+    /// connection declares, unlike its `issues` one.
+    pub const DOCUMENTS: &str = "query($first:Int,$after:String,$filter:DocumentFilter){ documents(first:$first,after:$after,filter:$filter){ nodes{id title content url createdAt updatedAt project{id}} pageInfo{hasNextPage endCursor} } }";
+    /// Create a document.
+    pub const DOCUMENT_CREATE: &str = "mutation($input:DocumentCreateInput!){ documentCreate(input:$input){success document{id}} }";
+    /// Update a document.
+    pub const DOCUMENT_UPDATE: &str = "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success document{id}} }";
+    /// Delete a document, so a copy that could not finish can take back what it created.
+    pub const DOCUMENT_DELETE: &str = "mutation($id:String!){ documentDelete(id:$id){success} }";
 }
 
 use graphql::{
-    ISSUE, ISSUE_RELATIONS, ISSUES, LABELS, PROJECT, PROJECT_RELATIONS, PROJECTS, VIEWER,
+    DOCUMENT, DOCUMENTS, ISSUE, ISSUE_RELATIONS, ISSUES, LABELS, PROJECT, PROJECT_RELATIONS,
+    PROJECTS, VIEWER,
 };
 
 /// Configuration contains only the credential variable's name, never its value.
@@ -325,6 +364,9 @@ enum MutationRoot {
     ProjectRelationDelete,
     IssueDelete,
     ProjectDelete,
+    DocumentCreate,
+    DocumentUpdate,
+    DocumentDelete,
 }
 impl MutationRoot {
     fn as_str(self) -> &'static str {
@@ -339,6 +381,9 @@ impl MutationRoot {
             Self::ProjectRelationDelete => "projectRelationDelete",
             Self::IssueDelete => "issueDelete",
             Self::ProjectDelete => "projectDelete",
+            Self::DocumentCreate => "documentCreate",
+            Self::DocumentUpdate => "documentUpdate",
+            Self::DocumentDelete => "documentDelete",
         }
     }
 }
@@ -521,12 +566,6 @@ impl LinearSource {
         edges: &[DependencyEdge],
         kind: WriteKind,
     ) -> Result<Option<String>, SourceError> {
-        let mut metadata = metadata.clone();
-        if repositories.is_empty() {
-            metadata.remove(Repository::METADATA_KEY);
-        } else {
-            metadata.insert(Repository::METADATA_KEY.into(), json!(repositories));
-        }
         let recorded = edges
             .iter()
             .filter(|edge| {
@@ -543,6 +582,26 @@ impl LinearSource {
             })
             .map(|edge| json!({"id":edge.to.id(),"kind":edge.to.kind}))
             .collect::<Vec<_>>();
+        Self::long_form(content, metadata, repositories, recorded)
+    }
+
+    /// The one long-form field a Linear item has, with this source's own slot at the end.
+    ///
+    /// Shared by every kind this source writes rather than reimplemented per kind: a
+    /// document keeps caller metadata in exactly the slot an issue and a project do, which
+    /// is what lets the same read side take it back out.
+    fn long_form(
+        content: Option<&str>,
+        metadata: &std::collections::BTreeMap<String, Value>,
+        repositories: &[Repository],
+        recorded: Vec<Value>,
+    ) -> Result<Option<String>, SourceError> {
+        let mut metadata = metadata.clone();
+        if repositories.is_empty() {
+            metadata.remove(Repository::METADATA_KEY);
+        } else {
+            metadata.insert(Repository::METADATA_KEY.into(), json!(repositories));
+        }
         if recorded.is_empty() {
             metadata.remove(DependencyEdge::RECORDED_KEY);
         } else {
@@ -736,7 +795,7 @@ impl TaskSource for LinearSource {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
-            documents: Support::Unsupported,
+            documents: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -937,6 +996,152 @@ impl TaskSource for LinearSource {
         mutation_payload(&data, MutationRoot::ProjectDelete)?;
         Ok(())
     }
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        // Read as an optional although the pinned `document(id:)` returns `Document!`, for
+        // the reason `delete_task` records: Linear answers an id naming nothing with an
+        // errored response rather than a null, and reading the null defensively is what
+        // keeps a responder that does answer one from being a malformed-response failure.
+        let d = self.send(DOCUMENT, json!({"id":id.0})).await?;
+        optional(&d, "document", map_document)
+    }
+    async fn query_documents(
+        &self,
+        query: &DocumentQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        // `query.text` is read by nothing here on purpose. Both searches are declared
+        // `Unsupported`, and capability rule 2 says an ignored predicate returns the
+        // *wider* set for the engine to narrow — half-applying one is what would drop rows.
+        let want = page.limit.min(250) as usize;
+        let mut filter = serde_json::Map::new();
+        if let ProjectFilter::Is(id) = &query.project {
+            filter.insert("project".into(), json!({"id": {"eq": id.0}}));
+        }
+        let filter = Value::Object(filter);
+        let mut items = Vec::new();
+        let mut cursor = page.cursor.clone();
+        loop {
+            // Only what is still owed, so the predicates applied here can never make this
+            // return more than the caller asked for, and never drop what it fetched.
+            let first = want.saturating_sub(items.len()).max(1);
+            let d = self
+                .send(
+                    DOCUMENTS,
+                    json!({"first":first,"after":cursor.as_ref().map(|cursor|&cursor.0),"filter":filter}),
+                )
+                .await?;
+            let fetched = connection(&d, "documents", map_document)?;
+            items.extend(
+                fetched
+                    .items
+                    .into_iter()
+                    .filter(|document| document_matches(document, &query.project, &query.labels)),
+            );
+            cursor = fetched.next;
+            if cursor.is_none() || items.len() >= want {
+                return Ok(Page {
+                    items,
+                    next: cursor,
+                });
+            }
+        }
+    }
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        // Two refusals by name rather than two silent drops. Linear's own document type
+        // has no labels and a document is not work, so neither a label nor a dependency
+        // has anywhere here to land — and a copy that dropped one would report success for
+        // an item the destination does not hold.
+        if !write.item.labels.is_empty() {
+            let named = write
+                .item
+                .labels
+                .iter()
+                .map(|label| label.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(SourceError::Refused {
+                message: format!(
+                    "source {} cannot carry a document's labels, because Linear's own \
+                     document type has none: {named}",
+                    self.name
+                ),
+            });
+        }
+        if !write.depends_on.is_empty()
+            || write
+                .item
+                .metadata
+                .contains_key(DependencyEdge::RECORDED_KEY)
+        {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "source {} cannot carry {} on a document, because a document is not \
+                     work and nothing may depend on one",
+                    self.name,
+                    DependencyEdge::RECORDED_KEY
+                ),
+            });
+        }
+        let content = Self::long_form(
+            write.item.content.as_deref(),
+            &write.item.metadata,
+            &write.item.repositories,
+            Vec::new(),
+        )?;
+        let project = write.item.project.as_ref().map(|id| id.0.clone());
+        let (query, variables, root) = match &write.target {
+            Some(id) => {
+                // A target this workspace does not hold is refused rather than created:
+                // the engine established that id before asking, so an absent one is a race
+                // this destination must not paper over by writing a second document.
+                if self.get_document(id).await?.is_none() {
+                    return Err(SourceError::Refused {
+                        message: format!("source {} holds no document {}", self.name, id.0),
+                    });
+                }
+                (
+                    graphql::DOCUMENT_UPDATE,
+                    json!({"id":id.0,"input":{"title":write.item.title,"content":content,"projectId":project}}),
+                    MutationRoot::DocumentUpdate,
+                )
+            }
+            None => {
+                let mut input =
+                    json!({"title":write.item.title,"content":content,"projectId":project});
+                // A Linear document lives in a project, an initiative, an issue or a team.
+                // One filed under no project needs the configured team to be its home, and
+                // one filed under a project already has one — so the team is asked for
+                // only where it is the answer, rather than made a condition of every write.
+                if project.is_none() {
+                    input["teamId"] = Value::String(self.team_id().await?.0);
+                }
+                (
+                    graphql::DOCUMENT_CREATE,
+                    json!({ "input": input }),
+                    MutationRoot::DocumentCreate,
+                )
+            }
+        };
+        let data = self.send(query, variables).await?;
+        let document = mutation_payload(&data, root)?
+            .get("document")
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("missing {}.document", root.as_str()),
+            })?;
+        Ok(NativeId(backend_id(document, "id")?.into()))
+    }
+    async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
+        // An id naming nothing is the state this asks for, on exactly the terms
+        // `delete_task` reads it on.
+        if self.get_document(id).await?.is_none() {
+            return Ok(());
+        }
+        let data = self
+            .send(graphql::DOCUMENT_DELETE, json!({"id":id.0}))
+            .await?;
+        mutation_payload(&data, MutationRoot::DocumentDelete)?;
+        Ok(())
+    }
 }
 
 /// Linear relates one Linear item to another and nothing else, so an edge whose far end
@@ -1097,6 +1302,7 @@ fn map_task(v: &Value) -> Result<Task, SourceError> {
     let (content, metadata) = metadata_description(optional_string(v, "description")?)?;
     let repositories = Repository::from_metadata(&metadata)
         .map_err(|message| SourceError::Malformed { message })?;
+    let url = optional_string(v, "url")?;
     Ok(Task {
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "title")?.into(),
@@ -1107,17 +1313,9 @@ fn map_task(v: &Value) -> Result<Task, SourceError> {
         labels: labels_of(v.get("labels").ok_or_else(|| SourceError::Malformed {
             message: "missing labels".into(),
         })?)?,
-        project: match v.get("project") {
-            None => {
-                return Err(SourceError::Malformed {
-                    message: "missing project field".into(),
-                });
-            }
-            Some(Value::Null) => None,
-            Some(p) => Some(NativeId(str_at(p, "id")?.into())),
-        },
-        url: optional_string(v, "url")?,
-        location: None,
+        project: filed_under(v)?,
+        location: web_address(url.as_deref()),
+        url,
         created_at: time(v, "createdAt")?,
         updated_at: time(v, "updatedAt")?,
         metadata,
@@ -1128,6 +1326,7 @@ fn map_project(v: &Value) -> Result<Project, SourceError> {
     let (content, metadata) = metadata_description(optional_string(v, "description")?)?;
     let repositories = Repository::from_metadata(&metadata)
         .map_err(|message| SourceError::Malformed { message })?;
+    let url = optional_string(v, "url")?;
     Ok(Project {
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "name")?.into(),
@@ -1138,14 +1337,93 @@ fn map_project(v: &Value) -> Result<Project, SourceError> {
         labels: labels_of(v.get("labels").ok_or_else(|| SourceError::Malformed {
             message: "missing project labels".into(),
         })?)?,
-        url: optional_string(v, "url")?,
-        location: None,
+        location: web_address(url.as_deref()),
+        url,
         created_at: time(v, "createdAt")?,
         updated_at: time(v, "updatedAt")?,
         metadata,
         repositories,
     })
 }
+
+/// Where a Linear entity is: the web address Linear itself reports for it, as a link.
+///
+/// Every issue, project and document of a Linear workspace has a page a person can open,
+/// so this source says so for all three — the counterpart of a folder of Markdown
+/// reporting the path of the file behind an item. A source that reported nothing here is
+/// what leaves a reader holding an opaque id, and `None` is reserved for the case Linear
+/// really did not say, which is not the same as saying the entity is nowhere.
+fn web_address(url: Option<&str>) -> Option<Location> {
+    url.map(|url| Location::Url(url.to_owned()))
+}
+
+/// The project a Linear item is filed under, or `None` for one filed under nothing.
+///
+/// One reader for issues and documents alike, because the field is the same field: an
+/// absent `project` key is a malformed response, a null one is an orphan.
+fn filed_under(v: &Value) -> Result<Option<NativeId>, SourceError> {
+    match v.get("project") {
+        None => Err(SourceError::Malformed {
+            message: "missing project field".into(),
+        }),
+        Some(Value::Null) => Ok(None),
+        Some(project) => Ok(Some(NativeId(str_at(project, "id")?.into()))),
+    }
+}
+
+fn map_document(v: &Value) -> Result<Document, SourceError> {
+    let (content, metadata) = metadata_description(optional_string(v, "content")?)?;
+    let repositories = Repository::from_metadata(&metadata)
+        .map_err(|message| SourceError::Malformed { message })?;
+    let url = optional_string(v, "url")?;
+    Ok(Document {
+        id: NativeId(str_at(v, "id")?.into()),
+        title: str_at(v, "title")?.into(),
+        content,
+        project: filed_under(v)?,
+        // Linear's `Document` carries no labels, and that is the published schema rather
+        // than a gap here: the types of it that carry `labels` are `Issue`, `Project`,
+        // `Team`, `Initiative` and `Organization`. Reporting none is what a source with no
+        // native slot owes; standing one up beside a first-class type is what this source
+        // exists not to do, and `write_document` refuses a label by name for the same
+        // reason rather than dropping it.
+        labels: Vec::new(),
+        location: web_address(url.as_deref()),
+        url,
+        created_at: time(v, "createdAt")?,
+        updated_at: time(v, "updatedAt")?,
+        metadata,
+        repositories,
+    })
+}
+
+/// Whether this document satisfies the predicates this source applies to a fetched page.
+///
+/// Two of them reach a page rather than the `documents(filter:)` variables, and each for a
+/// reason of Linear's own. `DocumentFilter.project` is a `ProjectFilter` where
+/// `IssueFilter.project` is a `NullableProjectFilter`, so only the issue side can be asked
+/// for the items belonging to no project. And a Linear document carries no label at all,
+/// so a query demanding one keeps nothing and a query excluding one keeps everything —
+/// which is this source *applying* the predicate it declares native, over the labels the
+/// document really has, rather than ignoring it.
+fn document_matches(document: &Document, project: &ProjectFilter, labels: &LabelFilter) -> bool {
+    let carries = |name: &String| {
+        document
+            .labels
+            .iter()
+            .any(|label| label.name.eq_ignore_ascii_case(name))
+    };
+    let filed = match project {
+        ProjectFilter::Any => true,
+        ProjectFilter::Orphans => document.project.is_none(),
+        ProjectFilter::Is(id) => document.project.as_ref() == Some(id),
+    };
+    filed
+        && (labels.any_of.is_empty() || labels.any_of.iter().any(&carries))
+        && labels.all_of.iter().all(&carries)
+        && !labels.none_of.iter().any(&carries)
+}
+
 fn optional<T>(
     d: &Value,
     k: &str,
