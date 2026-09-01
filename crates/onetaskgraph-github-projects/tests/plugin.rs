@@ -1437,6 +1437,49 @@ async fn one_projects_tasks_come_from_that_project_and_never_from_the_boards_ite
 }
 
 #[tokio::test]
+async fn an_item_named_by_its_qualified_id_is_resolved_from_that_id_and_nothing_else() {
+    // A qualified id names the item, so nothing is searched for and nothing is walked: the
+    // id is resolved, once, and an id this board does not hold is answered as not held
+    // rather than by reading the board to discover that.
+    let fixture = board_of(3, 2);
+    let source = source(&fixture);
+
+    assert_eq!(
+        source
+            .get_project(&NativeId("I_p2".to_owned()))
+            .await
+            .expect("the board answers a project read")
+            .expect("the board holds that project")
+            .title,
+        "Plan 2"
+    );
+    assert_eq!(
+        source
+            .get_task(&NativeId("I_p2t1".to_owned()))
+            .await
+            .expect("the board answers a task read")
+            .expect("the board holds that task")
+            .title,
+        "Step 2.1"
+    );
+    assert_eq!(
+        source
+            .get_project(&NativeId("I_nothing".to_owned()))
+            .await
+            .expect("the board answers a read of an id it does not hold"),
+        None
+    );
+    assert_eq!(
+        fixture.requests("issue"),
+        3,
+        "one request per id, and no more"
+    );
+    assert_eq!(fixture.searches(), Vec::<String>::new());
+    assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+    assert_eq!(fixture.documents().len(), 3);
+}
+
+#[tokio::test]
 async fn the_work_one_projects_read_does_is_that_projects_size_and_not_the_boards() {
     // The property the cost claim rests on, asserted the only way it can be: the same read
     // against two boards of very different size, and what it asked for compared.

@@ -69,7 +69,7 @@
 //!
 //! | Field | Verdict |
 //! | --- | --- |
-//! | `projects` | **Supported and proven.** A task's project is the issue it is a sub-issue of, and a listing scoped to one keeps the items filed under that issue. This is the field that was declared and then not applied, which silently returned another project's tasks. |
+//! | `projects` | **Supported and proven,** and the one predicate here that is pushed down rather than applied in process: a task's project is the issue it is a sub-issue of, so a listing scoped to one *asks that issue* for its own sub-issues. This is the field that was declared and then not applied, which silently returned another project's tasks. |
 //! | `documents` | **Supported and proven.** A board holds issues, so a document is one: the issue whose title begins [`DESIGN_TITLE_PREFIX`]. Reads, filters and paging answer on exactly the terms a task read does, and a write puts the prefix back. |
 //! | `orphan_tasks` | **Supported and proven.** A task issue with no `parent` is in no project. |
 //! | `filter_by_label` | **Supported and proven,** over the issue's own labels. |
