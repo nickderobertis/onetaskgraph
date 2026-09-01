@@ -92,6 +92,10 @@ METHOD_SECTIONS = {
     "write_project": "### 4.9 `write_task` and `write_project`",
     "delete_task": "### 4.10 `delete_task` and `delete_project`",
     "delete_project": "### 4.10 `delete_task` and `delete_project`",
+    "get_document": "### 4.11 `get_document` and `query_documents`",
+    "query_documents": "### 4.11 `get_document` and `query_documents`",
+    "write_document": "### 4.12 `write_document` and `delete_document`",
+    "delete_document": "### 4.12 `write_document` and `delete_document`",
 }
 
 ENUM_SECTIONS = {
@@ -104,6 +108,7 @@ ENUM_SECTIONS = {
     "DependencyKind": "### 4.8 `task_dependencies` and `project_dependencies`",
     "ItemKind": "### 4.8 `task_dependencies` and `project_dependencies`",
     "Direction": "### 4.8 `task_dependencies` and `project_dependencies`",
+    "Location": "### 4.13 `Location`",
 }
 
 # Values a section spells although the enum declaring them is specified elsewhere, each with
@@ -523,6 +528,8 @@ STRUCT_SECTIONS = {
     "DependencyEdge": "### 4.8 `task_dependencies` and `project_dependencies`",
     "DependencyEndpoint": "### 4.8 `task_dependencies` and `project_dependencies`",
     "ItemWrite": "### 4.9 `write_task` and `write_project`",
+    "DocumentQuery": "### 4.11 `get_document` and `query_documents`",
+    "Document": "### 4.11 `get_document` and `query_documents`",
 }
 
 def wire_members(struct):

@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Health, ItemKind,
-    Label, Page, PageRequest, Project, ProjectQuery, Repository, SourceError, Status,
-    StatusCategory, Task, TaskQuery, TextFields,
+    Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
+    DocumentQuery, Health, ItemKind, Label, Location, Page, PageRequest, Project, ProjectQuery,
+    Repository, SourceError, Status, StatusCategory, Task, TaskQuery, TextFields,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
@@ -31,7 +31,7 @@ use crate::{
 ///
 /// Which roots each version brought is what `git log` answers; what this number owes a
 /// reader is that it moves whenever [`schema_bundle`] below gains, loses or renames one.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 7;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 8;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -40,6 +40,12 @@ pub fn schema_bundle() -> Value {
 
     roots.insert("Task", schema_for!(Task));
     roots.insert("Project", schema_for!(Project));
+    roots.insert("Document", schema_for!(Document));
+    // A root of its own although both `Task` and `Project` reach it inside their own
+    // definitions, for the reason `TextFields` is one: a consumer acts on a location by
+    // asking which of the two keys is present, so the shape it switches on has to be
+    // nameable rather than only reachable.
+    roots.insert("Location", schema_for!(Location));
     roots.insert("Label", schema_for!(Label));
     roots.insert("Status", schema_for!(Status));
     roots.insert("StatusCategory", schema_for!(StatusCategory));
@@ -60,9 +66,11 @@ pub fn schema_bundle() -> Value {
 
     roots.insert("TaskQuery", schema_for!(TaskQuery));
     roots.insert("ProjectQuery", schema_for!(ProjectQuery));
+    roots.insert("DocumentQuery", schema_for!(DocumentQuery));
     roots.insert("PageRequest", schema_for!(PageRequest));
     roots.insert("PageOfTask", schema_for!(Page<Task>));
     roots.insert("PageOfProject", schema_for!(Page<Project>));
+    roots.insert("PageOfDocument", schema_for!(Page<Document>));
     roots.insert("PageOfLabel", schema_for!(Page<Label>));
     roots.insert("PageOfDependencyEdge", schema_for!(Page<DependencyEdge>));
 

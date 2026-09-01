@@ -29,6 +29,24 @@ RESPONSE_ROOTS = {
     "sources_list": "SourceListing",
     "config_show": "EffectiveConfig",
 }
+# Roots no command returns directly, which the package generates and exports anyway.
+#
+# The first four are reachable inside a response and are named here so a consumer has them
+# under their own names rather than only as nested definitions. The documents contract is
+# here for a different reason: `Document`, `DocumentQuery`, `Location` and `PageOfDocument`
+# are the contract's types, and the SDK owes a caller a model for each whether or not a
+# verb reaches one yet — no verb does today, and a generated surface that waited for one
+# would leave both SDKs describing different contracts.
+CONTRACT_ROOTS = {
+    "SourceFailure",
+    "QueryPlan",
+    "GlobalId",
+    "StatusCategory",
+    "Document",
+    "DocumentQuery",
+    "Location",
+    "PageOfDocument",
+}
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
     "allow_partial": "bool",
@@ -193,9 +211,7 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
     """Generate Pydantic models directly from every response schema in the bundle."""
     destination.mkdir(parents=True, exist_ok=True)
     exports: list[str] = []
-    for root in sorted(
-        set(RESPONSE_ROOTS.values()) | {"SourceFailure", "QueryPlan", "GlobalId", "StatusCategory"}
-    ):
+    for root in sorted(set(RESPONSE_ROOTS.values()) | CONTRACT_ROOTS):
         schema = bundle["roots"][root]
         add_variant_titles(schema, root)
         rename_qualified_definitions(schema)
@@ -249,11 +265,8 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
             ]
         if any("dict[str, Any]" in line for line in generated):
             generated = [
-                line.replace("from pydantic import ", "from pydantic import JsonValue, ")
-                .replace("dict[str, Any]", "dict[str, JsonValue]")
-                .replace(
-                    "JsonValue, AwareDatetime, BaseModel, Field, RootModel",
-                    "AwareDatetime, BaseModel, Field, JsonValue, RootModel",
+                line.replace("from pydantic import ", "from pydantic import JsonValue, ").replace(
+                    "dict[str, Any]", "dict[str, JsonValue]"
                 )
                 for line in generated
             ]
@@ -263,7 +276,10 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
             + "\n",
             encoding="utf-8",
         )
-        generated_name = "QueryResponse" if root.startswith("QueryResponseOf") else root
+        generated_name = root
+        for generic, titled in (("QueryResponseOf", "QueryResponse"), ("PageOf", "Page")):
+            if root.startswith(generic):
+                generated_name = titled
         exports.append(f"from .{module} import {generated_name} as {root}")
     (destination / "models.py").write_text(
         "# ruff: noqa: F401, I001  # Generated public re-exports are used by consumers.\n"
@@ -433,13 +449,68 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     )
 
 
+def enum_defaults(lines: list[str]) -> list[str]:
+    """Render a defaulted enum field as its member rather than as the raw schema value.
+
+    The code generator writes a schema `default` back as the JSON literal it was, so a
+    field annotated with a generated `StrEnum` is assigned a bare string — which the type
+    checker rejects, because a `str` is not that enum. The bundle carries one such field
+    today (`Capabilities.documents`, `"unsupported"` when a plugin omits it) and will carry
+    more the day another optional enum member lands, so this rewrites by rule rather than
+    by name.
+
+    A default this cannot place is left exactly as it was. That is deliberate: the type
+    check is what caught this one, and it is what should catch the next one rather than a
+    silent rewrite here that guesses wrong.
+    """
+    members: dict[str, dict[str, str]] = {}
+    enum_name: str | None = None
+    for line in lines:
+        if declared := re.fullmatch(r"class (\w+)\(StrEnum\):", line):
+            enum_name = declared.group(1)
+            members[enum_name] = {}
+        elif enum_name is not None:
+            if member := re.fullmatch(r"    (\w+) = \"(.*)\"", line):
+                members[enum_name][member.group(2)] = member.group(1)
+            elif line.strip():
+                enum_name = None
+
+    rewritten: list[str] = []
+    annotated: str | None = None
+    for line in lines:
+        if re.fullmatch(r"    \w+: Annotated\[", line):
+            annotated = ""
+        elif annotated == "" and (typed := re.fullmatch(r"        (\w+)(?: \| None)?,", line)):
+            annotated = typed.group(1)
+        elif assigned := re.fullmatch(r"    \] = \"(.*)\"", line):
+            member = members.get(annotated or "", {}).get(assigned.group(1))
+            if member is not None:
+                line = f"    ] = {annotated}.{member}"
+            annotated = None
+        rewritten.append(line)
+    return rewritten
+
+
 def format_generated(destination: Path) -> None:
     """Apply the package's locked formatter to deterministic generated output."""
     subprocess.run(["ruff", "format", str(destination)], check=True, capture_output=True)
     subprocess.run(
-        ["ruff", "check", "--fix", "--select", "F401", str(destination)],
+        # `I001` alongside `F401` because the package's own lint enforces import order and
+        # the code generator does not: it emits imports in the order it happens to need
+        # them, so a root that gains a type can reorder them into something `ruff check`
+        # then refuses. Sorting here keeps generated output passing the same lint every
+        # hand-written module passes.
+        ["ruff", "check", "--fix", "--select", "F401,I001", str(destination)],
         check=True,
     )
+    # After formatting rather than before it: the shape a field is written in is the
+    # formatter's, and reading it back is what lets this be one rule rather than a guess
+    # at what the code generator happened to emit on one line or several.
+    for module in sorted(destination.glob("*.py")):
+        lines = module.read_text(encoding="utf-8").splitlines()
+        rewritten = enum_defaults(lines)
+        if rewritten != lines:
+            module.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
     subprocess.run(["ruff", "format", str(destination)], check=True, capture_output=True)
 
 
@@ -472,12 +543,7 @@ def validate_schema_bundle(parsed: JsonValue) -> SchemaBundle:
     if not isinstance(parsed, dict) or not isinstance(parsed.get("roots"), dict):
         raise SystemExit("binary emitted an invalid schema bundle: expected an object with roots")
     bundle = TypeAdapter(SchemaBundle).validate_python(parsed)
-    required = set(RESPONSE_ROOTS.values()) | {
-        "SourceFailure",
-        "QueryPlan",
-        "GlobalId",
-        "StatusCategory",
-    }
+    required = set(RESPONSE_ROOTS.values()) | CONTRACT_ROOTS
     missing = sorted(required - bundle["roots"].keys())
     malformed = sorted(
         name

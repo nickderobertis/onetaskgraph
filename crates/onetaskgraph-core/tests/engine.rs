@@ -167,6 +167,7 @@ const PUBLISHED_BUNDLES: &[(u32, &[&str])] = &[
     (5, &FIFTH_BUNDLE_ROOTS),
     (6, &SIXTH_BUNDLE_ROOTS),
     (7, &SEVENTH_BUNDLE_ROOTS),
+    (8, &EIGHTH_BUNDLE_ROOTS),
 ];
 
 /// The roots version 1 of the bundle publishes.
@@ -503,6 +504,67 @@ const SEVENTH_BUNDLE_ROOTS: [&str; 52] = [
     "CopyAction",
 ];
 
+/// Version 8 adds the documents contract: a `Document`, the `Location` a consumer acts on
+/// without knowing the backend, and the query and page a document read answers with.
+const EIGHTH_BUNDLE_ROOTS: [&str; 56] = [
+    "Task",
+    "Project",
+    "Document",
+    "Location",
+    "Label",
+    "Status",
+    "StatusCategory",
+    "DependencyEdge",
+    "DependencyEndpoint",
+    "QualifiedEndpoint",
+    "ItemKind",
+    "Repository",
+    "DependencyKind",
+    "Direction",
+    "TaskQuery",
+    "ProjectQuery",
+    "DocumentQuery",
+    "PageRequest",
+    "PageOfTask",
+    "PageOfProject",
+    "PageOfDocument",
+    "PageOfLabel",
+    "PageOfDependencyEdge",
+    "Capabilities",
+    "Health",
+    "SourceError",
+    "GlobalId",
+    "QueryPlan",
+    "SourcePlan",
+    "Predicate",
+    "SourceFailure",
+    "EffectiveConfig",
+    "Setting",
+    "Origin",
+    "OutputFormat",
+    "SecretsReport",
+    "ResolvedCredential",
+    "CredentialLayer",
+    "PageToken",
+    "QualifiedTask",
+    "QualifiedProject",
+    "QualifiedLabel",
+    "QualifiedEdge",
+    "SearchHit",
+    "SourceListing",
+    "SourceListings",
+    "QueryResponseOfQualifiedTask",
+    "QueryResponseOfQualifiedProject",
+    "QueryResponseOfQualifiedLabel",
+    "QueryResponseOfQualifiedEdge",
+    "QueryResponseOfSearchHit",
+    "TextFields",
+    "SearchKind",
+    "CopyReport",
+    "CopyOutcome",
+    "CopyAction",
+];
+
 #[test]
 fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
     let bundle = schema_bundle();
@@ -599,6 +661,7 @@ fn a_response_carries_the_plan_that_produced_it_and_round_trips() {
             labels: Vec::new(),
             project: None,
             url: None,
+            location: None,
             created_at: None,
             updated_at: None,
             metadata: Default::default(),

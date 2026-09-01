@@ -32,6 +32,20 @@ pub struct ProjectQuery {
     pub statuses: Vec<StatusCategory>,
 }
 
+/// A filter over a source's documents.
+///
+/// No statuses, deliberately: a [`Document`](crate::Document) is not work and carries no
+/// status, so there is nothing here for a status filter to compare against.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+pub struct DocumentQuery {
+    /// Free-text search, when the caller asked for one.
+    pub text: Option<TextQuery>,
+    /// Label membership.
+    pub labels: LabelFilter,
+    /// Which project the document lives in.
+    pub project: ProjectFilter,
+}
+
 /// A free-text search and the fields it searches.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TextQuery {

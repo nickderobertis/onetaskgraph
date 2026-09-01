@@ -76,6 +76,7 @@ fn task() -> Task {
         labels: Vec::new(),
         project: None,
         url: None,
+        location: None,
         created_at: None,
         updated_at: None,
         metadata: Default::default(),
@@ -95,6 +96,7 @@ fn project() -> Project {
         },
         labels: Vec::new(),
         url: None,
+        location: None,
         created_at: None,
         updated_at: None,
         metadata: Default::default(),
@@ -111,6 +113,7 @@ impl TaskSource for Counting {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
+            documents: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

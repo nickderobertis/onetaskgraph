@@ -31,6 +31,12 @@ EXCEPTIONS = {
         "traits and types a plugin author implements against, and this is the one refusal "
         "`WriteSupport::Unsupported` obliges every unwritten source to answer a write with"
     ),
+    "documentless": (
+        "a free function, not one of the contract's types — the inventory enumerates the "
+        "traits and types a plugin author implements against, and this is the one refusal "
+        "`Capabilities.documents: Support::Unsupported` obliges every document-free source "
+        "to answer a document read with"
+    ),
     "SOURCE_NAME_PATTERN": (
         "a const, not one of the contract's types — the inventory enumerates the traits "
         "and types a plugin author implements against"

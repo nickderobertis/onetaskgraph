@@ -5,7 +5,7 @@
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, Field, JsonValue, RootModel
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel
 
 
 class GlobalId(RootModel[str]):
@@ -13,6 +13,29 @@ class GlobalId(RootModel[str]):
         str,
         Field(
             description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
+        ),
+    ]
+
+
+class Location1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    url: str
+
+
+class Location2(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    path: str
+
+
+class Location(RootModel[Location1 | Location2]):
+    root: Annotated[
+        Location1 | Location2,
+        Field(
+            description='Where an entity is, in the one form a consumer can act on without knowing the backend.\n\nExternally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or\n`{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader\nhanded one of these knows what to *do* with it — open a link, or print a path and read\nthe file out — which is what a bare string could not have said.\n\nIt carries no third case on purpose. `None` on the field is the third case, and it\nmeans the source did not say where the entity is, which is not the same as saying it is\nnowhere.\n\nThis does **not** redefine, replace or derive from the `url` field of [`Task`],\n[`Project`] or [`Document`]: a source that reports a web URL there goes on reporting\nit, and every existing consumer sees exactly what it saw.'
         ),
     ]
 
@@ -204,6 +227,12 @@ class Task(BaseModel):
             description="Inline rather than by id: a source returning a task already knows them."
         ),
     ]
+    location: Annotated[
+        Location | None,
+        Field(
+            description="Where this task is, when the source says (see [`Location`]).\n\nAbsent by default, so a source that predates this field — and every source that\nsimply does not say — reads as `None`, which means *the source did not say where\nthis is* rather than *this is nowhere*. It neither replaces nor derives from\n[`url`](Self::url), which goes on meaning exactly what it always did."
+        ),
+    ] = None
     metadata: Annotated[
         dict[str, JsonValue] | None,
         Field(
@@ -251,6 +280,10 @@ class Project(BaseModel):
         list[Label],
         Field(description="Inline rather than by id, for the same reason as on [`Task`]."),
     ]
+    location: Annotated[
+        Location | None,
+        Field(description="Where this project is, on exactly the terms of [`Task::location`]."),
+    ] = None
     metadata: Annotated[
         dict[str, JsonValue] | None,
         Field(

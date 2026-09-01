@@ -139,6 +139,68 @@ fn the_shipped_host_reports_malformed_plugin_settings_on_the_wire() {
 }
 
 #[test]
+fn a_source_with_no_documents_declares_so_and_refuses_a_document_read_over_a_real_pipe() {
+    // The whole of what "honest" means for documents, driven through the shipped binary and
+    // over a genuine pipe: the handshake says this source has none, and a document read that
+    // arrives anyway is *refused, naming the plugin*, rather than answered with an empty
+    // page. An empty page is the one wrong answer here — it is indistinguishable from a
+    // source that has documents and holds none matching, and a caller cannot tell the two
+    // apart afterwards.
+    let mut child = source_host()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the host runs");
+    let mut input = child.stdin.take().expect("stdin was piped");
+    writeln!(input, "{}", handshake()).expect("the host is listening");
+    for asked in [
+        json!({"id": "1", "method": "get_document", "params": {"id": "D-1"}}),
+        json!({"id": "2", "method": "query_documents", "params": {
+            "query": {
+                "text": null,
+                "labels": {"any_of": [], "all_of": [], "none_of": []},
+                "project": "any"
+            },
+            "page": {"cursor": null, "limit": 5}
+        }}),
+    ] {
+        writeln!(input, "{asked}").expect("the host is listening");
+    }
+    drop(input);
+
+    let output = child.wait_with_output().expect("the host finishes");
+
+    assert_eq!(output.status.code(), Some(0), "the host exits cleanly");
+    let answered = String::from_utf8(output.stdout).expect("responses are UTF-8");
+    let lines: Vec<Value> = answered
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
+        .collect();
+    assert_eq!(lines.len(), 3, "one answer per request: {answered}");
+
+    // The declaration a plugin makes once, at the handshake, and the engine reads once.
+    assert_eq!(
+        lines[0]["result"]["capabilities"]["documents"],
+        json!("unsupported"),
+        "{answered}"
+    );
+
+    for refusal in &lines[1..] {
+        assert!(
+            refusal.get("result").is_none(),
+            "a document read must not be answered at all: {refusal}"
+        );
+        assert_eq!(refusal["error"]["kind"], json!("refused"), "{refusal}");
+        assert_eq!(
+            refusal["error"]["message"],
+            json!("the in-memory plugin has no documents"),
+            "the refusal names the plugin behind the pipe: {refusal}"
+        );
+    }
+}
+
+#[test]
 fn a_protocol_version_the_shipped_host_does_not_know_is_refused_and_it_exits_zero() {
     let mut asked = handshake();
     asked["params"]["protocol_version"] = json!(3);

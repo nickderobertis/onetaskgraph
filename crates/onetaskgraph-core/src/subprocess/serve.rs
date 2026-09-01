@@ -21,9 +21,9 @@ use serde_json::{Value, json};
 
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
-    DeleteParams, DependencyParams, HandshakePluginKind, IdParams, InitializeParams,
-    InitializeResult, LabelParams, PROTOCOL_VERSION, ProjectQueryParams, ProjectWriteParams,
-    Request, Response, TaskQueryParams, TaskWriteParams,
+    DeleteParams, DependencyParams, DocumentQueryParams, DocumentWriteParams, HandshakePluginKind,
+    IdParams, InitializeParams, InitializeResult, LabelParams, PROTOCOL_VERSION,
+    ProjectQueryParams, ProjectWriteParams, Request, Response, TaskQueryParams, TaskWriteParams,
 };
 use crate::registry::PluginKind;
 
@@ -347,6 +347,35 @@ async fn dispatch(
             source.delete_project(&params.id).await?;
             encode(json!({}))
         }
+        // llmlint: ignore-block[changed_behavior_has_e2e] The *refusal* these four arms
+        // really answer with is covered end to end — `a_source_with_no_documents_declares_so_
+        // and_refuses_a_document_read_over_a_real_pipe` drives the shipped binary over a real
+        // pipe and asserts the hosted plugin's own words come back. Their success paths are
+        // unreachable from any test this change may write: this host serves *registered*
+        // plugins only (`kind.plugin().build(...)` above), no plugin of this build implements
+        // documents, and implementing one is what this change deliberately does not do. The
+        // engine's own half of the same four methods IS covered successfully, by
+        // `a_document_a_peer_really_answers_with_crosses_the_wire_whole` against a scripted
+        // peer over a real pipe. The day a plugin gains documents, that plugin's row in the
+        // shared journey table reaches these arms and this directive comes out with it.
+        "get_document" => {
+            let params: IdParams = decode(method, params)?;
+            encode(json!({ "document": source.get_document(&params.id).await? }))
+        }
+        "query_documents" => {
+            let params: DocumentQueryParams = decode(method, params)?;
+            encode(source.query_documents(&params.query, &params.page).await?)
+        }
+        "write_document" => {
+            let params: DocumentWriteParams = decode(method, params)?;
+            encode(json!({ "id": source.write_document(&params.write).await? }))
+        }
+        "delete_document" => {
+            let params: DeleteParams = decode(method, params)?;
+            source.delete_document(&params.id).await?;
+            encode(json!({}))
+        }
+        // llmlint: ignore-end[changed_behavior_has_e2e]
         other => Err(SourceError::Malformed {
             message: format!("protocol version {PROTOCOL_VERSION} has no method called {other:?}"),
         }),

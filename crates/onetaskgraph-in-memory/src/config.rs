@@ -321,6 +321,12 @@ impl From<&CapabilityConfig> for Capabilities {
     fn from(value: &CapabilityConfig) -> Self {
         Self {
             projects: value.projects,
+            // Fixed rather than configured, alone among these fields: this source holds no
+            // documents at all, so a key that could declare it native would let a document
+            // configure a source into claiming something it cannot serve — which is the
+            // one thing the capability rules forbid. `onetaskgraph-in-memory`'s own module
+            // documentation records the verdict, and docs/follow-ups.md tracks the gap.
+            documents: Support::Unsupported,
             orphan_tasks: value.orphan_tasks,
             filter_by_label: value.filter_by_label,
             filter_by_status: value.filter_by_status,

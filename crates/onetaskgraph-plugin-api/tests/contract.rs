@@ -6,11 +6,11 @@
 
 use chrono::{TimeZone as _, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Health,
-    ItemKind, ItemWrite, Label, LabelFilter, NativeId, Page, PageRequest, Project, ProjectFilter,
-    ProjectQuery, SOURCE_NAME_PATTERN, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
-    WriteSupport,
+    Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Document,
+    DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId, Page,
+    PageRequest, Project, ProjectFilter, ProjectQuery, SOURCE_NAME_PATTERN, SecretResolver,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
+    TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -28,6 +28,7 @@ impl TaskSource for Silent {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
+            documents: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Unsupported,
             filter_by_status: Support::Native,
@@ -822,6 +823,7 @@ fn a_task_round_trips_through_json_with_every_field_populated() {
         }],
         project: Some(NativeId::from("P-1")),
         url: Some("https://example.invalid/ENG-1".to_owned()),
+        location: Some(Location::Url("https://example.invalid/ENG-1".to_owned())),
         created_at: Some(Utc.with_ymd_and_hms(2026, 8, 22, 9, 0, 0).unwrap()),
         updated_at: None,
         metadata: [("onepipeline.turn_budget".to_owned(), serde_json::json!(12))].into(),
@@ -853,6 +855,7 @@ fn a_project_and_an_orphan_task_round_trip_through_json() {
         },
         labels: Vec::new(),
         url: None,
+        location: None,
         created_at: None,
         updated_at: Some(Utc.with_ymd_and_hms(2026, 8, 22, 9, 0, 0).unwrap()),
         metadata: Default::default(),
@@ -1179,6 +1182,10 @@ fn every_contract_root_generates_a_json_schema() {
         schema_for!(Health),
         schema_for!(SourceError),
         schema_for!(DependencyEdge),
+        schema_for!(Document),
+        schema_for!(Location),
+        schema_for!(DocumentQuery),
+        schema_for!(Page<Document>),
     ] {
         assert!(schema.as_value().is_object());
     }
@@ -1276,6 +1283,7 @@ fn outgoing() -> Task {
         labels: Vec::new(),
         project: None,
         url: None,
+        location: None,
         created_at: None,
         updated_at: None,
         metadata: std::collections::BTreeMap::new(),
@@ -1313,6 +1321,7 @@ async fn a_source_that_implements_only_the_read_methods_declares_no_write_side()
                     },
                     labels: Vec::new(),
                     url: None,
+                    location: None,
                     created_at: None,
                     updated_at: None,
                     metadata: std::collections::BTreeMap::new(),
@@ -1364,4 +1373,221 @@ fn an_item_write_round_trips_through_json_with_its_edges_and_an_absent_target() 
     .expect("decodes without depends_on");
     assert_eq!(bare.target, Some(NativeId::from("ENG-1")));
     assert!(bare.depends_on.is_empty());
+}
+
+/// The document a read test hands back, with every field the contract gives it populated.
+fn filed() -> Document {
+    Document {
+        id: NativeId::from("D-1"),
+        title: "Why the store holds a document".to_owned(),
+        content: Some("A person cannot review a plan node by node.".to_owned()),
+        project: Some(NativeId::from("P-1")),
+        labels: vec![Label {
+            id: NativeId::from("l-1"),
+            name: "design".to_owned(),
+            color: None,
+        }],
+        url: Some("https://example.invalid/D-1".to_owned()),
+        location: Some(Location::Path("/home/someone/notes/design.md".to_owned())),
+        created_at: Some(Utc.with_ymd_and_hms(2026, 8, 31, 9, 0, 0).unwrap()),
+        updated_at: None,
+        metadata: [("onepipeline.review".to_owned(), serde_json::json!(true))].into(),
+        repositories: vec![
+            onetaskgraph_plugin_api::Repository::try_from("github.com/example/work".to_owned())
+                .expect("normalized origin"),
+        ],
+    }
+}
+
+#[test]
+fn a_document_round_trips_through_json_with_every_field_populated() {
+    let document = filed();
+    let encoded = serde_json::to_value(&document).expect("encodes");
+
+    // A document is not work: it carries no status and no dependency key, and both
+    // absences are the contract rather than an oversight.
+    assert!(encoded.get("status").is_none(), "{encoded:#}");
+    assert!(encoded.get("depends_on").is_none(), "{encoded:#}");
+
+    assert_eq!(
+        serde_json::from_value::<Document>(encoded).expect("decodes"),
+        document
+    );
+}
+
+#[test]
+fn a_location_is_told_apart_by_which_key_is_present_on_all_three_entities() {
+    // A consumer reads a location without knowing the backend, so the whole of what it has
+    // to do is look at which key is there: a link it can open, or a path it can read out.
+    assert_eq!(
+        serde_json::to_value(Location::Url("https://example.invalid/D-1".to_owned()))
+            .expect("encodes"),
+        serde_json::json!({"url": "https://example.invalid/D-1"})
+    );
+    assert_eq!(
+        serde_json::to_value(Location::Path("/home/someone/notes/design.md".to_owned()))
+            .expect("encodes"),
+        serde_json::json!({"path": "/home/someone/notes/design.md"})
+    );
+
+    let task = Task {
+        location: Some(Location::Url("https://example.invalid/ENG-1".to_owned())),
+        ..outgoing()
+    };
+    let project = Project {
+        id: NativeId::from("P-1"),
+        title: "Foundation".to_owned(),
+        content: None,
+        status: Status {
+            category: StatusCategory::Backlog,
+            name: "Planned".to_owned(),
+        },
+        labels: Vec::new(),
+        url: None,
+        location: Some(Location::Path("/home/someone/notes/P-1".to_owned())),
+        created_at: None,
+        updated_at: None,
+        metadata: Default::default(),
+        repositories: Vec::new(),
+    };
+    for (encoded, expected) in [
+        (
+            serde_json::to_value(&task).expect("encodes"),
+            serde_json::json!({"url": "https://example.invalid/ENG-1"}),
+        ),
+        (
+            serde_json::to_value(&project).expect("encodes"),
+            serde_json::json!({"path": "/home/someone/notes/P-1"}),
+        ),
+        (
+            serde_json::to_value(filed()).expect("encodes"),
+            serde_json::json!({"path": "/home/someone/notes/design.md"}),
+        ),
+    ] {
+        assert_eq!(encoded["location"], expected, "{encoded:#}");
+    }
+
+    // Neither entity's `url` is touched, replaced or derived from: a source that reported
+    // one before this field existed reports exactly the same string now.
+    assert_eq!(
+        serde_json::to_value(&task).expect("encodes")["url"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        serde_json::to_value(filed()).expect("encodes")["url"],
+        serde_json::json!("https://example.invalid/D-1")
+    );
+}
+
+#[test]
+fn an_entity_that_does_not_say_where_it_is_decodes_as_absent_rather_than_failing() {
+    // The default is what makes this addition non-breaking: a peer written before there
+    // were locations omits the member, and `None` reads as *the source did not say* rather
+    // than as *it is nowhere*.
+    let mut without = serde_json::to_value(outgoing()).expect("encodes");
+    without
+        .as_object_mut()
+        .expect("a task is an object")
+        .remove("location")
+        .expect("the field was there to remove");
+    assert_eq!(
+        serde_json::from_value::<Task>(without)
+            .expect("decodes without a location")
+            .location,
+        None
+    );
+
+    let mut document = serde_json::to_value(filed()).expect("encodes");
+    document
+        .as_object_mut()
+        .expect("a document is an object")
+        .remove("location");
+    assert_eq!(
+        serde_json::from_value::<Document>(document)
+            .expect("decodes without a location")
+            .location,
+        None
+    );
+}
+
+#[test]
+fn a_plugin_that_predates_documents_is_read_as_the_document_free_source_it_is() {
+    // §2.1 of the protocol: an optional member with a documented default is not a version
+    // bump, so a handshake written before there were documents still deserialises — and
+    // says the honest thing rather than nothing.
+    let mut declared = serde_json::to_value(Silent("older").capabilities()).expect("encodes");
+    declared
+        .as_object_mut()
+        .expect("a capability value is an object")
+        .remove("documents")
+        .expect("the field was there to remove");
+
+    let read: Capabilities = serde_json::from_value(declared).expect("decodes without documents");
+    assert_eq!(read.documents, Support::Unsupported);
+    assert!(!read.documents.is_native());
+    // Every other field is what it was, so the default reaches this one and nothing else.
+    assert_eq!(read, Silent("older").capabilities());
+}
+
+#[tokio::test]
+async fn a_source_with_no_documents_refuses_a_document_read_rather_than_answering_an_empty_page() {
+    // The whole point of defaulting the document seam: a source with none needs no edit,
+    // keeps working, and refuses in the same words every other document-free source does.
+    // An empty page here would be indistinguishable from a source that has documents and
+    // holds none matching, which is the one wrong answer these methods can give.
+    let source: Box<dyn TaskSource> = Box::new(Silent("read-only"));
+    assert_eq!(source.capabilities().documents, Support::Unsupported);
+
+    let reads = [
+        source
+            .get_document(&NativeId::from("D-1"))
+            .await
+            .map(|found| format!("{found:?}")),
+        source
+            .query_documents(
+                &DocumentQuery {
+                    text: Some(TextQuery {
+                        terms: "design".to_owned(),
+                        fields: TextFields::TitleOrContent,
+                    }),
+                    labels: LabelFilter::default(),
+                    project: ProjectFilter::Is(NativeId::from("P-1")),
+                },
+                &PageRequest {
+                    cursor: None,
+                    limit: 10,
+                },
+            )
+            .await
+            .map(|page| format!("{page:?}")),
+    ];
+    for refusal in reads {
+        let Err(SourceError::Refused { message }) = refusal else {
+            panic!("a source with no documents must refuse a document read: {refusal:?}");
+        };
+        assert_eq!(message, "the read-only plugin has no documents");
+    }
+
+    // The two writes reuse the refusal every other write answers with, because a source
+    // with no write side refuses a document write for that reason rather than this one.
+    let writes = [
+        source
+            .write_document(&ItemWrite {
+                target: None,
+                item: filed(),
+                depends_on: Vec::new(),
+            })
+            .await
+            .map(|id| format!("{id:?}")),
+        source
+            .delete_document(&NativeId::from("D-1"))
+            .await
+            .map(|()| String::new()),
+    ];
+    for refusal in writes {
+        let Err(SourceError::Refused { message }) = refusal else {
+            panic!("a source with no write side must refuse a document write: {refusal:?}");
+        };
+        assert_eq!(message, "the read-only plugin cannot be written");
+    }
 }

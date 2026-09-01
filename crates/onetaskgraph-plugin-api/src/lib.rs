@@ -26,12 +26,12 @@ pub use capability::{Capabilities, DependencySupport, Support};
 pub use error::SourceError;
 pub use id::{NativeId, SOURCE_NAME_PATTERN, SourceName};
 pub use query::{
-    Cursor, LabelFilter, Page, PageRequest, ProjectFilter, ProjectQuery, TaskQuery, TextFields,
-    TextQuery,
+    Cursor, DocumentQuery, LabelFilter, Page, PageRequest, ProjectFilter, ProjectQuery, TaskQuery,
+    TextFields, TextQuery,
 };
 pub use source::{Health, SecretResolver, SourcePlugin, TaskSource};
 pub use work::{
-    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, ItemKind, Label, Project,
-    Repository, Status, StatusCategory, Task,
+    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, ItemKind, Label,
+    Location, Project, Repository, Status, StatusCategory, Task,
 };
-pub use write::{ItemWrite, WriteSupport, unwritable};
+pub use write::{ItemWrite, WriteSupport, documentless, unwritable};

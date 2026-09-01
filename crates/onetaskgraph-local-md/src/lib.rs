@@ -5,9 +5,10 @@
 //! One verdict per field of [`Capabilities`]. This source reads the whole folder before it
 //! answers anything, so every predicate is applied here rather than pushed at a remote
 //! service — which is what `Support::Native` means in the plugin contract: *the source
-//! applies this predicate itself*, wherever it applies it. Nothing here is unsupported,
-//! and nothing here could be: a filter over documents already read is a filter over
-//! documents already read.
+//! applies this predicate itself*, wherever it applies it. No *predicate* here is
+//! unsupported, and none could be: a filter over files already read is a filter over files
+//! already read. `documents` is the one unsupported field, and it is not a predicate — it
+//! says this source has no documents to filter in the first place.
 //!
 //! *Proven* means a shared journey drives it against the real binary over this source's
 //! own row in `crates/onetaskgraph/tests/e2e/fixtures.rs`, and
@@ -17,6 +18,7 @@
 //! | Field | Verdict |
 //! | --- | --- |
 //! | `projects` | **Supported and proven.** `projects/` is a folder of its own, and a task's `project:` key is what files it under one. |
+//! | `documents` | **Unsupported, and unimplemented.** This source reads task and project Markdown and nothing else, so it has no document side at all and refuses a document read rather than answering an empty page. A folder of Markdown could plainly hold one, which is what makes this work nobody has written rather than a limit; docs/follow-ups.md tracks it. |
 //! | `orphan_tasks` | **Supported and proven.** A task document with no `project:` key belongs to none. |
 //! | `filter_by_label` | **Supported and proven,** over the `labels:` key, requiring every label asked for and excluding every label refused. |
 //! | `filter_by_status` | **Supported and proven,** over `status:` through this instance's own `status_mapping`. |
@@ -548,6 +550,7 @@ impl TaskSource for LocalMdSource {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
+            documents: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -714,6 +717,7 @@ fn task(d: Document) -> Task {
         labels: d.labels,
         project: d.project,
         url: d.url,
+        location: None,
         created_at: None,
         updated_at: None,
         metadata: d.metadata,
@@ -728,6 +732,7 @@ fn project(d: Document) -> Project {
         status: d.status,
         labels: d.labels,
         url: d.url,
+        location: None,
         created_at: None,
         updated_at: None,
         metadata: d.metadata,

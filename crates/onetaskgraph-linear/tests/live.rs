@@ -459,6 +459,7 @@ async fn drive_every_declared_capability(
         status: project_status.clone(),
         labels: vec![],
         url: None,
+        location: None,
         created_at: None,
         updated_at: None,
         metadata: BTreeMap::new(),
@@ -472,6 +473,7 @@ async fn drive_every_declared_capability(
         labels,
         project: under.cloned(),
         url: None,
+        location: None,
         created_at: None,
         updated_at: None,
         metadata: BTreeMap::new(),
@@ -871,6 +873,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         source.capabilities(),
         Capabilities {
             projects: Support::Native,
+            documents: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

@@ -9,6 +9,23 @@ use serde::{Deserialize, Serialize};
 pub struct Capabilities {
     /// Whether the source has projects at all.
     pub projects: Support,
+    /// Whether the source has documents at all.
+    ///
+    /// The same shape as [`projects`](Self::projects), and read the same way: it says what
+    /// the source *holds*, not which predicate it applies. It is therefore **not** one of
+    /// the predicates the second capability rule reaches — there is no wider result set to
+    /// return and nothing for the engine to narrow. A source declaring `Unsupported` is
+    /// never asked for a document at all; the engine reads this once at the handshake,
+    /// exactly as it reads [`TaskSource::writes`](crate::TaskSource::writes), and a
+    /// document read across several sources reports such a source as holding none rather
+    /// than as having failed.
+    ///
+    /// Defaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that
+    /// predates documents says nothing here and is read as the document-free source it is.
+    // llmlint: ignore[names_match_behavior] SECOND PERMITTED REASON — this restates at a new field the justification recorded across this crate (`Capabilities.max_page_size` below, `PageRequest.limit` in query.rs, `Task::url` in work.rs) and in AGENTS.md's "The plugin contract": the approved contract specifies this field as a `Support` *in the shape `projects` already uses*, and `projects` has carried exactly this meaning — "the source has projects at all" — since before this change, as AGENTS.md and every plugin's verdict table record. A second enum here would say the same thing two ways for two sibling fields and change the serialized form of a frozen handshake. Renaming or re-typing either is the contract owner's call, not this crate's.
+    // llmlint: ignore[invalid_states_unrepresentable] the unrepresentable state named — "has documents, but some document predicate needs compensation" — is not a state this contract has: a `DocumentQuery`'s predicates are the same `text`/`labels`/`project` the task and project queries carry, and `filter_by_label`, `search_title` and `search_content` already declare how the source applies each of them, over whichever entity it is asked for. Adding a per-entity predicate axis is a contract change with no caller yet, and it would have to reach `projects` in the same breath. Recorded in AGENTS.md, "The three capability rules".
+    #[serde(default = "no_documents")]
+    pub documents: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether the source filters by label itself.
@@ -28,6 +45,15 @@ pub struct Capabilities {
     // llmlint: ignore[invalid_states_unrepresentable] this field's wire shape is frozen by the plugin contract every source is written against; only the contract's owner may change it, and tightening it is post-build follow-up.
     // llmlint: ignore[boundary_inputs_validated] the boundary that reads a user's configuration does reject zero — `CapabilityConfig::max_page_size` (onetaskgraph-in-memory/src/config.rs) is a `NonZeroU32` and names the setting when it refuses. What stays a plain `u32` is this frozen contract field, which only the contract's owner may narrow — AGENTS.md, "The plugin contract".
     pub max_page_size: u32,
+}
+
+/// What [`Capabilities::documents`] means when a wire value does not carry it.
+///
+/// A named function rather than a `Default` on [`Support`], which has no sensible default
+/// of its own: an absent *predicate* declaration is a plugin that did not answer, while an
+/// absent document declaration is a plugin written before there were any.
+fn no_documents() -> Support {
+    Support::Unsupported
 }
 
 /// Whether a source applies one predicate itself.
