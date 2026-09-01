@@ -6,6 +6,7 @@ import { binaryCommands } from "./generated/commands.ts";
 import type {
   CopyReport,
   EffectiveConfig,
+  QueryResponseOfQualifiedDocument,
   QueryResponseOfQualifiedEdge,
   QueryResponseOfQualifiedLabel,
   QueryResponseOfQualifiedProject,
@@ -32,6 +33,9 @@ export type FilterOptions = QueryOptions & {
   search?: string;
   fields?: "title" | "content" | "both";
 };
+// A document has no status, so a document list has no status filter — and this type is
+// what stops a caller writing one down for a verb the binary would refuse it on.
+export type DocumentFilterOptions = Omit<FilterOptions, "statuses">;
 export type CopyOptions = {
   matchBy?: string;
   recreate?: boolean;
@@ -78,6 +82,9 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   "project show": "QueryResponseOfQualifiedProject",
   "project deps": "QueryResponseOfQualifiedEdge",
   "project copy": "CopyReport",
+  "document list": "QueryResponseOfQualifiedDocument",
+  "document show": "QueryResponseOfQualifiedDocument",
+  "document copy": "CopyReport",
   "label list": "QueryResponseOfQualifiedLabel",
   search: "QueryResponseOfSearchHit",
 };
@@ -90,7 +97,8 @@ const partialResponseCommands = new Set(
       command !== "config show" &&
       command !== "sources list" &&
       command !== "task copy" &&
-      command !== "project copy",
+      command !== "project copy" &&
+      command !== "document copy",
   ),
 );
 
@@ -217,6 +225,24 @@ export class OnetaskgraphClient {
     const args = [id, "--to", to, ...copyFlags(options)];
     if (options.noTasks) args.push("--no-tasks");
     return this.run("project copy", args);
+  }
+  documentList(
+    options: DocumentFilterOptions & { project?: string; noProject?: boolean } = {},
+  ): Promise<QueryResponseOfQualifiedDocument> {
+    const args: string[] = [];
+    addFilters(args, options);
+    if (options.project !== undefined) args.push("--project", options.project);
+    if (options.noProject) args.push("--no-project");
+    return this.run("document list", args);
+  }
+  documentShow(
+    id: string,
+    options: Pick<QueryOptions, "allowPartial"> = {},
+  ): Promise<QueryResponseOfQualifiedDocument> {
+    return this.run("document show", [id, ...(options.allowPartial ? ["--allow-partial"] : [])]);
+  }
+  documentCopy(ids: string[], to: string, options: CopyOptions = {}): Promise<CopyReport> {
+    return this.run("document copy", [...ids, "--to", to, ...copyFlags(options)]);
   }
   labelList(options: QueryOptions = {}): Promise<QueryResponseOfQualifiedLabel> {
     const args: string[] = [];

@@ -24,6 +24,9 @@ RESPONSE_ROOTS = {
     "project_show": "QueryResponseOfQualifiedProject",
     "project_deps": "QueryResponseOfQualifiedEdge",
     "project_copy": "CopyReport",
+    "document_list": "QueryResponseOfQualifiedDocument",
+    "document_show": "QueryResponseOfQualifiedDocument",
+    "document_copy": "CopyReport",
     "label_list": "QueryResponseOfQualifiedLabel",
     "search": "QueryResponseOfSearchHit",
     "sources_list": "SourceListing",
@@ -31,12 +34,12 @@ RESPONSE_ROOTS = {
 }
 # Roots no command returns directly, which the package generates and exports anyway.
 #
-# The first four are reachable inside a response and are named here so a consumer has them
-# under their own names rather than only as nested definitions. The documents contract is
-# here for a different reason: `Document`, `DocumentQuery`, `Location` and `PageOfDocument`
-# are the contract's types, and the SDK owes a caller a model for each whether or not a
-# verb reaches one yet — no verb does today, and a generated surface that waited for one
-# would leave both SDKs describing different contracts.
+# Each is reachable inside a response and is named here so a consumer has it under its own
+# name rather than only as a nested definition. `Location` is the one a caller most needs
+# named: a document read answers with one, and acting on it means switching on which of its
+# two keys is present. `DocumentQuery` and `PageOfDocument` are the plugin-facing halves of
+# the same contract, which the SDK owes a caller a model for whether or not a verb returns
+# one directly.
 CONTRACT_ROOTS = {
     "SourceFailure",
     "QueryPlan",
