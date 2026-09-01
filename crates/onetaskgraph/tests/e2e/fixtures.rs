@@ -2129,6 +2129,26 @@ fn recorded_far_ends(key: &str, id: &Value) -> Vec<Value> {
 fn linear_label(v: &Value) -> Value {
     json!({"id":v["id"],"name":v["name"],"color":null})
 }
+/// Where the Linear row holds one entity: its own page there, as a link.
+fn linear_place(_sandbox: &Sandbox, verb: &str, id: &str) -> Option<Placed> {
+    let dataset = dataset();
+    let held = dataset[format!("{verb}s")]
+        .as_array()
+        .expect("the shared dataset holds this kind")
+        .iter()
+        .find(|item| item["id"] == json!(id))
+        .expect("the shared dataset holds this id");
+    // Linear spells a task an issue, and the address says so.
+    let kind = if verb == "task" { "issue" } else { verb };
+    Some(Placed {
+        key: "url",
+        value: linear_web_address(held, kind)
+            .as_str()
+            .expect("a Linear web address is a string")
+            .to_owned(),
+    })
+}
+
 // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This fixture-only mapping and matcher implement the finite shared journey dataset against the accepted 2026-08-24 contract; production parsing and real CLI row assertions independently verify the observable behavior without requiring live credentials.
 fn linear_state(v: &Value) -> Value {
     let category = v["category"].as_str().unwrap_or("");
@@ -2163,26 +2183,6 @@ fn linear_web_address(v: &Value, kind: &str) -> Value {
 
 fn linear_address(kind: &str, id: &str) -> String {
     format!("https://linear.app/fixture/{kind}/{id}")
-}
-
-/// Where the Linear row holds one entity: its own page there, as a link.
-fn linear_place(_sandbox: &Sandbox, verb: &str, id: &str) -> Option<Placed> {
-    let dataset = dataset();
-    let held = dataset[format!("{verb}s")]
-        .as_array()
-        .expect("the shared dataset holds this kind")
-        .iter()
-        .find(|item| item["id"] == json!(id))
-        .expect("the shared dataset holds this id");
-    // Linear spells a task an issue, and the address says so.
-    let kind = if verb == "task" { "issue" } else { verb };
-    Some(Placed {
-        key: "url",
-        value: linear_web_address(held, kind)
-            .as_str()
-            .expect("a Linear web address is a string")
-            .to_owned(),
-    })
 }
 
 fn linear_description(v: &Value, edges: &str, data: &Value) -> String {
