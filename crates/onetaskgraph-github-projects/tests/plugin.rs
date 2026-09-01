@@ -14,10 +14,10 @@ use std::{
 
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, ItemKind, ItemWrite, Label, LabelFilter, NativeId, PageRequest, Project,
-    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
-    WriteSupport,
+    Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location,
+    NativeId, PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
+    TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -163,6 +163,11 @@ struct State {
     /// fails one call of the several a write is, and what the source does about the calls
     /// that already landed is only readable if one of them can be made to fail.
     refuses: BTreeSet<String>,
+    /// How many of the most recently filed items this board's own reads do not show yet.
+    /// GitHub's `projectV2.items` is eventually consistent, so an item a run just created
+    /// is answered out of the source's own record of what it created until the board
+    /// catches up — and what that record holds is only observable while it is behind.
+    lagging_reads: usize,
     seen: Vec<Value>,
     next: usize,
 }
@@ -240,6 +245,11 @@ impl Fixture {
             .refuses
             .insert(operation.to_owned());
     }
+    /// Hold this board's reads `count` items behind what it really holds, the way GitHub's
+    /// eventually-consistent board read holds behind a mutation that has already landed.
+    fn read_behind(&self, count: usize) {
+        self.state.lock().unwrap().lagging_reads = count;
+    }
 }
 
 fn board(items: Vec<Item>) -> Fixture {
@@ -260,6 +270,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         status_field,
         blocked_by: BTreeMap::new(),
         refuses: BTreeSet::new(),
+        lagging_reads: 0,
         seen: Vec::new(),
         next: 0,
     }));
@@ -330,7 +341,8 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         let mut created = Item::issue(&id, input["title"].as_str().unwrap_or_default());
         created.body = input["body"].as_str().map(str::to_owned);
         state.pending.push(created);
-        return json!({"createIssue":{"issue":{"id":id}}});
+        return json!({"createIssue":{"issue":{"id":id,
+            "url":format!("https://github.example/{id}")}}});
     }
     if query.contains("addProjectV2ItemById(input:$input)") {
         let content = input["contentId"]
@@ -454,6 +466,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                     .map(|id| {
                         let far = state.items.iter().find(|item| item.content_id == id);
                         json!({"id":id,
+                               "title":far.map(|item| item.title.clone()).unwrap_or_default(),
                                "body":far.and_then(|item| item.body.clone()),
                                "parent":far.and_then(|item| item.parent.clone()).map(|id| json!({"id":id})),
                                "subIssuesSummary":{"total":far.map_or(0, |item| item.sub_issues)}})
@@ -483,16 +496,17 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         other => panic!("after must be null or a string: {other}"),
     };
     let first = variables["first"].as_u64().expect("first") as usize;
-    let end = (offset + first).min(state.items.len());
+    let visible = state.items.len().saturating_sub(state.lagging_reads);
+    let end = (offset + first).min(visible);
     let options = state.options();
-    let nodes = state.items[offset..end]
+    let nodes = state.items[offset.min(end)..end]
         .iter()
         .map(|item| {
             json!({"id":item.item_id,"fieldValues":item.field_values(&options),"content":item.content()})
         })
         .collect::<Vec<_>>();
     json!({"owner":{"projectV2":{"id":"PVT_board","title":"Roadmap","fields":state.fields(),
-        "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < state.items.len(),"endCursor":end.to_string()}}}}})
+        "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < visible,"endCursor":end.to_string()}}}}})
 }
 
 fn operation_name(query: &str) -> &str {
@@ -613,7 +627,7 @@ fn configured(endpoint: &str, extra: Value) -> Box<dyn TaskSource> {
         .expect("a usable configuration")
 }
 
-use onetaskgraph_github_projects::Plugin;
+use onetaskgraph_github_projects::{DESIGN_TITLE_PREFIX, Plugin};
 
 fn source(fixture: &Fixture) -> Box<dyn TaskSource> {
     configured(&fixture.endpoint, json!({}))
@@ -661,6 +675,49 @@ fn project(id: &str, title: &str, status: Status) -> Project {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+    }
+}
+
+fn design(id: &str, title: &str) -> Item {
+    Item::issue(id, &format!("{DESIGN_TITLE_PREFIX}{title}"))
+}
+
+fn document(id: &str, title: &str) -> Document {
+    Document {
+        id: NativeId(id.to_owned()),
+        title: title.to_owned(),
+        content: None,
+        project: None,
+        labels: vec![],
+        url: None,
+        location: None,
+        created_at: None,
+        updated_at: None,
+        metadata: BTreeMap::new(),
+        repositories: vec![],
+    }
+}
+
+async fn selected_documents(source: &dyn TaskSource, query: &DocumentQuery) -> Vec<String> {
+    source
+        .query_documents(query, &page(10))
+        .await
+        .expect("the board answers a document query")
+        .items
+        .into_iter()
+        .map(|document| document.id.0)
+        .collect()
+}
+
+fn document_query(
+    labels: LabelFilter,
+    project: ProjectFilter,
+    text: Option<TextQuery>,
+) -> DocumentQuery {
+    DocumentQuery {
+        text,
+        labels,
+        project,
     }
 }
 
@@ -2483,11 +2540,13 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
     // Every field, rather than a subset: this source applies every predicate a query
     // carries, in process, over a board it has already walked in full, and GitHub's
     // project-items connection has no filter argument to push any of them into.
+    // `documents` is not one of those predicates — it says this board has documents, which
+    // it does: an issue whose title begins with the design prefix is one.
     assert_eq!(
         source.capabilities(),
         Capabilities {
             projects: Support::Native,
-            documents: Support::Unsupported,
+            documents: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -3035,13 +3094,13 @@ async fn a_far_end_in_another_source_is_recorded_and_a_native_one_is_taken_back_
 async fn a_far_end_that_is_a_sub_issue_or_carries_a_broken_marker_is_read_as_it_is() {
     let node = |body: Value| {
         json!({"data":{"node":{"__typename":"Issue",
-            "blockedBy":{"nodes":[{"id":"I_far","body":body,"parent":null,
+            "blockedBy":{"nodes":[{"id":"I_far","title":"Far work","body":body,"parent":null,
                                    "subIssuesSummary":{"total":0}}],
                         "pageInfo":{"hasNextPage":false,"endCursor":null}},
             "blocking":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}})
     };
     let sub_issue = json!({"data":{"node":{"__typename":"Issue",
-        "blockedBy":{"nodes":[{"id":"I_far","body":null,"parent":{"id":"I_plan"},
+        "blockedBy":{"nodes":[{"id":"I_far","title":"Far work","body":null,"parent":{"id":"I_plan"},
                                "subIssuesSummary":{"total":4}}],
                     "pageInfo":{"hasNextPage":false,"endCursor":null}},
         "blocking":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}});
@@ -3408,8 +3467,8 @@ async fn a_sub_issue_count_this_source_cannot_read_is_refused_rather_than_read_a
     }
 
     for far in [
-        json!({"id":"I_far","body":null,"parent":null}),
-        json!({"id":"I_far","body":null,"parent":null,"subIssuesSummary":{"total":-1}}),
+        json!({"id":"I_far","title":"Far work","body":null,"parent":null}),
+        json!({"id":"I_far","title":"Far work","body":null,"parent":null,"subIssuesSummary":{"total":-1}}),
     ] {
         let node = json!({"data":{"node":{"__typename":"Issue",
             "blockedBy":{"nodes":[far],"pageInfo":{"hasNextPage":false,"endCursor":null}},
@@ -3588,5 +3647,603 @@ async fn a_write_that_fails_part_way_takes_back_only_the_item_it_created() {
         "one, revised",
         "the mutation before the failure landed, and writing that back is the engine's \
          journal's job — which it can only do while the item is still there"
+    );
+}
+
+/// A board holding a document of every shape that could be mistaken for something else.
+///
+/// `I_design` has sub-issues *and* the project marker, `I_loose` has neither, and
+/// `I_filed` is a sub-issue of a project — so each of the three arms that decide between a
+/// project and a task is present on a design issue, and each must lose to the prefix.
+fn board_with_documents() -> Fixture {
+    board(vec![
+        design("I_design", "Alpha design")
+            .body("the engine core, reviewed\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.item_kind\":\"project\",\"caller.flags\":[true,null]}\n-->")
+            .sub_issues(2)
+            .labelled(&[("L_1", "bug")]),
+        design("I_loose", "Loose note").body("filed nowhere"),
+        design("I_filed", "Runbook")
+            .body("how to read the alpha design")
+            .parent("I_plan")
+            .labelled(&[("L_3", "core")]),
+        Item::issue("I_plan", "Engine").sub_issues(1),
+        Item::issue("I_task", "Alpha engine").parent("I_plan"),
+    ])
+}
+
+#[tokio::test]
+async fn an_issue_titled_with_the_design_prefix_is_a_document_and_no_other_issue_is() {
+    let fixture = board_with_documents();
+    let source = source(&fixture);
+
+    assert_eq!(
+        selected_documents(source.as_ref(), &DocumentQuery::default()).await,
+        ["I_design", "I_loose", "I_filed"],
+        "every design-titled issue is a document, whatever else it looks like"
+    );
+    // Each of these would be something else if the prefix were read after the rule that
+    // separates a project from a task: the first has sub-issues and the kind marker, the
+    // second has neither and would be an empty project's twin, the third is a sub-issue.
+    assert_eq!(
+        selected_projects(source.as_ref(), &ProjectQuery::default()).await,
+        ["I_plan"],
+        "a design issue is never a project, whatever sub-issues or marker it carries"
+    );
+    assert_eq!(
+        selected_tasks(source.as_ref(), &TaskQuery::default()).await,
+        ["I_task"],
+        "and never a task, whichever project it is filed under"
+    );
+    assert!(
+        source
+            .get_task(&NativeId("I_loose".to_owned()))
+            .await
+            .unwrap()
+            .is_none()
+            && source
+                .get_project(&NativeId("I_design".to_owned()))
+                .await
+                .unwrap()
+                .is_none(),
+        "a design issue is not found by a task read or by a project read either"
+    );
+
+    let shown = source
+        .get_document(&NativeId("I_design".to_owned()))
+        .await
+        .unwrap()
+        .expect("a design issue reads back as a document");
+    assert_eq!(
+        shown.title, "Alpha design",
+        "the reported title is the one a person wrote, without the prefix"
+    );
+    assert_eq!(shown.content.as_deref(), Some("the engine core, reviewed"));
+    assert_eq!(shown.metadata["caller.flags"], json!([true, null]));
+    assert!(
+        !shown.metadata.contains_key(ItemKind::METADATA_KEY),
+        "the kind marker is this source's own encoding and never travels as metadata"
+    );
+    assert_eq!(
+        shown
+            .labels
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>(),
+        ["bug"]
+    );
+    assert_eq!(
+        shown.project, None,
+        "a document under no project is in none, exactly as a task is"
+    );
+    assert_eq!(
+        source
+            .get_document(&NativeId("I_filed".to_owned()))
+            .await
+            .unwrap()
+            .expect("the filed document")
+            .project,
+        Some(NativeId("I_plan".to_owned())),
+        "and one filed under a project issue is in that project"
+    );
+    assert!(
+        source
+            .get_document(&NativeId("I_task".to_owned()))
+            .await
+            .unwrap()
+            .is_none(),
+        "an issue without the prefix is not a document"
+    );
+}
+
+#[tokio::test]
+async fn every_predicate_a_document_query_carries_is_applied_before_it_is_paged() {
+    let fixture = board_with_documents();
+    let source = source(&fixture);
+
+    assert_eq!(
+        selected_documents(
+            source.as_ref(),
+            &document_query(label_filter(&["bug"], &[], &[]), ProjectFilter::Any, None)
+        )
+        .await,
+        ["I_design"]
+    );
+    assert_eq!(
+        selected_documents(
+            source.as_ref(),
+            &document_query(label_filter(&[], &[], &["bug"]), ProjectFilter::Any, None)
+        )
+        .await,
+        ["I_loose", "I_filed"]
+    );
+    assert_eq!(
+        selected_documents(
+            source.as_ref(),
+            &document_query(
+                LabelFilter::default(),
+                ProjectFilter::Is(NativeId("I_plan".to_owned())),
+                None
+            )
+        )
+        .await,
+        ["I_filed"]
+    );
+    assert_eq!(
+        selected_documents(
+            source.as_ref(),
+            &document_query(LabelFilter::default(), ProjectFilter::Orphans, None)
+        )
+        .await,
+        ["I_design", "I_loose"]
+    );
+    // The reported title is what a title search reads, so the prefix is not searchable
+    // text: a person searching for what they wrote finds it, and one searching for the
+    // encoding finds nothing.
+    assert_eq!(
+        selected_documents(
+            source.as_ref(),
+            &document_query(
+                LabelFilter::default(),
+                ProjectFilter::Any,
+                text("alpha design", TextFields::Title)
+            )
+        )
+        .await,
+        ["I_design"]
+    );
+    assert_eq!(
+        selected_documents(
+            source.as_ref(),
+            &document_query(
+                LabelFilter::default(),
+                ProjectFilter::Any,
+                text("alpha design", TextFields::Content)
+            )
+        )
+        .await,
+        ["I_filed"]
+    );
+    assert_eq!(
+        selected_documents(
+            source.as_ref(),
+            &document_query(
+                LabelFilter::default(),
+                ProjectFilter::Any,
+                text("alpha design", TextFields::TitleOrContent)
+            )
+        )
+        .await,
+        ["I_design", "I_filed"]
+    );
+    assert!(
+        selected_documents(
+            source.as_ref(),
+            &document_query(
+                LabelFilter::default(),
+                ProjectFilter::Any,
+                text(DESIGN_TITLE_PREFIX, TextFields::TitleOrContent)
+            )
+        )
+        .await
+        .is_empty(),
+        "the prefix is this source's encoding, not text a person wrote"
+    );
+
+    // Filtered before paged: a page of a filtered result is a page of the survivors.
+    let first = source
+        .query_documents(
+            &document_query(label_filter(&[], &[], &["bug"]), ProjectFilter::Any, None),
+            &page(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|d| d.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["I_loose"]
+    );
+    let cursor = first.next.expect("a second page").0;
+    let second = source
+        .query_documents(
+            &document_query(label_filter(&[], &[], &["bug"]), ProjectFilter::Any, None),
+            &resume(&cursor, 1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        second
+            .items
+            .iter()
+            .map(|d| d.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["I_filed"]
+    );
+    assert!(second.next.is_none(), "the walk reached the end");
+}
+
+#[tokio::test]
+async fn an_issue_says_where_it_is_as_a_link_and_a_draft_says_nothing_at_all() {
+    // A draft has no web address of its own, so this source does not say where it is —
+    // which is not the same as saying it is nowhere. Read first, before the binding below
+    // shadows the constructor.
+    let drafts = board(vec![Item::draft("D_1", "a draft")]);
+    assert_eq!(
+        source(&drafts)
+            .get_task(&NativeId("D_1".to_owned()))
+            .await
+            .unwrap()
+            .unwrap()
+            .location,
+        None
+    );
+
+    let fixture = board_with_documents();
+    let source = source(&fixture);
+    let link = |id: &str| Some(Location::Url(format!("https://github.example/{id}")));
+
+    assert_eq!(
+        source
+            .get_document(&NativeId("I_loose".to_owned()))
+            .await
+            .unwrap()
+            .unwrap()
+            .location,
+        link("I_loose")
+    );
+    let task = source
+        .get_task(&NativeId("I_task".to_owned()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.location, link("I_task"));
+    assert_eq!(
+        task.url.as_deref(),
+        Some("https://github.example/I_task"),
+        "the location says what the url field already reported, and does not replace it"
+    );
+    assert_eq!(
+        source
+            .get_project(&NativeId("I_plan".to_owned()))
+            .await
+            .unwrap()
+            .unwrap()
+            .location,
+        link("I_plan")
+    );
+}
+
+#[tokio::test]
+async fn a_document_written_to_this_board_puts_the_prefix_back_and_round_trips_intact() {
+    let fixture = board(vec![Item::issue("I_plan", "Engine").sub_issues(0)]);
+    let source = source(&fixture);
+    let mut item = document("D-1", "Alpha design");
+    item.content = Some("the engine core, reviewed".to_owned());
+    item.project = Some(NativeId("I_plan".to_owned()));
+    item.metadata = BTreeMap::from([
+        ("caller.flags".to_owned(), json!([true, null])),
+        ("caller.shape".to_owned(), json!({"nested": 3.5})),
+        ("onetaskgraph.origin".to_owned(), json!("notes:D-1")),
+    ]);
+
+    let created = source
+        .write_document(&write(item.clone()))
+        .await
+        .expect("a document copies onto this board");
+    assert_eq!(
+        fixture.item(&created.0).title,
+        format!("{DESIGN_TITLE_PREFIX}Alpha design"),
+        "the issue on the board carries the prefix, so the board reads as one too"
+    );
+
+    let read = source
+        .get_document(&created)
+        .await
+        .unwrap()
+        .expect("the created document reads back");
+    assert_eq!(
+        read.title, "Alpha design",
+        "and the title that comes back out is the title that went in"
+    );
+    assert_eq!(read.content.as_deref(), Some("the engine core, reviewed"));
+    assert_eq!(read.project, Some(NativeId("I_plan".to_owned())));
+    assert_eq!(read.metadata["caller.flags"], json!([true, null]));
+    assert_eq!(read.metadata["caller.shape"], json!({"nested": 3.5}));
+    assert_eq!(read.metadata["onetaskgraph.origin"], json!("notes:D-1"));
+    assert!(
+        !read.metadata.contains_key(ItemKind::METADATA_KEY),
+        "a document is told by its title, so nothing marks it as a kind of work"
+    );
+    assert!(
+        source.get_task(&created).await.unwrap().is_none()
+            && source.get_project(&created).await.unwrap().is_none(),
+        "what this write created is a document and nothing else"
+    );
+
+    // A second copy of the same document updates the one already there.
+    let mut revised = item.clone();
+    revised.title = "Alpha design, revised".to_owned();
+    let again = source
+        .write_document(&ItemWrite {
+            target: Some(created.clone()),
+            item: revised,
+            depends_on: vec![],
+        })
+        .await
+        .expect("the second copy lands on the item the first one wrote");
+    assert_eq!(again, created);
+    assert_eq!(
+        selected_documents(source.as_ref(), &DocumentQuery::default()).await,
+        std::slice::from_ref(&created.0),
+        "exactly one where there was one before"
+    );
+    assert_eq!(
+        source.get_document(&created).await.unwrap().unwrap().title,
+        "Alpha design, revised"
+    );
+
+    // And the undo a copy that cannot finish performs takes it back off the board.
+    source
+        .delete_document(&created)
+        .await
+        .expect("a document this run created is removable");
+    assert!(!fixture.holds(&created.0));
+    assert!(
+        selected_documents(source.as_ref(), &DocumentQuery::default())
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn an_item_this_run_created_reads_back_whole_while_the_board_is_still_behind() {
+    // GitHub's board read is eventually consistent, so a read that follows a write closely
+    // enough is answered out of this source's own record of what it created — and until
+    // now that record held the composed body, metadata slot and all, and no web address at
+    // all. The live lane caught it: a document written and read back in one run came back
+    // with its content carrying the encoding and nowhere a reader could open. Held one item
+    // behind here so the record is what answers, which is the only state it is visible in.
+    let fixture = board(vec![Item::issue("I_plan", "Engine").sub_issues(1)]);
+    let source = source(&fixture);
+    fixture.read_behind(1);
+
+    let mut design = document("D-1", "Alpha design");
+    design.content = Some("the engine core, reviewed".to_owned());
+    design.project = Some(NativeId("I_plan".to_owned()));
+    design.metadata = BTreeMap::from([("caller.flags".to_owned(), json!([true, null]))]);
+    let created = source
+        .write_document(&write(design))
+        .await
+        .expect("a document copies onto this board");
+
+    let read = source
+        .get_document(&created)
+        .await
+        .unwrap()
+        .expect("a board read that has not caught up still holds what this run created");
+    assert_eq!(read.title, "Alpha design");
+    assert_eq!(
+        read.content.as_deref(),
+        Some("the engine core, reviewed"),
+        "the content a person wrote, not the body this source composed around it"
+    );
+    assert_eq!(read.metadata["caller.flags"], json!([true, null]));
+    assert_eq!(
+        read.url.as_deref(),
+        Some(format!("https://github.example/{}", created.0).as_str())
+    );
+    assert_eq!(
+        read.location,
+        Some(Location::Url(format!(
+            "https://github.example/{}",
+            created.0
+        ))),
+        "an issue this run created is somewhere a reader can open from the moment it exists"
+    );
+
+    // The same of the work on the same board: this is one record for all three kinds.
+    let mut work = task("T-1", "Ship it", status(StatusCategory::Todo, "Todo"));
+    work.content = Some("the plan, written out".to_owned());
+    work.metadata = BTreeMap::from([("caller.shape".to_owned(), json!({"nested": 3.5}))]);
+    let written = source
+        .write_task(&write(work))
+        .await
+        .expect("a task copies onto this board");
+    let held = source
+        .get_task(&written)
+        .await
+        .unwrap()
+        .expect("and reads back the same way");
+    assert_eq!(held.content.as_deref(), Some("the plan, written out"));
+    assert_eq!(held.metadata["caller.shape"], json!({"nested": 3.5}));
+    assert_eq!(
+        held.location,
+        Some(Location::Url(format!(
+            "https://github.example/{}",
+            written.0
+        )))
+    );
+}
+
+#[tokio::test]
+async fn a_document_write_names_every_field_and_target_this_board_cannot_carry() {
+    let fixture = board(vec![Item::issue("I_1", "held").labelled(&[("L_1", "bug")])]);
+    let source = source(&fixture);
+
+    let stale = refusal(
+        source
+            .write_document(&ItemWrite {
+                target: Some(NativeId("I_missing".to_owned())),
+                item: document("D-1", "Alpha design"),
+                depends_on: vec![],
+            })
+            .await
+            .expect_err("a target this board does not hold"),
+    );
+    assert!(stale.contains("I_missing"), "{stale}");
+
+    let mut labelled = document("D-1", "Alpha design");
+    labelled.labels = vec![Label {
+        id: NativeId("L_1".to_owned()),
+        name: "bug".to_owned(),
+        color: None,
+    }];
+    let labels = refusal(
+        source
+            .write_document(&write(labelled))
+            .await
+            .expect_err("a label this destination cannot create"),
+    );
+    assert!(labels.contains("labels"), "{labels}");
+
+    // A document takes part in no dependency graph, so a caller naming one is told so
+    // rather than having it recorded under the reserved key, where a later read would
+    // report an edge the contract says cannot exist.
+    let depending = refusal(
+        source
+            .write_document(&ItemWrite {
+                target: None,
+                item: document("D-1", "Alpha design"),
+                depends_on: vec![DependencyEdge {
+                    from: DependencyEndpoint::from_native(
+                        NativeId("D-1".to_owned()),
+                        ItemKind::Task,
+                    ),
+                    to: DependencyEndpoint::from_native(NativeId("I_1".to_owned()), ItemKind::Task),
+                    kind: DependencyKind::Blocks,
+                }],
+            })
+            .await
+            .expect_err("a dependency on a document"),
+    );
+    assert!(depending.contains("no dependency graph"), "{depending}");
+    assert_eq!(
+        fixture.state.lock().unwrap().items.len(),
+        1,
+        "every one of those refusals happens before anything is created"
+    );
+}
+
+#[tokio::test]
+async fn a_task_or_project_titled_the_way_this_board_spells_a_document_is_refused_by_name() {
+    // Written, it would land as an issue this same source reads back as a document — so
+    // the field this destination cannot carry is named rather than silently reclassified.
+    let fixture = board(vec![]);
+    let source = source(&fixture);
+    let title = format!("{DESIGN_TITLE_PREFIX}Alpha design");
+
+    for message in [
+        refusal(
+            source
+                .write_task(&write(task(
+                    "T-1",
+                    &title,
+                    status(StatusCategory::Todo, "Todo"),
+                )))
+                .await
+                .expect_err("a task titled as a document"),
+        ),
+        refusal(
+            source
+                .write_project(&write(project(
+                    "P-1",
+                    &title,
+                    status(StatusCategory::Todo, "Todo"),
+                )))
+                .await
+                .expect_err("a project titled as a document"),
+        ),
+    ] {
+        assert!(message.contains(DESIGN_TITLE_PREFIX), "{message}");
+        assert!(message.contains("retitle it"), "{message}");
+    }
+    assert!(
+        fixture.state.lock().unwrap().items.is_empty(),
+        "the refusal comes before anything is created"
+    );
+}
+
+#[tokio::test]
+async fn a_dependency_far_end_this_board_holds_as_a_document_is_refused_by_name() {
+    // Nothing may point at a document, and `ItemKind` has no variant for one, so neither
+    // answer a read could give would be true: reporting it as a task names an id no task
+    // read of this source can find, and reporting it as a project names one no project
+    // read can.
+    let fixture = board(vec![
+        Item::issue("I_1", "Alpha engine"),
+        design("I_design", "Alpha design"),
+    ]);
+    let source = source(&fixture);
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_1".to_owned())),
+            item: task("I_1", "Alpha engine", status(StatusCategory::Todo, "Todo")),
+            depends_on: vec![],
+        })
+        .await
+        .expect("a write that changes nothing");
+    fixture
+        .state
+        .lock()
+        .unwrap()
+        .blocked_by
+        .insert("I_1".to_owned(), vec!["I_design".to_owned()]);
+
+    let message = refusal(
+        source
+            .task_dependencies(&NativeId("I_1".to_owned()), Direction::DependsOn, &page(10))
+            .await
+            .expect_err("a far end this board holds as a document"),
+    );
+    assert!(message.contains("I_design"), "{message}");
+    assert!(message.contains("is a document"), "{message}");
+
+    // And the write side settles it in the same place, in the sentence a disagreeing kind
+    // already had: no caller can name a document's kind correctly.
+    let named = refusal(
+        source
+            .write_task(&ItemWrite {
+                target: Some(NativeId("I_1".to_owned())),
+                item: task("I_1", "Alpha engine", status(StatusCategory::Todo, "Todo")),
+                depends_on: vec![DependencyEdge {
+                    from: DependencyEndpoint::from_native(
+                        NativeId("I_1".to_owned()),
+                        ItemKind::Task,
+                    ),
+                    to: DependencyEndpoint::from_native(
+                        NativeId("I_design".to_owned()),
+                        ItemKind::Task,
+                    ),
+                    kind: DependencyKind::Blocks,
+                }],
+            })
+            .await
+            .expect_err("a dependency on a document"),
+    );
+    assert!(
+        named.contains("I_design") && named.contains("document"),
+        "{named}"
     );
 }

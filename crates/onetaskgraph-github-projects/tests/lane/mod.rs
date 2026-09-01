@@ -11,6 +11,7 @@
 
 use std::future::Future;
 
+use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_plugin_api::SecretResolver;
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -52,9 +53,20 @@ pub fn artifact_title(process_id: u32, stamp_micros: i64) -> String {
     format!("{ARTIFACT_PREFIX}{process_id}-{stamp_micros}")
 }
 
+/// The artifact title inside one board issue's own title.
+///
+/// A *document* this lane writes carries [`DESIGN_TITLE_PREFIX`] in front of the title it
+/// was given, because that is how this source spells a document and the source puts it
+/// there rather than the caller. Cleanup reads the board's raw titles, so recognition has
+/// to take that prefix off first: without this, a document a run created would be residue
+/// no sweep could ever name, on somebody's real board.
+fn artifact_part(title: &str) -> &str {
+    title.strip_prefix(DESIGN_TITLE_PREFIX).unwrap_or(title)
+}
+
 /// Whether a board item is one this lane wrote, in this run or in an earlier one.
 pub fn is_artifact_title(title: &str) -> bool {
-    let Some(suffix) = title.strip_prefix(ARTIFACT_PREFIX) else {
+    let Some(suffix) = artifact_part(title).strip_prefix(ARTIFACT_PREFIX) else {
         return false;
     };
     let Some((process_id, stamp_micros)) = suffix.split_once('-') else {
@@ -71,7 +83,8 @@ pub fn is_artifact_title(title: &str) -> bool {
 /// cleanup without touching one an interrupted earlier run left for [`is_artifact_title`]
 /// to sweep.
 pub fn is_run_artifact_title(process_id: u32, title: &str) -> bool {
-    is_artifact_title(title) && title.starts_with(&format!("{ARTIFACT_PREFIX}{process_id}-"))
+    is_artifact_title(title)
+        && artifact_part(title).starts_with(&format!("{ARTIFACT_PREFIX}{process_id}-"))
 }
 
 /// The prefix of the one repository label this lane creates.

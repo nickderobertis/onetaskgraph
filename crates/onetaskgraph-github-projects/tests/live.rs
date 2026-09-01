@@ -14,9 +14,9 @@ use std::{collections::BTreeMap, env};
 
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
-    ItemKind, ItemWrite, LabelFilter, NativeId, PageRequest, Project, ProjectFilter, ProjectQuery,
-    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource,
-    TextFields, TextQuery,
+    Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter, NativeId, PageRequest, Project,
+    ProjectFilter, ProjectQuery, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
+    TaskQuery, TaskSource, TextFields, TextQuery,
 };
 use serde_json::{Value, json};
 
@@ -822,6 +822,27 @@ fn artifact_project(title: &str, status: &Status) -> Project {
     }
 }
 
+/// The one document this run writes.
+///
+/// The title given here is the title a person wrote; the source puts its own design prefix
+/// in front of it on the way to the board, and takes it off again on the way back — which
+/// is the round trip this leg of the lane is for.
+fn artifact_document(title: &str, project: Option<NativeId>) -> Document {
+    Document {
+        id: NativeId("live-source-item".into()),
+        title: title.to_owned(),
+        content: Some("temporary credentialed write; the live lane removes this".into()),
+        project,
+        labels: vec![],
+        url: None,
+        location: None,
+        created_at: None,
+        updated_at: None,
+        metadata: BTreeMap::new(),
+        repositories: vec![],
+    }
+}
+
 fn artifact_task(
     title: &str,
     content: String,
@@ -875,6 +896,23 @@ async fn task_titles(
             .items
             .into_iter()
             .map(|task| task.title)
+            .collect(),
+    ))
+}
+
+async fn document_titles(
+    source: &dyn TaskSource,
+    query: &DocumentQuery,
+    what: &str,
+) -> Result<Vec<String>, String> {
+    Ok(sorted(
+        source
+            .query_documents(query, &page(None))
+            .await
+            .map_err(|error| format!("live {what} failed: {error}"))?
+            .items
+            .into_iter()
+            .map(|document| document.title)
             .collect(),
     ))
 }
@@ -1101,6 +1139,95 @@ async fn drive_every_declared_capability(
     ensure!(
         read_alpha.as_ref().map(|project| project.title.as_str()) == Some(alpha.as_str()),
         "the written project did not read back by its own id: {read_alpha:?}"
+    );
+
+    // `documents`: a board has no document type, so one is an issue this source titles with
+    // its own design prefix. Written here rather than beside the five above because that
+    // is the discrimination worth having — this run's title search has already reported
+    // exactly three tasks and two projects, so a design issue that turned up in either of
+    // those listings afterwards would be the failure this leg exists to catch.
+    let design = run.title(5);
+    let design_id = writer
+        .write_document(&ItemWrite {
+            target: None,
+            item: artifact_document(&design, Some(alpha_id.clone())),
+            depends_on: vec![],
+        })
+        .await
+        .map_err(|error| format!("live document write of {design:?} failed: {error}"))?;
+    let by_prefix_document = || DocumentQuery {
+        text: Some(TextQuery {
+            terms: prefix.clone(),
+            fields: TextFields::Title,
+        }),
+        ..Default::default()
+    };
+    let mut settled = false;
+    for _ in 0..20 {
+        if document_titles(writer, &by_prefix_document(), "document settling read").await?
+            == vec![design.clone()]
+        {
+            settled = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    ensure!(
+        settled,
+        "the board never reported the document this run created ({design:?})"
+    );
+    let read_design = writer
+        .get_document(&design_id)
+        .await
+        .map_err(|error| format!("live document read-back failed: {error}"))?;
+    ensure!(
+        read_design.as_ref().map(|held| held.title.as_str()) == Some(design.as_str()),
+        "a document read back under a title other than the one written: {read_design:?}"
+    );
+    ensure!(
+        read_design
+            .as_ref()
+            .and_then(|held| held.project.clone())
+            .as_ref()
+            == Some(&alpha_id),
+        "the document this run filed under one of its projects came back in {:?}",
+        read_design.as_ref().map(|held| held.project.clone())
+    );
+    ensure!(
+        read_design
+            .as_ref()
+            .and_then(|held| held.location.clone())
+            .is_some(),
+        "every entity of a hosted board is somewhere a reader can open: {read_design:?}"
+    );
+    ensure!(
+        read_design.as_ref().and_then(|held| held.content.clone())
+            == artifact_document(&design, None).content,
+        "a document read back carrying something other than the content written: \
+         {read_design:?}"
+    );
+    // And it is a document and nothing else: the same two searches that reported three
+    // tasks and two projects above report exactly the same items now.
+    let tasks_after = task_titles(writer, &by_prefix(), "task read after the document").await?;
+    ensure!(
+        tasks_after == run_tasks,
+        "a design issue turned up among this run's tasks: {tasks_after:?}"
+    );
+    let projects_after = project_titles(
+        writer,
+        &ProjectQuery {
+            text: Some(TextQuery {
+                terms: prefix.clone(),
+                fields: TextFields::Title,
+            }),
+            ..Default::default()
+        },
+        "project read after the document",
+    )
+    .await?;
+    ensure!(
+        projects_after == run_projects,
+        "a design issue turned up among this run's projects: {projects_after:?}"
     );
 
     // `search_content`: the marker is in one body and in no title at all, so a content
@@ -1461,7 +1588,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         source.capabilities(),
         Capabilities {
             projects: Support::Native,
-            documents: Support::Unsupported,
+            documents: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

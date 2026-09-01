@@ -304,6 +304,33 @@ pub(crate) struct Peer {
     pub(crate) handshake_deadline: Option<Duration>,
 }
 
+/// The state the operating system itself needs a spawned plugin to keep, and nothing else.
+///
+/// `env_clear` below is about *credentials*: §3.1 gives a plugin the variables its own
+/// configuration names and nothing more, so a host's unrelated tokens do not cross the
+/// pipe. On Windows that clearing takes something with it that is not the user's at all.
+/// Winsock's provider catalog records its DLLs as `%SystemRoot%\system32\...`, and it is
+/// the *child's* environment that expands them, so a child spawned without that variable
+/// cannot open a socket at all: every networked plugin reports its backend as unreachable,
+/// on that platform alone. A GitHub Projects board a process away answered on Linux and
+/// macOS and was unreachable on Windows for exactly this reason.
+///
+/// `SystemRoot` is the operating system's own and holds nothing of a user's work and no
+/// credential, so §3.1's boundary is where it was: a plugin still reads its configuration
+/// and its secrets from the `initialize` request rather than from any of this. Anything
+/// else a platform turns out to need is named here beside it, one variable at a time, with
+/// the reason it is not the user's.
+#[cfg(windows)]
+fn keep_platform_state(command: &mut Command) {
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        command.env("SystemRoot", root);
+    }
+}
+
+/// Nothing to keep: a Unix child needs no variable of its own in order to reach a socket.
+#[cfg(not(windows))]
+fn keep_platform_state(_command: &mut Command) {}
+
 impl Peer {
     /// Spawn `program` and take its three streams.
     ///
@@ -317,12 +344,15 @@ impl Peer {
         args: &[String],
         deadline: Duration,
     ) -> Result<Self, SourceError> {
-        let mut child = Command::new(program)
+        let mut command = Command::new(program);
+        command
             .args(args)
             // Credentials cross this boundary only in the initialize request (§3.1).
             // Inheriting the engine's environment would also hand the plugin every
             // unrelated token held by its host process.
-            .env_clear()
+            .env_clear();
+        keep_platform_state(&mut command);
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

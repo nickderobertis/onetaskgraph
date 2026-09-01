@@ -996,6 +996,7 @@ dependencies = [
  "graphql-parser",
  "jsonschema",
  "onetaskgraph-core",
+ "onetaskgraph-github-projects",
  "onetaskgraph-linear",
  "onetaskgraph-plugin-api",
  "predicates",
