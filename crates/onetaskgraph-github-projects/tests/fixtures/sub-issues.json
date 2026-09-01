@@ -1,0 +1,105 @@
+{
+  "data": {
+    "node": {
+      "__typename": "Issue",
+      "subIssues": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        },
+        "nodes": [
+          {
+            "__typename": "Issue",
+            "id": "I_task",
+            "title": "Ship it",
+            "body": "details\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":7}\n-->",
+            "url": "https://github.example/issues/2",
+            "createdAt": "2026-01-02T00:00:00Z",
+            "updatedAt": "2026-01-03T00:00:00Z",
+            "state": "OPEN",
+            "stateReason": null,
+            "repository": {
+              "nameWithOwner": "acme/work"
+            },
+            "parent": {
+              "id": "I_plan"
+            },
+            "subIssuesSummary": {
+              "total": 0
+            },
+            "labels": {
+              "nodes": [
+                {
+                  "id": "L_bug",
+                  "name": "bug",
+                  "color": "ff0000"
+                }
+              ],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            },
+            "projectItems": {
+              "nodes": [
+                {
+                  "id": "PVTI_task",
+                  "project": {
+                    "number": 7
+                  },
+                  "fieldValues": {
+                    "nodes": [
+                      {
+                        "name": "Todo",
+                        "field": {
+                          "id": "FIELD_status",
+                          "name": "Status",
+                          "options": [
+                            {
+                              "id": "OPT_todo",
+                              "name": "Todo"
+                            },
+                            {
+                              "id": "OPT_doing",
+                              "name": "In Progress"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "text": "notes:T-1",
+                        "field": {
+                          "id": "FIELD_origin",
+                          "name": "onetaskgraph.origin"
+                        }
+                      },
+                      {
+                        "labels": {
+                          "nodes": [
+                            {
+                              "id": "L_field",
+                              "name": "team",
+                              "color": "00ff00"
+                            }
+                          ],
+                          "pageInfo": {
+                            "hasNextPage": false
+                          }
+                        }
+                      }
+                    ],
+                    "pageInfo": {
+                      "hasNextPage": false
+                    }
+                  }
+                }
+              ],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -132,6 +132,24 @@ impl Item {
         json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}})
     }
 
+    /// The board half of this item, as `Issue.projectItems` carries it.
+    ///
+    /// The same board item id and the same field values a `ProjectV2.items` read gives it,
+    /// reached from the issue instead of from the board. Every fixture item here sits on
+    /// the one board this suite configures, which is project number 7.
+    fn project_items(&self, options: &Value) -> Value {
+        json!({"nodes":[{"id":self.item_id,"project":{"number":7},
+                         "fieldValues":self.field_values(options)}],
+               "pageInfo":{"hasNextPage":false}})
+    }
+
+    /// This item as a search, a node read or a sub-issue read returns it.
+    fn as_issue(&self, options: &Value) -> Value {
+        let mut issue = self.content();
+        issue["projectItems"] = self.project_items(options);
+        issue
+    }
+
     fn content(&self) -> Value {
         match self.typename {
             "PullRequest" => json!({"__typename":"PullRequest","id":self.content_id}),
@@ -658,6 +676,88 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         };
         return json!({root:{"issue":{"id":issue},"blockingIssue":{"id":blocker}}});
     }
+    if query.contains("search(query:$search") {
+        assert_eq!(variables["type"], "ISSUE");
+        let search = variables["search"].as_str().expect("a search query");
+        let wanted = search
+            .strip_prefix("project:octo-org/7 is:issue")
+            .unwrap_or_else(|| panic!("a search scoped to the configured board: {search}"));
+        // The server side of `in:title "..."`, which is what makes naming a project by name
+        // one bounded query rather than a walk of the board.
+        let title = wanted.trim().strip_prefix("in:title ").map(|quoted| {
+            quoted
+                .trim()
+                .trim_matches('"')
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+        });
+        let offset = match &variables["after"] {
+            Value::Null => 0,
+            Value::String(cursor) => cursor.parse::<usize>().expect("a numeric cursor"),
+            other => panic!("after must be null or a string: {other}"),
+        };
+        let first = variables["first"].as_u64().expect("first") as usize;
+        // A search index is behind what the board really holds, exactly as GitHub's is —
+        // which is what a read taken straight after a write has to answer through anyway.
+        let visible = state.items.len().saturating_sub(state.lagging_reads);
+        let options = state.options();
+        let matched = state.items[..visible]
+            .iter()
+            .filter(|item| item.typename == "Issue")
+            .filter(|item| {
+                title
+                    .as_ref()
+                    .is_none_or(|title| item.title.eq_ignore_ascii_case(title))
+            })
+            .collect::<Vec<_>>();
+        let end = (offset + first).min(matched.len());
+        let nodes = matched[offset.min(end)..end]
+            .iter()
+            .map(|item| item.as_issue(&options))
+            .collect::<Vec<_>>();
+        return json!({"search":{"nodes":nodes,
+            "pageInfo":{"hasNextPage":end < matched.len(),"endCursor":end.to_string()}}});
+    }
+    if query.contains("subIssues(first:$first") {
+        let id = variables["id"].as_str().expect("a node id").to_owned();
+        let Some(parent) = state.items.iter().find(|item| item.content_id == id) else {
+            return json!({ "node": null });
+        };
+        if parent.typename != "Issue" {
+            return json!({"node":{"__typename":parent.typename}});
+        }
+        let offset = match &variables["after"] {
+            Value::Null => 0,
+            Value::String(cursor) => cursor.parse::<usize>().expect("a numeric cursor"),
+            other => panic!("after must be null or a string: {other}"),
+        };
+        let first = variables["first"].as_u64().expect("first") as usize;
+        let options = state.options();
+        let children = state
+            .items
+            .iter()
+            .filter(|item| item.parent.as_deref() == Some(id.as_str()))
+            .collect::<Vec<_>>();
+        let end = (offset + first).min(children.len());
+        let nodes = children[offset.min(end)..end]
+            .iter()
+            .map(|item| item.as_issue(&options))
+            .collect::<Vec<_>>();
+        return json!({"node":{"__typename":"Issue",
+            "subIssues":{"nodes":nodes,
+                "pageInfo":{"hasNextPage":end < children.len(),"endCursor":end.to_string()}}}});
+    }
+    if query.contains("node(id:$id){__typename ...BoardIssue}") {
+        let id = variables["id"].as_str().expect("a node id").to_owned();
+        let Some(item) = state.items.iter().find(|item| item.content_id == id) else {
+            return json!({ "node": null });
+        };
+        if item.typename != "Issue" {
+            return json!({"node":{"__typename":item.typename}});
+        }
+        let options = state.options();
+        return json!({ "node": item.as_issue(&options) });
+    }
     if query.contains("node(id:$id)") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
         let Some(item) = state.items.iter().find(|item| item.content_id == id) else {
@@ -733,12 +833,16 @@ fn operation_name(query: &str) -> &str {
     let root = &body[..body
         .find(|c: char| !c.is_alphanumeric() && c != '_')
         .unwrap_or(body.len())];
-    // The two reads answer to what they read rather than to their GraphQL root, because
-    // `owner` and `node` say nothing about what a test is counting. Nothing is enumerated:
-    // every mutation's name is the one its own document spells.
+    // The reads answer to what they read rather than to their GraphQL root, because
+    // `owner` and `node` say nothing about what a test is counting — and three different
+    // reads now share the `node` root. Which of them a document is, is still read off the
+    // document: nothing is enumerated, and every mutation's name is the one its own
+    // document spells.
     match root {
         "owner" => "board",
-        "node" => "issueDependencies",
+        "node" if query.contains("subIssues(") => "projectTasks",
+        "node" if query.contains("blockedBy(") => "issueDependencies",
+        "node" => "issue",
         other => other,
     }
 }
@@ -963,11 +1067,9 @@ fn write<T>(item: T) -> ItemWrite<T> {
 #[tokio::test]
 async fn the_committed_board_fixture_maps_to_two_projects_their_tasks_an_orphan_and_no_pull_request()
  {
-    // The committed fixture is the drift artifact the pinned-schema test validates, so it
-    // is read here through a real socket rather than paraphrased.
-    let fixture: Value = serde_json::from_str(include_str!("fixtures/project.json")).unwrap();
-    let endpoint = raw_server("200 OK", &fixture.to_string());
-    let source = configured(&endpoint, json!({}));
+    // The committed fixtures are the drift artifacts the pinned-schema test validates, so
+    // they are read here through a real socket rather than paraphrased.
+    let source = committed_board();
 
     let projects = source
         .query_projects(&ProjectQuery::default(), &page(10))
@@ -1045,9 +1147,82 @@ async fn the_committed_board_fixture_maps_to_two_projects_their_tasks_an_orphan_
 ///
 /// It holds two projects, a task under each of them, a task under neither, and a pull
 /// request, so one board answers every shape of the project filter.
+///
+/// Three committed artifacts rather than one, because this source reaches the same board
+/// three ways and each way has a recorded shape of its own: `project.json` is the board's
+/// own item connection, `issues.json` is the board-scoped issue search, and
+/// `sub-issues.json` is one project's own sub-issues. Every one of them is validated
+/// against its production document by the pinned-schema test, so the shapes this suite
+/// reads cannot drift from the shapes those documents ask for.
 fn committed_board() -> Box<dyn TaskSource> {
-    let fixture: Value = serde_json::from_str(include_str!("fixtures/project.json")).unwrap();
-    configured(&raw_server("200 OK", &fixture.to_string()), json!({}))
+    configured(&committed_server(), json!({}))
+}
+
+/// The committed fixtures, served over a real socket by the document that asks for them.
+fn committed_server() -> String {
+    let board: Value = serde_json::from_str(include_str!("fixtures/project.json")).unwrap();
+    let issues: Value = serde_json::from_str(include_str!("fixtures/issues.json")).unwrap();
+    let children: Value = serde_json::from_str(include_str!("fixtures/sub-issues.json")).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let request = read_http_json(&mut stream);
+            let query = request["query"].as_str().expect("a GraphQL document");
+            let variables = &request["variables"];
+            let recorded = issues.pointer("/data/search/nodes").unwrap().as_array().unwrap();
+            let body = if query.contains("search(query:$search") {
+                let search = variables["search"].as_str().expect("a search query");
+                let title = search
+                    .strip_prefix("project:octo-org/7 is:issue")
+                    .expect("a search scoped to the configured board")
+                    .trim()
+                    .strip_prefix("in:title ")
+                    .map(|quoted| quoted.trim().trim_matches('"').to_owned());
+                let matched = recorded
+                    .iter()
+                    .filter(|node| {
+                        title.as_ref().is_none_or(|title| {
+                            node["title"].as_str().is_some_and(|held| held == title)
+                        })
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                json!({"data":{"search":{"nodes":matched,
+                    "pageInfo":{"hasNextPage":false,"endCursor":null}}}})
+            } else if query.contains("subIssues(first:$first") {
+                let id = variables["id"].as_str().expect("a node id");
+                if id == "I_plan" {
+                    children.clone()
+                } else if recorded.iter().any(|node| node["id"] == json!(id)) {
+                    let held = recorded
+                        .iter()
+                        .filter(|node| node.pointer("/parent/id") == Some(&json!(id)))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    json!({"data":{"node":{"__typename":"Issue",
+                        "subIssues":{"nodes":held,
+                            "pageInfo":{"hasNextPage":false,"endCursor":null}}}}})
+                } else {
+                    json!({ "data": { "node": null } })
+                }
+            } else if query.contains("node(id:$id){__typename ...BoardIssue}") {
+                let id = variables["id"].as_str().expect("a node id");
+                let held = recorded.iter().find(|node| node["id"] == json!(id));
+                json!({"data":{"node":held.cloned().unwrap_or(Value::Null)}})
+            } else {
+                board.clone()
+            };
+            let body = body.to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    format!("http://{address}/graphql")
 }
 
 async fn selected_tasks(source: &dyn TaskSource, query: &TaskQuery) -> Vec<String> {
@@ -4270,11 +4445,18 @@ async fn the_board_this_command_reads_holds_what_this_command_has_itself_written
 }
 
 /// The title one source reports for a board item, read through the trait a caller holds.
+///
+/// A whole-board read rather than a read by id, and the difference is the subject of the
+/// test below: an unconstrained task list is the question the board's own item connection
+/// answers, and a read by id is not.
 async fn title_of(source: &dyn TaskSource, id: &str) -> String {
     source
-        .get_task(&NativeId(id.to_owned()))
+        .query_tasks(&TaskQuery::default(), &page(10))
         .await
-        .expect("the board answers a task read")
+        .expect("the board answers a task query")
+        .items
+        .into_iter()
+        .find(|task| task.id.0 == id)
         .expect("the board holds the item")
         .title
 }
@@ -4317,6 +4499,27 @@ async fn a_board_changed_by_something_else_is_seen_by_the_next_source_and_not_by
         "a fresh source answered from a board read some earlier source had made"
     );
     assert_eq!(fixture.requests("board"), 2);
+
+    // And the half of this that is no longer true, pinned on the same board so the two
+    // cannot be confused. A read by id resolves that id — one request against the issue
+    // itself rather than a walk of the board — so it is answered by what GitHub holds now,
+    // by the same source, with no second board read bought.
+    let before = fixture.requests("board");
+    assert_eq!(
+        held.get_task(&NativeId("I_1".to_owned()))
+            .await
+            .expect("the board answers a task read")
+            .expect("the board holds the item")
+            .title,
+        "as somebody else left it",
+        "a read by id resolves the id rather than answering from the board this source read"
+    );
+    assert_eq!(
+        fixture.requests("board"),
+        before,
+        "and it did that without reading the board again"
+    );
+    assert_eq!(fixture.requests("issue"), 1);
 }
 
 #[test]

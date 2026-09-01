@@ -20,7 +20,25 @@ type Query {
   repositoryOwner(login: String!): RepositoryOwner
   repository(owner: String!, name: String!, followRenames: Boolean = true): Repository
   node(id: ID!): Node
+  search(
+    query: String!
+    type: SearchType!
+    first: Int
+    after: String
+  ): SearchResultItemConnection!
 }
+enum SearchType {
+  ISSUE
+  REPOSITORY
+  USER
+  DISCUSSION
+}
+type SearchResultItemConnection {
+  issueCount: Int!
+  nodes: [SearchResultItem]
+  pageInfo: PageInfo!
+}
+union SearchResultItem = Issue | PullRequest | Repository
 type Mutation {
   createIssue(input: CreateIssueInput!): CreateIssuePayload
   addProjectV2ItemById(input: AddProjectV2ItemByIdInput!): AddProjectV2ItemByIdPayload
@@ -149,6 +167,7 @@ type User implements Node & RepositoryOwner & ProjectV2Owner {
 
 type ProjectV2 implements Node {
   id: ID!
+  number: Int!
   title: String!
   createdAt: DateTime!
   updatedAt: DateTime!
@@ -214,6 +233,11 @@ type Issue implements Node {
   parent: Issue
   subIssues(first: Int, after: String): IssueConnection!
   subIssuesSummary: SubIssuesSummary!
+  projectItems(
+    first: Int
+    after: String
+    includeArchived: Boolean = true
+  ): ProjectV2ItemConnection!
   labels(first: Int, after: String): LabelConnection
   blockedBy(first: Int, after: String): IssueConnection!
   blocking(first: Int, after: String): IssueConnection!

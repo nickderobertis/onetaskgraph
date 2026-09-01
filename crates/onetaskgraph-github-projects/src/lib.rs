@@ -92,19 +92,59 @@
 //! — so that the engine may push it down and apply nothing of its own.
 //!
 //! Second, this source can keep that promise for every predicate at no additional API
-//! cost, because this source's own `board` walk already reads every page of the board
-//! before it answers anything at all. That walk is what `get_task`, `labels` and every
-//! listing already pay for; filtering the items it returns is in-process work over data
-//! already in hand.
+//! cost, because whichever of the three reads below answers a query has already read every
+//! item that query could keep before it filters anything. Filtering those items is
+//! in-process work over data already in hand.
 //!
-//! Third, no predicate could be pushed into the API even if that were wanted:
-//! `ProjectV2.items` takes `first` and `after` and offers no filter argument of any kind.
-//! So there is no server-side filtering to declare, and — the other half of the same fact
-//! — there is no predicate here that is genuinely unsupportable. Declaring one
-//! `Unsupported` would make the engine compensate for work this source has already done,
-//! and declaring `projects` native while ignoring the filter (which this source once did)
-//! silently returns another project's tasks, because the engine trusts the declaration and
-//! applies nothing locally.
+//! Third, no predicate but `projects` could be pushed into the API even if that were
+//! wanted, and `projects` is pushed down: `ProjectV2.items` takes `first` and `after` and
+//! offers no filter argument of any kind, GitHub's issue search offers no qualifier for a
+//! label set, a status column or a substring of a body, and its title qualifier matches
+//! tokens where this source — and the local Markdown source beside it — match substrings,
+//! so pushing a search down would silently *narrow* the answer. What a project filter has
+//! instead is a relationship: a project's tasks are that issue's sub-issues, and asking
+//! the issue for them is both cheaper and exact. So there is one predicate this source
+//! applies by asking a narrower question, six it applies in process, and none it is unable
+//! to apply. Declaring one `Unsupported` would make the engine compensate for work this
+//! source has already done, and declaring `projects` native while ignoring the filter
+//! (which this source once did) silently returns another project's tasks, because the
+//! engine trusts the declaration and applies nothing locally.
+//!
+//! # The three ways this source reaches an item, and what each costs
+//!
+//! A board read is charged for what its *nested* connections could return rather than for
+//! what was asked, so one whole-board read costs the same whether the question was about
+//! one project or about all of them. That is why a question about one project is never
+//! answered by reading the board:
+//!
+//! | The question | What is sent | What it costs |
+//! | --- | --- | --- |
+//! | one item, by its own id | [`graphql::ISSUE`] — `node(id:)` | the item |
+//! | one project's tasks or documents | [`graphql::SUB_ISSUES`] — that issue's own `subIssues` | that project |
+//! | which projects this board holds | [`graphql::SEARCH_ISSUES`] — an issue search scoped to the board | the board's issues, without their board items |
+//! | every task, every document, every label | [`graphql::BOARD`] — the board's own `items` | the board |
+//!
+//! The board half of an issue — its board item's id, its `Status` option, this source's
+//! origin text field, its board label field — rides along on `Issue.projectItems` in the
+//! first three, so an item reached any of those ways resolves through the same
+//! [`GitHubProjectsSource::resolve`] the board walk uses and reports the same title, the
+//! same status, the same labels and the same qualified id. An issue with no entry for
+//! *this* board is not this source's to report, which is what keeps an id naming another
+//! repository's issue from being answered as an item of this board.
+//!
+//! The last row is still the board's own item connection, and deliberately: a **draft**
+//! board item is not an issue, so no search and no node read can reach one, and the reads
+//! that have to answer for the whole board are the ones whose cost is the board's size
+//! anyway.
+//!
+//! **Where a read-after-write guarantee comes from, since a search index cannot supply
+//! one.** GitHub's issue search is eventually consistent and answers a write made moments
+//! ago with the value from before it. Resolving a node id is not, so a read by id and a
+//! project's own sub-issues are already current. What closes the gap for the search is
+//! [`GitHubProjectsSource::created`]: every read this source answers is completed with
+//! what this process itself wrote, so an item created seconds ago is reported whether or
+//! not GitHub's index has caught up. Nothing else is remembered, nothing is written down,
+//! and the record dies with the process.
 //!
 //! Filtering happens before paging, so a page of a filtered result is a page of the
 //! survivors rather than the survivors of a page. Label and text matching answer the same
@@ -169,6 +209,15 @@ pub const KIND: &str = "github-projects";
 pub const MAX_PAGE_SIZE: u32 = 100;
 /// Nested connection size which keeps GitHub's worst-case query below its node limit.
 const NESTED_PAGE_SIZE: u32 = 50;
+/// How many of one issue's board memberships are read when an issue is reached directly.
+///
+/// An issue reached through a search or through its own node id carries its board half in
+/// `Issue.projectItems`, and only the entry for *this* board is read. Ten is deliberately
+/// far smaller than [`NESTED_PAGE_SIZE`]: this connection sits under a page of issues, so
+/// its size multiplies through the whole document, and an issue on ten boards at once is
+/// already well past what a person keeps track of. An issue whose entry for this board sits
+/// past it is refused naming the connection rather than reported as not on the board.
+const BOARD_ITEMS_PAGE_SIZE: u32 = 10;
 
 /// The issue-title prefix that makes a board issue a document.
 ///
@@ -191,6 +240,80 @@ pub const DESIGN_TITLE_PREFIX: &str = "DESIGN: ";
 /// independently. No document in this module writes the board itself, and none of them
 /// names `updateProjectV2Field`.
 pub mod graphql {
+    /// Everything this source reads about one issue, wherever it reaches that issue.
+    ///
+    /// A macro rather than a constant so the three documents below can `concat!` it: one
+    /// spelling of these fields is what makes an issue read through the board-scoped
+    /// search, through its own node id, and through its project's sub-issue relationship
+    /// resolve to *the same* item, which is the whole of what
+    /// [`GitHubProjectsSource::resolve_issue`](super::GitHubProjectsSource) relies on.
+    ///
+    /// `projectItems` is what carries the board half of an issue: the board item's own id
+    /// and the field values — the `Status` option, this source's origin text field, and any
+    /// board label field — that a `ProjectV2.items` read used to carry. It is asked for on
+    /// the issue rather than on the board, which is what makes the cost of a read
+    /// proportional to what was asked for instead of to the board's size.
+    macro_rules! board_issue {
+        () => {
+            r#" fragment BoardIssue on Issue{__typename id title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total}
+      labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}
+      projectItems(first:$boardItems){nodes{id project{number}
+        fieldValues(first:$nestedFirst){nodes{
+          ... on ProjectV2ItemFieldSingleSelectValue{name field{
+            ... on ProjectV2SingleSelectField{id name options{id name}}
+          }}
+          ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2Field{id name}}}
+          ... on ProjectV2ItemFieldLabelValue{labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        }pageInfo{hasNextPage}}}pageInfo{hasNextPage}}}"#
+        };
+    }
+
+    /// Every issue of one board, found by a search scoped to that board.
+    ///
+    /// This is how the projects a board holds are listed, and it selects no `items`
+    /// connection on `ProjectV2`: the board is a *qualifier of the search* rather than a
+    /// container walked page by page, so nothing nested inside a board item is paid for.
+    /// Which of the issues it returns is a project is then read off `parent` — GitHub
+    /// accepts `-has:parent` as a search qualifier and silently ignores it, so the
+    /// discriminator has to be applied to the field, which is a scalar on the issue and
+    /// costs nothing.
+    pub const SEARCH_ISSUES: &str = concat!(
+        r#"query($search:String!,$type:SearchType!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
+      search(query:$search,type:$type,first:$first,after:$after){
+        pageInfo{hasNextPage endCursor}
+        nodes{__typename ...BoardIssue}
+      }
+    }"#,
+        board_issue!()
+    );
+
+    /// One issue by its own node id, which is what a qualified id names here.
+    ///
+    /// Strongly consistent, unlike the search above: GitHub's issue search is an index and
+    /// answers a write made moments ago with the value from before it, and resolving a node
+    /// id does not.
+    pub const ISSUE: &str = concat!(
+        r#"query($id:ID!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
+      node(id:$id){__typename ...BoardIssue}
+    }"#,
+        board_issue!()
+    );
+
+    /// One project's tasks: the sub-issues of the issue that project is.
+    ///
+    /// The work this costs is the project's own size. Nothing about it grows as the board
+    /// gains projects, or as those projects gain tasks.
+    pub const SUB_ISSUES: &str = concat!(
+        r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
+      node(id:$id){__typename
+        ... on Issue{subIssues(first:$first,after:$after){
+          pageInfo{hasNextPage endCursor}
+          nodes{__typename ...BoardIssue}
+        }}}
+    }"#,
+        board_issue!()
+    );
+
     /// Reads the board's fields and one page of its items.
     pub const BOARD: &str = r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!,$duplicates:Boolean!){
       owner:repositoryOwner(login:$owner){
@@ -259,7 +382,10 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 13] = [
+    pub const DOCUMENTS: [(&str, &str); 16] = [
+        (SEARCH_ISSUES, "searching this board's issues"),
+        (ISSUE, "reading one issue"),
+        (SUB_ISSUES, "reading a project's tasks"),
         (BOARD, "reading the board"),
         (REPOSITORY, "reading the destination repository"),
         (ISSUE_DEPENDENCIES, "reading an issue's dependencies"),
@@ -1377,6 +1503,307 @@ impl GitHubProjectsSource {
             })
     }
 
+    /// The search that finds the issues of this board, narrowed by `also` when it is
+    /// given.
+    ///
+    /// `project:owner/number` is what scopes a search to one board, and `is:issue` is what
+    /// keeps pull requests out of it: GitHub's `ISSUE` search type covers both, and a pull
+    /// request is somebody's change rather than a unit of plan. `-has:parent` is *not*
+    /// here on purpose — GitHub accepts it and silently ignores it, so a project is told
+    /// from a task by the `parent` field each issue carries rather than by the search.
+    fn board_search(&self, also: Option<&str>) -> String {
+        let scope = format!(
+            "project:{}/{} is:issue",
+            self.owner, self.project_number
+        );
+        match also {
+            Some(also) => format!("{scope} {also}"),
+            None => scope,
+        }
+    }
+
+    /// One issue this source reached directly, as the board item a read of the board would
+    /// have produced — or `None` when this board does not hold it.
+    ///
+    /// The board half of an issue rides along on `Issue.projectItems`, so the value handed
+    /// to [`Self::resolve`] is the very shape a `ProjectV2.items` read gives it: the board
+    /// item's own id, that item's field values, and the issue as its content. One resolver
+    /// for both routes is what makes an issue read through a search, through its own node
+    /// id, or through its project's sub-issues report the same title, the same status, the
+    /// same labels and the same qualified id.
+    ///
+    /// An issue with no entry for *this* board is not this source's to report, which is
+    /// what keeps an id naming some other repository's issue from being answered as an item
+    /// of this board.
+    fn resolve_issue(&self, issue: &Value) -> Result<Option<Resolved>, SourceError> {
+        if optional_str(issue, "__typename")? != Some("Issue") {
+            return Ok(None);
+        }
+        let memberships = issue
+            .get("projectItems")
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub issue is missing projectItems".into(),
+            })?;
+        let nodes = memberships
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub issue projectItems.nodes is not an array".into(),
+            })?;
+        let held = nodes.iter().find(|node| {
+            node.pointer("/project/number").and_then(Value::as_u64)
+                == Some(u64::from(self.project_number))
+        });
+        let Some(held) = held else {
+            // Only now: an issue whose entry for this board sits past the page asked for
+            // would otherwise read as an issue this board does not hold, which is the one
+            // wrong answer available here.
+            complete_connection(
+                memberships,
+                "issue board memberships",
+                BOARD_ITEMS_PAGE_SIZE,
+            )?;
+            return Ok(None);
+        };
+        let item = json!({
+            "id": required_str(held, "id")?,
+            "fieldValues": held.get("fieldValues"),
+            "content": issue,
+        });
+        self.resolve(&item)
+    }
+
+    /// One page of a board-scoped issue search, and where the next page resumes.
+    async fn search_page(
+        &self,
+        search: &str,
+        first: u32,
+        after: Option<&str>,
+    ) -> Result<(Vec<Resolved>, Option<String>), SourceError> {
+        let data = self
+            .graphql(
+                graphql::SEARCH_ISSUES,
+                json!({"search":search,"type":"ISSUE","first":first.min(MAX_PAGE_SIZE),
+                       "after":after,"nestedFirst":NESTED_PAGE_SIZE,
+                       "boardItems":BOARD_ITEMS_PAGE_SIZE,"duplicates":true}),
+            )
+            .await?;
+        let connection = data.get("search").ok_or_else(|| SourceError::Malformed {
+            message: "GitHub search response has no search connection".into(),
+        })?;
+        let mut found = Vec::new();
+        for node in connection
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub search nodes is not an array".into(),
+            })?
+        {
+            if let Some(resolved) = self.resolve_issue(node)? {
+                found.push(resolved);
+            }
+        }
+        let info = connection
+            .get("pageInfo")
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub search connection has no pageInfo".into(),
+            })?;
+        let next = required_bool(info, "hasNextPage")?
+            .then(|| required_str(info, "endCursor"))
+            .transpose()?
+            .map(str::to_owned);
+        if let Some(next) = &next {
+            validate_cursor_progress(after, next)?;
+        }
+        Ok((found, next))
+    }
+
+    /// Every issue this board holds, walked to exhaustion, completed with what this run
+    /// wrote.
+    ///
+    /// The completion is not an optimisation and it is not a cache: GitHub's issue search
+    /// is an index and is eventually consistent, so an issue this run created seconds ago
+    /// is routinely absent from it, and a project listed straight after being written would
+    /// otherwise be missing from its own board. What is added back is only what this
+    /// process itself wrote, out of [`Self::created`], which lives and dies with the
+    /// process.
+    async fn board_issues(&self) -> Result<Vec<Resolved>, SourceError> {
+        let mut after: Option<String> = None;
+        let mut found = Vec::new();
+        let search = self.board_search(None);
+        loop {
+            let (page, next) = self
+                .search_page(&search, MAX_PAGE_SIZE, after.as_deref())
+                .await?;
+            found.extend(page);
+            match next {
+                Some(next) => after = Some(next),
+                None => break,
+            }
+        }
+        Ok(self.completed_with_written(found, |_| true)?)
+    }
+
+    /// `found`, with everything this run wrote that `keep` accepts and the read did not
+    /// report.
+    ///
+    /// See [`Self::created`] and [`Self::board_issues`] for why a read has to be completed
+    /// at all: the search index is behind, and a node read of an item filed moments ago can
+    /// be too.
+    fn completed_with_written(
+        &self,
+        mut found: Vec<Resolved>,
+        keep: impl Fn(&Resolved) -> bool,
+    ) -> Result<Vec<Resolved>, SourceError> {
+        for own in self.created()?.iter().filter(|own| keep(own)) {
+            if !found.iter().any(|item| item.id == own.id) {
+                found.push(own.clone());
+            }
+        }
+        Ok(found)
+    }
+
+    /// What resolving one node id reached.
+    ///
+    /// Three answers rather than an `Option`, because a board *draft* is none of the other
+    /// two: it is not an issue, it has no node of its own this source can read the board
+    /// half off, and its only home is the board's own item connection — so a read of one
+    /// is completed from there rather than reported as nothing.
+    async fn reach(&self, id: &NativeId) -> Result<Reached, SourceError> {
+        let asked = self
+            .graphql(
+                graphql::ISSUE,
+                json!({"id":id.0,"nestedFirst":NESTED_PAGE_SIZE,
+                       "boardItems":BOARD_ITEMS_PAGE_SIZE,"duplicates":true}),
+            )
+            .await;
+        let data = match asked {
+            Ok(data) => data,
+            // A string that is not a node id at all is not a failure to report: it is an id
+            // this board does not hold, which is what every read of one already answers.
+            Err(error) if unresolvable_node(&error) => return Ok(Reached::Nothing),
+            Err(error) => return Err(error),
+        };
+        let Some(node) = data.get("node").filter(|value| !value.is_null()) else {
+            return Ok(Reached::Nothing);
+        };
+        if optional_str(node, "__typename")? == Some("DraftIssue") {
+            return Ok(Reached::Draft);
+        }
+        Ok(match self.resolve_issue(node)? {
+            Some(item) => Reached::Held(Box::new(item)),
+            None => Reached::Nothing,
+        })
+    }
+
+    /// One item of this board by its own id, whatever kind it is.
+    ///
+    /// Resolved from the identifier alone: no search, board-wide or otherwise. What this
+    /// run wrote is read first, because a node read of an item created moments ago can
+    /// still be behind the board field values written onto it — see [`Self::created`].
+    async fn item_by_id(&self, id: &NativeId) -> Result<Option<Resolved>, SourceError> {
+        if let Some(own) = self.created()?.iter().find(|own| own.id == *id) {
+            return Ok(Some(own.clone()));
+        }
+        match self.reach(id).await? {
+            Reached::Held(item) => Ok(Some(*item)),
+            Reached::Nothing => Ok(None),
+            // The one read that still costs the board: a draft lives nowhere else.
+            Reached::Draft => Ok(self
+                .board()
+                .await?
+                .items
+                .into_iter()
+                .find(|item| item.id == *id)),
+        }
+    }
+
+    /// Which issue of this board a project selector names, or `None` when none does.
+    ///
+    /// A qualified id names the issue and is used as the node id it is — nothing is
+    /// searched for. Only a selector GitHub cannot resolve that way is read as a project
+    /// *name*, and that is one bounded search which filters on the name at the server
+    /// rather than a walk of every issue the board holds.
+    async fn project_named(&self, selector: &NativeId) -> Result<Option<NativeId>, SourceError> {
+        if self.created()?.iter().any(|own| own.id == *selector) {
+            return Ok(Some(selector.clone()));
+        }
+        match self.reach(selector).await? {
+            Reached::Held(_) | Reached::Draft => return Ok(Some(selector.clone())),
+            Reached::Nothing => {}
+        }
+        let search = self.board_search(Some(&title_qualifier(&selector.0)));
+        let (candidates, _) = self.search_page(&search, MAX_PAGE_SIZE, None).await?;
+        Ok(candidates
+            .into_iter()
+            .find(|item| {
+                item.kind == BoardKind::Work(ItemKind::Project)
+                    && item.title.eq_ignore_ascii_case(&selector.0)
+            })
+            .map(|item| item.id))
+    }
+
+    /// Everything filed under one project of this board: the sub-issues of the issue that
+    /// project is.
+    ///
+    /// Tasks *and* documents, because a document filed under a project is a sub-issue of it
+    /// too — the caller keeps the kind it asked for. Nothing about this grows as the board
+    /// gains projects, or as another project gains tasks.
+    async fn project_children(&self, selector: &NativeId) -> Result<Vec<Resolved>, SourceError> {
+        let Some(project) = self.project_named(selector).await? else {
+            return Ok(Vec::new());
+        };
+        let mut after: Option<String> = None;
+        let mut children = Vec::new();
+        loop {
+            let data = self
+                .graphql(
+                    graphql::SUB_ISSUES,
+                    json!({"id":project.0,"first":MAX_PAGE_SIZE,"after":after,
+                           "nestedFirst":NESTED_PAGE_SIZE,
+                           "boardItems":BOARD_ITEMS_PAGE_SIZE,"duplicates":true}),
+                )
+                .await?;
+            let Some(connection) = data
+                .pointer("/node/subIssues")
+                .filter(|value| !value.is_null())
+            else {
+                // A node that is not an issue has no sub-issue relationship, so nothing is
+                // filed under it. That is an empty answer rather than a failure: it is what
+                // this board says about a selector naming a draft, or an item it no longer
+                // holds.
+                break;
+            };
+            for node in connection
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub subIssues.nodes is not an array".into(),
+                })?
+            {
+                if let Some(resolved) = self.resolve_issue(node)? {
+                    children.push(resolved);
+                }
+            }
+            let info = connection
+                .get("pageInfo")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub subIssues connection has no pageInfo".into(),
+                })?;
+            let next = required_bool(info, "hasNextPage")?
+                .then(|| required_str(info, "endCursor"))
+                .transpose()?;
+            match next {
+                Some(next) => {
+                    validate_cursor_progress(after.as_deref(), next)?;
+                    after = Some(next.to_owned());
+                }
+                None => break,
+            }
+        }
+        self.completed_with_written(children, |own| own.parent.as_ref() == Some(&project))
+    }
+
     /// Every item on the board, with the one board identity they all share.
     ///
     /// See [`Self::board_cache`]. The completion from `created` happens on every call
@@ -1525,7 +1952,7 @@ impl GitHubProjectsSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub project item is missing fieldValues".into(),
             })?;
-        complete_connection(field_values, "project item field values")?;
+        complete_connection(field_values, "project item field values", NESTED_PAGE_SIZE)?;
         let nodes = field_values
             .get("nodes")
             .and_then(Value::as_array)
@@ -1533,11 +1960,11 @@ impl GitHubProjectsSource {
                 message: "GitHub project item fieldValues.nodes is not an array".into(),
             })?;
         if let Some(labels) = content.get("labels") {
-            complete_connection(labels, "content labels")?;
+            complete_connection(labels, "content labels", NESTED_PAGE_SIZE)?;
         }
         for field_value in nodes {
             if let Some(labels) = field_value.get("labels") {
-                complete_connection(labels, "project item field labels")?;
+                complete_connection(labels, "project item field labels", NESTED_PAGE_SIZE)?;
             }
         }
         let (body, slot) = metadata_body(optional_str(content, "body")?.map(str::to_owned))?;
@@ -2622,6 +3049,41 @@ impl GitHubProjectsSource {
     }
 }
 
+/// What resolving one node id reached; see [`GitHubProjectsSource::reach`].
+enum Reached {
+    /// An issue this board holds, resolved into everything this source reports about it.
+    Held(Box<Resolved>),
+    /// Nothing this board holds: no such node, or a node on some other board.
+    Nothing,
+    /// A board draft, which exists only inside the board's own item connection.
+    Draft,
+}
+
+/// What GitHub says when a string is not a node id it can resolve.
+///
+/// Matched because it is the ordinary answer to a project selector naming a project by its
+/// *name*, and reporting that as a failure would make naming one impossible. It is read
+/// off the refusal GitHub sent, never guessed from the shape of the string: this source
+/// does not define the syntax of a GitHub node id and would be wrong about it.
+const UNRESOLVABLE_NODE: &str = "could not resolve to a node";
+
+/// Whether this refusal is GitHub saying the id names no node at all.
+fn unresolvable_node(error: &SourceError) -> bool {
+    matches!(error, SourceError::Refused { message }
+        if message.to_ascii_lowercase().contains(UNRESOLVABLE_NODE))
+}
+
+/// One project name, as a search qualifier which filters on it at the server.
+///
+/// Quoted so the whole title is one phrase rather than a bag of words, with the two
+/// characters GitHub's own quoting grammar gives a meaning inside a quoted phrase escaped
+/// the way it documents. A title matched here is still compared for equality afterwards:
+/// the qualifier narrows what the server sends, and this source decides what it names.
+fn title_qualifier(name: &str) -> String {
+    let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("in:title \"{escaped}\"")
+}
+
 /// The board, and every item on it this source reports.
 #[derive(Clone)]
 struct Board {
@@ -2632,7 +3094,7 @@ struct Board {
 
 impl Board {
     fn field<'a>(fields: &'a Value, name: &str) -> Result<Option<&'a Value>, SourceError> {
-        complete_connection(fields, "project fields")?;
+        complete_connection(fields, "project fields", NESTED_PAGE_SIZE)?;
         let nodes = fields
             .get("nodes")
             .and_then(Value::as_array)
@@ -2951,21 +3413,17 @@ impl TaskSource for GitHubProjectsSource {
     }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
         Ok(self
-            .board()
+            .item_by_id(id)
             .await?
-            .items
-            .iter()
-            .find(|item| item.id == *id && item.kind == BoardKind::Work(ItemKind::Task))
-            .map(Resolved::task))
+            .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
+            .map(|item| item.task()))
     }
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
         Ok(self
-            .board()
+            .item_by_id(id)
             .await?
-            .items
-            .iter()
-            .find(|item| item.id == *id && item.kind == BoardKind::Work(ItemKind::Project))
-            .map(Resolved::project))
+            .filter(|item| item.kind == BoardKind::Work(ItemKind::Project))
+            .map(|item| item.project()))
     }
     async fn query_tasks(
         &self,
@@ -2973,12 +3431,16 @@ impl TaskSource for GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
         validate_page(page)?;
+        // A read narrowed to one project asks that project for its own tasks, so nothing
+        // about it costs what the rest of the board holds. Every other task read is a
+        // question about the whole board and is answered by reading it.
+        let held = match &query.project {
+            ProjectFilter::Is(project) => self.project_children(project).await?,
+            ProjectFilter::Any | ProjectFilter::Orphans => self.board().await?.items,
+        };
         // Filtered before paged: a page of a filtered result is a page of the survivors,
         // never the survivors of a page.
-        let tasks = self
-            .board()
-            .await?
-            .items
+        let tasks = held
             .iter()
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
             .map(Resolved::task)
@@ -2996,10 +3458,12 @@ impl TaskSource for GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         validate_page(page)?;
+        // The projects a board holds are found by an issue search scoped to that board,
+        // never by walking the board's own item connection: what tells a project from a
+        // task is the `parent` each issue carries, which costs nothing to read.
         let projects = self
-            .board()
+            .board_issues()
             .await?
-            .items
             .iter()
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Project))
             .map(Resolved::project)
@@ -3013,12 +3477,10 @@ impl TaskSource for GitHubProjectsSource {
     }
     async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
         Ok(self
-            .board()
+            .item_by_id(id)
             .await?
-            .items
-            .iter()
-            .find(|item| item.id == *id && item.kind == BoardKind::Document)
-            .map(Resolved::document))
+            .filter(|item| item.kind == BoardKind::Document)
+            .map(|item| item.document()))
     }
     async fn query_documents(
         &self,
@@ -3026,12 +3488,16 @@ impl TaskSource for GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<Document>, SourceError> {
         validate_page(page)?;
+        // Narrowed to one project, this is the same sub-issue read a task list scoped to
+        // that project makes — a document filed under a project is a sub-issue of it too,
+        // and which of them come back is the kind this caller asked for.
+        let held = match &query.project {
+            ProjectFilter::Is(project) => self.project_children(project).await?,
+            ProjectFilter::Any | ProjectFilter::Orphans => self.board().await?.items,
+        };
         // Filtered before paged, exactly as a task read is: a page of a filtered result is
         // a page of the survivors, never the survivors of a page.
-        let documents = self
-            .board()
-            .await?
-            .items
+        let documents = held
             .iter()
             .filter(|item| item.kind == BoardKind::Document)
             .map(Resolved::document)
@@ -3548,7 +4014,7 @@ fn optional_nodes<'a>(
             }),
     }
 }
-fn complete_connection(connection: &Value, name: &str) -> Result<(), SourceError> {
+fn complete_connection(connection: &Value, name: &str, size: u32) -> Result<(), SourceError> {
     let page_info = connection
         .get("pageInfo")
         .ok_or_else(|| SourceError::Malformed {
@@ -3557,7 +4023,7 @@ fn complete_connection(connection: &Value, name: &str) -> Result<(), SourceError
     if required_bool(page_info, "hasNextPage")? {
         return Err(SourceError::Malformed {
             message: format!(
-                "GitHub {name} exceeds the supported nested connection size of {NESTED_PAGE_SIZE}"
+                "GitHub {name} exceeds the supported nested connection size of {size}"
             ),
         });
     }
