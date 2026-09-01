@@ -57,6 +57,7 @@ python3 - "$PIN" "$PROBE" "$DECLARATION" "$work" <<'PY' || fatal \
 import json
 import re
 import sys
+from datetime import date
 from pathlib import Path
 from urllib.parse import quote
 
@@ -139,10 +140,20 @@ for position, registry in enumerate(registries, start=1):
         if not registry[field].strip():
             refuse([f"{where} holds '{field}' blank, which describes nothing"])
     # The provenance is a record of when this was read, so a date that is not one
-    # is a recollection wearing a date's clothes.
+    # is a recollection wearing a date's clothes. Both halves are needed: the
+    # pattern refuses the other spellings `fromisoformat` accepts (`20260831`,
+    # and a time after it), and `fromisoformat` refuses the impossible dates the
+    # pattern's own digits allow, of which 2026-99-99 is one.
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", registry["observed"]):
         refuse([
             f"{where} was observed on '{registry['observed']}', which is not a YYYY-MM-DD date"
+        ])
+    try:
+        date.fromisoformat(registry["observed"])
+    except ValueError:
+        refuse([
+            f"{where} was observed on '{registry['observed']}', which is spelled like a date "
+            "but is not one"
         ])
     # A probe reads. Anything that could change a registry's state is a method
     # this pin may not describe, whatever the probe happens to send today.

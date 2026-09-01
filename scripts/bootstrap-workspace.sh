@@ -57,16 +57,19 @@ fi
 # tier's is below: this needs the network, and `just check` still runs without it — the
 # reader check falls back to a capable onevcs on PATH and, failing that, says it could not
 # resolve one rather than passing quietly.
+# llmlint: ignore-block[changed_behavior_has_e2e] Its three paths are the presence of uv
+# and the reachability of PyPI, both host state outside this repository — the same reason
+# the release-plz installer above carries this directive, and the same remedy: what the
+# warm is FOR is verified where it is used, by scripts/check-release-targets.sh resolving
+# the pinned reader offline and refusing to pass on an incapable one.
 if command -v uvx >/dev/null 2>&1; then
   if ! warm_output="$(uvx --from "$reader_package==$reader_version" onevcs --version 2>&1)"; then
-    printf '%s\n' "$warm_output" >&2
-    echo "bootstrap-workspace: the canonical release-target reader ($reader_package $reader_version) did not fetch (see above)." >&2
-    echo "bootstrap-workspace: next action: fix the cause above, then rerun 'just bootstrap'." >&2
+    echo "bootstrap-workspace: $reader_package $reader_version did not fetch (${warm_output##*$'\n'}); 'just check' still runs, and next action is to fix that and rerun 'just bootstrap'" >&2
   fi
 else
-  echo "bootstrap-workspace: uv is not installed, so the canonical release-target reader was not warmed." >&2
-  echo "bootstrap-workspace: next action: install uv, then rerun 'just bootstrap'." >&2
+  echo "bootstrap-workspace: uv is not installed, so $reader_package $reader_version was not warmed; 'just check' still runs, and next action is to install uv and rerun 'just bootstrap'" >&2
 fi
+# llmlint: ignore-end[changed_behavior_has_e2e]
 
 # The judged tier is out of `just check`, but a contributor should not have to discover
 # how to install it. Through the documented recipe, so there is one way to do it.
