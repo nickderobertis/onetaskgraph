@@ -1,5 +1,13 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, resolve } from "node:path";
 import {
@@ -306,7 +314,11 @@ test("a document copy drives the real binary and is refused by a source with non
   // landed rather than only that a report was printed. `sealed` is an in-memory source
   // without the `documents` capability, so it holds none and is refused as a destination
   // before anything is read.
-  const documentRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-document-"));
+  // Canonicalized, because the location this source reports is: macOS hands out a
+  // temporary directory under `/var/folders`, which is a symlink to `/private/var/folders`,
+  // so an expectation built from the un-canonicalized path names a file the source never
+  // reports.
+  const documentRoot = realpathSync(mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-document-")));
   mkdirSync(resolve(documentRoot, "notes"), { recursive: true });
   writeFileSync(
     resolve(documentRoot, "onetaskgraph.yaml"),
