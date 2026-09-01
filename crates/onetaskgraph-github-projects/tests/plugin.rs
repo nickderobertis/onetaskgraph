@@ -4324,11 +4324,14 @@ async fn content_creating_mutations_leave_this_source_no_faster_than_the_shipped
         gaps.len() + 1
     );
     let floor = Duration::from_millis(onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS);
-    // The source spaces the moments it *releases* a mutation, and what a fixture on the
-    // far side of a socket sees is the moments they arrive; the two differ by however long
-    // each request spent in transit, which varies by a millisecond or so either way. So
-    // the floor is the shipped interval less a tolerance for that, which is still three
-    // orders of magnitude above the arrival gap of a source that paces nothing.
+    // Transit no longer eats into the gap a board sees — the interval is counted from the
+    // last mutation's completion, which is after its arrival, so an arrival gap is at least
+    // the interval by construction and
+    // `the_interval_a_board_sees_is_the_full_one_however_long_a_request_is_in_transit`
+    // asserts exactly that. What is left to allow for is the timer: a sleep is scheduled in
+    // whole milliseconds and may fire a shade under its deadline, so the floor keeps a
+    // millisecond-scale tolerance, which is still two orders of magnitude above the arrival
+    // gap of a source that paces nothing.
     let tolerance = Duration::from_millis(10);
     assert!(
         gaps.iter().all(|gap| *gap >= floor - tolerance),
@@ -4408,9 +4411,13 @@ async fn a_copy_of_a_project_of_many_tasks_is_not_refused_by_a_board_enforcing_t
     // refused by it. `retry_budget_ms: 0` is deliberate — nothing here may be rescued by a
     // retry, so what completes the copy is the pacing and only the pacing.
     //
-    // The board's threshold sits a little under the source's own interval on purpose: the
-    // source spaces its *releases*, and what the board measures is arrivals, so the gap
-    // absorbs loopback jitter. An unpaced source arrives at roughly zero spacing and is
+    // The board's threshold sits a little under the source's own interval, and what makes
+    // that safe is causal rather than statistical: the source counts its interval from the
+    // moment the last mutation finished, which is after that mutation arrived here, so an
+    // arrival gap is at least the full 60 ms however long a request spends in transit. It
+    // once sat on the far weaker footing that loopback jitter would stay inside the margin,
+    // and a Windows runner — where one round trip costs more than the margin — refused this
+    // copy on its fifth task. An unpaced source arrives at roughly zero spacing and is
     // refused on its second mutation.
     let fixture = board(vec![]);
     fixture.rate_limit_mutations(Duration::from_millis(45));
