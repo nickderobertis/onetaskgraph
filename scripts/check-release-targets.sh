@@ -16,13 +16,13 @@
 # into a failure, which is the pairing this repository already gives a check whose
 # third-party input may be absent.
 #
-# **The short names.** `crate`, `pypi`, `sdk-pypi` and `npm` are how a consumer in
-# another repository names one of these artifacts, and that consumer cannot see
-# this file to notice one moved — or that a fifth appeared it was never told
-# about. So the map from short name to identifier is spelled here as well as
+# **The short names.** `crate`, `pypi`, `sdk-pypi`, `npm` and `sdk-npm` are how a
+# consumer in another repository names one of these artifacts, and that consumer
+# cannot see this file to notice one moved — or that a sixth appeared it was never
+# told about. So the map from short name to identifier is spelled here as well as
 # there, deliberately: this is the drift gate that makes the second spelling safe,
 # and it refuses a name in either direction, because the set is frozen at those
-# four. Anything else this repository publishes is covered by one of them.
+# five. Anything else this repository publishes is covered by one of them.
 #
 # **The contents.** A hand-written inventory is exactly what goes stale in
 # silence — a repository publishing something it declares no target for grants no
@@ -126,12 +126,13 @@ MAX_PROSE = 400
 # whole set, because it is frozen. This is the second spelling the header
 # explains: a consumer names `sdk-pypi` in its own plan and cannot see this file,
 # so a short name that moved without moving here is a wait that resolves against
-# nothing, and a fifth name declared here is one nothing was told to wait on.
+# nothing, and a sixth name declared here is one nothing was told to wait on.
 EXPECTED_NAMES = {
     "crate": "crate:onetaskgraph",
     "pypi": "pypi:onetaskgraph-cli",
     "sdk-pypi": "pypi:onetaskgraph-sdk",
     "npm": "npm:@onetaskgraph/cli",
+    "sdk-npm": "npm:@onetaskgraph/sdk",
 }
 
 problems = []
@@ -307,7 +308,7 @@ for name in sorted(set(seen_names) - set(EXPECTED_NAMES)):
     problems.append(
         f"{DECLARATION} declares the short name '{name}', and the set is frozen at "
         f"{', '.join(sorted(EXPECTED_NAMES))}. Something else this repository publishes belongs "
-        "in the covers list of the target whose release carries it, not under a fifth name no "
+        "in the covers list of the target whose release carries it, not under a sixth name no "
         "consumer was told to wait on."
     )
 

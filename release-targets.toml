@@ -16,15 +16,25 @@
 # name that registry serves — `@onetaskgraph/cli` scoped, because that is npm's
 # own spelling of it.
 #
-# **There are exactly four targets, and which four is not this file's to decide.**
-# `crate`, `pypi`, `sdk-pypi` and `npm` are the frozen set: they are the names
-# another repository's plan waits on, and that repository cannot read this file to
-# learn that a fifth appeared or that one moved. So everything else this
-# repository publishes is a `covers` entry under the target whose release carries
-# it — which is what keeps the reconciliation below whole in both directions
-# without adding a name nobody agreed to.
+# **There are exactly five targets, and which five is not this file's to decide.**
+# `crate`, `pypi`, `sdk-pypi`, `npm` and `sdk-npm` are the frozen set: they are
+# the names another repository's plan waits on, and that repository cannot read
+# this file to learn that a sixth appeared or that one moved. So everything else
+# this repository publishes is a `covers` entry under the target whose release
+# carries it — which is what keeps the reconciliation below whole in both
+# directions without adding a name nobody agreed to.
 #
-# Three kinds of published name are therefore recorded as `covers`:
+# What earns a name a place among the five is that a dependent writes it down: a
+# Rust crate names `onetaskgraph`, a Python project names `onetaskgraph-cli` or
+# `onetaskgraph-sdk`, a TypeScript project names `@onetaskgraph/cli` or
+# `@onetaskgraph/sdk`. `sdk-npm` is a target of its own for exactly the reason
+# `sdk-pypi` is, and the symmetry between the two SDKs is the point: an SDK a
+# consumer imports is something it waits on in its own right, not something
+# another artifact's release merely carries. That the launcher's job happens to
+# ship the TypeScript SDK in the same run says when the wait resolves; it does not
+# make the SDK a thing nobody names.
+#
+# Two kinds of published name are therefore recorded as `covers`:
 #
 #   * The five `@onetaskgraph/cli-<platform>` carriers. They exist only so the
 #     launcher can resolve one at its own exact version — npm/cli/package.json
@@ -32,19 +42,17 @@
 #   * The six sibling crates. Every crate in this workspace carries the one
 #     `[workspace.package]` version and the publish-crates job sends all seven at
 #     that version in one run, so a dependent naming `onetaskgraph-plugin-api` is
-#     waiting on exactly the release `crate:onetaskgraph` answers for.
-#   * `@onetaskgraph/sdk`, the TypeScript SDK. Unlike the two above, a dependent
-#     really does name this one in its own `package.json` — it is covered rather
-#     than declared because the four short names are frozen, and covering it is
-#     sound: scripts/publish-npm.sh sends it in the same run as the launcher, at
-#     the same version, from the same job, so `npm` is a wait that is satisfied
-#     exactly when the SDK is out. A TypeScript consumer waits on `npm`.
+#     waiting on exactly the release `crate:onetaskgraph` answers for. They differ
+#     from the carriers in that a plugin author does name one — what makes them a
+#     `covers` list rather than six more targets is that there is one release to
+#     wait on and one version to wait for, so six targets would be six identical
+#     answers under six names.
 #
 # **The GitHub Release archives are deliberately not a target, and cannot be
 # one.** A target identifier is registry-qualified, and the per-platform
 # `.tar.gz`/`.zip` archives the native-assets-and-carriers job attaches to the
 # GitHub Release belong to no registry — there is no `<registry>:<name>` that
-# names one, so a fifth target for them could not be spelled. They are not a
+# names one, so a sixth target for them could not be spelled. They are not a
 # `[[retired]]` entry either: that records something this repository once
 # published and does not any more, and these ship on every release. A consumer
 # that installs them — scripts/install.sh does — waits on `pypi`, which is sound
@@ -103,8 +111,7 @@ published_by = ".github/workflows/release.yml — the publish-python job, from t
 manifest = "sdks/python/pyproject.toml"
 
 # The launcher an `npm install @onetaskgraph/cli` resolves, published after the
-# five per-platform carriers it pins at its own exact version, and beside the
-# TypeScript SDK it covers.
+# five per-platform carriers it pins at its own exact version.
 [[target]]
 id = "npm:@onetaskgraph/cli"
 name = "npm"
@@ -117,8 +124,14 @@ covers = [
     "npm:@onetaskgraph/cli-darwin-x64",
     "npm:@onetaskgraph/cli-darwin-arm64",
     "npm:@onetaskgraph/cli-win32-x64",
-    # The TypeScript SDK, which a dependent imports as `@onetaskgraph/sdk`. It
-    # ships from this same job, in the same run, at the same version, which is
-    # what makes waiting on `npm` a wait for it too.
-    "npm:@onetaskgraph/sdk",
 ]
+
+# The TypeScript SDK. It is a target of its own for the same reason `sdk-pypi` is:
+# a TypeScript application names it in its own dependencies, so it is something a
+# consumer waits on rather than something the launcher's release merely carries.
+[[target]]
+id = "npm:@onetaskgraph/sdk"
+name = "sdk-npm"
+what = "The typed TypeScript SDK, imported as `@onetaskgraph/sdk`, which drives the `onetaskgraph` binary it ships beside as a subprocess."
+published_by = ".github/workflows/release.yml — the publish-npm job, through scripts/publish-npm.sh, under sdks/typescript/package.json's name."
+manifest = "sdks/typescript/package.json"
