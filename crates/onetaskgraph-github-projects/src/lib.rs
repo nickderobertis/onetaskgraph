@@ -216,6 +216,31 @@ pub mod graphql {
     /// too, so there is no second `deleteProjectV2Item` to keep in step with it.
     pub const DELETE_ISSUE: &str =
         r#"mutation($input:DeleteIssueInput!){deleteIssue(input:$input){repository{id}}}"#;
+
+    /// Every document above, with what this source is doing when it sends one.
+    ///
+    /// One list rather than a `match` beside the constants: a rate-limit diagnostic has to
+    /// name the call that was refused, and a `match` with a catch-all arm would answer a
+    /// document added later with "talking to GitHub" and never say so.
+    ///
+    /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
+    /// const` here that this list omits, so the two cannot part — which is the same guard
+    /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
+    pub const DOCUMENTS: [(&str, &str); 13] = [
+        (BOARD, "reading the board"),
+        (REPOSITORY, "reading the destination repository"),
+        (ISSUE_DEPENDENCIES, "reading an issue's dependencies"),
+        (CREATE_ISSUE, "creating an issue"),
+        (ADD_TO_BOARD, "adding an issue to the board"),
+        (UPDATE_ISSUE, "updating an issue"),
+        (UPDATE_DRAFT, "updating a draft item"),
+        (UPDATE_FIELD, "writing a board field"),
+        (ADD_SUB_ISSUE, "filing an issue under its project"),
+        (REMOVE_SUB_ISSUE, "taking an issue out of its project"),
+        (ADD_BLOCKED_BY, "recording a dependency"),
+        (REMOVE_BLOCKED_BY, "removing a dependency"),
+        (DELETE_ISSUE, "deleting an issue"),
+    ];
 }
 
 /// Which of GitHub's two rate limiters refused a request.
@@ -432,23 +457,15 @@ fn is_mutation(query: &str) -> bool {
 }
 
 /// What this source was doing, for a diagnostic that has to say so.
+///
+/// Read out of [`graphql::DOCUMENTS`], which is the inventory rather than a copy of it, so
+/// a document added without a description is caught by that list's own gate instead of
+/// falling through to the vague arm below.
 fn operation_description(query: &str) -> &'static str {
-    match query {
-        graphql::BOARD => "reading the board",
-        graphql::REPOSITORY => "reading the destination repository",
-        graphql::ISSUE_DEPENDENCIES => "reading an issue's dependencies",
-        graphql::CREATE_ISSUE => "creating an issue",
-        graphql::ADD_TO_BOARD => "adding an issue to the board",
-        graphql::UPDATE_ISSUE => "updating an issue",
-        graphql::UPDATE_DRAFT => "updating a draft item",
-        graphql::UPDATE_FIELD => "writing a board field",
-        graphql::ADD_SUB_ISSUE => "filing an issue under its project",
-        graphql::REMOVE_SUB_ISSUE => "taking an issue out of its project",
-        graphql::ADD_BLOCKED_BY => "recording a dependency",
-        graphql::REMOVE_BLOCKED_BY => "removing a dependency",
-        graphql::DELETE_ISSUE => "deleting an issue",
-        _ => "talking to GitHub",
-    }
+    graphql::DOCUMENTS
+        .iter()
+        .find(|(document, _)| *document == query)
+        .map_or("talking to GitHub", |(_, doing)| *doing)
 }
 
 /// Shortest interval between two content-creating mutations, in milliseconds.

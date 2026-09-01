@@ -415,3 +415,40 @@ fn the_category_list_is_reconciled_against_the_vocabulary_it_mirrors() {
          declares them"
     );
 }
+
+#[test]
+fn documents_are_all_inventoried_with_what_the_source_is_doing_when_it_sends_one() {
+    // `graphql::DOCUMENTS` is what a rate-limit diagnostic reads to name the call that was
+    // refused, and a document missing from it would be reported as "talking to GitHub"
+    // with nothing saying so. Nothing about a set of `&str` constants makes that a
+    // compile error, so this reads the module back and is the gate instead.
+    let source = include_str!("../src/lib.rs");
+    let module = source
+        .split_once("pub mod graphql {")
+        .expect("the production documents live in one module")
+        .1
+        .split_once("\n}\n")
+        .expect("that module ends")
+        .0;
+    let declared: Vec<&str> = module
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("pub const "))
+        .filter_map(|rest| rest.split_once(':'))
+        .map(|(name, _)| name.trim())
+        .filter(|name| *name != "DOCUMENTS")
+        .collect();
+    assert_eq!(
+        declared.len(),
+        onetaskgraph_github_projects::graphql::DOCUMENTS.len(),
+        "graphql::DOCUMENTS names {} documents and the module declares {declared:?}; add the \
+         missing one to that list with what this source is doing when it sends it",
+        onetaskgraph_github_projects::graphql::DOCUMENTS.len()
+    );
+    for (document, doing) in onetaskgraph_github_projects::graphql::DOCUMENTS {
+        assert!(
+            !document.trim().is_empty() && !doing.trim().is_empty(),
+            "every document is inventoried with what sending it is doing: {doing:?}"
+        );
+        query::parse_query::<String>(document).expect("every inventoried document parses");
+    }
+}
