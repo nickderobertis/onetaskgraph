@@ -1,0 +1,25 @@
+{
+  "_": [
+    "Authoritative pin of GitHub's rate-limit vocabulary and its published limits on",
+    "content-creating requests. Recorded from GitHub's own documentation on 2026-09-01;",
+    "see README.md for the pages each value came off and why this artifact exists.",
+    "rate_limits_drift_gate in tests/schema.rs reconciles it against the production",
+    "constants both ways, so neither side may move without the other."
+  ],
+  "secondary": {
+    "wordings": [
+      "secondary rate limit",
+      "temporarily blocked from content creation",
+      "abuse detection",
+      "submitted too quickly",
+      "exceeded a secondary"
+    ]
+  },
+  "primary": {
+    "wordings": ["api rate limit exceeded", "rate limit exceeded", "rate_limited"]
+  },
+  "content_creation": {
+    "per_minute": 80,
+    "per_hour": 500
+  }
+}

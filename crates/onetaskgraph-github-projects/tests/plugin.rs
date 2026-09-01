@@ -4177,12 +4177,11 @@ async fn the_board_this_command_reads_holds_what_this_command_has_itself_written
 
 #[test]
 fn the_shipped_pacing_defaults_are_githubs_published_limits() {
+    // What GitHub publishes is `CONTENT_CREATION_PER_MINUTE`, and that is pinned and
+    // gated against `fixtures/rate-limits.json` by the crate's drift check rather than
+    // here. What this pins is the millisecond value that pacing actually runs at, so a
+    // derivation that started rounding the wrong way would be caught on this side too.
     assert_eq!(onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS, 750);
-    assert_eq!(
-        60_000 / onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS,
-        80,
-        "the shipped interval is no longer the published per-minute limit"
-    );
     // The other two defaults, because the constant is where each one's reasoning is
     // written down and a value that drifts from it makes that reasoning a lie.
     assert_eq!(onetaskgraph_github_projects::RETRY_BACKOFF_MS, 1_000);

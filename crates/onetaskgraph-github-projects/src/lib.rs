@@ -263,7 +263,12 @@ enum Limiter {
 /// rather than the status. `abuse detection` is the wording GitHub used before the
 /// limiter was renamed and still returns from some endpoints; `submitted too quickly` is
 /// what a burst of content creation is refused with.
-const SECONDARY_WORDINGS: [&str; 5] = [
+///
+/// This is GitHub's vocabulary rather than this source's, so it is pinned rather than
+/// remembered: `tests/fixtures/rate-limits.json` records where each wording was read and
+/// when, and the drift gate reconciles the two lists both ways. Public for that gate
+/// alone — a caller has no use for it, and matching on a refusal is this source's job.
+pub const SECONDARY_WORDINGS: [&str; 5] = [
     "secondary rate limit",
     "temporarily blocked from content creation",
     "abuse detection",
@@ -274,8 +279,9 @@ const SECONDARY_WORDINGS: [&str; 5] = [
 /// The wordings GitHub answers an exhausted primary budget with.
 ///
 /// `rate_limited` is the `type` its GraphQL error carries, which is read as a field rather
-/// than looked for in the response text.
-const PRIMARY_WORDINGS: [&str; 3] = [
+/// than looked for in the response text. Pinned and gated exactly as
+/// [`SECONDARY_WORDINGS`] is, and public for the same one reason.
+pub const PRIMARY_WORDINGS: [&str; 3] = [
     "api rate limit exceeded",
     "rate limit exceeded",
     "rate_limited",
@@ -493,18 +499,29 @@ fn operation_description(query: &str) -> &'static str {
         .map_or("talking to GitHub", |(_, doing)| *doing)
 }
 
+/// GitHub's published ceiling on content-generating requests, per minute.
+///
+/// Pinned in `tests/fixtures/rate-limits.json` and gated against it, because it is
+/// GitHub's number rather than this source's: [`MIN_MUTATION_INTERVAL_MS`] is *derived*
+/// from it, so a pacing value checked only against itself cannot go stale here.
+pub const CONTENT_CREATION_PER_MINUTE: u64 = 80;
+/// The same ceiling as GitHub publishes it per hour, which this source does **not** pace
+/// at. See [`MIN_MUTATION_INTERVAL_MS`] for why the per-minute bound is the one that
+/// governs; it is pinned beside its sibling so the gate would notice either one moving.
+pub const CONTENT_CREATION_PER_HOUR: u64 = 500;
 /// Shortest interval between two content-creating mutations, in milliseconds.
 ///
-/// GitHub documents two secondary limits on content-generating requests: no more than 80
-/// per minute, and no more than 500 per hour. 60000/80 is 750, so a mutation every 750 ms
-/// is the fastest rate that cannot exceed the per-minute bound, and that is the bound a
-/// copy actually trips: a copy of one plan-sized project is a burst of a few dozen
-/// mutations inside a few seconds. The hourly bound works out at one every 7.2 seconds
-/// sustained, which no single copy reaches and which, used as the spacing here, would turn
-/// an ordinary copy into an hour of waiting — so it is deliberately *not* what this paces
-/// at. An installation that wants the hourly bound honoured for a long sequence of copies
-/// says so through `pacing.min_mutation_interval_ms`.
-pub const MIN_MUTATION_INTERVAL_MS: u64 = 750;
+/// GitHub documents two secondary limits on content-generating requests:
+/// [`CONTENT_CREATION_PER_MINUTE`] and [`CONTENT_CREATION_PER_HOUR`]. 60000/80 is 750, so
+/// a mutation every 750 ms is the fastest rate that cannot exceed the per-minute bound,
+/// and that is the bound a copy actually trips: a copy of one plan-sized project is a
+/// burst of a few dozen mutations inside a few seconds. The hourly bound works out at one
+/// every 7.2 seconds sustained, which no single copy reaches and which, used as the
+/// spacing here, would turn an ordinary copy into an hour of waiting — so it is
+/// deliberately *not* what this paces at. An installation that wants the hourly bound
+/// honoured for a long sequence of copies says so through
+/// `pacing.min_mutation_interval_ms`.
+pub const MIN_MUTATION_INTERVAL_MS: u64 = 60_000 / CONTENT_CREATION_PER_MINUTE;
 /// First wait when a rate-limit refusal carries no hint; each further wait doubles it.
 ///
 /// A doubling schedule from one second reaches a minute in six waits, which is GitHub's

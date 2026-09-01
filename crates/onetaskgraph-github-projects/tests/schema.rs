@@ -470,3 +470,85 @@ fn documents_are_all_inventoried_with_what_the_source_is_doing_when_it_sends_one
         query::parse_query::<String>(document).expect("every inventoried document parses");
     }
 }
+
+#[test]
+fn the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact() {
+    // GitHub's refusal wordings and its published ceiling on content creation are
+    // GitHub's contract, not this source's, and this source restates both: the wordings
+    // are what `Limiter::classify` matches a refusal on, and the per-minute ceiling is
+    // what `MIN_MUTATION_INTERVAL_MS` is derived from. Restating an external contract
+    // without a gate is how the restatement quietly stops being true, so
+    // `fixtures/rate-limits.json` is the pin — recorded with its provenance in the README
+    // beside it — and this reconciles the two **both ways**: a wording the source matches
+    // on that nothing pinned it, and a pinned wording the source no longer matches on,
+    // each fail here naming the entry.
+    let pinned: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/rate-limits.json")).expect("the pin parses");
+
+    for (side, shipped) in [
+        (
+            "secondary",
+            onetaskgraph_github_projects::SECONDARY_WORDINGS.as_slice(),
+        ),
+        (
+            "primary",
+            onetaskgraph_github_projects::PRIMARY_WORDINGS.as_slice(),
+        ),
+    ] {
+        let pinned_wordings: HashSet<&str> = pinned[side]["wordings"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the pin records the {side} wordings"))
+            .iter()
+            .map(|wording| wording.as_str().expect("each pinned wording is a string"))
+            .collect();
+        let shipped_wordings: HashSet<&str> = shipped.iter().copied().collect();
+        assert_eq!(
+            shipped_wordings.len(),
+            shipped.len(),
+            "the {side} wordings list the same phrase twice, which hides one it omits"
+        );
+        for wording in &shipped_wordings {
+            assert!(
+                pinned_wordings.contains(wording),
+                "this source matches a {side} refusal on {wording:?}, which is not in \
+                 fixtures/rate-limits.json; pin it there with where it was read, or stop \
+                 matching on it"
+            );
+        }
+        for wording in &pinned_wordings {
+            assert!(
+                shipped_wordings.contains(wording),
+                "fixtures/rate-limits.json pins the {side} wording {wording:?} and this \
+                 source no longer matches on it; a refusal GitHub still sends that way \
+                 would be reported as something it is not"
+            );
+        }
+        for wording in &shipped_wordings {
+            assert_eq!(
+                *wording,
+                wording.to_ascii_lowercase(),
+                "`classify` lower-cases the response before matching, so an upper-case \
+                 character in {wording:?} could never match"
+            );
+        }
+    }
+
+    assert_eq!(
+        pinned["content_creation"]["per_minute"].as_u64(),
+        Some(onetaskgraph_github_projects::CONTENT_CREATION_PER_MINUTE),
+        "the shipped per-minute ceiling is not the one pinned from GitHub's documentation"
+    );
+    assert_eq!(
+        pinned["content_creation"]["per_hour"].as_u64(),
+        Some(onetaskgraph_github_projects::CONTENT_CREATION_PER_HOUR),
+        "the shipped per-hour ceiling is not the one pinned from GitHub's documentation"
+    );
+    // And the derivation itself, because the pin is only worth having if the value this
+    // source actually paces at moves with it.
+    assert_eq!(
+        onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS,
+        60_000 / onetaskgraph_github_projects::CONTENT_CREATION_PER_MINUTE,
+        "the shipped interval stopped being the fastest rate the pinned per-minute \
+         ceiling allows"
+    );
+}
