@@ -779,6 +779,8 @@ struct GitHubBoard {
     /// The board still holds it — every mutation below finds it — and only the *read* is
     /// behind, which is exactly what this models.
     lagging_reads: usize,
+    /// Every GraphQL document this board has received, in order.
+    documents: Vec<String>,
     /// The board's **own** title, description and readme — a person's, not this
     /// product's. `updateProjectV2` is answered here rather than refused so that a
     /// journey asserting these are byte-identical after a copy fails when something
@@ -789,9 +791,34 @@ struct GitHubBoard {
 /// A read-only handle on one fixture board's own fields.
 pub struct GitHubBoardFields {
     endpoint: String,
+    board: Arc<Mutex<GitHubBoard>>,
 }
 
 impl GitHubBoardFields {
+    /// Every GraphQL document this board has received, in order.
+    ///
+    /// What a journey needs to say that a read never *asked* for something, which is a
+    /// claim its answer cannot carry: a read scoped to one project and a read of the whole
+    /// board can agree about the tasks in that project and disagree entirely about what
+    /// they cost.
+    #[must_use]
+    pub fn documents(&self) -> Vec<String> {
+        self.board.lock().unwrap().documents.clone()
+    }
+
+    /// Which of the documents this board received selected the board's own item
+    /// connection — the read whose cost is the whole board.
+    #[must_use]
+    pub fn board_item_reads(&self) -> Vec<String> {
+        self.documents()
+            .into_iter()
+            .filter(|document| {
+                document.contains("projectV2(number:$number)")
+                    && document.contains("items(first:$first,after:$after)")
+            })
+            .collect()
+    }
+
     /// The board's own `title`, `shortDescription` and `readme`, asked of the GitHub
     /// endpoint the way any client of it asks.
     ///
@@ -1050,11 +1077,13 @@ fn github_projects_board_at(
         blocked_by: github_blockers(),
         created: 0,
         lagging_reads,
+        documents: Vec::new(),
         own: json!({"title":"Fixture board",
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
+    let watched = Arc::clone(&board);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
@@ -1071,6 +1100,7 @@ fn github_projects_board_at(
                 panic!("GraphQL request carries no variables object: {request}")
             });
             let variables = Value::Object(variables.clone());
+            board.lock().unwrap().documents.push(query.to_owned());
             let owed = owed_failures
                 .iter()
                 .position(|operation| query.contains(operation));
@@ -1114,7 +1144,10 @@ fn github_projects_board_at(
             // `crates/onetaskgraph-github-projects/tests/plugin.rs`.
             "pacing": {"min_mutation_interval_ms": 0}
         }),
-        GitHubBoardFields { endpoint },
+        GitHubBoardFields {
+            endpoint,
+            board: watched,
+        },
     )
 }
 

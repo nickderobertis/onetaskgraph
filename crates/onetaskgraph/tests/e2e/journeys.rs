@@ -198,6 +198,81 @@ fn github_projects_runs_shared_binary_journeys_against_its_fixture_server() {
 }
 
 #[test]
+fn a_github_read_about_one_project_never_asks_that_board_for_its_items() {
+    // The cost of a GitHub board read is charged for what its nested connections could
+    // return rather than for what was asked, so one read of `projectV2.items` costs the
+    // same whether the question was about one project or about every project on the board.
+    // A board this product shares with everything else that touches GitHub from one host
+    // has an hourly budget, and answering a question about one plan by fetching the whole
+    // board is what exhausted it.
+    //
+    // Driven through the binary rather than through the plugin, because that is where a
+    // person asks the question — and asserted on what the board was *asked for*, which is
+    // a claim the answer cannot carry: the right tasks come back either way.
+    let sandbox = Sandbox::new();
+    let (config, board) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(&json!({
+        SOURCE: {"plugin": "github-projects", "config": config},
+    })));
+    let run_of = "one project of a GitHub board";
+
+    let scoped = ok_as(
+        run_of,
+        &sandbox,
+        &["task", "list", "--project", &qualified(SOURCE, "P-1")],
+    );
+    assert_eq!(
+        listed(&scoped),
+        ours(&["T-1", "T-2"]),
+        "the tasks filed under that project, and no other project's:\n{scoped}"
+    );
+    assert_eq!(
+        board.board_item_reads(),
+        Vec::<String>::new(),
+        "a task list scoped to one project asked the board for its items"
+    );
+
+    let projects = ok_as(run_of, &sandbox, &["project", "list"]);
+    assert_eq!(
+        listed(&projects),
+        ours(&["P-1", "P-2"]),
+        "every project the board holds, and nothing filed under one:\n{projects}"
+    );
+    assert_eq!(
+        board.board_item_reads(),
+        Vec::<String>::new(),
+        "listing the board's projects asked the board for its items"
+    );
+
+    let shown = ok_as(
+        run_of,
+        &sandbox,
+        &["project", "show", &qualified(SOURCE, "P-1")],
+    );
+    assert_eq!(field(&shown, "title").as_deref(), Some("Engine"), "{shown}");
+    assert_eq!(
+        board.board_item_reads(),
+        Vec::<String>::new(),
+        "showing one project by its qualified id asked the board for its items"
+    );
+    assert!(
+        !board.documents().is_empty(),
+        "and the board really was reached over the wire"
+    );
+
+    // The other half of the same claim: a question that is about the whole board is still
+    // answered by reading the whole board, which is what a draft item — reachable through
+    // nothing else — depends on.
+    let everything = ok_as(run_of, &sandbox, &["task", "list"]);
+    assert_eq!(listed(&everything), ours(&["T-1", "T-2", "T-3", "T-4"]));
+    assert_eq!(
+        board.board_item_reads().len(),
+        1,
+        "an unconstrained task list reads the board, once:\n{everything}"
+    );
+}
+
+#[test]
 fn a_github_board_serves_its_design_issues_as_documents_over_both_source_boundaries() {
     // A board has no document type, so a document there is an issue whose title begins
     // this source's own design prefix. Driven at both boundaries because that is journey
