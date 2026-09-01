@@ -35,12 +35,21 @@ fn run(sandbox: &Sandbox, arguments: &[&str]) -> Output {
 /// Quotes stderr on failure, because a journey that fails on an exit code alone sends
 /// its reader back to the shell to find out why.
 fn ok(row: &Row, sandbox: &Sandbox, arguments: &[&str]) -> String {
+    ok_as(row.name, sandbox, arguments)
+}
+
+/// The same, under a name the caller chooses.
+///
+/// A journey that runs one row twice quotes the same row in both passes, so a failure
+/// says which source it was and not which of the two runs of it. Naming the run is the
+/// difference between a board reported unreachable *by the engine* and one reported
+/// unreachable by a plugin a process away, which are two different faults.
+fn ok_as(who: &str, sandbox: &Sandbox, arguments: &[&str]) -> String {
     let output = run(sandbox, arguments);
     assert_eq!(
         output.status.code(),
         Some(0),
-        "{}: `onetaskgraph {}` exited {:?}\n{}",
-        row.name,
+        "{who}: `onetaskgraph {}` exited {:?}\n{}",
         arguments.join(" "),
         output.status.code(),
         stderr(&output)
@@ -200,6 +209,8 @@ fn a_github_board_serves_its_design_issues_as_documents_over_both_source_boundar
         .find(|row| row.plugin == "github-projects")
         .expect("GitHub Projects fixture row");
     for boundary in SOURCE_BOUNDARIES {
+        // Both passes quote the same row, so the run says which side of the pipe asked.
+        let run_of = format!("{} across the {boundary:?} boundary", row.name);
         let sandbox = Sandbox::new();
         let (config, _board) = github_projects_with_board(&sandbox);
         sandbox.project_document(&document(&json!({
@@ -210,7 +221,7 @@ fn a_github_board_serves_its_design_issues_as_documents_over_both_source_boundar
             )
         })));
 
-        let listing = ok(row, &sandbox, &["document", "list"]);
+        let listing = ok_as(&run_of, &sandbox, &["document", "list"]);
         assert_eq!(
             listed(&listing),
             ours(&["D-1", "D-2", "D-3"]),
@@ -222,8 +233,8 @@ fn a_github_board_serves_its_design_issues_as_documents_over_both_source_boundar
              prefix taken off:\n{listing}"
         );
 
-        let shown = ok(
-            row,
+        let shown = ok_as(
+            &run_of,
             &sandbox,
             &["document", "show", &qualified(SOURCE, "D-1")],
         );
@@ -244,12 +255,12 @@ fn a_github_board_serves_its_design_issues_as_documents_over_both_source_boundar
         // its own, and `D-3` has neither, so both arms of the rule that separates a
         // project from a task are present and both lose to the prefix.
         assert_eq!(
-            listed(&ok(row, &sandbox, &["task", "list"])),
+            listed(&ok_as(&run_of, &sandbox, &["task", "list"])),
             ours(&["T-1", "T-2", "T-3", "T-4"]),
             "{boundary:?}: no design issue is a task"
         );
         assert_eq!(
-            listed(&ok(row, &sandbox, &["project", "list"])),
+            listed(&ok_as(&run_of, &sandbox, &["project", "list"])),
             ours(&["P-1", "P-2"]),
             "{boundary:?}: and none of them is an empty project"
         );
@@ -269,7 +280,7 @@ fn a_github_board_serves_its_design_issues_as_documents_over_both_source_boundar
         // And every one of the three entity kinds this board reports is somewhere a reader
         // can open, which is what "where is this?" means for a hosted backend.
         for (verb, id) in [("document", "D-1"), ("task", "T-1"), ("project", "P-1")] {
-            let placed = ok(row, &sandbox, &[verb, "show", &qualified(SOURCE, id)]);
+            let placed = ok_as(&run_of, &sandbox, &[verb, "show", &qualified(SOURCE, id)]);
             assert_eq!(
                 field(&placed, "location"),
                 Some(format!("url https://example.invalid/{id}")),
