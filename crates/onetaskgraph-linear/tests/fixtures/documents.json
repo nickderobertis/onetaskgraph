@@ -1,0 +1,27 @@
+{
+  "data": {
+    "documents": {
+      "nodes": [
+        {
+          "id": "d1",
+          "title": "Fixture design note",
+          "content": "Recorded body\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":7,\"onetaskgraph.repositories\":[\"github.com/acme/work\"]}\n-->",
+          "url": "https://linear.app/acme/document/fixture-design-note-aaaaaaaaaaaa",
+          "createdAt": "2026-08-01T12:00:00Z",
+          "updatedAt": "2026-08-02T12:00:00Z",
+          "project": { "id": "p1" }
+        },
+        {
+          "id": "d2",
+          "title": "Second fixture note",
+          "content": "Another recorded body",
+          "url": "https://linear.app/acme/document/second-fixture-note-bbbbbbbbbbbb",
+          "createdAt": "2026-08-03T12:00:00Z",
+          "updatedAt": "2026-08-04T12:00:00Z",
+          "project": null
+        }
+      ],
+      "pageInfo": { "hasNextPage": true, "endCursor": "next-1" }
+    }
+  }
+}
