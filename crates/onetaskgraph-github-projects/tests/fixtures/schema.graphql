@@ -20,12 +20,7 @@ type Query {
   repositoryOwner(login: String!): RepositoryOwner
   repository(owner: String!, name: String!, followRenames: Boolean = true): Repository
   node(id: ID!): Node
-  search(
-    query: String!
-    type: SearchType!
-    first: Int
-    after: String
-  ): SearchResultItemConnection!
+  search(query: String!, type: SearchType!, first: Int, after: String): SearchResultItemConnection!
 }
 enum SearchType {
   ISSUE
@@ -233,11 +228,7 @@ type Issue implements Node {
   parent: Issue
   subIssues(first: Int, after: String): IssueConnection!
   subIssuesSummary: SubIssuesSummary!
-  projectItems(
-    first: Int
-    after: String
-    includeArchived: Boolean = true
-  ): ProjectV2ItemConnection!
+  projectItems(first: Int, after: String, includeArchived: Boolean = true): ProjectV2ItemConnection!
   labels(first: Int, after: String): LabelConnection
   blockedBy(first: Int, after: String): IssueConnection!
   blocking(first: Int, after: String): IssueConnection!

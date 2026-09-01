@@ -1512,10 +1512,7 @@ impl GitHubProjectsSource {
     /// here on purpose — GitHub accepts it and silently ignores it, so a project is told
     /// from a task by the `parent` field each issue carries rather than by the search.
     fn board_search(&self, also: Option<&str>) -> String {
-        let scope = format!(
-            "project:{}/{} is:issue",
-            self.owner, self.project_number
-        );
+        let scope = format!("project:{}/{} is:issue", self.owner, self.project_number);
         match also {
             Some(also) => format!("{scope} {also}"),
             None => scope,
@@ -1641,7 +1638,7 @@ impl GitHubProjectsSource {
                 None => break,
             }
         }
-        Ok(self.completed_with_written(found, |_| true)?)
+        self.completed_with_written(found, |_| true)
     }
 
     /// `found`, with everything this run wrote that `keep` accepts and the read did not
@@ -1791,7 +1788,8 @@ impl GitHubProjectsSource {
         Ok(candidates
             .into_iter()
             .find(|item| {
-                item.kind == BoardKind::Work(ItemKind::Project) && item.title.eq_ignore_ascii_case(name)
+                item.kind == BoardKind::Work(ItemKind::Project)
+                    && item.title.eq_ignore_ascii_case(name)
             })
             .map(|item| item.id))
     }
@@ -3392,11 +3390,7 @@ fn project_matches(project: &Project, query: &ProjectQuery) -> bool {
 /// type carries none. The project predicate is the same one — a design issue filed under a
 /// project issue is in that project, and one filed under nothing is in none — so it is
 /// spelled the same way here rather than answered differently.
-fn document_matches(
-    document: &Document,
-    query: &DocumentQuery,
-    project: &ProjectFilter,
-) -> bool {
+fn document_matches(document: &Document, query: &DocumentQuery, project: &ProjectFilter) -> bool {
     labels_match(&document.labels, &query.labels)
         && match project {
             ProjectFilter::Any => true,

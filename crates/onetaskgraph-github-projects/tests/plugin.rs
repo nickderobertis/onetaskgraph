@@ -1208,7 +1208,11 @@ fn committed_server() -> String {
             let request = read_http_json(&mut stream);
             let query = request["query"].as_str().expect("a GraphQL document");
             let variables = &request["variables"];
-            let recorded = issues.pointer("/data/search/nodes").unwrap().as_array().unwrap();
+            let recorded = issues
+                .pointer("/data/search/nodes")
+                .unwrap()
+                .as_array()
+                .unwrap();
             let body = if query.contains("search(query:$search") {
                 let search = variables["search"].as_str().expect("a search query");
                 let title = search
@@ -1569,7 +1573,11 @@ async fn a_read_taken_straight_after_a_write_answers_with_what_was_written() {
             target: None,
             item: Task {
                 project: Some(created.clone()),
-                ..task("ignored", "First step", status(StatusCategory::Todo, "Todo"))
+                ..task(
+                    "ignored",
+                    "First step",
+                    status(StatusCategory::Todo, "Todo"),
+                )
             },
             depends_on: vec![],
         })
