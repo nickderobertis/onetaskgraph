@@ -308,6 +308,43 @@ impl Kind {
             Self::Document => "documents",
         }
     }
+
+    /// What one item of this kind is called, for a message a user has to act on.
+    const fn noun(self) -> &'static str {
+        match self {
+            Self::Task => "task",
+            Self::Project => "project",
+            Self::Document => "document",
+        }
+    }
+}
+
+/// The two kinds this source reads a status and a dependency list for.
+///
+/// Separate from [`Kind`] because a document has neither: a signature taking one of these
+/// cannot be handed a document, so the branch that would have to answer *what status does
+/// a document have* does not exist to be answered wrongly.
+#[derive(Debug, Clone, Copy)]
+enum WorkKind {
+    Task,
+    Project,
+}
+
+impl WorkKind {
+    const fn kind(self) -> Kind {
+        match self {
+            Self::Task => Kind::Task,
+            Self::Project => Kind::Project,
+        }
+    }
+
+    /// What a dependency edge of this kind points at, at both ends.
+    const fn item(self) -> ItemKind {
+        match self {
+            Self::Task => ItemKind::Task,
+            Self::Project => ItemKind::Project,
+        }
+    }
 }
 
 impl LocalMdSource {
@@ -501,7 +538,7 @@ impl LocalMdSource {
         })
     }
 
-    fn parse(&self, kind: Kind, path: &Path) -> Result<Entry, SourceError> {
+    fn parse(&self, kind: WorkKind, path: &Path) -> Result<Entry, SourceError> {
         // Both callers canonicalize and confine the path before parsing it. Keeping that
         // invariant explicit here makes future internal callers notice if they skip the
         // boundary check without duplicating an unreachable user-facing branch.
@@ -512,7 +549,7 @@ impl LocalMdSource {
                 message: format!("{}: {e}", path.display()),
             })?;
         let (shared, status, depends_on) = front.split();
-        let common = self.common(kind, path, &body, shared)?;
+        let common = self.common(kind.kind(), path, &body, shared)?;
         let status = Status {
             category: self
                 .statuses
@@ -522,12 +559,7 @@ impl LocalMdSource {
             name: status,
         };
         let from = common.id.clone();
-        let item_kind = match kind {
-            Kind::Project => ItemKind::Project,
-            // A document has no `depends_on` to reach this, and `Kind::Document` never
-            // reaches `parse`: it is read into the contract's own `Document` instead.
-            Kind::Task | Kind::Document => ItemKind::Task,
-        };
+        let item_kind = kind.item();
         // A bare `depends_on: [b]` names this source's own item, colons and all, so it
         // stays an opaque native id. The expanded form is where an author says otherwise:
         // `{id: other:P-9, item: project}` names a far end this source cannot hold, and
@@ -590,8 +622,8 @@ impl LocalMdSource {
         })
     }
 
-    fn readable_work(&self, kind: Kind) -> Result<Vec<Entry>, SourceError> {
-        self.paths(kind)?
+    fn readable_work(&self, kind: WorkKind) -> Result<Vec<Entry>, SourceError> {
+        self.paths(kind.kind())?
             .into_iter()
             .filter_map(|p| self.parse(kind, &p).ok())
             .collect::<Vec<_>>()
@@ -628,8 +660,8 @@ impl LocalMdSource {
         Ok(Some(canonical))
     }
 
-    fn find(&self, kind: Kind, id: &NativeId) -> Result<Option<Entry>, SourceError> {
-        self.locate(kind, id)?
+    fn find(&self, kind: WorkKind, id: &NativeId) -> Result<Option<Entry>, SourceError> {
+        self.locate(kind.kind(), id)?
             .map(|path| self.parse(kind, &path))
             .transpose()
     }
@@ -741,14 +773,14 @@ impl TaskSource for LocalMdSource {
         })
     }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
-        Ok(self.find(Kind::Task, id)?.map(task))
+        Ok(self.find(WorkKind::Task, id)?.map(task))
     }
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
-        Ok(self.find(Kind::Project, id)?.map(project))
+        Ok(self.find(WorkKind::Project, id)?.map(project))
     }
     async fn query_tasks(&self, q: &TaskQuery, p: &PageRequest) -> Result<Page<Task>, SourceError> {
         let items = self
-            .readable_work(Kind::Task)?
+            .readable_work(WorkKind::Task)?
             .into_iter()
             .map(task)
             .filter(|t| {
@@ -772,7 +804,7 @@ impl TaskSource for LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         let items = self
-            .readable_work(Kind::Project)?
+            .readable_work(WorkKind::Project)?
             .into_iter()
             .map(project)
             .filter(|x| {
@@ -821,9 +853,9 @@ impl TaskSource for LocalMdSource {
         // Documents too: a label a document carries is a label of this source, and reading
         // one more folder that is already on disk is the same read as the other two.
         let mut items: Vec<Label> = self
-            .readable_work(Kind::Task)?
+            .readable_work(WorkKind::Task)?
             .into_iter()
-            .chain(self.readable_work(Kind::Project)?)
+            .chain(self.readable_work(WorkKind::Project)?)
             .flat_map(|d| d.common.labels)
             .chain(
                 self.readable_documents()?
@@ -841,7 +873,7 @@ impl TaskSource for LocalMdSource {
         d: Direction,
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        self.edges(Kind::Task, id, d, p)
+        self.edges(WorkKind::Task, id, d, p)
     }
     async fn project_dependencies(
         &self,
@@ -849,65 +881,68 @@ impl TaskSource for LocalMdSource {
         d: Direction,
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        self.edges(Kind::Project, id, d, p)
+        self.edges(WorkKind::Project, id, d, p)
     }
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         let task = &write.item;
         self.write_entry(
-            Kind::Task,
             write.target.as_ref(),
-            &Outgoing {
-                id: &task.id,
-                title: &task.title,
-                content: task.content.as_deref(),
-                status: Some(&task.status),
-                labels: &task.labels,
-                project: task.project.as_ref(),
-                metadata: &task.metadata,
-                repositories: &task.repositories,
+            &Outgoing::Work {
+                kind: WorkKind::Task,
+                status: &task.status,
+                depends_on: &write.depends_on,
+                fields: Fields {
+                    id: &task.id,
+                    title: &task.title,
+                    content: task.content.as_deref(),
+                    labels: &task.labels,
+                    project: task.project.as_ref(),
+                    metadata: &task.metadata,
+                    repositories: &task.repositories,
+                },
             },
-            &write.depends_on,
         )
     }
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
         let project = &write.item;
         self.write_entry(
-            Kind::Project,
             write.target.as_ref(),
-            &Outgoing {
-                id: &project.id,
-                title: &project.title,
-                content: project.content.as_deref(),
-                status: Some(&project.status),
-                labels: &project.labels,
-                project: None,
-                metadata: &project.metadata,
-                repositories: &project.repositories,
+            &Outgoing::Work {
+                kind: WorkKind::Project,
+                status: &project.status,
+                depends_on: &write.depends_on,
+                fields: Fields {
+                    id: &project.id,
+                    title: &project.title,
+                    content: project.content.as_deref(),
+                    labels: &project.labels,
+                    project: None,
+                    metadata: &project.metadata,
+                    repositories: &project.repositories,
+                },
             },
-            &write.depends_on,
         )
     }
     /// One file under `documents/`, on exactly the terms a task lands under `tasks/`.
     ///
-    /// No status and no edges reach the front matter, which is the contract rather than an
-    /// omission: `depends_on` is ignored because nothing may point at a document, and there
-    /// is no status on the incoming item to write.
+    /// `write.depends_on` reaches nothing here, which is the contract rather than an
+    /// omission: nothing may point at a document, so [`Outgoing::Document`] has nowhere to
+    /// carry an edge and no status to disagree with this folder's mapping.
     async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
         let document = &write.item;
         self.write_entry(
-            Kind::Document,
             write.target.as_ref(),
-            &Outgoing {
-                id: &document.id,
-                title: &document.title,
-                content: document.content.as_deref(),
-                status: None,
-                labels: &document.labels,
-                project: document.project.as_ref(),
-                metadata: &document.metadata,
-                repositories: &document.repositories,
+            &Outgoing::Document {
+                fields: Fields {
+                    id: &document.id,
+                    title: &document.title,
+                    content: document.content.as_deref(),
+                    labels: &document.labels,
+                    project: document.project.as_ref(),
+                    metadata: &document.metadata,
+                    repositories: &document.repositories,
+                },
             },
-            &[],
         )
     }
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
@@ -923,7 +958,7 @@ impl TaskSource for LocalMdSource {
 impl LocalMdSource {
     fn edges(
         &self,
-        kind: Kind,
+        kind: WorkKind,
         id: &NativeId,
         d: Direction,
         p: &PageRequest,
@@ -972,20 +1007,50 @@ fn project(d: Entry) -> Project {
     }
 }
 
-/// One item on its way into a Markdown file, whichever kind it is.
+/// One item on its way into a Markdown file, and what its own kind carries.
 ///
-/// A task, a project and a document differ by two fields here, so the write path is
-/// written once over this rather than three times over the three contract types.
-struct Outgoing<'a> {
+/// The write path is written once over this rather than three times over the three
+/// contract types — and it is an enum rather than one struct with optional members because
+/// a document has no status and no edges while a task has both. Neither *a document with a
+/// status* nor *a task without one* is a value this type can hold, so the write path has no
+/// such case to get wrong.
+enum Outgoing<'a> {
+    /// A task or a project.
+    Work {
+        kind: WorkKind,
+        status: &'a Status,
+        depends_on: &'a [DependencyEdge],
+        fields: Fields<'a>,
+    },
+    /// A document, which takes part in no dependency graph and has no status.
+    Document { fields: Fields<'a> },
+}
+
+/// What every item on its way out carries, whichever kind it is.
+struct Fields<'a> {
     id: &'a NativeId,
     title: &'a str,
     content: Option<&'a str>,
-    /// `None` for a document, which has none — not a default standing in for one.
-    status: Option<&'a Status>,
     labels: &'a [Label],
     project: Option<&'a NativeId>,
     metadata: &'a BTreeMap<String, serde_json::Value>,
     repositories: &'a [Repository],
+}
+
+impl<'a> Outgoing<'a> {
+    /// Which of this source's folders this item is filed in.
+    const fn kind(&self) -> Kind {
+        match self {
+            Self::Work { kind, .. } => kind.kind(),
+            Self::Document { .. } => Kind::Document,
+        }
+    }
+
+    const fn fields(&self) -> &Fields<'a> {
+        match self {
+            Self::Work { fields, .. } | Self::Document { fields } => fields,
+        }
+    }
 }
 
 /// The front matter this source writes, which is the subset of [`FrontMatter`] a copy
@@ -1076,19 +1141,18 @@ fn document_stem(id: &NativeId) -> Result<String, SourceError> {
 }
 
 impl LocalMdSource {
-    /// Create or update one document, answering with the id it is filed under.
+    /// Create or update one file, answering with the id it is filed under.
     fn write_entry(
         &self,
-        kind: Kind,
         target: Option<&NativeId>,
         outgoing: &Outgoing<'_>,
-        depends_on: &[DependencyEdge],
     ) -> Result<NativeId, SourceError> {
+        let kind = outgoing.kind();
         let (id, path) = match target {
             Some(target) => (target.clone(), self.existing(kind, target)?),
-            None => self.unused(kind, outgoing.id)?,
+            None => self.unused(kind, outgoing.fields().id)?,
         };
-        let document = self.render(outgoing, depends_on)?;
+        let document = self.render(outgoing)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| SourceError::Unavailable {
                 message: format!("cannot create {}: {e}", parent.display()),
@@ -1123,9 +1187,9 @@ impl LocalMdSource {
         if !candidate.exists() {
             return Err(SourceError::Refused {
                 message: format!(
-                    "{id} names no {} document here; next: copy with --recreate to create one \
+                    "{id} names no {} here; next: copy with --recreate to create one \
                      instead of updating",
-                    kind.directory()
+                    kind.noun()
                 ),
             });
         }
@@ -1169,12 +1233,14 @@ impl LocalMdSource {
     }
 
     /// One file's whole text, or a refusal naming the field this source cannot hold.
-    fn render(
-        &self,
-        outgoing: &Outgoing<'_>,
-        depends_on: &[DependencyEdge],
-    ) -> Result<String, SourceError> {
-        if let Some(status) = outgoing.status {
+    fn render(&self, outgoing: &Outgoing<'_>) -> Result<String, SourceError> {
+        let (status, depends_on) = match outgoing {
+            Outgoing::Work {
+                status, depends_on, ..
+            } => (Some(*status), *depends_on),
+            Outgoing::Document { .. } => (None, [].as_slice()),
+        };
+        if let Some(status) = status {
             let mapped = self
                 .statuses
                 .get(&status.name.to_lowercase())
@@ -1194,9 +1260,10 @@ impl LocalMdSource {
                 });
             }
         }
+        let outgoing = outgoing.fields();
         let front = WrittenFrontMatter {
             title: outgoing.title.to_owned(),
-            status: outgoing.status.map(|status| status.name.clone()),
+            status: status.map(|status| status.name.clone()),
             labels: outgoing
                 .labels
                 .iter()

@@ -1831,7 +1831,7 @@ fn both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_al
         let sandbox = host(row);
         let places = row.fixture.place;
 
-        for (verb, id) in entities(row) {
+        for (verb, id) in sampled_entities(row) {
             let expected = places(&sandbox, verb, id);
             let shown = ok(row, &sandbox, &[verb, "show", &qualified(SOURCE, id)]);
 
@@ -1884,12 +1884,12 @@ fn both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_al
     }
 }
 
-/// The entities this row serves, one of each kind that carries a location and one that
-/// does not — plus the document verbs only where the row's source holds documents.
+/// A sample of the entities this row serves: enough of each kind for one to carry a
+/// location and one to carry none, plus the documents only where the row's source has any.
 ///
 /// A row that holds none has no document to place, and the honest refusal it answers a
 /// document read with is what that row's own journey asserts.
-fn entities(row: &Row) -> Vec<(&'static str, &'static str)> {
+fn sampled_entities(row: &Row) -> Vec<(&'static str, &'static str)> {
     let mut entities = vec![
         ("task", "T-1"),
         ("task", "T-2"),

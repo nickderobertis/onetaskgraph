@@ -1821,7 +1821,6 @@ fn a_document_copies_into_a_folder_of_markdown_and_the_next_invocation_reads_it_
         let sandbox = Sandbox::new();
         sandbox.project_document(&markdown_pair(&sandbox, boundary));
 
-        // Listed, with the title and the file behind each one.
         let listing = ok(&sandbox, &["document", "list", "--source", SOURCE]);
         for id in ["D-1", "D-2", "D-3"] {
             assert!(
@@ -1847,7 +1846,6 @@ fn a_document_copies_into_a_folder_of_markdown_and_the_next_invocation_reads_it_
 
         let held = shown(&sandbox, "document", &qualified(SOURCE, "D-1"));
 
-        // Copied in.
         let created = reported(&ok(
             &sandbox,
             &[

@@ -375,6 +375,15 @@ async fn public_results_expose_fallback_titles_unknown_statuses_deduplicated_lab
     assert_eq!(task.title, "fallback");
     assert_eq!(task.status.category, StatusCategory::Unknown);
 
+    // A label only a document carries is a label of this source: the document folder is
+    // read for these exactly as the other two are.
+    fs::create_dir_all(root.path().join("documents")).expect("document folder");
+    fs::write(
+        root.path().join("documents/design.md"),
+        "---\ntitle: Alpha design\nlabels: [Spec]\n---\nthe design\n",
+    )
+    .unwrap();
+
     let labels = source.labels(&page(200)).await.unwrap();
     assert_eq!(
         labels
@@ -383,6 +392,14 @@ async fn public_results_expose_fallback_titles_unknown_statuses_deduplicated_lab
             .filter(|label| label.name.eq_ignore_ascii_case("bug"))
             .count(),
         1
+    );
+    assert!(
+        labels
+            .items
+            .iter()
+            .any(|label| label.name.eq_ignore_ascii_case("spec")),
+        "a label only a document carries is still one of this source's: {:?}",
+        labels.items
     );
 
     let health = source.health().await.unwrap();
@@ -813,10 +830,7 @@ async fn a_write_updates_the_document_it_targets_and_refuses_one_that_is_not_the
     else {
         panic!("a target this folder does not hold must be refused rather than created");
     };
-    assert!(
-        message.contains("names no tasks document here"),
-        "{message}"
-    );
+    assert!(message.contains("names no task here"), "{message}");
     assert!(message.contains("--recreate"), "{message}");
 }
 
@@ -1889,10 +1903,7 @@ async fn a_document_write_updates_its_target_refuses_a_missing_one_and_never_ove
     else {
         panic!("a target this folder does not hold must be refused rather than created");
     };
-    assert!(
-        message.contains("names no documents document here"),
-        "{message}"
-    );
+    assert!(message.contains("names no document here"), "{message}");
     assert!(!root.path().join("documents/absent.md").exists());
 
     // And a document this folder wrote is one it can give back, so a copy that cannot
