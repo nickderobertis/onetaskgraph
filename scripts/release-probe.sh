@@ -194,9 +194,16 @@ url="${url_template/\{name\}/$encoded}"
 
 # One registry read: the body, then its HTTP status. A transport failure is not an
 # answer at all, so it never reaches the reading below.
-body_file="$(mktemp)" || refuse \
-  "could not create a temporary file to read the registry into" \
-  "check the temporary directory's permissions and free space, then re-ask"
+#
+# The directory is spelled rather than left to mktemp's default, which is not one
+# directory on every host: GNU mktemp writes under TMPDIR and BSD mktemp under
+# /tmp, so a caller naming a temporary directory is obeyed on Linux and silently
+# ignored on macOS. Whichever host this is, a probe that cannot write the answer
+# down has not answered.
+tmp_root="${TMPDIR:-/tmp}"
+body_file="$(mktemp "${tmp_root%/}/release-probe.XXXXXXXX")" || refuse \
+  "could not create a temporary file under ${tmp_root%/} to read the registry into" \
+  "check that directory's permissions and free space, or point TMPDIR at one this probe can write to, then re-ask"
 trap 'rm -f "$body_file"' EXIT
 status=0
 http_status="$(curl -q -sS --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
