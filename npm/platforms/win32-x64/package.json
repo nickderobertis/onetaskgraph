@@ -1,6 +1,6 @@
 {
   "name": "@onetaskgraph/cli-win32-x64",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "os": [
     "win32"
   ],
