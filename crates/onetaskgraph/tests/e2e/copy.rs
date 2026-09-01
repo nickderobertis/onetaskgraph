@@ -944,7 +944,11 @@ fn github_projects_is_a_permanent_destination_whose_created_items_are_issues() {
 /// journey copies *into*, so the source here is an `in-memory` one holding exactly one
 /// document — carrying no labels, because items this destination creates carry none and a
 /// write that named one would be refused for a reason this journey is not about.
-fn authored_document_beside(sandbox: &Sandbox) {
+///
+/// `boundary` reaches the *board* alone. It is the destination and so the thing under
+/// test, and putting the authored side behind a pipe too would double the journey's cost
+/// to prove a transport the shared table already drives.
+fn authored_document_beside(sandbox: &Sandbox, boundary: SourceBoundary) {
     let (config, _board) = github_projects_with_board(sandbox);
     sandbox.project_document(&document(&json!({
         "authored": {"plugin":"in-memory","config":{
@@ -960,7 +964,11 @@ fn authored_document_beside(sandbox: &Sandbox) {
                              "onepipeline.turn_budget": 12},
                 "repositories": ["github.com/nickderobertis/onetaskgraph"]
             }]}},
-        "board": {"plugin":"github-projects","config":config}
+        "board": boundary.source_with_secrets(
+            "github-projects",
+            config,
+            &["GITHUB_PROJECTS_FIXTURE_TOKEN"],
+        )
     })));
 }
 
@@ -970,95 +978,103 @@ fn a_document_copies_into_a_github_board_as_an_issue_and_reads_back_unchanged() 
     // copy lands as an issue titled the way this board spells a document, a *later*
     // invocation reads it back with every field and every caller key intact, and a second
     // copy matches the one already there rather than adding a duplicate.
-    let sandbox = Sandbox::new();
-    authored_document_beside(&sandbox);
+    //
+    // Driven at both boundaries, because journey 19 asks every journey for it and because
+    // this is the one that *writes*: the title this source rewrites on the way in and back
+    // off on the way out crosses the pipe in both directions, and caller JSON has to keep
+    // its types through a transport as well as through an issue body.
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        authored_document_beside(&sandbox, boundary);
 
-    let created = reported(&ok(
-        &sandbox,
-        &[
-            "document",
-            "copy",
-            "authored:HARNESS-1",
-            "--to",
-            "board",
-            "--json",
-        ],
-    ));
-    assert_eq!(created.len(), 1, "{created:?}");
-    assert_eq!(created[0].2, "created", "{created:?}");
-    let landed_id = created[0].1.as_str().expect("a qualified id").to_owned();
+        let created = reported(&ok(
+            &sandbox,
+            &[
+                "document",
+                "copy",
+                "authored:HARNESS-1",
+                "--to",
+                "board",
+                "--json",
+            ],
+        ));
+        assert_eq!(created.len(), 1, "{boundary:?}: {created:?}");
+        assert_eq!(created[0].2, "created", "{boundary:?}: {created:?}");
+        let landed_id = created[0].1.as_str().expect("a qualified id").to_owned();
 
-    // A later invocation, against the board the first one wrote.
-    let landed = shown(&sandbox, "document", &landed_id);
-    let source = shown(&sandbox, "document", "authored:HARNESS-1");
-    for field in ["title", "content", "repositories"] {
+        // A later invocation, against the board the first one wrote.
+        let landed = shown(&sandbox, "document", &landed_id);
+        let source = shown(&sandbox, "document", "authored:HARNESS-1");
+        for field in ["title", "content", "repositories"] {
+            assert_eq!(
+                landed[field], source[field],
+                "{boundary:?}: the board holds {field} as the source reported it"
+            );
+        }
         assert_eq!(
-            landed[field], source[field],
-            "the board holds {field} as the source reported it"
+            landed["title"], "Harness plan",
+            "{boundary:?}: the title that comes back out is the title that went in, prefix \
+             and all removed"
+        );
+        for key in ["caller.flags", "caller.shape", "onepipeline.turn_budget"] {
+            assert_eq!(
+                landed["metadata"][key], source["metadata"][key],
+                "{boundary:?}: the board holds the metadata key {key} with its JSON type intact"
+            );
+        }
+        assert_eq!(
+            landed["location"]["url"],
+            json!(format!(
+                "https://example.invalid/{}",
+                landed_id.strip_prefix("board:").expect("a board id")
+            )),
+            "{boundary:?}: and says where it is, as a link a reader can open: {landed}"
+        );
+
+        // It is a document of that board and nothing else, which is only true if the prefix
+        // really landed on the issue: a title without it reads back as a task.
+        assert_eq!(
+            ok(&sandbox, &["task", "list", "--source", "board"])
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count(),
+            4,
+            "{boundary:?}: the copy added no task"
+        );
+        assert_eq!(
+            ok(&sandbox, &["project", "list", "--source", "board"])
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count(),
+            2,
+            "{boundary:?}: and no project"
+        );
+
+        let again = reported(&ok(
+            &sandbox,
+            &[
+                "document",
+                "copy",
+                "authored:HARNESS-1",
+                "--to",
+                "board",
+                "--json",
+            ],
+        ));
+        assert_eq!(again[0].1, json!(landed_id), "{boundary:?}: {again:?}");
+        assert!(
+            matches!(again[0].2.as_str(), "updated" | "unchanged"),
+            "{boundary:?}: a second copy is not a second create: {again:?}"
+        );
+        assert_eq!(
+            ok(&sandbox, &["document", "list", "--source", "board"])
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count(),
+            4,
+            "{boundary:?}: the board's own three documents and exactly one copied one"
         );
     }
-    assert_eq!(
-        landed["title"], "Harness plan",
-        "the title that comes back out is the title that went in, prefix and all removed"
-    );
-    for key in ["caller.flags", "caller.shape", "onepipeline.turn_budget"] {
-        assert_eq!(
-            landed["metadata"][key], source["metadata"][key],
-            "the board holds the metadata key {key} with its JSON type intact"
-        );
-    }
-    assert_eq!(
-        landed["location"]["url"],
-        json!(format!(
-            "https://example.invalid/{}",
-            landed_id.strip_prefix("board:").expect("a board id")
-        )),
-        "and says where it is, as a link a reader can open: {landed}"
-    );
-
-    // It is a document of that board and nothing else, which is only true if the prefix
-    // really landed on the issue: a title without it reads back as a task.
-    assert_eq!(
-        ok(&sandbox, &["task", "list", "--source", "board"])
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count(),
-        4,
-        "the copy added no task"
-    );
-    assert_eq!(
-        ok(&sandbox, &["project", "list", "--source", "board"])
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count(),
-        2,
-        "and no project"
-    );
-
-    let again = reported(&ok(
-        &sandbox,
-        &[
-            "document",
-            "copy",
-            "authored:HARNESS-1",
-            "--to",
-            "board",
-            "--json",
-        ],
-    ));
-    assert_eq!(again[0].1, json!(landed_id), "{again:?}");
-    assert!(
-        matches!(again[0].2.as_str(), "updated" | "unchanged"),
-        "a second copy is not a second create: {again:?}"
-    );
-    assert_eq!(
-        ok(&sandbox, &["document", "list", "--source", "board"])
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count(),
-        4,
-        "the board's own three documents and exactly one copied one"
-    );
 }
 
 #[test]
