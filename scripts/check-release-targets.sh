@@ -8,13 +8,15 @@
 #
 # **The shape.** The document is the canonical release-target schema, which
 # nickderobertis/onevcs defines in its docs/contract.md and reads with `onevcs
-# release declaration`. Where that reader is installed this loads the real file
-# back through it — the one authority on whether a consumer can read this
-# document at all. Where it is not, the restatement below holds the document to
-# the same shape, so a malformed declaration cannot land on a machine that does
-# not carry the reader. `ONETASKGRAPH_RELEASE_READER_REQUIRED=1` turns the skip
-# into a failure, which is the pairing this repository already gives a check whose
-# third-party input may be absent.
+# release declaration`. This loads the real file back through that reader — the
+# one authority on whether a consumer can read this document at all — and it runs
+# a PINNED reader rather than whichever build a machine happens to put first on
+# PATH, because a verdict that follows PATH order is not a verdict about this
+# repository. Where no capable reader can be resolved, the restatement below holds
+# the document to the same shape, so a malformed declaration cannot land on a
+# machine that carries no reader. `ONETASKGRAPH_RELEASE_READER_REQUIRED=1` turns
+# that skip into a failure, which is the pairing this repository already gives a
+# check whose third-party input may be absent.
 #
 # **The short names.** `crate`, `pypi`, `sdk-pypi`, `npm` and `sdk-npm` are how a
 # consumer in another repository names one of these artifacts, and that consumer
@@ -73,29 +75,53 @@ case "$reader_required" in
   0 | 1) ;;
   *)
     fatal "ONETASKGRAPH_RELEASE_READER_REQUIRED is '$reader_required', and it must be 1, 0 or unset" \
-      "set it to 1 to require the canonical reader, or unset it to let this skip where onevcs is absent"
+      "set it to 1 to require the canonical reader, or unset it to let this skip where none can be resolved"
     ;;
 esac
 
-# Whether the onevcs on PATH can read an npm scoped name at all, asked of a
-# document that carries one and nothing else.
+# The canonical reader, pinned and resolved deterministically rather than taken
+# from whatever `onevcs` a machine happens to put first on PATH.
 #
-# A reader's refusal is only evidence about release-targets.toml if that reader
-# can read the spellings release-targets.toml uses. `onevcs` gained the npm scoped
-# form in 0.16.1 — "accept an npm scoped name as a registry identifier", its
-# CHANGELOG — and every build before it refuses `npm:@onetaskgraph/cli` as a name
-# no registry serves, at every schema_version, whatever else the document says. So
-# an older reader on PATH reports this repository's four scoped identifiers as
-# four defects in a document that is in fact exactly what the schema documents,
-# and points whoever reads it at the wrong file.
+# This host carries five `onevcs` builds and the check's verdict followed PATH
+# order between them, which is not a property of this repository at all. Worse
+# than arbitrary: `onevcs` gained the npm scoped form in 0.16.1 — "accept an npm
+# scoped name as a registry identifier", its CHANGELOG — and every build before it
+# refuses `npm:@onetaskgraph/cli` as a name no registry serves, at every
+# schema_version, whatever else the document says. So an older build on PATH
+# reported this repository's scoped identifiers as defects in a document that is
+# exactly what the schema documents, and pointed whoever read it at the wrong
+# file. This repository really publishes `@onetaskgraph/cli`, its five carriers and
+# `@onetaskgraph/sdk`; the scoped spelling is not the declaration's to give up, so
+# the reader is what has to be nailed down.
 #
-# A behaviour rather than a version comparison, deliberately: a pinned minimum
-# version is a second copy of a third party's history that goes stale in silence,
-# and what this needs to know is not which release a build is but whether it can
+# `uvx` runs one pinned version from the uv cache — offline, in about a quarter of
+# a second, and identically on every machine that has uv, which this repository
+# already requires for its Python workspace. That is the mechanism; the PATH build
+# is the fallback for a machine without uv, and it is used only if it proves it can
+# read what this document contains.
+readonly READER_PACKAGE="onevcs-cli"
+# The version this check was written and verified against. Moving it means running
+# this check against the new build: it is the authority on whether a consumer can
+# read release-targets.toml, so a version nobody watched read it is a version this
+# repository has no evidence about.
+readonly READER_VERSION="0.18.0"
+
+# The argv prefix that runs the reader, and a phrase naming where it came from for
+# the diagnostics below. Empty when no reader could be resolved at all.
+reader_argv=""
+reader_origin=""
+
+# Ask a candidate whether it reads an npm scoped name, with a document that carries
+# one and nothing else. A behaviour rather than a version comparison: a build's
+# number is a second copy of a third party's history that goes stale in silence,
+# and what this needs to know is not which release something is but whether it can
 # read a name this repository really publishes under.
-reader_reads_scoped_names() {
-  mkdir -p "$work/capability" || return 1
-  cat > "$work/capability/release-targets.toml" <<'PROBE' || return 1
+mkdir -p "$work/capability" || fatal \
+  "could not write the reader's capability probe under $work" \
+  "check the temporary directory's permissions and free space, then rerun"
+cat > "$work/capability/release-targets.toml" <<'PROBE' || fatal \
+  "could not write the reader's capability probe document" \
+  "check the temporary directory's permissions and free space, then rerun"
 schema_version = 2
 [[target]]
 id = "npm:@scope/name"
@@ -103,29 +129,41 @@ name = "scoped"
 what = "A probe document, carrying one npm scoped identifier and nothing else."
 published_by = "Nothing publishes it. It exists to ask a reader whether it reads a scoped name."
 PROBE
-  onevcs release declaration "$work/capability" --json >/dev/null 2>&1
+
+reads_scoped_names() {
+  "$@" release declaration "$work/capability" --json >/dev/null 2>&1
 }
 
+# The pin first, so the answer is the same on every machine that can produce it.
+# `--offline` deliberately: a required check does not reach the network, so this
+# uses the uv cache or steps aside for the fallback below.
+if command -v uvx >/dev/null 2>&1 &&
+  reads_scoped_names uvx --offline --from "$READER_PACKAGE==$READER_VERSION" onevcs; then
+  reader_argv="uvx --offline --from $READER_PACKAGE==$READER_VERSION onevcs"
+  reader_origin="the pinned $READER_PACKAGE $READER_VERSION, run from the uv cache"
+elif command -v onevcs >/dev/null 2>&1 && reads_scoped_names onevcs; then
+  reader_argv="onevcs"
+  reader_origin="the onevcs on PATH ($(command -v onevcs), $(onevcs --version 2>/dev/null || echo 'version unknown'))"
+fi
+
 # The reader that actually consumes this document, run over the real file. It is
-# the whole point of writing one, so where it is installed it is not optional.
+# the whole point of writing one, so where one is available it is not optional.
 reader_status=0
-if command -v onevcs >/dev/null 2>&1; then
-  if ! onevcs release declaration "$ROOT" --json > "$work/declaration.json" 2> "$work/declaration.err"; then
-    # Which of the two this is, before anything is said about the document.
-    if ! reader_reads_scoped_names; then
-      fatal "the onevcs on PATH ($(command -v onevcs), $(onevcs --version 2>/dev/null || echo 'version unknown')) cannot read an npm scoped identifier, so its refusal of release-targets.toml is about the reader rather than the document" \
-        "upgrade onevcs to 0.16.1 or newer, which is where 'accept an npm scoped name as a registry identifier' landed, then rerun; this repository really publishes @onetaskgraph/cli and @onetaskgraph/sdk, so the scoped spelling is not the declaration's to give up"
-    fi
+if [ -n "$reader_argv" ]; then
+  # Unquoted on purpose: this is an argv prefix of several words, and every word in
+  # it is a literal set above rather than anything read from the environment.
+  # shellcheck disable=SC2086
+  if ! $reader_argv release declaration "$ROOT" --json > "$work/declaration.json" 2> "$work/declaration.err"; then
     cat "$work/declaration.err" >&2
-    fatal "the canonical reader refused release-targets.toml (its refusal is above)" \
+    fatal "the canonical reader refused release-targets.toml (its refusal is above; the reader was $reader_origin)" \
       "fix the field it names; a document this reader refuses is one a consumer cannot read at all"
   fi
 elif [ "$reader_required" = 1 ]; then
-  fatal "onevcs is not on PATH and ONETASKGRAPH_RELEASE_READER_REQUIRED=1 asked for it" \
-    "install onevcs (cargo install onevcs, or pip install onevcs-cli) and rerun"
+  fatal "no onevcs that reads an npm scoped identifier could be resolved, and ONETASKGRAPH_RELEASE_READER_REQUIRED=1 asked for one" \
+    "install uv, so this can run the pinned $READER_PACKAGE $READER_VERSION, or put an onevcs of 0.16.1 or newer on PATH, then rerun"
 else
   reader_status=1
-  echo "check-release-targets: onevcs is not on PATH; the canonical reader did not load this document (set ONETASKGRAPH_RELEASE_READER_REQUIRED=1 to make that a failure)" >&2
+  echo "check-release-targets: no onevcs that reads an npm scoped identifier could be resolved, so the canonical reader did not load this document; install uv for the pinned $READER_PACKAGE $READER_VERSION, or put an onevcs of 0.16.1 or newer on PATH (set ONETASKGRAPH_RELEASE_READER_REQUIRED=1 to make this a failure)" >&2
 fi
 
 python3 - "$reader_status" "$work/declaration.json" <<'PY' || fatal \
