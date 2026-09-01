@@ -2427,7 +2427,9 @@ impl TaskSource for GitHubProjectsSource {
         if !write.depends_on.is_empty() {
             return Err(SourceError::Refused {
                 message: format!(
-                    "this write names {} dependencies for a document, and a document takes part                      in no dependency graph; next: put the dependency on the task or project                      the document is about",
+                    "this write names {} dependencies for a document, and a document takes \
+                     part in no dependency graph; next: put the dependency on the task or \
+                     project the document is about",
                     write.depends_on.len()
                 ),
             });

@@ -92,10 +92,19 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 // This file's first command is the first time anything here starts the debug binary, and
 // that first exec is not the same cost as the ones after it: on a loaded macOS runner,
 // paging in an unstripped debug build and validating its signature has outlasted bun's 5s
-// default on its own, while the test below drove a dozen commands through the warm binary
-// in under two seconds. A bound this wide still catches a command that hangs; what it stops
+// default on its own. A bound this wide still catches a command that hangs; what it stops
 // doing is reporting a cold start as one.
 const COLD_START_TIMEOUT_MS = 60_000;
+
+// The warm spawns are not free either, and the test below is nothing but sixteen of them:
+// about 57ms each on an idle eight-core box, 914ms for the test. That left bun's 5s
+// default a factor of five, and the gate spends it — it runs ten projects and their cargo
+// builds at once, and this test outlasted the default there at 5039.53ms on a tree that
+// runs it in under a second unloaded. The default is the bound bun gives a unit test, not
+// one anybody chose for a test whose whole cost is real processes; so this test gets the
+// same wide bound and for the same reason as the one above. It still catches a command
+// that never returns; what it stops doing is reporting a busy machine as one.
+const SUBPROCESS_SUITE_TIMEOUT_MS = 60_000;
 
 test(
   "every emitted command has a client method",
@@ -107,104 +116,108 @@ test(
   COLD_START_TIMEOUT_MS,
 );
 
-test("typed methods drive every real binary command", async () => {
-  expect((await client.configShow()).settings.length).toBeGreaterThan(0);
-  expect((await client.sourcesList())[0]?.source).toBe("work");
-  const tasks = await client.taskList({
-    sources: ["work"],
-    labels: ["bug"],
-    excludeLabels: ["chore"],
-    statuses: ["todo"],
-    search: "Alpha",
-    fields: "title",
-    limit: 1,
-    project: "P-1",
-  });
-  expect(tasks.items[0]?.id).toBe("work:T-1");
-  const firstPage = await client.taskList({ sources: ["work"], limit: 1 });
-  expect(firstPage.next).toBeString();
-  const secondPage = await client.taskList({
-    sources: ["work"],
-    limit: 1,
-    page: firstPage.next ?? "missing-page-token",
-  });
-  expect(secondPage.items).toHaveLength(1);
-  expect(secondPage.items[0]?.id).not.toBe(firstPage.items[0]?.id);
-  expect((await client.taskList({ sources: ["work"], noProject: true })).items[0]?.id).toBe(
-    "work:T-2",
-  );
-  expect((await client.taskShow("work:T-1", { allowPartial: true })).items[0]?.item.title).toBe(
-    "Alpha engine",
-  );
-  expect(
-    (
-      await client.taskDeps("work:T-2", {
-        direction: "depended-on-by",
-        limit: 1,
-        allowPartial: true,
-      })
-    ).items[0]?.from,
-  ).toEqual({ id: "work:T-1", kind: "task" });
-  expect(
-    (
-      await client.projectList({
-        sources: ["work"],
-        labels: ["bug"],
-        excludeLabels: ["chore"],
-        statuses: ["in-progress"],
-        search: "Engine",
-        fields: "title",
-        limit: 1,
-        allowPartial: true,
-      })
-    ).items[0]?.id,
-  ).toBe("work:P-1");
-  expect((await client.projectShow("work:P-1", { allowPartial: true })).items[0]?.item.title).toBe(
-    "Engine",
-  );
-  expect(
-    (
-      await client.projectDeps("work:P-2", {
-        direction: "depended-on-by",
-        limit: 1,
-        allowPartial: true,
-      })
-    ).items[0]?.from,
-  ).toEqual({ id: "work:P-1", kind: "project" });
-  const documents = await client.documentList({
-    sources: ["work"],
-    labels: ["bug"],
-    excludeLabels: ["chore"],
-    search: "Alpha",
-    fields: "title",
-    limit: 1,
-    project: "P-1",
-  });
-  expect(documents.items[0]?.id).toBe("work:D-1");
-  // Where a document is comes back as the contract type's own JSON, so a caller branches
-  // on which key is present rather than parsing a sentence.
-  expect(documents.items[0]?.item.location).toEqual({ url: "https://example.invalid/D-1" });
-  expect((await client.documentList({ sources: ["work"], noProject: true })).items[0]?.id).toBe(
-    "work:D-2",
-  );
-  expect((await client.documentShow("work:D-1", { allowPartial: true })).items[0]?.item.title).toBe(
-    "Alpha design",
-  );
-  expect(
-    (await client.labelList({ sources: ["work"], limit: 1, allowPartial: true })).items[0]?.id,
-  ).toBe("work:L-1");
-  expect(
-    (
-      await client.search("Alpha", {
-        sources: ["work"],
-        fields: "title",
-        kind: "task",
-        limit: 1,
-        allowPartial: true,
-      })
-    ).items[0]?.kind,
-  ).toBe("task");
-});
+test(
+  "typed methods drive every real binary command",
+  async () => {
+    expect((await client.configShow()).settings.length).toBeGreaterThan(0);
+    expect((await client.sourcesList())[0]?.source).toBe("work");
+    const tasks = await client.taskList({
+      sources: ["work"],
+      labels: ["bug"],
+      excludeLabels: ["chore"],
+      statuses: ["todo"],
+      search: "Alpha",
+      fields: "title",
+      limit: 1,
+      project: "P-1",
+    });
+    expect(tasks.items[0]?.id).toBe("work:T-1");
+    const firstPage = await client.taskList({ sources: ["work"], limit: 1 });
+    expect(firstPage.next).toBeString();
+    const secondPage = await client.taskList({
+      sources: ["work"],
+      limit: 1,
+      page: firstPage.next ?? "missing-page-token",
+    });
+    expect(secondPage.items).toHaveLength(1);
+    expect(secondPage.items[0]?.id).not.toBe(firstPage.items[0]?.id);
+    expect((await client.taskList({ sources: ["work"], noProject: true })).items[0]?.id).toBe(
+      "work:T-2",
+    );
+    expect((await client.taskShow("work:T-1", { allowPartial: true })).items[0]?.item.title).toBe(
+      "Alpha engine",
+    );
+    expect(
+      (
+        await client.taskDeps("work:T-2", {
+          direction: "depended-on-by",
+          limit: 1,
+          allowPartial: true,
+        })
+      ).items[0]?.from,
+    ).toEqual({ id: "work:T-1", kind: "task" });
+    expect(
+      (
+        await client.projectList({
+          sources: ["work"],
+          labels: ["bug"],
+          excludeLabels: ["chore"],
+          statuses: ["in-progress"],
+          search: "Engine",
+          fields: "title",
+          limit: 1,
+          allowPartial: true,
+        })
+      ).items[0]?.id,
+    ).toBe("work:P-1");
+    expect(
+      (await client.projectShow("work:P-1", { allowPartial: true })).items[0]?.item.title,
+    ).toBe("Engine");
+    expect(
+      (
+        await client.projectDeps("work:P-2", {
+          direction: "depended-on-by",
+          limit: 1,
+          allowPartial: true,
+        })
+      ).items[0]?.from,
+    ).toEqual({ id: "work:P-1", kind: "project" });
+    const documents = await client.documentList({
+      sources: ["work"],
+      labels: ["bug"],
+      excludeLabels: ["chore"],
+      search: "Alpha",
+      fields: "title",
+      limit: 1,
+      project: "P-1",
+    });
+    expect(documents.items[0]?.id).toBe("work:D-1");
+    // Where a document is comes back as the contract type's own JSON, so a caller branches
+    // on which key is present rather than parsing a sentence.
+    expect(documents.items[0]?.item.location).toEqual({ url: "https://example.invalid/D-1" });
+    expect((await client.documentList({ sources: ["work"], noProject: true })).items[0]?.id).toBe(
+      "work:D-2",
+    );
+    expect(
+      (await client.documentShow("work:D-1", { allowPartial: true })).items[0]?.item.title,
+    ).toBe("Alpha design");
+    expect(
+      (await client.labelList({ sources: ["work"], limit: 1, allowPartial: true })).items[0]?.id,
+    ).toBe("work:L-1");
+    expect(
+      (
+        await client.search("Alpha", {
+          sources: ["work"],
+          fields: "title",
+          kind: "task",
+          limit: 1,
+          allowPartial: true,
+        })
+      ).items[0]?.kind,
+    ).toBe("task");
+  },
+  SUBPROCESS_SUITE_TIMEOUT_MS,
+);
 
 test("copy drives the real binary and reports what it did to each item", async () => {
   const copyRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-copy-"));
