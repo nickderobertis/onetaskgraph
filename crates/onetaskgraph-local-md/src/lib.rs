@@ -150,10 +150,10 @@ fn default_status() -> String {
 
 /// The front-matter keys every kind of file in this source carries.
 ///
-/// A plain struct rather than a `#[serde(flatten)]` member, because both front matters
-/// above are `deny_unknown_fields` and serde cannot deny an unknown field beside a
-/// flattened one — and denying them is exactly what makes a document's missing `status`
-/// and `depends_on` a refusal rather than a shrug.
+/// A plain struct rather than a `#[serde(flatten)]` member of [`FrontMatter`] and
+/// [`DocumentFrontMatter`]: both are `deny_unknown_fields`, serde cannot deny an unknown
+/// field beside a flattened one, and denying them is exactly what makes a `status:` under
+/// `documents/` a refusal rather than a shrug.
 struct SharedFront {
     title: Option<String>,
     labels: Vec<LabelInput>,
