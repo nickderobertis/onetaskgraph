@@ -997,6 +997,10 @@ impl TaskSource for LinearSource {
         Ok(())
     }
     async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        // Read as an optional although the pinned `document(id:)` returns `Document!`, for
+        // the reason `delete_task` records: Linear answers an id naming nothing with an
+        // errored response rather than a null, and reading the null defensively is what
+        // keeps a responder that does answer one from being a malformed-response failure.
         let d = self.send(DOCUMENT, json!({"id":id.0})).await?;
         optional(&d, "document", map_document)
     }
