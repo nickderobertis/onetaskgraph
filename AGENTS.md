@@ -377,11 +377,13 @@ them do; this is the inventory of what is owed, not a status board.
 - **`release-targets.toml` is what a consumer waits on, and its short names are frozen.**
   It declares every artifact this repository publishes in the canonical schema `onevcs`
   defines and reads, because a dependent that has to guess a release happened either
-  launches too early or waits by hand. `crate`, `pypi`, `sdk-pypi`, `npm` and `sdk-npm`
-  are how another repository names one of these, and that repository cannot see this file
-  to notice one moved — so a rename goes through `scripts/check-release-targets.sh` too,
-  which is the drift gate that makes the second spelling safe and which reconciles the
-  declared set against the real release workflow both ways.
+  launches too early or waits by hand. The set is frozen at four — `crate`, `pypi`,
+  `sdk-pypi`, `npm` — because that is how another repository names one of these and it
+  cannot see this file to notice one moved or a fifth appeared. Everything else this
+  repository publishes, the TypeScript SDK included, is covered by the target whose
+  release carries it. Both rules go through `scripts/check-release-targets.sh`, the drift
+  gate that makes the second spelling safe and that reconciles the declared set against
+  the real release workflow both ways.
 - **The probe's three answers are not interchangeable.** `scripts/release-probe.sh` prints
   a version, prints nothing when that registry serves none, or exits non-zero because the
   lookup could not be made — and a consumer holds indefinitely on the third and stops
