@@ -204,6 +204,8 @@ impl Refusal {
 struct Limits {
     /// Canned refusals to answer the next requests with, oldest first.
     scripted: Vec<Refusal>,
+    /// Canned refusals to answer the next requests *carrying one operation* with.
+    scripted_for: BTreeMap<String, Vec<Refusal>>,
     /// Shortest interval this board accepts between two mutations. Anything faster is
     /// refused the way GitHub refuses a secondary rate limit.
     min_mutation_interval: Option<Duration>,
@@ -223,6 +225,13 @@ impl Limits {
     fn refusal(&mut self, operation: &str, mutation: bool) -> Option<Refusal> {
         let now = Instant::now();
         self.arrivals.push((now, operation.to_owned(), mutation));
+        if let Some(scripted) = self
+            .scripted_for
+            .get_mut(operation)
+            .filter(|scripted| !scripted.is_empty())
+        {
+            return Some(scripted.remove(0));
+        }
         if !self.scripted.is_empty() {
             return Some(self.scripted.remove(0));
         }
@@ -321,6 +330,17 @@ impl Fixture {
     /// Answer the next requests with these canned HTTP refusals, oldest first.
     fn script(&self, refusals: Vec<Refusal>) {
         self.state.lock().unwrap().limits.scripted = refusals;
+    }
+    /// Answer the next requests carrying `operation` with these canned refusals, oldest
+    /// first. A write is several calls, so refusing one of them by name is the only way to
+    /// say *which* the limiter caught.
+    fn script_for(&self, operation: &str, refusals: Vec<Refusal>) {
+        self.state
+            .lock()
+            .unwrap()
+            .limits
+            .scripted_for
+            .insert(operation.to_owned(), refusals);
     }
     /// Refuse any mutation arriving less than `interval` after the one before it, the way
     /// GitHub's secondary limiter refuses a burst of content creation.
@@ -3743,15 +3763,6 @@ async fn a_write_that_fails_part_way_takes_back_only_the_item_it_created() {
     );
 }
 
-// ---------------------------------------------------------------------------------------
-// GitHub's two rate limiters.
-//
-// Every test below drives the real source over a real socket, and each asserts on the one
-// observable the fix moves: how a refusal is classified, what the diagnostic says, whether
-// a wait was taken, how many requests a copy issues, and how they are spaced. A source
-// still carrying each defect is named beside the assertion that catches it.
-// ---------------------------------------------------------------------------------------
-
 /// A server which answers every request the same way, with headers of its own.
 ///
 /// `raw_server_with_headers` cannot spell a status *and* a body a limiter needs together
@@ -4404,5 +4415,80 @@ async fn an_exhausted_budget_reports_when_it_comes_back_rather_than_burning_the_
     assert!(
         (3_500..=3_600).contains(&seconds),
         "the reset was not reported as the wait it is: {seconds}"
+    );
+}
+
+#[tokio::test]
+async fn a_board_holding_work_about_rate_limits_is_not_read_as_a_rate_limit() {
+    // A board is where people write about their own work, and this product's own board
+    // holds tasks named after the very wordings a refusal carries. Matched across the raw
+    // response text — which is where a forbidden status really does carry them — a
+    // perfectly good answer would become a refusal this source then waited out and
+    // reported. So classification reads what a response says about *itself* and never the
+    // work it carries, and a source matching the whole body fails here on both counts.
+    let fixture = board(vec![
+        Item::issue("I_1", "You have exceeded a secondary rate limit").status("Todo"),
+        Item::issue("I_2", "triage the abuse detection mechanism").body("API rate limit exceeded"),
+    ]);
+    let source = source(&fixture);
+    let listed = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("a board whose items are about rate limits is still a board");
+    assert_eq!(listed.items.len(), 2);
+    assert_eq!(
+        fixture.requests("board"),
+        1,
+        "an answer was retried as though it were a refusal"
+    );
+    source
+        .write_task(&write(task(
+            "T-1",
+            "You have exceeded a secondary rate limit",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("and writing one is not a refusal either");
+}
+
+#[tokio::test]
+async fn a_mutation_refused_for_a_rate_limit_is_retried_and_lands() {
+    // The recovery a copy actually needs: a refused mutation never ran, so replaying it is
+    // safe, and the item it was creating ends up on the board rather than the copy ending
+    // half done. A source that reports a refused mutation instead of retrying it leaves
+    // the board empty here.
+    let fixture = board(vec![]);
+    fixture.script_for("createIssue", vec![Refusal::secondary_forbidden()]);
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":60,"retry_budget_ms":5_000}),
+    );
+    let landed = source
+        .write_task(&write(task(
+            "T-1",
+            "Publish",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("the write past a refusal it waited out");
+    assert!(fixture.holds(&landed.0), "the retried write did not land");
+    assert_eq!(
+        fixture.item(&landed.0).title,
+        "Publish",
+        "and it landed with what it was given"
+    );
+    assert_eq!(
+        fixture.requests("createIssue"),
+        2,
+        "the refused creation was not retried"
+    );
+    assert_eq!(
+        fixture
+            .seen()
+            .iter()
+            .filter(|call| call[0] == "createIssue")
+            .count(),
+        1,
+        "a refused call never ran, so exactly one creation reached the board"
     );
 }

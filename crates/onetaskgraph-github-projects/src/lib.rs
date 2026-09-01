@@ -271,11 +271,51 @@ const SECONDARY_WORDINGS: [&str; 5] = [
 ];
 
 /// The wordings GitHub answers an exhausted primary budget with.
+///
+/// `rate_limited` is the `type` its GraphQL error carries, which is read as a field rather
+/// than looked for in the response text.
 const PRIMARY_WORDINGS: [&str; 3] = [
     "api rate limit exceeded",
     "rate limit exceeded",
-    "\"type\":\"rate_limited\"",
+    "rate_limited",
 ];
+
+/// What a response *says about itself*, which is the only place a refusal can be read.
+///
+/// Deliberately not the whole response body. A board is a place people write about their
+/// own work, and a task on it titled "the secondary rate limit" would, matched across the
+/// raw text, turn a perfectly good answer into a refusal this source then waited out and
+/// reported. So the item data is never read: what is read is GitHub's own REST-style
+/// `message` envelope, which is what a forbidden status carries, and the `message` and
+/// `type` of each GraphQL error, which is where a *successful* response says it.
+///
+/// A body that is not JSON at all has nothing structured to read, so only a failing
+/// response's own text is taken — a successful response that is not JSON is malformed
+/// rather than refused, and [`GitHubProjectsSource::answer`] says so.
+fn refusal_wording(status: StatusCode, body: &str) -> String {
+    let Ok(parsed) = serde_json::from_str::<Value>(body) else {
+        return if status.is_success() {
+            String::new()
+        } else {
+            body.to_owned()
+        };
+    };
+    let mut said: Vec<&str> = parsed
+        .get("message")
+        .and_then(Value::as_str)
+        .into_iter()
+        .collect();
+    if let Some(errors) = parsed.get("errors").and_then(Value::as_array) {
+        for error in errors {
+            said.extend(
+                ["message", "type"]
+                    .into_iter()
+                    .filter_map(|key| error.get(key).and_then(Value::as_str)),
+            );
+        }
+    }
+    said.join("; ")
+}
 
 impl Limiter {
     /// Which limiter refused this response, or `None` when none of them did.
@@ -284,9 +324,10 @@ impl Limiter {
     /// limit with a forbidden status far more often than with too-many-requests, and a
     /// forbidden status with no such wording really is a credential this token lacks. So
     /// the wording is read first, and only what carries none of it falls through to the
-    /// status.
+    /// status. What counts as wording is [`refusal_wording`], which reads what the
+    /// response says about itself and never the work it carries.
     fn classify(status: StatusCode, budget_exhausted: bool, body: &str) -> Option<Self> {
-        let normalized = body.to_ascii_lowercase();
+        let normalized = refusal_wording(status, body).to_ascii_lowercase();
         if SECONDARY_WORDINGS
             .iter()
             .any(|wording| normalized.contains(wording))
