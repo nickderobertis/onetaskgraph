@@ -2,10 +2,10 @@
 //!
 //! Every other copy journey reads its destination back through a later command, which is
 //! only possible because a folder of Markdown is still there afterwards. Documents had no
-//! such destination: `local-md` declares it holds none, and the in-memory source's work
-//! dies with the process that held it — so a `document copy` typed at a shell could be
-//! observed only through the report it printed, and "the document really landed carrying
-//! every field" was proven one layer down, as a library call.
+//! such destination when this was written: `local-md` declared it holds none, and the
+//! in-memory source's work dies with the process that held it — so a `document copy` typed
+//! at a shell could be observed only through the report it printed, and "the document
+//! really landed carrying every field" was proven one layer down, as a library call.
 //!
 //! This closes that. The destination is `document_store.py` beside this file: a peer that
 //! keeps its documents in a JSON file and speaks `docs/plugin-protocol.md` over a real pipe
@@ -26,7 +26,7 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{ROWS, Row, document, empty_folder, qualified};
+use crate::fixtures::{ROWS, Row, document, qualified};
 
 /// The source every journey here copies out of.
 const SOURCE: &str = "work";
@@ -374,9 +374,14 @@ fn a_document_copy_into_a_destination_with_no_documents_reads_nothing_from_the_s
     )
     .expect("the source's own store");
 
+    // A second peer as the destination, declaring it has no documents. A folder of
+    // Markdown was this destination once and can no longer be: `local-md` holds documents
+    // now, and what this journey needs is a destination that says it does not — and whose
+    // own store is a file, so "nothing was written" is a thing to look at.
+    let notes = sandbox.subdirectory("notes").join("documents.json");
     sandbox.project_document(&document(&json!({
         SOURCE: store_at(&store, Some(&log), "native"),
-        "notes": {"plugin": "local-md", "config": empty_folder(&sandbox, "notes")},
+        "notes": store_at(&notes, None, "unsupported"),
     })));
 
     let complaint = refused(
@@ -392,7 +397,7 @@ fn a_document_copy_into_a_destination_with_no_documents_reads_nothing_from_the_s
     );
     assert!(
         complaint.contains("notes")
-            && complaint.contains("local-md")
+            && complaint.contains("document-store")
             && complaint.contains("has no documents"),
         "the refusal names the destination and its plugin:\n{complaint}"
     );
@@ -409,8 +414,7 @@ fn a_document_copy_into_a_destination_with_no_documents_reads_nothing_from_the_s
     );
 
     // And nothing was written at the destination either.
-    let notes = sandbox.project().join("notes");
-    let written: Vec<PathBuf> = walk(&notes);
+    let written: Vec<PathBuf> = walk(&sandbox.subdirectory("notes"));
     assert!(
         written.is_empty(),
         "a refused copy writes nothing: {written:?}"
