@@ -4183,6 +4183,105 @@ fn the_shipped_pacing_defaults_are_githubs_published_limits() {
         80,
         "the shipped interval is no longer the published per-minute limit"
     );
+    // The other two defaults, because the constant is where each one's reasoning is
+    // written down and a value that drifts from it makes that reasoning a lie.
+    assert_eq!(onetaskgraph_github_projects::RETRY_BACKOFF_MS, 1_000);
+    let mut wait = onetaskgraph_github_projects::RETRY_BACKOFF_MS;
+    let mut doublings = 0_u32;
+    while wait < 60_000 {
+        wait *= 2;
+        doublings += 1;
+    }
+    assert_eq!(
+        doublings, 6,
+        "the shipped backoff no longer reaches a minute in six waits, which is what its \
+         own reasoning claims for it"
+    );
+    assert_eq!(onetaskgraph_github_projects::RETRY_BUDGET_MS, 120_000);
+    const {
+        assert!(
+            onetaskgraph_github_projects::RETRY_BUDGET_MS > 0
+                && onetaskgraph_github_projects::RETRY_BUDGET_MS
+                    <= onetaskgraph_github_projects::MAX_PACING_MS,
+            "a shipped budget of zero would never wait and one past the cap could not be \
+             configured, and the bound is what makes the wait a wait rather than a hang"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_shipped_backoff_is_what_an_unhinted_refusal_waits_when_nothing_is_configured() {
+    // Every other limiter test states its own backoff, so the path a board on github.com
+    // actually takes — the one where the configuration says nothing and `Pacing::resolve`
+    // falls back to `RETRY_BACKOFF_MS` — was the one path never driven against a refusal.
+    // The window below is read from the constant on purpose: what this proves is the
+    // *wiring*, that the defaulted path waits the shipped backoff and not some other
+    // number, and the test above is what pins the number itself.
+    let fixture = board(vec![Item::issue("I_1", "one").status("Todo")]);
+    fixture.script(vec![Refusal::secondary_forbidden()]);
+    let source = configured(&fixture.endpoint, json!({"pacing": null}));
+    let shipped = Duration::from_millis(onetaskgraph_github_projects::RETRY_BACKOFF_MS);
+    let started = Instant::now();
+    let page = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("the retry the shipped backoff schedules");
+    let waited = started.elapsed();
+    assert_eq!(
+        page.items.len(),
+        1,
+        "the retry returned the board's own item"
+    );
+    assert_eq!(
+        fixture.requests("board"),
+        2,
+        "the unhinted refusal was not retried at the shipped default"
+    );
+    assert!(
+        waited >= shipped && waited < shipped * 2,
+        "the defaulted path did not wait the shipped backoff of {shipped:?}: {waited:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_shipped_budget_bounds_a_wait_no_configuration_asked_for() {
+    // The other half of the defaulted path: a hint this source cannot afford. GitHub is
+    // entitled to ask for longer than one call may spend waiting, and what bounds that at
+    // the shipped defaults is `RETRY_BUDGET_MS` alone. A source defaulting to an unbounded
+    // budget honours the hint instead and sits here for two minutes; so does one whose
+    // default budget is longer than the hint. Neither reaches the assertions below.
+    let fixture = board(vec![Item::issue("I_1", "one").status("Todo")]);
+    let past_the_budget = onetaskgraph_github_projects::RETRY_BUDGET_MS / 1_000 + 1;
+    fixture.script(vec![Refusal::secondary_forbidden().after(past_the_budget)]);
+    let source = configured(&fixture.endpoint, json!({"pacing": null}));
+    let started = Instant::now();
+    let error = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect_err("a hint past the shipped budget");
+    let waited = started.elapsed();
+    assert!(
+        waited < Duration::from_secs(5),
+        "the shipped budget did not bound a hint of {past_the_budget}s: {waited:?}"
+    );
+    assert_eq!(
+        fixture.requests("board"),
+        1,
+        "a wait it could not afford was taken anyway"
+    );
+    let message = refusal(error);
+    assert!(
+        message.contains(&format!(
+            "{:.1}s one call may spend waiting",
+            onetaskgraph_github_projects::RETRY_BUDGET_MS as f64 / 1_000.0
+        )),
+        "the diagnostic does not name the shipped budget that bounded it: {message}"
+    );
+    assert!(
+        message.contains("secondary rate limit") && message.contains("reading the board"),
+        "the bounded refusal stopped naming which limiter and what this source was doing: \
+         {message}"
+    );
 }
 
 #[tokio::test]
