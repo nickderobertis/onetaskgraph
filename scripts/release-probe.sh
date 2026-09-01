@@ -7,7 +7,9 @@
 #
 #   * exit 0 with one line on stdout — the version that registry serves now;
 #   * exit 0 with nothing on stdout — that registry has no release of it yet;
-#   * a non-zero exit with the reason on stderr — not answered.
+#   * a non-zero exit with the reason on stderr — not answered. Exit 2 is
+#     reserved for a usage error, which is the caller having asked wrongly rather
+#     than anything about a release; every other refusal exits 1.
 #
 # **A probe is not a gate.** It rules on no change and refuses no publication. It
 # answers what version is out there, and a caller decides what that means.

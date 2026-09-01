@@ -154,9 +154,7 @@ except (OSError, tomllib.TOMLDecodeError) as problem:
     print("  fix that file; it is the one thing a consumer reads to learn what to wait on", file=sys.stderr)
     raise SystemExit(1)
 
-# ---------------------------------------------------------------------------
 # The shape.
-# ---------------------------------------------------------------------------
 version = declared.get("schema_version")
 if version != SCHEMA_VERSION:
     problems.append(
@@ -287,9 +285,7 @@ for name in sorted(set(seen_names) - set(EXPECTED_NAMES)):
         "target is a new thing consumers may wait on: add it here in the same change."
     )
 
-# ---------------------------------------------------------------------------
 # The contents, derived from the real release configuration.
-# ---------------------------------------------------------------------------
 workflow = read(WORKFLOW, "the release workflow")
 published = {}
 

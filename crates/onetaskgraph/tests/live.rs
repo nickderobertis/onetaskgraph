@@ -32,10 +32,14 @@ fn repository_root() -> PathBuf {
 
 /// Every `[[target]]` id the declaration carries.
 ///
-/// A deliberately lenient scan rather than a TOML parse: what the document *is* —
-/// every required field, every identifier, every short name — is held by
+/// A scan rather than a TOML parse — what the document *is* is held by
 /// `scripts/check-release-targets.sh` and by the canonical reader it runs, and
-/// what this lane needs is only the list of things a consumer waits on.
+/// what this lane needs is only the list of things a consumer waits on — but a
+/// scan that is strict about the two things it reads. A key is `id` exactly, not
+/// anything beginning with it, and its value is a quoted string; a line under
+/// `[[target]]` that spells `id` some other way panics here rather than being
+/// passed over, because a declared target this lane silently skipped is a target
+/// nothing asks a registry about.
 fn declared_target_ids(root: &Path) -> Vec<String> {
     let declaration = root.join("release-targets.toml");
     let text = std::fs::read_to_string(&declaration)
@@ -54,16 +58,24 @@ fn declared_target_ids(root: &Path) -> Vec<String> {
         if !in_target {
             continue;
         }
-        let Some(value) = line.strip_prefix("id") else {
+        let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        let Some(value) = value.trim_start().strip_prefix('=') else {
+        if key.trim() != "id" {
             continue;
-        };
-        let value = value.trim().trim_matches('"');
-        if !value.is_empty() {
-            ids.push(value.to_string());
         }
+        let value = value.trim();
+        let quoted = value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .filter(|value| !value.is_empty() && !value.contains('"'));
+        let Some(identifier) = quoted else {
+            panic!(
+                "{} gives a [[target]] the id {value}, which is not a quoted <registry>:<name>",
+                declaration.display()
+            )
+        };
+        ids.push(identifier.to_string());
     }
     assert!(
         !ids.is_empty(),

@@ -50,9 +50,7 @@ work="$(mktemp -d)" || fatal \
   "check the temporary directory's permissions and free space, then rerun"
 trap 'rm -rf "$work"' EXIT
 
-# ---------------------------------------------------------------------------
 # Half one: the probe against the pin. Text only, so it runs on every platform.
-# ---------------------------------------------------------------------------
 python3 - "$PIN" "$PROBE" "$DECLARATION" "$work" <<'PY' || fatal \
   "scripts/release-probe.sh and config/registry-interfaces.toml disagree (the drift is above)" \
   "bring the probe back to the pinned interface, or re-observe that registry's interface and record the new observation in the pin"
@@ -94,6 +92,7 @@ declaration = load(declaration_path)
 PINNED_FIELDS = {
     "registry": str,
     "service": str,
+    "method": str,
     "url": str,
     "name_in_url": str,
     "version_path": str,
@@ -250,6 +249,7 @@ for target in targets:
     plan.append(
         "\t".join([
             identifier,
+            registry["method"],
             registry["url"].replace("{name}", in_url),
             str(registry["served_status"]),
             registry["served_version"],
@@ -262,9 +262,7 @@ for target in targets:
 (work / "plan.tsv").write_text("\n".join(plan) + "\n", encoding="utf-8")
 PY
 
-# ---------------------------------------------------------------------------
 # Half two: the three answers, driven through the real probe.
-# ---------------------------------------------------------------------------
 # The stub is an extensionless executable earlier on PATH than curl, which is a
 # Unix shape — the same reason scripts/check-real-release-preparation.sh names for
 # its own skip. Windows keeps the reconciliation above, which is where a drifted
@@ -285,11 +283,14 @@ set -u
 out=""
 url=""
 agent=""
+# curl's own default, and what the caller gets unless it asks for another.
+method="GET"
 previous=""
 for argument in "$@"; do
   case "$previous" in
     -o) out="$argument" ;;
     -A) agent="$argument" ;;
+    -X | --request) method="$argument" ;;
   esac
   case "$argument" in
     -*) ;;
@@ -299,6 +300,7 @@ for argument in "$@"; do
 done
 printf '%s\n' "$url" > "$STUB_REQUEST"
 printf '%s\n' "$agent" > "$STUB_AGENT"
+printf '%s\n' "$method" > "$STUB_METHOD"
 if [ "${STUB_TRANSPORT_FAILS:-0}" = 1 ]; then
   echo "stub curl: could not resolve host" >&2
   exit 6
@@ -320,12 +322,12 @@ fail() {
 probe_status=0
 run_probe() {
   probe_status=0
-  STUB_REQUEST="$work/request" STUB_AGENT="$work/agent" STUB_BODY="$3" \
-    STUB_STATUS="$2" STUB_TRANSPORT_FAILS="$4" PATH="$work/bin:$PATH" \
+  STUB_REQUEST="$work/request" STUB_AGENT="$work/agent" STUB_METHOD="$work/method" \
+    STUB_BODY="$3" STUB_STATUS="$2" STUB_TRANSPORT_FAILS="$4" PATH="$work/bin:$PATH" \
     "$PROBE" "$1" > "$work/out" 2> "$work/err" || probe_status=$?
 }
 
-while IFS=$'\t' read -r identifier expected_url served_status served_version absent_status directory nulled; do
+while IFS=$'\t' read -r identifier expected_method expected_url served_status served_version absent_status directory nulled; do
   [ -n "$identifier" ] || continue
 
   # 1. The registry serves a version.
@@ -339,6 +341,10 @@ while IFS=$'\t' read -r identifier expected_url served_status served_version abs
   requested="$(cat "$work/request")"
   if [ "$requested" != "$expected_url" ]; then
     fail "$identifier was looked up at '$requested', and config/registry-interfaces.toml pins '$expected_url'; bring the URL scripts/release-probe.sh builds back to the pinned one"
+  fi
+  method="$(cat "$work/method")"
+  if [ "$method" != "$expected_method" ]; then
+    fail "$identifier was looked up with $method, and config/registry-interfaces.toml pins $expected_method as the method that registry answers this read on"
   fi
   if [ ! -s "$work/agent" ]; then
     fail "$identifier was looked up without a user agent, which crates.io answers 403"
@@ -399,9 +405,7 @@ while IFS=$'\t' read -r identifier expected_url served_status served_version abs
   fi
 done < "$work/plan.tsv"
 
-# ---------------------------------------------------------------------------
 # Half three: every other way the probe declines to answer.
-# ---------------------------------------------------------------------------
 # Each of these is a branch that ends without a version, and the one thing none
 # of them may do is end at exit 0 with empty output — that is the registry's
 # answer "no release yet", and a consumer stops waiting on it. So each is driven
@@ -414,8 +418,8 @@ assert_refused() {
   local description=$1 expected=$2 path=$3 script=$4 http=$5 body=$6 transport=$7
   shift 7
   local status=0
-  STUB_REQUEST="$work/request" STUB_AGENT="$work/agent" STUB_BODY="$body" \
-    STUB_STATUS="$http" STUB_TRANSPORT_FAILS="$transport" PATH="$path" \
+  STUB_REQUEST="$work/request" STUB_AGENT="$work/agent" STUB_METHOD="$work/method" \
+    STUB_BODY="$body" STUB_STATUS="$http" STUB_TRANSPORT_FAILS="$transport" PATH="$path" \
     "$script" "$@" > "$work/out" 2> "$work/err" || status=$?
   if [ "$status" -eq 0 ]; then
     fail "$description was answered (exit 0) instead of refused; a caller cannot tell that from the registry saying it serves nothing"
@@ -436,8 +440,8 @@ assert_refused() {
 
 stub_path="$work/bin:$PATH"
 first_target="$(head -n 1 "$work/plan.tsv" | cut -f 1)"
-served_body="$(head -n 1 "$work/plan.tsv" | cut -f 6)/served.json"
-served_http="$(head -n 1 "$work/plan.tsv" | cut -f 3)"
+served_body="$(head -n 1 "$work/plan.tsv" | cut -f 7)/served.json"
+served_http="$(head -n 1 "$work/plan.tsv" | cut -f 4)"
 
 # The identifier: none, several, and one this repository does not release. The
 # last is not answered rather than answered emptily, because an artifact nobody
@@ -497,6 +501,35 @@ rm -f "$work/minbin/python3"
 ln -sf "$work/bin/curl" "$work/minbin/curl"
 assert_refused "a host with no python3" "python3 is not on PATH" \
   "$work/minbin" "$PROBE" "$served_http" "$served_body" 0 "$first_target"
+
+# A declared identifier whose name is not one a registry serves. It becomes a path
+# segment of a URL, so it is refused before it is spelled into one — and refused
+# rather than answered emptily, because a name nobody can look up says nothing
+# about what has been released.
+assert_refused "a declared name that opens an npm scope it does not finish" "opens an npm scope" \
+  "$stub_path" \
+  "$(scratch_probe unfinished_scope 'schema_version = 2
+[[target]]
+id = "npm:@onetaskgraph/"
+name = "npm"
+what = "A scoped name with no package after the scope."
+published_by = "nothing; this is a fixture."')" \
+  "$served_http" "$served_body" 0 "npm:@onetaskgraph/"
+assert_refused "a declared name outside the alphabet a registry serves" "is not one a registry serves" \
+  "$stub_path" \
+  "$(scratch_probe unserved_name 'schema_version = 2
+[[target]]
+id = "crate:not a name"
+name = "crate"
+what = "A name with a space in it."
+published_by = "nothing; this is a fixture."')" \
+  "$served_http" "$served_body" 0 "crate:not a name"
+
+# A host that cannot give the probe a temporary file to read the answer into. It
+# is the registry read that has not happened, so it is not answered.
+TMPDIR="$work/no-such-directory" assert_refused "a host with no writable temporary directory" \
+  "could not create a temporary file" \
+  "$stub_path" "$PROBE" "$served_http" "$served_body" 0 "$first_target"
 
 # An answer that is not one. Every case here is a registry that replied and could
 # not be understood, which is the state most easily mistaken for "nothing
