@@ -38,16 +38,15 @@ otherwise fail, naming the row and the field — and deleting this entry and the
 the field line above and fails while it names a capability that plugin no longer calls
 unsupported, so the entry cannot outlive the gap it describes.
 
-## Documents: two of the four hosted sources have none yet
+## Documents: one of the four hosted sources has none yet
 
 Unsupported fields: `onetaskgraph-github-projects` `documents`
-Unsupported fields: `onetaskgraph-linear` `documents`
 
 The plugin contract carries documents — `Document`, `Location`, `DocumentQuery`, the
-`documents` capability, and the four `TaskSource` methods — and `in-memory` and `local-md`
-implement them. The two above declare `documents: Support::Unsupported` and keep the four
-methods' defaults, which refuse: `documentless` for the two reads, `unwritable` for the two
-writes.
+`documents` capability, and the four `TaskSource` methods — and `in-memory`, `local-md`
+and `linear` implement them. The one above declares `documents: Support::Unsupported` and
+keeps the four methods' defaults, which refuse: `documentless` for the two reads,
+`unwritable` for the two writes.
 
 That is sound as it stands, and it is what the capability rules ask for. `documents` is
 not a predicate the engine compensates for; it says whether a source has documents at all,
@@ -57,16 +56,22 @@ a document read across several sources reports such a source as holding none rat
 as having failed. What a plugin must never do here is answer an empty page, which reads as
 a source that has documents and holds none matching.
 
-It is a gap rather than a limit for both, and each plugin's own verdict row says why:
-Linear has documents of its own, and a GitHub repository holds files a board item could
-name.
+It is a gap rather than a limit, and this plugin's own verdict row says why: a GitHub
+repository holds files a board item could name.
 
-Closing an entry means: implementing that plugin's four methods, flipping its `documents`
+Closing the entry means: implementing that plugin's four methods, flipping its `documents`
 to `Support::Native`, updating its row in `crates/onetaskgraph/tests/e2e/fixtures.rs` —
 which the reconciliation journey will otherwise fail, naming the row and the field — and
-deleting that plugin's line above together with the verdict row's wording. That is what
-`local-md` did: `documents/` is a folder beside the `tasks/` and `projects/` it already
-read, and `docs/local-md.md` records why the folder is the discriminator.
+deleting the line above together with the verdict row's wording. That is what `local-md`
+and `linear` did. `local-md` added `documents/` beside the `tasks/` and `projects/` it
+already read, and `docs/local-md.md` records why the folder is the discriminator. `linear`
+read Linear's own first-class `Document`, which brought back one thing worth knowing before
+the same is attempted elsewhere: a backend that *has* the concept can still be missing a
+field the shared dataset gives it. Linear's `Document` carries no labels where its `Issue`
+and `Project` do, so what closed the entry was not only the four methods but a new
+dimension of the shared journey table — `Ready::labels_its_documents` — so a row states
+what its source really reports and the shared journeys drive that claim rather than one
+plugin's shape standing for every plugin's.
 
 ## What a Windows location is spelled like, and who decides
 

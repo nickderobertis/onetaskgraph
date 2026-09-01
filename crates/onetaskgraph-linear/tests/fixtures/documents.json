@@ -18,6 +18,15 @@
           "url": "https://linear.app/acme/document/second-fixture-note-bbbbbbbbbbbb",
           "createdAt": "2026-08-03T12:00:00Z",
           "updatedAt": "2026-08-04T12:00:00Z",
+          "project": { "id": "p2" }
+        },
+        {
+          "id": "d3",
+          "title": "Loose fixture note",
+          "content": "A third recorded body",
+          "url": "https://linear.app/acme/document/loose-fixture-note-cccccccccccc",
+          "createdAt": "2026-08-05T12:00:00Z",
+          "updatedAt": "2026-08-06T12:00:00Z",
           "project": null
         }
       ],

@@ -2271,7 +2271,7 @@ async fn documents_use_real_http_parse_mapping_paging_and_report_their_linear_ad
             &DocumentQuery::default(),
             &PageRequest {
                 cursor: None,
-                limit: 2,
+                limit: 3,
             },
         )
         .await
@@ -2311,7 +2311,12 @@ async fn documents_use_real_http_parse_mapping_paging_and_report_their_linear_ad
     );
     // Linear's own document type has no labels, so this source reports none.
     assert!(page.items[0].labels.is_empty());
-    assert_eq!(page.items[1].project, None, "a document in no project");
+    assert_eq!(
+        page.items[1].project.as_ref().expect("a second project").0,
+        "p2",
+        "two projects, so a predicate applied and one dropped are different answers"
+    );
+    assert_eq!(page.items[2].project, None, "a document in no project");
     assert_eq!(page.next.unwrap().0, "next-1");
 
     let wire = request.recv().unwrap();
@@ -2324,21 +2329,26 @@ async fn a_document_read_pushes_down_a_project_and_applies_orphans_and_labels_it
     // The two predicates Linear cannot be asked for are still applied, over a page this
     // source fetched: `DocumentFilter.project` carries no `null:` member, and a Linear
     // document carries no label at all.
-    let page = |first: &str, second: &str| {
+    // One page, holding exactly what Linear would have returned for the filter under test:
+    // the project predicate is the one this source pushes down, so its page is narrowed,
+    // and the orphan and label predicates are the ones it applies to a page of everything.
+    let page = |kept: &[&str]| {
         let mut body: serde_json::Value =
             serde_json::from_str(include_str!("fixtures/documents.json")).unwrap();
-        body["data"]["documents"]["nodes"][0]["project"] = serde_json::json!({"id": first});
-        body["data"]["documents"]["nodes"][1]["project"] = if second.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::json!({"id": second})
-        };
+        let nodes = body["data"]["documents"]["nodes"]
+            .as_array()
+            .expect("the fixture documents")
+            .iter()
+            .filter(|node| kept.contains(&node["id"].as_str().unwrap_or_default()))
+            .cloned()
+            .collect::<Vec<_>>();
+        body["data"]["documents"]["nodes"] = serde_json::Value::Array(nodes);
         body["data"]["documents"]["pageInfo"] =
             serde_json::json!({"hasNextPage": false, "endCursor": null});
         body.to_string()
     };
 
-    let (endpoint, request) = server("200 OK", "", page("p1", ""));
+    let (endpoint, request) = server("200 OK", "", page(&["d1"]));
     let narrowed = source(&endpoint)
         .query_documents(
             &DocumentQuery {
@@ -2360,7 +2370,7 @@ async fn a_document_read_pushes_down_a_project_and_applies_orphans_and_labels_it
         "the project predicate is pushed into the documents filter: {wire}"
     );
 
-    let (endpoint, request) = server("200 OK", "", page("p1", ""));
+    let (endpoint, request) = server("200 OK", "", page(&["d1", "d2", "d3"]));
     let orphans = source(&endpoint)
         .query_documents(
             &DocumentQuery {
@@ -2378,9 +2388,9 @@ async fn a_document_read_pushes_down_a_project_and_applies_orphans_and_labels_it
         orphans
             .items
             .iter()
-            .map(|d| d.id.0.as_str())
+            .map(|document| document.id.0.as_str())
             .collect::<Vec<_>>(),
-        vec!["d2"],
+        vec!["d3"],
         "the document in no project, kept by this source rather than by Linear"
     );
     let wire = request.recv().unwrap();
@@ -2389,7 +2399,7 @@ async fn a_document_read_pushes_down_a_project_and_applies_orphans_and_labels_it
         "Linear is never asked for a predicate its DocumentFilter has no member for: {wire}"
     );
 
-    let (endpoint, _) = server("200 OK", "", page("p1", ""));
+    let (endpoint, _) = server("200 OK", "", page(&["d1", "d2", "d3"]));
     let demanded = source(&endpoint)
         .query_documents(
             &DocumentQuery {
@@ -2411,7 +2421,7 @@ async fn a_document_read_pushes_down_a_project_and_applies_orphans_and_labels_it
         "no Linear document carries a label, so a query demanding one keeps nothing"
     );
 
-    let (endpoint, _) = server("200 OK", "", page("p1", ""));
+    let (endpoint, _) = server("200 OK", "", page(&["d1", "d2", "d3"]));
     let excluded = source(&endpoint)
         .query_documents(
             &DocumentQuery {
@@ -2430,7 +2440,7 @@ async fn a_document_read_pushes_down_a_project_and_applies_orphans_and_labels_it
         .expect("a document read excluding a label");
     assert_eq!(
         excluded.items.len(),
-        2,
+        3,
         "and a query excluding one keeps every document, rather than narrowing"
     );
 }
