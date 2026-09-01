@@ -17,6 +17,9 @@ schemars.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# The timer, for waiting a rate limit out and spacing this source's own mutations. It
+# needs no runtime of its own — the caller already has one.
+tokio.workspace = true
 
 [dev-dependencies]
 graphql-parser.workspace = true

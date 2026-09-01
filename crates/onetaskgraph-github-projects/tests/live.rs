@@ -999,6 +999,9 @@ async fn await_on_board(
 async fn drive_every_declared_capability(
     run: &LiveRun,
     writer: &dyn TaskSource,
+    // A source built the way `writer` was, for the legs that follow the one mutation this
+    // journey makes without going through a source at all. See where it is called.
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
 ) -> Result<(), String> {
     let (alpha, beta) = (run.title(0), run.title(1));
     let (first, second, orphan) = (run.title(2), run.title(3), run.title(4));
@@ -1091,6 +1094,15 @@ async fn drive_every_declared_capability(
         .map_err(|error| format!("live task write of {orphan:?} failed: {error}"))?;
     let label_id = create_artifact_label(&run.token, &run.repository, &label_name).await?;
     attach_artifact_label(&run.token, &first_id.0, &label_id).await?;
+    // That label went onto the issue through GitHub's own REST API rather than through
+    // this source, and this source reads the board once for the command it is serving:
+    // one invocation of the binary is one process, one source and one read of the board,
+    // which is what stops a copy of a project re-reading the whole board per item it
+    // writes. This journey is many commands' worth of work driven through one object, so
+    // the legs below take a source built the way the next command would build one — which
+    // is what makes a change nothing here wrote visible to them.
+    let rebuilt = rebuilt();
+    let writer = rebuilt.as_ref();
 
     // GitHub decides when a created issue appears on the board, so the reads below wait
     // for the fixture rather than racing it.
@@ -1700,15 +1712,18 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         stamp_micros: chrono::Utc::now().timestamp_micros(),
         status_option: status_name.clone(),
     };
-    let writer = onetaskgraph_github_projects::Plugin
-        .build(
-            &SourceName::new("github-live").unwrap(),
-            &live_write_config(&owner, project_number, &repository, &status_name),
-            &LiveSecret(token.clone().into()),
-        )
-        .unwrap_or_else(|error| panic!("the live write configuration was refused: {error}"));
+    let rebuild = || {
+        onetaskgraph_github_projects::Plugin
+            .build(
+                &SourceName::new("github-live").unwrap(),
+                &live_write_config(&owner, project_number, &repository, &status_name),
+                &LiveSecret(token.clone().into()),
+            )
+            .unwrap_or_else(|error| panic!("the live write configuration was refused: {error}"))
+    };
+    let writer = rebuild();
     run_then_cleanup(
-        || drive_every_declared_capability(&run, writer.as_ref()),
+        || drive_every_declared_capability(&run, writer.as_ref(), &rebuild),
         || {
             remove_live_state(
                 &token,

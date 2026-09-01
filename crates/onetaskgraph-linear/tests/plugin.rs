@@ -1383,7 +1383,8 @@ async fn rate_limit_carries_retry_hint() {
     assert_eq!(
         source(&endpoint).health().await.unwrap_err(),
         SourceError::RateLimited {
-            retry_after_seconds: Some(17)
+            retry_after_seconds: Some(17),
+            message: None,
         }
     );
 }
@@ -1402,7 +1403,8 @@ async fn graphql_rate_limit_uses_http_hint_and_viewer_id_is_validated() {
     assert_eq!(
         source(&endpoint).health().await.unwrap_err(),
         SourceError::RateLimited {
-            retry_after_seconds: Some(23)
+            retry_after_seconds: Some(23),
+            message: None,
         }
     );
     for body in [
@@ -1950,7 +1952,8 @@ async fn item_reads_and_transport_error_boundaries_are_exercised() {
             matches!(
                 error,
                 SourceError::RateLimited {
-                    retry_after_seconds: Some(9)
+                    retry_after_seconds: Some(9),
+                    message: None,
                 }
             ),
             rate

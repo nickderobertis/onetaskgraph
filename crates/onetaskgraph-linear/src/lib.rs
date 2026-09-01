@@ -436,6 +436,10 @@ impl LinearSource {
         if status.as_u16() == 429 {
             return Err(SourceError::RateLimited {
                 retry_after_seconds: retry,
+                // Linear has one rate limiter and the status is the whole of what it said,
+                // so there is nothing to add beyond the kind — which is what an absent
+                // message means.
+                message: None,
             });
         }
         if status.as_u16() == 401 || status.as_u16() == 403 {
@@ -463,6 +467,7 @@ impl LinearSource {
                     .and_then(|value| value.retry_after);
                 return Err(SourceError::RateLimited {
                     retry_after_seconds: hint.or(retry),
+                    message: None,
                 });
             }
             return Err(SourceError::Refused {

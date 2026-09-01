@@ -1089,7 +1089,14 @@ fn github_projects_board_at(
             // `done` and `cancelled` keep their shipped defaults, which close the issue:
             // GitHub derives a project's `Sub-issues progress` from closed sub-issues, so a
             // plan whose finished tasks were only moved to a column reads 0% complete forever.
-            "status_mapping": {"todo":"Todo","in-progress":"Doing"}
+            "status_mapping": {"todo":"Todo","in-progress":"Doing"},
+            // This board is a socket on loopback, not github.com, and it has no rate
+            // limiter to be paced for. The shipped default spaces a content-creating
+            // mutation every 750 ms so a copy cannot trip GitHub's secondary limit; left
+            // on here it would buy nothing and would spend that per mutation on every
+            // journey that writes. The pacing itself is proven where it is the subject, in
+            // `crates/onetaskgraph-github-projects/tests/plugin.rs`.
+            "pacing": {"min_mutation_interval_ms": 0}
         }),
         GitHubBoardFields { endpoint },
     )

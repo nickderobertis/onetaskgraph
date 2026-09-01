@@ -46,3 +46,29 @@ board's own fields, so a document that tried to would fail the pinned-schema tes
 than rename a user's board. `updateProjectV2Field` is absent because its
 `singleSelectOptions` is documented as overwriting a field's existing options, so no
 addition is additive and a mistake would destroy every item's status.
+
+## `rate-limits.json`
+
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This artifact *is* the pinned source, and `the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact` is its drift gate; the rule's remaining ask — an automated freshness check against GitHub itself — cannot be a required check here, because GitHub publishes its rate-limit vocabulary and its content-creation ceilings as prose rather than as a versioned artifact, and no required check may reach the network. -->
+
+`rate-limits.json` pins the two things this source restates from GitHub rather than
+decides for itself: the wordings a rate-limit refusal arrives in, and the published
+ceiling on content-creating requests. Both were read on 2026-09-01 from
+<https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api> and
+<https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api>,
+which is where GitHub documents the secondary limiter, the wordings it refuses with, and
+the "no more than 80 content-generating requests per minute and 500 per hour" ceilings.
+It is documentation-derived; it carries no captured response and no identifier.
+
+`the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact` in
+`../schema.rs` reconciles it against `SECONDARY_WORDINGS`, `PRIMARY_WORDINGS`,
+`CONTENT_CREATION_PER_MINUTE` and `CONTENT_CREATION_PER_HOUR` **both ways**, so neither a
+wording this source quietly starts matching on nor one it quietly stops matching on can
+land without moving the pin — and moving the pin means going back to those pages and
+recording what they say now. `MIN_MUTATION_INTERVAL_MS` is derived from the per-minute
+ceiling rather than written out beside it, so the pacing this source runs at is gated by
+the same pin.
+
+GitHub's own wording changes are why this is a list rather than one phrase: `abuse
+detection` is what the limiter was called before it was renamed and is still what some
+endpoints return, and a refusal carrying it has to keep classifying as a secondary limit.

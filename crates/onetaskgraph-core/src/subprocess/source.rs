@@ -311,7 +311,15 @@ fn with_diagnostics(error: SourceError, peer: &mut Peer) -> SourceError {
     }
     let message = format!("{error}; the plugin wrote: {said}");
     match error {
-        SourceError::RateLimited { .. } => error,
+        // The wait it asked for is preserved: what the plugin wrote is extra reason, not a
+        // replacement for the one piece of this refusal the engine acts on.
+        SourceError::RateLimited {
+            retry_after_seconds,
+            ..
+        } => SourceError::RateLimited {
+            retry_after_seconds,
+            message: Some(message),
+        },
         SourceError::Config { .. } => SourceError::Config { message },
         SourceError::Auth { .. } => SourceError::Auth { message },
         SourceError::Refused { .. } => SourceError::Refused { message },

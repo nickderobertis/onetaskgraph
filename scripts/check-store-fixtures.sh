@@ -136,7 +136,17 @@ MANIFEST = {
 # Files under a `tests/fixtures` directory that do not stand in for a store, each with the
 # reason. Recorded rather than skipped by pattern, so a store fixture cannot be added under
 # a name a pattern happens to exclude.
-NOT_A_STORE = {}
+NOT_A_STORE = {
+    "crates/onetaskgraph-github-projects/tests/fixtures/rate-limits.json": (
+        "Not a store: it holds no items and no query reads it. It pins the vocabulary a "
+        "GitHub rate-limit refusal arrives in and the published ceiling on "
+        "content-creating requests, and the crate's own drift gate "
+        "`the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact` "
+        "reconciles it against the production constants both ways, so the discrimination "
+        "this check exists to force is already forced there — by an exact set equality "
+        "rather than by two rows differing."
+    ),
+}
 
 root = pathlib.Path(".")
 problems = []

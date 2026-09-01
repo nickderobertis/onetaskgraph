@@ -134,7 +134,17 @@ for (const [name, schema] of Object.entries(bundle.roots)) {
   );
 }
 
-const files = new Map<string, string>([
+/// `json-schema-to-typescript` renders a JSDoc paragraph break as a line that is exactly
+/// `" * "`, which `git diff --check` reports. `compile` runs with `format: false` here, so
+/// there is no formatter to strip it as the Python generator's `ruff format` does.
+function withoutTrailingWhitespace(source: string): string {
+  return source
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/, ""))
+    .join("\n");
+}
+
+const emittedFiles = new Map<string, string>([
   ["models.ts", `${declarations.join("\n")}\n`],
   [
     "schemas.ts",
@@ -149,6 +159,11 @@ const files = new Map<string, string>([
       `export const binaryCommands = ${JSON.stringify(bundle.commands, null, 2)} as const;\n`,
   ],
 ]);
+// Every file, rather than only the one that has the problem today: the rule is about what
+// this repository commits, not about which renderer happens to break it.
+const files = new Map(
+  [...emittedFiles].map(([name, content]) => [name, withoutTrailingWhitespace(content)]),
+);
 
 let stale = false;
 for (const [relative, content] of files) {

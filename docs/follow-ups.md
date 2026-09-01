@@ -63,3 +63,41 @@ Settling it means deciding whether `local-md` strips the `\\?\` prefix before re
 so a Windows location reads `C:\…` — and if so, saying that in `docs/local-md.md` beside
 the sentence above and stripping it in the six Rust sites that canonicalize on the
 expectation side, so the two halves of each comparison keep agreeing.
+
+## What "the life of one command" means to a caller that is not the binary
+
+`github-projects` reads the whole board once and answers from that read for as long as the
+source object lives. That is what stops a copy of a project re-reading the board for every
+item it writes, and it is why `a_project_copy_reads_the_board_and_the_repository_once_for_the_whole_command`
+and `the_board_this_command_reads_holds_what_this_command_has_itself_written` both hold the
+board to a single request. The read is completed from what this process has itself created
+and replaced where this process has itself written, so nothing this source did is ever
+missing from its own view.
+
+The proxy for "one command" is the source object's lifetime, and for the binary that proxy
+is exact: one invocation is one process, one source and one read. It is not exact for a
+caller that links the crate and holds a source across what would be several commands — the
+consumer the recorded decision about `Engine::copy` names. Such a caller sees a board that
+went stale the moment something outside its own source changed the board, and has no verb
+that says "read it again".
+
+Nothing is wrong for any consumer this repository ships. The CLI is a process per command,
+and both SDKs drive that binary as a subprocess, so all three get a fresh read per command
+by construction. The one place the proxy showed through is this crate's own live journey,
+which drives every capability through a single source and attaches a label to an issue
+through GitHub's REST API rather than through the source; it now takes a source built the
+way the next command would build one for the legs after that mutation, and says so at the
+site.
+
+What is true today is pinned rather than only described:
+`a_board_changed_by_something_else_is_seen_by_the_next_source_and_not_by_this_one` retitles
+a board item without going through the source, asserts that source still reports the title
+it read, and asserts that a source built the way the next command builds one reports the
+new one. So the behaviour this entry rules on fails a test when it moves rather than
+turning a live lane red.
+
+Settling it means deciding what a long-lived caller is owed: a source-level way to discard
+the cached board, a bound on how long a read may be answered from it, or a ruling that
+holding a source across commands is not a supported shape and saying that in the crate's
+own documentation. The first two both cost the single-request guarantee above, so whichever
+is chosen has to say what the three tests named here should assert instead.
