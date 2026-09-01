@@ -224,6 +224,19 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   `Engine::copy` as a library call. The second is not a duplicate: this product is exposed
   three ways from one engine, and the consumer a command-line-only copy would strand is
   the Rust caller that links the crate.
+- **A document copy is proven against a destination that outlives the invocation.** One
+  command line is one process, so an `in-memory` destination cannot be read back by a later
+  command and `local-md` declares it holds no documents — which once left the document copy
+  observable only through the report it printed. `onetaskgraph-document-store` closes it: a
+  file-backed peer written from `docs/plugin-protocol.md` rather than from the engine's
+  implementation of it, spawned over a real pipe, so what one invocation writes the next one
+  reads. It and `tests/e2e/document_store.rs` are behind the non-default `test-support`
+  feature, because both are fixtures rather than product surface — `cargo install` never
+  builds the peer, and every target in `crates/onetaskgraph/project.json` passes
+  `--all-features`, so both are built, linted and measured in every required check. **Do not
+  replace that round trip with a destination pre-populated as the copy would leave it and an
+  assertion that nothing changed.** That proves what a copy *would* write; it does not prove
+  one landed, and the difference is the whole of what the journey is for.
 - **Coverage: 95% lines, per project, and each project measures only its own crate.**
   A workspace average lets a weak crate hide behind a strong one — and, decisively, a
   workspace-wide pass runs every crate's tests on every change, which is what affected

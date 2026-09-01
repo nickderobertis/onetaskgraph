@@ -20,6 +20,20 @@ path = "src/main.rs"
 name = "onetaskgraph-source"
 path = "src/bin/onetaskgraph-source.rs"
 
+# A file-backed document source the copy journeys spawn, so what one invocation writes the
+# next one can read. Behind a feature that is not a default one, because it is a fixture
+# rather than a product surface: `cargo install` never builds it, while every target in
+# this crate's project.json passes `--all-features`, so it is built, linted and
+# type-checked in every required check on all three platforms.
+[[bin]]
+name = "onetaskgraph-document-store"
+path = "src/bin/onetaskgraph-document-store.rs"
+required-features = ["test-support"]
+
+[features]
+# Builds the test-only stdio peer above, and the journeys that drive it.
+test-support = []
+
 # The one crate permitted to depend on the engine; deny.toml names it as such.
 [dependencies]
 clap.workspace = true
