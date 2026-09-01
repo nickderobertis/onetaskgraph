@@ -21,6 +21,15 @@ appends the name of every method this source is asked for, which is how a journe
 refusal happened *before* anything was read.
 """
 
+# llmlint: ignore-file[modern_domain_modeling] This peer is a transcription of
+# docs/plugin-protocol.md, and the protocol's own types are JSON objects. It is spawned
+# with a cleared environment (§3.1) by whatever `python3` or `python` the host provides, so
+# it may import nothing outside the standard library and cannot assume a version that has
+# the typing this rule asks for. A stdlib model layer would also be erased at runtime,
+# adding no check that `parameter`, `read_store` and `initialize` below do not already
+# make — while costing the file the property the journeys rely on: that a plugin can be
+# written from the protocol document alone, sharing no type with the engine's own half.
+
 import json
 import os
 import sys
@@ -46,13 +55,20 @@ def read_store(path):
     """The documents on disk, treating a file that is not there yet as an empty store.
 
     A missing file is the ordinary first-run state — a destination nothing has been copied
-    into yet — rather than a failure.
+    into yet — rather than a failure. A file that is there and is not a store is a
+    different thing, and says so rather than raising a Python error into the pipe.
     """
     try:
         with open(path, encoding="utf-8") as handle:
-            return json.load(handle).get("documents", [])
+            held = json.load(handle)
     except FileNotFoundError:
         return []
+    except ValueError:
+        raise Refusal(malformed("%s is not JSON, so it is not this source's store" % path))
+    documents = held.get("documents", []) if isinstance(held, dict) else None
+    if not isinstance(documents, list):
+        raise Refusal(malformed('%s is not a store: expected {"documents": [...]}' % path))
+    return documents
 
 
 def write_store(path, documents):
@@ -183,6 +199,23 @@ class Refusal(Exception):
         self.error = error
 
 
+def parameter(params, name, kind, method):
+    """One request parameter, refused as `malformed` when it is absent or the wrong shape.
+
+    A plugin answers a request it cannot parse with `malformed` (§5) rather than failing in
+    a way the engine has to guess at, so this names the method and the parameter instead of
+    raising a Python error into the pipe — where the engine would see only a dead peer.
+    """
+    value = params.get(name) if isinstance(params, dict) else None
+    if not isinstance(value, kind):
+        raise Refusal(
+            malformed(
+                "%s needs a %s parameter %r" % (method, kind.__name__, name)
+            )
+        )
+    return value
+
+
 def document_side(settings):
     """Refuse every document call when this source's settings say it has none.
 
@@ -193,6 +226,12 @@ def document_side(settings):
         raise Refusal(refused("the %s plugin has no documents" % KIND))
 
 
+# llmlint: ignore-block[structural_pattern_matching] `match`/`case` is a syntax error
+# before Python 3.10, and this peer is spawned with a cleared environment by whichever
+# `python3` or `python` the host has on PATH — see `interpreter()` in document_store.rs.
+# A syntax error there aborts the interpreter at import, which the engine sees as a plugin
+# that closed its output rather than as a portability problem, so the whole document-copy
+# round trip would report as broken on any host still shipping 3.9.
 def dispatch(settings, method, params):
     """Answer one method against the store this source's settings name."""
     store = settings["store"]
@@ -215,18 +254,20 @@ def dispatch(settings, method, params):
         return {"items": [], "next": None}
     if method == "get_document":
         document_side(settings)
-        found = [d for d in read_store(store) if d["id"] == params["id"]]
+        wanted = parameter(params, "id", str, method)
+        found = [d for d in read_store(store) if d["id"] == wanted]
         return {"document": found[0] if found else None}
     if method == "query_documents":
         document_side(settings)
-        kept = [d for d in read_store(store) if survives(d, params["query"])]
-        return paginate(kept, params["page"])
+        query = parameter(params, "query", dict, method)
+        kept = [d for d in read_store(store) if survives(d, query)]
+        return paginate(kept, parameter(params, "page", dict, method))
     if method == "write_document":
         document_side(settings)
-        write = params["write"]
+        write = parameter(params, "write", dict, method)
         documents = read_store(store)
         target = write.get("target")
-        landing = dict(write["item"])
+        landing = dict(parameter(write, "item", dict, method))
         if target is None:
             landing["id"] = unused(documents, landing["id"])
             documents.append(landing)
@@ -245,7 +286,8 @@ def dispatch(settings, method, params):
         return {"id": landing["id"]}
     if method == "delete_document":
         document_side(settings)
-        documents = [d for d in read_store(store) if d["id"] != params["id"]]
+        unwanted = parameter(params, "id", str, method)
+        documents = [d for d in read_store(store) if d["id"] != unwanted]
         write_store(store, documents)
         return {}
     if method in ("write_task", "write_project", "delete_task", "delete_project"):
@@ -255,6 +297,7 @@ def dispatch(settings, method, params):
     )
 
 
+# llmlint: ignore-end[structural_pattern_matching]
 def initialize(params):
     """The handshake (§3), which is also where this source learns where its store is."""
     version = params.get("protocol_version")
@@ -267,11 +310,20 @@ def initialize(params):
             }
         )
     settings = params.get("config") or {}
-    if "store" not in settings:
+    # Every setting is read here, once, rather than trusted wherever it is later used: a
+    # peer configured with a path that is not one, or a capability value the contract has
+    # no member for, is a configuration mistake and says so at the handshake.
+    if (
+        not isinstance(settings, dict)
+        or not isinstance(settings.get("store"), str)
+        or settings.get("documents", "native") not in ("native", "unsupported")
+        or not isinstance(settings.get("log", ""), str)
+    ):
         raise Refusal(
             {
                 "kind": "config",
-                "message": 'this source\'s settings must be {"store": <path>, ...}',
+                "message": 'this source\'s settings must be {"store": <path>, "documents": '
+                '"native"|"unsupported", "log": <path>}, the last two optional',
             }
         )
     note(settings, "initialize")
@@ -298,6 +350,8 @@ def main():
         method = request.get("method", "")
         params = request.get("params") or {}
         try:
+            if not isinstance(method, str) or not isinstance(params, dict):
+                raise Refusal(malformed("a request names its method and carries an object"))
             if method == "initialize":
                 settings, result = initialize(params)
             elif settings is None:

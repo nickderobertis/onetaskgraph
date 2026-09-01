@@ -319,6 +319,47 @@ fn a_document_copy_creates_at_a_persistent_destination_and_a_second_copy_updates
 }
 
 #[test]
+fn a_peer_that_cannot_parse_what_it_was_handed_refuses_in_its_own_words() {
+    // The recovery path of the seam, driven the way a user meets it: a peer answers a
+    // request it cannot parse with `malformed` (§5) rather than dying, so the engine
+    // reports one named source as having failed and leaves the rest of the answer intact.
+    // Here the peer's own store is the thing it cannot parse — a file somebody replaced.
+    let sandbox = Sandbox::new();
+    let store = store_path(&sandbox);
+    sandbox.project_document(&planted(source_document(json!({})), &store));
+    std::fs::create_dir_all(store.parent().expect("the store has a directory"))
+        .expect("the store directory");
+    std::fs::write(&store, "[\"not a store\"]").expect("the store file");
+
+    // Exit 4: a query that lost a source and was not asked to accept a partial answer.
+    let complaint = refused(&sandbox, &["document", "list", "--source", STORE], 4);
+    assert!(
+        complaint.contains("is not a store"),
+        "the peer's own words reach the user:\n{complaint}"
+    );
+
+    // The other source still answers, and the run says which one could not.
+    let partial = run(
+        &sandbox,
+        &[
+            "document",
+            "list",
+            "--source",
+            SOURCE,
+            "--source",
+            STORE,
+            "--allow-partial",
+        ],
+    );
+    assert_eq!(partial.status.code(), Some(0), "{}", stderr(&partial));
+    assert!(
+        stdout(&partial).contains(&qualified(SOURCE, "D-1")),
+        "one source failing leaves the other's documents intact:\n{}",
+        stdout(&partial)
+    );
+}
+
+#[test]
 fn a_document_copy_into_a_destination_with_no_documents_reads_nothing_from_the_source_first() {
     // The refusal is answered from the declaration the handshake carried, so the proof it
     // owes is not only its own wording: the source has to have been asked *nothing*. This
