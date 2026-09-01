@@ -119,6 +119,7 @@ ID_SYNTAX = re.compile(
 )
 NAME_SYNTAX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 MAX_PROSE = 400
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 # The short names other repositories wait on, and the artifact each one is. This
 # is the second spelling the header explains: a consumer names `sdk-pypi` in its
