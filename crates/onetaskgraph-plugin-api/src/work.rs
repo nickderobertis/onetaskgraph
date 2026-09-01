@@ -151,9 +151,13 @@ pub struct Document {
 #[serde(rename_all = "kebab-case")]
 pub enum Location {
     /// The entity lives at an external website, and this is a link a reader can open.
+    // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this restates at a new site the justification already recorded at `Task::url` and `Project::url` in this module, at `Capabilities.max_page_size` (capability.rs) and `PageRequest.limit` (query.rs): this crate's field types ARE the approved contract, and this variant is a `String` because the `url` field it sits beside is one. Narrowing it here alone would leave two members describing a web address in two different types, which is worse than the state it would remove.
+    // llmlint: ignore[boundary_inputs_validated] parsing this into a URL type would add a URL dependency to the crate AGENTS.md says to keep still ("Keep the api crate still" — every change here rebuilds and re-tests every plugin), and would narrow a frozen surface only the contract's owner may narrow. A plugin returning a string this interface cannot represent is what `SourceError::Malformed` is for, exactly as it is for `Task::url`.
     Url(String),
     /// The entity is a file on the machine the source runs on, and this is that file's
     /// absolute path, so a reader can print the path or read the contents out.
+    // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — the reason the variant above carries, plus one of this variant's own: a typed path here would be `std::path::PathBuf`, whose parsing is the *reading* platform's while this string is the *source's*. A plugin on Linux reporting an absolute path to an engine on Windows must have that path survive byte for byte, so the type that would make a relative path unrepresentable is the type that would corrupt a correct one.
+    // llmlint: ignore[boundary_inputs_validated] validating absoluteness here would answer the question with the wrong machine's rules, for the reason above — this side cannot know what "absolute" means on the host the plugin runs on. The absoluteness this documents is an obligation on the source, and a source that breaks it is `SourceError::Malformed` to the reader that acts on the path.
     Path(String),
 }
 

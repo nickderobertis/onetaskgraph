@@ -256,7 +256,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: native_block,
             complete_dataset: true,
-            declared: EVERYTHING_NATIVE,
+            declared: EVERY_PREDICATE_NATIVE,
         },
     },
     Row {
@@ -292,7 +292,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: hosted_block,
             complete_dataset: true,
-            declared: EVERYTHING_NATIVE,
+            declared: EVERY_PREDICATE_NATIVE,
         },
     },
     Row {
@@ -303,7 +303,7 @@ pub const ROWS: &[Row] = &[
             complete_dataset: true,
             declared: Declared {
                 max_page_size: 200,
-                ..EVERYTHING_NATIVE
+                ..EVERY_PREDICATE_NATIVE
             },
         },
     },
@@ -324,7 +324,7 @@ pub const ROWS: &[Row] = &[
                 search_title: Support::Unsupported,
                 search_content: Support::Unsupported,
                 max_page_size: 250,
-                ..EVERYTHING_NATIVE
+                ..EVERY_PREDICATE_NATIVE
             },
         },
     },
@@ -345,7 +345,7 @@ pub const ROWS: &[Row] = &[
             // documentation records why that is what `Native` means here.
             declared: Declared {
                 max_page_size: 100,
-                ..EVERYTHING_NATIVE
+                ..EVERY_PREDICATE_NATIVE
             },
         },
     },
@@ -353,14 +353,19 @@ pub const ROWS: &[Row] = &[
 
 /// The declaration a source that applies every predicate itself carries.
 ///
+/// *Predicate* is the whole of the name, and `documents` below is why: that field is not
+/// one, so a source can apply every predicate natively and still hold no documents. A name
+/// saying `EVERYTHING` would contradict the value.
+///
 /// A named constant because five of the six rows differ from it in at most two fields,
 /// and a row spelled out in full is a row whose one interesting difference is buried.
 /// `max_page_size` is the in-memory default; a row whose plugin picks its own overrides it.
-const EVERYTHING_NATIVE: Declared = Declared {
+const EVERY_PREDICATE_NATIVE: Declared = Declared {
     projects: Support::Native,
-    // Unsupported even here, because `documents` is not a predicate and "native" would
-    // claim this source holds documents rather than that it filters them itself. No plugin
-    // has any yet; docs/follow-ups.md tracks each one.
+    // Unsupported even here, because `documents` is not a predicate: "native" would claim
+    // this source *holds* documents rather than that it filters them itself, which is what
+    // keeps this constant's name true. No plugin has any yet; docs/follow-ups.md tracks
+    // each one.
     documents: Support::Unsupported,
     orphan_tasks: Support::Native,
     filter_by_label: Support::Native,

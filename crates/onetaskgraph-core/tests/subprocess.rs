@@ -16,9 +16,9 @@ use onetaskgraph_core::{
     MAX_LINE, RequestDeadline, SubprocessConfig, SubprocessSource, plugin_for, serve,
 };
 use onetaskgraph_plugin_api::{
-    Direction, Document, DocumentQuery, ItemWrite, LabelFilter, NativeId, PageRequest,
-    ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, Support, Task, TaskQuery,
-    TaskSource, WriteSupport,
+    Cursor, Direction, Document, DocumentQuery, ItemWrite, LabelFilter, Location, NativeId,
+    PageRequest, ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, Support,
+    Task, TaskQuery, TaskSource, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -863,6 +863,87 @@ async fn a_document_refusal_crosses_the_wire_as_the_hosted_plugin_s_own_reason()
         };
         assert_eq!(message, "the in-memory plugin cannot be written");
     }
+}
+
+#[tokio::test]
+async fn a_document_a_peer_really_answers_with_crosses_the_wire_whole() {
+    // The refusal is what every source of this build gives, so it is what the shared
+    // journey drives. This is the other half: a peer that *does* have documents, answering
+    // all four methods successfully over a real pipe, so the engine's own encoding and
+    // decoding of them is exercised rather than assumed. Nothing registered here can play
+    // that peer yet — no plugin implements documents — which is exactly why it is scripted.
+    let source = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": documentary(), "writes": "supported"}})
+        .to_string(),
+        json!({"id": "1", "result": {"document": wire_document()}}).to_string(),
+        json!({"id": "2", "result": {"items": [wire_document()], "next": "b2Zmc2V0PTE"}})
+            .to_string(),
+        json!({"id": "3", "result": {"id": "D-9"}}).to_string(),
+        json!({"id": "4", "result": {}}).to_string(),
+    ])
+    .expect("the handshake succeeds");
+
+    assert_eq!(source.capabilities().documents, Support::Native);
+
+    let found = source
+        .get_document(&NativeId("D-1".to_owned()))
+        .await
+        .expect("the peer holds it")
+        .expect("a document, not a null");
+    assert_eq!(found.title, "Why the store holds a document");
+    assert_eq!(found.project, Some(NativeId("P-1".to_owned())));
+    // The member a consumer acts on without knowing the backend, decoded as the one key
+    // that was present rather than as a bare string.
+    assert_eq!(
+        found.location,
+        Some(Location::Path("/home/someone/notes/design.md".to_owned()))
+    );
+
+    let page = source
+        .query_documents(&DocumentQuery::default(), &page(5))
+        .await
+        .expect("the peer answers a page");
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].id, NativeId("D-1".to_owned()));
+    assert_eq!(page.next, Some(Cursor("b2Zmc2V0PTE".to_owned())));
+
+    let written = source
+        .write_document(&ItemWrite {
+            target: None,
+            item: filed(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("the peer takes it");
+    assert_eq!(written, NativeId("D-9".to_owned()));
+
+    source
+        .delete_document(&NativeId("D-9".to_owned()))
+        .await
+        .expect("the peer removes it");
+}
+
+/// A handshake from a peer that says it has documents, unlike anything this build hosts.
+fn documentary() -> Value {
+    let mut declared = capabilities();
+    declared["documents"] = json!("native");
+    declared
+}
+
+/// One document as a peer puts it on the wire.
+fn wire_document() -> Value {
+    json!({
+        "id": "D-1",
+        "title": "Why the store holds a document",
+        "content": "A person cannot review a plan node by node.",
+        "project": "P-1",
+        "labels": [{"id": "L-1", "name": "design", "color": null}],
+        "url": "https://example.invalid/D-1",
+        "location": {"path": "/home/someone/notes/design.md"},
+        "created_at": null,
+        "updated_at": null
+    })
 }
 
 #[tokio::test]
