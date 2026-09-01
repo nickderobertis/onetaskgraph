@@ -94,6 +94,28 @@ def checked_optional_string(value, what):
     return value
 
 
+def checked_list(value, what):
+    """An optional list member: absent or null is empty, and anything else is a list.
+
+    Spelled out rather than defaulted with `or`, and that is the whole of why it exists:
+    `[]`, `{}`, `0`, `""` and `false` are all falsey in Python, so `value.get(name) or []`
+    would read `"labels": false` as "no labels" — accepting a shape the protocol does not
+    have, at the one place that exists to refuse one.
+    """
+    if value is None:
+        return []
+    checked(isinstance(value, list), "%s must be a list" % what)
+    return value
+
+
+def checked_object(value, what):
+    """An optional object member, on `checked_list`'s terms and for its reason."""
+    if value is None:
+        return {}
+    checked(isinstance(value, dict), "%s must be an object" % what)
+    return value
+
+
 def checked_location(location, what):
     """A `Location` (§4.13): absent, null, or an object with exactly one of two keys.
 
@@ -129,18 +151,13 @@ def checked_document(value, what):
     checked_string(value.get("title"), "%s needs a title that" % what)
     for member in ("content", "project", "url", "created_at", "updated_at"):
         checked_optional_string(value.get(member), "%s's %s" % (what, member))
-    labels = value.get("labels") or []
-    checked(isinstance(labels, list), "%s's labels must be a list" % what)
-    for label in labels:
+    for label in checked_list(value.get("labels"), "%s's labels" % what):
         checked(isinstance(label, dict), "%s's labels must each be an object" % what)
         checked_string(label.get("id"), "%s's label id" % what)
         checked_string(label.get("name"), "%s's label name" % what)
     checked_location(value.get("location"), what)
-    metadata = value.get("metadata") or {}
-    checked(isinstance(metadata, dict), "%s's metadata must be an object" % what)
-    repositories = value.get("repositories") or []
-    checked(isinstance(repositories, list), "%s's repositories must be a list" % what)
-    for origin in repositories:
+    checked_object(value.get("metadata"), "%s's metadata" % what)
+    for origin in checked_list(value.get("repositories"), "%s's repositories" % what):
         checked_string(origin, "%s's repository origin" % what)
     return value
 
@@ -159,11 +176,9 @@ def checked_query(query, method):
             text.get("fields") in TEXT_FIELDS,
             "%s's search fields must be one of %s" % (method, ", ".join(TEXT_FIELDS)),
         )
-    labels = query.get("labels") or {}
-    checked(isinstance(labels, dict), "%s's label filter must be an object" % method)
+    labels = checked_object(query.get("labels"), "%s's label filter" % method)
     for member in ("any_of", "all_of", "none_of"):
-        names = labels.get(member) or []
-        checked(isinstance(names, list), "%s's %s label filter must be a list" % (method, member))
+        names = checked_list(labels.get(member), "%s's %s label filter" % (method, member))
         for name in names:
             checked_string(name, "%s's %s label name" % (method, member))
     project = query.get("project", "any")

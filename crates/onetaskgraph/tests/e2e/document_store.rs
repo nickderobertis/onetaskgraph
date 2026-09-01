@@ -748,6 +748,29 @@ fn the_peer_refuses_malformed_protocol_input_rather_than_raising_into_the_pipe()
             creating("m14", source_document(json!({"repositories": [7]}))),
             "repository origin must be a string",
         ),
+        // The falsey ones, which are their own case: `[]`, `{}`, `0` and `false` are all
+        // falsey in Python, so a member defaulted with `or` reads `false` as "none of
+        // these" and accepts a shape the protocol does not have.
+        (
+            creating("m15", source_document(json!({"labels": false}))),
+            "labels must be a list",
+        ),
+        (
+            creating("m16", source_document(json!({"metadata": 0}))),
+            "metadata must be an object",
+        ),
+        (
+            creating("m17", source_document(json!({"repositories": false}))),
+            "repositories must be a list",
+        ),
+        (
+            querying("m18", json!({"labels": false})),
+            "label filter must be an object",
+        ),
+        (
+            querying("m19", json!({"labels": {"any_of": false}})),
+            "any_of label filter must be a list",
+        ),
     ];
 
     let mut sent = vec![hello(&store)];
