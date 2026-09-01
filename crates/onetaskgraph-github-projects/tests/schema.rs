@@ -437,17 +437,35 @@ fn documents_are_all_inventoried_with_what_the_source_is_doing_when_it_sends_one
         .map(|(name, _)| name.trim())
         .filter(|name| *name != "DOCUMENTS")
         .collect();
+    let inventory = onetaskgraph_github_projects::graphql::DOCUMENTS;
+    // Counting alone would let a duplicated entry stand in for an omitted document, so
+    // distinctness is asserted too. Every entry is a compiler-checked reference to one of
+    // the constants declared above it, so `as many entries as constants` and `no two
+    // entries alike` together mean each constant is inventoried exactly once.
+    let documents: HashSet<&str> = inventory.iter().map(|(document, _)| *document).collect();
+    assert_eq!(
+        documents.len(),
+        inventory.len(),
+        "graphql::DOCUMENTS holds the same document twice, which hides one it omits"
+    );
     assert_eq!(
         declared.len(),
-        onetaskgraph_github_projects::graphql::DOCUMENTS.len(),
+        inventory.len(),
         "graphql::DOCUMENTS names {} documents and the module declares {declared:?}; add the \
          missing one to that list with what this source is doing when it sends it",
-        onetaskgraph_github_projects::graphql::DOCUMENTS.len()
+        inventory.len()
     );
-    for (document, doing) in onetaskgraph_github_projects::graphql::DOCUMENTS {
+    let described: HashSet<&str> = inventory.iter().map(|(_, doing)| *doing).collect();
+    assert_eq!(
+        described.len(),
+        inventory.len(),
+        "two documents are inventoried as the same activity, so a diagnostic naming it \
+         cannot say which call was refused"
+    );
+    for (document, doing) in inventory {
         assert!(
-            !document.trim().is_empty() && !doing.trim().is_empty(),
-            "every document is inventoried with what sending it is doing: {doing:?}"
+            !doing.trim().is_empty(),
+            "every document is inventoried with what sending it is doing"
         );
         query::parse_query::<String>(document).expect("every inventoried document parses");
     }

@@ -447,6 +447,20 @@ fn seconds(duration: Duration) -> String {
     format!("{:.1}s", duration.as_secs_f64())
 }
 
+/// A header GitHub spells as a whole number of seconds, or `None` when this one is not.
+///
+/// A value that is present and unreadable is deliberately *not* an error. `retry-after` is
+/// allowed by HTTP to be a date rather than a count, an intermediary can rewrite either
+/// header, and neither is what makes a response a refusal — so the whole cost of one this
+/// cannot read is that the refusal carries no hint and the backing-off schedule answers it
+/// instead. Refusing the response over the header would turn a readable refusal into an
+/// unreadable one, and refusing to *wait* would be the one wrong direction to fail in.
+fn whole_seconds(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
+    value
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+}
+
 /// Whether this document creates content, which is what the secondary limiter counts.
 ///
 /// Every mutation in [`graphql`] does — creating an issue, putting it on the board,
@@ -1134,13 +1148,12 @@ impl GitHubProjectsSource {
                 })
             })?;
         let status = response.status();
-        let header = |name: &str| {
-            response
-                .headers()
-                .get(name)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<u64>().ok())
-        };
+        let header = |name: &str| whole_seconds(response.headers().get(name));
+        // Exactly `0` is exhaustion and everything else — a count, an empty value, bytes
+        // that are not text at all — is "not known to be exhausted". Nothing is decided on
+        // this alone: it narrows which limiter a refusal is attributed to and can add a
+        // hint, while what makes a response a refusal in the first place is its status and
+        // its own wording. So an unreadable value costs a hint, never a misclassification.
         let exhausted = response
             .headers()
             .get("x-ratelimit-remaining")
