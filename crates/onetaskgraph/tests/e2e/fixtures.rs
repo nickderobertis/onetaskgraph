@@ -1037,7 +1037,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             "parent":Value::Null,"repo":"nickderobertis/onetaskgraph","status":"Todo",
             "origin":"","labels":[]});
         board.pending.push(created);
-        return json!({"createIssue":{"issue":{"id":id}}});
+        // GitHub answers the creating mutation with the issue's own web address, which is
+        // the only place a run learns where an item it just created is before this board's
+        // read catches up.
+        return json!({"createIssue":{"issue":{"id":id,
+            "url":format!("https://example.invalid/{id}")}}});
     }
     if query.contains("addProjectV2ItemById(input:$input)") {
         assert_eq!(input["projectId"], "PVT-board");

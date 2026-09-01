@@ -214,7 +214,7 @@ pub mod graphql {
       }}} fragment Related on Issue{id title body parent{id} subIssuesSummary{total}}"#;
     /// Creates one issue in the configured repository.
     pub const CREATE_ISSUE: &str =
-        r#"mutation($input:CreateIssueInput!){createIssue(input:$input){issue{id}}}"#;
+        r#"mutation($input:CreateIssueInput!){createIssue(input:$input){issue{id url}}}"#;
     /// Puts an existing issue on the configured board.
     pub const ADD_TO_BOARD: &str = r#"mutation($input:AddProjectV2ItemByIdInput!){addProjectV2ItemById(input:$input){item{id}}}"#;
     /// Updates an issue's visible fields and its open or closed state in one call.
@@ -1449,11 +1449,11 @@ impl GitHubProjectsSource {
             None => None,
         };
 
-        let (content_id, item_id) = match existing {
+        let (content_id, item_id, url) = match existing {
             Some(item) => {
                 self.update_existing(item, incoming, &body, status_target.as_ref())
                     .await?;
-                (item.id.clone(), item.item_id.clone())
+                (item.id.clone(), item.item_id.clone(), item.url.clone())
             }
             None => {
                 self.create_and_file_issue(&board, incoming, &body, status_target.as_ref())
@@ -1500,7 +1500,11 @@ impl GitHubProjectsSource {
                 content_kind,
                 kind: incoming.written.kind(),
                 title: incoming.title.to_owned(),
-                body: body.clone(),
+                // The visible half of the body this write composed, split back off it the
+                // way a read splits it — so what this record reports is what a read of the
+                // same issue reports, rather than the person's text with the metadata slot
+                // still on the end of it.
+                body: metadata_body(body.clone())?.0,
                 // A document has no status of its own; what it reads back as is whatever
                 // the issue's own state says, which is what a re-read reports.
                 status: incoming
@@ -1514,7 +1518,7 @@ impl GitHubProjectsSource {
                 labels: incoming.labels.to_vec(),
                 parent: incoming.parent.cloned(),
                 origin: (!origin.is_empty()).then(|| origin.to_owned()),
-                url: None,
+                url,
                 created_at: None,
                 updated_at: None,
                 own_repository,
@@ -1747,13 +1751,20 @@ impl GitHubProjectsSource {
     /// Three calls rather than one: `createIssue` needs a repository and answers with an
     /// issue that is on no board, `addProjectV2ItemById` is what puts it there, and a
     /// closed status is a state of the issue rather than a field of the board item.
+    /// Creates the issue, files it on the board, and reports what a read of it would say:
+    /// its content id, its board item id, and the web address GitHub gave it.
+    ///
+    /// The address comes back here because this is the only place it is known before
+    /// GitHub's own board read catches up — an item this run created answers the reads
+    /// that follow it out of the record below, and one remembered without its address
+    /// would report no location for the rest of the run.
     async fn create_and_file_issue(
         &self,
         board: &Board,
         incoming: &Incoming<'_>,
         body: &Option<String>,
         status_target: Option<&StatusTarget>,
-    ) -> Result<(NativeId, String), SourceError> {
+    ) -> Result<(NativeId, String, Option<String>), SourceError> {
         let repository_id = self.repository_id().await?;
         let data = self
             .graphql(
@@ -1770,6 +1781,10 @@ impl GitHubProjectsSource {
                 message: "GitHub issue creation returned no issue".into(),
             })?;
         let content_id = NativeId(required_str(created, "id")?.to_owned());
+        // Optional although GitHub's schema makes it non-null: the issue exists by now, so
+        // a response without it is not worth failing a landed write over — the item simply
+        // reports no location until the board read catches up, which is what it did before.
+        let url = optional_str(created, "url")?.map(str::to_owned);
         // The issue exists from here on, so a failure filing it on the board takes it
         // back: an issue in the repository that is on no board is an item nobody asked for
         // and nothing here would find again.
@@ -1811,7 +1826,7 @@ impl GitHubProjectsSource {
                 });
             }
         }
-        Ok((content_id, required_str(item, "id")?.to_owned()))
+        Ok((content_id, required_str(item, "id")?.to_owned(), url))
     }
 
     /// Move one issue under the project it now belongs to, or out of the one it left.
@@ -1981,9 +1996,11 @@ impl Resolved {
     /// does not replace or derive from `url`: the field goes on reporting exactly what it
     /// reported before, and this says what that address *is*.
     ///
-    /// An item GitHub gave no `url` for — a draft has none, and neither does an issue this
-    /// run has only just created — reports no location at all rather than a third variant,
-    /// which is the contract's "the source did not say".
+    /// An item GitHub gave no `url` for — a draft has none — reports no location at all
+    /// rather than a third variant, which is the contract's "the source did not say". An
+    /// issue this run created is not one of those: its address comes back from the
+    /// creating mutation, so it is somewhere a reader can open from the moment it exists
+    /// rather than from whenever the board read catches up.
     fn location(&self) -> Option<Location> {
         self.url.clone().map(Location::Url)
     }

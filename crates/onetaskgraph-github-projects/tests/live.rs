@@ -1200,6 +1200,12 @@ async fn drive_every_declared_capability(
             .is_some(),
         "every entity of a hosted board is somewhere a reader can open: {read_design:?}"
     );
+    ensure!(
+        read_design.as_ref().and_then(|held| held.content.clone())
+            == artifact_document(&design, None).content,
+        "a document read back carrying something other than the content written: \
+         {read_design:?}"
+    );
     // And it is a document and nothing else: the same two searches that reported three
     // tasks and two projects above report exactly the same items now.
     let tasks_after = task_titles(writer, &by_prefix(), "task read after the document").await?;

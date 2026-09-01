@@ -163,6 +163,11 @@ struct State {
     /// fails one call of the several a write is, and what the source does about the calls
     /// that already landed is only readable if one of them can be made to fail.
     refuses: BTreeSet<String>,
+    /// How many of the most recently filed items this board's own reads do not show yet.
+    /// GitHub's `projectV2.items` is eventually consistent, so an item a run just created
+    /// is answered out of the source's own record of what it created until the board
+    /// catches up — and what that record holds is only observable while it is behind.
+    lagging_reads: usize,
     seen: Vec<Value>,
     next: usize,
 }
@@ -240,6 +245,11 @@ impl Fixture {
             .refuses
             .insert(operation.to_owned());
     }
+    /// Hold this board's reads `count` items behind what it really holds, the way GitHub's
+    /// eventually-consistent board read holds behind a mutation that has already landed.
+    fn read_behind(&self, count: usize) {
+        self.state.lock().unwrap().lagging_reads = count;
+    }
 }
 
 fn board(items: Vec<Item>) -> Fixture {
@@ -260,6 +270,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         status_field,
         blocked_by: BTreeMap::new(),
         refuses: BTreeSet::new(),
+        lagging_reads: 0,
         seen: Vec::new(),
         next: 0,
     }));
@@ -330,7 +341,8 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         let mut created = Item::issue(&id, input["title"].as_str().unwrap_or_default());
         created.body = input["body"].as_str().map(str::to_owned);
         state.pending.push(created);
-        return json!({"createIssue":{"issue":{"id":id}}});
+        return json!({"createIssue":{"issue":{"id":id,
+            "url":format!("https://github.example/{id}")}}});
     }
     if query.contains("addProjectV2ItemById(input:$input)") {
         let content = input["contentId"]
@@ -484,16 +496,17 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         other => panic!("after must be null or a string: {other}"),
     };
     let first = variables["first"].as_u64().expect("first") as usize;
-    let end = (offset + first).min(state.items.len());
+    let visible = state.items.len().saturating_sub(state.lagging_reads);
+    let end = (offset + first).min(visible);
     let options = state.options();
-    let nodes = state.items[offset..end]
+    let nodes = state.items[offset.min(end)..end]
         .iter()
         .map(|item| {
             json!({"id":item.item_id,"fieldValues":item.field_values(&options),"content":item.content()})
         })
         .collect::<Vec<_>>();
     json!({"owner":{"projectV2":{"id":"PVT_board","title":"Roadmap","fields":state.fields(),
-        "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < state.items.len(),"endCursor":end.to_string()}}}}})
+        "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < visible,"endCursor":end.to_string()}}}}})
 }
 
 fn operation_name(query: &str) -> &str {
@@ -4001,6 +4014,76 @@ async fn a_document_written_to_this_board_puts_the_prefix_back_and_round_trips_i
         selected_documents(source.as_ref(), &DocumentQuery::default())
             .await
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn an_item_this_run_created_reads_back_whole_while_the_board_is_still_behind() {
+    // GitHub's board read is eventually consistent, so a read that follows a write closely
+    // enough is answered out of this source's own record of what it created — and until
+    // now that record held the composed body, metadata slot and all, and no web address at
+    // all. The live lane caught it: a document written and read back in one run came back
+    // with its content carrying the encoding and nowhere a reader could open. Held one item
+    // behind here so the record is what answers, which is the only state it is visible in.
+    let fixture = board(vec![Item::issue("I_plan", "Engine").sub_issues(1)]);
+    let source = source(&fixture);
+    fixture.read_behind(1);
+
+    let mut design = document("D-1", "Alpha design");
+    design.content = Some("the engine core, reviewed".to_owned());
+    design.project = Some(NativeId("I_plan".to_owned()));
+    design.metadata = BTreeMap::from([("caller.flags".to_owned(), json!([true, null]))]);
+    let created = source
+        .write_document(&write(design))
+        .await
+        .expect("a document copies onto this board");
+
+    let read = source
+        .get_document(&created)
+        .await
+        .unwrap()
+        .expect("a board read that has not caught up still holds what this run created");
+    assert_eq!(read.title, "Alpha design");
+    assert_eq!(
+        read.content.as_deref(),
+        Some("the engine core, reviewed"),
+        "the content a person wrote, not the body this source composed around it"
+    );
+    assert_eq!(read.metadata["caller.flags"], json!([true, null]));
+    assert_eq!(
+        read.url.as_deref(),
+        Some(format!("https://github.example/{}", created.0).as_str())
+    );
+    assert_eq!(
+        read.location,
+        Some(Location::Url(format!(
+            "https://github.example/{}",
+            created.0
+        ))),
+        "an issue this run created is somewhere a reader can open from the moment it exists"
+    );
+
+    // The same of the work on the same board: this is one record for all three kinds.
+    let mut work = task("T-1", "Ship it", status(StatusCategory::Todo, "Todo"));
+    work.content = Some("the plan, written out".to_owned());
+    work.metadata = BTreeMap::from([("caller.shape".to_owned(), json!({"nested": 3.5}))]);
+    let written = source
+        .write_task(&write(work))
+        .await
+        .expect("a task copies onto this board");
+    let held = source
+        .get_task(&written)
+        .await
+        .unwrap()
+        .expect("and reads back the same way");
+    assert_eq!(held.content.as_deref(), Some("the plan, written out"));
+    assert_eq!(held.metadata["caller.shape"], json!({"nested": 3.5}));
+    assert_eq!(
+        held.location,
+        Some(Location::Url(format!(
+            "https://github.example/{}",
+            written.0
+        )))
     );
 }
 
