@@ -122,8 +122,15 @@ through GitHub's REST API rather than through the source; it now takes a source 
 way the next command would build one for the legs after that mutation, and says so at the
 site.
 
+What is true today is pinned rather than only described:
+`a_board_changed_by_something_else_is_seen_by_the_next_source_and_not_by_this_one` retitles
+a board item without going through the source, asserts that source still reports the title
+it read, and asserts that a source built the way the next command builds one reports the
+new one. So the behaviour this entry rules on fails a test when it moves rather than
+turning a live lane red.
+
 Settling it means deciding what a long-lived caller is owed: a source-level way to discard
 the cached board, a bound on how long a read may be answered from it, or a ruling that
 holding a source across commands is not a supported shape and saying that in the crate's
 own documentation. The first two both cost the single-request guarantee above, so whichever
-is chosen has to say what the two tests named here should assert instead.
+is chosen has to say what the three tests named here should assert instead.

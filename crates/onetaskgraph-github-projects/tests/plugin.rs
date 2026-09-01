@@ -409,6 +409,17 @@ impl Fixture {
             .collect::<Vec<_>>();
         times.windows(2).map(|pair| pair[1] - pair[0]).collect()
     }
+    /// Retitle an item without going through the source, the way anything else that
+    /// touches this board does — another person, another tool, another process.
+    fn retitled_by_something_else(&self, content_id: &str, title: &str) {
+        let mut state = self.state.lock().unwrap();
+        let item = state
+            .items
+            .iter_mut()
+            .find(|item| item.content_id == content_id)
+            .expect("this board holds the item being retitled");
+        item.title = title.to_owned();
+    }
     /// Hold this board's reads `count` items behind what it really holds, the way GitHub's
     /// eventually-consistent board read holds behind a mutation that has already landed.
     fn read_behind(&self, count: usize) {
@@ -4251,6 +4262,56 @@ async fn the_board_this_command_reads_holds_what_this_command_has_itself_written
         "and it took one board read to answer all of that"
     );
     assert!(landed.0.starts_with("I_new"));
+}
+
+/// The title one source reports for a board item, read through the trait a caller holds.
+async fn title_of(source: &dyn TaskSource, id: &str) -> String {
+    source
+        .get_task(&NativeId(id.to_owned()))
+        .await
+        .expect("the board answers a task read")
+        .expect("the board holds the item")
+        .title
+}
+
+#[tokio::test]
+async fn a_board_changed_by_something_else_is_seen_by_the_next_source_and_not_by_this_one() {
+    // The other face of reading the board once, and the one no other test here states. A
+    // source answers from that read for as long as it lives, so a change *nothing it did*
+    // made is not visible to it. For every consumer this repository ships that is exactly
+    // right — one invocation of the binary is one process, one source and one read, and
+    // both SDKs drive that binary as a subprocess — and it is what stops a copy of a
+    // project re-reading the whole board per item it writes.
+    //
+    // It is pinned here rather than left to prose because it is the observable a change to
+    // the cache's scope moves, and prose does not fail. `docs/follow-ups.md` records what
+    // a caller that links the crate and holds a source across several commands is owed,
+    // and says that settling it means saying what this test should assert instead.
+    let fixture = board(vec![Item::issue("I_1", "as it was").status("Todo")]);
+    let held = source(&fixture);
+    assert_eq!(title_of(held.as_ref(), "I_1").await, "as it was");
+
+    fixture.retitled_by_something_else("I_1", "as somebody else left it");
+    assert_eq!(
+        title_of(held.as_ref(), "I_1").await,
+        "as it was",
+        "this source read the board a second time, which is the request its one read buys"
+    );
+    assert_eq!(
+        fixture.requests("board"),
+        1,
+        "two reads through one source cost two reads of the board"
+    );
+
+    // And a source built the way the next command builds one reads what is there now, so
+    // the change is invisible for the life of one command rather than lost.
+    let next = source(&fixture);
+    assert_eq!(
+        title_of(next.as_ref(), "I_1").await,
+        "as somebody else left it",
+        "a fresh source answered from a board read some earlier source had made"
+    );
+    assert_eq!(fixture.requests("board"), 2);
 }
 
 #[test]
