@@ -1943,7 +1943,19 @@ fn writing_an_items_identifier_where_its_title_belongs_is_caught_by_every_row() 
     // against, which are Rust and out of that check's reach.
     for row in ROWS {
         let sandbox = host(row);
-        for (verb, noun) in [("task", "tasks"), ("project", "projects")] {
+        // The document verbs only where the row's source has documents; a row that holds
+        // none has no document rows for this to discriminate between, and the honest
+        // refusal it answers with is what that row's own journey asserts.
+        let entities: &[(&str, &str)] = if row.declared().documents.is_native() {
+            &[
+                ("task", "tasks"),
+                ("project", "projects"),
+                ("document", "documents"),
+            ]
+        } else {
+            &[("task", "tasks"), ("project", "projects")]
+        };
+        for &(verb, noun) in entities {
             let rendered = ok(row, &sandbox, &[verb, "list", "--json"]);
             let response: serde_json::Value =
                 serde_json::from_str(&rendered).expect("a list emits JSON");
