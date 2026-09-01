@@ -1,23 +1,11 @@
 #!/usr/bin/env bash
-# Fail when anything spells the GitHub Projects design-title prefix differently from the
-# plugin that defines it.
+# Fail when anything spells the GitHub Projects design-title prefix differently from
+# `DESIGN_TITLE_PREFIX`, the plugin constant that defines it.
 #
-# A GitHub Projects board has no document type, so `github-projects` reads a document as an
-# issue whose title begins one literal prefix. That literal is a contract in both
-# directions — this product writes it and reads it back, and a person authoring a design
-# issue by hand types it — so it is spelled once, as `DESIGN_TITLE_PREFIX` in that plugin,
-# and every other spelling is a restatement.
-#
-# The restatements are unavoidable and are not the problem. Prose has to show a reader the
-# exact bytes they will type, and `README.md`, `docs/metadata.md` and `docs/follow-ups.md`
-# each do. What a restatement without a gate costs is silence: change the constant and the
-# documents go on telling people to type the old prefix, which reads as this product
-# ignoring the design issues they wrote. Nothing else fails — the suite passes, because it
-# takes the prefix from the constant.
-#
-# So this reconciles them. Every code span in those documents that names the prefix must be
-# the plugin's own spelling of it, and so must every Rust string literal outside the plugin
-# that defines it.
+# Prose has to show a reader the exact bytes they will type, so the documents below restate
+# the prefix. What a restatement without a gate costs is silence: move the constant and they
+# go on telling people to type the old prefix, while the suite still passes because it reads
+# the constant.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
