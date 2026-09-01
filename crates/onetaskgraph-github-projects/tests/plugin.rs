@@ -10,6 +10,7 @@ use std::{
     net::TcpListener,
     sync::{Arc, Mutex},
     thread,
+    time::{Duration, Instant},
 };
 
 use onetaskgraph_plugin_api::{
@@ -165,6 +166,82 @@ struct State {
     refuses: BTreeSet<String>,
     seen: Vec<Value>,
     next: usize,
+    /// GitHub's two rate limiters, as far as a board fixture can spell them.
+    limits: Limits,
+}
+
+/// One canned HTTP refusal, in the exact shape GitHub answers a rate limit with.
+#[derive(Clone)]
+struct Refusal {
+    status: &'static str,
+    headers: String,
+    body: String,
+}
+
+impl Refusal {
+    /// A secondary rate limit under a forbidden status, which is how GitHub answers it far
+    /// more often than with too-many-requests.
+    fn secondary_forbidden() -> Self {
+        Self {
+            status: "403 Forbidden",
+            headers: String::new(),
+            body: json!({"message":"You have exceeded a secondary rate limit and have been \
+                                   temporarily blocked from content creation. Please retry \
+                                   your request again later.",
+                         "documentation_url":"https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"})
+                .to_string(),
+        }
+    }
+    /// The same refusal, asking for a wait of `seconds`.
+    fn after(mut self, seconds: u64) -> Self {
+        self.headers = format!("retry-after: {seconds}\r\n");
+        self
+    }
+}
+
+/// What this board refuses for going too fast, and what it counts while it does.
+#[derive(Default)]
+struct Limits {
+    /// Canned refusals to answer the next requests with, oldest first.
+    scripted: Vec<Refusal>,
+    /// Shortest interval this board accepts between two mutations. Anything faster is
+    /// refused the way GitHub refuses a secondary rate limit.
+    min_mutation_interval: Option<Duration>,
+    /// Refuse every mutation with a secondary rate limit, however slowly it arrives.
+    refuse_every_mutation: bool,
+    /// When the last mutation arrived, for the interval above.
+    last_mutation: Option<Instant>,
+    /// How many mutations this board refused for arriving too fast.
+    too_fast: u32,
+    /// When each request arrived, and which operation it carried.
+    arrivals: Vec<(Instant, String)>,
+}
+
+impl Limits {
+    /// The refusal this request earns, or `None` to let the board answer it.
+    fn refusal(&mut self, operation: &str, mutation: bool) -> Option<Refusal> {
+        let now = Instant::now();
+        self.arrivals.push((now, operation.to_owned()));
+        if !self.scripted.is_empty() {
+            return Some(self.scripted.remove(0));
+        }
+        if !mutation {
+            return None;
+        }
+        if self.refuse_every_mutation {
+            return Some(Refusal::secondary_forbidden());
+        }
+        let too_fast = self.min_mutation_interval.is_some_and(|interval| {
+            self.last_mutation
+                .is_some_and(|last| now.duration_since(last) < interval)
+        });
+        self.last_mutation = Some(now);
+        if too_fast {
+            self.too_fast += 1;
+            return Some(Refusal::secondary_forbidden());
+        }
+        None
+    }
 }
 
 impl State {
@@ -240,6 +317,46 @@ impl Fixture {
             .refuses
             .insert(operation.to_owned());
     }
+    /// Answer the next requests with these canned HTTP refusals, oldest first.
+    fn script(&self, refusals: Vec<Refusal>) {
+        self.state.lock().unwrap().limits.scripted = refusals;
+    }
+    /// Refuse any mutation arriving less than `interval` after the one before it, the way
+    /// GitHub's secondary limiter refuses a burst of content creation.
+    fn rate_limit_mutations(&self, interval: Duration) {
+        self.state.lock().unwrap().limits.min_mutation_interval = Some(interval);
+    }
+    /// Refuse every mutation with a secondary rate limit, however slowly it arrives.
+    fn refuse_every_mutation(&self) {
+        self.state.lock().unwrap().limits.refuse_every_mutation = true;
+    }
+    /// How many mutations this board refused for arriving faster than it allows.
+    fn too_fast(&self) -> u32 {
+        self.state.lock().unwrap().limits.too_fast
+    }
+    /// How many requests carried `operation`, refused ones included.
+    fn requests(&self, operation: &str) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .limits
+            .arrivals
+            .iter()
+            .filter(|(_, seen)| seen == operation)
+            .count()
+    }
+    /// The gaps between consecutive arrivals of any content-creating mutation.
+    fn mutation_gaps(&self) -> Vec<Duration> {
+        let state = self.state.lock().unwrap();
+        let times = state
+            .limits
+            .arrivals
+            .iter()
+            .filter(|(_, seen)| MUTATIONS.contains(&seen.as_str()))
+            .map(|(at, _)| *at)
+            .collect::<Vec<_>>();
+        times.windows(2).map(|pair| pair[1] - pair[0]).collect()
+    }
 }
 
 fn board(items: Vec<Item>) -> Fixture {
@@ -262,6 +379,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         refuses: BTreeSet::new(),
         seen: Vec::new(),
         next: 0,
+        limits: Limits::default(),
     }));
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
@@ -273,12 +391,25 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             let query = request["query"].as_str().expect("a GraphQL document");
             graphql_parser::parse_query::<String>(query).expect("a valid GraphQL document");
             let variables = &request["variables"];
-            let body = match refused(&served, query, variables) {
-                Some(message) => json!({"errors":[{"message":message}]}).to_string(),
-                None => json!({ "data": answer(&served, query, variables) }).to_string(),
+            // The limiter answers before the board does, exactly as GitHub's does: a
+            // refused request never reaches the board and changes nothing on it.
+            let limited = served.lock().unwrap().limits.refusal(
+                operation_name(query),
+                query.trim_start().starts_with("mutation"),
+            );
+            let (status, headers, body) = match limited {
+                Some(refusal) => (refusal.status, refusal.headers, refusal.body),
+                None => (
+                    "200 OK",
+                    String::new(),
+                    match refused(&served, query, variables) {
+                        Some(message) => json!({"errors":[{"message":message}]}).to_string(),
+                        None => json!({ "data": answer(&served, query, variables) }).to_string(),
+                    },
+                ),
             };
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
             stream.write_all(response.as_bytes()).expect("a response");
@@ -495,22 +626,37 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < state.items.len(),"endCursor":end.to_string()}}}}})
 }
 
+/// Every content-creating mutation this source sends, which is what GitHub's secondary
+/// limiter counts.
+const MUTATIONS: [&str; 10] = [
+    "createIssue",
+    "deleteIssue",
+    "addProjectV2ItemById",
+    "updateIssue",
+    "updateProjectV2DraftIssue",
+    "updateProjectV2ItemFieldValue",
+    "addSubIssue",
+    "removeSubIssue",
+    "addBlockedBy",
+    "removeBlockedBy",
+];
+
 fn operation_name(query: &str) -> &str {
-    for name in [
-        "createIssue",
-        "deleteIssue",
-        "addProjectV2ItemById",
-        "updateIssue",
-        "updateProjectV2DraftIssue",
-        "updateProjectV2ItemFieldValue",
-        "addSubIssue",
-        "removeSubIssue",
-        "addBlockedBy",
-        "removeBlockedBy",
-    ] {
+    for name in MUTATIONS {
         if query.contains(&format!("{name}(input:$input)")) {
             return name;
         }
+    }
+    // The reads, named so a test can count them: proving a copy stopped re-reading the
+    // whole board per item means counting the board reads it made.
+    if query.contains("projectV2(number:$number)") {
+        return "board";
+    }
+    if query.contains("repository(owner:$owner,name:$name)") {
+        return "repository";
+    }
+    if query.contains("node(id:$id)") {
+        return "issueDependencies";
     }
     "unknown"
 }
@@ -598,9 +744,19 @@ fn sequence_server(bodies: Vec<Value>) -> String {
     format!("http://{address}/graphql")
 }
 
+/// A source over one fixture endpoint.
+///
+/// Pacing is switched off in the base configuration on purpose. The shipped default
+/// spaces a mutation every 750 ms against github.com, and every write test here would
+/// otherwise spend that per call proving something about status mapping or metadata. The
+/// tests that are about pacing and about waiting a limiter out say so themselves, by
+/// passing a `pacing` block of their own — so what is proven about the schedule is proven
+/// where it is the subject, and `the_shipped_pacing_defaults_are_githubs_published_limits`
+/// pins the shipped values against the ones a source built with no `pacing` block uses.
 fn configured(endpoint: &str, extra: Value) -> Box<dyn TaskSource> {
     let mut config = json!({"owner":"octo-org","project_number":7,"endpoint":endpoint,
-                            "repository":"acme/work"});
+                            "repository":"acme/work",
+                            "pacing":{"min_mutation_interval_ms":0,"retry_budget_ms":0}});
     for (key, value) in extra.as_object().expect("an object of overrides") {
         if value.is_null() {
             config.as_object_mut().unwrap().remove(key);
@@ -3588,5 +3744,495 @@ async fn a_write_that_fails_part_way_takes_back_only_the_item_it_created() {
         "one, revised",
         "the mutation before the failure landed, and writing that back is the engine's \
          journal's job — which it can only do while the item is still there"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// GitHub's two rate limiters.
+//
+// Every test below drives the real source over a real socket, and each asserts on the one
+// observable the fix moves: how a refusal is classified, what the diagnostic says, whether
+// a wait was taken, how many requests a copy issues, and how they are spaced. A source
+// still carrying each defect is named beside the assertion that catches it.
+// ---------------------------------------------------------------------------------------
+
+/// A server which answers every request the same way, with headers of its own.
+///
+/// `raw_server_with_headers` cannot spell a status *and* a body a limiter needs together
+/// with more than one header line, and reading a body under a non-success status is the
+/// whole point here.
+fn always(refusal: &Refusal) -> String {
+    raw_server_with_headers(refusal.status, &refusal.body, &refusal.headers)
+}
+
+/// A source whose pacing and waiting are stated rather than defaulted.
+fn paced(endpoint: &str, pacing: Value) -> Box<dyn TaskSource> {
+    configured(endpoint, json!({ "pacing": pacing }))
+}
+
+/// No waiting at all: the first refusal is what the caller is told.
+fn no_waiting() -> Value {
+    json!({"min_mutation_interval_ms":0,"retry_budget_ms":0})
+}
+
+#[tokio::test]
+async fn every_shape_a_rate_limit_arrives_in_is_classified_as_one_and_never_as_a_credential() {
+    // The defect: this source classified on the HTTP status alone. GitHub answers a
+    // secondary rate limit with a *forbidden* status far more often than with
+    // too-many-requests, and that status mapped to `Auth` — so an operator being refused
+    // for going too fast was told to go and re-scope a token that was fine. It also
+    // answers one inside the `errors` of a *successful* response, which reached `Refused`
+    // with GitHub's own sentence passed through and nothing said about what it meant.
+    //
+    // A source still carrying the defect fails the second and third cases on
+    // `names_no_credential`, and the third on `names_a_rate_limit` too.
+    let secondary_in_a_success = Refusal {
+        status: "200 OK",
+        headers: String::new(),
+        body: json!({"errors":[{"type":"RATE_LIMITED",
+                                "message":"You have exceeded a secondary rate limit. Please \
+                                           wait a few minutes before you try again."}]})
+        .to_string(),
+    };
+    let too_many = Refusal {
+        status: "429 Too Many Requests",
+        headers: "retry-after: 30\r\n".to_owned(),
+        body: "{}".to_owned(),
+    };
+    for (what, shape) in [
+        ("a too-many-requests status", too_many),
+        (
+            "a forbidden status naming it",
+            Refusal::secondary_forbidden(),
+        ),
+        ("a successful response naming it", secondary_in_a_success),
+    ] {
+        let error = paced(&always(&shape), no_waiting())
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .expect_err(what);
+        assert!(
+            !matches!(error, SourceError::Auth { .. }),
+            "{what} was classified as a credential problem: {error:?}"
+        );
+        let message = refusal(error).to_ascii_lowercase();
+        assert!(
+            message.contains("rate limit") || message.contains("rate-limited"),
+            "{what} does not read as a rate limit: {message}"
+        );
+        assert!(
+            !message.contains("grant it projects and issues"),
+            "{what} still sends the operator to re-scope a token that is fine: {message}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_credential_the_board_really_rejects_is_still_a_credential_problem() {
+    // The other half of the same fix: a forbidden status carrying none of the limiter's
+    // wording is a token that genuinely lacks the access, and the advice it earns is the
+    // access it needs. A fix which simply stopped calling 403 a credential problem would
+    // pass the test above and fail this one.
+    for shape in [
+        Refusal {
+            status: "403 Forbidden",
+            headers: String::new(),
+            body: json!({"message":"Resource not accessible by personal access token"}).to_string(),
+        },
+        Refusal {
+            status: "401 Unauthorized",
+            headers: String::new(),
+            body: "{}".to_owned(),
+        },
+    ] {
+        let error = paced(&always(&shape), no_waiting())
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .expect_err("a rejected credential");
+        assert!(
+            matches!(error, SourceError::Auth { .. }),
+            "a rejected credential stopped being one: {error:?}"
+        );
+        let message = refusal(error);
+        assert!(
+            message.contains("Projects and Issues read/write")
+                && message.contains("Pull requests read-only"),
+            "the refusal no longer names the access the credential needs: {message}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_wait_hint_is_honoured_and_the_call_retried_rather_than_reported() {
+    // The defect: a refusal carrying `retry-after` became an error with the hint attached
+    // and no attempt made to honour it. A source still carrying it never sends the second
+    // request, so `requests("board")` is 1 and the read fails.
+    let fixture = board(vec![Item::issue("I_1", "one").status("Todo")]);
+    fixture.script(vec![Refusal::secondary_forbidden().after(1)]);
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_budget_ms":10_000}),
+    );
+    let started = Instant::now();
+    let page = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("the retry after the hinted wait");
+    let waited = started.elapsed();
+    assert_eq!(
+        page.items.len(),
+        1,
+        "the retry returned the board's own item"
+    );
+    assert!(
+        waited >= Duration::from_secs(1),
+        "the hinted second was not waited out: {waited:?}"
+    );
+    assert_eq!(
+        fixture.requests("board"),
+        2,
+        "the refused read was not retried"
+    );
+}
+
+#[tokio::test]
+async fn a_refusal_with_no_hint_is_retried_on_a_growing_schedule() {
+    // A refusal carrying no hint had no schedule at all. The assertion that catches a
+    // constant one: three waits of a flat 80 ms are 240 ms, and a doubling 80/160/320 is
+    // 560 ms, so the floor below is above anything but growth.
+    let fixture = board(vec![Item::issue("I_1", "one").status("Todo")]);
+    fixture.script(vec![
+        Refusal::secondary_forbidden(),
+        Refusal::secondary_forbidden(),
+        Refusal::secondary_forbidden(),
+    ]);
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":80,"retry_budget_ms":10_000}),
+    );
+    let started = Instant::now();
+    source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("the fourth attempt, once the board stopped refusing");
+    let waited = started.elapsed();
+    assert!(
+        waited >= Duration::from_millis(80 + 160 + 320),
+        "the schedule did not grow: {waited:?}"
+    );
+    assert_eq!(
+        fixture.requests("board"),
+        4,
+        "three refusals were not each retried"
+    );
+}
+
+#[tokio::test]
+async fn a_limiter_that_never_lets_up_ends_in_a_diagnostic_rather_than_an_unbounded_wait() {
+    // Bounded, and what the bound reports. An operator who reads a secondary refusal as a
+    // primary one polls `gh api rate_limit`, sees budget, and retries harder — which
+    // extends the limit — so the diagnostic has to say which limiter, what this source was
+    // doing, and that the endpoint reporting the primary budget does not report this one.
+    let fixture = board(vec![]);
+    fixture.refuse_every_mutation();
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":50,"retry_budget_ms":300}),
+    );
+    let started = Instant::now();
+    let error = source
+        .write_task(&write(task(
+            "T-1",
+            "Publish",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect_err("a limiter that never lets up");
+    let waited = started.elapsed();
+    assert!(
+        waited < Duration::from_secs(10),
+        "the bounded schedule did not end: {waited:?}"
+    );
+    assert!(
+        !matches!(error, SourceError::Auth { .. }),
+        "an unrelenting limiter was reported as a credential problem: {error:?}"
+    );
+    let message = refusal(error);
+    assert!(
+        message.contains("secondary rate limit"),
+        "the diagnostic does not name which limiter refused: {message}"
+    );
+    assert!(
+        message.contains("creating an issue"),
+        "the diagnostic does not say what this source was doing: {message}"
+    );
+    assert!(
+        message.contains("gh api rate_limit") && message.contains("does not report this one"),
+        "the diagnostic does not say the primary endpoint is silent about this: {message}"
+    );
+    assert!(
+        message.contains("2 refusals"),
+        "the diagnostic does not say a wait was taken at all: {message}"
+    );
+    assert!(
+        !message.contains("Projects and Issues read/write"),
+        "the diagnostic still sends the operator to re-scope a token: {message}"
+    );
+}
+
+#[tokio::test]
+async fn a_read_refused_past_the_budget_reports_it_rather_than_hanging() {
+    // The same bound over a read, and against a limiter that answers with a *successful*
+    // response — the shape that used to reach `Refused` carrying GitHub's own sentence and
+    // nothing about what it meant.
+    let secondary_in_a_success = Refusal {
+        status: "200 OK",
+        headers: String::new(),
+        body: json!({"errors":[{"message":"You have exceeded a secondary rate limit"}]})
+            .to_string(),
+    };
+    let source = paced(
+        &always(&secondary_in_a_success),
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":40,"retry_budget_ms":200}),
+    );
+    let started = Instant::now();
+    let message = refusal(
+        source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .expect_err("a limiter that never lets up"),
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the bounded schedule did not end"
+    );
+    assert!(
+        message.contains("reading the board") && message.contains("secondary rate limit"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn a_project_copy_reads_the_board_and_the_repository_once_for_the_whole_command() {
+    // The defect: `write_item` began by reading the whole board, paged, for every single
+    // item it wrote, and `create_and_file_issue` re-read the destination repository's
+    // identity for every issue it created. Those reads are the bulk of a copy's request
+    // count and none of its work, and they are what turned a six-item plan into a burst.
+    //
+    // A source still carrying the defect reads the board seven times here and the
+    // repository six, so both assertions below fail on the count they name.
+    let fixture = board(vec![]);
+    let source = source(&fixture);
+    let plan = source
+        .write_project(&write(project(
+            "P-1",
+            "Published roadmap",
+            status(StatusCategory::InProgress, "In Progress"),
+        )))
+        .await
+        .expect("the project issue");
+    for step in 0..5 {
+        let mut child = task(
+            &format!("T-{step}"),
+            &format!("step {step}"),
+            status(StatusCategory::Todo, "Todo"),
+        );
+        child.project = Some(plan.clone());
+        source.write_task(&write(child)).await.expect("a task");
+    }
+    assert_eq!(
+        fixture.requests("board"),
+        1,
+        "the board was re-read per item written"
+    );
+    assert_eq!(
+        fixture.requests("repository"),
+        1,
+        "the destination repository was re-resolved per issue created"
+    );
+    assert_eq!(
+        fixture.item(&plan.0).sub_issues,
+        5,
+        "and the copy still filed every task under its project"
+    );
+}
+
+#[tokio::test]
+async fn the_board_this_command_reads_holds_what_this_command_has_itself_written() {
+    // The half a cache gets wrong. GitHub's project items are eventually consistent, so a
+    // board read is completed from what this run created; a cache that served the snapshot
+    // taken *before* those writes would break exactly what that completion exists to fix.
+    //
+    // Both halves are asserted: an item created after the cached read is depended on by a
+    // later one and resolves, and an item that was already on the board reads back through
+    // the source with what the second write gave it rather than what it had before.
+    let fixture = board(vec![Item::issue("I_old", "already there").status("Todo")]);
+    let source = source(&fixture);
+    let first = source
+        .write_task(&write(task(
+            "T-1",
+            "the one depended on",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("the first task");
+    let second = task(
+        "T-2",
+        "the one that depends",
+        status(StatusCategory::Todo, "Todo"),
+    );
+    let landed = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: second,
+            depends_on: vec![edge(("T-2", ItemKind::Task), (&first.0, ItemKind::Task))],
+        })
+        .await
+        .expect("an item created earlier in this command resolves as a far end");
+    assert!(
+        fixture
+            .seen()
+            .iter()
+            .any(|call| call[0] == "addBlockedBy" && call[1]["blockingIssueId"] == first.0.as_str()),
+        "the dependency on the item this command created was not recorded: {:?}",
+        fixture.seen()
+    );
+
+    let mut revised = task("T", "renamed", status(StatusCategory::Todo, "Todo"));
+    revised.repositories = vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_old".to_owned())),
+            item: revised,
+            depends_on: vec![],
+        })
+        .await
+        .expect("a second write of an item that was already on the board");
+    assert_eq!(
+        source
+            .get_task(&NativeId("I_old".to_owned()))
+            .await
+            .unwrap()
+            .expect("the item is still there")
+            .title,
+        "renamed",
+        "this command's own view of the board went stale after it wrote to it"
+    );
+    assert_eq!(
+        fixture.requests("board"),
+        1,
+        "and it took one board read to answer all of that"
+    );
+    assert!(landed.0.starts_with("I_new"));
+}
+
+#[test]
+fn the_shipped_pacing_defaults_are_githubs_published_limits() {
+    // The rate this source states, and the reasoning stated beside it in the constant's own
+    // documentation: GitHub documents no more than 80 content-generating requests per
+    // minute, and 60000/80 is 750.
+    assert_eq!(onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS, 750);
+    assert_eq!(
+        60_000 / onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS,
+        80,
+        "the shipped interval is no longer the published per-minute limit"
+    );
+}
+
+#[tokio::test]
+async fn content_creating_mutations_leave_this_source_no_faster_than_the_shipped_rate() {
+    // Driven at the *shipped* default rather than a configured one, because the shipped
+    // default is what a board on github.com meets. A source with no pacing at all sends
+    // these four mutations inside a millisecond of each other, so every gap below fails.
+    let fixture = board(vec![]);
+    let source = configured(&fixture.endpoint, json!({"pacing": null}));
+    source
+        .write_task(&write(task(
+            "T-1",
+            "Publish",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("one task");
+    let gaps = fixture.mutation_gaps();
+    assert!(
+        gaps.len() >= 3,
+        "a created task is several mutations, and this saw {}",
+        gaps.len() + 1
+    );
+    let floor = Duration::from_millis(onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS);
+    // The source spaces the moments it *releases* a mutation, and what a fixture on the
+    // far side of a socket sees is the moments they arrive; the two differ by however long
+    // each request spent in transit, which varies by a millisecond or so either way. So
+    // the floor is the shipped interval less a tolerance for that, which is still three
+    // orders of magnitude above the arrival gap of a source that paces nothing.
+    let tolerance = Duration::from_millis(10);
+    assert!(
+        gaps.iter().all(|gap| *gap >= floor - tolerance),
+        "a mutation left this source faster than the shipped rate: {gaps:?}"
+    );
+    assert!(
+        gaps.iter().sum::<Duration>() >= floor * u32::try_from(gaps.len()).unwrap() - tolerance,
+        "the mutations of one write did not cost the shipped rate between them: {gaps:?}"
+    );
+    // And reads are not paced: pacing what the secondary limiter does not count would
+    // charge every listing for a limit it cannot trip.
+    let started = Instant::now();
+    source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("a read");
+    assert!(
+        started.elapsed() < floor,
+        "a read was paced as though it created content"
+    );
+}
+
+#[tokio::test]
+async fn a_copy_of_a_project_of_many_tasks_is_not_refused_by_a_board_enforcing_that_rate() {
+    // The whole point, end to end: a board which refuses any mutation arriving too soon
+    // after the one before it, and a copy of a project holding many tasks which is never
+    // refused by it. `retry_budget_ms: 0` is deliberate — nothing here may be rescued by a
+    // retry, so what completes the copy is the pacing and only the pacing.
+    //
+    // The board's threshold sits a little under the source's own interval on purpose: the
+    // source spaces its *releases*, and what the board measures is arrivals, so the gap
+    // absorbs loopback jitter. An unpaced source arrives at roughly zero spacing and is
+    // refused on its second mutation.
+    let fixture = board(vec![]);
+    fixture.rate_limit_mutations(Duration::from_millis(45));
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":60,"retry_budget_ms":0}),
+    );
+    let plan = source
+        .write_project(&write(project(
+            "P-1",
+            "Published roadmap",
+            status(StatusCategory::InProgress, "In Progress"),
+        )))
+        .await
+        .expect("the project issue was not refused");
+    for step in 0..8 {
+        let mut child = task(
+            &format!("T-{step}"),
+            &format!("step {step}"),
+            status(StatusCategory::Todo, "Todo"),
+        );
+        child.project = Some(plan.clone());
+        source
+            .write_task(&write(child))
+            .await
+            .unwrap_or_else(|error| panic!("task {step} was refused: {error}"));
+    }
+    assert_eq!(
+        fixture.too_fast(),
+        0,
+        "the board refused mutations for arriving too fast"
+    );
+    assert_eq!(fixture.item(&plan.0).sub_issues, 8);
+    assert!(
+        fixture.mutation_gaps().len() >= 30,
+        "a project of eight tasks is far more than a handful of mutations"
     );
 }

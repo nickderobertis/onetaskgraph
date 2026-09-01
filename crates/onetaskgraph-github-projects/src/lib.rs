@@ -116,10 +116,43 @@
 //! it titles and names its own artifacts, which is self-healing after an interrupted run:
 //! a process killed between its writes and its cleanup leaves artifacts the next run
 //! removes.
+//!
+//! # GitHub's two rate limiters, and why they are not one thing
+//!
+//! **The primary budget** is the hourly allowance `gh api rate_limit` reports. It is
+//! reported in `x-ratelimit-remaining`, it refills at a time `x-ratelimit-reset` names,
+//! and waiting is the whole answer to it.
+//!
+//! **The secondary limiter** is a burst limiter over *content-generating* requests — every
+//! mutation this source sends. Nothing reports it: `gh api rate_limit` shows the primary
+//! budget untouched while it is refusing, so an operator who reads a secondary refusal as
+//! a primary one polls that endpoint, sees room, and retries harder — which extends the
+//! limit. GitHub answers it with a **forbidden** status far more often than with
+//! too-many-requests, and sometimes with a *successful* response whose GraphQL `errors`
+//! name it. Classifying on the status alone therefore called it a credential problem and
+//! sent the operator to re-scope a token that was fine, which is the defect
+//! [`Limiter::classify`] exists to close: the evidence is the status *together with* what
+//! the body says.
+//!
+//! So this source does three things about it, and each is measured rather than tidy:
+//!
+//! 1. **It paces its own mutations.** GitHub documents a secondary limit of 80
+//!    content-generating requests per minute, so [`MIN_MUTATION_INTERVAL_MS`] spaces them
+//!    at 60000/80 — the fastest rate that cannot exceed the published bound. See that
+//!    constant for why the hourly half of the same limit is not what a copy trips.
+//! 2. **It reads the board and the destination repository once per command.** A copy of a
+//!    project used to re-read the whole board, paged, for every single item it wrote, and
+//!    re-resolve the repository for every issue it created. Those reads are the bulk of a
+//!    copy's request count and none of its work.
+//! 3. **It waits a refusal out** — the hint when the response carries one, a doubling
+//!    schedule when it does not — under one total budget, so a call that cannot succeed
+//!    reports a failure instead of hanging. What it reports names the limiter, what this
+//!    source was doing, and that the primary endpoint does not report the secondary one.
 #![deny(missing_docs)]
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
@@ -208,6 +241,198 @@ pub mod graphql {
     pub const DELETE_ISSUE: &str =
         r#"mutation($input:DeleteIssueInput!){deleteIssue(input:$input){repository{id}}}"#;
 }
+
+/// Which of GitHub's two rate limiters refused a request.
+///
+/// The distinction is not decoration: waiting is the whole answer to the primary budget,
+/// and polling is what *extends* the secondary one, so an operator told the wrong one
+/// takes the wrong next step. See this module's own note on the two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Limiter {
+    /// The hourly API budget, which `gh api rate_limit` reports and a wait answers.
+    Primary,
+    /// The burst limiter over content-generating requests, which nothing reports.
+    Secondary,
+}
+
+/// The wordings GitHub answers a secondary rate limit with.
+///
+/// It sends them under a forbidden status, under a too-many-requests status, and inside
+/// the `errors` of a *successful* response, which is why the text is what this matches on
+/// rather than the status. `abuse detection` is the wording GitHub used before the
+/// limiter was renamed and still returns from some endpoints; `submitted too quickly` is
+/// what a burst of content creation is refused with.
+const SECONDARY_WORDINGS: [&str; 5] = [
+    "secondary rate limit",
+    "temporarily blocked from content creation",
+    "abuse detection",
+    "submitted too quickly",
+    "exceeded a secondary",
+];
+
+/// The wordings GitHub answers an exhausted primary budget with.
+const PRIMARY_WORDINGS: [&str; 3] = [
+    "api rate limit exceeded",
+    "rate limit exceeded",
+    "\"type\":\"rate_limited\"",
+];
+
+impl Limiter {
+    /// Which limiter refused this response, or `None` when none of them did.
+    ///
+    /// The status alone is not the evidence and never was: GitHub answers a secondary
+    /// limit with a forbidden status far more often than with too-many-requests, and a
+    /// forbidden status with no such wording really is a credential this token lacks. So
+    /// the wording is read first, and only what carries none of it falls through to the
+    /// status.
+    fn classify(status: StatusCode, budget_exhausted: bool, body: &str) -> Option<Self> {
+        let normalized = body.to_ascii_lowercase();
+        if SECONDARY_WORDINGS
+            .iter()
+            .any(|wording| normalized.contains(wording))
+        {
+            return Some(Self::Secondary);
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS || budget_exhausted {
+            return Some(Self::Primary);
+        }
+        // A successful response saying it: GitHub reports a GraphQL rate limit in the
+        // `errors` of an HTTP 200, where nothing about the status says so at all.
+        if status.is_success()
+            && PRIMARY_WORDINGS
+                .iter()
+                .any(|wording| normalized.contains(wording))
+        {
+            return Some(Self::Primary);
+        }
+        None
+    }
+
+    /// What this limiter is called where an operator can look it up.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Primary => "GitHub's primary API rate limit",
+            Self::Secondary => "GitHub's secondary rate limit",
+        }
+    }
+}
+
+/// One rate-limit refusal, and the wait GitHub asked for if it asked for one.
+#[derive(Debug, Clone, Copy)]
+struct Limited {
+    limiter: Limiter,
+    hint: Option<u64>,
+}
+
+impl Limited {
+    /// What the caller is told once this source has waited as long as it may.
+    ///
+    /// The secondary limiter reports as a refusal carrying its reason rather than as
+    /// [`SourceError::RateLimited`], and the difference is the advice: that variant means
+    /// "slow down and try again", which is the one thing that extends a secondary limit,
+    /// and it carries no message in which to say otherwise. The primary budget keeps it,
+    /// because there waiting really is the answer and `retry_after_seconds` really is how
+    /// long.
+    fn exhausted(self, doing: &str, waits: u32, waited: Duration, needed: Duration) -> SourceError {
+        match self.limiter {
+            Limiter::Primary => SourceError::RateLimited {
+                retry_after_seconds: self.hint,
+            },
+            Limiter::Secondary => SourceError::Refused {
+                message: format!(
+                    "{} refused this source while {doing}; it waited {} out over {} and was \
+                     refused again, and the next wait of {} would take it past the {} one call \
+                     may spend waiting. That limiter is not the primary API budget: `gh api \
+                     rate_limit` reports the primary budget and does not report this one, so \
+                     budget showing there says nothing about this refusal, and every further \
+                     attempt extends it. next: leave this board alone for a few minutes, then \
+                     run the command again — or raise pacing.min_mutation_interval_ms on this \
+                     source so it writes more slowly.",
+                    self.limiter.name(),
+                    plural(waits, "refusal"),
+                    seconds(waited),
+                    seconds(needed),
+                    seconds(waited + needed),
+                ),
+            },
+        }
+    }
+}
+
+/// One attempt's outcome: an error to report, or a rate limit to wait out.
+enum Attempt {
+    Failed(SourceError),
+    Limited(Limited),
+}
+
+/// `n things`, with the plural a diagnostic a person reads has to get right.
+fn plural(count: u32, thing: &str) -> String {
+    if count == 1 {
+        format!("{count} {thing}")
+    } else {
+        format!("{count} {thing}s")
+    }
+}
+
+/// A duration as a diagnostic spells it.
+fn seconds(duration: Duration) -> String {
+    format!("{:.1}s", duration.as_secs_f64())
+}
+
+/// Whether this document creates content, which is what the secondary limiter counts.
+///
+/// Every mutation in [`graphql`] does — creating an issue, putting it on the board,
+/// writing a field of it, filing it under its project, recording a dependency — and every
+/// query in there does not.
+fn is_mutation(query: &str) -> bool {
+    query.trim_start().starts_with("mutation")
+}
+
+/// What this source was doing, for a diagnostic that has to say so.
+fn operation_description(query: &str) -> &'static str {
+    match query {
+        graphql::BOARD => "reading the board",
+        graphql::REPOSITORY => "reading the destination repository",
+        graphql::ISSUE_DEPENDENCIES => "reading an issue's dependencies",
+        graphql::CREATE_ISSUE => "creating an issue",
+        graphql::ADD_TO_BOARD => "adding an issue to the board",
+        graphql::UPDATE_ISSUE => "updating an issue",
+        graphql::UPDATE_DRAFT => "updating a draft item",
+        graphql::UPDATE_FIELD => "writing a board field",
+        graphql::ADD_SUB_ISSUE => "filing an issue under its project",
+        graphql::REMOVE_SUB_ISSUE => "taking an issue out of its project",
+        graphql::ADD_BLOCKED_BY => "recording a dependency",
+        graphql::REMOVE_BLOCKED_BY => "removing a dependency",
+        graphql::DELETE_ISSUE => "deleting an issue",
+        _ => "talking to GitHub",
+    }
+}
+
+/// Shortest interval between two content-creating mutations, in milliseconds.
+///
+/// GitHub documents two secondary limits on content-generating requests: no more than 80
+/// per minute, and no more than 500 per hour. 60000/80 is 750, so a mutation every 750 ms
+/// is the fastest rate that cannot exceed the per-minute bound, and that is the bound a
+/// copy actually trips: a copy of one plan-sized project is a burst of a few dozen
+/// mutations inside a few seconds. The hourly bound works out at one every 7.2 seconds
+/// sustained, which no single copy reaches and which, used as the spacing here, would turn
+/// an ordinary copy into an hour of waiting — so it is deliberately *not* what this paces
+/// at. An installation that wants the hourly bound honoured for a long sequence of copies
+/// says so through `pacing.min_mutation_interval_ms`.
+pub const MIN_MUTATION_INTERVAL_MS: u64 = 750;
+/// First wait when a rate-limit refusal carries no hint; each further wait doubles it.
+///
+/// A doubling schedule from one second reaches a minute in six waits, which is GitHub's
+/// own advice for a secondary limit — wait, and wait longer each time — without spending
+/// the first minute of a transient refusal doing nothing.
+pub const RETRY_BACKOFF_MS: u64 = 1_000;
+/// Total time one call may spend waiting out rate limits before it reports a failure.
+///
+/// Two minutes is long enough to ride out the refusals a paced copy still collects and
+/// short enough that a command an operator is watching returns. The bound is what makes
+/// the wait a wait rather than a hang: a call refused past it ends in a diagnostic naming
+/// the limiter, not in a process nobody can tell from a wedged one.
+pub const RETRY_BUDGET_MS: u64 = 120_000;
 
 fn default_token_env() -> String {
     "GH_PROJECTS_TOKEN".to_owned()
@@ -309,6 +534,60 @@ pub struct GitHubProjectsConfig {
     /// disabled.
     #[serde(default)]
     pub status_mapping: BTreeMap<String, Option<StatusTargetConfig>>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` parses each key into a `StatusCategory` and reports an unknown one against this instance.
+    /// How fast this source writes, and how long it waits out a rate-limit refusal.
+    ///
+    /// Every field keeps its shipped default when it is absent, and the defaults are
+    /// GitHub's own published limits rather than taste. See [`Pacing`].
+    #[serde(default)]
+    pub pacing: PacingConfig,
+}
+
+/// How fast this source writes, and how long it waits out a rate-limit refusal.
+///
+/// Configurable because a GitHub Enterprise installation sets its own limits and an
+/// operator who has already been refused may want to go slower still — not because the
+/// defaults are guesses. Each default is [`MIN_MUTATION_INTERVAL_MS`],
+/// [`RETRY_BACKOFF_MS`] and [`RETRY_BUDGET_MS`], and each of those records the published
+/// limit it was chosen from.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct PacingConfig {
+    /// Shortest interval between two content-creating mutations, in milliseconds.
+    ///
+    /// Zero sends them as fast as they are asked for, which is what a fixture server on
+    /// loopback wants and what no board on github.com does.
+    pub min_mutation_interval_ms: Option<u64>,
+    /// First wait when a rate-limit refusal carries no hint, in milliseconds. Each
+    /// further wait of the same call doubles it.
+    pub retry_backoff_ms: Option<u64>,
+    /// Total time one call may spend waiting out rate limits, in milliseconds.
+    ///
+    /// Zero reports the refusal rather than waiting at all.
+    pub retry_budget_ms: Option<u64>,
+}
+
+/// [`PacingConfig`] with every default resolved, which is what the source holds.
+#[derive(Debug, Clone, Copy)]
+struct Pacing {
+    min_mutation_interval: Duration,
+    retry_backoff: Duration,
+    retry_budget: Duration,
+}
+
+impl From<PacingConfig> for Pacing {
+    fn from(config: PacingConfig) -> Self {
+        Self {
+            min_mutation_interval: Duration::from_millis(
+                config
+                    .min_mutation_interval_ms
+                    .unwrap_or(MIN_MUTATION_INTERVAL_MS),
+            ),
+            retry_backoff: Duration::from_millis(
+                config.retry_backoff_ms.unwrap_or(RETRY_BACKOFF_MS),
+            ),
+            retry_budget: Duration::from_millis(config.retry_budget_ms.unwrap_or(RETRY_BUDGET_MS)),
+        }
+    }
 }
 
 /// Factory for [`GitHubProjectsSource`].
@@ -561,6 +840,31 @@ pub struct GitHubProjectsSource {
     /// itself just write, it lives and dies with the process, and it is never consulted for
     /// an item this source did not create.
     created: Mutex<Vec<Resolved>>,
+    /// How fast this source writes, and how long it waits out a refusal.
+    pacing: Pacing,
+    /// When the last content-creating mutation was released, so the next one can be
+    /// spaced from it. See [`MIN_MUTATION_INTERVAL_MS`].
+    last_mutation: Mutex<Option<Instant>>,
+    /// The board as this process last read it, for the length of one command.
+    ///
+    /// A copy of a project used to re-read the whole board, paged, before writing each of
+    /// its items, which is by far the largest part of a copy's request count and none of
+    /// its work. Nothing else changes this board while a command runs — this source's own
+    /// writes are the only writer — so one read answers them all.
+    ///
+    /// It is not a store of a user's work and it is not the cache the no-persistence
+    /// invariant forbids: it lives and dies with the process exactly as `created` does,
+    /// nothing is written down, and [`Self::board`] still completes it from `created`, so
+    /// an item this command created and then depends on resolves whether or not GitHub's
+    /// own eventually-consistent read has caught up. A write to an item already on the
+    /// board updates the entry here too, so what this holds is the last read plus this
+    /// process's own writes rather than a snapshot taken before them.
+    board_cache: Mutex<Option<Board>>,
+    /// The destination repository's node id, resolved once rather than per issue created.
+    ///
+    /// A repository's node id does not change, and re-reading it for every issue of a copy
+    /// spent one request per item on an answer this source already had.
+    repository_cache: Mutex<Option<String>>,
 }
 
 impl GitHubProjectsSource {
@@ -629,10 +933,77 @@ impl GitHubProjectsSource {
                     message: format!("cannot build HTTP client: {e}"),
                 })?,
             created: Mutex::new(Vec::new()),
+            pacing: config.pacing.into(),
+            last_mutation: Mutex::new(None),
+            board_cache: Mutex::new(None),
+            repository_cache: Mutex::new(None),
         })
     }
 
+    /// Send one GraphQL document, pacing this source's own mutations and waiting out a
+    /// rate limit rather than handing it straight back as an error.
+    ///
+    /// Retrying is safe for every document here: a request the limiter refused did not
+    /// run, so nothing this replays has already taken effect.
     async fn graphql(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
+        let doing = operation_description(query);
+        let mut waited = Duration::ZERO;
+        let mut waits = 0_u32;
+        let mut backoff = self.pacing.retry_backoff;
+        loop {
+            if is_mutation(query) {
+                let spacing = self.reserve_mutation_slot();
+                if !spacing.is_zero() {
+                    tokio::time::sleep(spacing).await;
+                }
+            }
+            let limited = match self.send_once(query, &variables).await {
+                Ok(data) => return Ok(data),
+                Err(Attempt::Failed(error)) => return Err(error),
+                Err(Attempt::Limited(limited)) => limited,
+            };
+            let wait = match limited.hint {
+                Some(hint) => Duration::from_secs(hint),
+                None => backoff,
+            };
+            let remaining = self.pacing.retry_budget.saturating_sub(waited);
+            if wait > remaining {
+                return Err(limited.exhausted(doing, waits, waited, wait));
+            }
+            tokio::time::sleep(wait).await;
+            waited += wait;
+            waits += 1;
+            backoff = backoff.saturating_mul(2);
+        }
+    }
+
+    /// The next moment a content-creating mutation may leave this source, as a wait from
+    /// now.
+    ///
+    /// The slot is reserved under the lock and the waiting happens outside it, so two
+    /// callers take two slots rather than the same one — and no lock is held across an
+    /// await.
+    fn reserve_mutation_slot(&self) -> Duration {
+        if self.pacing.min_mutation_interval.is_zero() {
+            return Duration::ZERO;
+        }
+        // A poisoned lock here costs pacing, not correctness, and refusing the write over
+        // it would turn an earlier failure into a second one for no gain.
+        let mut last = self
+            .last_mutation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = Instant::now();
+        let at = last.map_or(now, |previous| {
+            (previous + self.pacing.min_mutation_interval).max(now)
+        });
+        *last = Some(at);
+        at.saturating_duration_since(now)
+    }
+
+    /// One HTTP attempt, classified into an answer, a rate limit to wait out, or a
+    /// failure that waiting cannot help.
+    async fn send_once(&self, query: &str, variables: &Value) -> Result<Value, Attempt> {
         let response = self
             .client
             .post(self.endpoint.clone())
@@ -640,11 +1011,13 @@ impl GitHubProjectsSource {
             .json(&json!({"query": query, "variables": variables}))
             .send()
             .await
-            .map_err(|e| SourceError::Unavailable {
-                message: format!("GitHub GraphQL request failed: {e}"),
+            .map_err(|e| {
+                Attempt::Failed(SourceError::Unavailable {
+                    message: format!("GitHub GraphQL request failed: {e}"),
+                })
             })?;
         let status = response.status();
-        let retry_after = response
+        let hint = response
             .headers()
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
@@ -654,24 +1027,35 @@ impl GitHubProjectsSource {
             .get("x-ratelimit-remaining")
             .and_then(|v| v.to_str().ok())
             == Some("0");
-        if status == StatusCode::TOO_MANY_REQUESTS || exhausted {
-            return Err(SourceError::RateLimited {
-                retry_after_seconds: retry_after,
-            });
+        // Read before it is parsed, because the evidence which tells a secondary rate
+        // limit from a rejected credential is in the body of a response whose status says
+        // only "forbidden" — and a non-success response was never parsed at all.
+        let body = response.text().await.map_err(|e| {
+            Attempt::Failed(SourceError::Unavailable {
+                message: format!("GitHub GraphQL response could not be read: {e}"),
+            })
+        })?;
+        if let Some(limiter) = Limiter::classify(status, exhausted, &body) {
+            return Err(Attempt::Limited(Limited { limiter, hint }));
         }
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-            return Err(SourceError::Auth {
+            return Err(Attempt::Failed(SourceError::Auth {
                 message: format!(
                     "GitHub rejected the configured credential with HTTP {status}; grant it Projects and Issues read/write plus Pull requests read-only access for every repository represented on the board"
                 ),
-            });
+            }));
         }
         if !status.is_success() {
-            return Err(SourceError::Unavailable {
+            return Err(Attempt::Failed(SourceError::Unavailable {
                 message: format!("GitHub GraphQL returned HTTP {status}"),
-            });
+            }));
         }
-        let body: Value = response.json().await.map_err(|e| SourceError::Malformed {
+        self.answer(&body).map_err(Attempt::Failed)
+    }
+
+    /// What one successful HTTP response says, once its GraphQL errors are read.
+    fn answer(&self, body: &str) -> Result<Value, SourceError> {
+        let body: Value = serde_json::from_str(body).map_err(|e| SourceError::Malformed {
             message: format!("GitHub returned invalid JSON: {e}"),
         })?;
         let errors = body
@@ -740,7 +1124,70 @@ impl GitHubProjectsSource {
     }
 
     /// Every item on the board, with the one board identity they all share.
+    ///
+    /// Read from GitHub once per command and then answered from [`Self::board_cache`];
+    /// see that field for why one read is enough and why this is not a store. The
+    /// completion from `created` happens on every call rather than once, so an item this
+    /// command wrote after the cached read still comes back.
     async fn board(&self) -> Result<Board, SourceError> {
+        let cached = self.board_cache()?.clone();
+        let mut board = match cached {
+            Some(board) => board,
+            None => {
+                let read = self.read_board().await?;
+                *self.board_cache()? = Some(read.clone());
+                read
+            }
+        };
+        for own in self.created()?.iter() {
+            if !board.items.iter().any(|item| item.id == own.id) {
+                board.items.push(own.clone());
+            }
+        }
+        Ok(board)
+    }
+
+    /// This process's own view of the board, or the refusal a poisoned lock is.
+    fn board_cache(&self) -> Result<std::sync::MutexGuard<'_, Option<Board>>, SourceError> {
+        self.board_cache
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "this source's view of the board was left inconsistent by an earlier \
+                      failure; next: run the command again"
+                    .into(),
+            })
+    }
+
+    /// Bring this process's own view of the board up to an item it has just written.
+    ///
+    /// A created item goes to `created`, which is what completes a board read GitHub's own
+    /// eventual consistency has left behind. An item that was already there is replaced
+    /// where it sits, so a second write of it in the same command reads its real parent
+    /// rather than the one it had before the first write.
+    fn remember_written(&self, item: Resolved, created: bool) -> Result<(), SourceError> {
+        if created {
+            self.created()?.push(item);
+            return Ok(());
+        }
+        if let Some(board) = self.board_cache()?.as_mut()
+            && let Some(held) = board.items.iter_mut().find(|held| held.id == item.id)
+        {
+            *held = item;
+        }
+        Ok(())
+    }
+
+    /// Forget one item this process has just deleted, from both halves of its own view.
+    fn forget(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.created()?.retain(|own| own.id != *id);
+        if let Some(board) = self.board_cache()?.as_mut() {
+            board.items.retain(|item| item.id != *id);
+        }
+        Ok(())
+    }
+
+    /// Every page of the board, read from GitHub.
+    async fn read_board(&self) -> Result<Board, SourceError> {
         let mut after: Option<String> = None;
         let mut items = Vec::new();
         let mut board;
@@ -773,11 +1220,6 @@ impl GitHubProjectsSource {
                     after = Some(next.to_owned());
                 }
                 None => break,
-            }
-        }
-        for own in self.created()?.iter() {
-            if !items.iter().any(|item| item.id == own.id) {
-                items.push(own.clone());
             }
         }
         Ok(Board {
@@ -1231,7 +1673,13 @@ impl GitHubProjectsSource {
     }
 
     /// The configured repository's node id, or the refusal naming the field it needs.
+    ///
+    /// Resolved once per command; see [`Self::repository_cache`] for why re-reading it per
+    /// issue was pure cost.
     async fn repository_id(&self) -> Result<String, SourceError> {
+        if let Some(id) = self.repository_cache()?.clone() {
+            return Ok(id);
+        }
         let repository = self
             .repository
             .as_ref()
@@ -1258,7 +1706,20 @@ impl GitHubProjectsSource {
                     repository.owner, repository.name
                 ),
             })?;
-        Ok(required_str(node, "id")?.to_owned())
+        let id = required_str(node, "id")?.to_owned();
+        *self.repository_cache()? = Some(id.clone());
+        Ok(id)
+    }
+
+    /// This process's own record of the destination repository's node id.
+    fn repository_cache(&self) -> Result<std::sync::MutexGuard<'_, Option<String>>, SourceError> {
+        self.repository_cache
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "this source's record of the destination repository was left \
+                          inconsistent by an earlier failure; next: run the command again"
+                    .into(),
+            })
     }
 
     /// Create or update one board item, whichever kind it is.
@@ -1417,29 +1878,38 @@ impl GitHubProjectsSource {
             return Err(error);
         }
 
-        if existing.is_none() {
-            // Remember it, so the next board read in this run holds it whether or not
-            // GitHub's own has caught up. See the field's own documentation.
-            let remembered = Resolved {
-                item_id,
-                id: content_id.clone(),
-                content_kind,
-                kind: incoming.kind,
-                title: incoming.title.to_owned(),
-                body: body.clone(),
-                status: incoming.status.clone(),
-                labels: incoming.labels.to_vec(),
-                parent: incoming.parent.cloned(),
-                origin: (!origin.is_empty()).then(|| origin.to_owned()),
-                url: None,
-                created_at: None,
-                updated_at: None,
-                own_repository,
-                repositories: incoming.repositories.to_vec(),
-                slot,
-            };
-            self.created()?.push(remembered);
-        }
+        // Remember what was written, so the rest of this command reads what it just did
+        // rather than what the board said before it. A created item goes to `created`,
+        // which also completes a board read GitHub's own eventual consistency has left
+        // behind; an item that was already there replaces its entry in the board this
+        // command read. See both fields' own documentation.
+        let remembered = Resolved {
+            item_id,
+            id: content_id.clone(),
+            content_kind,
+            kind: incoming.kind,
+            title: incoming.title.to_owned(),
+            // The item's *visible* prose, which is what `resolve` reads back out of a
+            // board item's body and therefore what the rest of this command has to see.
+            // The composed `body` above is that prose plus the trailing metadata comment,
+            // and remembering it would read back as an item whose content held its own
+            // encoding.
+            body: incoming
+                .content
+                .filter(|content| !content.is_empty())
+                .map(str::to_owned),
+            status: incoming.status.clone(),
+            labels: incoming.labels.to_vec(),
+            parent: incoming.parent.cloned(),
+            origin: (!origin.is_empty()).then(|| origin.to_owned()),
+            url: existing.and_then(|item| item.url.clone()),
+            created_at: existing.and_then(|item| item.created_at),
+            updated_at: existing.and_then(|item| item.updated_at),
+            own_repository,
+            repositories: incoming.repositories.to_vec(),
+            slot,
+        };
+        self.remember_written(remembered, existing.is_none())?;
         Ok(content_id)
     }
 
@@ -1504,7 +1974,7 @@ impl GitHubProjectsSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub issue deletion returned no repository".into(),
             })?;
-        self.created()?.retain(|own| own.id != *id);
+        self.forget(id)?;
         Ok(())
     }
 
@@ -1536,7 +2006,7 @@ impl GitHubProjectsSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub issue deletion returned no repository".into(),
             })?;
-        self.created()?.retain(|own| own.id != *id);
+        self.forget(id)?;
         Ok(())
     }
 
@@ -1819,6 +2289,7 @@ impl GitHubProjectsSource {
 }
 
 /// The board, and every item on it this source reports.
+#[derive(Clone)]
 struct Board {
     id: String,
     fields: Value,

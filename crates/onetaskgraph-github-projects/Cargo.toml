@@ -17,6 +17,9 @@ schemars.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Only the timer: this source waits out a rate limit and spaces its own mutations, and
+# neither needs a runtime of its own — the caller already has one.
+tokio = { version = "1.53.1", default-features = false, features = ["time"] }
 
 [dev-dependencies]
 graphql-parser.workspace = true
