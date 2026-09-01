@@ -483,7 +483,6 @@ enum Attempt {
     Limited(Limited),
 }
 
-/// `n things`, with the plural a diagnostic a person reads has to get right.
 fn plural(count: u32, thing: &str) -> String {
     if count == 1 {
         format!("{count} {thing}")
@@ -492,7 +491,6 @@ fn plural(count: u32, thing: &str) -> String {
     }
 }
 
-/// A duration as a diagnostic spells it.
 fn seconds(duration: Duration) -> String {
     format!("{:.1}s", duration.as_secs_f64())
 }
@@ -511,11 +509,10 @@ fn whole_seconds(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
         .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
-/// Whether this document creates content, which is what the secondary limiter counts.
-///
-/// Every mutation in [`graphql`] does — creating an issue, putting it on the board,
-/// writing a field of it, filing it under its project, recording a dependency — and every
-/// query in there does not.
+/// Every mutation this source sends creates content — an issue, a board item, a field of
+/// one, a sub-issue link, a dependency — and no query in [`graphql::DOCUMENTS`] does, so
+/// what the secondary limiter counts and what the keyword says are the same set. That is
+/// what makes the keyword a sound test rather than a convenient one.
 fn is_mutation(query: &str) -> bool {
     query.trim_start().starts_with("mutation")
 }
@@ -1122,8 +1119,14 @@ impl GitHubProjectsSource {
     /// Send one GraphQL document, pacing this source's own mutations and waiting out a
     /// rate limit rather than handing it straight back as an error.
     ///
-    /// Retrying is safe for every document here: a request the limiter refused did not
-    /// run, so nothing this replays has already taken effect.
+    /// Retrying is safe for every document here, including the mutations, and the reason
+    /// is that only a *refusal* is retried: [`Limiter::classify`] rules on a response
+    /// GitHub sent, and a request GitHub refused for a rate limit did not run, so nothing
+    /// this replays has already taken effect. An outcome this source cannot know — the
+    /// send failed, or the body could not be read, so the mutation may well have landed —
+    /// is [`Attempt::Failed`] in [`send_once`] and leaves this loop without a second
+    /// attempt. A duplicate write would come from replaying one of those, and none is
+    /// replayed.
     async fn graphql(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
         let doing = operation_description(query);
         let mut waited = Duration::ZERO;

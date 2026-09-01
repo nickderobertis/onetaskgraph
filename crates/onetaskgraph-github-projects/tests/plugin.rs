@@ -715,7 +715,6 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < visible,"endCursor":end.to_string()}}}}})
 }
 
-/// Whether this document creates content, which is what GitHub's secondary limiter counts.
 fn is_mutation(query: &str) -> bool {
     query.trim_start().starts_with("mutation")
 }
@@ -3884,12 +3883,18 @@ fn always(refusal: &Refusal) -> String {
     raw_server_with_headers(refusal.status, &refusal.body, &refusal.headers)
 }
 
-/// A source whose pacing and waiting are stated rather than defaulted.
+/// A source built against `endpoint` with pacing of the test's own choosing.
+///
+/// Every test that asserts on a wait or a gap uses this rather than [`source`], because
+/// the shipped defaults are a minute's worth of backoff and would make each of them a
+/// minute long. The two that assert on the *shipped* rate say so in their own names.
 fn paced(endpoint: &str, pacing: Value) -> Box<dyn TaskSource> {
     configured(endpoint, json!({ "pacing": pacing }))
 }
 
-/// No waiting at all: the first refusal is what the caller is told.
+/// Pacing that neither spaces nor retries, so what a test sees is one request and the
+/// answer to it — which is what every test asserting on a *classification* wants, rather
+/// than the classification of whatever the last of several attempts got.
 fn no_waiting() -> Value {
     json!({"min_mutation_interval_ms":0,"retry_budget_ms":0})
 }
