@@ -7,10 +7,18 @@
 //! observed only through the report it printed, and "the document really landed carrying
 //! every field" was proven one layer down, as a library call.
 //!
-//! This closes that. The destination is `onetaskgraph-document-store`, a peer that keeps
-//! its documents in a JSON file and speaks `docs/plugin-protocol.md` over a real pipe to a
-//! real second process — so the copy in one invocation is read back by the *next*
+//! This closes that. The destination is `document_store.py` beside this file: a peer that
+//! keeps its documents in a JSON file and speaks `docs/plugin-protocol.md` over a real pipe
+//! to a real second process — so the copy in one invocation is read back by the *next*
 //! invocation, through the same command line a user types.
+//!
+//! That it is Python is deliberate twice over. It keeps a fixture out of the shipped
+//! binary, where an unmeasurable spawned program would sit as permanently uncovered lines.
+//! And it shares not one line with the engine's own half of the protocol, so these
+//! journeys test the seam's actual claim — that a plugin can be written in another
+//! language against the protocol document alone — rather than restating the engine's
+//! implementation back to itself. `python3` is already what every guard under
+//! `workspace:lint` runs on all three platforms, so it costs the gate no new dependency.
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -96,10 +104,44 @@ fn store_at(store: &Path, log: Option<&Path>, documents: &str) -> Value {
     json!({
         "plugin": "subprocess",
         "config": {
-            "command": env!("CARGO_BIN_EXE_onetaskgraph-document-store"),
+            "command": interpreter().to_string_lossy(),
+            "args": [peer().to_string_lossy()],
             "settings": settings,
         },
     })
+}
+
+/// This file's peer, beside it in the source tree.
+fn peer() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/document_store.py")
+}
+
+/// The Python interpreter, by absolute path.
+///
+/// Absolute because the engine spawns a plugin with a cleared environment (§3.1, so a
+/// plugin cannot read credentials from its own), which leaves the child with no `PATH` to
+/// resolve a bare command against. Found here, where there is still an environment to look
+/// in, rather than assumed — and a host without one fails saying so, because `python3` is
+/// what every guard under `workspace:lint` already runs.
+fn interpreter() -> PathBuf {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let names = if cfg!(windows) {
+        ["python3.exe", "python.exe"].as_slice()
+    } else {
+        ["python3", "python"].as_slice()
+    };
+    for directory in std::env::split_paths(&path) {
+        for name in names {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    panic!(
+        "no {names:?} on PATH; this suite's document destination is a Python peer, and \
+         python3 is already what every guard under `workspace:lint` runs"
+    )
 }
 
 /// The one document this suite copies, with a caller-defined key of every JSON type.

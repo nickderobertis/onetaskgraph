@@ -228,12 +228,15 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   command line is one process, so an `in-memory` destination cannot be read back by a later
   command and `local-md` declares it holds no documents — which once left the document copy
   observable only through the report it printed. `onetaskgraph-document-store` closes it: a
-  file-backed peer written from `docs/plugin-protocol.md` rather than from the engine's
-  implementation of it, spawned over a real pipe, so what one invocation writes the next one
-  reads. It and `tests/e2e/document_store.rs` are behind the non-default `test-support`
-  feature, because both are fixtures rather than product surface — `cargo install` never
-  builds the peer, and every target in `crates/onetaskgraph/project.json` passes
-  `--all-features`, so both are built, linted and measured in every required check. **Do not
+  file-backed peer spawned over a real pipe, so what one invocation writes the next one
+  reads. **It is Python, and that is not incidental.** A spawned plugin can never be
+  measured — the engine clears the child's environment (§3.1), which takes
+  `LLVM_PROFILE_FILE` with it, and `bin/onetaskgraph-source.rs` sits at 0% for exactly that
+  reason — so a peer of any size written in Rust would be permanently uncovered lines in the
+  binary crate. Being another language also makes the journeys test the seam's actual claim,
+  that a plugin can be written against the protocol document alone, rather than restating
+  the engine's own half back to itself. `python3` is already what every guard under
+  `workspace:lint` runs on all three platforms, so it costs the gate nothing. **Do not
   replace that round trip with a destination pre-populated as the copy would leave it and an
   assertion that nothing changed.** That proves what a copy *would* write; it does not prove
   one landed, and the difference is the whole of what the journey is for.

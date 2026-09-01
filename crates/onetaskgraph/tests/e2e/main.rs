@@ -25,10 +25,6 @@
 mod common;
 
 mod copy;
-// The document-copy round trip, whose destination is the file-backed stdio peer built
-// behind the same feature. Both are fixtures rather than product surface, so both are
-// behind `test-support` — which every target in this crate's project.json enables.
-#[cfg(feature = "test-support")]
 mod document_store;
 mod failures;
 mod fixtures;
