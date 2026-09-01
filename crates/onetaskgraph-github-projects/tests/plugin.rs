@@ -211,6 +211,9 @@ struct Limits {
     min_mutation_interval: Option<Duration>,
     /// Refuse every mutation with a secondary rate limit, however slowly it arrives.
     refuse_every_mutation: bool,
+    /// Operations this board answers normally, with the budget reported as spent — which
+    /// is what GitHub sends on the last request a budget allows.
+    spends_the_budget: BTreeSet<String>,
     /// When the last mutation arrived, for the interval above.
     last_mutation: Option<Instant>,
     /// How many mutations this board refused for arriving too fast.
@@ -351,6 +354,16 @@ impl Fixture {
     fn refuse_every_mutation(&self) {
         self.state.lock().unwrap().limits.refuse_every_mutation = true;
     }
+    /// Answer `operation` normally, reporting the budget spent — which is what GitHub
+    /// sends on the last request a budget allows, not only on the ones it then refuses.
+    fn spend_the_budget_on(&self, operation: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .limits
+            .spends_the_budget
+            .insert(operation.to_owned());
+    }
     /// How many mutations this board refused for arriving faster than it allows.
     fn too_fast(&self) -> u32 {
         self.state.lock().unwrap().limits.too_fast
@@ -419,11 +432,21 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                 .unwrap()
                 .limits
                 .refusal(operation_name(query), is_mutation(query));
+            let spent = served
+                .lock()
+                .unwrap()
+                .limits
+                .spends_the_budget
+                .contains(operation_name(query));
             let (status, headers, body) = match limited {
                 Some(refusal) => (refusal.status, refusal.headers, refusal.body),
                 None => (
                     "200 OK",
-                    String::new(),
+                    if spent {
+                        "x-ratelimit-remaining: 0\r\n".to_owned()
+                    } else {
+                        String::new()
+                    },
                     match refused(&served, query, variables) {
                         Some(message) => json!({"errors":[{"message":message}]}).to_string(),
                         None => json!({ "data": answer(&served, query, variables) }).to_string(),
@@ -2733,7 +2756,7 @@ async fn transport_http_json_and_graphql_failures_each_reach_the_caller_intact()
             "rate",
         ),
         (
-            raw_server_with_headers("200 OK", "{}", "x-ratelimit-remaining: 0\r\n"),
+            raw_server_with_headers("403 Forbidden", "{}", "x-ratelimit-remaining: 0\r\n"),
             "rate",
         ),
         (raw_server("401 Unauthorized", "{}"), "credential"),
@@ -4308,7 +4331,7 @@ async fn the_primary_budget_is_waited_out_and_then_reported_as_the_rate_limit_it
     // shapes of its own: the `x-ratelimit-remaining: 0` header, and a successful response
     // whose GraphQL errors name it.
     let exhausted = Refusal {
-        status: "200 OK",
+        status: "403 Forbidden",
         headers: "x-ratelimit-remaining: 0\r\n".to_owned(),
         body: "{}".to_owned(),
     };
@@ -4411,7 +4434,7 @@ async fn an_exhausted_budget_reports_when_it_comes_back_rather_than_burning_the_
     let refills_in_an_hour = chrono::Utc::now().timestamp() + 3_600;
     let source = paced(
         &always(&Refusal {
-            status: "200 OK",
+            status: "403 Forbidden",
             headers: format!(
                 "x-ratelimit-remaining: 0\r\nx-ratelimit-reset: {refills_in_an_hour}\r\n"
             ),
@@ -4641,4 +4664,66 @@ async fn the_diagnostic_names_whichever_call_the_limiter_caught() {
             "a limiter that caught {operation} says {said:?} rather than naming {doing:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn spending_the_last_of_the_budget_still_answers_rather_than_refusing() {
+    // GitHub sets `x-ratelimit-remaining: 0` on the last request the budget allowed as
+    // well as on the ones it then refuses. Reading the header alone made that successful
+    // read a rate-limit failure — throwing away an answer it already had — and, once
+    // refusals were retried, replayed a request that had already taken effect. A response
+    // is a refusal because of its status or its own wording; a spent budget only explains
+    // one.
+    let fixture = board(vec![Item::issue("I_1", "one").status("Todo")]);
+    fixture.spend_the_budget_on("board");
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":50,"retry_budget_ms":5_000}),
+    );
+    let answered = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("a response that spent the last of the budget is still a response");
+    assert_eq!(
+        answered.items.len(),
+        1,
+        "the answer that response already carried was thrown away"
+    );
+    assert_eq!(
+        fixture.requests("board"),
+        1,
+        "a request that had already taken effect was replayed"
+    );
+
+    // A write, where replaying is the half that costs something: the creation runs once
+    // and exactly one issue ends up on the board.
+    let fixture = board(vec![]);
+    fixture.spend_the_budget_on("createIssue");
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":50,"retry_budget_ms":5_000}),
+    );
+    let landed = source
+        .write_task(&write(task(
+            "T-1",
+            "Publish",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("a write whose creation spent the last of the budget");
+    assert_eq!(
+        fixture.requests("createIssue"),
+        1,
+        "an issue creation that had already taken effect was sent a second time"
+    );
+    assert!(fixture.holds(&landed.0));
+    assert_eq!(
+        fixture
+            .seen()
+            .iter()
+            .filter(|call| call[0] == "createIssue")
+            .count(),
+        1,
+        "and the board holds exactly the one issue that was asked for"
+    );
 }

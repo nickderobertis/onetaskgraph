@@ -325,6 +325,9 @@ impl Limiter {
     /// because GitHub answers a secondary limit with a forbidden status far more often
     /// than with too-many-requests — while a forbidden status saying nothing about a limit
     /// really is a credential this token lacks.
+    ///
+    /// A response is a refusal because of its status or its own wording. A spent budget
+    /// only ever explains one; it never turns an answer into a refusal.
     fn classify(status: StatusCode, budget_exhausted: bool, body: &str) -> Option<Self> {
         let normalized = refusal_wording(status, body).to_ascii_lowercase();
         if SECONDARY_WORDINGS
@@ -333,7 +336,15 @@ impl Limiter {
         {
             return Some(Self::Secondary);
         }
-        if status == StatusCode::TOO_MANY_REQUESTS || budget_exhausted {
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            return Some(Self::Primary);
+        }
+        // An exhausted budget *explains* a response that failed; it does not make one that
+        // succeeded into a failure. GitHub sets `x-ratelimit-remaining: 0` on the last
+        // request the budget allowed as well as on the ones it then refuses, so reading
+        // the header alone threw away a good answer — and, once refusals were retried,
+        // replayed a request that had already taken effect.
+        if !status.is_success() && budget_exhausted {
             return Some(Self::Primary);
         }
         // A successful response saying it: GitHub reports a GraphQL rate limit in the
@@ -1150,10 +1161,10 @@ impl GitHubProjectsSource {
         let status = response.status();
         let header = |name: &str| whole_seconds(response.headers().get(name));
         // Exactly `0` is exhaustion and everything else — a count, an empty value, bytes
-        // that are not text at all — is "not known to be exhausted". Nothing is decided on
-        // this alone: it narrows which limiter a refusal is attributed to and can add a
-        // hint, while what makes a response a refusal in the first place is its status and
-        // its own wording. So an unreadable value costs a hint, never a misclassification.
+        // that are not text at all — is "not known to be exhausted". This never makes a
+        // response a refusal on its own: it says which limiter a refusal is attributed to
+        // and where its hint comes from, so a value this cannot read costs a hint rather
+        // than an answer.
         let exhausted = response
             .headers()
             .get("x-ratelimit-remaining")
