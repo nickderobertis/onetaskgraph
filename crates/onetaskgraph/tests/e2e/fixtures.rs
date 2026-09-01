@@ -779,6 +779,8 @@ struct GitHubBoard {
     /// The board still holds it — every mutation below finds it — and only the *read* is
     /// behind, which is exactly what this models.
     lagging_reads: usize,
+    /// Every GraphQL document this board has received, in order.
+    documents: Vec<String>,
     /// The board's **own** title, description and readme — a person's, not this
     /// product's. `updateProjectV2` is answered here rather than refused so that a
     /// journey asserting these are byte-identical after a copy fails when something
@@ -789,9 +791,34 @@ struct GitHubBoard {
 /// A read-only handle on one fixture board's own fields.
 pub struct GitHubBoardFields {
     endpoint: String,
+    board: Arc<Mutex<GitHubBoard>>,
 }
 
 impl GitHubBoardFields {
+    /// Every GraphQL document this board has received, in order.
+    ///
+    /// What a journey needs to say that a read never *asked* for something, which is a
+    /// claim its answer cannot carry: a read scoped to one project and a read of the whole
+    /// board can agree about the tasks in that project and disagree entirely about what
+    /// they cost.
+    #[must_use]
+    pub fn documents(&self) -> Vec<String> {
+        self.board.lock().unwrap().documents.clone()
+    }
+
+    /// Which of the documents this board received selected the board's own item
+    /// connection — the read whose cost is the whole board.
+    #[must_use]
+    pub fn board_item_reads(&self) -> Vec<String> {
+        self.documents()
+            .into_iter()
+            .filter(|document| {
+                document.contains("projectV2(number:$number)")
+                    && document.contains("items(first:$first,after:$after)")
+            })
+            .collect()
+    }
+
     /// The board's own `title`, `shortDescription` and `readme`, asked of the GitHub
     /// endpoint the way any client of it asks.
     ///
@@ -876,6 +903,22 @@ impl GitHubBoard {
                "labels":{"nodes":item["labels"].as_array().unwrap().iter()
                    .map(|pair| json!({"id":pair[0],"name":pair[1],"color":null}))
                    .collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}})
+    }
+
+    /// One issue as a board-scoped search, a node read or a sub-issue read returns it:
+    /// the issue's own fields with the board half riding along on `projectItems`.
+    ///
+    /// The board half is `rendered`'s, read back out of it rather than spelled twice, so
+    /// an item reached through the board and the same item reached through its own id
+    /// cannot disagree about its status, its origin or its board labels.
+    fn as_issue(&self, item: &Value) -> Value {
+        let board_item = self.rendered(item);
+        let mut issue = self.content(item);
+        issue["projectItems"] = json!({"nodes":[{"id":board_item["id"],
+                                                 "project":{"number":7},
+                                                 "fieldValues":board_item["fieldValues"]}],
+                                       "pageInfo":{"hasNextPage":false}});
+        issue
     }
 
     fn rendered(&self, item: &Value) -> Value {
@@ -1034,11 +1077,13 @@ fn github_projects_board_at(
         blocked_by: github_blockers(),
         created: 0,
         lagging_reads,
+        documents: Vec::new(),
         own: json!({"title":"Fixture board",
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
+    let watched = Arc::clone(&board);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
@@ -1055,6 +1100,7 @@ fn github_projects_board_at(
                 panic!("GraphQL request carries no variables object: {request}")
             });
             let variables = Value::Object(variables.clone());
+            board.lock().unwrap().documents.push(query.to_owned());
             let owed = owed_failures
                 .iter()
                 .position(|operation| query.contains(operation));
@@ -1098,7 +1144,10 @@ fn github_projects_board_at(
             // `crates/onetaskgraph-github-projects/tests/plugin.rs`.
             "pacing": {"min_mutation_interval_ms": 0}
         }),
-        GitHubBoardFields { endpoint },
+        GitHubBoardFields {
+            endpoint,
+            board: watched,
+        },
     )
 }
 
@@ -1248,6 +1297,91 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     if query.contains("... on ProjectV2{title shortDescription readme}") {
         assert_eq!(variables["id"], "PVT-board");
         return json!({ "node": board.own.clone() });
+    }
+    if query.contains("search(query:$search") {
+        assert_eq!(variables["type"], "ISSUE");
+        let search = variables["search"].as_str().expect("a search query");
+        let wanted = search
+            .strip_prefix("project:fixture-owner/7 is:issue")
+            .unwrap_or_else(|| panic!("a search scoped to the configured board: {search}"));
+        // The server side of `in:title "..."`, which is what a project named by name is
+        // discovered through.
+        let title = wanted.trim().strip_prefix("in:title ").map(|quoted| {
+            quoted
+                .trim()
+                .trim_matches('"')
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+        });
+        let offset = match &variables["after"] {
+            Value::Null => 0,
+            Value::String(cursor) => cursor.parse::<usize>().expect("numeric after cursor"),
+            other => panic!("GraphQL after must be null or a numeric string: {other}"),
+        };
+        let first = usize::try_from(
+            variables["first"]
+                .as_u64()
+                .expect("GraphQL first must be an unsigned integer"),
+        )
+        .expect("GraphQL first fits usize");
+        assert!(first > 0, "GraphQL first must be positive");
+        // GitHub's issue search is an index and is behind what the board really holds, the
+        // same way its board read is; `lagging_reads` is how far.
+        let visible = board.items.len().saturating_sub(board.lagging_reads);
+        let matched = board.items[..visible]
+            .iter()
+            .filter(|item| {
+                title
+                    .as_ref()
+                    .is_none_or(|title| item["title"] == json!(title))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let end = (offset + first).min(matched.len());
+        let nodes = matched[offset.min(end)..end]
+            .iter()
+            .map(|item| board.as_issue(item))
+            .collect::<Vec<_>>();
+        return json!({"search":{"nodes":nodes,
+            "pageInfo":{"hasNextPage":end < matched.len(),"endCursor":end.to_string()}}});
+    }
+    if query.contains("subIssues(first:$first") {
+        let id = variables["id"].as_str().expect("a node id").to_owned();
+        if !board.items.iter().any(|item| item["id"] == json!(id)) {
+            return json!({ "node": null });
+        }
+        let offset = match &variables["after"] {
+            Value::Null => 0,
+            Value::String(cursor) => cursor.parse::<usize>().expect("numeric after cursor"),
+            other => panic!("GraphQL after must be null or a numeric string: {other}"),
+        };
+        let first = usize::try_from(
+            variables["first"]
+                .as_u64()
+                .expect("GraphQL first must be an unsigned integer"),
+        )
+        .expect("GraphQL first fits usize");
+        let children = board
+            .items
+            .iter()
+            .filter(|item| item["parent"] == json!(id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let end = (offset + first).min(children.len());
+        let nodes = children[offset.min(end)..end]
+            .iter()
+            .map(|item| board.as_issue(item))
+            .collect::<Vec<_>>();
+        return json!({"node":{"__typename":"Issue",
+            "subIssues":{"nodes":nodes,
+                "pageInfo":{"hasNextPage":end < children.len(),"endCursor":end.to_string()}}}});
+    }
+    if query.contains("node(id:$id){__typename ...BoardIssue}") {
+        let id = variables["id"].as_str().expect("a node id").to_owned();
+        let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
+            return json!({ "node": null });
+        };
+        return json!({ "node": board.as_issue(item) });
     }
     if query.contains("node(id:$id)") {
         let id = variables["id"].as_str().expect("dependency id").to_owned();

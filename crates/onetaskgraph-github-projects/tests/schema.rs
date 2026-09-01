@@ -243,6 +243,17 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
             Some("/data/owner"),
             Some(include_str!("fixtures/project.json")),
         ),
+        (
+            graphql::SEARCH_ISSUES,
+            Some("/data/search"),
+            Some(include_str!("fixtures/issues.json")),
+        ),
+        (graphql::ISSUE, None, None),
+        (
+            graphql::SUB_ISSUES,
+            Some("/data/node"),
+            Some(include_str!("fixtures/sub-issues.json")),
+        ),
         (graphql::REPOSITORY, None, None),
         (
             graphql::ISSUE_DEPENDENCIES,

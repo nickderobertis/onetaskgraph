@@ -14,6 +14,28 @@ differ from one another so that every predicate a query carries separates them.
 `Issue.blocking: IssueConnection` shapes, which provide both dependency directions, with
 each far end carrying the fields that say which kind of item it is.
 
+`issues.json` and `sub-issues.json` are the same board reached the two ways a read that is
+*not* about the whole board reaches it: a board-scoped issue search
+(`Query.search(type: ISSUE)` returning `SearchResultItemConnection`) and one project
+issue's own `Issue.subIssues`. They hold the same five issues and the same pull request
+`project.json` does, with each issue's board half on `Issue.projectItems` instead of the
+issue hanging under a `ProjectV2Item` — which is the whole difference between asking the
+board for its items and asking an issue where it sits. `issues.json` is what the
+pinned-schema test validates the search document against, and because every one of the
+three read documents selects the same `BoardIssue` fragment, the keys it checks are the
+keys all three ask for. The `search`, `SearchResultItemConnection`, `SearchResultItem`,
+`SearchType`, `Issue.projectItems` and `ProjectV2.number` halves of `schema.graphql` were
+read from GitHub.com's own published schema artifact
+<https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-09-01, and the reduction
+of `SearchResultItem` to the two members an `ISSUE` search can return is the same deliberate
+reduction the rest of this file carries.
+
+One search qualifier is recorded here because its *absence* from the documents is
+deliberate: `-has:parent` is accepted by GitHub's issue search and silently ignored, as
+observed against the real board on 2026-09-01, so the discriminator that tells a project
+from a task is the `parent` field on each returned issue rather than anything in the
+search string.
+
 The values are synthetic and stable; the object, union, and connection shapes are recorded from
 the official GraphQL references at <https://docs.github.com/en/graphql/reference/projects> and
 <https://docs.github.com/en/graphql/reference/issues>. Tests serve these files through an actual

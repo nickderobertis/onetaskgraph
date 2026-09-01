@@ -1,0 +1,378 @@
+{
+  "data": {
+    "search": {
+      "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": null
+      },
+      "nodes": [
+        {
+          "__typename": "Issue",
+          "id": "I_plan",
+          "title": "Delivery plan",
+          "body": "the delivery plan\n\n<!-- onetaskgraph.metadata\n{\"caller.enabled\":true}\n-->",
+          "url": "https://github.example/issues/1",
+          "createdAt": "2026-01-01T00:00:00Z",
+          "updatedAt": "2026-02-01T00:00:00Z",
+          "state": "OPEN",
+          "stateReason": null,
+          "repository": {
+            "nameWithOwner": "acme/work"
+          },
+          "parent": null,
+          "subIssuesSummary": {
+            "total": 1
+          },
+          "labels": {
+            "nodes": [],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          },
+          "projectItems": {
+            "nodes": [
+              {
+                "id": "PVTI_plan",
+                "project": {
+                  "number": 7
+                },
+                "fieldValues": {
+                  "nodes": [
+                    {
+                      "name": "In Progress",
+                      "field": {
+                        "id": "FIELD_status",
+                        "name": "Status",
+                        "options": [
+                          {
+                            "id": "OPT_todo",
+                            "name": "Todo"
+                          },
+                          {
+                            "id": "OPT_doing",
+                            "name": "In Progress"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "text": "",
+                      "field": {
+                        "id": "FIELD_origin",
+                        "name": "onetaskgraph.origin"
+                      }
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": false
+                  }
+                }
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        },
+        {
+          "__typename": "Issue",
+          "id": "I_task",
+          "title": "Ship it",
+          "body": "details\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":7}\n-->",
+          "url": "https://github.example/issues/2",
+          "createdAt": "2026-01-02T00:00:00Z",
+          "updatedAt": "2026-01-03T00:00:00Z",
+          "state": "OPEN",
+          "stateReason": null,
+          "repository": {
+            "nameWithOwner": "acme/work"
+          },
+          "parent": {
+            "id": "I_plan"
+          },
+          "subIssuesSummary": {
+            "total": 0
+          },
+          "labels": {
+            "nodes": [
+              {
+                "id": "L_bug",
+                "name": "bug",
+                "color": "ff0000"
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          },
+          "projectItems": {
+            "nodes": [
+              {
+                "id": "PVTI_task",
+                "project": {
+                  "number": 7
+                },
+                "fieldValues": {
+                  "nodes": [
+                    {
+                      "name": "Todo",
+                      "field": {
+                        "id": "FIELD_status",
+                        "name": "Status",
+                        "options": [
+                          {
+                            "id": "OPT_todo",
+                            "name": "Todo"
+                          },
+                          {
+                            "id": "OPT_doing",
+                            "name": "In Progress"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "text": "notes:T-1",
+                      "field": {
+                        "id": "FIELD_origin",
+                        "name": "onetaskgraph.origin"
+                      }
+                    },
+                    {
+                      "labels": {
+                        "nodes": [
+                          {
+                            "id": "L_field",
+                            "name": "team",
+                            "color": "00ff00"
+                          }
+                        ],
+                        "pageInfo": {
+                          "hasNextPage": false
+                        }
+                      }
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": false
+                  }
+                }
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        },
+        {
+          "__typename": "Issue",
+          "id": "I_next",
+          "title": "Next quarter",
+          "body": "<!-- onetaskgraph.metadata\n{\"onetaskgraph.item_kind\":\"project\"}\n-->",
+          "url": "https://github.example/issues/3",
+          "createdAt": "2026-01-04T00:00:00Z",
+          "updatedAt": "2026-01-04T00:00:00Z",
+          "state": "OPEN",
+          "stateReason": null,
+          "repository": {
+            "nameWithOwner": "acme/work"
+          },
+          "parent": null,
+          "subIssuesSummary": {
+            "total": 1
+          },
+          "labels": {
+            "nodes": [],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          },
+          "projectItems": {
+            "nodes": [
+              {
+                "id": "PVTI_next",
+                "project": {
+                  "number": 7
+                },
+                "fieldValues": {
+                  "nodes": [
+                    {
+                      "name": "Todo",
+                      "field": {
+                        "id": "FIELD_status",
+                        "name": "Status",
+                        "options": [
+                          {
+                            "id": "OPT_todo",
+                            "name": "Todo"
+                          },
+                          {
+                            "id": "OPT_doing",
+                            "name": "In Progress"
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": false
+                  }
+                }
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        },
+        {
+          "__typename": "Issue",
+          "id": "I_notes",
+          "title": "Draft the notes",
+          "body": "what next quarter needs written down",
+          "url": "https://github.example/issues/4",
+          "createdAt": "2026-01-05T00:00:00Z",
+          "updatedAt": "2026-01-05T00:00:00Z",
+          "state": "OPEN",
+          "stateReason": null,
+          "repository": {
+            "nameWithOwner": "acme/work"
+          },
+          "parent": {
+            "id": "I_next"
+          },
+          "subIssuesSummary": {
+            "total": 0
+          },
+          "labels": {
+            "nodes": [],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          },
+          "projectItems": {
+            "nodes": [
+              {
+                "id": "PVTI_notes",
+                "project": {
+                  "number": 7
+                },
+                "fieldValues": {
+                  "nodes": [
+                    {
+                      "name": "In Progress",
+                      "field": {
+                        "id": "FIELD_status",
+                        "name": "Status",
+                        "options": [
+                          {
+                            "id": "OPT_todo",
+                            "name": "Todo"
+                          },
+                          {
+                            "id": "OPT_doing",
+                            "name": "In Progress"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "labels": {
+                        "nodes": [
+                          {
+                            "id": "L_docs",
+                            "name": "docs",
+                            "color": "0000ff"
+                          }
+                        ],
+                        "pageInfo": {
+                          "hasNextPage": false
+                        }
+                      }
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": false
+                  }
+                }
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        },
+        {
+          "__typename": "Issue",
+          "id": "I_loose",
+          "title": "Sweep the backlog",
+          "body": "work nobody has filed under a plan",
+          "url": "https://github.example/issues/5",
+          "createdAt": "2026-01-06T00:00:00Z",
+          "updatedAt": "2026-01-06T00:00:00Z",
+          "state": "OPEN",
+          "stateReason": null,
+          "repository": {
+            "nameWithOwner": "acme/work"
+          },
+          "parent": null,
+          "subIssuesSummary": {
+            "total": 0
+          },
+          "labels": {
+            "nodes": [
+              {
+                "id": "L_chore",
+                "name": "chore",
+                "color": "00ff00"
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          },
+          "projectItems": {
+            "nodes": [
+              {
+                "id": "PVTI_loose",
+                "project": {
+                  "number": 7
+                },
+                "fieldValues": {
+                  "nodes": [
+                    {
+                      "name": "Todo",
+                      "field": {
+                        "id": "FIELD_status",
+                        "name": "Status",
+                        "options": [
+                          {
+                            "id": "OPT_todo",
+                            "name": "Todo"
+                          },
+                          {
+                            "id": "OPT_doing",
+                            "name": "In Progress"
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": false
+                  }
+                }
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        },
+        {
+          "__typename": "PullRequest"
+        }
+      ]
+    }
+  }
+}

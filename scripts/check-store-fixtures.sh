@@ -122,6 +122,33 @@ MANIFEST = {
         "facets": {},
         "least": 1,
     },
+    "crates/onetaskgraph-github-projects/tests/fixtures/issues.json": {
+        "items": ["data", "search", "nodes"],
+        "id": ["id"],
+        "title": ["title"],
+        # The same board as project.json reached by a board-scoped issue search, so the
+        # same three facets — the board Status option now riding along on the issue's own
+        # projectItems instead of hanging off a board item.
+        "facets": {
+            "status": ["projectItems", "nodes", [], "fieldValues", "nodes", [], "name"],
+            "label": ["labels", "nodes", [], "name"],
+            "project": ["parent", "id"],
+        },
+    },
+    "crates/onetaskgraph-github-projects/tests/fixtures/sub-issues.json": {
+        "items": ["data", "node", "subIssues", "nodes"],
+        "id": ["id"],
+        "title": ["title"],
+        # One item, and that is this fixture's whole discrimination rather than a thin
+        # fixture. It is the answer to "what is filed under *this* project" over a board
+        # that holds three tasks under two projects and none — so a read that ignored which
+        # project was asked about would answer with three rows where this holds one. The
+        # facets a query carries are filtered in process over whichever items a read
+        # returned, and issues.json and project.json beside it are where two distinct
+        # values of each of them live.
+        "facets": {},
+        "least": 1,
+    },
     "crates/onetaskgraph-github-projects/tests/fixtures/dependencies.json": {
         "items": ["data", "node", "blockedBy", "nodes"],
         "id": ["id"],

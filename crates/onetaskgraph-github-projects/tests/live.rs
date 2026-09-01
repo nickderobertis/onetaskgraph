@@ -954,18 +954,50 @@ async fn board_items_page(token: &str, project_id: &str, first: u32) -> Result<V
 /// the new item, and a write naming that item as a dependency resolves the far end
 /// through exactly that connection — so a fixture that referenced it the moment it was
 /// created would be refused for an item which by then certainly exists.
+///
+/// It asks a **fresh** source, and it asks with an unconstrained listing, and both halves
+/// of that are the point. A read by id resolves that id against GitHub directly and is
+/// answered the instant the issue exists, which says nothing about the board connection
+/// this wait is for; and the source that did the writing completes every read from its own
+/// record of what it wrote, so asking *it* would answer yes before GitHub had caught up at
+/// all.
 async fn await_on_board(
-    writer: &dyn TaskSource,
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     id: &NativeId,
     kind: ItemKind,
+    // Narrowed to this run's own titles, so the listing is this run's five artifacts
+    // however much else the nominated board holds.
+    prefix: &str,
 ) -> Result<(), String> {
+    let ours = || {
+        Some(TextQuery {
+            terms: prefix.to_owned(),
+            fields: TextFields::Title,
+        })
+    };
     for _ in 0..30 {
+        let reader = rebuilt();
         let seen = match kind {
-            ItemKind::Task => writer.get_task(id).await.map(|task| task.is_some()),
-            ItemKind::Project => writer
-                .get_project(id)
+            ItemKind::Task => reader
+                .query_tasks(
+                    &TaskQuery {
+                        text: ours(),
+                        ..Default::default()
+                    },
+                    &page(None),
+                )
                 .await
-                .map(|project| project.is_some()),
+                .map(|held| held.items.iter().any(|task| task.id == *id)),
+            ItemKind::Project => reader
+                .query_projects(
+                    &ProjectQuery {
+                        text: ours(),
+                        ..Default::default()
+                    },
+                    &page(None),
+                )
+                .await
+                .map(|held| held.items.iter().any(|project| project.id == *id)),
         }
         .map_err(|error| {
             format!(
@@ -1035,7 +1067,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live project write of {alpha:?} failed: {error}"))?;
-    await_on_board(writer, &alpha_id, ItemKind::Project).await?;
+    await_on_board(rebuilt, &alpha_id, ItemKind::Project, &prefix).await?;
     let beta_id = writer
         .write_project(&ItemWrite {
             target: None,
@@ -1063,7 +1095,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live task write of {first:?} failed: {error}"))?;
-    await_on_board(writer, &first_id, ItemKind::Task).await?;
+    await_on_board(rebuilt, &first_id, ItemKind::Task, &prefix).await?;
     let second_id = writer
         .write_task(&ItemWrite {
             target: None,
