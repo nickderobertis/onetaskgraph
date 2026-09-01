@@ -234,20 +234,43 @@ for target in targets:
     directory = work / identifier.replace(":", "_").replace("/", "_")
     directory.mkdir(parents=True, exist_ok=True)
 
-    served = json.loads(registry["served_body"])
+    def pinned_document(where):
+        """The pinned body, as a JSON object; refused by name if it is not one."""
+        try:
+            document = json.loads(registry["served_body"])
+        except ValueError as problem:
+            refuse([f"{pin_path}'s {where} served_body is not JSON: {problem}"])
+        if not isinstance(document, dict):
+            refuse([f"{pin_path}'s {where} served_body is not a JSON object"])
+        return document
+
+    # A path the pinned body does not carry means the pin describes a document it
+    # does not hold, which is the one thing this half cannot work around: every
+    # case below is built by reaching that path.
+    def descend(document, dotted):
+        keys = dotted.split(".")
+        for key in keys[:-1]:
+            if not isinstance(document, dict) or key not in document:
+                refuse([
+                    f"{pin_path}'s {registry_name} served_body has no {dotted}, which is the "
+                    "field it pins as that registry's released version"
+                ])
+            document = document[key]
+        if not isinstance(document, dict) or keys[-1] not in document:
+            refuse([
+                f"{pin_path}'s {registry_name} served_body has no {dotted}, which is the field "
+                "it pins as that registry's released version"
+            ])
+        return document, keys[-1]
+
+    served = pinned_document(registry_name)
     (directory / "served.json").write_text(json.dumps(served), encoding="utf-8")
     (directory / "absent.json").write_text(registry["absent_body"].strip() + "\n", encoding="utf-8")
 
     # The same document with the pinned field taken away and every decoy left
     # standing: a probe reading the neighbour instead of the field answers this
     # one, and a probe reading the pinned field cannot.
-    def descend(document, dotted):
-        keys = dotted.split(".")
-        for key in keys[:-1]:
-            document = document[key]
-        return document, keys[-1]
-
-    decoyed = json.loads(registry["served_body"])
+    decoyed = pinned_document(registry_name)
     holder, leaf = descend(decoyed, registry["version_path"])
     del holder[leaf]
     (directory / "decoyed.json").write_text(json.dumps(decoyed), encoding="utf-8")
@@ -256,7 +279,7 @@ for target in targets:
     # means "serves nothing" is per registry — crates.io means it, the other two
     # never answer it — so both sides are driven, and the pin is what says which
     # this one is.
-    document = json.loads(registry["served_body"])
+    document = pinned_document(registry_name)
     holder, leaf = descend(document, registry["version_path"])
     holder[leaf] = None
     (directory / "nulled.json").write_text(json.dumps(document), encoding="utf-8")

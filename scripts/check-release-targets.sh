@@ -242,7 +242,11 @@ for entry, position in sorted(covered.items()):
     if entry in seen_ids:
         problems.append(f"{DECLARATION} both declares '{entry}' as a target and covers it under [[target]] #{position}")
 
-for position, retired in enumerate(declared.get("retired", []) or [], start=1):
+retired_entries = declared.get("retired", [])
+if not isinstance(retired_entries, list):
+    problems.append(f"{DECLARATION}'s retired is not the array of tables the schema declares")
+    retired_entries = []
+for position, retired in enumerate(retired_entries, start=1):
     if not isinstance(retired, dict):
         problems.append(f"{DECLARATION} [[retired]] #{position} is not a table")
         continue
