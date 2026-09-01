@@ -4,7 +4,12 @@
   "projectType": "application",
   "tags": ["lang:rust", "layer:binary"],
   "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `test-live`, which is what it is about: that lane runs only under `nx run-many`, never `nx affected`, and scripts/check-live-lane.sh asserts it.",
-  "implicitDependencies": ["onetaskgraph-core", "onetaskgraph-linear", "onetaskgraph-plugin-api"],
+  "implicitDependencies": [
+    "onetaskgraph-core",
+    "onetaskgraph-github-projects",
+    "onetaskgraph-linear",
+    "onetaskgraph-plugin-api"
+  ],
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",

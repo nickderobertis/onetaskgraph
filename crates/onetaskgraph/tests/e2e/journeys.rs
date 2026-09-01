@@ -8,8 +8,11 @@
 
 use std::process::Output;
 
-use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{Declared, ROWS, Row, SOURCE, dataset, document, qualified};
+use crate::common::{SOURCE_BOUNDARIES, Sandbox, stderr, stdout};
+use crate::fixtures::{
+    Declared, ROWS, Row, SOURCE, dataset, document, github_projects_with_board, qualified,
+};
+use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_plugin_api::Capabilities;
 use serde_json::json;
 
@@ -183,6 +186,97 @@ fn github_projects_runs_shared_binary_journeys_against_its_fixture_server() {
         }
     }
     assert_eq!(walked, ours(&["T-1", "T-2", "T-3", "T-4"]));
+}
+
+#[test]
+fn a_github_board_serves_its_design_issues_as_documents_over_both_source_boundaries() {
+    // A board has no document type, so a document there is an issue whose title begins
+    // this source's own design prefix. Driven at both boundaries because that is journey
+    // 19's claim about every journey: what a source can do must not change because it is a
+    // process away, and a title read on one side of a pipe and rewritten on the other is
+    // exactly the kind of thing a transport can lose.
+    let row = ROWS
+        .iter()
+        .find(|row| row.plugin == "github-projects")
+        .expect("GitHub Projects fixture row");
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        let (config, _board) = github_projects_with_board(&sandbox);
+        sandbox.project_document(&document(&json!({
+            SOURCE: boundary.source_with_secrets(
+                "github-projects",
+                config,
+                &["GITHUB_PROJECTS_FIXTURE_TOKEN"],
+            )
+        })));
+
+        let listing = ok(row, &sandbox, &["document", "list"]);
+        assert_eq!(
+            listed(&listing),
+            ours(&["D-1", "D-2", "D-3"]),
+            "{boundary:?}: every design-titled issue on the board is a document:\n{listing}"
+        );
+        assert!(
+            listing.contains("Alpha design") && !listing.contains(DESIGN_TITLE_PREFIX),
+            "{boundary:?}: a document is listed under the title a person wrote, with the \
+             prefix taken off:\n{listing}"
+        );
+
+        let shown = ok(
+            row,
+            &sandbox,
+            &["document", "show", &qualified(SOURCE, "D-1")],
+        );
+        assert_eq!(
+            field(&shown, "title").as_deref(),
+            Some("Alpha design"),
+            "{boundary:?}: {shown}"
+        );
+        assert_eq!(
+            field(&shown, "project").as_deref(),
+            Some(qualified(SOURCE, "P-1").as_str()),
+            "{boundary:?}: a design issue filed under a project issue is in that \
+             project:\n{shown}"
+        );
+
+        // An issue without the prefix is not a document, and a design issue is not work —
+        // whatever sub-issues it has. `D-1` carries the project marker and sub-issues of
+        // its own, and `D-3` has neither, so both arms of the rule that separates a
+        // project from a task are present and both lose to the prefix.
+        assert_eq!(
+            listed(&ok(row, &sandbox, &["task", "list"])),
+            ours(&["T-1", "T-2", "T-3", "T-4"]),
+            "{boundary:?}: no design issue is a task"
+        );
+        assert_eq!(
+            listed(&ok(row, &sandbox, &["project", "list"])),
+            ours(&["P-1", "P-2"]),
+            "{boundary:?}: and none of them is an empty project"
+        );
+        let not_a_document = run(&sandbox, &["document", "show", &qualified(SOURCE, "T-1")]);
+        assert_eq!(
+            not_a_document.status.code(),
+            Some(1),
+            "{boundary:?}: {}",
+            stderr(&not_a_document)
+        );
+        assert!(
+            stderr(&not_a_document).contains("no document with that id"),
+            "{boundary:?}: {}",
+            stderr(&not_a_document)
+        );
+
+        // And every one of the three entity kinds this board reports is somewhere a reader
+        // can open, which is what "where is this?" means for a hosted backend.
+        for (verb, id) in [("document", "D-1"), ("task", "T-1"), ("project", "P-1")] {
+            let placed = ok(row, &sandbox, &[verb, "show", &qualified(SOURCE, id)]);
+            assert_eq!(
+                field(&placed, "location"),
+                Some(format!("url https://example.invalid/{id}")),
+                "{boundary:?}: `{verb} show {id}` is a link:\n{placed}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1819,49 +1913,46 @@ fn a_document_list_narrows_by_project_by_label_and_by_text_and_has_no_status_fil
     }
 }
 
+/// Every entity of the shared dataset a location is asserted over, and its verb.
+const PLACED: &[(&str, &str)] = &[
+    ("document", "D-1"),
+    ("document", "D-2"),
+    ("document", "D-3"),
+    ("task", "T-1"),
+    ("project", "P-1"),
+];
+
 #[test]
 fn both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_alike() {
+    // What each row is asked for is what *that row's source* says, taken from its own
+    // entry in the table: a location is the backend's own, so a hosted board hands a
+    // reader a link to open where a source holding files hands a path, and a journey that
+    // assumed one shape would be asserting on the fixture rather than on the rendering.
+    // The three cases the contract has are proven across the table rather than by any one
+    // row, and the guard at the end of this journey is what keeps that true.
+    let mut seen: Vec<Option<&'static str>> = Vec::new();
     for row in documentary_rows() {
         let sandbox = host(row);
 
-        // The human rendering says which kind of place it is, so a reader knows whether to
-        // open a link or read a file out.
-        for (verb, id, expected) in [
-            ("document", "D-1", "url https://example.invalid/D-1"),
-            ("document", "D-2", "path /srv/notes/D-2.md"),
-            ("task", "T-1", "url https://example.invalid/T-1"),
-            ("project", "P-1", "path /srv/engine"),
-        ] {
+        for (verb, id) in PLACED {
+            let where_it_is = (row.fixture.locations)(id);
+            seen.push(where_it_is.as_ref().map(|(kind, _)| *kind));
+
+            // The human rendering says which kind of place it is, so a reader knows
+            // whether to open a link or read a file out — and a source that did not say
+            // leaves the line out entirely, which is not the same as saying it is nowhere.
             let shown = ok(row, &sandbox, &[verb, "show", &qualified(SOURCE, id)]);
             assert_eq!(
-                field(&shown, "location").as_deref(),
-                Some(expected),
-                "{}: `{verb} show {id}` must say where it is and which kind of place:\n{shown}",
+                field(&shown, "location"),
+                where_it_is
+                    .as_ref()
+                    .map(|(kind, place)| format!("{kind} {place}")),
+                "{}: `{verb} show {id}` must say where its source says it is:\n{shown}",
                 row.name
             );
-        }
 
-        // A source that did not say where an entity is leaves the line out entirely,
-        // which is not the same as saying it is nowhere.
-        let unplaced = ok(
-            row,
-            &sandbox,
-            &["document", "show", &qualified(SOURCE, "D-3")],
-        );
-        assert!(
-            field(&unplaced, "location").is_none(),
-            "{}: a location the source did not give is left out:\n{unplaced}",
-            row.name
-        );
-
-        // The machine rendering carries the contract type's own JSON, so a consumer
-        // branches on which key is present rather than parsing a sentence.
-        for (verb, id, key, place) in [
-            ("document", "D-1", "url", "https://example.invalid/D-1"),
-            ("document", "D-2", "path", "/srv/notes/D-2.md"),
-            ("task", "T-1", "url", "https://example.invalid/T-1"),
-            ("project", "P-1", "path", "/srv/engine"),
-        ] {
+            // The machine rendering carries the contract type's own JSON, so a consumer
+            // branches on which key is present rather than parsing a sentence.
             let response: serde_json::Value = serde_json::from_str(&ok(
                 row,
                 &sandbox,
@@ -1871,32 +1962,38 @@ fn both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_al
             let location = &response["items"][0]["item"]["location"];
             assert_eq!(
                 location,
-                &json!({key: place}),
-                "{}: `{verb} show {id} --json` carries the location's own JSON:\n{location}",
+                &where_it_is
+                    .as_ref()
+                    .map_or(json!(null), |(kind, place)| json!({*kind: place})),
+                "{}: `{verb} show {id} --json` carries the location's own JSON, and \
+                 null — never a third variant — where the source said nothing:\n{location}",
                 row.name
             );
         }
-        let none: serde_json::Value = serde_json::from_str(&ok(
-            row,
-            &sandbox,
-            &["document", "show", &qualified(SOURCE, "D-3"), "--json"],
-        ))
-        .expect("a show emits JSON");
-        assert_eq!(
-            none["items"][0]["item"]["location"],
-            json!(null),
-            "{}: a source that did not say reports null, not a third variant",
-            row.name
-        );
 
         // And the list rendering says it too, because a document list is where a reader
         // finds the thing they were asked to open.
         let listing = ok(row, &sandbox, &["document", "list"]);
+        for id in ["D-1", "D-2", "D-3"] {
+            let Some((kind, place)) = (row.fixture.locations)(id) else {
+                continue;
+            };
+            assert!(
+                listing.contains(&format!("{kind} {place}")),
+                "{}: a document list says where each one is:\n{listing}",
+                row.name
+            );
+        }
+    }
+
+    // A fixture that stopped discriminating would make every assertion above pass while
+    // proving nothing, so the cases themselves are asserted: some row reports a link, some
+    // row reports a path, and some row says nothing about where an entity is.
+    for wanted in [Some("url"), Some("path"), None] {
         assert!(
-            listing.contains("url https://example.invalid/D-1")
-                && listing.contains("path /srv/notes/D-2.md"),
-            "{}: a document list says where each one is:\n{listing}",
-            row.name
+            seen.contains(&wanted),
+            "no document-bearing row reports {wanted:?} for any entity, so this journey \
+             no longer proves the case: give one of them a source that does"
         );
     }
 }

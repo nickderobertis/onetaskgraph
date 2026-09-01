@@ -40,6 +40,18 @@ pub struct Ready {
     pub declared: Declared,
     /// Whether this source can represent the complete cross-plugin dataset.
     pub complete_dataset: bool,
+    /// Where this row's source says one entity of the shared dataset is, by native id, as
+    /// the pair `(which kind of place, the place)` — or `None` where the source says
+    /// nothing about it. See [`dataset_locations`].
+    ///
+    /// A location is the backend's **own**, and that is the whole point of the contract:
+    /// a hosted board can only ever hand a reader a link to open, and a source holding
+    /// files hands a path. So the shape is the row's to declare rather than the journey's
+    /// to assume — what the journey asserts is that both renderings report *what this
+    /// row's source says*, in the shape it says it, and
+    /// `both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_alike`
+    /// fails if the table stops carrying all three cases between them.
+    pub locations: fn(&str) -> Option<(&'static str, String)>,
 }
 
 /// What one row's source declares, so a journey can assert the plan as well as the rows.
@@ -61,9 +73,10 @@ pub struct Declared {
     /// Not a predicate, and so unlike every other `Support` here: it says what the source
     /// *holds*, the engine reads it once at the handshake rather than compensating for it,
     /// and a source declaring it unsupported is never asked for a document. The table
-    /// carries rows of both kinds on purpose — the `in-memory` rows hold documents, the
-    /// three hosted plugins hold none yet — so the shared document journeys drive the
-    /// answer and the honest refusal against real difference rather than against a mock.
+    /// carries rows of both kinds on purpose — the `in-memory` rows and the GitHub Projects
+    /// board hold documents, `local-md` and `linear` hold none yet — so the shared document
+    /// journeys drive the answer and the honest refusal against real difference rather than
+    /// against a mock.
     pub documents: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
@@ -277,6 +290,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: native_block,
             complete_dataset: true,
+            locations: dataset_locations,
             declared: Declared {
                 documents: Support::Native,
                 ..EVERY_PREDICATE_NATIVE
@@ -296,6 +310,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: compensated_block,
             complete_dataset: true,
+            locations: dataset_locations,
             declared: Declared {
                 projects: Support::Native,
                 // Native here for the same reason `projects` is: it says this source
@@ -320,6 +335,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: hosted_block,
             complete_dataset: true,
+            locations: dataset_locations,
             declared: Declared {
                 documents: Support::Native,
                 ..EVERY_PREDICATE_NATIVE
@@ -332,6 +348,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: local_md_block,
             complete_dataset: true,
+            locations: no_locations,
             declared: Declared {
                 max_page_size: 200,
                 ..EVERY_PREDICATE_NATIVE
@@ -342,6 +359,7 @@ pub const ROWS: &[Row] = &[
         plugin: "linear",
         name: "linear",
         fixture: Ready {
+            locations: no_locations,
             block: linear_block,
             // Linear models the whole table: two projects, an orphan, and dependencies in
             // both directions, so it drives the shared complete-dataset journeys.
@@ -374,13 +392,51 @@ pub const ROWS: &[Row] = &[
             // The source walks the whole board before it answers anything, so it applies
             // every predicate a query carries itself; `GitHubProjectsSource`'s own module
             // documentation records why that is what `Native` means here.
+            //
+            // `documents` included: a board has no document type, so this source spells
+            // one as an issue whose title begins its own design prefix — which is what the
+            // three `D-*` items of the fixture board above are.
+            locations: github_locations,
             declared: Declared {
+                documents: Support::Native,
                 max_page_size: 100,
                 ..EVERY_PREDICATE_NATIVE
             },
         },
     },
 ];
+
+/// Where the shared dataset's own `location` values put each of its entities.
+///
+/// The `in-memory` family serves that table verbatim, so this is it read back: one link,
+/// one path, and entities the source says nothing about at all. Those three cases are
+/// what the location journey is for, and this is the row function that carries all three.
+fn dataset_locations(native: &str) -> Option<(&'static str, String)> {
+    let at = |kind, place: &str| Some((kind, place.to_owned()));
+    match native {
+        "D-1" => at("url", "https://example.invalid/D-1"),
+        "D-2" => at("path", "/srv/notes/D-2.md"),
+        "T-1" => at("url", "https://example.invalid/T-1"),
+        "P-1" => at("path", "/srv/engine"),
+        _ => None,
+    }
+}
+
+/// Every entity a GitHub Projects board reports is an issue, and every issue has a web
+/// address, so every one of them is a link and none of them is absent.
+///
+/// This is the contrast the location contract exists for, and it is real difference rather
+/// than a second copy of the row above: one reader is handed something to open and another
+/// a path to read out, and neither has to know which plugin answered.
+fn github_locations(native: &str) -> Option<(&'static str, String)> {
+    Some(("url", format!("https://example.invalid/{native}")))
+}
+
+/// A source that says where nothing is. Its entities have no `location` line at all, which
+/// is the contract's "the source did not say" rather than a third kind of place.
+fn no_locations(_native: &str) -> Option<(&'static str, String)> {
+    None
+}
 
 /// The declaration a source that applies every predicate itself carries.
 ///
@@ -396,7 +452,7 @@ const EVERY_PREDICATE_NATIVE: Declared = Declared {
     // Unsupported even here, because `documents` is not a predicate: "native" would claim
     // this source *holds* documents rather than that it filters them itself, which is what
     // keeps this constant's name true. The rows whose source really does hold documents
-    // override it; docs/follow-ups.md tracks the three plugins that do not.
+    // override it; docs/follow-ups.md tracks the two plugins that do not.
     documents: Support::Unsupported,
     orphan_tasks: Support::Native,
     filter_by_label: Support::Native,
@@ -547,7 +603,67 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
             json!([]),
             marked(json!({})),
         ),
+        // The shared dataset's three documents. A board has no document type, so each is an
+        // ordinary issue whose title begins with this source's own design prefix — taken
+        // from the plugin rather than spelled again here, so this fixture cannot drift from
+        // what the source reads. The prefix is what makes them documents: `D-1` carries the
+        // *project* marker and sub-issues of its own, `D-3` has neither and would otherwise
+        // be an empty project, and `D-2` is a sub-issue, so each of the three arms that
+        // separate a project from a task is present on one of them and each must lose.
+        github_document(
+            "D-1",
+            "Alpha design",
+            "the engine core, reviewed",
+            Some("P-1"),
+            json!([["L-1", "bug"]]),
+            json!({"onepipeline.turn_budget":12,"caller.flags":[true,null]}),
+        ),
+        github_document(
+            "D-2",
+            "Runbook",
+            "how to read the alpha design",
+            Some("P-2"),
+            json!([["L-3", "core"]]),
+            json!({}),
+        ),
+        github_document(
+            "D-3",
+            "Loose note",
+            "filed nowhere",
+            None,
+            json!([]),
+            json!({}),
+        ),
     ]
+}
+
+/// One document on the fixture board: an issue titled the way this source spells one.
+///
+/// A document has no status, so this takes none — the issue sits open in whatever column
+/// the board gives it, and nothing this source reports about a document reads it.
+fn github_document(
+    id: &str,
+    title: &str,
+    body: &str,
+    parent: Option<&str>,
+    labels: Value,
+    slot: Value,
+) -> Value {
+    github_item(
+        id,
+        &format!(
+            "{}{title}",
+            onetaskgraph_github_projects::DESIGN_TITLE_PREFIX
+        ),
+        body,
+        Placement {
+            status: "Todo",
+            state: ("OPEN", None),
+            parent,
+        },
+        labels,
+        slot,
+    )
 }
 
 /// The board's own `blockedBy` graph: which item waits on which.
@@ -720,6 +836,7 @@ impl GitHubBoard {
                 .map(|id| {
                     let far = self.items.iter().find(|item| item["id"] == json!(id));
                     json!({"id":id,
+                           "title":far.map(|item| item["title"].clone()),
                            "body":far.map(|item| item["body"].clone()),
                            "parent":far.and_then(|item| item["parent"].as_str())
                                .map(|parent| json!({"id":parent})),

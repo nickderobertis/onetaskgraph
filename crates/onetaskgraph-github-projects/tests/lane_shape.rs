@@ -12,6 +12,7 @@ use lane::{
     LiveLane, LiveSecret, artifact_label, artifact_title, is_artifact_label, is_artifact_title,
     is_run_artifact_title, live_lane, live_write_config, run_then_cleanup,
 };
+use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_plugin_api::{SourceName, SourcePlugin};
 
 #[tokio::test]
@@ -219,6 +220,29 @@ fn residue_recovery_matches_this_lanes_own_artifacts_and_nothing_else() {
             "residue recovery must not match {foreign:?}"
         );
     }
+    // A *document* this lane writes is titled the way this source spells one — the design
+    // prefix, put there by the source rather than by the caller — so cleanup reads a title
+    // the artifact prefix does not start. Recognition takes that prefix off first: without
+    // it, a document a run created would be residue no sweep could ever name, on somebody's
+    // real board.
+    assert!(is_artifact_title(&format!(
+        "{DESIGN_TITLE_PREFIX}onetaskgraph live cleanup 2533-1787816134627361"
+    )));
+    assert!(is_artifact_title(&format!(
+        "{DESIGN_TITLE_PREFIX}{}",
+        artifact_title(std::process::id(), 1)
+    )));
+    for foreign in [
+        format!("{DESIGN_TITLE_PREFIX}AI Orchestrator plan"),
+        format!("{DESIGN_TITLE_PREFIX}onetaskgraph live cleanup 2533"),
+        format!("copy of {DESIGN_TITLE_PREFIX}onetaskgraph live cleanup 2533-17"),
+    ] {
+        assert!(
+            !is_artifact_title(&foreign),
+            "residue recovery must not match {foreign:?}"
+        );
+    }
+
     // A run names its own by the process id every one of its artifacts shares, so it
     // cleans up after itself without touching what an interrupted earlier run left for
     // the sweep above.
@@ -226,6 +250,17 @@ fn residue_recovery_matches_this_lanes_own_artifacts_and_nothing_else() {
         2533,
         "onetaskgraph live cleanup 2533-17"
     ));
+    assert!(is_run_artifact_title(
+        2533,
+        &format!("{DESIGN_TITLE_PREFIX}onetaskgraph live cleanup 2533-17")
+    ));
+    assert!(
+        !is_run_artifact_title(
+            2533,
+            &format!("{DESIGN_TITLE_PREFIX}onetaskgraph live cleanup 25330-17")
+        ),
+        "and a document of another run is another run's, exactly as an issue is"
+    );
     for other in [
         "onetaskgraph live cleanup 25330-17",
         "onetaskgraph live cleanup 253-17",

@@ -38,16 +38,15 @@ otherwise fail, naming the row and the field — and deleting this entry and the
 the field line above and fails while it names a capability that plugin no longer calls
 unsupported, so the entry cannot outlive the gap it describes.
 
-## Documents: three of the four hosted sources have none yet
+## Documents: two of the four hosted sources have none yet
 
-Unsupported fields: `onetaskgraph-github-projects` `documents`
 Unsupported fields: `onetaskgraph-linear` `documents`
 Unsupported fields: `onetaskgraph-local-md` `documents`
 
 The plugin contract carries documents — `Document`, `Location`, `DocumentQuery`, the
-`documents` capability, and the four `TaskSource` methods — and `in-memory` is the one
-source that implements them. The three above declare `documents: Support::Unsupported` and
-keep the four methods' defaults, which refuse: `documentless` for the two reads,
+`documents` capability, and the four `TaskSource` methods — and `in-memory` and
+`github-projects` implement them. The two above declare `documents: Support::Unsupported`
+and keep the four methods' defaults, which refuse: `documentless` for the two reads,
 `unwritable` for the two writes.
 
 That is sound as it stands, and it is what the capability rules ask for. `documents` is
@@ -58,13 +57,15 @@ a document read across several sources reports such a source as holding none rat
 as having failed. What a plugin must never do here is answer an empty page, which reads as
 a source that has documents and holds none matching.
 
-It is a gap rather than a limit for all three, and each plugin's own verdict row says why:
-Linear has documents of its own; a GitHub repository holds files a board item could name;
-and a folder of Markdown is already files on disk.
+It is a gap rather than a limit for both, and each plugin's own verdict row says why:
+Linear has documents of its own, and a folder of Markdown is already files on disk.
 
 Closing an entry means: implementing that plugin's four methods, flipping its `documents`
 to `Support::Native`, updating its row in `crates/onetaskgraph/tests/e2e/fixtures.rs` —
 which the reconciliation journey will otherwise fail, naming the row and the field — and
 deleting that plugin's line above together with the verdict row's wording. That is what
 `in-memory` did: its `documents` is a `CapabilityConfig` key a document sets, and a
-configuration listing documents without declaring it is refused where it is read.
+configuration listing documents without declaring it is refused where it is read. It is
+also what `github-projects` did, from a backend with no document type at all: a board holds
+issues, so a document there is the issue whose title begins `DESIGN: `, and
+`docs/metadata.md` settles what that discriminator implies.

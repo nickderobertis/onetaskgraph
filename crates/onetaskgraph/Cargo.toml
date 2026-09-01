@@ -36,6 +36,10 @@ tokio.workspace = true
 assert_cmd.workspace = true
 graphql-parser.workspace = true
 jsonschema.workspace = true
+# The two hosted plugins whose journeys drive a fixture built from the plugin's own
+# constants — the GraphQL documents Linear sends, and the title prefix a GitHub Projects
+# board spells a document with — rather than from a copy of them a fixture could drift from.
+onetaskgraph-github-projects.workspace = true
 onetaskgraph-linear.workspace = true
 predicates.workspace = true
 serde_json.workspace = true
