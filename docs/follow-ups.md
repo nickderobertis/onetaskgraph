@@ -38,41 +38,6 @@ otherwise fail, naming the row and the field — and deleting this entry and the
 the field line above and fails while it names a capability that plugin no longer calls
 unsupported, so the entry cannot outlive the gap it describes.
 
-## Documents: one of the four hosted sources has none yet
-
-Unsupported fields: `onetaskgraph-github-projects` `documents`
-
-The plugin contract carries documents — `Document`, `Location`, `DocumentQuery`, the
-`documents` capability, and the four `TaskSource` methods — and `in-memory`, `local-md`
-and `linear` implement them. The one above declares `documents: Support::Unsupported` and
-keeps the four methods' defaults, which refuse: `documentless` for the two reads,
-`unwritable` for the two writes.
-
-That is sound as it stands, and it is what the capability rules ask for. `documents` is
-not a predicate the engine compensates for; it says whether a source has documents at all,
-the engine reads it once at the handshake exactly as it reads `writes`, and a source that
-says it has none is never asked for one. So no caller can reach a refusal by accident, and
-a document read across several sources reports such a source as holding none rather than
-as having failed. What a plugin must never do here is answer an empty page, which reads as
-a source that has documents and holds none matching.
-
-It is a gap rather than a limit, and this plugin's own verdict row says why: a GitHub
-repository holds files a board item could name.
-
-Closing the entry means: implementing that plugin's four methods, flipping its `documents`
-to `Support::Native`, updating its row in `crates/onetaskgraph/tests/e2e/fixtures.rs` —
-which the reconciliation journey will otherwise fail, naming the row and the field — and
-deleting the line above together with the verdict row's wording. That is what `local-md`
-and `linear` did. `local-md` added `documents/` beside the `tasks/` and `projects/` it
-already read, and `docs/local-md.md` records why the folder is the discriminator. `linear`
-read Linear's own first-class `Document`, which brought back one thing worth knowing before
-the same is attempted elsewhere: a backend that *has* the concept can still be missing a
-field the shared dataset gives it. Linear's `Document` carries no labels where its `Issue`
-and `Project` do, so what closed the entry was not only the four methods but a new
-dimension of the shared journey table — `Ready::labels_its_documents` — so a row states
-what its source really reports and the shared journeys drive that claim rather than one
-plugin's shape standing for every plugin's.
-
 ## What a Windows location is spelled like, and who decides
 
 `local-md` reports a location by handing `std::fs::canonicalize` to `Location::Path`. On

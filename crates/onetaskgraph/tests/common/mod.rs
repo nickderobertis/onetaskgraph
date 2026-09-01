@@ -26,12 +26,25 @@ pub const SOURCE_BOUNDARIES: [SourceBoundary; 2] =
 impl SourceBoundary {
     /// One configured source, preserving the source's own plugin and configuration.
     pub fn source(self, plugin: &str, config: Value) -> Value {
+        self.source_with_secrets(plugin, config, &[])
+    }
+
+    /// The same, for a source that needs a named credential to reach its backend.
+    ///
+    /// §3.1 forbids a plugin reading a credential out of its own environment, and the
+    /// stdio host clears the child's, so a hosted source reaches only the variables its
+    /// configuration *names*. An in-process source reads the engine's own resolver and
+    /// needs no such list, which is why this is one method rather than two shapes of
+    /// fixture: the journey says which credential the source behind the boundary needs,
+    /// and each boundary does whatever getting it there takes.
+    pub fn source_with_secrets(self, plugin: &str, config: Value, secrets: &[&str]) -> Value {
         match self {
             Self::Direct => json!({"plugin": plugin, "config": config}),
             Self::Subprocess => json!({
                 "plugin": "subprocess",
                 "config": {
                     "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                    "secrets": secrets,
                     "settings": {"kind": plugin, "config": config},
                 },
             }),

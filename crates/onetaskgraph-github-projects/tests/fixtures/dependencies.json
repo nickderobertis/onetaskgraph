@@ -6,6 +6,7 @@
         "nodes": [
           {
             "id": "I_blocker",
+            "title": "Blocking work",
             "body": "<!-- onetaskgraph.metadata\n{\"onetaskgraph.item_kind\":\"project\"}\n-->",
             "parent": null,
             "subIssuesSummary": { "total": 0 }

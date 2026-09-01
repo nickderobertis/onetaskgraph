@@ -77,6 +77,12 @@ path on the machine its source runs on (`path …`). `task show`, `project show`
 source has documents; one that says it has none is reported as holding none rather than as
 having failed, and a copy naming it is refused before anything is read.
 
+How a source *spells* a document is its own business. A GitHub Projects board has no
+document type, so `github-projects` reads one as an ordinary issue whose title begins
+`DESIGN: ` — the title you see has that prefix taken off, and writing a document puts it
+back, so a design note copied out of a board and back returns the title it started with.
+`docs/metadata.md` records the whole of that rule.
+
 ### Seeing which plan you got
 
 `--explain` renders the plan the query ran, per source:

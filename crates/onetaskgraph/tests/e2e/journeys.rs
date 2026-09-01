@@ -8,8 +8,11 @@
 
 use std::process::Output;
 
-use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{Declared, Placed, ROWS, Row, SOURCE, dataset, document, qualified};
+use crate::common::{SOURCE_BOUNDARIES, Sandbox, stderr, stdout};
+use crate::fixtures::{
+    Declared, Placed, ROWS, Row, SOURCE, dataset, document, github_projects_with_board, qualified,
+};
+use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_plugin_api::Capabilities;
 use serde_json::json;
 
@@ -32,12 +35,21 @@ fn run(sandbox: &Sandbox, arguments: &[&str]) -> Output {
 /// Quotes stderr on failure, because a journey that fails on an exit code alone sends
 /// its reader back to the shell to find out why.
 fn ok(row: &Row, sandbox: &Sandbox, arguments: &[&str]) -> String {
+    ok_as(row.name, sandbox, arguments)
+}
+
+/// The same, under a name the caller chooses.
+///
+/// A journey that runs one row twice quotes the same row in both passes, so a failure
+/// says which source it was and not which of the two runs of it. Naming the run is the
+/// difference between a board reported unreachable *by the engine* and one reported
+/// unreachable by a plugin a process away, which are two different faults.
+fn ok_as(who: &str, sandbox: &Sandbox, arguments: &[&str]) -> String {
     let output = run(sandbox, arguments);
     assert_eq!(
         output.status.code(),
         Some(0),
-        "{}: `onetaskgraph {}` exited {:?}\n{}",
-        row.name,
+        "{who}: `onetaskgraph {}` exited {:?}\n{}",
         arguments.join(" "),
         output.status.code(),
         stderr(&output)
@@ -183,6 +195,99 @@ fn github_projects_runs_shared_binary_journeys_against_its_fixture_server() {
         }
     }
     assert_eq!(walked, ours(&["T-1", "T-2", "T-3", "T-4"]));
+}
+
+#[test]
+fn a_github_board_serves_its_design_issues_as_documents_over_both_source_boundaries() {
+    // A board has no document type, so a document there is an issue whose title begins
+    // this source's own design prefix. Driven at both boundaries because that is journey
+    // 19's claim about every journey: what a source can do must not change because it is a
+    // process away, and a title read on one side of a pipe and rewritten on the other is
+    // exactly the kind of thing a transport can lose.
+    let row = ROWS
+        .iter()
+        .find(|row| row.plugin == "github-projects")
+        .expect("GitHub Projects fixture row");
+    for boundary in SOURCE_BOUNDARIES {
+        // Both passes quote the same row, so the run says which side of the pipe asked.
+        let run_of = format!("{} across the {boundary:?} boundary", row.name);
+        let sandbox = Sandbox::new();
+        let (config, _board) = github_projects_with_board(&sandbox);
+        sandbox.project_document(&document(&json!({
+            SOURCE: boundary.source_with_secrets(
+                "github-projects",
+                config,
+                &["GITHUB_PROJECTS_FIXTURE_TOKEN"],
+            )
+        })));
+
+        let listing = ok_as(&run_of, &sandbox, &["document", "list"]);
+        assert_eq!(
+            listed(&listing),
+            ours(&["D-1", "D-2", "D-3"]),
+            "{boundary:?}: every design-titled issue on the board is a document:\n{listing}"
+        );
+        assert!(
+            listing.contains("Alpha design") && !listing.contains(DESIGN_TITLE_PREFIX),
+            "{boundary:?}: a document is listed under the title a person wrote, with the \
+             prefix taken off:\n{listing}"
+        );
+
+        let shown = ok_as(
+            &run_of,
+            &sandbox,
+            &["document", "show", &qualified(SOURCE, "D-1")],
+        );
+        assert_eq!(
+            field(&shown, "title").as_deref(),
+            Some("Alpha design"),
+            "{boundary:?}: {shown}"
+        );
+        assert_eq!(
+            field(&shown, "project").as_deref(),
+            Some(qualified(SOURCE, "P-1").as_str()),
+            "{boundary:?}: a design issue filed under a project issue is in that \
+             project:\n{shown}"
+        );
+
+        // An issue without the prefix is not a document, and a design issue is not work —
+        // whatever sub-issues it has. `D-1` carries the project marker and sub-issues of
+        // its own, and `D-3` has neither, so both arms of the rule that separates a
+        // project from a task are present and both lose to the prefix.
+        assert_eq!(
+            listed(&ok_as(&run_of, &sandbox, &["task", "list"])),
+            ours(&["T-1", "T-2", "T-3", "T-4"]),
+            "{boundary:?}: no design issue is a task"
+        );
+        assert_eq!(
+            listed(&ok_as(&run_of, &sandbox, &["project", "list"])),
+            ours(&["P-1", "P-2"]),
+            "{boundary:?}: and none of them is an empty project"
+        );
+        let not_a_document = run(&sandbox, &["document", "show", &qualified(SOURCE, "T-1")]);
+        assert_eq!(
+            not_a_document.status.code(),
+            Some(1),
+            "{boundary:?}: {}",
+            stderr(&not_a_document)
+        );
+        assert!(
+            stderr(&not_a_document).contains("no document with that id"),
+            "{boundary:?}: {}",
+            stderr(&not_a_document)
+        );
+
+        // And every one of the three entity kinds this board reports is somewhere a reader
+        // can open, which is what "where is this?" means for a hosted backend.
+        for (verb, id) in [("document", "D-1"), ("task", "T-1"), ("project", "P-1")] {
+            let placed = ok_as(&run_of, &sandbox, &[verb, "show", &qualified(SOURCE, id)]);
+            assert_eq!(
+                field(&placed, "location"),
+                Some(format!("url https://example.invalid/{id}")),
+                "{boundary:?}: `{verb} show {id}` is a link:\n{placed}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1865,13 +1970,17 @@ fn both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_al
     // over a remote service reports the link it holds; one over a folder of files reports
     // the path of the file behind each item; one that says nothing leaves the field out.
     // The table is what says which, so the journey drives the claim rather than a constant
-    // of its own.
+    // of its own. Which of the three each row said is collected as it goes, and asserted
+    // at the end: a table that stopped discriminating would make every assertion below
+    // pass while proving nothing.
+    let mut seen: Vec<Option<&'static str>> = Vec::new();
     for row in ROWS {
         let sandbox = host(row);
         let places = row.fixture.place;
 
         for (verb, id) in sampled_entities(row) {
             let expected = places(&sandbox, verb, id);
+            seen.push(expected.as_ref().map(|place| place.key));
             let shown = ok(row, &sandbox, &[verb, "show", &qualified(SOURCE, id)]);
 
             // The human rendering says which kind of place it is, so a reader knows
@@ -1920,6 +2029,17 @@ fn both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_al
                 );
             }
         }
+    }
+
+    // A table that stopped discriminating would make every assertion above pass while
+    // proving nothing, so the cases themselves are asserted: some row reports a link, some
+    // row reports a path, and some row says nothing about where an entity is.
+    for wanted in [Some("url"), Some("path"), None] {
+        assert!(
+            seen.contains(&wanted),
+            "no row reports {wanted:?} for any entity, so this journey no longer proves \
+             that case: give one of them a source that does"
+        );
     }
 }
 

@@ -101,8 +101,8 @@ fi
 #    field its title belongs in. One site, and the count is asserted rather than assumed —
 #    a substitution that matched nothing would leave the suite green and read as the
 #    fixtures having caught nothing.
-readonly BEFORE='title: required_str(content, "title")?.to_owned(),'
-readonly AFTER='title: required_str(content, "id")?.to_owned(),'
+readonly BEFORE='let raw_title = required_str(content, "title")?;'
+readonly AFTER='let raw_title = required_str(content, "id")?;'
 MUTATION_SOURCE="$scratch/repo/$SOURCE" MUTATION_BEFORE="$BEFORE" MUTATION_AFTER="$AFTER" \
   python3 - <<'PY' || fatal \
   "could not reintroduce the id-where-a-title-belongs substitution" \
