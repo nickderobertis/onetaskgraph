@@ -177,16 +177,24 @@ case "$registry" in
     url_template="https://crates.io/api/v1/crates/{name}"
     version_path="crate.max_stable_version"
     service="crates.io"
+    # crates.io documents this field as nullable, and null there is the registry
+    # itself saying it serves no stable version. Whether a null means that is per
+    # registry rather than general: reading one that way where the registry does
+    # not mean it would report a document this probe cannot understand as "nothing
+    # published", which is the answer a consumer stops waiting on.
+    null_is_no_release=1
     ;;
   pypi)
     url_template="https://pypi.org/pypi/{name}/json"
     version_path="info.version"
     service="PyPI"
+    null_is_no_release=0
     ;;
   npm)
     url_template="https://registry.npmjs.org/{name}/latest"
     version_path="version"
     service="npm"
+    null_is_no_release=0
     # A scoped name is one path segment, so its separator is percent-encoded.
     encoded="${name//\//%2F}"
     ;;
@@ -219,11 +227,11 @@ esac
 
 version=""
 status=0
-version="$(python3 - "$version_path" "$body_file" <<'PY'
+version="$(python3 - "$version_path" "$body_file" "$null_is_no_release" <<'PY'
 import json
 import sys
 
-path, body_file = sys.argv[1], sys.argv[2]
+path, body_file, null_is_no_release = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 try:
     with open(body_file, "rb") as handle:
         document = json.load(handle)
@@ -238,12 +246,17 @@ for key in path.split("."):
         raise SystemExit(3)
     value = value[key]
 
-# A field the registry itself set to null is the registry saying it serves no
-# release: crates.io answers `"max_stable_version": null` for a crate whose every
-# version is yanked or a prerelease. That is the empty answer, and it is the only
-# way a 200 reaches it.
+# A field the registry itself set to null, where that registry means by it that
+# it serves no release: crates.io answers `"max_stable_version": null` for a crate
+# whose every version is yanked or a prerelease. That is the empty answer, and it
+# is the only way a 200 reaches it. Where the registry does not mean that — the
+# other two never answer null — it is a document this cannot read, and reading it
+# as "nothing published" would end a wait on evidence nobody gave.
 if value is None:
-    raise SystemExit(4)
+    if null_is_no_release:
+        raise SystemExit(4)
+    print(f"{path} is null, which this registry does not use to mean it serves nothing", file=sys.stderr)
+    raise SystemExit(3)
 if not isinstance(value, str):
     print(f"{path} is {type(value).__name__} rather than a version string", file=sys.stderr)
     raise SystemExit(3)

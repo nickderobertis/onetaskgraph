@@ -87,9 +87,48 @@ def load(path):
 
 pin = load(pin_path)
 declaration = load(declaration_path)
+
+# Both documents are input to this check rather than something it wrote, so every
+# field is held to its type here — one named refusal a reader can act on, rather
+# than a traceback from the first place a string turned out to be a list.
+PINNED_FIELDS = {
+    "registry": str,
+    "service": str,
+    "url": str,
+    "name_in_url": str,
+    "version_path": str,
+    "served_status": int,
+    "absent_status": int,
+    "served_version": str,
+    "served_body": str,
+    "absent_body": str,
+    "null_means_no_release": bool,
+    "decoy_paths": list,
+    "user_agent_required": bool,
+}
 registries = pin.get("registry", [])
-if not registries:
-    refuse([f"{pin_path} pins no registry at all, so nothing holds the probe to an interface"])
+if not isinstance(registries, list) or not registries:
+    refuse([f"{pin_path} pins no [[registry]] table at all, so nothing holds the probe to an interface"])
+for position, registry in enumerate(registries, start=1):
+    if not isinstance(registry, dict):
+        refuse([f"{pin_path} [[registry]] #{position} is not a table"])
+    for field, kind in PINNED_FIELDS.items():
+        if field not in registry:
+            refuse([f"{pin_path} [[registry]] #{position} is missing '{field}'"])
+        # bool is a subclass of int, so an integer field would accept `true`.
+        if not isinstance(registry[field], kind) or (kind is int and isinstance(registry[field], bool)):
+            refuse([
+                f"{pin_path} [[registry]] #{position} holds '{field}' as "
+                f"{type(registry[field]).__name__}, and the pin's shape gives it {kind.__name__}"
+            ])
+    if registry["name_in_url"] not in {"verbatim", "percent-encoded"}:
+        refuse([
+            f"{pin_path} [[registry]] #{position} spells its name in the URL as "
+            f"'{registry['name_in_url']}', which is neither 'verbatim' nor 'percent-encoded'"
+        ])
+    for decoy in registry["decoy_paths"]:
+        if not isinstance(decoy, str):
+            refuse([f"{pin_path} [[registry]] #{position} has a decoy path that is not a string"])
 
 probe_source = probe_path.read_text(encoding="utf-8")
 # Instructions, not prose: the header deliberately explains which field must not
@@ -156,8 +195,14 @@ if problems:
 # together rather than transcribed: one per declared target, so a target added to
 # the declaration is a target proven here.
 targets = declaration.get("target", [])
-if not targets:
-    refuse([f"{declaration_path} declares no target, so there is nothing to prove the probe answers"])
+if not isinstance(targets, list) or not targets:
+    refuse([f"{declaration_path} declares no [[target]], so there is nothing to prove the probe answers"])
+for position, target in enumerate(targets, start=1):
+    if not isinstance(target, dict) or not isinstance(target.get("id"), str) or ":" not in target["id"]:
+        refuse([
+            f"{declaration_path} [[target]] #{position} has no id of the form <registry>:<name>; "
+            "scripts/check-release-targets.sh is what says why in full"
+        ])
 
 by_registry = {registry["registry"]: registry for registry in registries}
 plan = []
@@ -192,13 +237,15 @@ for target in targets:
     del holder[leaf]
     (directory / "decoyed.json").write_text(json.dumps(decoyed), encoding="utf-8")
 
-    nulled = ""
-    if registry["null_means_no_release"]:
-        document = json.loads(registry["served_body"])
-        holder, leaf = descend(document, registry["version_path"])
-        holder[leaf] = None
-        (directory / "nulled.json").write_text(json.dumps(document), encoding="utf-8")
-        nulled = str(directory / "nulled.json")
+    # A registry that answers null in the field the probe reads. Whether that
+    # means "serves nothing" is per registry — crates.io means it, the other two
+    # never answer it — so both sides are driven, and the pin is what says which
+    # this one is.
+    document = json.loads(registry["served_body"])
+    holder, leaf = descend(document, registry["version_path"])
+    holder[leaf] = None
+    (directory / "nulled.json").write_text(json.dumps(document), encoding="utf-8")
+    nulled = "empty" if registry["null_means_no_release"] else "refused"
 
     plan.append(
         "\t".join([
@@ -224,7 +271,7 @@ PY
 # lookup or a drifted field is caught; the Linux and macOS lanes drive the answers.
 case "${OS:-}${OSTYPE:-}" in
   *Windows_NT* | *msys* | *cygwin* | *win32*)
-    echo "check-release-probe: pinned-interface reconciliation passed; the stood-in answers are skipped on Windows (they need an extensionless curl earlier on PATH, which is a Unix shape) — the Linux and macOS lanes drive all three" >&2
+    echo "check-release-probe: skipped the stood-in answers on Windows (they need an extensionless curl on PATH); the Linux and macOS lanes drive them" >&2
     exit 0
     ;;
 esac
@@ -337,15 +384,134 @@ while IFS=$'\t' read -r identifier expected_url served_status served_version abs
     fail "$identifier answered '$(cat "$work/out")' from a document with the pinned field removed; scripts/release-probe.sh is reading a neighbouring field config/registry-interfaces.toml names as a decoy"
   fi
 
-  # 5. Where the pin records that the registry itself answers null, that is the
-  #    registry saying it serves nothing — the empty answer, not a refusal.
-  if [ -n "$nulled" ]; then
-    run_probe "$identifier" "$served_status" "$nulled" 0
+  # 5. The registry answers null in the field the probe reads, and what that
+  #    means is per registry: crates.io says by it that it serves no stable
+  #    version, and the other two never answer it at all, so reading one there as
+  #    "nothing published" would end a wait on a document nobody understood. Both
+  #    sides are driven, from the pin's own `null_means_no_release`.
+  run_probe "$identifier" "$served_status" "$directory/nulled.json" 0
+  if [ "$nulled" = "empty" ]; then
     if [ "$probe_status" -ne 0 ] || [ -s "$work/out" ]; then
-      fail "$identifier did not read a null pinned field as the registry serving nothing; config/registry-interfaces.toml records that this registry answers null for an artifact it has no released version of"
+      fail "$identifier did not read a null pinned field as the registry serving nothing, and config/registry-interfaces.toml records that this registry answers null for an artifact it has no released version of"
     fi
+  elif [ "$probe_status" -eq 0 ]; then
+    fail "$identifier read a null pinned field as an answer, and config/registry-interfaces.toml records that this registry never means 'serves nothing' by null — so that document is one the probe could not read, not a release that has not happened"
   fi
 done < "$work/plan.tsv"
+
+# ---------------------------------------------------------------------------
+# Half three: every other way the probe declines to answer.
+# ---------------------------------------------------------------------------
+# Each of these is a branch that ends without a version, and the one thing none
+# of them may do is end at exit 0 with empty output — that is the registry's
+# answer "no release yet", and a consumer stops waiting on it. So each is driven
+# through the real script and held to a refusal a caller cannot mistake for it:
+# non-zero, nothing on stdout, and a reason on stderr about the branch the case is
+# actually testing.
+
+# assert_refused <description> <reason fragment> <PATH> <probe> <status> <body> <transport-fails> [arguments...]
+assert_refused() {
+  local description=$1 expected=$2 path=$3 script=$4 http=$5 body=$6 transport=$7
+  shift 7
+  local status=0
+  STUB_REQUEST="$work/request" STUB_AGENT="$work/agent" STUB_BODY="$body" \
+    STUB_STATUS="$http" STUB_TRANSPORT_FAILS="$transport" PATH="$path" \
+    "$script" "$@" > "$work/out" 2> "$work/err" || status=$?
+  if [ "$status" -eq 0 ]; then
+    fail "$description was answered (exit 0) instead of refused; a caller cannot tell that from the registry saying it serves nothing"
+    return
+  fi
+  if [ -s "$work/out" ]; then
+    fail "$description wrote '$(cat "$work/out")' to stdout while refusing; stdout carries the answer alone"
+    return
+  fi
+  if [ ! -s "$work/err" ]; then
+    fail "$description refused without a reason on stderr, so a caller learns only that something went wrong"
+    return
+  fi
+  if ! grep -Fq "$expected" "$work/err"; then
+    fail "$description was refused for some reason other than '$expected', so it exercised a branch it is not about: $(cat "$work/err")"
+  fi
+}
+
+stub_path="$work/bin:$PATH"
+first_target="$(head -n 1 "$work/plan.tsv" | cut -f 1)"
+served_body="$(head -n 1 "$work/plan.tsv" | cut -f 6)/served.json"
+served_http="$(head -n 1 "$work/plan.tsv" | cut -f 3)"
+
+# The identifier: none, several, and one this repository does not release. The
+# last is not answered rather than answered emptily, because an artifact nobody
+# publishes says nothing about whether anything was released.
+assert_refused "an invocation with no identifier" "takes exactly one" \
+  "$stub_path" "$PROBE" "$served_http" "$served_body" 0
+assert_refused "an invocation with two identifiers" "takes exactly one" \
+  "$stub_path" "$PROBE" "$served_http" "$served_body" 0 "$first_target" "$first_target"
+assert_refused "an identifier this repository does not declare" "is not one this repository declares" \
+  "$stub_path" "$PROBE" "$served_http" "$served_body" 0 "crate:not-a-thing-here"
+
+# A declaration this probe cannot use. It resolves one from its own location, so
+# each case is a copy of the script beside the declaration it is about.
+scratch_probe() {
+  local case_name=$1 declaration=$2
+  mkdir -p "$work/$case_name/scripts"
+  cp "$PROBE" "$work/$case_name/scripts/release-probe.sh"
+  if [ -n "$declaration" ]; then
+    printf '%s\n' "$declaration" > "$work/$case_name/release-targets.toml"
+  fi
+  printf '%s' "$work/$case_name/scripts/release-probe.sh"
+}
+
+assert_refused "a checkout carrying no declaration" "is missing or unreadable" \
+  "$stub_path" "$(scratch_probe undeclared "")" "$served_http" "$served_body" 0 "$first_target"
+assert_refused "a declaration that is not TOML" "could not be read" \
+  "$stub_path" "$(scratch_probe malformed 'this is not = = toml')" "$served_http" "$served_body" 0 "$first_target"
+assert_refused "a declaration with no target in it" "declares no release target at all" \
+  "$stub_path" "$(scratch_probe empty 'schema_version = 2')" "$served_http" "$served_body" 0 "$first_target"
+assert_refused "a target on a registry this probe cannot read" "cannot read" \
+  "$stub_path" \
+  "$(scratch_probe unknown_registry 'schema_version = 2
+[[target]]
+id = "gem:onetaskgraph"
+name = "gem"
+what = "A registry this probe has no branch for."
+published_by = "nothing; this is a fixture."')" \
+  "$served_http" "$served_body" 0 "gem:onetaskgraph"
+
+# A host missing one of the two tools it runs. Not answered rather than answered
+# emptily, and it says which tool: that is the whole of what such a host can be
+# told.
+mkdir -p "$work/minbin"
+for tool in bash dirname mktemp rm; do
+  # `type -P` resolves the executable FILE. `command -v` would answer with a
+  # shell function where a developer's profile defines one, and the link made
+  # from that answer would point at itself.
+  tool_path="$(type -P "$tool")" || fatal \
+    "no $tool on this host, so the restricted-PATH cases cannot be built" \
+    "install $tool (it is in coreutils on Linux and macOS) and rerun"
+  ln -sf "$tool_path" "$work/minbin/$tool"
+done
+ln -sf "$(type -P python3)" "$work/minbin/python3"
+assert_refused "a host with no curl" "curl is not on PATH" \
+  "$work/minbin" "$PROBE" "$served_http" "$served_body" 0 "$first_target"
+rm -f "$work/minbin/python3"
+ln -sf "$work/bin/curl" "$work/minbin/curl"
+assert_refused "a host with no python3" "python3 is not on PATH" \
+  "$work/minbin" "$PROBE" "$served_http" "$served_body" 0 "$first_target"
+
+# An answer that is not one. Every case here is a registry that replied and could
+# not be understood, which is the state most easily mistaken for "nothing
+# published" and never is one.
+printf 'not json at all\n' > "$work/not-json"
+printf '{"crate":{"max_stable_version":9}}\n' > "$work/not-a-string"
+printf '{"crate":{"max_stable_version":"not a version"}}\n' > "$work/not-a-version"
+assert_refused "a registry answering 500" "cannot say what is released" \
+  "$stub_path" "$PROBE" 500 "$served_body" 0 "$first_target"
+assert_refused "a body that is not JSON" "without a readable" \
+  "$stub_path" "$PROBE" "$served_http" "$work/not-json" 0 "$first_target"
+assert_refused "a version field that is not a string" "without a readable" \
+  "$stub_path" "$PROBE" "$served_http" "$work/not-a-string" 0 "$first_target"
+assert_refused "a version field that is not a version" "which is not a version" \
+  "$stub_path" "$PROBE" "$served_http" "$work/not-a-version" 0 "$first_target"
 
 [ "$failures" -eq 0 ] || fatal \
   "scripts/release-probe.sh answered $failures case(s) wrongly (each is named above)" \

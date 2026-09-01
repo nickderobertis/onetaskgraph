@@ -74,7 +74,7 @@ elif [ "${ONETASKGRAPH_RELEASE_READER_REQUIRED:-0}" = 1 ]; then
     "install onevcs (cargo install onevcs, or pip install onevcs-cli) and rerun"
 else
   reader_status=1
-  echo "check-release-targets: onevcs is not on PATH, so the canonical reader did not load this document; the restatement below still holds its shape. Install onevcs, or set ONETASKGRAPH_RELEASE_READER_REQUIRED=1 to make this a failure." >&2
+  echo "check-release-targets: onevcs is not on PATH; the canonical reader did not load this document (set ONETASKGRAPH_RELEASE_READER_REQUIRED=1 to make that a failure)" >&2
 fi
 
 python3 - "$reader_status" "$work/declaration.json" <<'PY' || fatal \
@@ -168,7 +168,26 @@ if version != SCHEMA_VERSION:
 for key in sorted(set(declared) - TOP_KEYS - {"target", "retired"}):
     problems.append(f"{DECLARATION} carries the top-level key '{key}', which schema version {SCHEMA_VERSION} does not declare")
 
+# The document is input rather than something this wrote, so every value is held
+# to the type the schema gives it before anything reads it as one. Refused here
+# rather than dereferenced: `name = ["crate"]` would otherwise reach a comparison
+# as a list and `manifest = 1` a path as an integer, and each would end this check
+# on a traceback naming neither the file nor the field.
+def typed(value, kind, where, key):
+    """The value, when it has the type the schema gives it; None once refused."""
+    if isinstance(value, kind) and not (kind is int and isinstance(value, bool)):
+        return value
+    problems.append(
+        f"{where} holds {key} as {type(value).__name__}, and schema version "
+        f"{SCHEMA_VERSION} gives it {kind.__name__}"
+    )
+    return None
+
+
 targets = declared.get("target", [])
+if not isinstance(targets, list):
+    problems.append(f"{DECLARATION}'s target is not the array of tables the schema declares")
+    targets = []
 if not targets:
     problems.append(
         f"{DECLARATION} declares no [[target]] at all, which a consumer cannot tell from "
@@ -176,13 +195,17 @@ if not targets:
     )
 
 seen_names, seen_ids, covered = {}, {}, {}
-for position, target in enumerate(targets, start=1):
+for position, target in enumerate(list(targets), start=1):
     where = f"{DECLARATION} [[target]] #{position}"
+    if not isinstance(target, dict):
+        problems.append(f"{where} is not a table")
+        continue
     for key in sorted(set(target) - TARGET_KEYS):
         problems.append(f"{where} carries the key '{key}', which schema version {SCHEMA_VERSION} does not declare")
     for key in sorted(REQUIRED_TARGET_KEYS - set(target)):
         problems.append(f"{where} is missing the required key '{key}'")
-    identifier, name = target.get("id"), target.get("name")
+    identifier = typed(target.get("id"), str, where, "id") if "id" in target else None
+    name = typed(target.get("name"), str, where, "name") if "name" in target else None
     if isinstance(identifier, str):
         if not ID_SYNTAX.match(identifier):
             problems.append(f"{where} has the id '{identifier}', which is not <registry>:<name>")
@@ -196,22 +219,24 @@ for position, target in enumerate(targets, start=1):
             problems.append(f"{where} takes the short name '{name}', which [[target]] #{seen_names[name]} already has")
         seen_names[name] = position
     for key in ("what", "published_by"):
-        value = target.get(key)
+        if key not in target:
+            continue
+        value = typed(target.get(key), str, where, key)
         if isinstance(value, str) and (not value.strip() or "\n" in value or len(value) > MAX_PROSE):
             problems.append(f"{where}'s {key} is not one non-blank line of at most {MAX_PROSE} characters")
-    for entry in target.get("covers", []):
+    for entry in typed(target.get("covers", []), list, where, "covers") or []:
         if not isinstance(entry, str) or not ID_SYNTAX.match(entry):
             problems.append(f"{where} covers '{entry}', which is not <registry>:<name>")
             continue
         if entry in covered:
             problems.append(f"{where} covers '{entry}', which [[target]] #{covered[entry]} already covers")
         covered[entry] = position
-    for key in ("manifest",):
-        value = target.get(key)
-        if value is None:
-            continue
-        if value.startswith("/") or value.startswith("\\") or ".." in value.replace("\\", "/").split("/") or re.match(r"^[A-Za-z]:", value):
-            problems.append(f"{where}'s {key} '{value}' is not a path inside this repository")
+    if "manifest" in target:
+        value = typed(target.get("manifest"), str, where, "manifest")
+        if not isinstance(value, str):
+            pass
+        elif value.startswith("/") or value.startswith("\\") or ".." in value.replace("\\", "/").split("/") or re.match(r"^[A-Za-z]:", value):
+            problems.append(f"{where}'s manifest '{value}' is not a path inside this repository")
         elif not Path(value).is_file():
             problems.append(f"{where} names the manifest '{value}', which this repository does not carry")
 
@@ -219,7 +244,10 @@ for entry, position in sorted(covered.items()):
     if entry in seen_ids:
         problems.append(f"{DECLARATION} both declares '{entry}' as a target and covers it under [[target]] #{position}")
 
-for retired in declared.get("retired", []):
+for position, retired in enumerate(declared.get("retired", []) or [], start=1):
+    if not isinstance(retired, dict):
+        problems.append(f"{DECLARATION} [[retired]] #{position} is not a table")
+        continue
     for key in sorted(set(retired) - RETIRED_KEYS):
         problems.append(f"a [[retired]] entry carries the key '{key}', which schema version {SCHEMA_VERSION} does not declare")
     for key in sorted(RETIRED_KEYS - set(retired)):
@@ -228,6 +256,9 @@ for retired in declared.get("retired", []):
         problems.append(f"{DECLARATION} retires '{retired['id']}' and declares it as a target")
 
 probe = declared.get("probe")
+if probe is not None and not isinstance(probe, str):
+    problems.append(f"{DECLARATION}'s probe is a {type(probe).__name__} where the schema gives it a path")
+    probe = ""
 if probe is None:
     problems.append(
         f"{DECLARATION} names no probe, so every target it declares is one nothing can ask "
@@ -323,8 +354,12 @@ MANIFEST_NAME = {
     ".json": lambda document: document.get("name"),
 }
 for target in targets:
+    if not isinstance(target, dict):
+        continue
     manifest, identifier = target.get("manifest"), target.get("id")
-    if not manifest or not isinstance(identifier, str) or not Path(manifest).is_file():
+    # Both are refused by name above where they are not strings; this reconciles
+    # the ones that are, rather than reading a non-path as one.
+    if not isinstance(manifest, str) or not isinstance(identifier, str) or not Path(manifest).is_file():
         continue
     suffix = Path(manifest).suffix
     try:
@@ -351,9 +386,14 @@ if problems:
 # What the canonical reader saw, against what this read: the same targets, or the
 # reader was answering about a different document.
 if reader_ran:
-    reported = json.loads(READER_OUTPUT.read_text(encoding="utf-8"))
+    try:
+        reported = json.loads(READER_OUTPUT.read_text(encoding="utf-8"))
+        theirs = [(target["id"], target["name"]) for target in reported["target"]]
+    except (OSError, ValueError, TypeError, KeyError) as problem:
+        print(f"  the canonical reader answered something this cannot read: {problem}", file=sys.stderr)
+        print("  run `onevcs release declaration . --json` and see what it printed", file=sys.stderr)
+        raise SystemExit(1)
     mine = [(target["id"], target["name"]) for target in targets]
-    theirs = [(target["id"], target["name"]) for target in reported.get("target", [])]
     if mine != theirs:
         print(f"  the canonical reader read {theirs} out of {DECLARATION}, and this read {mine}", file=sys.stderr)
         print("  the two disagree about what this repository declares; re-run `onevcs release declaration .`", file=sys.stderr)
