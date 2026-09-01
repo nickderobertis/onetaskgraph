@@ -275,8 +275,18 @@ esac
 # The answer, held closed on its way out: what a caller reads on stdout is read as
 # a released version, so a body that answered something which is not one is not
 # answered at all.
+#
+# A shape rather than a grammar, deliberately. The three registries do not share
+# one: crates.io and npm serve semantic versions, and PyPI serves PEP 440, which
+# has an epoch (`1!2.0`) and a local segment (`1.0+local.1`) semver does not. A
+# guard restating either would refuse a version a registry really serves — and a
+# refusal is "not answered", which a consumer waits on forever. So what is refused
+# here is what cannot be a version from any of them: empty, not opening with a
+# digit, or carrying a character none of those grammars has. Distinguishing
+# `1.2.3` from `1foo` is the caller's comparison to make, and it has the version
+# to make it with.
 case "$version" in
-  "" | [!0-9]* | *[!0-9A-Za-z.+-]*)
+  "" | [!0-9]* | *[!0-9A-Za-z.+!-]*)
     refuse "$service answered '$version' for $identifier, which is not a version" \
       "re-ask once the registry answers a version; nothing about a release has been established" ;;
 esac

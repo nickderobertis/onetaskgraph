@@ -531,6 +531,18 @@ TMPDIR="$work/no-such-directory" assert_refused "a host with no writable tempora
   "could not create a temporary file" \
   "$stub_path" "$PROBE" "$served_http" "$served_body" 0 "$first_target"
 
+# A version its own registry's grammar allows and another's does not: PyPI serves
+# PEP 440, whose epoch has no semver spelling. It is answered rather than refused,
+# because a refusal is what a consumer waits on forever.
+printf '{"info":{"version":"1!2.0"}}\n' > "$work/epoch-version"
+epoch_status=0
+STUB_REQUEST="$work/request" STUB_AGENT="$work/agent" STUB_METHOD="$work/method" \
+  STUB_BODY="$work/epoch-version" STUB_STATUS=200 STUB_TRANSPORT_FAILS=0 PATH="$stub_path" \
+  "$PROBE" "pypi:onetaskgraph-cli" > "$work/out" 2> "$work/err" || epoch_status=$?
+if [ "$epoch_status" -ne 0 ] || [ "$(cat "$work/out")" != "1!2.0" ]; then
+  fail "a PEP 440 epoch version was not answered as PyPI served it; the outgoing guard in scripts/release-probe.sh is a shape check rather than one registry's grammar, because refusing a version a registry really serves is a wait that never ends"
+fi
+
 # An answer that is not one. Every case here is a registry that replied and could
 # not be understood, which is the state most easily mistaken for "nothing
 # published" and never is one.
