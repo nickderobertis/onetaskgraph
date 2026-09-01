@@ -841,8 +841,9 @@ async fn a_document_refusal_crosses_the_wire_as_the_hosted_plugin_s_own_reason()
         assert_eq!(message, "the in-memory plugin has no documents");
     }
 
-    // The two writes refuse for the reason every other write refuses, which this hosted
-    // source does have: it is writable, and it has nowhere to put a document.
+    // The two writes refuse for the same reason the two reads do, and not for the write
+    // one: this hosted source *is* writable, so "cannot be written" would be false — it
+    // has no document side to write into, which is what it says.
     assert!(source.writes().is_supported());
     for refusal in [
         source
@@ -861,7 +862,7 @@ async fn a_document_refusal_crosses_the_wire_as_the_hosted_plugin_s_own_reason()
         let Err(SourceError::Refused { message }) = refusal else {
             panic!("a source with no document side refuses a document write: {refusal:?}");
         };
-        assert_eq!(message, "the in-memory plugin cannot be written");
+        assert_eq!(message, "the in-memory plugin has no documents");
     }
 }
 

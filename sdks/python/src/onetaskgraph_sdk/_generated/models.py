@@ -7,6 +7,7 @@ from .global_id import GlobalId as GlobalId
 from .location import Location as Location
 from .page_of_document import Page as PageOfDocument
 from .query_plan import QueryPlan as QueryPlan
+from .query_response_of_qualified_document import QueryResponse as QueryResponseOfQualifiedDocument
 from .query_response_of_qualified_edge import QueryResponse as QueryResponseOfQualifiedEdge
 from .query_response_of_qualified_label import QueryResponse as QueryResponseOfQualifiedLabel
 from .query_response_of_qualified_project import QueryResponse as QueryResponseOfQualifiedProject

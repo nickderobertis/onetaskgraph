@@ -49,6 +49,64 @@ pub fn with_capabilities(capabilities: Value) -> InMemoryConfig {
     serde_json::from_value(config).expect("the fixture is a valid configuration block")
 }
 
+/// The same work with a document table beside it, and the declaration that gives it one.
+///
+/// Separate from [`with_capabilities`] rather than folded into [`work`]: `documents`
+/// declares whether a source has documents *at all*, so the fixture every other test uses
+/// has to go on having none — a source that grew a document table would stop being the
+/// document-free source those tests are about.
+///
+/// One document carries a link and one carries a path, which is the pair a consumer has to
+/// be able to tell apart; the third carries neither, because "the source did not say" is
+/// its own case and not the same as being nowhere.
+#[must_use]
+pub fn with_documents(capabilities: Value) -> InMemoryConfig {
+    let mut config = work();
+    config["capabilities"] = capabilities;
+    config["capabilities"]["documents"] = json!("native");
+    config["documents"] = json!([
+        document(
+            "D-1",
+            "Contract review",
+            Some("the two crates, one direction"),
+            ["infra"],
+            Some("P-1"),
+            json!({"url": "https://example.invalid/D-1"})
+        ),
+        document(
+            "D-2",
+            "Plugin notes",
+            Some("how a plugin is hosted"),
+            ["p1"],
+            Some("P-2"),
+            json!({"path": "/srv/notes/D-2.md"})
+        ),
+        document("D-3", "Loose note", None, [], None, Value::Null),
+    ]);
+    serde_json::from_value(config).expect("the fixture is a valid configuration block")
+}
+
+fn document(
+    id: &str,
+    title: &str,
+    content: Option<&str>,
+    labels: impl IntoIterator<Item = &'static str>,
+    project: Option<&str>,
+    location: Value,
+) -> Value {
+    json!({
+        "id": id,
+        "title": title,
+        "content": content,
+        "project": project,
+        "labels": labels.into_iter().map(label).collect::<Vec<_>>(),
+        "url": null,
+        "location": location,
+        "created_at": null,
+        "updated_at": null,
+    })
+}
+
 fn task(
     id: &str,
     title: &str,

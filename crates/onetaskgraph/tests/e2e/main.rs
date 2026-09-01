@@ -25,6 +25,7 @@
 mod common;
 
 mod copy;
+mod document_store;
 mod failures;
 mod fixtures;
 mod journeys;

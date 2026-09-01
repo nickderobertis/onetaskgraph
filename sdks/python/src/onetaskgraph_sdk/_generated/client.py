@@ -8,6 +8,7 @@ from .models import (
     CopyReport,
     EffectiveConfig,
     GlobalId,
+    QueryResponseOfQualifiedDocument,
     QueryResponseOfQualifiedEdge,
     QueryResponseOfQualifiedLabel,
     QueryResponseOfQualifiedProject,
@@ -15,6 +16,25 @@ from .models import (
     QueryResponseOfSearchHit,
     SourceListing,
 )
+
+POSITIONALS: dict[tuple[str, ...], str] = {
+    ("document", "copy"): "ids",
+    ("document", "show"): "id",
+    ("project", "copy"): "id",
+    ("project", "deps"): "id",
+    ("project", "show"): "id",
+    ("search",): "text",
+    ("task", "copy"): "ids",
+    ("task", "deps"): "id",
+    ("task", "show"): "id",
+}
+"""The operand each command takes ahead of its options, by command.
+
+The runtime client builds the argument vector from this rather than from a second
+table of its own: a verb whose operand was named in one place and forgotten in the
+other generates a method that cannot do what it is named for, and nothing would say
+so until the binary refused the invocation.
+"""
 
 
 class GeneratedClient:
@@ -35,6 +55,92 @@ class GeneratedClient:
             ["config", "show"],
             EffectiveConfig,
             default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
+
+    async def document_copy(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        match_by: str | None = None,
+        page_size: int | None = None,
+        recreate: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        to: str | None = None,
+    ) -> CopyReport:
+        """Run ``onetaskgraph document copy``."""
+        return await self._invoke(
+            ["document", "copy"],
+            CopyReport,
+            ids=ids,
+            default_sources=default_sources,
+            dry_run=dry_run,
+            match_by=match_by,
+            page_size=page_size,
+            recreate=recreate,
+            set=set,
+            to=to,
+        )
+
+    async def document_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        limit: int | None = None,
+        no_project: bool | None = None,
+        not_label: list[str] | tuple[str, ...] | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        project: str | None = None,
+        search: str | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedDocument:
+        """Run ``onetaskgraph document list``."""
+        return await self._invoke(
+            ["document", "list"],
+            QueryResponseOfQualifiedDocument,
+            allow_partial=allow_partial,
+            default_sources=default_sources,
+            explain=explain,
+            in_=in_,
+            label=label,
+            limit=limit,
+            no_project=no_project,
+            not_label=not_label,
+            page=page,
+            page_size=page_size,
+            project=project,
+            search=search,
+            set=set,
+            source=source,
+        )
+
+    async def document_show(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedDocument:
+        """Run ``onetaskgraph document show``."""
+        return await self._invoke(
+            ["document", "show"],
+            QueryResponseOfQualifiedDocument,
+            id=id,
+            allow_partial=allow_partial,
+            default_sources=default_sources,
+            explain=explain,
             page_size=page_size,
             set=set,
         )

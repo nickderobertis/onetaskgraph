@@ -1294,3 +1294,193 @@ async fn a_restore_the_destination_refuses_names_the_item_left_holding_this_copy
         ]
     );
 }
+
+/// One document, held by an `in-memory` source, carrying caller-defined metadata of
+/// several JSON types and a location of its own.
+fn a_document(id: &str, title: &str) -> Value {
+    json!({
+        "id": id,
+        "title": title,
+        "content": "why the store holds a document",
+        "labels": [{"id": "L-1", "name": "spec"}],
+        "project": null,
+        "location": {"path": "/srv/notes/D-1.md"},
+        "metadata": {"caller.shape": {"nested": [1, true, null]}, "onepipeline.turn_budget": 12},
+        "repositories": ["github.com/nickderobertis/onetaskgraph"]
+    })
+}
+
+/// Two document-bearing in-memory sources: one holding `D-1`, one empty and writable.
+fn document_pair() -> Engine {
+    engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "documents": [a_document("D-1", "Design review")],
+        }},
+        "into": {"plugin": "in-memory", "config": {"capabilities": {"documents": "native"}}},
+    }))
+}
+
+#[tokio::test]
+async fn a_document_copies_into_another_source_whole_and_a_second_copy_updates_it() {
+    let engine = document_pair();
+
+    let first = engine
+        .copy(&many(&["from:D-1"], CopyScope::Documents))
+        .await
+        .expect("a document-bearing destination takes a document");
+    assert_eq!(
+        first.items.iter().map(landed).collect::<Vec<_>>(),
+        [(Some("into:D-1".to_owned()), "created".to_owned())]
+    );
+
+    let landed_document = engine
+        .document(&id("into:D-1"))
+        .await
+        .expect("the destination is configured");
+    let item = &landed_document.items[0].item;
+    assert_eq!(item.title, "Design review");
+    assert_eq!(
+        item.content.as_deref(),
+        Some("why the store holds a document")
+    );
+    assert_eq!(item.labels[0].name, "spec");
+    // Every caller-defined key, with its JSON types intact, plus the origin the copy
+    // records so a second copy finds this one rather than adding another.
+    assert_eq!(
+        item.metadata["caller.shape"],
+        json!({"nested": [1, true, null]})
+    );
+    assert_eq!(item.metadata["onepipeline.turn_budget"], json!(12));
+    assert_eq!(item.metadata[GlobalId::ORIGIN_KEY], json!("from:D-1"));
+    assert_eq!(
+        item.repositories
+            .iter()
+            .map(|repository| repository.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        ["github.com/nickderobertis/onetaskgraph"]
+    );
+    // Where the *source* holds a document says nothing about where the destination does,
+    // so the location is the destination's own and is never written.
+    assert_eq!(item.location, None);
+
+    let second = engine
+        .copy(&many(&["from:D-1"], CopyScope::Documents))
+        .await
+        .expect("a second copy is an update, not a duplicate");
+    assert_eq!(
+        second.items.iter().map(landed).collect::<Vec<_>>(),
+        [(Some("into:D-1".to_owned()), "unchanged".to_owned())]
+    );
+    let held = engine
+        .documents(&onetaskgraph_core::DocumentRequest {
+            sources: vec![name("into")],
+            filters: onetaskgraph_core::DocumentFilters::default(),
+            project: onetaskgraph_core::ProjectSelector::Any,
+            paging: Paging {
+                limit: NonZeroU32::new(20).expect("a non-zero limit"),
+                token: None,
+            },
+        })
+        .await
+        .expect("the destination is configured");
+    assert_eq!(
+        held.items.len(),
+        1,
+        "exactly one where there was one before"
+    );
+}
+
+#[tokio::test]
+async fn a_document_copy_naming_a_destination_with_no_documents_is_refused_before_anything_is_read()
+{
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "documents": [a_document("D-1", "Design review")],
+        }},
+        // Writable, and holding no documents: the refusal has to be about the documents.
+        "into": {"plugin": "in-memory", "config": {}},
+    }));
+
+    let refusal = engine
+        .copy(&many(&["from:D-1"], CopyScope::Documents))
+        .await
+        .expect_err("a destination with no documents has nowhere to put one");
+    let EngineError::NoDocuments { name: named, kind } = refusal else {
+        panic!("a destination with no documents is refused as one: {refusal:?}");
+    };
+    assert_eq!(named, "into");
+    assert_eq!(kind, "in-memory");
+
+    // Nothing was read and nothing was written: the destination still holds no documents,
+    // and the source still holds the one it had.
+    assert!(
+        engine
+            .document(&id("into:D-1"))
+            .await
+            .expect("the destination is configured")
+            .items
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_document_copy_out_of_a_source_with_no_documents_is_refused_naming_that_source() {
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {}},
+        "into": {"plugin": "in-memory", "config": {"capabilities": {"documents": "native"}}},
+    }));
+
+    let refusal = engine
+        .copy(&many(&["from:D-1"], CopyScope::Documents))
+        .await
+        .expect_err("a source with no documents holds nothing to copy out");
+    let EngineError::NoDocuments { name: named, kind } = refusal else {
+        panic!("a source with no documents is refused as one: {refusal:?}");
+    };
+    assert_eq!(named, "from");
+    assert_eq!(kind, "in-memory");
+}
+
+#[tokio::test]
+async fn a_document_copy_that_cannot_finish_leaves_the_destination_as_it_found_it() {
+    // Two documents, the second of which the destination will not create. A copy is either
+    // complete or it never happened, so the first one's creation is taken back.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "documents": [a_document("D-1", "Design review"), a_document("D-2", "Refused")],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native", "uncreatable_titles": ["Refused"]},
+        }},
+    }));
+
+    let refusal = engine
+        .copy(&many(&["from:D-1", "from:D-2"], CopyScope::Documents))
+        .await
+        .expect_err("a destination that refuses one document fails the whole copy");
+    let EngineError::SourceRefused { name: named, .. } = refusal else {
+        panic!("the destination's own refusal reaches the caller: {refusal:?}");
+    };
+    assert_eq!(named, "into");
+
+    let held = engine
+        .documents(&onetaskgraph_core::DocumentRequest {
+            sources: vec![name("into")],
+            filters: onetaskgraph_core::DocumentFilters::default(),
+            project: onetaskgraph_core::ProjectSelector::Any,
+            paging: Paging {
+                limit: NonZeroU32::new(20).expect("a non-zero limit"),
+                token: None,
+            },
+        })
+        .await
+        .expect("the destination is configured");
+    assert!(
+        held.items.is_empty(),
+        "the copy undid its own writes: {:?}",
+        held.items
+    );
+}

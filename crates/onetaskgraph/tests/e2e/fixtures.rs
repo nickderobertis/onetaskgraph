@@ -60,9 +60,10 @@ pub struct Declared {
     ///
     /// Not a predicate, and so unlike every other `Support` here: it says what the source
     /// *holds*, the engine reads it once at the handshake rather than compensating for it,
-    /// and a source declaring it unsupported is never asked for a document. Every row
-    /// declares unsupported because no plugin has documents yet — the row is what makes
-    /// that a claim this table is held to rather than an assumption.
+    /// and a source declaring it unsupported is never asked for a document. The table
+    /// carries rows of both kinds on purpose — the `in-memory` rows hold documents, the
+    /// three hosted plugins hold none yet — so the shared document journeys drive the
+    /// answer and the honest refusal against real difference rather than against a mock.
     pub documents: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
@@ -190,10 +191,30 @@ impl Row {
         }))
     }
 
+    /// This row as a document naming `work` and one empty document-bearing source beside
+    /// it.
+    ///
+    /// A second `in-memory` source rather than a folder of Markdown, unlike
+    /// [`document_with_folder`](Self::document_with_folder): `local-md` declares it has no
+    /// documents, so the one destination a document can be copied into is a source that
+    /// says it has them.
+    pub fn document_with_store(&self, sandbox: &Sandbox, store: &str) -> String {
+        let block = (self.fixture.block)(sandbox);
+        document(&json!({
+            SOURCE: {"plugin": self.plugin, "config": block},
+            store: {"plugin": "in-memory", "config": empty_document_store()},
+        }))
+    }
+
     /// What this row declares.
     pub fn declared(&self) -> &Declared {
         &self.fixture.declared
     }
+}
+
+/// An empty in-memory source that has documents, ready to be copied into.
+pub fn empty_document_store() -> Value {
+    json!({"capabilities": {"documents": "native"}})
 }
 
 /// An empty Markdown folder, ready to be copied into.
@@ -256,7 +277,10 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: native_block,
             complete_dataset: true,
-            declared: EVERY_PREDICATE_NATIVE,
+            declared: Declared {
+                documents: Support::Native,
+                ..EVERY_PREDICATE_NATIVE
+            },
         },
     },
     Row {
@@ -274,7 +298,11 @@ pub const ROWS: &[Row] = &[
             complete_dataset: true,
             declared: Declared {
                 projects: Support::Native,
-                documents: Support::Unsupported,
+                // Native here for the same reason `projects` is: it says this source
+                // *holds* documents, and a row declaring it unsupported would contribute
+                // no document rows at all — which would leave the engine's document
+                // compensation with no coverage, not less of it.
+                documents: Support::Native,
                 orphan_tasks: Support::Unsupported,
                 filter_by_label: Support::Unsupported,
                 filter_by_status: Support::Unsupported,
@@ -292,7 +320,10 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: hosted_block,
             complete_dataset: true,
-            declared: EVERY_PREDICATE_NATIVE,
+            declared: Declared {
+                documents: Support::Native,
+                ..EVERY_PREDICATE_NATIVE
+            },
         },
     },
     Row {
@@ -364,8 +395,8 @@ const EVERY_PREDICATE_NATIVE: Declared = Declared {
     projects: Support::Native,
     // Unsupported even here, because `documents` is not a predicate: "native" would claim
     // this source *holds* documents rather than that it filters them itself, which is what
-    // keeps this constant's name true. No plugin has any yet; docs/follow-ups.md tracks
-    // each one.
+    // keeps this constant's name true. The rows whose source really does hold documents
+    // override it; docs/follow-ups.md tracks the three plugins that do not.
     documents: Support::Unsupported,
     orphan_tasks: Support::Native,
     filter_by_label: Support::Native,
@@ -2048,8 +2079,18 @@ fn local_md_block(sandbox: &Sandbox) -> Value {
 /// The `in-memory` row that applies every predicate itself.
 fn native_block(_sandbox: &Sandbox) -> Value {
     let mut block = dataset();
-    block["capabilities"] = json!({"max_page_size": 50});
+    block["capabilities"] = native_capabilities();
     block
+}
+
+/// The capability block the row that applies everything itself declares.
+///
+/// Spelled once and exported because three journey modules configure this same source
+/// outside the table, and `documents` is a key a caller has to remember: the shared
+/// dataset holds documents, and a source declaring it has none while holding some is
+/// refused where its configuration is read.
+pub fn native_capabilities() -> Value {
+    json!({"documents": "native", "max_page_size": 50})
 }
 
 /// The row that runs the same dataset in a second process, over the stdio protocol.
@@ -2062,7 +2103,7 @@ fn native_block(_sandbox: &Sandbox) -> Value {
 /// worth making: what a source can do must not change because it is a process away.
 fn hosted_block(_sandbox: &Sandbox) -> Value {
     let mut settings = dataset();
-    settings["capabilities"] = json!({"max_page_size": 50});
+    settings["capabilities"] = native_capabilities();
     json!({
         "command": env!("CARGO_BIN_EXE_onetaskgraph"),
         "args": ["plugin-serve", "in-memory"],
@@ -2078,6 +2119,10 @@ fn hosted_block(_sandbox: &Sandbox) -> Value {
 fn compensated_block(_sandbox: &Sandbox) -> Value {
     let mut block = dataset();
     block["capabilities"] = json!({
+        // `documents` is not a predicate: it says this source *holds* documents, which it
+        // does. Declaring it unsupported here would contribute no document rows at all and
+        // leave the engine's document compensation with no coverage rather than less of it.
+        "documents": "native",
         "filter_by_label": "unsupported",
         "filter_by_status": "unsupported",
         "search_title": "unsupported",
@@ -2091,7 +2136,17 @@ fn compensated_block(_sandbox: &Sandbox) -> Value {
 }
 
 /// The work every row serves: four tasks, three of which are in a project, three labels,
-/// two projects, and a dependency graph with a reverse answer worth checking.
+/// two projects, three documents, and a dependency graph with a reverse answer worth
+/// checking.
+///
+/// The documents are what only a source that *has* documents can serve, so they are here
+/// rather than in a fixture of their own: the rows that hold them and the rows that
+/// declare they hold none read the same table, and the shared journeys drive both against
+/// it. One document carries a link and one a path, so a journey can assert that a consumer
+/// tells the two shapes apart; the third carries neither, because "the source did not say"
+/// is its own case. `T-1` and `P-1` carry a location apiece for the same reason — location
+/// was added to all three entities, and a fixture with it on documents alone would leave
+/// the other two renderings unproven.
 ///
 /// Exactly one of the two projects carries a label, and the two sit in different status
 /// categories, so every project filter has something to keep and something to drop —
@@ -2116,6 +2171,7 @@ pub fn dataset() -> Value {
              "status": {"category": "todo", "name": "Todo"},
              "labels": [{"id": "L-1", "name": "bug"}, {"id": "L-3", "name": "core"}],
             "project": "P-1", "url": "https://example.invalid/T-1",
+            "location": {"url": "https://example.invalid/T-1"},
             "metadata": {"onepipeline.turn_budget": 12, "caller.flags": [true, null]},
             "repositories": ["github.com/nickderobertis/onetaskgraph"]},
             {"id": "T-2", "title": "Beta", "content": "alpha in the body",
@@ -2133,10 +2189,23 @@ pub fn dataset() -> Value {
              "status": {"category": "in-progress", "name": "Doing"},
              "labels": [{"id": "L-3", "name": "core"}],
              "url": "https://example.invalid/P-1",
+             "location": {"path": "/srv/engine"},
              "metadata": {"onepipeline.publication": {"mode": "review"}},
              "repositories": ["github.com/nickderobertis/onetaskgraph"]},
             {"id": "P-2", "title": "Docs", "content": "alpha docs",
              "status": {"category": "todo", "name": "Todo"}, "labels": []}
+        ],
+        "documents": [
+            {"id": "D-1", "title": "Alpha design", "content": "the engine core, reviewed",
+             "project": "P-1", "labels": [{"id": "L-1", "name": "bug"}],
+             "location": {"url": "https://example.invalid/D-1"},
+             "metadata": {"onepipeline.turn_budget": 12, "caller.flags": [true, null]},
+             "repositories": ["github.com/nickderobertis/onetaskgraph"]},
+            {"id": "D-2", "title": "Runbook", "content": "how to read the alpha design",
+             "project": "P-2", "labels": [{"id": "L-3", "name": "core"}],
+             "location": {"path": "/srv/notes/D-2.md"}},
+            {"id": "D-3", "title": "Loose note", "content": "filed nowhere",
+             "project": null, "labels": []}
         ],
         "labels": [
             {"id": "L-1", "name": "bug"},

@@ -51,6 +51,10 @@ onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dr
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
 onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks] [--match-by KEY] [--recreate]
                                                  [--dry-run]
+
+onetaskgraph document list / show                # the same flags, minus --status
+onetaskgraph document copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dry-run]
+
 onetaskgraph label list [--source S]...
 onetaskgraph search <TEXT> [--in ...] [--kind task|project|both]
 
@@ -62,6 +66,16 @@ An `<ID>` is qualified: `work:ENG-142`. Repeating `--label` narrows — a second
 second requirement — and `--not-label` excludes. `--project` takes a qualified id, which
 narrows the query to that project's own source, or a bare native id, which is asked of
 every selected source.
+
+A **document** is what lives in a project and is not work — a design note, a runbook, a
+page somebody has to read. It carries no status and takes part in no dependency graph, so
+`document` has no `--status` filter and no `deps` verb. What it does carry is a
+**location**: where a reader can actually open it, as a link (`url …`) or as an absolute
+path on the machine its source runs on (`path …`). `task show`, `project show` and
+`document show` all print it, and `--json` carries the contract type's own shape —
+`{"url": …}` or `{"path": …}` — so a program branches on which key is present. Not every
+source has documents; one that says it has none is reported as holding none rather than as
+having failed, and a copy naming it is refused before anything is read.
 
 ### Seeing which plan you got
 

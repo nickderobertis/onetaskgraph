@@ -15,16 +15,17 @@ use std::str::FromStr as _;
 use clap::{CommandFactory as _, Parser};
 use onetaskgraph_core::config::Layer;
 use onetaskgraph_core::{
-    CopyItems, CopyRequest, CopyScope, DependencyRequest, Engine, Environment, Filters, GlobalId,
-    LabelRequest, Loaded, MatchBy, OutputFormat, PageToken, Paging, ProjectRequest,
-    ProjectSelector, QueryResponse, SearchRequest, SourceFailure, TaskRequest,
+    CopyItems, CopyRequest, CopyScope, DependencyRequest, DocumentFilters, DocumentRequest, Engine,
+    Environment, Filters, GlobalId, LabelRequest, Loaded, MatchBy, OutputFormat, PageToken, Paging,
+    ProjectRequest, ProjectSelector, QueryResponse, SearchRequest, SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{LabelFilter, NativeId, SourceName, TextQuery};
 use serde::Serialize;
 
 use crate::cli::{
-    Cli, Command, ConfigCommand, CopyArgs, DependencyArgs, FilterArgs, LabelCommand, PageArgs,
-    ProjectCommand, SelectionArgs, ShowArgs, SourcesCommand, TaskCommand,
+    Cli, Command, ConfigCommand, CopyArgs, DependencyArgs, DocumentCommand, DocumentFilterArgs,
+    FilterArgs, LabelCommand, PageArgs, ProjectCommand, SelectionArgs, ShowArgs, SourcesCommand,
+    TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`.
@@ -253,6 +254,58 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
             )
         }
 
+        Command::Document {
+            command: DocumentCommand::List(args),
+        } => {
+            let engine = engine(loaded);
+            let request = DocumentRequest {
+                sources: selection(&args.selection)?,
+                filters: document_filters(&args.filters),
+                project: selector(&engine, args.project.as_deref(), args.no_project),
+                paging: paging(loaded, &args.paging)?,
+            };
+            let response = engine
+                .documents(&request)
+                .await
+                .map_err(|error| error.to_string())?;
+            respond(
+                out,
+                loaded,
+                response,
+                render::documents,
+                &args.paging,
+                "documents",
+            )
+        }
+
+        Command::Document {
+            command: DocumentCommand::Show(args),
+        } => {
+            let response = engine(loaded)
+                .document(&qualified(&args.id)?)
+                .await
+                .map_err(|error| error.to_string())?;
+            show(
+                out,
+                loaded,
+                response,
+                render::document_detail,
+                args,
+                "document",
+            )
+        }
+
+        Command::Document {
+            command: DocumentCommand::Copy(args),
+        } => {
+            let request = copy_request(
+                args.id.iter().map(String::as_str),
+                CopyScope::Documents,
+                &args.copy,
+            )?;
+            copy(out, loaded, &request).await
+        }
+
         Command::Label {
             command: LabelCommand::List(args),
         } => {
@@ -478,6 +531,25 @@ fn filters(args: &FilterArgs) -> Result<Filters, String> {
     })
 }
 
+/// The filters a document list was given.
+///
+/// No statuses: a document has no status, so there is nothing here for one to compare
+/// against and no flag that could set one.
+fn document_filters(args: &DocumentFilterArgs) -> DocumentFilters {
+    DocumentFilters {
+        text: args.search.as_ref().map(|terms| TextQuery {
+            terms: terms.clone(),
+            fields: args.fields.fields(),
+        }),
+        labels: LabelFilter {
+            // Repeating `--label` narrows rather than widens, exactly as it does for tasks.
+            all_of: args.label.clone(),
+            none_of: args.not_label.clone(),
+            any_of: Vec::new(),
+        },
+    }
+}
+
 /// Which project a `task list` was narrowed to.
 ///
 /// A qualified id names one project of one source and narrows the query to it; anything
@@ -668,6 +740,9 @@ mod tests {
                 "project show",
                 "project deps",
                 "project copy",
+                "document list",
+                "document show",
+                "document copy",
                 "label list",
                 "search"
             ])

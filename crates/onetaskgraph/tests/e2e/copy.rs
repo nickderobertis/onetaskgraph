@@ -1717,3 +1717,70 @@ fn a_creation_whose_filing_and_cleanup_both_fail_still_reports_the_filing() {
     let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
     assert_eq!(listed.matches("First step").count(), 1, "{listed}");
 }
+
+/// The document-bearing destination the document copy journeys copy into.
+const STORE: &str = "store";
+
+/// Every row whose source holds documents; the rest assert the refusal below.
+///
+/// The copy *round trip* out of these rows — created, read back, and matched rather than
+/// duplicated on a second copy — needs a destination that outlives one invocation, so it
+/// lives in `document_store.rs` beside the peer that provides one. What stays here is the
+/// pair of refusals, which write nothing and so need no destination to read back.
+fn documentary_rows() -> impl Iterator<Item = &'static crate::fixtures::Row> {
+    ROWS.iter()
+        .filter(|row| row.declared().documents.is_native())
+}
+
+#[test]
+fn a_document_copy_into_a_source_that_has_none_is_refused_naming_it_and_its_plugin() {
+    // Refused from the declaration rather than from a failed write, so nothing is read
+    // first — the same shape the write-support refusal already has.
+    for row in documentary_rows() {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&row.document_with_folder(&sandbox, NOTES));
+
+        let complaint = refused(
+            &sandbox,
+            &["document", "copy", &qualified(SOURCE, "D-1"), "--to", NOTES],
+            1,
+        );
+        assert!(
+            complaint.contains(NOTES) && complaint.contains("local-md"),
+            "{}: the refusal names the source and its plugin:\n{complaint}",
+            row.name
+        );
+        assert!(
+            complaint.contains("has no documents"),
+            "{}: and says what is wrong with it:\n{complaint}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn a_document_copy_out_of_a_source_that_has_none_is_refused_naming_it_and_its_plugin() {
+    for row in ROWS
+        .iter()
+        .filter(|row| !row.declared().documents.is_native())
+    {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&row.document_with_store(&sandbox, STORE));
+
+        let complaint = refused(
+            &sandbox,
+            &["document", "copy", &qualified(SOURCE, "D-1"), "--to", STORE],
+            1,
+        );
+        assert!(
+            complaint.contains(SOURCE) && complaint.contains(row.plugin),
+            "{}: the refusal names the source and its plugin:\n{complaint}",
+            row.name
+        );
+        assert!(
+            complaint.contains("has no documents"),
+            "{}: and says what is wrong with it:\n{complaint}",
+            row.name
+        );
+    }
+}

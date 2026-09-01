@@ -13,6 +13,7 @@ from typing import cast
 from pydantic import RootModel, TypeAdapter, ValidationError
 
 from ._generated import GeneratedClient
+from ._generated.client import POSITIONALS
 
 
 class OnetaskgraphError(RuntimeError):
@@ -42,22 +43,18 @@ class Client(GeneratedClient):
 
     async def _invoke[T](self, command: list[str], model: object, **options: object) -> T:
         arguments = [self.binary, *command]
-        match command:
-            case ["search"]:
-                positional = "text"
-            case ["task", "copy"]:
-                positional = "ids"
-            case ["task" | "project", "show" | "deps" | "copy"]:
-                positional = "id"
-            case _:
-                positional = None
+        # Read from the generated table rather than matched again here: the generated
+        # methods and this argument vector have to name the same operand, and while each
+        # kept its own copy a verb added to one and forgotten in the other produced a
+        # method that could not do what it was named for.
+        positional = POSITIONALS.get(tuple(command))
         if positional is not None:
             try:
                 value = options.pop(positional)
             except KeyError as error:
                 raise TypeError(f"missing required argument: {positional}") from error
-            # `task copy` is the one command whose positional is variadic; every other
-            # takes exactly one, so a bare value is passed through as a list of one.
+            # A copy verb's positional is variadic; every other takes exactly one, so a
+            # bare value is passed through as a list of one.
             given = value if isinstance(value, (list, tuple)) else [value]
             arguments.extend(
                 str(item.root if isinstance(item, RootModel) else item) for item in given
