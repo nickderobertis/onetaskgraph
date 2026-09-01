@@ -29,6 +29,24 @@ RESPONSE_ROOTS = {
     "sources_list": "SourceListing",
     "config_show": "EffectiveConfig",
 }
+# Roots no command returns directly, which the package generates and exports anyway.
+#
+# The first four are reachable inside a response and are named here so a consumer has them
+# under their own names rather than only as nested definitions. The documents contract is
+# here for a different reason: `Document`, `DocumentQuery`, `Location` and `PageOfDocument`
+# are the contract's types, and the SDK owes a caller a model for each whether or not a
+# verb reaches one yet — no verb does today, and a generated surface that waited for one
+# would leave both SDKs describing different contracts.
+CONTRACT_ROOTS = {
+    "SourceFailure",
+    "QueryPlan",
+    "GlobalId",
+    "StatusCategory",
+    "Document",
+    "DocumentQuery",
+    "Location",
+    "PageOfDocument",
+}
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
     "allow_partial": "bool",
@@ -193,9 +211,7 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
     """Generate Pydantic models directly from every response schema in the bundle."""
     destination.mkdir(parents=True, exist_ok=True)
     exports: list[str] = []
-    for root in sorted(
-        set(RESPONSE_ROOTS.values()) | {"SourceFailure", "QueryPlan", "GlobalId", "StatusCategory"}
-    ):
+    for root in sorted(set(RESPONSE_ROOTS.values()) | CONTRACT_ROOTS):
         schema = bundle["roots"][root]
         add_variant_titles(schema, root)
         rename_qualified_definitions(schema)
@@ -260,7 +276,10 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
             + "\n",
             encoding="utf-8",
         )
-        generated_name = "QueryResponse" if root.startswith("QueryResponseOf") else root
+        generated_name = root
+        for generic, titled in (("QueryResponseOf", "QueryResponse"), ("PageOf", "Page")):
+            if root.startswith(generic):
+                generated_name = titled
         exports.append(f"from .{module} import {generated_name} as {root}")
     (destination / "models.py").write_text(
         "# ruff: noqa: F401, I001  # Generated public re-exports are used by consumers.\n"
@@ -524,12 +543,7 @@ def validate_schema_bundle(parsed: JsonValue) -> SchemaBundle:
     if not isinstance(parsed, dict) or not isinstance(parsed.get("roots"), dict):
         raise SystemExit("binary emitted an invalid schema bundle: expected an object with roots")
     bundle = TypeAdapter(SchemaBundle).validate_python(parsed)
-    required = set(RESPONSE_ROOTS.values()) | {
-        "SourceFailure",
-        "QueryPlan",
-        "GlobalId",
-        "StatusCategory",
-    }
+    required = set(RESPONSE_ROOTS.values()) | CONTRACT_ROOTS
     missing = sorted(required - bundle["roots"].keys())
     malformed = sorted(
         name
