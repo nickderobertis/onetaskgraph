@@ -10,7 +10,7 @@ use std::process::Output;
 
 use crate::common::{SOURCE_BOUNDARIES, Sandbox, stderr, stdout};
 use crate::fixtures::{
-    Declared, ROWS, Row, SOURCE, dataset, document, github_projects_with_board, qualified,
+    Declared, Placed, ROWS, Row, SOURCE, dataset, document, github_projects_with_board, qualified,
 };
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_plugin_api::Capabilities;
@@ -1924,41 +1924,34 @@ fn a_document_list_narrows_by_project_by_label_and_by_text_and_has_no_status_fil
     }
 }
 
-/// Every entity of the shared dataset a location is asserted over, and its verb.
-const PLACED: &[(&str, &str)] = &[
-    ("document", "D-1"),
-    ("document", "D-2"),
-    ("document", "D-3"),
-    ("task", "T-1"),
-    ("project", "P-1"),
-];
-
 #[test]
 fn both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_alike() {
-    // What each row is asked for is what *that row's source* says, taken from its own
-    // entry in the table: a location is the backend's own, so a hosted board hands a
-    // reader a link to open where a source holding files hands a path, and a journey that
-    // assumed one shape would be asserting on the fixture rather than on the rendering.
-    // The three cases the contract has are proven across the table rather than by any one
-    // row, and the guard at the end of this journey is what keeps that true.
+    // Every row, not only the ones holding documents: where an entity is is a claim each
+    // source makes about all three kinds, and the rows differ in what they claim. A source
+    // over a remote service reports the link it holds; one over a folder of files reports
+    // the path of the file behind each item; one that says nothing leaves the field out.
+    // The table is what says which, so the journey drives the claim rather than a constant
+    // of its own. Which of the three each row said is collected as it goes, and asserted
+    // at the end: a table that stopped discriminating would make every assertion below
+    // pass while proving nothing.
     let mut seen: Vec<Option<&'static str>> = Vec::new();
-    for row in documentary_rows() {
+    for row in ROWS {
         let sandbox = host(row);
+        let places = row.fixture.place;
 
-        for (verb, id) in PLACED {
-            let where_it_is = (row.fixture.locations)(id);
-            seen.push(where_it_is.as_ref().map(|(kind, _)| *kind));
+        for (verb, id) in sampled_entities(row) {
+            let expected = places(&sandbox, verb, id);
+            seen.push(expected.as_ref().map(|place| place.key));
+            let shown = ok(row, &sandbox, &[verb, "show", &qualified(SOURCE, id)]);
 
             // The human rendering says which kind of place it is, so a reader knows
-            // whether to open a link or read a file out — and a source that did not say
-            // leaves the line out entirely, which is not the same as saying it is nowhere.
-            let shown = ok(row, &sandbox, &[verb, "show", &qualified(SOURCE, id)]);
+            // whether to open a link or read a file out — and a location the source did
+            // not give is left out entirely, which is not the same as saying it is
+            // nowhere.
             assert_eq!(
                 field(&shown, "location"),
-                where_it_is
-                    .as_ref()
-                    .map(|(kind, place)| format!("{kind} {place}")),
-                "{}: `{verb} show {id}` must say where its source says it is:\n{shown}",
+                expected.as_ref().map(Placed::rendered),
+                "{}: `{verb} show {id}` must say where it is and which kind of place:\n{shown}",
                 row.name
             );
 
@@ -1973,40 +1966,64 @@ fn both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_al
             let location = &response["items"][0]["item"]["location"];
             assert_eq!(
                 location,
-                &where_it_is
+                &expected
                     .as_ref()
-                    .map_or(json!(null), |(kind, place)| json!({*kind: place})),
-                "{}: `{verb} show {id} --json` carries the location's own JSON, and \
-                 null — never a third variant — where the source said nothing:\n{location}",
+                    .map_or_else(|| json!(null), |place| json!({place.key: place.value})),
+                "{}: `{verb} show {id} --json` carries the location's own JSON:\n{location}",
                 row.name
             );
         }
 
-        // And the list rendering says it too, because a document list is where a reader
-        // finds the thing they were asked to open.
-        let listing = ok(row, &sandbox, &["document", "list"]);
-        for id in ["D-1", "D-2", "D-3"] {
-            let Some((kind, place)) = (row.fixture.locations)(id) else {
-                continue;
-            };
-            assert!(
-                listing.contains(&format!("{kind} {place}")),
-                "{}: a document list says where each one is:\n{listing}",
-                row.name
-            );
+        // And the *document* list says it too, because a document listing is where a
+        // reader finds the thing they were asked to open. A task list prints a status
+        // where this line would go and is not where a reader goes looking for a file.
+        if row.declared().documents.is_native() {
+            let listing = ok(row, &sandbox, &["document", "list"]);
+            for id in ["D-1", "D-2", "D-3"] {
+                let Some(place) = places(&sandbox, "document", id) else {
+                    continue;
+                };
+                assert!(
+                    listing.contains(&place.rendered()),
+                    "{}: a document list says where {id} is:\n{listing}",
+                    row.name
+                );
+            }
         }
     }
 
-    // A fixture that stopped discriminating would make every assertion above pass while
+    // A table that stopped discriminating would make every assertion above pass while
     // proving nothing, so the cases themselves are asserted: some row reports a link, some
     // row reports a path, and some row says nothing about where an entity is.
     for wanted in [Some("url"), Some("path"), None] {
         assert!(
             seen.contains(&wanted),
-            "no document-bearing row reports {wanted:?} for any entity, so this journey \
-             no longer proves the case: give one of them a source that does"
+            "no row reports {wanted:?} for any entity, so this journey no longer proves \
+             that case: give one of them a source that does"
         );
     }
+}
+
+/// A sample of the entities this row serves: enough of each kind for one to carry a
+/// location and one to carry none, plus the documents only where the row's source has any.
+///
+/// A row that holds none has no document to place, and the honest refusal it answers a
+/// document read with is what that row's own journey asserts.
+fn sampled_entities(row: &Row) -> Vec<(&'static str, &'static str)> {
+    let mut entities = vec![
+        ("task", "T-1"),
+        ("task", "T-2"),
+        ("project", "P-1"),
+        ("project", "P-2"),
+    ];
+    if row.declared().documents.is_native() {
+        entities.extend([
+            ("document", "D-1"),
+            ("document", "D-2"),
+            ("document", "D-3"),
+        ]);
+    }
+    entities
 }
 
 #[test]

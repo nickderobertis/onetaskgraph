@@ -1,5 +1,13 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, resolve } from "node:path";
 import {
@@ -314,11 +322,11 @@ test("copy drives the real binary and reports what it did to each item", async (
 });
 
 test("a document copy drives the real binary and is refused by a source with none", async () => {
-  // One client call is one process, so an in-memory destination cannot be read back by
-  // the next call — the round trip is proven end to end against a persistent peer in
-  // `crates/onetaskgraph/tests/e2e/document_store.rs`. What this owes is that the method
-  // carries the operands the verb requires: a `document copy` invoked without its ids is
-  // refused by clap as a bad invocation, so a method that dropped them reaches no report.
+  // `notes` is a folder of Markdown, whose documents are files that outlive the process,
+  // so what one client call copied the next one reads back — which is what proves the copy
+  // landed rather than only that a report was printed. `sealed` is an in-memory source
+  // without the `documents` capability, so it holds none and is refused as a destination
+  // before anything is read.
   const documentRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-document-"));
   mkdirSync(resolve(documentRoot, "notes"), { recursive: true });
   writeFileSync(
@@ -329,31 +337,77 @@ test("a document copy drives the real binary and is refused by a source with non
           plugin: "in-memory",
           config: {
             capabilities: { documents: "native" },
-            documents: [{ id: "D-1", title: "Alpha design", content: "reviewed", labels: [] }],
+            documents: [
+              {
+                id: "D-1",
+                title: "Alpha design",
+                content: "reviewed",
+                labels: [],
+                location: { url: "https://example.invalid/D-1" },
+                metadata: { "caller.reviewers": ["ada", "grace"], "caller.rounds": 2 },
+              },
+            ],
           },
         },
-        store: { plugin: "in-memory", config: { capabilities: { documents: "native" } } },
-        // A folder of Markdown declares it holds no documents, so it is refused as a
-        // destination before anything is read.
         notes: {
           plugin: "local-md",
           config: { root: resolve(documentRoot, "notes"), status_mapping: { todo: "todo" } },
         },
+        sealed: { plugin: "in-memory", config: {} },
       },
     }),
   );
   try {
     const documentClient = new OnetaskgraphClient({ binaryPath: binary, cwd: documentRoot });
 
-    const planned = await documentClient.documentCopy(["from:D-1"], "store", { dryRun: true });
+    const planned = await documentClient.documentCopy(["from:D-1"], "notes", { dryRun: true });
     expect(planned.items).toEqual([{ source: "from:D-1", action: "created", destination: null }]);
 
-    const created = await documentClient.documentCopy(["from:D-1"], "store");
+    const created = await documentClient.documentCopy(["from:D-1"], "notes");
     expect(created.items).toEqual([
-      { source: "from:D-1", action: "created", destination: "store:D-1" },
+      { source: "from:D-1", action: "created", destination: "notes:D-1" },
     ]);
 
-    await expect(documentClient.documentCopy(["from:D-1"], "notes")).rejects.toThrow(
+    // The destination really holds it, read back through the same binary: every
+    // caller-defined key with its JSON type intact, and a location that is the
+    // destination's own — the path of the file this folder put it in, not the URL the
+    // source reported.
+    const copied = await documentClient.documentShow("notes:D-1");
+    const document = copied.items[0]?.item;
+    // The location is compared by the file it names rather than by how it is spelled: this
+    // source canonicalizes, and a canonical path is spelled differently on each platform —
+    // macOS resolves the temporary tree's symlink under `/var/folders`, and Windows answers
+    // with an extended-length `\\?\` path over an account name no other language here
+    // writes. `fs.realpathSync` settled macOS and not Windows: run over the path this test
+    // built, it left Windows' 8.3 short name in place, so the comparison ran
+    // `C:\Users\RUNNER~1\…` against the `\\?\C:\Users\runneradmin\…` the source reported and
+    // `check (windows-latest)` refused it. Putting the reported side through it too was
+    // not measured and is not the answer to reach for, because what two canonical spellings
+    // are is not what this assertion asks. Write a sentinel through the path this test built
+    // and read it back through the path the source reported instead: one file has it and no
+    // other file can, which is the question the assertion is really making, and reading also
+    // fails outright when the reported path names nothing — as comparing two strings does
+    // not. The extended-length prefix is dropped first, because it is a spelling for Windows'
+    // own API rather than for a file call of this runtime — and only ahead of a drive letter,
+    // the one form a temporary tree takes, so the `UNC\\` spelling this test never produces
+    // is left whole rather than turned into a bad path.
+    const located = document?.location as { path: string };
+    const openable = located.path.replace(/^\\\\\?\\(?=[A-Za-z]:\\)/, "");
+    const sentinel = "read back through the location this source reported";
+    appendFileSync(resolve(documentRoot, "notes/documents/D-1.md"), `\n${sentinel}\n`);
+    expect(readFileSync(openable, "utf8")).toContain(sentinel);
+    expect(document).toMatchObject({
+      title: "Alpha design",
+      content: "reviewed",
+      url: null,
+      metadata: {
+        "caller.reviewers": ["ada", "grace"],
+        "caller.rounds": 2,
+        "onetaskgraph.origin": "from:D-1",
+      },
+    });
+
+    await expect(documentClient.documentCopy(["from:D-1"], "sealed")).rejects.toThrow(
       "has no documents",
     );
   } finally {

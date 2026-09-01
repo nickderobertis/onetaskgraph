@@ -1,7 +1,7 @@
 [package]
 name = "onetaskgraph"
 description = "One interface over the ticketing systems your work lives in."
-version = "0.2.15"
+version = "0.2.16"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

@@ -38,15 +38,14 @@ otherwise fail, naming the row and the field — and deleting this entry and the
 the field line above and fails while it names a capability that plugin no longer calls
 unsupported, so the entry cannot outlive the gap it describes.
 
-## Documents: two of the four hosted sources have none yet
+## Documents: one of the four hosted sources has none yet
 
 Unsupported fields: `onetaskgraph-linear` `documents`
-Unsupported fields: `onetaskgraph-local-md` `documents`
 
 The plugin contract carries documents — `Document`, `Location`, `DocumentQuery`, the
-`documents` capability, and the four `TaskSource` methods — and `in-memory` and
-`github-projects` implement them. The two above declare `documents: Support::Unsupported`
-and keep the four methods' defaults, which refuse: `documentless` for the two reads,
+`documents` capability, and the four `TaskSource` methods — and `in-memory`, `local-md` and
+`github-projects` implement them. The one above declares `documents: Support::Unsupported`
+and keeps the four methods' defaults, which refuse: `documentless` for the two reads,
 `unwritable` for the two writes.
 
 That is sound as it stands, and it is what the capability rules ask for. `documents` is
@@ -58,7 +57,7 @@ as having failed. What a plugin must never do here is answer an empty page, whic
 a source that has documents and holds none matching.
 
 It is a gap rather than a limit for both, and each plugin's own verdict row says why:
-Linear has documents of its own, and a folder of Markdown is already files on disk.
+Linear has documents of its own.
 
 Closing an entry means: implementing that plugin's four methods, flipping its `documents`
 to `Support::Native`, updating its row in `crates/onetaskgraph/tests/e2e/fixtures.rs` —
@@ -66,6 +65,34 @@ which the reconciliation journey will otherwise fail, naming the row and the fie
 deleting that plugin's line above together with the verdict row's wording. That is what
 `in-memory` did: its `documents` is a `CapabilityConfig` key a document sets, and a
 configuration listing documents without declaring it is refused where it is read. It is
-also what `github-projects` did, from a backend with no document type at all: a board holds
+what `local-md` did: `documents/` is a folder beside the `tasks/` and `projects/` it
+already read, and `docs/local-md.md` records why the folder is the discriminator. And it
+is what `github-projects` did, from a backend with no document type at all: a board holds
 issues, so a document there is the issue whose title begins `DESIGN: `, and
 `docs/metadata.md` settles what that discriminator implies.
+
+## What a Windows location is spelled like, and who decides
+
+`local-md` reports a location by handing `std::fs::canonicalize` to `Location::Path`. On
+Windows that answers with an extended-length path — `\\?\C:\…` — and that spelling is not
+what `docs/local-md.md` implies when it says a reader "can print the path or read the
+contents out for a person, without knowing anything about this plugin": no other language
+in this repository writes a path that way, and many tools a person would hand it to refuse
+it. The TypeScript SDK's own test runner is one of them — `fs.realpathSync` there returns
+an extended-length path unchanged rather than resolving it — which is evidence for that
+reading rather than an argument against it. The spelling is nevertheless *the* canonicalized
+absolute path on that platform, which is what the source promises, so both readings stand
+and the choice between them is the contract's rather than a test's.
+
+Nothing is wrong today. Every assertion over a location compares the file named rather
+than the string, and none of them depends on how a runtime spells a canonical path: the
+Rust tests canonicalize on the expectation side too, the Python SDK test asks the operating
+system with `Path.samefile`, and the TypeScript SDK test writes a sentinel through the path
+it built itself and reads it back through the path the source reported, which one file
+holds and no other file can. That is also what makes them independent of the symlinked
+temporary tree macOS hands out.
+
+Settling it means deciding whether `local-md` strips the `\\?\` prefix before reporting —
+so a Windows location reads `C:\…` — and if so, saying that in `docs/local-md.md` beside
+the sentence above and stripping it in the six Rust sites that canonicalize on the
+expectation side, so the two halves of each comparison keep agreeing.

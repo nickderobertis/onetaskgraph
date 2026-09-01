@@ -40,18 +40,62 @@ pub struct Ready {
     pub declared: Declared,
     /// Whether this source can represent the complete cross-plugin dataset.
     pub complete_dataset: bool,
-    /// Where this row's source says one entity of the shared dataset is, by native id, as
-    /// the pair `(which kind of place, the place)` — or `None` where the source says
-    /// nothing about it. See [`dataset_locations`].
-    ///
-    /// A location is the backend's **own**, and that is the whole point of the contract:
-    /// a hosted board can only ever hand a reader a link to open, and a source holding
-    /// files hands a path. So the shape is the row's to declare rather than the journey's
-    /// to assume — what the journey asserts is that both renderings report *what this
-    /// row's source says*, in the shape it says it, and
-    /// `both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_alike`
-    /// fails if the table stops carrying all three cases between them.
-    pub locations: fn(&str) -> Option<(&'static str, String)>,
+    /// Where this source says one of its entities is, or that it does not say.
+    pub place: Place,
+}
+
+/// Where a row's source says one entity is: its verb, its native id, this run's sandbox.
+///
+/// A function rather than a table of constants because a location is not always knowable
+/// before the run: a source over a folder of files reports the path of the file behind each
+/// item, which exists only once the sandbox does. `None` is the source not saying where an
+/// entity is, which is not the same as saying it is nowhere.
+pub type Place = fn(&Sandbox, &str, &str) -> Option<Placed>;
+
+/// One location, split into the JSON key a consumer branches on and what it holds.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Placed {
+    /// The `Location` variant's own key: `url` or `path`.
+    pub key: &'static str,
+    /// What that key holds.
+    pub value: String,
+}
+
+impl Placed {
+    /// This location as the human rendering says it: which kind of place, then the place.
+    #[must_use]
+    pub fn rendered(&self) -> String {
+        format!("{} {}", self.key, self.value)
+    }
+}
+
+/// One entity's location as the shared dataset states it, for every row serving it.
+///
+/// Read out of [`dataset`] rather than restated, so a row and the fixture it is built from
+/// cannot disagree about where an item is.
+fn dataset_place(_sandbox: &Sandbox, verb: &str, id: &str) -> Option<Placed> {
+    let dataset = dataset();
+    let held = dataset[format!("{verb}s")]
+        .as_array()
+        .expect("the shared dataset holds this kind")
+        .iter()
+        .find(|item| item["id"] == json!(id))
+        .expect("the shared dataset holds this id");
+    let location = &held["location"];
+    for key in ["url", "path"] {
+        if let Some(value) = location[key].as_str() {
+            return Some(Placed {
+                key,
+                value: value.to_owned(),
+            });
+        }
+    }
+    None
+}
+
+/// A source that reports no location at all, for any entity it serves.
+fn nowhere(_sandbox: &Sandbox, _verb: &str, _id: &str) -> Option<Placed> {
+    None
 }
 
 /// What one row's source declares, so a journey can assert the plan as well as the rows.
@@ -73,8 +117,8 @@ pub struct Declared {
     /// Not a predicate, and so unlike every other `Support` here: it says what the source
     /// *holds*, the engine reads it once at the handshake rather than compensating for it,
     /// and a source declaring it unsupported is never asked for a document. The table
-    /// carries rows of both kinds on purpose — the `in-memory` rows and the GitHub Projects
-    /// board hold documents, `local-md` and `linear` hold none yet — so the shared document
+    /// carries rows of both kinds on purpose — the `in-memory`, `local-md` and GitHub
+    /// Projects rows hold documents and `linear` holds none yet — so the shared document
     /// journeys drive the answer and the honest refusal against real difference rather than
     /// against a mock.
     pub documents: Support,
@@ -208,14 +252,29 @@ impl Row {
     /// it.
     ///
     /// A second `in-memory` source rather than a folder of Markdown, unlike
-    /// [`document_with_folder`](Self::document_with_folder): `local-md` declares it has no
-    /// documents, so the one destination a document can be copied into is a source that
-    /// says it has them.
+    /// [`document_with_folder`](Self::document_with_folder): a destination that dies with
+    /// the process is all a refusal needs, and it keeps a refusal journey from depending on
+    /// whichever plugin happens to hold documents today.
     pub fn document_with_store(&self, sandbox: &Sandbox, store: &str) -> String {
         let block = (self.fixture.block)(sandbox);
         document(&json!({
             SOURCE: {"plugin": self.plugin, "config": block},
             store: {"plugin": "in-memory", "config": empty_document_store()},
+        }))
+    }
+
+    /// This row as a document naming `work` and one source that declares it has no
+    /// documents beside it.
+    ///
+    /// The destination a document copy must be refused by. An `in-memory` source without
+    /// the `documents` key declares exactly that — and it is one rather than a folder of
+    /// Markdown because `local-md` now holds documents, which is what a destination naming
+    /// none has to *not* be.
+    pub fn document_with_documentless(&self, sandbox: &Sandbox, store: &str) -> String {
+        let block = (self.fixture.block)(sandbox);
+        document(&json!({
+            SOURCE: {"plugin": self.plugin, "config": block},
+            store: {"plugin": "in-memory", "config": json!({})},
         }))
     }
 
@@ -290,7 +349,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: native_block,
             complete_dataset: true,
-            locations: dataset_locations,
+            place: dataset_place,
             declared: Declared {
                 documents: Support::Native,
                 ..EVERY_PREDICATE_NATIVE
@@ -310,7 +369,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: compensated_block,
             complete_dataset: true,
-            locations: dataset_locations,
+            place: dataset_place,
             declared: Declared {
                 projects: Support::Native,
                 // Native here for the same reason `projects` is: it says this source
@@ -335,7 +394,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: hosted_block,
             complete_dataset: true,
-            locations: dataset_locations,
+            place: dataset_place,
             declared: Declared {
                 documents: Support::Native,
                 ..EVERY_PREDICATE_NATIVE
@@ -348,8 +407,14 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: local_md_block,
             complete_dataset: true,
-            locations: no_locations,
+            // A folder of files, so every entity is a file and this source says where each
+            // one is — the only row of this table whose locations are not knowable until
+            // the sandbox holding them exists.
+            place: local_md_place,
             declared: Declared {
+                // A third folder beside `tasks/` and `projects/`: this source holds
+                // documents, and reads, filters and writes them on the same terms.
+                documents: Support::Native,
                 max_page_size: 200,
                 ..EVERY_PREDICATE_NATIVE
             },
@@ -359,8 +424,10 @@ pub const ROWS: &[Row] = &[
         plugin: "linear",
         name: "linear",
         fixture: Ready {
-            locations: no_locations,
             block: linear_block,
+            // Linear reports no location for anything yet; docs/follow-ups.md tracks its
+            // document side, and a location is what a document read would give it.
+            place: nowhere,
             // Linear models the whole table: two projects, an orphan, and dependencies in
             // both directions, so it drives the shared complete-dataset journeys.
             complete_dataset: true,
@@ -382,6 +449,9 @@ pub const ROWS: &[Row] = &[
         name: "github-projects",
         fixture: Ready {
             block: github_projects_block,
+            // Every entity here is an issue and every issue has a web address, so this row
+            // is the one whose places are all links.
+            place: github_place,
             // A board is a container of projects, not a project: a project is an issue and
             // its tasks are that issue's sub-issues, which is what this source's own module
             // documentation records and what the fixture board below is built as. So one
@@ -396,7 +466,6 @@ pub const ROWS: &[Row] = &[
             // `documents` included: a board has no document type, so this source spells
             // one as an issue whose title begins its own design prefix — which is what the
             // three `D-*` items of the fixture board above are.
-            locations: github_locations,
             declared: Declared {
                 documents: Support::Native,
                 max_page_size: 100,
@@ -406,36 +475,19 @@ pub const ROWS: &[Row] = &[
     },
 ];
 
-/// Where the shared dataset's own `location` values put each of its entities.
-///
-/// The `in-memory` family serves that table verbatim, so this is it read back: one link,
-/// one path, and entities the source says nothing about at all. Those three cases are
-/// what the location journey is for, and this is the row function that carries all three.
-fn dataset_locations(native: &str) -> Option<(&'static str, String)> {
-    let at = |kind, place: &str| Some((kind, place.to_owned()));
-    match native {
-        "D-1" => at("url", "https://example.invalid/D-1"),
-        "D-2" => at("path", "/srv/notes/D-2.md"),
-        "T-1" => at("url", "https://example.invalid/T-1"),
-        "P-1" => at("path", "/srv/engine"),
-        _ => None,
-    }
-}
-
 /// Every entity a GitHub Projects board reports is an issue, and every issue has a web
 /// address, so every one of them is a link and none of them is absent.
 ///
 /// This is the contrast the location contract exists for, and it is real difference rather
-/// than a second copy of the row above: one reader is handed something to open and another
-/// a path to read out, and neither has to know which plugin answered.
-fn github_locations(native: &str) -> Option<(&'static str, String)> {
-    Some(("url", format!("https://example.invalid/{native}")))
-}
-
-/// A source that says where nothing is. Its entities have no `location` line at all, which
-/// is the contract's "the source did not say" rather than a third kind of place.
-fn no_locations(_native: &str) -> Option<(&'static str, String)> {
-    None
+/// than a second copy of `local-md`'s: one reader is handed something to open and another
+/// a path to read out, and neither has to know which plugin answered. The address is the
+/// one the fixture board's own GraphQL responses carry, so the row and the board it is
+/// built from cannot disagree about where an item is.
+fn github_place(_sandbox: &Sandbox, _verb: &str, id: &str) -> Option<Placed> {
+    Some(Placed {
+        key: "url",
+        value: format!("https://example.invalid/{id}"),
+    })
 }
 
 /// The declaration a source that applies every predicate itself carries.
@@ -2155,6 +2207,15 @@ fn linear_relations(
     json!({"description":description,"relations":{"nodes":forward,"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":inverse,"pageInfo":{"hasNextPage":false,"endCursor":null}}})
 }
 
+/// The Markdown row's own configuration, for a journey that configures it itself.
+///
+/// Exported because the document round trip drives this source at both boundaries and as
+/// both ends of a copy, which the table's one-source rows have no shape for — and planting
+/// the fixture a second time would be a second dataset to keep in step with this one.
+pub fn local_md_config(sandbox: &Sandbox) -> Value {
+    local_md_block(sandbox)
+}
+
 fn local_md_block(sandbox: &Sandbox) -> Value {
     let root = sandbox.subdirectory("local-md");
     for (kind, id, front, body) in [
@@ -2189,12 +2250,46 @@ fn local_md_block(sandbox: &Sandbox) -> Value {
             "the engine",
         ),
         ("projects", "P-2", "title: Docs\nstatus: Todo", "alpha docs"),
+        // `documents/`, the third folder: no `status:` and no `depends_on:`, because a
+        // document is not work and this source refuses either key under here.
+        (
+            "documents",
+            "D-1",
+            "title: Alpha design\nlabels: [{id: L-1, name: bug}]\nproject: P-1\nmetadata: {onepipeline.turn_budget: 12, caller.flags: [true, null]}\nrepositories: [github.com/nickderobertis/onetaskgraph]",
+            "the engine core, reviewed",
+        ),
+        (
+            "documents",
+            "D-2",
+            "title: Runbook\nlabels: [{id: L-3, name: core}]\nproject: P-2",
+            "how to read the alpha design",
+        ),
+        ("documents", "D-3", "title: Loose note", "filed nowhere"),
     ] {
         let path = root.join(kind).join(format!("{id}.md"));
         std::fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
         std::fs::write(path, format!("---\n{front}\n---\n{body}\n")).expect("Markdown fixture");
     }
     json!({ "root": root, "status_mapping": {"todo":"todo", "doing":"in-progress", "shipped":"done"} })
+}
+
+/// Where the Markdown row holds one entity: the file behind it, by absolute path.
+///
+/// Canonicalized here as well as in the plugin, because the two have to be the same string
+/// on a host whose temporary tree is reached through a link — which is every macOS runner,
+/// and is why comparing against the sandbox path unresolved would pass on Linux alone.
+fn local_md_place(sandbox: &Sandbox, verb: &str, id: &str) -> Option<Placed> {
+    let path = sandbox
+        .subdirectory("local-md")
+        .join(format!("{verb}s"))
+        .join(format!("{id}.md"));
+    Some(Placed {
+        key: "path",
+        value: std::fs::canonicalize(&path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+            .to_string_lossy()
+            .into_owned(),
+    })
 }
 
 /// The `in-memory` row that applies every predicate itself.
