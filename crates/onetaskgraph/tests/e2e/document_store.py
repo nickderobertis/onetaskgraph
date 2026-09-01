@@ -26,9 +26,10 @@ refusal happened *before* anything was read.
 # with a cleared environment (§3.1) by whatever `python3` or `python` the host provides, so
 # it may import nothing outside the standard library and cannot assume a version that has
 # the typing this rule asks for. A stdlib model layer would also be erased at runtime,
-# adding no check that `parameter`, `read_store` and `initialize` below do not already
-# make — while costing the file the property the journeys rely on: that a plugin can be
-# written from the protocol document alone, sharing no type with the engine's own half.
+# adding no check that `parameter`, the `checked_*` family, `read_store` and `initialize`
+# below do not already make — while costing the file the property the journeys rely on:
+# that a plugin can be written from the protocol document alone, sharing no type with the
+# engine's own half.
 
 import json
 import os
@@ -39,6 +40,9 @@ PROTOCOL_VERSION = 2
 
 # The largest page this source will serve, which it also declares at the handshake.
 MAX_PAGE_SIZE = 50
+
+# The `TextFields` members a `TextQuery` may name (§4.5).
+TEXT_FIELDS = ("title", "content", "title-or-content")
 
 
 def refused(message):
@@ -51,12 +55,163 @@ def malformed(message):
     return {"kind": "malformed", "message": message}
 
 
+def a_string(value):
+    """Whether a value is the JSON string the protocol asks for."""
+    return isinstance(value, str)
+
+
+def an_integer(value):
+    """Whether a value is a JSON integer.
+
+    `True` is an `int` in Python and is not one here: a limit of `true` is a request this
+    source cannot serve, and silently reading it as `1` would answer a different question
+    from the one that was asked.
+    """
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def checked(condition, message):
+    """Refuse as `malformed` unless a protocol shape holds.
+
+    Every boundary value below is read through this rather than indexed directly. A peer
+    that raises a Python error into the pipe is a *dead* peer to the engine, which can then
+    say only that the plugin closed its output — while `malformed` (§5) names what arrived
+    and reaches the user as this source's own words.
+    """
+    if not condition:
+        raise Refusal(malformed(message))
+
+
+def checked_string(value, what):
+    """`value` when it is a string, and a refusal naming `what` when it is not."""
+    checked(a_string(value), "%s must be a string" % what)
+    return value
+
+
+def checked_optional_string(value, what):
+    """`value` when it is a string or null — the shape every optional text member has."""
+    checked(value is None or a_string(value), "%s must be a string or null" % what)
+    return value
+
+
+def checked_location(location, what):
+    """A `Location` (§4.13): absent, null, or an object with exactly one of two keys.
+
+    A consumer tells the two apart by which key is present, so an object carrying both —
+    or neither — is not a location this interface can represent, and saying so is what
+    keeps that reading true of everything this source hands out.
+    """
+    if location is None:
+        return None
+    checked(
+        isinstance(location, dict)
+        and len(location) == 1
+        and ("url" in location or "path" in location),
+        '%s\'s location must be {"url": <link>} or {"path": <absolute path>}' % what,
+    )
+    key = "url" if "url" in location else "path"
+    checked_string(location[key], "%s's location %s" % (what, key))
+    return location
+
+
+def checked_document(value, what):
+    """One `Document` (§4.11), refused as malformed unless every member is its own shape.
+
+    Read on the way *in* from a write and on the way *out* of the store, because both are
+    this source's boundary: a store file somebody edited by hand is as much untrusted input
+    as a request line is, and a half-shaped document handed back would report a defect of
+    this peer as a defect of the engine reading it. No status and no dependencies are
+    validated because a document carries neither — a store holding one is holding a member
+    this source never wrote and never reads.
+    """
+    checked(isinstance(value, dict), "%s must be an object" % what)
+    checked_string(value.get("id"), "%s needs an id that" % what)
+    checked_string(value.get("title"), "%s needs a title that" % what)
+    for member in ("content", "project", "url", "created_at", "updated_at"):
+        checked_optional_string(value.get(member), "%s's %s" % (what, member))
+    labels = value.get("labels") or []
+    checked(isinstance(labels, list), "%s's labels must be a list" % what)
+    for label in labels:
+        checked(isinstance(label, dict), "%s's labels must each be an object" % what)
+        checked_string(label.get("id"), "%s's label id" % what)
+        checked_string(label.get("name"), "%s's label name" % what)
+    checked_location(value.get("location"), what)
+    metadata = value.get("metadata") or {}
+    checked(isinstance(metadata, dict), "%s's metadata must be an object" % what)
+    repositories = value.get("repositories") or []
+    checked(isinstance(repositories, list), "%s's repositories must be a list" % what)
+    for origin in repositories:
+        checked_string(origin, "%s's repository origin" % what)
+    return value
+
+
+def checked_query(query, method):
+    """A `DocumentQuery` (§4.11), whole, before any predicate of it narrows anything.
+
+    There is no `statuses` member and this does not invent one: a document is not work, so
+    a status filter would have nothing to compare against.
+    """
+    text = query.get("text")
+    if text is not None:
+        checked(isinstance(text, dict), "%s's text query must be an object or null" % method)
+        checked_string(text.get("terms"), "%s's search terms" % method)
+        checked(
+            text.get("fields") in TEXT_FIELDS,
+            "%s's search fields must be one of %s" % (method, ", ".join(TEXT_FIELDS)),
+        )
+    labels = query.get("labels") or {}
+    checked(isinstance(labels, dict), "%s's label filter must be an object" % method)
+    for member in ("any_of", "all_of", "none_of"):
+        names = labels.get(member) or []
+        checked(isinstance(names, list), "%s's %s label filter must be a list" % (method, member))
+        for name in names:
+            checked_string(name, "%s's %s label name" % (method, member))
+    project = query.get("project", "any")
+    checked(
+        project in ("any", "orphans")
+        or (isinstance(project, dict) and a_string(project.get("is"))),
+        '%s\'s project filter must be "any", "orphans" or {"is": <native id>}' % method,
+    )
+    return query
+
+
+def checked_page(page, method):
+    """A `PageRequest` (§4.1): an optional opaque cursor, and a limit that is a number.
+
+    Whether the limit is one this source will *serve*, and whether the cursor is one it
+    ever *issued*, are `paginate`'s to answer — this is only the shape, and it runs first
+    so that neither of those questions is asked of a value that is not one.
+    """
+    cursor = page.get("cursor")
+    checked(
+        cursor is None or a_string(cursor),
+        "%s's page cursor must be a string or null" % method,
+    )
+    checked(
+        an_integer(page.get("limit", 0)),
+        "%s's page limit must be an integer" % method,
+    )
+    return page
+
+
+def checked_write(write, method):
+    """An `ItemWrite` (§4.12) whose item is a `Document`, as the target and the item."""
+    target = write.get("target")
+    checked(
+        target is None or a_string(target),
+        "%s's write target must be a native id or null" % method,
+    )
+    return target, checked_document(write.get("item"), "%s's item" % method)
+
+
 def read_store(path):
     """The documents on disk, treating a file that is not there yet as an empty store.
 
     A missing file is the ordinary first-run state — a destination nothing has been copied
     into yet — rather than a failure. A file that is there and is not a store is a
-    different thing, and says so rather than raising a Python error into the pipe.
+    different thing, and says so rather than raising a Python error into the pipe. So is a
+    store whose entries are not documents: this is where they re-enter the peer, so it is
+    where their shape is established rather than assumed by every reader below.
     """
     try:
         with open(path, encoding="utf-8") as handle:
@@ -68,6 +223,8 @@ def read_store(path):
     documents = held.get("documents", []) if isinstance(held, dict) else None
     if not isinstance(documents, list):
         raise Refusal(malformed('%s is not a store: expected {"documents": [...]}' % path))
+    for index, document in enumerate(documents):
+        checked_document(document, "%s document %d" % (path, index))
     return documents
 
 
@@ -115,7 +272,12 @@ def has_documents(settings):
 
 
 def matches_text(document, query):
-    """Whether one document matches a free-text query, over the fields it names."""
+    """Whether one document matches a free-text query, over the fields it names.
+
+    Both sides arrive established: the query through `checked_query` and the document
+    through `checked_document`, so nothing indexed here can be a shape this source never
+    agreed to read.
+    """
     if query is None:
         return True
     terms = query["terms"].lower()
@@ -149,7 +311,11 @@ def survives(document, query):
 
 
 def paginate(items, page):
-    """Slice `items` into the page asked for, refusing a cursor this source never issued."""
+    """Slice `items` into the page asked for, refusing a cursor this source never issued.
+
+    Its `page` has been through `checked_page`, so a cursor here is a string and a limit is
+    a number: what is left to decide is whether they name a page this source can serve.
+    """
     cursor = page.get("cursor")
     start = 0
     if cursor is not None:
@@ -259,15 +425,17 @@ def dispatch(settings, method, params):
         return {"document": found[0] if found else None}
     if method == "query_documents":
         document_side(settings)
-        query = parameter(params, "query", dict, method)
+        query = checked_query(parameter(params, "query", dict, method), method)
+        page = checked_page(parameter(params, "page", dict, method), method)
         kept = [d for d in read_store(store) if survives(d, query)]
-        return paginate(kept, parameter(params, "page", dict, method))
+        return paginate(kept, page)
     if method == "write_document":
         document_side(settings)
-        write = parameter(params, "write", dict, method)
+        # The whole write is established before the store is opened, so a request this
+        # source cannot represent leaves the store exactly as it found it.
+        target, item = checked_write(parameter(params, "write", dict, method), method)
         documents = read_store(store)
-        target = write.get("target")
-        landing = dict(parameter(write, "item", dict, method))
+        landing = dict(item)
         if target is None:
             landing["id"] = unused(documents, landing["id"])
             documents.append(landing)
@@ -347,11 +515,24 @@ def main():
         except (ValueError, KeyError, TypeError):
             print("%s: ignoring an unaddressed line" % KIND, file=sys.stderr)
             continue
+        # An `id` is a string (§2) and a response echoes it, so a line addressed with
+        # anything else has no address to answer at: complaining about it in an `error`
+        # would mean inventing an id the engine is not waiting on. It goes to stderr with
+        # the unaddressed lines, and this connection carries on.
+        if not isinstance(identifier, str):
+            print("%s: ignoring a line whose id is not a string" % KIND, file=sys.stderr)
+            continue
         method = request.get("method", "")
-        params = request.get("params") or {}
+        params = request.get("params")
         try:
-            if not isinstance(method, str) or not isinstance(params, dict):
-                raise Refusal(malformed("a request names its method and carries an object"))
+            if not isinstance(method, str):
+                raise Refusal(malformed("a request names its method as a string"))
+            # `params` is present even when empty (§2), so an absent one is a request this
+            # source cannot read rather than an empty one it should guess at.
+            if not isinstance(params, dict):
+                raise Refusal(
+                    malformed("a request carries an object `params`, present even when empty")
+                )
             if method == "initialize":
                 settings, result = initialize(params)
             elif settings is None:

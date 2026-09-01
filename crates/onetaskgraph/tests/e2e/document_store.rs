@@ -534,3 +534,306 @@ fn walk(root: &Path) -> Vec<PathBuf> {
     }
     found
 }
+
+/// One conversation with the peer over real pipes: the request lines in, the responses out.
+///
+/// Spawned directly rather than through the engine, and only here. Every journey above
+/// drives the peer the way a user reaches it, because that is what a destination is for —
+/// but a *malformed* request is precisely what a correct engine never sends, so a line the
+/// peer owes a refusal to has no other way to arrive. Everything else about the seam is
+/// the real one: a second process, a real pipe, one JSON object per line, and end-of-file
+/// on standard input to close the connection (§1).
+fn converse(requests: &[Value]) -> Vec<Value> {
+    let mut child = std::process::Command::new(interpreter())
+        .arg(peer())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the peer spawns");
+    {
+        use std::io::Write as _;
+        let mut input = child.stdin.take().expect("the peer's standard input");
+        for request in requests {
+            writeln!(input, "{request}").expect("a request line reaches the peer");
+        }
+    }
+    let output = child.wait_with_output().expect("the peer exits");
+    // A peer that answers a request it cannot parse is a peer that is still *there*: the
+    // one failure §5 exists to prevent is the interpreter dying into the pipe, which the
+    // engine can only report as a plugin that closed its output.
+    assert!(
+        output.status.success(),
+        "the peer must answer and exit 0 rather than dying: {:?}\n{}",
+        output.status.code(),
+        stderr(&output)
+    );
+    stdout(&output)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every response line is JSON"))
+        .collect()
+}
+
+/// The handshake (§3) that tells the peer where its store is.
+fn hello(store: &Path) -> Value {
+    json!({
+        "id": "0",
+        "method": "initialize",
+        "params": {
+            "protocol_version": 2,
+            "source_name": STORE,
+            "config": {"store": store},
+        },
+    })
+}
+
+/// A `write_document` creating what `item` describes.
+fn creating(id: &str, item: Value) -> Value {
+    json!({
+        "id": id,
+        "method": "write_document",
+        "params": {"write": {"target": null, "item": item, "depends_on": []}},
+    })
+}
+
+/// A `query_documents` over `query`, asking for one full page.
+fn querying(id: &str, query: Value) -> Value {
+    json!({
+        "id": id,
+        "method": "query_documents",
+        "params": {"query": query, "page": {"cursor": null, "limit": 50}},
+    })
+}
+
+#[test]
+fn the_peer_answers_a_well_formed_document_conversation_over_real_stdio() {
+    // The shapes every refusal below is measured against: a handshake, a write, a query
+    // carrying each member `DocumentQuery` has, and a read of the document that landed.
+    let sandbox = Sandbox::new();
+    let store = store_path(&sandbox);
+    let answers = converse(&[
+        hello(&store),
+        creating("1", source_document(json!({}))),
+        querying(
+            "2",
+            json!({
+                "text": {"terms": "alpha", "fields": "title-or-content"},
+                "labels": {"any_of": ["spec"], "all_of": [], "none_of": ["wontfix"]},
+                "project": {"is": "P-1"},
+            }),
+        ),
+        json!({"id": "3", "method": "get_document", "params": {"id": "D-1"}}),
+    ]);
+
+    let addressed: Vec<&str> = answers
+        .iter()
+        .map(|answer| {
+            answer["id"]
+                .as_str()
+                .expect("every response echoes a string id")
+        })
+        .collect();
+    assert_eq!(
+        addressed,
+        ["0", "1", "2", "3"],
+        "every request is answered, and each response echoes its own id: {answers:?}"
+    );
+    for answer in &answers {
+        assert_eq!(
+            answer["error"],
+            json!(null),
+            "a well-formed request is not refused: {answer}"
+        );
+    }
+
+    assert_eq!(answers[0]["result"]["kind"], json!("document-store"));
+    assert_eq!(
+        answers[0]["result"]["capabilities"]["documents"],
+        json!("native"),
+        "the peer declares it has documents: {}",
+        answers[0]
+    );
+    assert_eq!(
+        answers[1]["result"]["id"],
+        json!("D-1"),
+        "a create answers with the id this source now holds it under: {}",
+        answers[1]
+    );
+    assert_eq!(
+        answers[2]["result"]["items"],
+        json!([source_document(json!({}))]),
+        "the query returns the document whole, every metadata type intact: {}",
+        answers[2]
+    );
+    assert_eq!(answers[2]["result"]["next"], json!(null));
+    assert_eq!(
+        answers[3]["result"]["document"],
+        source_document(json!({})),
+        "and so does a read by id: {}",
+        answers[3]
+    );
+}
+
+#[test]
+fn the_peer_refuses_malformed_protocol_input_rather_than_raising_into_the_pipe() {
+    // Every one of these is a shape the protocol does not have, and each is owed the same
+    // answer: `malformed` (§5), naming what arrived, on a connection that carries on. A
+    // Python exception here would reach the engine as a plugin that closed its output,
+    // which says nothing about what was wrong with the request.
+    let sandbox = Sandbox::new();
+    let store = store_path(&sandbox);
+    let refusals: Vec<(Value, &str)> = vec![
+        (
+            json!({"id": "m1", "method": "query_documents"}),
+            "`params`, present even when empty",
+        ),
+        (
+            json!({"id": "m2", "method": "query_documents", "params": []}),
+            "`params`, present even when empty",
+        ),
+        (
+            json!({"id": "m3", "method": 7, "params": {}}),
+            "names its method as a string",
+        ),
+        (
+            querying("m4", json!({"text": {"terms": 5, "fields": "title"}})),
+            "search terms must be a string",
+        ),
+        (
+            querying(
+                "m5",
+                json!({"text": {"terms": "alpha", "fields": "headings"}}),
+            ),
+            "search fields must be one of title, content, title-or-content",
+        ),
+        (
+            querying("m6", json!({"labels": {"any_of": [7]}})),
+            "any_of label name must be a string",
+        ),
+        (
+            querying("m7", json!({"project": {"is": 7}})),
+            "project filter must be",
+        ),
+        (
+            json!({"id": "m8", "method": "query_documents", "params": {
+                "query": {}, "page": {"cursor": 7, "limit": 50}}}),
+            "page cursor must be a string or null",
+        ),
+        (
+            json!({"id": "m9", "method": "query_documents", "params": {
+                "query": {}, "page": {"cursor": null, "limit": "many"}}}),
+            "page limit must be an integer",
+        ),
+        (
+            json!({"id": "m10", "method": "write_document", "params": {
+                "write": {"target": 7, "item": source_document(json!({}))}}}),
+            "write target must be a native id or null",
+        ),
+        (
+            creating("m11", source_document(json!({"title": 7}))),
+            "needs a title that must be a string",
+        ),
+        (
+            creating("m12", source_document(json!({"labels": [{"id": "L-1"}]}))),
+            "label name must be a string",
+        ),
+        (
+            creating(
+                "m13",
+                source_document(json!({"location": {"url": "u", "path": "p"}})),
+            ),
+            "location must be",
+        ),
+        (
+            creating("m14", source_document(json!({"repositories": [7]}))),
+            "repository origin must be a string",
+        ),
+    ];
+
+    let mut sent = vec![hello(&store)];
+    sent.extend(refusals.iter().map(|(request, _)| request.clone()));
+    // A line the protocol gives no address to answer at: `id` is a string (§2), so this
+    // one is dropped rather than answered — and the request after it still is, which is
+    // what says the connection survived being handed one.
+    sent.push(json!({"id": 7, "method": "get_document", "params": {"id": "D-1"}}));
+    sent.push(querying("survivor", json!({})));
+    let answers = converse(&sent);
+
+    for (index, (request, expected)) in refusals.iter().enumerate() {
+        let answer = &answers[index + 1];
+        assert_eq!(
+            answer["id"], request["id"],
+            "each refusal is addressed to the request that earned it: {answer}"
+        );
+        assert_eq!(
+            answer["error"]["kind"],
+            json!("malformed"),
+            "{request} is malformed, not a failure of the source: {answer}"
+        );
+        let message = answer["error"]["message"]
+            .as_str()
+            .expect("a malformed error carries a message a person reads");
+        assert!(
+            message.contains(expected),
+            "the refusal has to say what arrived; wanted {expected:?} in: {message}"
+        );
+        assert_eq!(
+            answer["result"],
+            json!(null),
+            "a refused request answers with an error and nothing else: {answer}"
+        );
+    }
+
+    let addressed: Vec<&str> = answers
+        .iter()
+        .map(|answer| answer["id"].as_str().expect("a string id"))
+        .collect();
+    assert_eq!(
+        addressed.last(),
+        Some(&"survivor"),
+        "the connection answers after every refusal: {answers:?}"
+    );
+    assert!(
+        !addressed.contains(&"7") && addressed.len() == refusals.len() + 2,
+        "a line whose id is not a string is dropped rather than answered: {addressed:?}"
+    );
+    assert_eq!(
+        answers.last().expect("the survivor")["result"]["items"],
+        json!([]),
+        "and nothing a refused write named was persisted: {:?}",
+        answers.last()
+    );
+    assert!(
+        !store.exists(),
+        "a refused write leaves the store as it found it: {store:?}"
+    );
+}
+
+#[test]
+fn the_peer_refuses_a_store_holding_something_that_is_not_a_document() {
+    // The other half of the same boundary. A store file is as much untrusted input as a
+    // request line — this one was edited by hand — and a peer that handed a half-shaped
+    // document back would report its own defect as the engine's.
+    let sandbox = Sandbox::new();
+    let store = store_path(&sandbox);
+    std::fs::create_dir_all(store.parent().expect("the store has a directory"))
+        .expect("the store directory");
+    std::fs::write(
+        &store,
+        json!({"documents": [{"id": "D-1", "title": ["not", "a", "title"]}]}).to_string(),
+    )
+    .expect("the store file");
+
+    let answers = converse(&[
+        hello(&store),
+        json!({"id": "1", "method": "get_document", "params": {"id": "D-1"}}),
+    ]);
+    assert_eq!(answers[1]["error"]["kind"], json!("malformed"));
+    let message = answers[1]["error"]["message"]
+        .as_str()
+        .expect("a message a person reads");
+    assert!(
+        message.contains("document 0") && message.contains("needs a title"),
+        "the refusal names which entry of the store and what is wrong with it: {message}"
+    );
+}
