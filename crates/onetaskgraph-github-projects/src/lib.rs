@@ -117,37 +117,13 @@
 //! a process killed between its writes and its cleanup leaves artifacts the next run
 //! removes.
 //!
-//! # GitHub's two rate limiters, and why they are not one thing
-//!
-//! **The primary budget** is the hourly allowance `gh api rate_limit` reports. It is
-//! reported in `x-ratelimit-remaining`, it refills at a time `x-ratelimit-reset` names,
-//! and waiting is the whole answer to it.
-//!
-//! **The secondary limiter** is a burst limiter over *content-generating* requests — every
-//! mutation this source sends. Nothing reports it: `gh api rate_limit` shows the primary
-//! budget untouched while it is refusing, so an operator who reads a secondary refusal as
-//! a primary one polls that endpoint, sees room, and retries harder — which extends the
-//! limit. GitHub answers it with a **forbidden** status far more often than with
-//! too-many-requests, and sometimes with a *successful* response whose GraphQL `errors`
-//! name it. Classifying on the status alone therefore called it a credential problem and
-//! sent the operator to re-scope a token that was fine, which is the defect
-//! [`Limiter::classify`] exists to close: the evidence is the status *together with* what
-//! the body says.
-//!
-//! So this source does three things about it, and each is measured rather than tidy:
-//!
-//! 1. **It paces its own mutations.** GitHub documents a secondary limit of 80
-//!    content-generating requests per minute, so [`MIN_MUTATION_INTERVAL_MS`] spaces them
-//!    at 60000/80 — the fastest rate that cannot exceed the published bound. See that
-//!    constant for why the hourly half of the same limit is not what a copy trips.
-//! 2. **It reads the board and the destination repository once per command.** A copy of a
-//!    project used to re-read the whole board, paged, for every single item it wrote, and
-//!    re-resolve the repository for every issue it created. Those reads are the bulk of a
-//!    copy's request count and none of its work.
-//! 3. **It waits a refusal out** — the hint when the response carries one, a doubling
-//!    schedule when it does not — under one total budget, so a call that cannot succeed
-//!    reports a failure instead of hanging. What it reports names the limiter, what this
-//!    source was doing, and that the primary endpoint does not report the secondary one.
+//! **GitHub has two rate limiters and this source is refused by both, so nothing here
+//! treats them as one thing.** The primary budget is the hourly allowance `gh api
+//! rate_limit` reports; the secondary limiter is a burst limiter over content-generating
+//! requests, and *nothing* reports it. Which one refused decides the operator's next step,
+//! so [`Limiter`] is a type rather than a detail, and it is what [`MIN_MUTATION_INTERVAL_MS`],
+//! [`GitHubProjectsSource::board_cache`] and [`GitHubProjectsSource::graphql`] each answer
+//! one part of.
 #![deny(missing_docs)]
 
 use std::collections::BTreeMap;
@@ -244,9 +220,9 @@ pub mod graphql {
 
 /// Which of GitHub's two rate limiters refused a request.
 ///
-/// The distinction is not decoration: waiting is the whole answer to the primary budget,
-/// and polling is what *extends* the secondary one, so an operator told the wrong one
-/// takes the wrong next step. See this module's own note on the two.
+/// Waiting is the whole answer to the primary budget, and polling is what *extends* the
+/// secondary one — so an operator told the wrong one takes the wrong next step, which is
+/// the whole reason this is carried rather than collapsed into "rate limited".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Limiter {
     /// The hourly API budget, which `gh api rate_limit` reports and a wait answers.
@@ -320,12 +296,10 @@ fn refusal_wording(status: StatusCode, body: &str) -> String {
 impl Limiter {
     /// Which limiter refused this response, or `None` when none of them did.
     ///
-    /// The status alone is not the evidence and never was: GitHub answers a secondary
-    /// limit with a forbidden status far more often than with too-many-requests, and a
-    /// forbidden status with no such wording really is a credential this token lacks. So
-    /// the wording is read first, and only what carries none of it falls through to the
-    /// status. What counts as wording is [`refusal_wording`], which reads what the
-    /// response says about itself and never the work it carries.
+    /// The wording is read first and the status only decides what carries none of it,
+    /// because GitHub answers a secondary limit with a forbidden status far more often
+    /// than with too-many-requests — while a forbidden status saying nothing about a limit
+    /// really is a credential this token lacks.
     fn classify(status: StatusCode, budget_exhausted: bool, body: &str) -> Option<Self> {
         let normalized = refusal_wording(status, body).to_ascii_lowercase();
         if SECONDARY_WORDINGS
@@ -358,10 +332,6 @@ impl Limiter {
     }
 
     /// What the endpoint an operator would go and check says about this limiter.
-    ///
-    /// The whole point of naming the limiter. `gh api rate_limit` reports the primary
-    /// budget and nothing else, so an operator who reads a secondary refusal as a primary
-    /// one checks there, sees room, and retries harder — which extends the limit.
     const fn where_to_look(self) -> &'static str {
         match self {
             Self::Primary => {
@@ -619,9 +589,7 @@ pub struct GitHubProjectsConfig {
 ///
 /// Configurable because a GitHub Enterprise installation sets its own limits and an
 /// operator who has already been refused may want to go slower still — not because the
-/// defaults are guesses. Each default is [`MIN_MUTATION_INTERVAL_MS`],
-/// [`RETRY_BACKOFF_MS`] and [`RETRY_BUDGET_MS`], and each of those records the published
-/// limit it was chosen from.
+/// defaults are guesses.
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct PacingConfig {
@@ -1078,21 +1046,17 @@ impl GitHubProjectsSource {
                 Err(Attempt::Failed(error)) => return Err(error),
                 Err(Attempt::Limited(limited)) => limited,
             };
-            // A hint is honoured, but never as a licence to retry at once: GitHub really
-            // does send `retry-after: 0`, and a wait of nothing spends none of the budget,
-            // so the schedule below would never end — and retrying immediately is the one
-            // move that extends a secondary limit. So a hint shorter than the schedule's
-            // own next wait is raised to it.
+            // GitHub really does send `retry-after: 0`, and retrying at once is the one
+            // move that extends a secondary limit, so a hint below the schedule's own next
+            // wait is raised to it.
             let wait = match limited.hint {
                 Some(hint) => Duration::from_secs(hint).max(backoff),
                 None => backoff,
             };
             let remaining = self.pacing.retry_budget.saturating_sub(waited);
-            // A wait of nothing is exhaustion rather than a retry: it spends none of the
-            // budget, so a schedule made of them would never end. Configuration cannot
-            // produce one — `Pacing::resolve` refuses a zero backoff beside a budget to
-            // spend — which leaves the instance with no budget at all, where reporting the
-            // first refusal is exactly what was asked for.
+            // A wait of nothing spends none of the budget, so it is exhaustion rather
+            // than a retry. `Pacing::resolve` rules out every way of configuring one
+            // except a budget of zero, where reporting the first refusal is the ask.
             if wait.is_zero() || wait > remaining {
                 return Err(limited.exhausted(
                     doing,
@@ -1273,10 +1237,8 @@ impl GitHubProjectsSource {
 
     /// Every item on the board, with the one board identity they all share.
     ///
-    /// Read from GitHub once per command and then answered from [`Self::board_cache`];
-    /// see that field for why one read is enough and why this is not a store. The
-    /// completion from `created` happens on every call rather than once, so an item this
-    /// command wrote after the cached read still comes back.
+    /// See [`Self::board_cache`]. The completion from `created` happens on every call
+    /// rather than once, which is what the cache could otherwise have broken.
     async fn board(&self) -> Result<Board, SourceError> {
         let cached = self.board_cache()?.clone();
         let mut board = match cached {
@@ -1822,8 +1784,7 @@ impl GitHubProjectsSource {
 
     /// The configured repository's node id, or the refusal naming the field it needs.
     ///
-    /// Resolved once per command; see [`Self::repository_cache`] for why re-reading it per
-    /// issue was pure cost.
+    /// Resolved once per command; see [`Self::repository_cache`].
     async fn repository_id(&self) -> Result<String, SourceError> {
         if let Some(id) = self.repository_cache()?.clone() {
             return Ok(id);
@@ -2026,11 +1987,8 @@ impl GitHubProjectsSource {
             return Err(error);
         }
 
-        // Remember what was written, so the rest of this command reads what it just did
-        // rather than what the board said before it. A created item goes to `created`,
-        // which also completes a board read GitHub's own eventual consistency has left
-        // behind; an item that was already there replaces its entry in the board this
-        // command read. See both fields' own documentation.
+        // So the rest of this command reads what it just did rather than what the board
+        // said before it. See `remember_written` for which half takes it.
         let remembered = Resolved {
             item_id,
             id: content_id.clone(),

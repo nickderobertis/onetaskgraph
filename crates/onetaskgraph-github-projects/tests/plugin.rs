@@ -3784,15 +3784,9 @@ fn no_waiting() -> Value {
 
 #[tokio::test]
 async fn every_shape_a_rate_limit_arrives_in_is_classified_as_one_and_never_as_a_credential() {
-    // The defect: this source classified on the HTTP status alone. GitHub answers a
-    // secondary rate limit with a *forbidden* status far more often than with
-    // too-many-requests, and that status mapped to `Auth` — so an operator being refused
-    // for going too fast was told to go and re-scope a token that was fine. It also
-    // answers one inside the `errors` of a *successful* response, which reached `Refused`
-    // with GitHub's own sentence passed through and nothing said about what it meant.
-    //
-    // A source still carrying the defect fails the second and third cases on
-    // `names_no_credential`, and the third on `names_a_rate_limit` too.
+    // Three shapes, because GitHub sends three and this source once read only the status:
+    // a forbidden status, which it called a credential problem, and a *successful*
+    // response, which it called an unexplained refusal.
     let secondary_in_a_success = Refusal {
         status: "200 OK",
         headers: String::new(),
@@ -4051,13 +4045,8 @@ async fn a_read_refused_past_the_budget_reports_it_rather_than_hanging() {
 
 #[tokio::test]
 async fn a_project_copy_reads_the_board_and_the_repository_once_for_the_whole_command() {
-    // The defect: `write_item` began by reading the whole board, paged, for every single
-    // item it wrote, and `create_and_file_issue` re-read the destination repository's
-    // identity for every issue it created. Those reads are the bulk of a copy's request
-    // count and none of its work, and they are what turned a six-item plan into a burst.
-    //
-    // A source still carrying the defect reads the board seven times here and the
-    // repository six, so both assertions below fail on the count they name.
+    // Six items, so a source reading the board per item written reads it seven times and
+    // the repository six — which is the burst this counts, not the writes themselves.
     let fixture = board(vec![]);
     let source = source(&fixture);
     let plan = source
@@ -4165,9 +4154,6 @@ async fn the_board_this_command_reads_holds_what_this_command_has_itself_written
 
 #[test]
 fn the_shipped_pacing_defaults_are_githubs_published_limits() {
-    // The rate this source states, and the reasoning stated beside it in the constant's own
-    // documentation: GitHub documents no more than 80 content-generating requests per
-    // minute, and 60000/80 is 750.
     assert_eq!(onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS, 750);
     assert_eq!(
         60_000 / onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS,
