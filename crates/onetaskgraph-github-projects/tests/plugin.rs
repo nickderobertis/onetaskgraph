@@ -213,15 +213,16 @@ struct Limits {
     last_mutation: Option<Instant>,
     /// How many mutations this board refused for arriving too fast.
     too_fast: u32,
-    /// When each request arrived, and which operation it carried.
-    arrivals: Vec<(Instant, String)>,
+    /// When each request arrived, which operation it carried, and whether that operation
+    /// creates content.
+    arrivals: Vec<(Instant, String, bool)>,
 }
 
 impl Limits {
     /// The refusal this request earns, or `None` to let the board answer it.
     fn refusal(&mut self, operation: &str, mutation: bool) -> Option<Refusal> {
         let now = Instant::now();
-        self.arrivals.push((now, operation.to_owned()));
+        self.arrivals.push((now, operation.to_owned(), mutation));
         if !self.scripted.is_empty() {
             return Some(self.scripted.remove(0));
         }
@@ -342,7 +343,7 @@ impl Fixture {
             .limits
             .arrivals
             .iter()
-            .filter(|(_, seen)| seen == operation)
+            .filter(|(_, seen, _)| seen == operation)
             .count()
     }
     /// The gaps between consecutive arrivals of any content-creating mutation.
@@ -352,8 +353,8 @@ impl Fixture {
             .limits
             .arrivals
             .iter()
-            .filter(|(_, seen)| MUTATIONS.contains(&seen.as_str()))
-            .map(|(at, _)| *at)
+            .filter(|(_, _, mutation)| *mutation)
+            .map(|(at, _, _)| *at)
             .collect::<Vec<_>>();
         times.windows(2).map(|pair| pair[1] - pair[0]).collect()
     }
@@ -393,10 +394,11 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             let variables = &request["variables"];
             // The limiter answers before the board does, exactly as GitHub's does: a
             // refused request never reaches the board and changes nothing on it.
-            let limited = served.lock().unwrap().limits.refusal(
-                operation_name(query),
-                query.trim_start().starts_with("mutation"),
-            );
+            let limited = served
+                .lock()
+                .unwrap()
+                .limits
+                .refusal(operation_name(query), is_mutation(query));
             let (status, headers, body) = match limited {
                 Some(refusal) => (refusal.status, refusal.headers, refusal.body),
                 None => (
@@ -626,39 +628,33 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < state.items.len(),"endCursor":end.to_string()}}}}})
 }
 
-/// Every content-creating mutation this source sends, which is what GitHub's secondary
-/// limiter counts.
-const MUTATIONS: [&str; 10] = [
-    "createIssue",
-    "deleteIssue",
-    "addProjectV2ItemById",
-    "updateIssue",
-    "updateProjectV2DraftIssue",
-    "updateProjectV2ItemFieldValue",
-    "addSubIssue",
-    "removeSubIssue",
-    "addBlockedBy",
-    "removeBlockedBy",
-];
+/// Whether this document creates content, which is what GitHub's secondary limiter counts.
+fn is_mutation(query: &str) -> bool {
+    query.trim_start().starts_with("mutation")
+}
 
+/// The operation this document carries, read out of the document itself.
+///
+/// Derived rather than matched against a list of the operations this source sends: a list
+/// here would be a second copy of the production mutation inventory, and a mutation added
+/// there and not here would go uncounted and unnamed in silence — which is exactly what
+/// the pacing assertions below measure.
 fn operation_name(query: &str) -> &str {
-    for name in MUTATIONS {
-        if query.contains(&format!("{name}(input:$input)")) {
-            return name;
-        }
+    let body = query
+        .split_once('{')
+        .map_or(query, |(_, rest)| rest)
+        .trim_start();
+    let root = &body[..body
+        .find(|c: char| !c.is_alphanumeric() && c != '_')
+        .unwrap_or(body.len())];
+    // The two reads answer to what they read rather than to their GraphQL root, because
+    // `owner` and `node` say nothing about what a test is counting. Nothing is enumerated:
+    // every mutation's name is the one its own document spells.
+    match root {
+        "owner" => "board",
+        "node" => "issueDependencies",
+        other => other,
     }
-    // The reads, named so a test can count them: proving a copy stopped re-reading the
-    // whole board per item means counting the board reads it made.
-    if query.contains("projectV2(number:$number)") {
-        return "board";
-    }
-    if query.contains("repository(owner:$owner,name:$name)") {
-        return "repository";
-    }
-    if query.contains("node(id:$id)") {
-        return "issueDependencies";
-    }
-    "unknown"
 }
 
 fn read_http_json(stream: &mut impl Read) -> Value {
@@ -4234,5 +4230,45 @@ async fn a_copy_of_a_project_of_many_tasks_is_not_refused_by_a_board_enforcing_t
     assert!(
         fixture.mutation_gaps().len() >= 30,
         "a project of eight tasks is far more than a handful of mutations"
+    );
+}
+
+#[test]
+fn a_pacing_setting_that_would_not_pace_is_refused_when_the_source_is_built() {
+    // A zero backoff with a budget to spend is a schedule of zero-length waits: it
+    // consumes none of the budget, so the loop that ends when the budget runs out never
+    // ends. And every setting is bounded, because a wait budget past that bound is the
+    // unbounded wait this mechanism exists to replace.
+    let refused = build_refusal(json!({"owner":"octo-org","project_number":7,
+        "pacing":{"retry_backoff_ms":0,"retry_budget_ms":5000}}));
+    assert!(
+        refused.contains("retry_backoff_ms")
+            && refused.contains("retry_budget_ms")
+            && refused.contains("forever"),
+        "{refused}"
+    );
+    for field in [
+        "min_mutation_interval_ms",
+        "retry_backoff_ms",
+        "retry_budget_ms",
+    ] {
+        let refused = build_refusal(json!({"owner":"octo-org","project_number":7,
+            "pacing":{field: onetaskgraph_github_projects::MAX_PACING_MS + 1}}));
+        assert!(
+            refused.contains(field) && refused.contains("an hour"),
+            "{field}: {refused}"
+        );
+    }
+    // And a zero backoff beside a zero budget is not a schedule at all — it reports the
+    // first refusal, which is what every fixture-driven test here asks for.
+    assert!(
+        Plugin
+            .build(
+                &SourceName::new("work").unwrap(),
+                &json!({"owner":"octo-org","project_number":7,
+                        "pacing":{"retry_backoff_ms":0,"retry_budget_ms":0}}),
+                &Secrets,
+            )
+            .is_ok()
     );
 }

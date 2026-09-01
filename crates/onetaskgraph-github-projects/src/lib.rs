@@ -562,18 +562,33 @@ pub struct PacingConfig {
     /// Shortest interval between two content-creating mutations, in milliseconds.
     ///
     /// Zero sends them as fast as they are asked for, which is what a fixture server on
-    /// loopback wants and what no board on github.com does.
-    pub min_mutation_interval_ms: Option<u64>,
+    /// loopback wants and what no board on github.com does. At most [`MAX_PACING_MS`].
+    pub min_mutation_interval_ms: Option<u64>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `Pacing::resolve` bounds it to `MAX_PACING_MS` before the private validated `Pacing` is built.
     /// First wait when a rate-limit refusal carries no hint, in milliseconds. Each
-    /// further wait of the same call doubles it.
-    pub retry_backoff_ms: Option<u64>,
+    /// further wait of the same call doubles it. At most [`MAX_PACING_MS`], and never
+    /// zero while there is a budget to spend, because a schedule of zero-length waits
+    /// consumes none of it and so never ends.
+    pub retry_backoff_ms: Option<u64>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `Pacing::resolve` refuses a non-progressing zero and bounds the rest before the private validated `Pacing` is built.
     /// Total time one call may spend waiting out rate limits, in milliseconds.
     ///
-    /// Zero reports the refusal rather than waiting at all.
-    pub retry_budget_ms: Option<u64>,
+    /// Zero reports the refusal rather than waiting at all. At most [`MAX_PACING_MS`]:
+    /// the bound is what makes this a wait rather than a hang.
+    pub retry_budget_ms: Option<u64>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `Pacing::resolve` bounds it to `MAX_PACING_MS` before the private validated `Pacing` is built.
 }
 
-/// [`PacingConfig`] with every default resolved, which is what the source holds.
+/// The largest any pacing setting may be, in milliseconds.
+///
+/// One hour. GitHub's own harshest published bound on content-generating requests works
+/// out at one every 7.2 seconds, so an hour is already three orders of magnitude past
+/// anything a real limit asks for, and past it the settings stop describing pacing at all:
+/// a wait budget beyond it is the unbounded wait this whole mechanism exists to replace,
+/// and an interval beyond it is a command that never sends its second mutation. It also
+/// keeps the clock arithmetic in [`GitHubProjectsSource::reserve_mutation_slot`] inside
+/// what an `Instant` can hold on every platform.
+pub const MAX_PACING_MS: u64 = 3_600_000;
+
+/// [`PacingConfig`] with every default resolved and every value checked, which is what the
+/// source holds.
 #[derive(Debug, Clone, Copy)]
 struct Pacing {
     min_mutation_interval: Duration,
@@ -581,19 +596,47 @@ struct Pacing {
     retry_budget: Duration,
 }
 
-impl From<PacingConfig> for Pacing {
-    fn from(config: PacingConfig) -> Self {
-        Self {
-            min_mutation_interval: Duration::from_millis(
-                config
-                    .min_mutation_interval_ms
-                    .unwrap_or(MIN_MUTATION_INTERVAL_MS),
-            ),
-            retry_backoff: Duration::from_millis(
-                config.retry_backoff_ms.unwrap_or(RETRY_BACKOFF_MS),
-            ),
-            retry_budget: Duration::from_millis(config.retry_budget_ms.unwrap_or(RETRY_BUDGET_MS)),
+impl Pacing {
+    /// Resolve one instance's pacing, refusing a configuration that would not pace at all.
+    fn resolve(config: PacingConfig, instance: &SourceName) -> Result<Self, SourceError> {
+        let bounded = |value: Option<u64>, default: u64, field: &str| match value {
+            Some(value) if value > MAX_PACING_MS => Err(SourceError::Config {
+                message: format!(
+                    "pacing.{field} of source {instance} is {value} ms, and the most any pacing \
+                     setting may be is {MAX_PACING_MS} ms — an hour, which is already far past \
+                     GitHub's own harshest published limit"
+                ),
+            }),
+            Some(value) => Ok(Duration::from_millis(value)),
+            None => Ok(Duration::from_millis(default)),
+        };
+        let retry_backoff = bounded(
+            config.retry_backoff_ms,
+            RETRY_BACKOFF_MS,
+            "retry_backoff_ms",
+        )?;
+        let retry_budget = bounded(config.retry_budget_ms, RETRY_BUDGET_MS, "retry_budget_ms")?;
+        if retry_backoff.is_zero() && !retry_budget.is_zero() {
+            return Err(SourceError::Config {
+                message: format!(
+                    "pacing.retry_backoff_ms of source {instance} is 0 while \
+                     pacing.retry_budget_ms is {} ms; a schedule of zero-length waits spends \
+                     none of that budget, so it would retry a refusal forever. Set a backoff of \
+                     at least 1 ms, or set retry_budget_ms to 0 to report a refusal without \
+                     waiting at all",
+                    retry_budget.as_millis()
+                ),
+            });
         }
+        Ok(Self {
+            min_mutation_interval: bounded(
+                config.min_mutation_interval_ms,
+                MIN_MUTATION_INTERVAL_MS,
+                "min_mutation_interval_ms",
+            )?,
+            retry_backoff,
+            retry_budget,
+        })
     }
 }
 
@@ -940,7 +983,7 @@ impl GitHubProjectsSource {
                     message: format!("cannot build HTTP client: {e}"),
                 })?,
             created: Mutex::new(Vec::new()),
-            pacing: config.pacing.into(),
+            pacing: Pacing::resolve(config.pacing, name)?,
             last_mutation: Mutex::new(None),
             board_cache: Mutex::new(None),
             repository_cache: Mutex::new(None),
@@ -1007,8 +1050,12 @@ impl GitHubProjectsSource {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = Instant::now();
+        // `checked_add` rather than `+`: `Instant + Duration` panics on overflow, and
+        // pacing is not worth a panic even at a bound `MAX_PACING_MS` already rules out.
         let at = last.map_or(now, |previous| {
-            (previous + self.pacing.min_mutation_interval).max(now)
+            previous
+                .checked_add(self.pacing.min_mutation_interval)
+                .map_or(now, |earliest| earliest.max(now))
         });
         *last = Some(at);
         at.saturating_duration_since(now)
