@@ -40,6 +40,17 @@ pub struct Ready {
     pub declared: Declared,
     /// Whether this source can represent the complete cross-plugin dataset.
     pub complete_dataset: bool,
+    /// Whether this source's *documents* carry the shared dataset's labels.
+    ///
+    /// Read only where the row holds documents at all, and separate from
+    /// [`Declared::filter_by_label`] because the two say different things: that one is
+    /// whether the source applies a label predicate itself, this one is whether its
+    /// documents have labels for such a predicate to keep. Linear is why the table needs
+    /// the difference — its published `Document` type has no `labels` field, where its
+    /// `Issue` and `Project` do — so a document read of it reports none, a document write
+    /// into it refuses a label by name, and the shared journeys below drive that answer
+    /// rather than skipping the row.
+    pub labels_its_documents: bool,
     /// Where this source says one of its entities is, or that it does not say.
     pub place: Place,
 }
@@ -349,6 +360,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: native_block,
             complete_dataset: true,
+            labels_its_documents: true,
             place: dataset_place,
             declared: Declared {
                 documents: Support::Native,
@@ -369,6 +381,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: compensated_block,
             complete_dataset: true,
+            labels_its_documents: true,
             place: dataset_place,
             declared: Declared {
                 projects: Support::Native,
@@ -394,6 +407,7 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: hosted_block,
             complete_dataset: true,
+            labels_its_documents: true,
             place: dataset_place,
             declared: Declared {
                 documents: Support::Native,
@@ -407,6 +421,8 @@ pub const ROWS: &[Row] = &[
         fixture: Ready {
             block: local_md_block,
             complete_dataset: true,
+            // A `labels:` key in the front matter of a document, exactly as in a task's.
+            labels_its_documents: true,
             // A folder of files, so every entity is a file and this source says where each
             // one is — the only row of this table whose locations are not knowable until
             // the sandbox holding them exists.
@@ -425,18 +441,28 @@ pub const ROWS: &[Row] = &[
         name: "linear",
         fixture: Ready {
             block: linear_block,
-            // Linear reports no location for anything yet; docs/follow-ups.md tracks its
-            // document side, and a location is what a document read would give it.
-            place: nowhere,
+            // Every issue, project and document of a Linear workspace has a page a person
+            // can open, so this row's source says where all three are — as a link, which
+            // is the shape a folder of Markdown's path is not.
+            place: linear_place,
             // Linear models the whole table: two projects, an orphan, and dependencies in
             // both directions, so it drives the shared complete-dataset journeys.
             complete_dataset: true,
+            // The one row of this table whose documents carry no labels, and Linear's
+            // published schema is why: `Document` has no `labels` field where `Issue` and
+            // `Project` do. So the shared document journeys assert the answer that follows
+            // from it — a label demanded of a document keeps nothing, a label excluded
+            // keeps everything — against a real remote protocol rather than against a mock.
+            labels_its_documents: false,
             // The two searches are unsupported, which is what makes this row the one that
             // proves the engine's text compensation against a real remote protocol. That
             // is a ruling rather than a finding: Linear's own API has issue search, so
             // this is unimplemented rather than unsupportable — see the verdict table in
             // `onetaskgraph-linear`'s own module documentation and `docs/follow-ups.md`.
             declared: Declared {
+                // Linear's own first-class `Document`, read through `documents(…)` and
+                // written through `documentCreate`/`documentUpdate`.
+                documents: Support::Native,
                 search_title: Support::Unsupported,
                 search_content: Support::Unsupported,
                 max_page_size: 250,
@@ -449,8 +475,10 @@ pub const ROWS: &[Row] = &[
         name: "github-projects",
         fixture: Ready {
             block: github_projects_block,
-            // As Linear: no location reported for anything yet.
+            // No location reported for anything yet; docs/follow-ups.md tracks it.
             place: nowhere,
+            // Never read: this row holds no documents, so it has none to label.
+            labels_its_documents: false,
             // A board is a container of projects, not a project: a project is an issue and
             // its tasks are that issue's sub-issues, which is what this source's own module
             // documentation records and what the fixture board below is built as. So one
@@ -1272,11 +1300,43 @@ pub fn linear_failing_a_relation_write_once(sandbox: &Sandbox) -> Value {
     )
 }
 
+/// An empty Linear workspace, ready to be copied into.
+///
+/// The same responder over an empty table rather than a second implementation, so what a
+/// document written into it has to satisfy is exactly what a document read out of the
+/// shared workspace was read through. It outlives one invocation because the responder
+/// holds its table in this process — which is what lets a copy be read back by a *later*
+/// command, the way a user reads one back.
+pub fn linear_empty_workspace(sandbox: &Sandbox) -> Value {
+    linear_server_over(sandbox, empty_dataset(), None, &[])
+}
+
+/// The shared dataset's shape with nothing in it.
+///
+/// Spelled from [`dataset`]'s own keys rather than restated, so a collection added there
+/// cannot go missing here and leave the responder unwrapping a key that is not present.
+fn empty_dataset() -> Value {
+    let mut empty = dataset();
+    for (_, held) in empty.as_object_mut().expect("the dataset is an object") {
+        *held = json!([]);
+    }
+    empty
+}
+
 fn linear_server(sandbox: &Sandbox, recorded: Option<Value>, failing: &[&str]) -> Value {
+    linear_server_over(sandbox, dataset(), recorded, failing)
+}
+
+fn linear_server_over(
+    sandbox: &Sandbox,
+    held: Value,
+    recorded: Option<Value>,
+    failing: &[&str],
+) -> Value {
     sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
-    let state = Arc::new(Mutex::new(dataset()));
+    let state = Arc::new(Mutex::new(held));
     let failing: Vec<String> = failing
         .iter()
         .map(|operation| (*operation).into())
@@ -1452,13 +1512,13 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
     use onetaskgraph_linear::graphql;
     let valid = match operation {
         graphql::VIEWER => serde_json::from_value::<NoVariables>(variables.clone()).is_ok(),
-        graphql::ISSUE | graphql::PROJECT => {
+        graphql::ISSUE | graphql::PROJECT | graphql::DOCUMENT => {
             serde_json::from_value::<ItemVariables>(variables.clone())
                 .is_ok_and(|variables| !variables.id.is_empty())
         }
         graphql::LABELS => serde_json::from_value::<PageVariables>(variables.clone())
             .is_ok_and(|variables| variables.first > 0 && variables.after.as_deref() != Some("")),
-        graphql::ISSUES | graphql::PROJECTS => {
+        graphql::ISSUES | graphql::PROJECTS | graphql::DOCUMENTS => {
             serde_json::from_value::<QueryVariables>(variables.clone()).is_ok_and(|variables| {
                 variables.first > 0
                     && variables.after.as_deref() != Some("")
@@ -1525,10 +1585,31 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     &[],
                 )
         }
+        graphql::DOCUMENT_CREATE => {
+            exact_linear_variable_keys(variables, &["input"])
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &["title"],
+                    &["content", "projectId", "teamId"],
+                )
+        }
+        graphql::DOCUMENT_UPDATE => {
+            exact_linear_variable_keys(variables, &["id", "input"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &["title"],
+                    &["content", "projectId"],
+                )
+        }
         graphql::ISSUE_RELATION_DELETE
         | graphql::PROJECT_RELATION_DELETE
         | graphql::ISSUE_DELETE
-        | graphql::PROJECT_DELETE => {
+        | graphql::PROJECT_DELETE
+        | graphql::DOCUMENT_DELETE => {
             exact_linear_variable_keys(variables, &["id"])
                 && variables
                     .get("id")
@@ -1583,7 +1664,7 @@ fn valid_linear_write_input(value: Option<&Value>, required: &[&str], optional: 
                 .iter()
                 .all(|value| value.as_str().is_some_and(|id| !id.is_empty()))
         }),
-        "description" => value.is_null() || value.is_string(),
+        "description" | "content" => value.is_null() || value.is_string(),
         "projectId" => value.is_null() || value.as_str().is_some_and(|id| !id.is_empty()),
         _ => value.as_str().is_some_and(|text| !text.is_empty()),
     })
@@ -1644,6 +1725,11 @@ fn linear_response(
         graphql::PROJECT_RELATION_DELETE,
         graphql::ISSUE_DELETE,
         graphql::PROJECT_DELETE,
+        graphql::DOCUMENT,
+        graphql::DOCUMENTS,
+        graphql::DOCUMENT_CREATE,
+        graphql::DOCUMENT_UPDATE,
+        graphql::DOCUMENT_DELETE,
     ]
     .contains(&operation)
     {
@@ -1671,6 +1757,39 @@ fn linear_response(
     }
     if matches!(operation, graphql::PROJECT_CREATE | graphql::PROJECT_UPDATE) {
         return linear_write_item(data, &vars, operation == graphql::PROJECT_CREATE, true);
+    }
+    if matches!(
+        operation,
+        graphql::DOCUMENT_CREATE | graphql::DOCUMENT_UPDATE
+    ) {
+        return linear_write_document(data, &vars, operation == graphql::DOCUMENT_CREATE);
+    }
+    if operation == graphql::DOCUMENT_DELETE {
+        let id = vars["id"].as_str().ok_or("delete id must be a string")?;
+        data["documents"]
+            .as_array_mut()
+            .ok_or("fixture collection is not an array")?
+            .retain(|row| row["id"] != json!(id));
+        return Ok(json!({"documentDelete":{"success":true}}));
+    }
+    if operation == graphql::DOCUMENTS {
+        let rows = data["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| linear_matches_fixture_subset(v, &vars))
+            .map(linear_document)
+            .collect();
+        return Ok(json!({"documents":linear_connection(rows,&vars)}));
+    }
+    if operation == graphql::DOCUMENT {
+        let id = vars["id"].as_str().unwrap_or("");
+        let item = data["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == id);
+        return Ok(json!({"document":item.map(linear_document)}));
     }
     if matches!(
         operation,
@@ -1837,6 +1956,53 @@ fn linear_write_item(
     })
 }
 
+/// A document created or updated in this workspace, on the terms an issue is.
+fn linear_write_document(
+    data: &mut Value,
+    vars: &Value,
+    create: bool,
+) -> Result<Value, &'static str> {
+    let input = vars["input"]
+        .as_object()
+        .ok_or("write input must be an object")?;
+    let rows = data["documents"]
+        .as_array_mut()
+        .ok_or("fixture collection is not an array")?;
+    let id = if create {
+        format!("D-W{}", rows.len() + 1)
+    } else {
+        vars["id"]
+            .as_str()
+            .ok_or("update id must be a string")?
+            .to_owned()
+    };
+    let existing = rows.iter().position(|row| row["id"] == id);
+    if !create && existing.is_none() {
+        return Err("update target does not exist");
+    }
+    let mut row = json!({
+        "id": id,
+        "title": input.get("title").and_then(Value::as_str).ok_or("title must be a string")?,
+        "content": "",
+        "labels": [],
+        "_linear_description": input.get("content").cloned().unwrap_or(Value::Null),
+    });
+    if let Some(project) = input.get("projectId").filter(|value| !value.is_null()) {
+        row["project"] = project.clone();
+    }
+    if let Some(index) = existing {
+        rows[index] = row;
+    } else {
+        rows.push(row);
+    }
+    let payload = json!({"success":true,"document":{"id":id}});
+    Ok(if create {
+        json!({ "documentCreate": payload })
+    } else {
+        json!({ "documentUpdate": payload })
+    })
+}
+
 fn linear_write_relation(
     data: &mut Value,
     vars: &Value,
@@ -1969,22 +2135,59 @@ fn linear_state(v: &Value) -> Value {
     json!({"name":v["name"],"type":match category{"todo"=>"unstarted","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
 }
 fn linear_task(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":v.get("url"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null})
 }
 fn linear_project(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":v.get("url"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null})
 }
+
+/// One Linear document. It has no `labels` field and no `state`, because Linear's own
+/// published `Document` has neither — which is what the `linear` row of the table above
+/// declares and what the shared document journeys drive.
+fn linear_document(v: &Value) -> Value {
+    json!({"id":v["id"],"title":v["title"],"content":linear_long_form(v,Vec::new()),"project":v.get("project").filter(|project|project.is_string()).map(|id|json!({"id":id})),"url":linear_web_address(v,"document"),"createdAt":null,"updatedAt":null})
+}
+
+/// The Linear web address this workspace holds one item at.
+///
+/// Every item of a real Linear workspace has a page, so every item of this one does too —
+/// which is what makes this row report a location for all three kinds. Where the shared
+/// dataset states a url, that url *is* the address: a journey asserting on the one the
+/// dataset gives must not find an invented one in its place.
+fn linear_web_address(v: &Value, kind: &str) -> Value {
+    v.get("url")
+        .filter(|url| url.is_string())
+        .cloned()
+        .unwrap_or_else(|| json!(linear_address(kind, v["id"].as_str().unwrap_or_default())))
+}
+
+fn linear_address(kind: &str, id: &str) -> String {
+    format!("https://linear.app/fixture/{kind}/{id}")
+}
+
+/// Where the Linear row holds one entity: its own page there, as a link.
+fn linear_place(_sandbox: &Sandbox, verb: &str, id: &str) -> Option<Placed> {
+    let dataset = dataset();
+    let held = dataset[format!("{verb}s")]
+        .as_array()
+        .expect("the shared dataset holds this kind")
+        .iter()
+        .find(|item| item["id"] == json!(id))
+        .expect("the shared dataset holds this id");
+    // Linear spells a task an issue, and the address says so.
+    let kind = if verb == "task" { "issue" } else { verb };
+    Some(Placed {
+        key: "url",
+        value: linear_web_address(held, kind)
+            .as_str()
+            .expect("a Linear web address is a string")
+            .to_owned(),
+    })
+}
+
 fn linear_description(v: &Value, edges: &str, data: &Value) -> String {
     if let Some(description) = v.get("_linear_description").and_then(Value::as_str) {
         return description.to_owned();
-    }
-    let mut metadata = v
-        .get("metadata")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    if let Some(repositories) = v.get("repositories") {
-        metadata.insert("onetaskgraph.repositories".into(), repositories.clone());
     }
     // No Linear relation can name an item of another source, so this is the one slot a
     // far end like that can be in.
@@ -1998,6 +2201,26 @@ fn linear_description(v: &Value, edges: &str, data: &Value) -> String {
         })
         .map(|edge| edge["to"].clone())
         .collect::<Vec<_>>();
+    linear_long_form(v, far)
+}
+
+/// The one long-form field a Linear item has, with this source's own slot at the end.
+///
+/// Shared by every kind this workspace serves, because the source reads all three out of
+/// exactly the same slot. A document is handed no far ends: it is not work, so nothing
+/// may depend on one and it has no dependency graph to record.
+fn linear_long_form(v: &Value, far: Vec<Value>) -> String {
+    if let Some(held) = v.get("_linear_description").and_then(Value::as_str) {
+        return held.to_owned();
+    }
+    let mut metadata = v
+        .get("metadata")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(repositories) = v.get("repositories") {
+        metadata.insert("onetaskgraph.repositories".into(), repositories.clone());
+    }
     if !far.is_empty() {
         metadata.insert("onetaskgraph.depends_on".into(), Value::Array(far));
     }

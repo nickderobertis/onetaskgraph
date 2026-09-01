@@ -21,7 +21,8 @@ use crate::fixtures::{
     github_projects_failing_a_field_write_and_its_cleanup,
     github_projects_failing_a_field_write_once, github_projects_failing_to_file_and_its_cleanup,
     github_projects_failing_to_file_once, github_projects_reading_one_item_behind,
-    github_projects_with_board, linear_block, linear_failing_a_relation_write_once, qualified,
+    github_projects_with_board, linear_block, linear_empty_workspace,
+    linear_failing_a_relation_write_once, qualified,
 };
 
 /// The folder every copy journey copies into, configured beside the source under test.
@@ -1931,6 +1932,163 @@ fn a_document_copies_into_a_folder_of_markdown_and_the_next_invocation_reads_it_
         assert_eq!(
             again[0].1,
             json!(qualified(NOTES, "D-1")),
+            "{boundary:?}: the second copy found the first one's document"
+        );
+        assert!(
+            matches!(again[0].2.as_str(), "updated" | "unchanged"),
+            "{boundary:?}: a second copy is not a second create: {:?}",
+            again[0]
+        );
+        let listed = ok(&sandbox, &["document", "list", "--source", NOTES]);
+        assert_eq!(
+            listed
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count(),
+            1,
+            "{boundary:?}: exactly one where there was one before:\n{listed}"
+        );
+    }
+}
+
+/// One `linear` source at `boundary`, carrying the credential name across the pipe.
+///
+/// `SourceBoundary::source` cannot do this for every plugin and must not try: §3.1 clears
+/// a spawned plugin's environment, so a hosted source sees only the credentials its own
+/// configuration *names*, and a source with no credential names none. This one has one.
+fn linear_at(boundary: SourceBoundary, config: Value) -> Value {
+    match boundary {
+        SourceBoundary::Direct => json!({"plugin": "linear", "config": config}),
+        SourceBoundary::Subprocess => json!({
+            "plugin": "subprocess",
+            "config": {
+                "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                "secrets": ["LINEAR_API_KEY"],
+                "settings": {"kind": "linear", "config": config},
+            },
+        }),
+    }
+}
+
+#[test]
+fn a_document_copies_into_a_linear_workspace_and_the_next_invocation_reads_it_all_back() {
+    // The whole round trip against Linear's own document type, through the command line a
+    // user types: list, show, copy, and then a *separate* run that reads back what landed.
+    // The responder holds its workspace in this process, so a destination written by one
+    // invocation really is still there for the next one — which is what makes this a round
+    // trip rather than an assertion about what a copy would have written.
+    //
+    // Driven at both boundaries, because a plugin a process away must answer exactly what
+    // the in-process one does, and the credential has to cross that pipe for it to.
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&document(&json!({
+            SOURCE: linear_at(boundary, linear_block(&sandbox)),
+            NOTES: linear_at(boundary, linear_empty_workspace(&sandbox)),
+        })));
+
+        let listing = ok(&sandbox, &["document", "list", "--source", SOURCE]);
+        for id in ["D-1", "D-2", "D-3"] {
+            assert!(
+                listing.contains(&qualified(SOURCE, id)),
+                "{boundary:?}: the workspace lists {id}:\n{listing}"
+            );
+        }
+        assert!(
+            listing.contains("Alpha design") && listing.contains("Loose note"),
+            "{boundary:?}: a document list carries each title:\n{listing}"
+        );
+
+        // Shown, and where each of the three kinds is is a link a reader can open — never
+        // a path, which is what a source over a remote service has none of.
+        for (verb, id) in [("document", "D-1"), ("task", "T-1"), ("project", "P-1")] {
+            let held = shown(&sandbox, verb, &qualified(SOURCE, id));
+            let location = &held["location"];
+            assert!(
+                location["url"].as_str().is_some_and(|url| !url.is_empty()),
+                "{boundary:?}: `{verb} show {id}` reports a link:\n{location}"
+            );
+            assert!(
+                location.get("path").is_none(),
+                "{boundary:?}: and only a link:\n{location}"
+            );
+        }
+
+        let held = shown(&sandbox, "document", &qualified(SOURCE, "D-1"));
+
+        let created = reported(&ok(
+            &sandbox,
+            &[
+                "document",
+                "copy",
+                &qualified(SOURCE, "D-1"),
+                "--to",
+                NOTES,
+                "--json",
+            ],
+        ));
+        assert_eq!(created.len(), 1, "{boundary:?}: one document, one write");
+        assert_eq!(created[0].0, qualified(SOURCE, "D-1"), "{boundary:?}");
+        assert_eq!(created[0].2, "created", "{boundary:?}");
+        let landed_id = created[0].1.as_str().expect("a destination id").to_owned();
+
+        // And a *later* invocation reads back every field the copy carried, out of this
+        // source's own trailing slot, with its JSON types intact.
+        let landed = shown(&sandbox, "document", &landed_id);
+        for field in ["title", "content", "project", "repositories"] {
+            assert_eq!(
+                landed[field], held[field],
+                "{boundary:?}: the workspace holds {field} as the source reported it"
+            );
+        }
+        for key in ["onepipeline.turn_budget", "caller.flags"] {
+            assert_eq!(
+                landed["metadata"][key], held["metadata"][key],
+                "{boundary:?}: and the metadata key {key} with its JSON type intact"
+            );
+        }
+        assert_eq!(
+            landed["metadata"]["onetaskgraph.origin"],
+            json!(qualified(SOURCE, "D-1")),
+            "{boundary:?}: and the origin the copy recorded"
+        );
+        // The visible body is the text a person wrote: the slot the metadata above came
+        // out of is not in it.
+        assert!(
+            !landed["content"]
+                .as_str()
+                .expect("a body")
+                .contains("onetaskgraph.metadata"),
+            "{boundary:?}: the slot is taken off the visible body:\n{}",
+            landed["content"]
+        );
+        // Where the destination holds it is the destination's own page, not the source's.
+        assert!(
+            landed["location"]["url"]
+                .as_str()
+                .is_some_and(|url| !url.is_empty()),
+            "{boundary:?}: the destination says where *it* holds the document"
+        );
+        assert_ne!(
+            landed["location"], held["location"],
+            "{boundary:?}: which is not where the source held it"
+        );
+
+        // A second copy updates the one already there rather than adding a duplicate.
+        let again = reported(&ok(
+            &sandbox,
+            &[
+                "document",
+                "copy",
+                &qualified(SOURCE, "D-1"),
+                "--to",
+                NOTES,
+                "--json",
+            ],
+        ));
+        assert_eq!(
+            again[0].1,
+            json!(landed_id),
             "{boundary:?}: the second copy found the first one's document"
         );
         assert!(
