@@ -4272,3 +4272,137 @@ fn a_pacing_setting_that_would_not_pace_is_refused_when_the_source_is_built() {
             .is_ok()
     );
 }
+
+#[tokio::test]
+async fn the_primary_budget_is_waited_out_and_then_reported_as_the_rate_limit_it_is() {
+    // The other limiter. It is the one `gh api rate_limit` reports and the one a wait
+    // really does answer, so it keeps `SourceError::RateLimited` — and it reaches this
+    // source in two shapes of its own: the `x-ratelimit-remaining: 0` header, and a
+    // successful response whose GraphQL errors name it.
+    let exhausted = Refusal {
+        status: "200 OK",
+        headers: "x-ratelimit-remaining: 0\r\n".to_owned(),
+        body: "{}".to_owned(),
+    };
+    let fixture = board(vec![Item::issue("I_1", "one").status("Todo")]);
+    fixture.script(vec![exhausted.clone()]);
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":60,"retry_budget_ms":5_000}),
+    );
+    let started = Instant::now();
+    source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("the retry once the budget was no longer reported spent");
+    assert!(
+        started.elapsed() >= Duration::from_millis(60),
+        "no wait taken"
+    );
+    assert_eq!(fixture.requests("board"), 2, "the read was not retried");
+
+    // Unrelenting, it reports as a rate limit carrying the wait GitHub asked for.
+    let error = paced(
+        &always(&Refusal {
+            status: "429 Too Many Requests",
+            headers: "retry-after: 30\r\n".to_owned(),
+            body: "{}".to_owned(),
+        }),
+        no_waiting(),
+    )
+    .query_tasks(&TaskQuery::default(), &page(10))
+    .await
+    .expect_err("an exhausted primary budget");
+    assert_eq!(
+        error,
+        SourceError::RateLimited {
+            retry_after_seconds: Some(30)
+        },
+        "the primary budget stopped reporting the wait it asked for"
+    );
+
+    // And in the shape that arrives as a successful response.
+    let named_in_a_success = Refusal {
+        status: "200 OK",
+        headers: String::new(),
+        body: json!({"errors":[{"type":"RATE_LIMITED",
+                                "message":"API rate limit exceeded for user ID 1."}]})
+        .to_string(),
+    };
+    let error = paced(&always(&named_in_a_success), no_waiting())
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect_err("a primary rate limit named in a successful response");
+    assert_eq!(
+        error,
+        SourceError::RateLimited {
+            retry_after_seconds: None
+        },
+        "a primary rate limit inside a successful response was not read as one: {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_wait_hint_of_nothing_is_still_a_wait_and_still_ends() {
+    // GitHub really does answer `retry-after: 0`. Honoured literally it is a retry with no
+    // wait at all, which spends none of the budget — so the schedule would never end, and
+    // retrying at once is the one move that extends a secondary limit. A source honouring
+    // it literally hangs here rather than failing.
+    let unrelenting = Refusal::secondary_forbidden().after(0);
+    let source = paced(
+        &always(&unrelenting),
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":50,"retry_budget_ms":200}),
+    );
+    let started = Instant::now();
+    let message = refusal(
+        source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .expect_err("a hint of nothing, from a limiter that never lets up"),
+    );
+    let took = started.elapsed();
+    assert!(took < Duration::from_secs(10), "it never ended: {took:?}");
+    assert!(
+        took >= Duration::from_millis(50),
+        "the hint of nothing was honoured literally: {took:?}"
+    );
+    assert!(message.contains("secondary rate limit"), "{message}");
+}
+
+#[tokio::test]
+async fn an_exhausted_budget_reports_when_it_comes_back_rather_than_burning_the_wait_on_it() {
+    // `x-ratelimit-reset` is the primary budget's own hint, spelled as the moment it
+    // refills rather than as a wait. A reset an hour out is past anything one command may
+    // spend waiting, so this reports at once — carrying that wait — instead of sitting in
+    // the schedule for a limit that will not lift inside it.
+    let refills_in_an_hour = chrono::Utc::now().timestamp() + 3_600;
+    let source = paced(
+        &always(&Refusal {
+            status: "200 OK",
+            headers: format!(
+                "x-ratelimit-remaining: 0\r\nx-ratelimit-reset: {refills_in_an_hour}\r\n"
+            ),
+            body: "{}".to_owned(),
+        }),
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":50,"retry_budget_ms":5_000}),
+    );
+    let started = Instant::now();
+    let error = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect_err("a budget that does not come back inside the wait");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "it waited on a reset it could never reach"
+    );
+    let SourceError::RateLimited {
+        retry_after_seconds: Some(seconds),
+    } = error
+    else {
+        panic!("an exhausted primary budget reported as {error:?}");
+    };
+    assert!(
+        (3_500..=3_600).contains(&seconds),
+        "the reset was not reported as the wait it is: {seconds}"
+    );
+}

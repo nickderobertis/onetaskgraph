@@ -1012,12 +1012,22 @@ impl GitHubProjectsSource {
                 Err(Attempt::Failed(error)) => return Err(error),
                 Err(Attempt::Limited(limited)) => limited,
             };
+            // A hint is honoured, but never as a licence to retry at once: GitHub really
+            // does send `retry-after: 0`, and a wait of nothing spends none of the budget,
+            // so the schedule below would never end — and retrying immediately is the one
+            // move that extends a secondary limit. So a hint shorter than the schedule's
+            // own next wait is raised to it.
             let wait = match limited.hint {
-                Some(hint) => Duration::from_secs(hint),
+                Some(hint) => Duration::from_secs(hint).max(backoff),
                 None => backoff,
             };
             let remaining = self.pacing.retry_budget.saturating_sub(waited);
-            if wait > remaining {
+            // A wait of nothing is exhaustion rather than a retry: it spends none of the
+            // budget, so a schedule made of them would never end. Configuration cannot
+            // produce one — `Pacing::resolve` refuses a zero backoff beside a budget to
+            // spend — which leaves the instance with no budget at all, where reporting the
+            // first refusal is exactly what was asked for.
+            if wait.is_zero() || wait > remaining {
                 return Err(limited.exhausted(
                     doing,
                     waits,
@@ -1077,16 +1087,28 @@ impl GitHubProjectsSource {
                 })
             })?;
         let status = response.status();
-        let hint = response
-            .headers()
-            .get("retry-after")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok());
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+        };
         let exhausted = response
             .headers()
             .get("x-ratelimit-remaining")
-            .and_then(|v| v.to_str().ok())
+            .and_then(|value| value.to_str().ok())
             == Some("0");
+        // `retry-after` is what GitHub asks for when it asks; when it does not and the
+        // primary budget is spent, `x-ratelimit-reset` says when that budget comes back,
+        // which is the same question answered as an absolute time. Nothing else here is a
+        // hint, and a schedule is what answers a refusal that carries none.
+        let hint = header("retry-after").or_else(|| {
+            exhausted
+                .then(|| header("x-ratelimit-reset"))
+                .flatten()
+                .map(|reset| reset.saturating_sub(Utc::now().timestamp().max(0).unsigned_abs()))
+        });
         // Read before it is parsed, because the evidence which tells a secondary rate
         // limit from a rejected credential is in the body of a response whose status says
         // only "forbidden" — and a non-success response was never parsed at all.
