@@ -188,6 +188,14 @@ struct State {
     /// catches up — and what that record holds is only observable while it is behind.
     lagging_reads: usize,
     seen: Vec<Value>,
+    /// Every GraphQL document this board received, in order.
+    ///
+    /// The operation counts beside it say how *many* requests a read made; this says what
+    /// each one asked for, which is the only place a test can see that a read scoped to one
+    /// project never asked the board for its items.
+    documents: Vec<String>,
+    /// The search string of every board-scoped search this board answered, in order.
+    searches: Vec<String>,
     next: usize,
     /// GitHub's two rate limiters, as far as a board fixture can spell them.
     limits: Limits,
@@ -404,6 +412,29 @@ impl Fixture {
     fn too_fast(&self) -> u32 {
         self.state.lock().unwrap().limits.too_fast
     }
+    /// Every GraphQL document this board received, in order.
+    fn documents(&self) -> Vec<String> {
+        self.state.lock().unwrap().documents.clone()
+    }
+    /// The search string of every board-scoped search this board answered, in order.
+    fn searches(&self) -> Vec<String> {
+        self.state.lock().unwrap().searches.clone()
+    }
+    /// Which of the documents this board received selected its own item connection.
+    ///
+    /// The one read whose cost is the whole board, named by the selection that makes it
+    /// so rather than by the constant that holds it: a read that stopped asking for
+    /// `ProjectV2.items` and started asking for it again under another name would still be
+    /// caught here.
+    fn board_item_reads(&self) -> Vec<String> {
+        self.documents()
+            .into_iter()
+            .filter(|document| {
+                document.contains("projectV2(number:$number)")
+                    && document.contains("items(first:$first,after:$after)")
+            })
+            .collect()
+    }
     /// How many requests carried `operation`, refused ones included.
     fn requests(&self, operation: &str) -> usize {
         self.state
@@ -465,6 +496,8 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         refuses: BTreeSet::new(),
         lagging_reads: 0,
         seen: Vec::new(),
+        documents: Vec::new(),
+        searches: Vec::new(),
         next: 0,
         limits: Limits::default(),
     }));
@@ -478,6 +511,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             let query = request["query"].as_str().expect("a GraphQL document");
             graphql_parser::parse_query::<String>(query).expect("a valid GraphQL document");
             let variables = &request["variables"];
+            served.lock().unwrap().documents.push(query.to_owned());
             // The limiter answers before the board does, exactly as GitHub's does: a
             // refused request never reaches the board and changes nothing on it.
             let limited = served
@@ -681,7 +715,10 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         let search = variables["search"].as_str().expect("a search query");
         let wanted = search
             .strip_prefix("project:octo-org/7 is:issue")
-            .unwrap_or_else(|| panic!("a search scoped to the configured board: {search}"));
+            .unwrap_or_else(|| panic!("a search scoped to the configured board: {search}"))
+            .to_owned();
+        state.searches.push(search.to_owned());
+        let wanted = wanted.as_str();
         // The server side of `in:title "..."`, which is what makes naming a project by name
         // one bounded query rather than a walk of the board.
         let title = wanted.trim().strip_prefix("in:title ").map(|quoted| {
@@ -1322,6 +1359,288 @@ async fn a_task_read_scoped_to_one_project_returns_only_that_projects_tasks() {
         ["I_task", "I_notes", "I_loose"],
         "an unconstrained query still answers with the whole board"
     );
+}
+
+/// A board holding `projects` projects, each with `tasks` tasks filed under it.
+///
+/// The shape a cost claim needs: several projects, each holding work of its own, so that a
+/// read scoped to one of them can be told from a read of all of them.
+fn board_of(projects: usize, tasks: usize) -> Fixture {
+    let mut items = Vec::new();
+    for plan in 1..=projects {
+        let id = format!("I_p{plan}");
+        // The kind marker as well as the sub-issue count, so that a plan holding nothing
+        // yet is still a project — which is the state a project copy passes through
+        // between creating the project and filing its first task.
+        items.push(
+            Item::issue(&id, &format!("Plan {plan}"))
+                .status("Todo")
+                .sub_issues(tasks as u64)
+                .body("<!-- onetaskgraph.metadata\n{\"onetaskgraph.item_kind\":\"project\"}\n-->"),
+        );
+        for step in 1..=tasks {
+            items.push(
+                Item::issue(&format!("I_p{plan}t{step}"), &format!("Step {plan}.{step}"))
+                    .status("Todo")
+                    .parent(&id),
+            );
+        }
+    }
+    board(items)
+}
+
+#[tokio::test]
+async fn one_projects_tasks_come_from_that_project_and_never_from_the_boards_items() {
+    // The read this whole shape exists for. A board read is charged for what its nested
+    // connections could return rather than for what was asked, so answering "which tasks
+    // are in this project?" by reading the board cost the same as answering "which tasks
+    // are on this board?" — and this board holds three plans.
+    let fixture = board_of(3, 2);
+    let source = source(&fixture);
+
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &TaskQuery {
+                project: ProjectFilter::Is(NativeId("I_p2".to_owned())),
+                ..TaskQuery::default()
+            },
+        )
+        .await,
+        ["I_p2t1", "I_p2t2"],
+        "the tasks filed under that project, and no other project's"
+    );
+    assert_eq!(
+        fixture.board_item_reads(),
+        Vec::<String>::new(),
+        "a read scoped to one project asked the board for its items"
+    );
+    assert_eq!(
+        fixture.requests("projectTasks"),
+        1,
+        "the tasks came from the project issue's own sub-issue relationship"
+    );
+    assert_eq!(
+        fixture.searches(),
+        Vec::<String>::new(),
+        "a project named by its id is resolved from that id, not searched for"
+    );
+    assert_eq!(
+        fixture.documents().len(),
+        1,
+        "and one request is the whole of what it took"
+    );
+}
+
+#[tokio::test]
+async fn the_work_one_projects_read_does_is_that_projects_size_and_not_the_boards() {
+    // The property the cost claim rests on, asserted the only way it can be: the same read
+    // against two boards of very different size, and what it asked for compared.
+    let small = board_of(2, 2);
+    let large = board_of(12, 2);
+    let scoped = TaskQuery {
+        project: ProjectFilter::Is(NativeId("I_p2".to_owned())),
+        ..TaskQuery::default()
+    };
+
+    let from_small = selected_tasks(source(&small).as_ref(), &scoped).await;
+    let from_large = selected_tasks(source(&large).as_ref(), &scoped).await;
+
+    assert_eq!(from_small, ["I_p2t1", "I_p2t2"]);
+    assert_eq!(
+        from_large, from_small,
+        "the same project of a board six times the size answers the same"
+    );
+    assert_eq!(
+        large.documents(),
+        small.documents(),
+        "and asked for exactly the same thing to do it"
+    );
+    assert_eq!(large.board_item_reads(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn the_projects_a_board_holds_come_from_a_search_scoped_to_it_and_not_from_its_items() {
+    // An orphan task is on this board too, so `parent` really is doing the work of telling
+    // a project from a task: GitHub accepts `-has:parent` as a search qualifier and
+    // silently ignores it, which is why the discriminator cannot live in the search.
+    let mut items = board_of(2, 1);
+    items = {
+        let mut all = items.state.lock().unwrap().items.clone();
+        all.push(Item::issue("I_loose", "Sweep the backlog").status("Todo"));
+        drop(items);
+        board(all)
+    };
+    let source = source(&items);
+
+    assert_eq!(
+        selected_projects(source.as_ref(), &ProjectQuery::default()).await,
+        ["I_p1", "I_p2"],
+        "the issues with no parent and sub-issues of their own, and not the loose one"
+    );
+    assert_eq!(
+        items.board_item_reads(),
+        Vec::<String>::new(),
+        "listing the board's projects asked the board for its items"
+    );
+    assert_eq!(
+        items.searches(),
+        ["project:octo-org/7 is:issue"],
+        "one search, scoped to the configured board"
+    );
+}
+
+#[tokio::test]
+async fn a_project_named_by_name_is_found_by_one_bounded_search_that_filters_at_the_server() {
+    // A selector GitHub cannot resolve as a node id is a project *name*. Discovering it
+    // must not become a walk of the board, so the name goes into the search as a qualifier
+    // and the server does the narrowing.
+    let fixture = board_of(3, 2);
+    let by_name = source(&fixture);
+
+    assert_eq!(
+        selected_tasks(
+            by_name.as_ref(),
+            &TaskQuery {
+                project: ProjectFilter::Is(NativeId("Plan 2".to_owned())),
+                ..TaskQuery::default()
+            },
+        )
+        .await,
+        ["I_p2t1", "I_p2t2"],
+        "a project named by its name answers with its own tasks"
+    );
+    assert_eq!(
+        fixture.searches(),
+        ["project:octo-org/7 is:issue in:title \"Plan 2\""],
+        "one bounded search, filtering on that name at the server"
+    );
+    assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+
+    // And a name nothing on this board carries selects nothing rather than everything.
+    let other = board_of(3, 2);
+    let elsewhere = source(&other);
+    assert_eq!(
+        selected_tasks(
+            elsewhere.as_ref(),
+            &TaskQuery {
+                project: ProjectFilter::Is(NativeId("Plan 9".to_owned())),
+                ..TaskQuery::default()
+            },
+        )
+        .await,
+        Vec::<String>::new()
+    );
+    assert_eq!(other.board_item_reads(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_read_taken_straight_after_a_write_answers_with_what_was_written() {
+    // GitHub's issue search is an index and is eventually consistent, so it cannot supply
+    // this: a project written a moment ago is routinely absent from the very next search.
+    // What supplies it is this source's own record of what it wrote, which every read is
+    // completed from. `read_behind` is that index being behind, and nothing else here
+    // changes.
+    let fixture = board_of(1, 0);
+    let source = source(&fixture);
+
+    let created = source
+        .write_project(&write(project(
+            "ignored",
+            "Second plan",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("a project this board accepts");
+    fixture.read_behind(1);
+
+    assert_eq!(
+        selected_projects(source.as_ref(), &ProjectQuery::default()).await,
+        ["I_p1", created.0.as_str()],
+        "the project this run wrote is reported though the search cannot see it yet"
+    );
+    assert!(
+        !fixture.searches().is_empty(),
+        "and the search really was the discovery path"
+    );
+
+    let filed = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: Task {
+                project: Some(created.clone()),
+                ..task("ignored", "First step", status(StatusCategory::Todo, "Todo"))
+            },
+            depends_on: vec![],
+        })
+        .await
+        .expect("a task this board accepts");
+    fixture.read_behind(2);
+
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &TaskQuery {
+                project: ProjectFilter::Is(created.clone()),
+                ..TaskQuery::default()
+            },
+        )
+        .await,
+        [filed.0.as_str()],
+        "and so is the task this run filed under it"
+    );
+    assert_eq!(
+        source
+            .get_project(&created)
+            .await
+            .expect("the board answers a project read")
+            .expect("the project this run wrote")
+            .title,
+        "Second plan"
+    );
+}
+
+#[tokio::test]
+async fn a_board_of_more_than_one_page_of_projects_and_of_tasks_is_read_completely() {
+    // GitHub caps a connection page at 100, so a board holding more projects than that —
+    // or a project holding more tasks than that — is only read completely if both walks
+    // page. Neither walk is the caller's paging: the caller's page is cut from the answer
+    // afterwards.
+    let fixture = board_of(140, 0);
+    let many = source(&fixture);
+    let listed = selected_projects(many.as_ref(), &ProjectQuery::default()).await;
+    assert_eq!(listed.len(), 10, "the caller asked for a page of ten");
+    assert!(
+        fixture.requests("search") >= 2,
+        "a board of 140 projects is two pages of GitHub's own maximum"
+    );
+
+    let plan = board_of(1, 140);
+    let one_plan = source(&plan);
+    let scoped = TaskQuery {
+        project: ProjectFilter::Is(NativeId("I_p1".to_owned())),
+        ..TaskQuery::default()
+    };
+    let held = one_plan
+        .query_tasks(&scoped, &page(100))
+        .await
+        .expect("the board answers a task query");
+    assert_eq!(held.items.len(), 100);
+    assert!(
+        held.next.is_some(),
+        "and the caller is told there is more of it"
+    );
+    let rest = one_plan
+        .query_tasks(&scoped, &resume(&held.next.unwrap().0, 100))
+        .await
+        .expect("the board answers the rest");
+    assert_eq!(rest.items.len(), 40);
+    assert!(rest.next.is_none());
+    assert!(
+        plan.requests("projectTasks") >= 2,
+        "a project of 140 tasks is two pages of sub-issues"
+    );
+    assert_eq!(plan.board_item_reads(), Vec::<String>::new());
 }
 
 #[tokio::test]

@@ -1718,61 +1718,38 @@ impl GitHubProjectsSource {
         }
     }
 
-    /// Which issue of this board a project selector names, or `None` when none does.
+    /// Everything filed under one issue of this board, walked to exhaustion — or `None`
+    /// when that id names nothing here with a sub-issue relationship to walk.
     ///
-    /// A qualified id names the issue and is used as the node id it is — nothing is
-    /// searched for. Only a selector GitHub cannot resolve that way is read as a project
-    /// *name*, and that is one bounded search which filters on the name at the server
-    /// rather than a walk of every issue the board holds.
-    async fn project_named(&self, selector: &NativeId) -> Result<Option<NativeId>, SourceError> {
-        if self.created()?.iter().any(|own| own.id == *selector) {
-            return Ok(Some(selector.clone()));
-        }
-        match self.reach(selector).await? {
-            Reached::Held(_) | Reached::Draft => return Ok(Some(selector.clone())),
-            Reached::Nothing => {}
-        }
-        let search = self.board_search(Some(&title_qualifier(&selector.0)));
-        let (candidates, _) = self.search_page(&search, MAX_PAGE_SIZE, None).await?;
-        Ok(candidates
-            .into_iter()
-            .find(|item| {
-                item.kind == BoardKind::Work(ItemKind::Project)
-                    && item.title.eq_ignore_ascii_case(&selector.0)
-            })
-            .map(|item| item.id))
-    }
-
-    /// Everything filed under one project of this board: the sub-issues of the issue that
-    /// project is.
-    ///
-    /// Tasks *and* documents, because a document filed under a project is a sub-issue of it
-    /// too — the caller keeps the kind it asked for. Nothing about this grows as the board
-    /// gains projects, or as another project gains tasks.
-    async fn project_children(&self, selector: &NativeId) -> Result<Vec<Resolved>, SourceError> {
-        let Some(project) = self.project_named(selector).await? else {
-            return Ok(Vec::new());
-        };
+    /// `None` and an empty answer are different: `None` is *this is not an issue of this
+    /// GitHub*, which is what sends a project selector on to be read as a name, and an
+    /// empty vector is a project that holds nothing.
+    async fn sub_issues(&self, id: &NativeId) -> Result<Option<Vec<Resolved>>, SourceError> {
         let mut after: Option<String> = None;
         let mut children = Vec::new();
         loop {
-            let data = self
+            let asked = self
                 .graphql(
                     graphql::SUB_ISSUES,
-                    json!({"id":project.0,"first":MAX_PAGE_SIZE,"after":after,
+                    json!({"id":id.0,"first":MAX_PAGE_SIZE,"after":after,
                            "nestedFirst":NESTED_PAGE_SIZE,
                            "boardItems":BOARD_ITEMS_PAGE_SIZE,"duplicates":true}),
                 )
-                .await?;
+                .await;
+            let data = match asked {
+                Ok(data) => data,
+                // A string that is not a node id at all is not a failure to report: it is
+                // the ordinary answer to a selector naming a project by its name.
+                Err(error) if unresolvable_node(&error) => return Ok(None),
+                Err(error) => return Err(error),
+            };
             let Some(connection) = data
                 .pointer("/node/subIssues")
                 .filter(|value| !value.is_null())
             else {
-                // A node that is not an issue has no sub-issue relationship, so nothing is
-                // filed under it. That is an empty answer rather than a failure: it is what
-                // this board says about a selector naming a draft, or an item it no longer
-                // holds.
-                break;
+                // No such node, or one with no sub-issue relationship — a board draft is
+                // the one this board can really hold.
+                return Ok(None);
             };
             for node in connection
                 .get("nodes")
@@ -1798,9 +1775,49 @@ impl GitHubProjectsSource {
                     validate_cursor_progress(after.as_deref(), next)?;
                     after = Some(next.to_owned());
                 }
-                None => break,
+                None => return Ok(Some(children)),
             }
         }
+    }
+
+    /// Which issue of this board a project *name* is, or `None` when none is.
+    ///
+    /// One bounded query which filters on that name at the server, rather than a walk of
+    /// every issue the board holds. The name is compared again here: the qualifier narrows
+    /// what GitHub sends, and this source decides what it names.
+    async fn project_by_name(&self, name: &str) -> Result<Option<NativeId>, SourceError> {
+        let search = self.board_search(Some(&title_qualifier(name)));
+        let (candidates, _) = self.search_page(&search, MAX_PAGE_SIZE, None).await?;
+        Ok(candidates
+            .into_iter()
+            .find(|item| {
+                item.kind == BoardKind::Work(ItemKind::Project) && item.title.eq_ignore_ascii_case(name)
+            })
+            .map(|item| item.id))
+    }
+
+    /// Everything filed under one project of this board: the sub-issues of the issue that
+    /// project is.
+    ///
+    /// Tasks *and* documents, because a document filed under a project is a sub-issue of it
+    /// too — the caller keeps the kind it asked for. Nothing about this grows as the board
+    /// gains projects, or as another project gains tasks.
+    ///
+    /// A qualified id names the issue and is asked for its sub-issues directly: one
+    /// request, no search of any kind. Only a selector GitHub cannot resolve that way is
+    /// read as a project *name*, which costs the one bounded search
+    /// [`Self::project_by_name`] makes.
+    async fn project_children(&self, selector: &NativeId) -> Result<Vec<Resolved>, SourceError> {
+        let (project, children) = match self.sub_issues(selector).await? {
+            Some(children) => (selector.clone(), children),
+            None => match self.project_by_name(&selector.0).await? {
+                Some(project) => {
+                    let children = self.sub_issues(&project).await?.unwrap_or_default();
+                    (project, children)
+                }
+                None => return Ok(Vec::new()),
+            },
+        };
         self.completed_with_written(children, |own| own.parent.as_ref() == Some(&project))
     }
 
@@ -3338,10 +3355,18 @@ fn text_matches(title: &str, content: Option<&str>, query: &TextQuery) -> bool {
     }
 }
 
-fn task_matches(task: &Task, query: &TaskQuery) -> bool {
+/// Whether `task` satisfies `query`, with `project` deciding the project predicate.
+///
+/// The project predicate is passed separately because a read narrowed to one project has
+/// already answered it by asking *that project* for its own items — and re-applying it
+/// there would compare the caller's selector, which may be a project's **name**, against
+/// the id of the project that name resolved to, and keep nothing. Every other read passes
+/// `query.project` and applies it here, which is what keeps `projects` a predicate this
+/// source really does apply.
+fn task_matches(task: &Task, query: &TaskQuery, project: &ProjectFilter) -> bool {
     labels_match(&task.labels, &query.labels)
         && status_matches(task.status.category, &query.statuses)
-        && match &query.project {
+        && match project {
             ProjectFilter::Any => true,
             ProjectFilter::Orphans => task.project.is_none(),
             ProjectFilter::Is(id) => task.project.as_ref() == Some(id),
@@ -3367,9 +3392,13 @@ fn project_matches(project: &Project, query: &ProjectQuery) -> bool {
 /// type carries none. The project predicate is the same one — a design issue filed under a
 /// project issue is in that project, and one filed under nothing is in none — so it is
 /// spelled the same way here rather than answered differently.
-fn document_matches(document: &Document, query: &DocumentQuery) -> bool {
+fn document_matches(
+    document: &Document,
+    query: &DocumentQuery,
+    project: &ProjectFilter,
+) -> bool {
     labels_match(&document.labels, &query.labels)
-        && match &query.project {
+        && match project {
             ProjectFilter::Any => true,
             ProjectFilter::Orphans => document.project.is_none(),
             ProjectFilter::Is(id) => document.project.as_ref() == Some(id),
@@ -3434,9 +3463,15 @@ impl TaskSource for GitHubProjectsSource {
         // A read narrowed to one project asks that project for its own tasks, so nothing
         // about it costs what the rest of the board holds. Every other task read is a
         // question about the whole board and is answered by reading it.
-        let held = match &query.project {
-            ProjectFilter::Is(project) => self.project_children(project).await?,
-            ProjectFilter::Any | ProjectFilter::Orphans => self.board().await?.items,
+        let (held, membership) = match &query.project {
+            ProjectFilter::Is(project) => (
+                self.project_children(project).await?,
+                // Answered by where these items came from; see `task_matches`.
+                &ProjectFilter::Any,
+            ),
+            ProjectFilter::Any | ProjectFilter::Orphans => {
+                (self.board().await?.items, &query.project)
+            }
         };
         // Filtered before paged: a page of a filtered result is a page of the survivors,
         // never the survivors of a page.
@@ -3444,7 +3479,7 @@ impl TaskSource for GitHubProjectsSource {
             .iter()
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
             .map(Resolved::task)
-            .filter(|task| task_matches(task, query))
+            .filter(|task| task_matches(task, query, membership))
             .collect();
         Ok(offset_page(
             tasks,
@@ -3491,9 +3526,15 @@ impl TaskSource for GitHubProjectsSource {
         // Narrowed to one project, this is the same sub-issue read a task list scoped to
         // that project makes — a document filed under a project is a sub-issue of it too,
         // and which of them come back is the kind this caller asked for.
-        let held = match &query.project {
-            ProjectFilter::Is(project) => self.project_children(project).await?,
-            ProjectFilter::Any | ProjectFilter::Orphans => self.board().await?.items,
+        let (held, membership) = match &query.project {
+            ProjectFilter::Is(project) => (
+                self.project_children(project).await?,
+                // Answered by where these items came from; see `task_matches`.
+                &ProjectFilter::Any,
+            ),
+            ProjectFilter::Any | ProjectFilter::Orphans => {
+                (self.board().await?.items, &query.project)
+            }
         };
         // Filtered before paged, exactly as a task read is: a page of a filtered result is
         // a page of the survivors, never the survivors of a page.
@@ -3501,7 +3542,7 @@ impl TaskSource for GitHubProjectsSource {
             .iter()
             .filter(|item| item.kind == BoardKind::Document)
             .map(Resolved::document)
-            .filter(|document| document_matches(document, query))
+            .filter(|document| document_matches(document, query, membership))
             .collect();
         Ok(offset_page(
             documents,
