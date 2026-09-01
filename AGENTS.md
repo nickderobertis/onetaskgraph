@@ -393,6 +393,30 @@ them do; this is the inventory of what is owed, not a status board.
   from no source change at all, and auto-merge fed each proposal back in as the next push.
   `scripts/check-release-tooling-selection.sh` and `scripts/check-real-release-preparation.sh`
   drive both decisions, the second against the real pinned tool over a real checkout.
+- **`release-targets.toml` is what a consumer waits on, and its short names are frozen.**
+  It declares every artifact this repository publishes in the canonical schema `onevcs`
+  defines and reads, because a dependent that has to guess a release happened either
+  launches too early or waits by hand. The set is frozen at five — `crate`, `pypi`,
+  `sdk-pypi`, `npm`, `sdk-npm` — because that is how another repository names one of these
+  and it cannot see this file to notice one moved or a sixth appeared. A name is one of
+  the five when a dependent writes it down, which is why both SDKs are targets and neither
+  is folded into the binary's: `sdk-npm` is to `npm` what `sdk-pypi` is to `pypi`.
+  Everything else this repository publishes — the five per-platform npm carriers, the six
+  sibling crates — is covered by the target whose release carries it. Both rules go
+  through `scripts/check-release-targets.sh`, the drift gate that makes the second
+  spelling safe and that reconciles the declared set against the real release workflow
+  both ways.
+- **The probe's three answers are not interchangeable.** `scripts/release-probe.sh` prints
+  a version, prints nothing when that registry serves none, or exits non-zero because the
+  lookup could not be made — and a consumer holds indefinitely on the third and stops
+  holding on the second, so reporting a failed lookup as "nothing published" is the one
+  thing it must never do. It is a probe rather than a gate: it rules on no change. Each
+  registry's request and the field read out of the answer are pinned with their provenance
+  in `config/registry-interfaces.toml`; `scripts/check-release-probe.sh` holds the probe to
+  that pin and drives all three answers against documents built from it, so what makes
+  those answers evidence is the pin rather than a registry being reachable, and
+  `crates/onetaskgraph/tests/live.rs` re-observes the real registries from outside every
+  required check.
 
 ## Conventions
 
