@@ -1,11 +1,14 @@
 """A file-backed document source, spoken to over `docs/plugin-protocol.md`.
 
 It exists for one reason the suite could not otherwise satisfy. A copy is only proven by
-reading the destination back *afterwards*, and every destination this build has is either
-a folder of Markdown — which declares it has no documents — or the in-memory source, whose
-work dies with the process that held it. One command-line invocation is one process, so a
-document copy driven the way a user drives it had nothing left to look at. This keeps its
-documents in a JSON file, so what one invocation writes the next one reads.
+reading the destination back *afterwards*, and when this was written every destination this
+build had was either a folder of Markdown — which declared it has no documents — or the
+in-memory source, whose work dies with the process that held it. One command-line
+invocation is one process, so a document copy driven the way a user drives it had nothing
+left to look at. This keeps its documents in a JSON file, so what one invocation writes the
+next one reads. `local-md` has since grown a document side of its own and is a second such
+destination; this peer is not thereby redundant, because it is the one destination written
+against the protocol document rather than out of this engine.
 
 It is written in Python on purpose, and not only to keep a fixture out of the shipped
 binary. The stdio seam's whole claim is that a plugin can be written in another language

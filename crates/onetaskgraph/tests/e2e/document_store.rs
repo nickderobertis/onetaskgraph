@@ -2,10 +2,10 @@
 //!
 //! Every other copy journey reads its destination back through a later command, which is
 //! only possible because a folder of Markdown is still there afterwards. Documents had no
-//! such destination: `local-md` declares it holds none, and the in-memory source's work
-//! dies with the process that held it — so a `document copy` typed at a shell could be
-//! observed only through the report it printed, and "the document really landed carrying
-//! every field" was proven one layer down, as a library call.
+//! such destination when this was written: `local-md` declared it holds none, and the
+//! in-memory source's work dies with the process that held it — so a `document copy` typed
+//! at a shell could be observed only through the report it printed, and "the document
+//! really landed carrying every field" was proven one layer down, as a library call.
 //!
 //! This closes that. The destination is `document_store.py` beside this file: a peer that
 //! keeps its documents in a JSON file and speaks `docs/plugin-protocol.md` over a real pipe

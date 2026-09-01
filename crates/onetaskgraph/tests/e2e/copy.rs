@@ -1723,10 +1723,12 @@ const STORE: &str = "store";
 
 /// Every row whose source holds documents; the rest assert the refusal below.
 ///
-/// The copy *round trip* out of these rows — created, read back, and matched rather than
-/// duplicated on a second copy — needs a destination that outlives one invocation, so it
-/// lives in `document_store.rs` beside the peer that provides one. What stays here is the
-/// pair of refusals, which write nothing and so need no destination to read back.
+/// The copy *round trip* out of every one of these rows — created, read back, and matched
+/// rather than duplicated on a second copy — needs a destination that outlives one
+/// invocation, so it lives in `document_store.rs` beside the peer that provides one for
+/// any source. What stays here is the pair of refusals, which write nothing and so need no
+/// destination to read back, and the round trip out of the one row whose own plugin is a
+/// destination that outlives an invocation.
 fn documentary_rows() -> impl Iterator<Item = &'static crate::fixtures::Row> {
     ROWS.iter()
         .filter(|row| row.declared().documents.is_native())
