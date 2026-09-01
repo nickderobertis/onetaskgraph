@@ -814,6 +814,7 @@ fn artifact_project(title: &str, status: &Status) -> Project {
         status: status.clone(),
         labels: vec![],
         url: None,
+        location: None,
         created_at: None,
         updated_at: None,
         metadata: BTreeMap::new(),
@@ -836,6 +837,7 @@ fn artifact_task(
         labels: vec![],
         project,
         url: None,
+        location: None,
         created_at: None,
         updated_at: None,
         metadata,
@@ -1459,6 +1461,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         source.capabilities(),
         Capabilities {
             projects: Support::Native,
+            documents: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

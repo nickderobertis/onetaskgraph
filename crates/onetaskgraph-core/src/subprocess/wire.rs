@@ -14,8 +14,8 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Direction, ItemWrite, NativeId, PageRequest, Project, ProjectQuery, SourceError,
-    Task, TaskQuery, WriteSupport,
+    Capabilities, Direction, Document, DocumentQuery, ItemWrite, NativeId, PageRequest, Project,
+    ProjectQuery, SourceError, Task, TaskQuery, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -197,6 +197,14 @@ pub(crate) struct ProjectResult {
     pub(crate) project: Option<Project>,
 }
 
+/// The `get_document` result (§4.11): a document, or `null` when there is no such one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DocumentResult {
+    /// The document, or `null`.
+    #[serde(default)]
+    pub(crate) document: Option<Document>,
+}
+
 /// `query_tasks` parameters (§4.5).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TaskQueryParams {
@@ -218,6 +226,15 @@ pub(crate) struct ProjectQueryParams {
 /// `labels` parameters (§4.7).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LabelParams {
+    /// Where to resume and how much to return.
+    pub(crate) page: PageRequest,
+}
+
+/// `query_documents` parameters (§4.11).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DocumentQueryParams {
+    /// The predicates the plugin is being asked to apply.
+    pub(crate) query: DocumentQuery,
     /// Where to resume and how much to return.
     pub(crate) page: PageRequest,
 }
@@ -247,14 +264,22 @@ pub(crate) struct ProjectWriteParams {
     pub(crate) write: ItemWrite<Project>,
 }
 
-/// `delete_task` and `delete_project` parameters (§4.10).
+/// `write_document` parameters (§4.12).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DocumentWriteParams {
+    /// The document to create or update, and what to write into it.
+    pub(crate) write: ItemWrite<Document>,
+}
+
+/// `delete_task`, `delete_project` and `delete_document` parameters (§4.10, §4.12).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DeleteParams {
     /// The destination item to remove.
     pub(crate) id: NativeId,
 }
 
-/// The result of either write method (§4.9): the id the destination holds the item under.
+/// The result of any write method (§4.9, §4.12): the id the destination holds the item
+/// under.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct WriteResult {
     /// The destination's own id for the item that was written.

@@ -51,6 +51,7 @@
 //! | Field | Verdict |
 //! | --- | --- |
 //! | `projects` | **Supported and proven.** A task's project is the issue it is a sub-issue of, and a listing scoped to one keeps the items filed under that issue. This is the field that was declared and then not applied, which silently returned another project's tasks. |
+//! | `documents` | **Unsupported, and unimplemented.** A board holds issues, and this source reads them as tasks and as projects; nothing here reads a document. A repository holds files a board item could name, so this is work nobody has written rather than something the backend forbids; docs/follow-ups.md tracks it. |
 //! | `orphan_tasks` | **Supported and proven.** A task issue with no `parent` is in no project. |
 //! | `filter_by_label` | **Supported and proven,** over the issue's own labels. |
 //! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping`. |
@@ -60,9 +61,11 @@
 //! | `project_dependencies` | **Supported and proven,** in both directions, over the same two connections, because a project here is an issue. |
 //! | `max_page_size` | **Supported and proven.** [`MAX_PAGE_SIZE`], GitHub's own connection maximum. |
 //!
-//! Nothing here is unsupported, and the three facts behind that are recorded below rather
-//! than re-derived — because a reader who takes `Native` to mean *the remote service
-//! filters* will read the uniform verdict as a lie.
+//! No *predicate* here is unsupported — `documents` is the one unsupported field, and it
+//! is not a predicate but a statement that this source has no documents at all — and the
+//! three facts behind the uniform `Native` are recorded below rather than re-derived,
+//! because a reader who takes `Native` to mean *the remote service filters* will read that
+//! uniformity as a lie.
 //!
 //! First, the plugin contract defines `Support::Native` as *the source applies this
 //! predicate itself*, and says nothing about where it applies it. What the declaration
@@ -1882,6 +1885,7 @@ impl Resolved {
             labels: self.labels.clone(),
             project: self.parent.clone(),
             url: self.url.clone(),
+            location: None,
             created_at: self.created_at,
             updated_at: self.updated_at,
             metadata: self.metadata(),
@@ -1897,6 +1901,7 @@ impl Resolved {
             status: self.status.clone(),
             labels: self.labels.clone(),
             url: self.url.clone(),
+            location: None,
             created_at: self.created_at,
             updated_at: self.updated_at,
             metadata: self.metadata(),
@@ -1992,6 +1997,7 @@ impl TaskSource for GitHubProjectsSource {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
+            documents: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

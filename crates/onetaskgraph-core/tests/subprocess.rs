@@ -16,8 +16,9 @@ use onetaskgraph_core::{
     MAX_LINE, RequestDeadline, SubprocessConfig, SubprocessSource, plugin_for, serve,
 };
 use onetaskgraph_plugin_api::{
-    Direction, ItemWrite, LabelFilter, NativeId, PageRequest, ProjectFilter, ProjectQuery,
-    SecretResolver, SourceError, SourceName, Task, TaskQuery, TaskSource, WriteSupport,
+    Cursor, Direction, Document, DocumentQuery, ItemWrite, LabelFilter, Location, NativeId,
+    PageRequest, ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, Support,
+    Task, TaskQuery, TaskSource, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -810,6 +811,172 @@ async fn a_delete_result_is_read_as_an_object_rather_than_as_exactly_the_empty_o
         panic!("a delete result that is not an object is a protocol violation");
     };
     assert!(message.contains("delete_project"), "{message}");
+}
+
+#[tokio::test]
+async fn a_document_refusal_crosses_the_wire_as_the_hosted_plugin_s_own_reason() {
+    // Both halves of §4.11 and §4.12, driven against each other over a real pipe. The
+    // engine's side forwards these four the way it forwards every other method, and the
+    // reason that comes back is the *hosted* plugin's — `in-memory`, not `subprocess` —
+    // because this side holds no opinion about documents any more than it holds one about
+    // anything else.
+    let source = a_process_away(hosted_settings()).expect("the handshake succeeds");
+
+    // What the engine reads once, at the handshake, and never asks again.
+    assert_eq!(source.capabilities().documents, Support::Unsupported);
+
+    for refusal in [
+        source
+            .get_document(&NativeId("D-1".to_owned()))
+            .await
+            .map(|found| format!("{found:?}")),
+        source
+            .query_documents(&DocumentQuery::default(), &page(2))
+            .await
+            .map(|answered| format!("{answered:?}")),
+    ] {
+        let Err(SourceError::Refused { message }) = refusal else {
+            panic!("a source with no documents refuses a document read: {refusal:?}");
+        };
+        assert_eq!(message, "the in-memory plugin has no documents");
+    }
+
+    // The two writes refuse for the reason every other write refuses, which this hosted
+    // source does have: it is writable, and it has nowhere to put a document.
+    assert!(source.writes().is_supported());
+    for refusal in [
+        source
+            .write_document(&ItemWrite {
+                target: None,
+                item: filed(),
+                depends_on: Vec::new(),
+            })
+            .await
+            .map(|id| format!("{id:?}")),
+        source
+            .delete_document(&NativeId("D-1".to_owned()))
+            .await
+            .map(|()| String::new()),
+    ] {
+        let Err(SourceError::Refused { message }) = refusal else {
+            panic!("a source with no document side refuses a document write: {refusal:?}");
+        };
+        assert_eq!(message, "the in-memory plugin cannot be written");
+    }
+}
+
+#[tokio::test]
+async fn a_document_a_peer_really_answers_with_crosses_the_wire_whole() {
+    // The refusal is what every source of this build gives, so it is what the shared
+    // journey drives. This is the other half: a peer that *does* have documents, answering
+    // all four methods successfully over a real pipe, so the engine's own encoding and
+    // decoding of them is exercised rather than assumed. Nothing registered here can play
+    // that peer yet — no plugin implements documents — which is exactly why it is scripted.
+    let source = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": documentary(), "writes": "supported"}})
+        .to_string(),
+        json!({"id": "1", "result": {"document": wire_document()}}).to_string(),
+        json!({"id": "2", "result": {"items": [wire_document()], "next": "b2Zmc2V0PTE"}})
+            .to_string(),
+        json!({"id": "3", "result": {"id": "D-9"}}).to_string(),
+        json!({"id": "4", "result": {}}).to_string(),
+    ])
+    .expect("the handshake succeeds");
+
+    assert_eq!(source.capabilities().documents, Support::Native);
+
+    let found = source
+        .get_document(&NativeId("D-1".to_owned()))
+        .await
+        .expect("the peer holds it")
+        .expect("a document, not a null");
+    assert_eq!(found.title, "Why the store holds a document");
+    assert_eq!(found.project, Some(NativeId("P-1".to_owned())));
+    // The member a consumer acts on without knowing the backend, decoded as the one key
+    // that was present rather than as a bare string.
+    assert_eq!(
+        found.location,
+        Some(Location::Path("/home/someone/notes/design.md".to_owned()))
+    );
+
+    let page = source
+        .query_documents(&DocumentQuery::default(), &page(5))
+        .await
+        .expect("the peer answers a page");
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].id, NativeId("D-1".to_owned()));
+    assert_eq!(page.next, Some(Cursor("b2Zmc2V0PTE".to_owned())));
+
+    let written = source
+        .write_document(&ItemWrite {
+            target: None,
+            item: filed(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("the peer takes it");
+    assert_eq!(written, NativeId("D-9".to_owned()));
+
+    source
+        .delete_document(&NativeId("D-9".to_owned()))
+        .await
+        .expect("the peer removes it");
+}
+
+/// A handshake from a peer that says it has documents, unlike anything this build hosts.
+fn documentary() -> Value {
+    let mut declared = capabilities();
+    declared["documents"] = json!("native");
+    declared
+}
+
+/// One document as a peer puts it on the wire.
+fn wire_document() -> Value {
+    json!({
+        "id": "D-1",
+        "title": "Why the store holds a document",
+        "content": "A person cannot review a plan node by node.",
+        "project": "P-1",
+        "labels": [{"id": "L-1", "name": "design", "color": null}],
+        "url": "https://example.invalid/D-1",
+        "location": {"path": "/home/someone/notes/design.md"},
+        "created_at": null,
+        "updated_at": null
+    })
+}
+
+#[tokio::test]
+async fn a_handshake_that_says_nothing_about_documents_is_read_as_having_none() {
+    // §2.1 and §4.2 together: `documents` is an optional member with a documented default,
+    // so a plugin written before there were documents — which is what `capabilities()`
+    // below spells, omitting it — is read as the document-free source it is rather than
+    // refused for a member it has never heard of.
+    let source = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": capabilities()}})
+        .to_string(),
+    ])
+    .expect("the handshake succeeds");
+
+    assert_eq!(source.capabilities().documents, Support::Unsupported);
+}
+
+/// The document a write test hands the far side, which never gets as far as holding one.
+fn filed() -> Document {
+    Document {
+        id: NativeId("D-1".to_owned()),
+        title: "Why the store holds a document".to_owned(),
+        content: None,
+        project: Some(NativeId("P-1".to_owned())),
+        labels: Vec::new(),
+        url: None,
+        location: None,
+        created_at: None,
+        updated_at: None,
+        metadata: BTreeMap::new(),
+        repositories: Vec::new(),
+    }
 }
 
 #[tokio::test]

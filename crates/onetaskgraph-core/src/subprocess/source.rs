@@ -14,17 +14,19 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, Direction, Health, ItemWrite, Label, NativeId, Page, PageRequest,
-    Project, ProjectQuery, SourceError, SourceName, Task, TaskQuery, TaskSource, WriteSupport,
+    Capabilities, DependencyEdge, Direction, Document, DocumentQuery, Health, ItemWrite, Label,
+    NativeId, Page, PageRequest, Project, ProjectQuery, SourceError, SourceName, Task, TaskQuery,
+    TaskSource, WriteSupport,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::connection::{Connection, Peer};
 use super::wire::{
-    DeleteParams, DependencyParams, EngineIdentity, IdParams, InitializeParams, InitializeResult,
-    LabelParams, PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request,
-    TaskQueryParams, TaskResult, TaskWriteParams, WriteResult,
+    DeleteParams, DependencyParams, DocumentQueryParams, DocumentResult, DocumentWriteParams,
+    EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams, PROTOCOL_VERSION,
+    ProjectQueryParams, ProjectResult, ProjectWriteParams, Request, TaskQueryParams, TaskResult,
+    TaskWriteParams, WriteResult,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -453,6 +455,47 @@ impl TaskSource for SubprocessSource {
     async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
         let _: IgnoredResult = self
             .ask("delete_project", params(&DeleteParams { id: id.clone() }))
+            .await?;
+        Ok(())
+    }
+
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        let result: DocumentResult = self
+            .ask("get_document", params(&IdParams { id: id.clone() }))
+            .await?;
+        Ok(result.document)
+    }
+
+    async fn query_documents(
+        &self,
+        query: &DocumentQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        self.ask(
+            "query_documents",
+            params(&DocumentQueryParams {
+                query: query.clone(),
+                page: page.clone(),
+            }),
+        )
+        .await
+    }
+
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        let result: WriteResult = self
+            .ask(
+                "write_document",
+                params(&DocumentWriteParams {
+                    write: write.clone(),
+                }),
+            )
+            .await?;
+        Ok(result.id)
+    }
+
+    async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
+        let _: IgnoredResult = self
+            .ask("delete_document", params(&DeleteParams { id: id.clone() }))
             .await?;
         Ok(())
     }

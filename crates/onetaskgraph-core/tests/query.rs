@@ -586,6 +586,7 @@ impl TaskSource for Rendezvous {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
+            documents: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -629,6 +630,7 @@ impl TaskSource for Rendezvous {
             labels: Vec::new(),
             project: None,
             url: None,
+            location: None,
             created_at: None,
             updated_at: None,
             metadata: Default::default(),
@@ -715,6 +717,7 @@ impl TaskSource for Stuck {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
+            documents: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -1137,6 +1140,7 @@ impl Recording {
                 labels: Vec::new(),
                 project: None,
                 url: None,
+                location: None,
                 created_at: None,
                 updated_at: None,
                 metadata: Default::default(),
@@ -1159,6 +1163,7 @@ impl TaskSource for Recording {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
+            documents: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

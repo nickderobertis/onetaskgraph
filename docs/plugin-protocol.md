@@ -174,6 +174,7 @@ the source can do natively, and what configuration it is being built with.
     "kind": "local-md",
     "capabilities": {
       "projects": "native",
+      "documents": "unsupported",
       "orphan_tasks": "native",
       "filter_by_label": "native",
       "filter_by_status": "unsupported",
@@ -269,6 +270,10 @@ its `result`; the JSON shape of every contract type in them is what
 | `write_project` | `TaskSource::write_project` |
 | `delete_task` | `TaskSource::delete_task` |
 | `delete_project` | `TaskSource::delete_project` |
+| `get_document` | `TaskSource::get_document` |
+| `query_documents` | `TaskSource::query_documents` |
+| `write_document` | `TaskSource::write_document` |
+| `delete_document` | `TaskSource::delete_document` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -299,11 +304,23 @@ returning fewer items than `limit` is not thereby saying there are no more: only
 
 ### 4.2 `Capabilities`
 
-`projects`, `orphan_tasks`, `filter_by_label`, `filter_by_status`, `search_title` and
-`search_content` are each `"native"` or `"unsupported"`. `task_dependencies` and
-`project_dependencies` are each `"both-directions"` or `"forward-only"` — there is
-deliberately **no** unsupported value for these two. `max_page_size` is a positive
-integer.
+`projects`, `documents`, `orphan_tasks`, `filter_by_label`, `filter_by_status`,
+`search_title` and `search_content` are each `"native"` or `"unsupported"`.
+`task_dependencies` and `project_dependencies` are each `"both-directions"` or
+`"forward-only"` — there is deliberately **no** unsupported value for these two.
+`max_page_size` is a positive integer.
+
+`documents` is the one member of this object that is **optional**, and an absent one means
+`"unsupported"`. That is §2.1 doing its job, exactly as it does for the write-support member
+§3.3 specifies: a plugin written before there were documents says nothing here and is read
+as the document-free source it is, with no version bump on either side.
+
+`documents` is also not a *predicate*, and the rules below do not reach it. It says whether
+this source has documents at all, in the shape `projects` uses, so there is no wider result
+set to return and nothing for the engine to narrow. The engine reads it once at the
+handshake and never sends a document method to a plugin that answered `"unsupported"` — see
+§4.11, which is also where a plugin is told to refuse rather than answer an empty page if
+one arrives anyway.
 
 Three rules bind every plugin, and the engine's compensation is only correct while
 all three hold:
@@ -315,9 +332,9 @@ all three hold:
    a source can only *half* apply — a `title-or-content` search where only titles are
    searchable — must be declared unsupported and ignored outright, because half
    applying it narrows.
-3. This reaches the six `"native"`/`"unsupported"` predicates alone. A dependency read
-   is never ignored and never silently empty. A `"forward-only"` plugin still answers
-   `depended-on-by` — see §4.8.
+3. This reaches the six `"native"`/`"unsupported"` predicates alone — not `documents`,
+   which is not one of them. A dependency read is never ignored and never silently empty.
+   A `"forward-only"` plugin still answers `depended-on-by` — see §4.8.
 
 ### 4.3 `health`
 
@@ -520,7 +537,8 @@ to the empty list.
 create is free to choose an id other than the one `item` suggested; an update answers
 with `target`.
 
-`url`, `created_at` and `updated_at` are the destination's own and are never written.
+`url`, `location` (§4.13), `created_at` and `updated_at` are the destination's own and are
+never written — where the *source* holds an item says nothing about where this one does.
 Everything else `item` carries is, and **nothing is silently dropped**: a field this
 source cannot represent, and a metadata key it cannot carry, are each a
 `{"kind": "refused"}` naming the field or the keys. A `target` this source does not hold
@@ -549,6 +567,98 @@ hosted destination's rate limiter.
 this method asks for, so a plugin answers `{}` rather than refusing. What a plugin does
 refuse is what it refuses everywhere else: no write side at all, or an item it cannot
 remove, each as a `{"kind": "refused"}` saying which.
+
+### 4.11 `get_document` and `query_documents`
+
+Only a plugin that declared `documents` `"native"` in §4.2 is ever sent either of these.
+
+```json
+{ "id": "8", "method": "get_document", "params": { "id": "D-1" } }
+{ "id": "8", "result": { "document": { } } }
+```
+
+`result.document` is a `Document`, or `null` when there is no such document — "no such
+document" is `null` and not an error, exactly as it is in §4.4.
+
+```json
+{
+  "id": "9",
+  "method": "query_documents",
+  "params": {
+    "query": {
+      "text": { "terms": "design", "fields": "title-or-content" },
+      "labels": { "any_of": [], "all_of": [], "none_of": [] },
+      "project": { "is": "PRJ-4" }
+    },
+    "page": { "cursor": null, "limit": 50 }
+  }
+}
+```
+
+`query` is a `DocumentQuery` and `result` is a `Page<Document>`. Its `text`, `labels` and
+`project` members are read exactly as §4.5 reads the members of the same names. There is no
+`statuses` member, and a plugin must not invent one: a document is not work and carries no
+status, so there is nothing for a status filter to compare against.
+
+A `Document` is a piece of information that lives in a project and is not work. It carries
+an `id`, a `title`, an optional `content`, an optional `project` — `null` is an orphan
+document — its `labels`, its `url`, its `location` (§4.13), its `created_at` and
+`updated_at`, its `metadata` and its `repositories`, each on the terms the `Task` member of
+the same name is read on. It carries **no status and no dependencies**, and both absences
+are the contract rather than an oversight: nothing may point at a document, which is why
+the endpoint kinds of §4.8 remain `"task"` and `"project"` alone.
+
+**A plugin with no documents refuses rather than answering an empty page.** It declared
+`documents` `"unsupported"`, so the engine never sends it one — the declaration is read
+once at the handshake, exactly as `writes` is (§3.3) — and a document read spanning several
+sources reports such a source as holding none rather than as having failed. A plugin should
+still implement the case defensively, with a `{"kind": "refused"}` naming itself, for the
+reason a `"forward-only"` plugin implements `"depended-on-by"` defensively: an empty page
+here is indistinguishable from a source that has documents and holds none matching, which
+is the one wrong answer these methods can give.
+
+### 4.12 `write_document` and `delete_document`
+
+Only a plugin that answered `"supported"` to §3.3 is ever sent either of these.
+
+```json
+{ "id": "10", "method": "write_document", "params": { "write": { } } }
+{ "id": "11", "method": "delete_document", "params": { "id": "D-1" } }
+```
+
+`write` is an `ItemWrite` whose `item` is a `Document`, and it is read exactly as §4.9
+reads one: `target` is the id of the document at **this** source to update or `null` to
+create, `result` is `{"id": …}` carrying the `NativeId` this source now holds it under, and
+nothing the item carries is silently dropped. `depends_on` is always the empty list here,
+because a document has no dependencies.
+
+`delete_document` takes an `id` and answers the empty object `{}` — the trait method
+carries `()`, so there is nothing for it to say beyond having done it — on every term §4.10
+sets: it is not a verb of the product, an `id` naming nothing is not an error, and the
+engine sends it only while undoing a copy that could not finish.
+
+### 4.13 `Location`
+
+Where an entity is, in the one form a consumer can act on without knowing the backend. It
+appears as the optional `location` member of a `Task`, a `Project` and a `Document`, and it
+is an object with exactly one of two keys:
+
+```json
+{ "url": "https://example.invalid/D-1" }
+{ "path": "/home/someone/notes/design.md" }
+```
+
+- `url` — the entity lives at an external website, and this is a link a reader can open.
+- `path` — the entity is a file on the machine the *plugin* runs on, and this is that
+  file's absolute path, so a reader can print the path or read the contents out.
+
+A consumer tells the two apart by which key is present, and a plugin sends exactly one of
+them. The member is **optional** on all three entities and an absent one means `null`,
+which says *this source did not say where the entity is* — not that it is nowhere.
+
+This is not the `url` field those three entities already carry, does not replace it, and is
+not derived from it. A plugin that reported a web address there goes on reporting exactly
+what it reported before, whether or not it also says where the entity is.
 
 ## 5. The error envelope
 
@@ -585,6 +695,16 @@ under §2.1: a plugin speaking version 1 has never heard of either, and the one 
 engine sends them is while it is undoing a copy that has already written to that plugin.
 Refusing such a plugin at the handshake, by name, is the only place that difference can be
 reported before anything has been written.
+
+The documents of §4.11 and §4.12, and the `location` member of §4.13, were added **without**
+a bump, and the difference from §4.10 above is the whole reason. The engine sends a document
+method only to a plugin that declared `documents` `"native"` in its handshake, and a plugin
+written before there were documents cannot have declared that: it omits the member, §4.2
+reads the omission as `"unsupported"`, and it is never sent one. A delete had no such gate —
+`writes` says whether a plugin can be written, not whether it can be un-written — so a
+version 1 plugin could be sent one halfway through undoing a copy. Adding a method behind a
+declaration its peer cannot accidentally make is the "method a peer may decline" case below;
+adding one a peer has already implicitly opted into is not.
 
 A version is bumped when a change is **not** safe under §2.1 — a member removed, a
 type narrowed, a meaning changed, a method removed or renamed. Adding an optional
@@ -657,8 +777,8 @@ Engine to plugin:
 Plugin to engine:
 
 ```
-{"id":"0","result":{"protocol_version":2,"kind":"local-md","capabilities":{"projects":"native","orphan_tasks":"native","filter_by_label":"native","filter_by_status":"unsupported","search_title":"native","search_content":"unsupported","task_dependencies":"forward-only","project_dependencies":"forward-only","max_page_size":200}}}
-{"id":"1","result":{"items":[{"id":"tasks/migrate.md","title":"Migrate the store","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"url":null,"created_at":null,"updated_at":null},{"id":"tasks/schema.md","title":"Settle the schema","content":null,"status":{"category":"in-progress","name":"Doing"},"labels":[],"project":null,"url":null,"created_at":null,"updated_at":null}],"next":"b2Zmc2V0PTI"}}
+{"id":"0","result":{"protocol_version":2,"kind":"local-md","capabilities":{"projects":"native","documents":"unsupported","orphan_tasks":"native","filter_by_label":"native","filter_by_status":"unsupported","search_title":"native","search_content":"unsupported","task_dependencies":"forward-only","project_dependencies":"forward-only","max_page_size":200}}}
+{"id":"1","result":{"items":[{"id":"tasks/migrate.md","title":"Migrate the store","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"url":null,"location":null,"created_at":null,"updated_at":null},{"id":"tasks/schema.md","title":"Settle the schema","content":null,"status":{"category":"in-progress","name":"Doing"},"labels":[],"project":null,"url":null,"location":null,"created_at":null,"updated_at":null}],"next":"b2Zmc2V0PTI"}}
 {"id":"2","result":{"items":[{"from":"tasks/migrate.md","to":"tasks/schema.md","kind":"blocks"}],"next":null}}
 ```
 

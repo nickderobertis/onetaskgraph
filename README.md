@@ -145,8 +145,8 @@ found, one is created carrying that origin.
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it, matching each task independently. |
 
 Every field a copy read is written — title, content, status, labels, project,
-repositories, metadata and the edges — except `url`, `created_at` and `updated_at`, which
-are the destination's own. Nothing is silently dropped: a field the destination cannot
+repositories, metadata and the edges — except `url`, `location`, `created_at` and
+`updated_at`, which are the destination's own. Nothing is silently dropped: a field the destination cannot
 represent, or a metadata key it cannot carry, refuses the write and names it. A copy never
 deletes work either, so a destination item the source no longer holds is left exactly as it
 is and reported as `orphaned`.

@@ -698,6 +698,8 @@ fn outgoing(id: &str, title: &str, status: &str, category: StatusCategory) -> Ta
         project: Some(NativeId("p".into())),
         // The destination's own, and never written.
         url: Some("https://example.invalid/ignored".into()),
+        // The destination's own too: this source says nothing about where it holds an item.
+        location: None,
         created_at: None,
         updated_at: None,
         metadata: [
@@ -878,6 +880,7 @@ async fn a_project_write_carries_its_own_fields_and_an_id_no_path_can_be_made_of
                 },
                 labels: Vec::new(),
                 url: None,
+                location: None,
                 created_at: None,
                 updated_at: None,
                 metadata: [("caller.key".to_owned(), serde_json::json!(1))]
@@ -1198,6 +1201,7 @@ async fn an_unstated_status_reads_as_backlog_and_draft_is_read_as_an_ordinary_st
                 labels: Vec::new(),
                 project: None,
                 url: None,
+                location: None,
                 created_at: None,
                 updated_at: None,
                 metadata: Default::default(),
@@ -1289,6 +1293,7 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
         source.capabilities(),
         onetaskgraph_plugin_api::Capabilities {
             projects: onetaskgraph_plugin_api::Support::Native,
+            documents: onetaskgraph_plugin_api::Support::Unsupported,
             orphan_tasks: onetaskgraph_plugin_api::Support::Native,
             filter_by_label: onetaskgraph_plugin_api::Support::Native,
             filter_by_status: onetaskgraph_plugin_api::Support::Native,
