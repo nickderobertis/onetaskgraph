@@ -11,9 +11,9 @@ use common::with_capabilities;
 use onetaskgraph_in_memory::{InMemoryConfig, Plugin};
 use onetaskgraph_plugin_api::{
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
-    ItemKind, ItemWrite, LabelFilter, NativeId, Page, PageRequest, ProjectFilter, ProjectQuery,
-    SecretResolver, SourceError, SourceName, SourcePlugin, Support, Task, TaskQuery, TaskSource,
-    TextFields, TextQuery,
+    Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter, Location, NativeId, Page,
+    PageRequest, ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName,
+    SourcePlugin, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
 };
 use secrecy::SecretString;
 use serde_json::json;
@@ -1581,5 +1581,294 @@ async fn a_source_with_no_write_side_or_one_that_holds_on_refuses_a_delete() {
             .unwrap()
             .is_some(),
         "and it is still there"
+    );
+}
+
+/// The document-bearing source: everything native, over the same work plus a document
+/// table.
+fn documentary() -> Box<dyn TaskSource> {
+    Box::new(
+        onetaskgraph_in_memory::InMemorySource::new(common::with_documents(json!({})))
+            .expect("the fixture graph is coherent"),
+    )
+}
+
+fn document_ids(page: &Page<Document>) -> Vec<String> {
+    ids(page, |document| document.id.to_string())
+}
+
+#[tokio::test]
+async fn a_source_declaring_no_documents_refuses_a_document_read_rather_than_emptying_it() {
+    // The one wrong answer this method can give is an empty page: it is indistinguishable
+    // from a source that has documents and holds none matching, and a caller cannot tell
+    // the two apart afterwards. So the refusal is the behaviour under test, in the
+    // contract's own words.
+    let source = fully_capable();
+    assert_eq!(source.capabilities().documents, Support::Unsupported);
+
+    for refused in [
+        source
+            .get_document(&NativeId("D-1".to_owned()))
+            .await
+            .map(|found| format!("{found:?}")),
+        source
+            .query_documents(&DocumentQuery::default(), &whole())
+            .await
+            .map(|page| format!("{page:?}")),
+        source
+            .write_document(&ItemWrite {
+                target: None,
+                item: a_document(),
+                depends_on: Vec::new(),
+            })
+            .await
+            .map(|id| id.to_string()),
+        source
+            .delete_document(&NativeId("D-1".to_owned()))
+            .await
+            .map(|()| String::new()),
+    ] {
+        let Err(SourceError::Refused { message }) = refused else {
+            panic!("a source with no documents refuses every document call: {refused:?}");
+        };
+        assert_eq!(message, "the in-memory plugin has no documents");
+    }
+}
+
+#[tokio::test]
+async fn a_documentary_source_declares_it_and_answers_both_location_shapes() {
+    let source = documentary();
+    assert_eq!(source.capabilities().documents, Support::Native);
+
+    let listed = source
+        .query_documents(&DocumentQuery::default(), &whole())
+        .await
+        .expect("a source with documents answers");
+    assert_eq!(document_ids(&listed), ["D-1", "D-2", "D-3"]);
+
+    // The two shapes a consumer branches on, and the third case that is neither: the
+    // source did not say where it is, which is not the same as saying it is nowhere.
+    let linked = source
+        .get_document(&NativeId("D-1".to_owned()))
+        .await
+        .expect("the source answers")
+        .expect("D-1 is held");
+    assert_eq!(
+        linked.location,
+        Some(Location::Url("https://example.invalid/D-1".to_owned()))
+    );
+    let filed = source
+        .get_document(&NativeId("D-2".to_owned()))
+        .await
+        .expect("the source answers")
+        .expect("D-2 is held");
+    assert_eq!(
+        filed.location,
+        Some(Location::Path("/srv/notes/D-2.md".to_owned()))
+    );
+    assert_eq!(
+        source
+            .get_document(&NativeId("D-3".to_owned()))
+            .await
+            .expect("the source answers")
+            .expect("D-3 is held")
+            .location,
+        None
+    );
+
+    assert_eq!(
+        source
+            .get_document(&NativeId("D-9".to_owned()))
+            .await
+            .expect("a miss is an answer, not a failure"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_document_query_applies_every_predicate_a_documentary_source_declares_native() {
+    let source = documentary();
+
+    let in_project = source
+        .query_documents(
+            &DocumentQuery {
+                project: ProjectFilter::Is(NativeId("P-1".to_owned())),
+                ..DocumentQuery::default()
+            },
+            &whole(),
+        )
+        .await
+        .expect("the source answers");
+    assert_eq!(document_ids(&in_project), ["D-1"]);
+
+    let orphans = source
+        .query_documents(
+            &DocumentQuery {
+                project: ProjectFilter::Orphans,
+                ..DocumentQuery::default()
+            },
+            &whole(),
+        )
+        .await
+        .expect("the source answers");
+    assert_eq!(document_ids(&orphans), ["D-3"]);
+
+    let labelled = source
+        .query_documents(
+            &DocumentQuery {
+                labels: LabelFilter {
+                    all_of: vec!["infra".to_owned()],
+                    ..LabelFilter::default()
+                },
+                ..DocumentQuery::default()
+            },
+            &whole(),
+        )
+        .await
+        .expect("the source answers");
+    assert_eq!(document_ids(&labelled), ["D-1"]);
+
+    let searched = source
+        .query_documents(
+            &DocumentQuery {
+                text: Some(TextQuery {
+                    terms: "hosted".to_owned(),
+                    fields: TextFields::Content,
+                }),
+                ..DocumentQuery::default()
+            },
+            &whole(),
+        )
+        .await
+        .expect("the source answers");
+    assert_eq!(document_ids(&searched), ["D-2"]);
+}
+
+#[tokio::test]
+async fn a_documentary_source_that_declares_a_predicate_unsupported_returns_the_wider_set() {
+    // Rule 2, over documents: a predicate this source does not apply is *ignored*, never
+    // half-applied, so what comes back is wider than the query and never narrower.
+    let source = onetaskgraph_in_memory::InMemorySource::new(common::with_documents(json!({
+        "filter_by_label": "unsupported",
+        "search_title": "unsupported",
+        "search_content": "unsupported",
+    })))
+    .expect("the fixture graph is coherent");
+
+    let ignored = source
+        .query_documents(
+            &DocumentQuery {
+                labels: LabelFilter {
+                    all_of: vec!["infra".to_owned()],
+                    ..LabelFilter::default()
+                },
+                text: Some(TextQuery {
+                    terms: "nothing here matches".to_owned(),
+                    fields: TextFields::TitleOrContent,
+                }),
+                ..DocumentQuery::default()
+            },
+            &whole(),
+        )
+        .await
+        .expect("the source answers");
+    assert_eq!(document_ids(&ignored), ["D-1", "D-2", "D-3"]);
+}
+
+#[tokio::test]
+async fn a_document_written_into_a_documentary_source_is_created_then_updated_then_removed() {
+    let source = documentary();
+
+    let created = source
+        .write_document(&ItemWrite {
+            target: None,
+            item: a_document(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("a documentary source takes a document");
+    assert_eq!(created, NativeId("D-7".to_owned()));
+
+    let updated = source
+        .write_document(&ItemWrite {
+            target: Some(created.clone()),
+            item: Document {
+                title: "Renamed".to_owned(),
+                ..a_document()
+            },
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("an update names an item already there");
+    assert_eq!(updated, created);
+    let held = source
+        .get_document(&created)
+        .await
+        .expect("the source answers")
+        .expect("the written document is held");
+    assert_eq!(held.title, "Renamed");
+    // Exactly one where there was one before: an update is not a second create.
+    assert_eq!(
+        document_ids(
+            &source
+                .query_documents(&DocumentQuery::default(), &whole())
+                .await
+                .expect("the source answers")
+        ),
+        ["D-1", "D-2", "D-3", "D-7"]
+    );
+
+    source
+        .delete_document(&created)
+        .await
+        .expect("a documentary source takes a document back");
+    assert_eq!(
+        source
+            .get_document(&created)
+            .await
+            .expect("the source answers"),
+        None
+    );
+}
+
+/// One document to write, filed under a project this source really holds.
+fn a_document() -> Document {
+    Document {
+        id: NativeId("D-7".to_owned()),
+        title: "Written".to_owned(),
+        content: Some("a body".to_owned()),
+        project: Some(NativeId("P-1".to_owned())),
+        labels: Vec::new(),
+        url: None,
+        location: Some(Location::Path("/srv/notes/D-7.md".to_owned())),
+        created_at: None,
+        updated_at: None,
+        metadata: std::collections::BTreeMap::new(),
+        repositories: Vec::new(),
+    }
+}
+
+#[test]
+fn documents_configured_under_a_source_that_declares_it_has_none_are_refused() {
+    // The one incoherence documents add: work held where nothing may ask for it. A source
+    // declaring it has none is never asked for one, so these rows could never be read —
+    // and a configuration that says both things at once has to be told which it meant.
+    let mut config = common::work();
+    config["documents"] = json!([{
+        "id": "D-1", "title": "Unreachable", "content": null, "project": null,
+        "labels": [], "url": null, "created_at": null, "updated_at": null
+    }]);
+    let config: InMemoryConfig =
+        serde_json::from_value(config).expect("the shape is a valid configuration block");
+
+    let SourceError::Config { message } = onetaskgraph_in_memory::InMemorySource::new(config)
+        .expect_err("an unreachable document is refused")
+    else {
+        panic!("an incoherent configuration is a config error");
+    };
+    assert!(
+        message.contains("1 document(s) are configured under a source that declares it has none")
+            && message.contains("capabilities.documents: native"),
+        "{message}"
     );
 }

@@ -4,10 +4,10 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencySupport, Direction, Health,
-    ItemKind, ItemWrite, Label, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery,
-    SecretResolver, SourceError, SourceName, SourcePlugin, Task, TaskQuery, TaskSource, TextFields,
-    TextQuery, WriteSupport, unwritable,
+    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencySupport, Direction,
+    Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, NativeId, Page, PageRequest,
+    Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Task, TaskQuery, TaskSource, TextFields, TextQuery, WriteSupport, documentless, unwritable,
 };
 use schemars::{Schema, schema_for};
 
@@ -63,6 +63,7 @@ impl SourcePlugin for Plugin {
 struct Held {
     tasks: Vec<Task>,
     projects: Vec<Project>,
+    documents: Vec<Document>,
     labels: Vec<Label>,
     task_dependencies: Vec<DependencyEdge>,
     project_dependencies: Vec<DependencyEdge>,
@@ -95,6 +96,7 @@ impl InMemorySource {
             held: Mutex::new(Held {
                 tasks: config.tasks,
                 projects: config.projects,
+                documents: config.documents,
                 labels: config.labels,
                 task_dependencies: config.task_dependencies,
                 project_dependencies: config.project_dependencies,
@@ -187,13 +189,21 @@ impl InMemorySource {
     /// `Orphans` is gated on `orphan_tasks` and `Is(..)` on `projects`, because a
     /// source without projects cannot honour either and must return the wider set.
     fn project_matches(&self, task: &Task, filter: &ProjectFilter) -> bool {
+        self.filed_matches(task.project.as_ref(), filter)
+    }
+
+    /// Whether an item filed under `project` survives the project predicate.
+    ///
+    /// Shared by tasks and documents because the predicate is the same one: both are
+    /// filed under a project or under none, and both declare the same two capabilities
+    /// about it. A second copy of this for documents would be a second place for
+    /// `Orphans` to start meaning something else.
+    fn filed_matches(&self, project: Option<&NativeId>, filter: &ProjectFilter) -> bool {
         let declared = self.declared();
         match filter {
             ProjectFilter::Any => true,
-            ProjectFilter::Orphans => !declared.orphan_tasks.is_native() || task.project.is_none(),
-            ProjectFilter::Is(id) => {
-                !declared.projects.is_native() || task.project.as_ref() == Some(id)
-            }
+            ProjectFilter::Orphans => !declared.orphan_tasks.is_native() || project.is_none(),
+            ProjectFilter::Is(id) => !declared.projects.is_native() || project == Some(id),
         }
     }
 
@@ -212,6 +222,26 @@ impl InMemorySource {
         self.text_survives(
             &project.title,
             project.content.as_deref(),
+            query.text.as_ref(),
+        )
+    }
+
+    /// Whether a document survives every predicate this source declared `Native`.
+    ///
+    /// The same three predicates a task query carries minus the status filter, because a
+    /// document has no status for one to compare against.
+    fn document_survives(&self, document: &Document, query: &DocumentQuery) -> bool {
+        let declared = self.declared();
+
+        if declared.filter_by_label.is_native() && !labels_match(&document.labels, &query.labels) {
+            return false;
+        }
+        if !self.filed_matches(document.project.as_ref(), &query.project) {
+            return false;
+        }
+        self.text_survives(
+            &document.title,
+            document.content.as_deref(),
             query.text.as_ref(),
         )
     }
@@ -338,6 +368,34 @@ impl TaskSource for InMemorySource {
         self.paginate(&matched, page)
     }
 
+    /// A source declaring `documents: unsupported` has no document table at all, so it
+    /// refuses rather than answering an empty page — an empty page reads as a source that
+    /// has documents and holds none matching, which is the one wrong answer this method
+    /// can give.
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        self.documentary()?;
+        Ok(self.held()?.documents.iter().find(|d| &d.id == id).cloned())
+    }
+
+    /// As [`get_document`](Self::get_document) for the refusal, and as `query_tasks` for
+    /// everything else: every predicate this source declares native is applied, and every
+    /// one it does not is ignored so the wider set goes back.
+    async fn query_documents(
+        &self,
+        query: &DocumentQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        self.documentary()?;
+        let matched: Vec<Document> = self
+            .held()?
+            .documents
+            .iter()
+            .filter(|document| self.document_survives(document, query))
+            .cloned()
+            .collect();
+        self.paginate(&matched, page)
+    }
+
     async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
         let labels = self.held()?.labels.clone();
         self.paginate(&labels, page)
@@ -444,6 +502,49 @@ impl TaskSource for InMemorySource {
         Ok(id)
     }
 
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        self.documentary()?;
+        self.writable(&write.item.metadata)?;
+        self.creatable(write.target.as_ref(), &write.item.title)?;
+        let mut held = self.held()?;
+        let id = match &write.target {
+            Some(target) => {
+                let position =
+                    position_of(held.documents.iter().map(|document| &document.id), target)
+                        .ok_or_else(|| missing(target, "document"))?;
+                held.documents[position] = Document {
+                    id: target.clone(),
+                    ..write.item.clone()
+                };
+                target.clone()
+            }
+            None => {
+                let id = unused(
+                    held.documents.iter().map(|document| &document.id),
+                    &write.item.id,
+                );
+                held.documents.push(Document {
+                    id: id.clone(),
+                    ..write.item.clone()
+                });
+                id
+            }
+        };
+        self.half_written(write.target.as_ref(), &write.item.title)?;
+        held.adopt_labels(&write.item.labels);
+        // No edges are recorded, and that is the contract rather than an omission: a
+        // document takes part in no dependency graph, so `depends_on` has nothing here to
+        // point at and nothing points at a document.
+        Ok(id)
+    }
+
+    async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.documentary()?;
+        self.deletable(id)?;
+        self.held()?.documents.retain(|document| &document.id != id);
+        Ok(())
+    }
+
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         self.deletable(id)?;
         let mut held = self.held()?;
@@ -472,6 +573,19 @@ impl TaskSource for InMemorySource {
 }
 
 impl InMemorySource {
+    /// Refuse every document call when this source's configuration says it has none.
+    ///
+    /// In the same words every document-free source uses, because the refusal is the
+    /// contract's own [`documentless`] rather than this plugin's wording: a caller that
+    /// reached one of these methods anyway must not be able to tell which plugin was
+    /// behind it apart from the kind the message names.
+    fn documentary(&self) -> Result<(), SourceError> {
+        if self.declared().documents.is_native() {
+            return Ok(());
+        }
+        Err(documentless(KIND))
+    }
+
     /// Refuse a write this source's configuration says it cannot take.
     ///
     /// Both refusals name what a caller has to change: the plugin, when there is no write

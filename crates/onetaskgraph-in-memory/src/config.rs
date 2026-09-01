@@ -1,8 +1,8 @@
 //! The configuration block this plugin builds a source from.
 
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, ItemKind,
-    Label, NativeId, Project, Support, Task, WriteSupport,
+    Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Document,
+    ItemKind, Label, NativeId, Project, Support, Task, WriteSupport,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, de::Error as _};
@@ -20,6 +20,12 @@ pub struct InMemoryConfig {
     pub tasks: Vec<Task>,
     /// The projects this source serves.
     pub projects: Vec<Project>,
+    /// The documents this source serves.
+    ///
+    /// Read only when [`CapabilityConfig::documents`] declares this source has documents
+    /// at all — and a document listed under a source that declares it has none is refused
+    /// by [`InMemoryConfig::validate`] rather than held where nothing may ask for it.
+    pub documents: Vec<Document>,
     /// Every label this source knows.
     pub labels: Vec<Label>,
     /// Forward task dependency edges: `from` depends on `to`.
@@ -127,6 +133,10 @@ impl InMemoryConfig {
                 duplicate_ids(self.projects.iter().map(|project| &project.id)),
             ),
             (
+                "documents",
+                duplicate_ids(self.documents.iter().map(|document| &document.id)),
+            ),
+            (
                 "labels",
                 duplicate_ids(self.labels.iter().map(|label| &label.id)),
             ),
@@ -152,6 +162,31 @@ impl InMemoryConfig {
                     task.id
                 ));
             }
+        }
+
+        for document in &self.documents {
+            if let Some(project) = &document.project
+                && !project_ids.contains(project)
+            {
+                problems.push(format!(
+                    "document {} is filed under project {project}, which this source does not \
+                     hold",
+                    document.id
+                ));
+            }
+        }
+
+        // The one incoherence documents add: work held where nothing may ask for it. The
+        // capability says whether this source has documents *at all*, and a source
+        // declaring it has none is never asked for one — so a document listed beside that
+        // declaration is not a narrower answer, it is an item no query can ever reach.
+        if !self.documents.is_empty() && !self.capabilities.documents.is_native() {
+            problems.push(format!(
+                "{} document(s) are configured under a source that declares it has none; \
+                 set `capabilities.documents: native`, or remove them — a source declaring \
+                 no documents is never asked for one, so these could never be read",
+                self.documents.len()
+            ));
         }
 
         for (noun, edges, known) in [
@@ -206,6 +241,16 @@ fn duplicate_ids<'a>(ids: impl Iterator<Item = &'a NativeId>) -> Vec<&'a NativeI
 pub struct CapabilityConfig {
     /// Whether this source has projects.
     pub projects: Support,
+    /// Whether this source has documents at all.
+    ///
+    /// Not a predicate, unlike every other `Support` here: it says what this source
+    /// *holds*, the engine reads it once at the handshake, and a source declaring
+    /// [`Support::Unsupported`] is never asked for a document rather than answering an
+    /// empty page. So it defaults to `Unsupported` — an in-memory source configured with
+    /// no `documents:` list has none, and says so — and
+    /// [`InMemoryConfig::validate`](crate::InMemoryConfig::validate) refuses the one
+    /// incoherent pairing: documents listed under a source that declares it has none.
+    pub documents: Support,
     /// Whether this source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether this source filters by label itself.
@@ -300,6 +345,7 @@ impl Default for CapabilityConfig {
     fn default() -> Self {
         Self {
             projects: Support::Native,
+            documents: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -321,12 +367,7 @@ impl From<&CapabilityConfig> for Capabilities {
     fn from(value: &CapabilityConfig) -> Self {
         Self {
             projects: value.projects,
-            // Fixed rather than configured, alone among these fields: this source holds no
-            // documents at all, so a key that could declare it native would let a document
-            // configure a source into claiming something it cannot serve — which is the
-            // one thing the capability rules forbid. `onetaskgraph-in-memory`'s own module
-            // documentation records the verdict, and docs/follow-ups.md tracks the gap.
-            documents: Support::Unsupported,
+            documents: value.documents,
             orphan_tasks: value.orphan_tasks,
             filter_by_label: value.filter_by_label,
             filter_by_status: value.filter_by_status,
