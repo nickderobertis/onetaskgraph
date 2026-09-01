@@ -42,6 +42,21 @@ beforeAll(() => {
         work: {
           plugin: "in-memory",
           config: {
+            // A source holding documents has to declare it: the engine reads the
+            // declaration once at the handshake and never asks a source that says it has
+            // none, so a `documents:` list without this key is refused where it is read.
+            capabilities: { documents: "native" },
+            documents: [
+              {
+                id: "D-1",
+                title: "Alpha design",
+                content: "the engine core, reviewed",
+                project: "P-1",
+                labels: [{ id: "L-1", name: "bug" }],
+                location: { url: "https://example.invalid/D-1" },
+              },
+              { id: "D-2", title: "Loose note", content: "filed nowhere", labels: [] },
+            ],
             tasks: [
               {
                 id: "T-1",
@@ -156,6 +171,25 @@ test("typed methods drive every real binary command", async () => {
       })
     ).items[0]?.from,
   ).toEqual({ id: "work:P-1", kind: "project" });
+  const documents = await client.documentList({
+    sources: ["work"],
+    labels: ["bug"],
+    excludeLabels: ["chore"],
+    search: "Alpha",
+    fields: "title",
+    limit: 1,
+    project: "P-1",
+  });
+  expect(documents.items[0]?.id).toBe("work:D-1");
+  // Where a document is comes back as the contract type's own JSON, so a caller branches
+  // on which key is present rather than parsing a sentence.
+  expect(documents.items[0]?.item.location).toEqual({ url: "https://example.invalid/D-1" });
+  expect((await client.documentList({ sources: ["work"], noProject: true })).items[0]?.id).toBe(
+    "work:D-2",
+  );
+  expect((await client.documentShow("work:D-1", { allowPartial: true })).items[0]?.item.title).toBe(
+    "Alpha design",
+  );
   expect(
     (await client.labelList({ sources: ["work"], limit: 1, allowPartial: true })).items[0]?.id,
   ).toBe("work:L-1");
@@ -263,6 +297,54 @@ test("copy drives the real binary and reports what it did to each item", async (
     await expect(copyClient.taskCopy(["from:T-1"], "sealed")).rejects.toThrow("cannot be written");
   } finally {
     rmSync(copyRoot, { recursive: true, force: true });
+  }
+});
+
+test("a document copy drives the real binary and is refused by a source with none", async () => {
+  // One client call is one process, so an in-memory destination cannot be read back by
+  // the next call — the round trip is proven end to end against a persistent peer in
+  // `crates/onetaskgraph/tests/e2e/document_store.rs`. What this owes is that the method
+  // carries the operands the verb requires: a `document copy` invoked without its ids is
+  // refused by clap as a bad invocation, so a method that dropped them reaches no report.
+  const documentRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-document-"));
+  mkdirSync(resolve(documentRoot, "notes"), { recursive: true });
+  writeFileSync(
+    resolve(documentRoot, "onetaskgraph.yaml"),
+    JSON.stringify({
+      sources: {
+        from: {
+          plugin: "in-memory",
+          config: {
+            capabilities: { documents: "native" },
+            documents: [{ id: "D-1", title: "Alpha design", content: "reviewed", labels: [] }],
+          },
+        },
+        store: { plugin: "in-memory", config: { capabilities: { documents: "native" } } },
+        // A folder of Markdown declares it holds no documents, so it is refused as a
+        // destination before anything is read.
+        notes: {
+          plugin: "local-md",
+          config: { root: resolve(documentRoot, "notes"), status_mapping: { todo: "todo" } },
+        },
+      },
+    }),
+  );
+  try {
+    const documentClient = new OnetaskgraphClient({ binaryPath: binary, cwd: documentRoot });
+
+    const planned = await documentClient.documentCopy(["from:D-1"], "store", { dryRun: true });
+    expect(planned.items).toEqual([{ source: "from:D-1", action: "created", destination: null }]);
+
+    const created = await documentClient.documentCopy(["from:D-1"], "store");
+    expect(created.items).toEqual([
+      { source: "from:D-1", action: "created", destination: "store:D-1" },
+    ]);
+
+    await expect(documentClient.documentCopy(["from:D-1"], "notes")).rejects.toThrow(
+      "has no documents",
+    );
+  } finally {
+    rmSync(documentRoot, { recursive: true, force: true });
   }
 });
 
