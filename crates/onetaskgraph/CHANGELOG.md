@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.16](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.15...v0.2.16) - 2026-09-01
+
+### Added
+
+- *(local-md)* hold documents in their own folder and report file locations ([#155](https://github.com/nickderobertis/onetaskgraph/pull/155))
+
 ## [0.2.15](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.14...v0.2.15) - 2026-09-01
 
 ### Added
