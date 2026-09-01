@@ -123,10 +123,7 @@ test("a description in several paragraphs generates without trailing whitespace"
       },
       commands: ["thing list"],
     };
-    const result = generateWith(
-      emitter(fixtures, "paragraphs", JSON.stringify(bundle)),
-      generated,
-    );
+    const result = generateWith(emitter(fixtures, "paragraphs", JSON.stringify(bundle)), generated);
     expectExited(result);
     expect(result.status, result.stderr).toBe(0);
     const models = readFileSync(resolve(generated, "models.ts"), "utf8");

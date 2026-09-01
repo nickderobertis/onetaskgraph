@@ -1535,16 +1535,16 @@ export type ProjectQuery = GeneratedProjectQuery.ProjectQuery;
 export namespace GeneratedQualifiedDocument {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -1556,7 +1556,7 @@ path: string
 })
 /**
  * A source's own opaque identifier for one item.
- * 
+ *
  * Deliberately unvalidated: a native id is whatever the upstream system says it
  * is, colons included. The engine parses a qualified id by splitting on the
  * *first* colon precisely so this stays true.
@@ -1569,7 +1569,7 @@ export type Repository = string
 
 /**
  * One item, under the qualified id the engine addresses it by.
- * 
+ *
  * A plugin only ever deals in its own [`NativeId`]; qualifying one is the engine's job,
  * so this type is the engine's and a plugin never constructs one.
  */
@@ -2103,16 +2103,16 @@ export type QueryPlan = GeneratedQueryPlan.QueryPlan;
 export namespace GeneratedQueryResponseOfQualifiedDocument {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -2124,7 +2124,7 @@ path: string
 })
 /**
  * A source's own opaque identifier for one item.
- * 
+ *
  * Deliberately unvalidated: a native id is whatever the upstream system says it
  * is, colons included. The engine parses a qualified id by splitting on the
  * *first* colon precisely so this stays true.
@@ -2137,15 +2137,15 @@ export type Repository = string
 /**
  * The engine's own resume token: one plugin cursor per source stream, opaque to the
  * caller exactly as a plugin's cursor is opaque to the engine.
- * 
+ *
  * Rendered as lower-case hex, which is not obfuscation — the inside is not a secret —
  * but the one property a token a person copies off a terminal has to have: it survives
  * a shell. The document underneath holds a plugin's own cursor, and a cursor may hold
  * anything at all, so a token spelled as the raw JSON would carry quotes, braces and
  * spaces straight into the next command line. Hex has no character a shell reads.
- * 
+ *
  * # What a token is and is not checked for
- * 
+ *
  * Both ways in go through [`parse`](Self::parse) — including deserialising one — and
  * what that establishes is **structural**: the string is hex, the bytes are this
  * engine's own resume document, and every state in it is well formed. It does not, and
@@ -2153,7 +2153,7 @@ export type Repository = string
  * credential and carries nothing secret; forging one buys a caller nothing they could
  * not have asked for outright, since every cursor inside is handed straight back to the
  * source that issued it and is validated there.
- * 
+ *
  * What a forged token *could* do is name a stream this configuration has no source for,
  * or resume further into a page than the engine ever pages. Both are refused where the
  * token meets the query it is resuming, by
@@ -2216,6 +2216,15 @@ message: string
 } | {
 kind: "rate-limited"
 /**
+ * What the source can add about *which* limit refused it and what it was doing.
+ *
+ * Absent means the source had nothing to add beyond the kind, which is what
+ * every source said before this member existed; it is omitted from the wire
+ * entirely when absent, so a reader written against the shape without it sees
+ * exactly the shape it was written for. Never contains a credential.
+ */
+message?: (string | null)
+/**
  * How long the source asked us to wait, when it said.
  */
 retry_after_seconds?: (number | null)
@@ -2243,7 +2252,7 @@ source: string
 }
 /**
  * One item, under the qualified id the engine addresses it by.
- * 
+ *
  * A plugin only ever deals in its own [`NativeId`]; qualifying one is the engine's job,
  * so this type is the engine's and a plugin never constructs one.
  */
@@ -2360,7 +2369,7 @@ kind: string
 pages_fetched: number
 /**
  * Predicates the source applied itself.
- * 
+ *
  * The four predicate vectors below partition one set of outcomes, and nothing in
  * the type says so: a `Predicate` could appear in two of them at once, or in none.
  * One `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that
@@ -2373,7 +2382,7 @@ pushed_down: Predicate[]
 source: string
 /**
  * Predicates neither side could answer, so the result is unconstrained.
- * 
+ *
  * Never [`Predicate::ReverseDependencies`]: `DependencySupport` has no
  * unsupported variant, so a reverse-dependency read is answered natively or
  * emulated by the engine's bounded scan, never abandoned. The type cannot say
