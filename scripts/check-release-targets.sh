@@ -143,6 +143,18 @@ MAX_PROSE = 400
 # explains: a consumer names `sdk-pypi` in its own plan and cannot see this file,
 # so a short name that moved without moving here is a wait that resolves against
 # nothing, and a sixth name declared here is one nothing was told to wait on.
+#
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This map is a
+# restatement with no source to reconcile against, and that is what it is for
+# rather than an oversight. The other side of the contract is a plan in a
+# different repository — one this repository does not depend on, cannot fetch
+# from an offline pinned gate, and must not read even if it could, since `onevcs`
+# is this repository's CONSUMER. Deriving the map from release-targets.toml, the
+# only in-tree authority, would make the comparison below circular and let an edit
+# to the declaration alone pass green, which is the single failure this exists to
+# catch. What makes the second spelling safe is instead that the set is frozen and
+# refused in both directions here: a name that moved and a name that appeared both
+# go red, so the map cannot drift without this file being edited on purpose.
 EXPECTED_NAMES = {
     "crate": "crate:onetaskgraph",
     "pypi": "pypi:onetaskgraph-cli",
@@ -150,6 +162,7 @@ EXPECTED_NAMES = {
     "npm": "npm:@onetaskgraph/cli",
     "sdk-npm": "npm:@onetaskgraph/sdk",
 }
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 problems = []
 

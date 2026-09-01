@@ -222,7 +222,7 @@ for url in sorted(pinned_urls - probe_urls):
         f"{pin_path} pins the lookup {url}, which {probe_path} never makes"
     )
 
-# Every registry word the probe branches on, against the pinned set.
+# Every registry word the probe branches on, against the pinned set, each way.
 probe_registries = set()
 for line in code.splitlines():
     stripped = line.strip()
@@ -231,6 +231,16 @@ for line in code.splitlines():
 pinned_registries = {registry["registry"] for registry in registries}
 for registry in sorted(pinned_registries - probe_registries):
     problems.append(f"{probe_path} has no branch for the pinned registry '{registry}'")
+# And the other way, which is the direction that lets an unreconciled lookup
+# through: a branch the pin does not describe still builds a URL and reads a
+# field, and nothing above holds either to an observation, so the probe would be
+# answering for a registry whose interface nobody recorded.
+for registry in sorted(probe_registries - pinned_registries):
+    problems.append(
+        f"{probe_path} branches on the registry '{registry}', which {pin_path} does not "
+        "describe — pin that registry's interface, or the lookup it makes is one nothing "
+        "has checked"
+    )
 
 for registry in registries:
     name = registry["registry"]
