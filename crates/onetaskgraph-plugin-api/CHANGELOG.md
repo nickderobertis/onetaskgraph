@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.18](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.17...onetaskgraph-plugin-api-v0.2.18) - 2026-09-01
+
+### Fixed
+
+- *(github-projects)* read GitHub's secondary rate limiter as one, and stop the copy outrunning it ([#173](https://github.com/nickderobertis/onetaskgraph/pull/173))
+
 ## [0.2.14](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.13...onetaskgraph-plugin-api-v0.2.14) - 2026-09-01
 
 ### Added
