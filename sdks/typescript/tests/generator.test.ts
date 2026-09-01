@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -86,6 +94,50 @@ test("generation, clean check, stale check, and invalid arguments use the real b
     expect(emptyBinary.status).toBe(1);
     expect(emptyBinary.stderr).toContain("ONETASKGRAPH_BIN must be a non-empty executable path");
   } finally {
+    rmSync(generated, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("a description in several paragraphs generates without trailing whitespace", () => {
+  // `json-schema-to-typescript` renders a paragraph break inside a JSDoc block as a line
+  // that is exactly `" * "`. Committed, that is what `git diff --check` reports against
+  // every change adding a field documented in more than one paragraph — and the contract's
+  // fields really are documented that way, so this is a property of the generator rather
+  // than of any one field. A generator without the fix emits `" * "` here and fails.
+  const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generator-whitespace-"));
+  const generated = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generated-"));
+  try {
+    const bundle = {
+      version: 1,
+      roots: {
+        Thing: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          properties: {
+            note: {
+              description: "The first paragraph.\n\nThe second, after a blank line.",
+              type: "string",
+            },
+          },
+        },
+      },
+      commands: ["thing list"],
+    };
+    const result = generateWith(
+      emitter(fixtures, "paragraphs", JSON.stringify(bundle)),
+      generated,
+    );
+    expectExited(result);
+    expect(result.status, result.stderr).toBe(0);
+    const models = readFileSync(resolve(generated, "models.ts"), "utf8");
+    expect(models).toContain("The second, after a blank line.");
+    const offending = models
+      .split("\n")
+      .map((line, index) => [index + 1, line] as const)
+      .filter(([, line]) => /[ \t]+$/.test(line));
+    expect(offending).toEqual([]);
+  } finally {
+    rmSync(fixtures, { recursive: true, force: true });
     rmSync(generated, { recursive: true, force: true });
   }
 }, 30_000);

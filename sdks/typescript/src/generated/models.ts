@@ -8,7 +8,7 @@ export namespace GeneratedCapabilities {
 export interface Capabilities {
 /**
  * Whether the source has documents at all.
- * 
+ *
  * The same shape as [`projects`](Self::projects), and read the same way: it says what
  * the source *holds*, not which predicate it applies. It is therefore **not** one of
  * the predicates the second capability rule reaches — there is no wider result set to
@@ -17,7 +17,7 @@ export interface Capabilities {
  * exactly as it reads [`TaskSource::writes`](crate::TaskSource::writes), and a
  * document read across several sources reports such a source as holding none rather
  * than as having failed.
- * 
+ *
  * Defaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that
  * predates documents says nothing here and is read as the document-free source it is.
  */
@@ -80,7 +80,7 @@ destination?: (GlobalId | null)
 action: "updated"
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -90,7 +90,7 @@ destination: string
 action: "unchanged"
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -100,7 +100,7 @@ destination: string
 action: "orphaned"
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -109,7 +109,7 @@ destination: string
 })
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -120,7 +120,7 @@ export type CopyAction = GeneratedCopyAction.CopyAction;
 export namespace GeneratedCopyOutcome {
 /**
  * What happened to one item.
- * 
+ *
  * `action` and `destination` are one value rather than two fields side by side: an
  * updated item without a destination id, or an orphan without one, are states this type
  * must not be able to say — the id *is* what those outcomes are about. The one outcome
@@ -130,7 +130,7 @@ export namespace GeneratedCopyOutcome {
 export type CopyOutcome = ({
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -148,7 +148,7 @@ destination?: (GlobalId | null)
 action: "updated"
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -158,7 +158,7 @@ destination: string
 action: "unchanged"
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -168,7 +168,7 @@ destination: string
 action: "orphaned"
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -177,7 +177,7 @@ destination: string
 }))
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -188,7 +188,7 @@ export type CopyOutcome = GeneratedCopyOutcome.CopyOutcome;
 export namespace GeneratedCopyReport {
 /**
  * What happened to one item.
- * 
+ *
  * `action` and `destination` are one value rather than two fields side by side: an
  * updated item without a destination id, or an orphan without one, are states this type
  * must not be able to say — the id *is* what those outcomes are about. The one outcome
@@ -198,7 +198,7 @@ export namespace GeneratedCopyReport {
 export type CopyOutcome = ({
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -217,7 +217,7 @@ destination?: (GlobalId | null)
 action: "updated"
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -227,7 +227,7 @@ destination: string
 action: "unchanged"
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -237,7 +237,7 @@ destination: string
 action: "orphaned"
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -246,7 +246,7 @@ destination: string
 })
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -254,7 +254,7 @@ export type GlobalId = string
 
 /**
  * What a copy did, one entry per item.
- * 
+ *
  * The same per-item outcomes reach every consumer: the machine-readable output renders
  * this, the rendered output renders this, and a Rust caller is handed it.
  */
@@ -279,11 +279,11 @@ export type CredentialLayer = GeneratedCredentialLayer.CredentialLayer;
 export namespace GeneratedDependencyEdge {
 /**
  * A dependency between two work items.
- * 
+ *
  * An endpoint may name another source. Keeping that far id on the near item is work data
  * owned by its plugin, not an engine-side index or mirror; the engine reports it without
  * resolving or fetching the far item.
- * 
+ *
  * A source uses its backend's own relationship wherever that relationship can name the
  * far end, so the backend knows the graph and its own interface draws it. Where it
  * cannot — a far end in another source, which no backend relates — the source reads
@@ -294,7 +294,7 @@ export namespace GeneratedDependencyEdge {
 export interface DependencyEdge {
 /**
  * The item the edge starts at, and the one that **depends on** the other.
- * 
+ *
  * This is the orientation every source reports in, whichever way its own backend
  * spells the relationship: a GitHub `blockedBy` connection read for `ENG-1` yields
  * `from: ENG-1`, because `ENG-1` is what depends.
@@ -333,7 +333,7 @@ export type DependencyEndpoint = GeneratedDependencyEndpoint.DependencyEndpoint;
 export namespace GeneratedDependencyKind {
 /**
  * What a [`DependencyEdge`] means.
- * 
+ *
  * Both variants are read in the one direction [`DependencyEdge::from`] fixes: `from`
  * depends on `to`. This enum said the opposite of that until the orientation was settled,
  * which is why it is spelled out twice rather than once.
@@ -353,16 +353,16 @@ export type Direction = GeneratedDirection.Direction;
 export namespace GeneratedDocument {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -374,7 +374,7 @@ path: string
 })
 /**
  * A source's own opaque identifier for one item.
- * 
+ *
  * Deliberately unvalidated: a native id is whatever the upstream system says it
  * is, colons included. The engine parses a qualified id by splitting on the
  * *first* colon precisely so this stays true.
@@ -387,13 +387,13 @@ export type Repository = string
 
 /**
  * One piece of information that lives in a project and is not work.
- * 
+ *
  * A document carries **no status** and **no dependencies**, and both omissions are the
  * contract rather than an oversight: a document is not work, so it has no place in a
  * status filter and no place in a dependency graph. [`ItemKind`] therefore gains no
  * document variant — that enum names what a dependency endpoint points at, and nothing
  * may point at a document.
- * 
+ *
  * A source says whether it has documents at all through
  * [`Capabilities::documents`](crate::Capabilities::documents), and one that says it has
  * none is never asked for one.
@@ -474,7 +474,7 @@ export type Document = GeneratedDocument.Document;
 export namespace GeneratedDocumentQuery {
 /**
  * A source's own opaque identifier for one item.
- * 
+ *
  * Deliberately unvalidated: a native id is whatever the upstream system says it
  * is, colons included. The engine parses a qualified id by splitting on the
  * *first* colon precisely so this stays true.
@@ -483,7 +483,7 @@ export type NativeId = string
 
 /**
  * A filter over a source's documents.
- * 
+ *
  * No statuses, deliberately: a [`Document`](crate::Document) is not work and carries no
  * status, so there is nothing here for a status filter to compare against.
  */
@@ -550,7 +550,7 @@ settings: Setting[]
 }
 /**
  * What the credentials file supplied, by name, and which layer answers for each.
- * 
+ *
  * Beside the settings because it is the same question — where does this value
  * come from — asked of the one kind of value that may never be printed. So the
  * name and the layer are reported and the value never is.
@@ -630,7 +630,7 @@ export type EffectiveConfig = GeneratedEffectiveConfig.EffectiveConfig;
 export namespace GeneratedGlobalId {
 /**
  * One item, qualified by the source it came from.
- * 
+ *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
@@ -641,9 +641,9 @@ export type GlobalId = GeneratedGlobalId.GlobalId;
 export namespace GeneratedHealth {
 /**
  * Whether a source is answering right now.
- * 
+ *
  * # Placement is an open contract question
- * 
+ *
  * This type lives here because [`TaskSource::health`] returns it and the trait
  * lives here: placing it in `onetaskgraph-core` would make this crate depend on
  * the engine and invert the one direction the crate split exists to establish.
@@ -660,7 +660,7 @@ export interface Health {
 detail?: (string | null)
 /**
  * Whether the source answered.
- * 
+ *
  * A bare `bool` beside an untyped `detail` cannot say that an unreachable source
  * must explain itself, or keep "reachable with a warning" apart from "reachable";
  * an enum carrying the detail in its unreachable variant would.
@@ -704,16 +704,16 @@ export type Label = GeneratedLabel.Label;
 export namespace GeneratedLocation {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -729,7 +729,7 @@ export type Location = GeneratedLocation.Location;
 export namespace GeneratedOrigin {
 /**
  * Where one setting's value came from.
- * 
+ *
  * This is what makes precedence provable rather than asserted: `config show`
  * renders it per setting, so a user sees the same answer a test does.
  */
@@ -792,11 +792,11 @@ next?: (Cursor | null)
 }
 /**
  * A dependency between two work items.
- * 
+ *
  * An endpoint may name another source. Keeping that far id on the near item is work data
  * owned by its plugin, not an engine-side index or mirror; the engine reports it without
  * resolving or fetching the far item.
- * 
+ *
  * A source uses its backend's own relationship wherever that relationship can name the
  * far end, so the backend knows the graph and its own interface draws it. Where it
  * cannot — a far end in another source, which no backend relates — the source reads
@@ -807,7 +807,7 @@ next?: (Cursor | null)
 export interface DependencyEdge {
 /**
  * The item the edge starts at, and the one that **depends on** the other.
- * 
+ *
  * This is the orientation every source reports in, whichever way its own backend
  * spells the relationship: a GitHub `blockedBy` connection read for `ENG-1` yields
  * `from: ENG-1`, because `ENG-1` is what depends.
@@ -835,16 +835,16 @@ export type PageOfDependencyEdge = GeneratedPageOfDependencyEdge.PageOfDependenc
 export namespace GeneratedPageOfDocument {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -856,7 +856,7 @@ path: string
 })
 /**
  * A source's own opaque identifier for one item.
- * 
+ *
  * Deliberately unvalidated: a native id is whatever the upstream system says it
  * is, colons included. The engine parses a qualified id by splitting on the
  * *first* colon precisely so this stays true.
@@ -888,13 +888,13 @@ next?: (Cursor | null)
 }
 /**
  * One piece of information that lives in a project and is not work.
- * 
+ *
  * A document carries **no status** and **no dependencies**, and both omissions are the
  * contract rather than an oversight: a document is not work, so it has no place in a
  * status filter and no place in a dependency graph. [`ItemKind`] therefore gains no
  * document variant — that enum names what a dependency endpoint points at, and nothing
  * may point at a document.
- * 
+ *
  * A source says whether it has documents at all through
  * [`Capabilities::documents`](crate::Capabilities::documents), and one that says it has
  * none is never asked for one.
@@ -1017,16 +1017,16 @@ export type PageOfLabel = GeneratedPageOfLabel.PageOfLabel;
 export namespace GeneratedPageOfProject {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -1149,16 +1149,16 @@ export type PageOfProject = GeneratedPageOfProject.PageOfProject;
 export namespace GeneratedPageOfTask {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -1170,7 +1170,7 @@ path: string
 })
 /**
  * A source's own opaque identifier for one item.
- * 
+ *
  * Deliberately unvalidated: a native id is whatever the upstream system says it
  * is, colons included. The engine parses a qualified id by splitting on the
  * *first* colon precisely so this stays true.
@@ -1222,7 +1222,7 @@ id: string
 labels: Label[]
 /**
  * Where this task is, when the source says (see [`Location`]).
- * 
+ *
  * Absent by default, so a source that predates this field — and every source that
  * simply does not say — reads as `None`, which means *the source did not say where
  * this is* rather than *this is nowhere*. It neither replaces nor derives from
@@ -1231,7 +1231,7 @@ labels: Label[]
 location?: (Location | null)
 /**
  * Caller-defined attributes, preserving their JSON types.
- * 
+ *
  * Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
  * product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
  * the two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —
@@ -1328,15 +1328,15 @@ export namespace GeneratedPageToken {
 /**
  * The engine's own resume token: one plugin cursor per source stream, opaque to the
  * caller exactly as a plugin's cursor is opaque to the engine.
- * 
+ *
  * Rendered as lower-case hex, which is not obfuscation — the inside is not a secret —
  * but the one property a token a person copies off a terminal has to have: it survives
  * a shell. The document underneath holds a plugin's own cursor, and a cursor may hold
  * anything at all, so a token spelled as the raw JSON would carry quotes, braces and
  * spaces straight into the next command line. Hex has no character a shell reads.
- * 
+ *
  * # What a token is and is not checked for
- * 
+ *
  * Both ways in go through [`parse`](Self::parse) — including deserialising one — and
  * what that establishes is **structural**: the string is hex, the bytes are this
  * engine's own resume document, and every state in it is well formed. It does not, and
@@ -1344,7 +1344,7 @@ export namespace GeneratedPageToken {
  * credential and carries nothing secret; forging one buys a caller nothing they could
  * not have asked for outright, since every cursor inside is handed straight back to the
  * source that issued it and is validated there.
- * 
+ *
  * What a forged token *could* do is name a stream this configuration has no source for,
  * or resume further into a page than the engine ever pages. Both are refused where the
  * token meets the query it is resuming, by
@@ -1366,16 +1366,16 @@ export type Predicate = GeneratedPredicate.Predicate;
 export namespace GeneratedProject {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -1535,7 +1535,7 @@ export type ProjectQuery = GeneratedProjectQuery.ProjectQuery;
 export namespace GeneratedQualifiedEdge {
 /**
  * One dependency edge with both ends qualified.
- * 
+ *
  * An end may belong to another source. The near plugin owns that qualified far id and the
  * engine reports it without resolving or fetching the far source, so it holds no index.
  */
@@ -1550,7 +1550,7 @@ to: QualifiedEndpoint1
 }
 /**
  * The item the edge starts at, and the one that **depends on** the other.
- * 
+ *
  * The direction a caller asked in says which end they named, not which end the edge
  * starts at: a forward read and the matching reverse read report the same edge.
  */
@@ -1603,7 +1603,7 @@ export type QualifiedEndpoint = GeneratedQualifiedEndpoint.QualifiedEndpoint;
 export namespace GeneratedQualifiedLabel {
 /**
  * One item, under the qualified id the engine addresses it by.
- * 
+ *
  * A plugin only ever deals in its own [`NativeId`]; qualifying one is the engine's job,
  * so this type is the engine's and a plugin never constructs one.
  */
@@ -1639,16 +1639,16 @@ export type QualifiedLabel = GeneratedQualifiedLabel.QualifiedLabel;
 export namespace GeneratedQualifiedProject {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -1665,7 +1665,7 @@ export type Repository = string
 
 /**
  * One item, under the qualified id the engine addresses it by.
- * 
+ *
  * A plugin only ever deals in its own [`NativeId`]; qualifying one is the engine's job,
  * so this type is the engine's and a plugin never constructs one.
  */
@@ -1766,16 +1766,16 @@ export type QualifiedProject = GeneratedQualifiedProject.QualifiedProject;
 export namespace GeneratedQualifiedTask {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -1787,7 +1787,7 @@ path: string
 })
 /**
  * A source's own opaque identifier for one item.
- * 
+ *
  * Deliberately unvalidated: a native id is whatever the upstream system says it
  * is, colons included. The engine parses a qualified id by splitting on the
  * *first* colon precisely so this stays true.
@@ -1800,7 +1800,7 @@ export type Repository = string
 
 /**
  * One item, under the qualified id the engine addresses it by.
- * 
+ *
  * A plugin only ever deals in its own [`NativeId`]; qualifying one is the engine's job,
  * so this type is the engine's and a plugin never constructs one.
  */
@@ -1834,7 +1834,7 @@ id: string
 labels: Label[]
 /**
  * Where this task is, when the source says (see [`Location`]).
- * 
+ *
  * Absent by default, so a source that predates this field — and every source that
  * simply does not say — reads as `None`, which means *the source did not say where
  * this is* rather than *this is nowhere*. It neither replaces nor derives from
@@ -1843,7 +1843,7 @@ labels: Label[]
 location?: (Location | null)
 /**
  * Caller-defined attributes, preserving their JSON types.
- * 
+ *
  * Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
  * product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
  * the two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —
@@ -1950,7 +1950,7 @@ kind: string
 pages_fetched: number
 /**
  * Predicates the source applied itself.
- * 
+ *
  * The four predicate vectors below partition one set of outcomes, and nothing in
  * the type says so: a `Predicate` could appear in two of them at once, or in none.
  * One `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that
@@ -1963,7 +1963,7 @@ pushed_down: Predicate[]
 source: string
 /**
  * Predicates neither side could answer, so the result is unconstrained.
- * 
+ *
  * Never [`Predicate::ReverseDependencies`]: `DependencySupport` has no
  * unsupported variant, so a reverse-dependency read is answered natively or
  * emulated by the engine's bounded scan, never abandoned. The type cannot say
@@ -1979,15 +1979,15 @@ export namespace GeneratedQueryResponseOfQualifiedEdge {
 /**
  * The engine's own resume token: one plugin cursor per source stream, opaque to the
  * caller exactly as a plugin's cursor is opaque to the engine.
- * 
+ *
  * Rendered as lower-case hex, which is not obfuscation — the inside is not a secret —
  * but the one property a token a person copies off a terminal has to have: it survives
  * a shell. The document underneath holds a plugin's own cursor, and a cursor may hold
  * anything at all, so a token spelled as the raw JSON would carry quotes, braces and
  * spaces straight into the next command line. Hex has no character a shell reads.
- * 
+ *
  * # What a token is and is not checked for
- * 
+ *
  * Both ways in go through [`parse`](Self::parse) — including deserialising one — and
  * what that establishes is **structural**: the string is hex, the bytes are this
  * engine's own resume document, and every state in it is well formed. It does not, and
@@ -1995,7 +1995,7 @@ export namespace GeneratedQueryResponseOfQualifiedEdge {
  * credential and carries nothing secret; forging one buys a caller nothing they could
  * not have asked for outright, since every cursor inside is handed straight back to the
  * source that issued it and is validated there.
- * 
+ *
  * What a forged token *could* do is name a stream this configuration has no source for,
  * or resume further into a page than the engine ever pages. Both are refused where the
  * token meets the query it is resuming, by
@@ -2059,7 +2059,7 @@ message: string
 kind: "rate-limited"
 /**
  * What the source can add about *which* limit refused it and what it was doing.
- * 
+ *
  * Absent means the source had nothing to add beyond the kind, which is what
  * every source said before this member existed; it is omitted from the wire
  * entirely when absent, so a reader written against the shape without it sees
@@ -2094,7 +2094,7 @@ source: string
 }
 /**
  * One dependency edge with both ends qualified.
- * 
+ *
  * An end may belong to another source. The near plugin owns that qualified far id and the
  * engine reports it without resolving or fetching the far source, so it holds no index.
  */
@@ -2109,7 +2109,7 @@ to: QualifiedEndpoint1
 }
 /**
  * The item the edge starts at, and the one that **depends on** the other.
- * 
+ *
  * The direction a caller asked in says which end they named, not which end the edge
  * starts at: a forward read and the matching reverse read report the same edge.
  */
@@ -2170,7 +2170,7 @@ kind: string
 pages_fetched: number
 /**
  * Predicates the source applied itself.
- * 
+ *
  * The four predicate vectors below partition one set of outcomes, and nothing in
  * the type says so: a `Predicate` could appear in two of them at once, or in none.
  * One `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that
@@ -2183,7 +2183,7 @@ pushed_down: Predicate[]
 source: string
 /**
  * Predicates neither side could answer, so the result is unconstrained.
- * 
+ *
  * Never [`Predicate::ReverseDependencies`]: `DependencySupport` has no
  * unsupported variant, so a reverse-dependency read is answered natively or
  * emulated by the engine's bounded scan, never abandoned. The type cannot say
@@ -2199,15 +2199,15 @@ export namespace GeneratedQueryResponseOfQualifiedLabel {
 /**
  * The engine's own resume token: one plugin cursor per source stream, opaque to the
  * caller exactly as a plugin's cursor is opaque to the engine.
- * 
+ *
  * Rendered as lower-case hex, which is not obfuscation — the inside is not a secret —
  * but the one property a token a person copies off a terminal has to have: it survives
  * a shell. The document underneath holds a plugin's own cursor, and a cursor may hold
  * anything at all, so a token spelled as the raw JSON would carry quotes, braces and
  * spaces straight into the next command line. Hex has no character a shell reads.
- * 
+ *
  * # What a token is and is not checked for
- * 
+ *
  * Both ways in go through [`parse`](Self::parse) — including deserialising one — and
  * what that establishes is **structural**: the string is hex, the bytes are this
  * engine's own resume document, and every state in it is well formed. It does not, and
@@ -2215,7 +2215,7 @@ export namespace GeneratedQueryResponseOfQualifiedLabel {
  * credential and carries nothing secret; forging one buys a caller nothing they could
  * not have asked for outright, since every cursor inside is handed straight back to the
  * source that issued it and is validated there.
- * 
+ *
  * What a forged token *could* do is name a stream this configuration has no source for,
  * or resume further into a page than the engine ever pages. Both are refused where the
  * token meets the query it is resuming, by
@@ -2279,7 +2279,7 @@ message: string
 kind: "rate-limited"
 /**
  * What the source can add about *which* limit refused it and what it was doing.
- * 
+ *
  * Absent means the source had nothing to add beyond the kind, which is what
  * every source said before this member existed; it is omitted from the wire
  * entirely when absent, so a reader written against the shape without it sees
@@ -2314,7 +2314,7 @@ source: string
 }
 /**
  * One item, under the qualified id the engine addresses it by.
- * 
+ *
  * A plugin only ever deals in its own [`NativeId`]; qualifying one is the engine's job,
  * so this type is the engine's and a plugin never constructs one.
  */
@@ -2376,7 +2376,7 @@ kind: string
 pages_fetched: number
 /**
  * Predicates the source applied itself.
- * 
+ *
  * The four predicate vectors below partition one set of outcomes, and nothing in
  * the type says so: a `Predicate` could appear in two of them at once, or in none.
  * One `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that
@@ -2389,7 +2389,7 @@ pushed_down: Predicate[]
 source: string
 /**
  * Predicates neither side could answer, so the result is unconstrained.
- * 
+ *
  * Never [`Predicate::ReverseDependencies`]: `DependencySupport` has no
  * unsupported variant, so a reverse-dependency read is answered natively or
  * emulated by the engine's bounded scan, never abandoned. The type cannot say
@@ -2404,16 +2404,16 @@ export type QueryResponseOfQualifiedLabel = GeneratedQueryResponseOfQualifiedLab
 export namespace GeneratedQueryResponseOfQualifiedProject {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -2430,15 +2430,15 @@ export type Repository = string
 /**
  * The engine's own resume token: one plugin cursor per source stream, opaque to the
  * caller exactly as a plugin's cursor is opaque to the engine.
- * 
+ *
  * Rendered as lower-case hex, which is not obfuscation — the inside is not a secret —
  * but the one property a token a person copies off a terminal has to have: it survives
  * a shell. The document underneath holds a plugin's own cursor, and a cursor may hold
  * anything at all, so a token spelled as the raw JSON would carry quotes, braces and
  * spaces straight into the next command line. Hex has no character a shell reads.
- * 
+ *
  * # What a token is and is not checked for
- * 
+ *
  * Both ways in go through [`parse`](Self::parse) — including deserialising one — and
  * what that establishes is **structural**: the string is hex, the bytes are this
  * engine's own resume document, and every state in it is well formed. It does not, and
@@ -2446,7 +2446,7 @@ export type Repository = string
  * credential and carries nothing secret; forging one buys a caller nothing they could
  * not have asked for outright, since every cursor inside is handed straight back to the
  * source that issued it and is validated there.
- * 
+ *
  * What a forged token *could* do is name a stream this configuration has no source for,
  * or resume further into a page than the engine ever pages. Both are refused where the
  * token meets the query it is resuming, by
@@ -2510,7 +2510,7 @@ message: string
 kind: "rate-limited"
 /**
  * What the source can add about *which* limit refused it and what it was doing.
- * 
+ *
  * Absent means the source had nothing to add beyond the kind, which is what
  * every source said before this member existed; it is omitted from the wire
  * entirely when absent, so a reader written against the shape without it sees
@@ -2545,7 +2545,7 @@ source: string
 }
 /**
  * One item, under the qualified id the engine addresses it by.
- * 
+ *
  * A plugin only ever deals in its own [`NativeId`]; qualifying one is the engine's job,
  * so this type is the engine's and a plugin never constructs one.
  */
@@ -2672,7 +2672,7 @@ kind: string
 pages_fetched: number
 /**
  * Predicates the source applied itself.
- * 
+ *
  * The four predicate vectors below partition one set of outcomes, and nothing in
  * the type says so: a `Predicate` could appear in two of them at once, or in none.
  * One `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that
@@ -2685,7 +2685,7 @@ pushed_down: Predicate[]
 source: string
 /**
  * Predicates neither side could answer, so the result is unconstrained.
- * 
+ *
  * Never [`Predicate::ReverseDependencies`]: `DependencySupport` has no
  * unsupported variant, so a reverse-dependency read is answered natively or
  * emulated by the engine's bounded scan, never abandoned. The type cannot say
@@ -2700,16 +2700,16 @@ export type QueryResponseOfQualifiedProject = GeneratedQueryResponseOfQualifiedP
 export namespace GeneratedQueryResponseOfQualifiedTask {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -2721,7 +2721,7 @@ path: string
 })
 /**
  * A source's own opaque identifier for one item.
- * 
+ *
  * Deliberately unvalidated: a native id is whatever the upstream system says it
  * is, colons included. The engine parses a qualified id by splitting on the
  * *first* colon precisely so this stays true.
@@ -2734,15 +2734,15 @@ export type Repository = string
 /**
  * The engine's own resume token: one plugin cursor per source stream, opaque to the
  * caller exactly as a plugin's cursor is opaque to the engine.
- * 
+ *
  * Rendered as lower-case hex, which is not obfuscation — the inside is not a secret —
  * but the one property a token a person copies off a terminal has to have: it survives
  * a shell. The document underneath holds a plugin's own cursor, and a cursor may hold
  * anything at all, so a token spelled as the raw JSON would carry quotes, braces and
  * spaces straight into the next command line. Hex has no character a shell reads.
- * 
+ *
  * # What a token is and is not checked for
- * 
+ *
  * Both ways in go through [`parse`](Self::parse) — including deserialising one — and
  * what that establishes is **structural**: the string is hex, the bytes are this
  * engine's own resume document, and every state in it is well formed. It does not, and
@@ -2750,7 +2750,7 @@ export type Repository = string
  * credential and carries nothing secret; forging one buys a caller nothing they could
  * not have asked for outright, since every cursor inside is handed straight back to the
  * source that issued it and is validated there.
- * 
+ *
  * What a forged token *could* do is name a stream this configuration has no source for,
  * or resume further into a page than the engine ever pages. Both are refused where the
  * token meets the query it is resuming, by
@@ -2814,7 +2814,7 @@ message: string
 kind: "rate-limited"
 /**
  * What the source can add about *which* limit refused it and what it was doing.
- * 
+ *
  * Absent means the source had nothing to add beyond the kind, which is what
  * every source said before this member existed; it is omitted from the wire
  * entirely when absent, so a reader written against the shape without it sees
@@ -2849,7 +2849,7 @@ source: string
 }
 /**
  * One item, under the qualified id the engine addresses it by.
- * 
+ *
  * A plugin only ever deals in its own [`NativeId`]; qualifying one is the engine's job,
  * so this type is the engine's and a plugin never constructs one.
  */
@@ -2883,7 +2883,7 @@ id: string
 labels: Label[]
 /**
  * Where this task is, when the source says (see [`Location`]).
- * 
+ *
  * Absent by default, so a source that predates this field — and every source that
  * simply does not say — reads as `None`, which means *the source did not say where
  * this is* rather than *this is nowhere*. It neither replaces nor derives from
@@ -2892,7 +2892,7 @@ labels: Label[]
 location?: (Location | null)
 /**
  * Caller-defined attributes, preserving their JSON types.
- * 
+ *
  * Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
  * product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
  * the two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —
@@ -2990,7 +2990,7 @@ kind: string
 pages_fetched: number
 /**
  * Predicates the source applied itself.
- * 
+ *
  * The four predicate vectors below partition one set of outcomes, and nothing in
  * the type says so: a `Predicate` could appear in two of them at once, or in none.
  * One `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that
@@ -3003,7 +3003,7 @@ pushed_down: Predicate[]
 source: string
 /**
  * Predicates neither side could answer, so the result is unconstrained.
- * 
+ *
  * Never [`Predicate::ReverseDependencies`]: `DependencySupport` has no
  * unsupported variant, so a reverse-dependency read is answered natively or
  * emulated by the engine's bounded scan, never abandoned. The type cannot say
@@ -3023,15 +3023,15 @@ export type SearchHit = (Qualified | Qualified2)
 /**
  * The engine's own resume token: one plugin cursor per source stream, opaque to the
  * caller exactly as a plugin's cursor is opaque to the engine.
- * 
+ *
  * Rendered as lower-case hex, which is not obfuscation — the inside is not a secret —
  * but the one property a token a person copies off a terminal has to have: it survives
  * a shell. The document underneath holds a plugin's own cursor, and a cursor may hold
  * anything at all, so a token spelled as the raw JSON would carry quotes, braces and
  * spaces straight into the next command line. Hex has no character a shell reads.
- * 
+ *
  * # What a token is and is not checked for
- * 
+ *
  * Both ways in go through [`parse`](Self::parse) — including deserialising one — and
  * what that establishes is **structural**: the string is hex, the bytes are this
  * engine's own resume document, and every state in it is well formed. It does not, and
@@ -3039,7 +3039,7 @@ export type SearchHit = (Qualified | Qualified2)
  * credential and carries nothing secret; forging one buys a caller nothing they could
  * not have asked for outright, since every cursor inside is handed straight back to the
  * source that issued it and is validated there.
- * 
+ *
  * What a forged token *could* do is name a stream this configuration has no source for,
  * or resume further into a page than the engine ever pages. Both are refused where the
  * token meets the query it is resuming, by
@@ -3103,7 +3103,7 @@ message: string
 kind: "rate-limited"
 /**
  * What the source can add about *which* limit refused it and what it was doing.
- * 
+ *
  * Absent means the source had nothing to add beyond the kind, which is what
  * every source said before this member existed; it is omitted from the wire
  * entirely when absent, so a reader written against the shape without it sees
@@ -3182,7 +3182,7 @@ kind: string
 pages_fetched: number
 /**
  * Predicates the source applied itself.
- * 
+ *
  * The four predicate vectors below partition one set of outcomes, and nothing in
  * the type says so: a `Predicate` could appear in two of them at once, or in none.
  * One `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that
@@ -3195,7 +3195,7 @@ pushed_down: Predicate[]
 source: string
 /**
  * Predicates neither side could answer, so the result is unconstrained.
- * 
+ *
  * Never [`Predicate::ReverseDependencies`]: `DependencySupport` has no
  * unsupported variant, so a reverse-dependency read is answered natively or
  * emulated by the engine's bounded scan, never abandoned. The type cannot say
@@ -3347,7 +3347,7 @@ export type Setting = GeneratedSetting.Setting;
 export namespace GeneratedSourceError {
 /**
  * Why a source could not answer.
- * 
+ *
  * Every variant carries owned data only, so an error survives the JSON-over-stdio
  * boundary a subprocess-hosted plugin crosses without losing anything.
  */
@@ -3376,7 +3376,7 @@ message: string
 kind: "rate-limited"
 /**
  * What the source can add about *which* limit refused it and what it was doing.
- * 
+ *
  * Absent means the source had nothing to add beyond the kind, which is what
  * every source said before this member existed; it is omitted from the wire
  * entirely when absent, so a reader written against the shape without it sees
@@ -3439,7 +3439,7 @@ message: string
 kind: "rate-limited"
 /**
  * What the source can add about *which* limit refused it and what it was doing.
- * 
+ *
  * Absent means the source had nothing to add beyond the kind, which is what
  * every source said before this member existed; it is omitted from the wire
  * entirely when absent, so a reader written against the shape without it sees
@@ -3482,7 +3482,7 @@ export namespace GeneratedSourceListing {
 export type SourceListing = ({
 /**
  * The plugin kind behind it.
- * 
+ *
  * A `String` because the vocabulary is open, not because it was not thought about:
  * this is the kind a source reports, and a subprocess-hosted plugin reports one
  * arriving over the wire from a binary this workspace never compiled. No
@@ -3528,7 +3528,7 @@ message: string
 kind: "rate-limited"
 /**
  * What the source can add about *which* limit refused it and what it was doing.
- * 
+ *
  * Absent means the source had nothing to add beyond the kind, which is what
  * every source said before this member existed; it is omitted from the wire
  * entirely when absent, so a reader written against the shape without it sees
@@ -3565,7 +3565,7 @@ state: "unavailable"
 export interface Capabilities {
 /**
  * Whether the source has documents at all.
- * 
+ *
  * The same shape as [`projects`](Self::projects), and read the same way: it says what
  * the source *holds*, not which predicate it applies. It is therefore **not** one of
  * the predicates the second capability rule reaches — there is no wider result set to
@@ -3574,7 +3574,7 @@ export interface Capabilities {
  * exactly as it reads [`TaskSource::writes`](crate::TaskSource::writes), and a
  * document read across several sources reports such a source as holding none rather
  * than as having failed.
- * 
+ *
  * Defaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that
  * predates documents says nothing here and is read as the document-free source it is.
  */
@@ -3628,7 +3628,7 @@ export namespace GeneratedSourceListings {
 export type SourceListing = ({
 /**
  * The plugin kind behind it.
- * 
+ *
  * A `String` because the vocabulary is open, not because it was not thought about:
  * this is the kind a source reports, and a subprocess-hosted plugin reports one
  * arriving over the wire from a binary this workspace never compiled. No
@@ -3675,7 +3675,7 @@ message: string
 kind: "rate-limited"
 /**
  * What the source can add about *which* limit refused it and what it was doing.
- * 
+ *
  * Absent means the source had nothing to add beyond the kind, which is what
  * every source said before this member existed; it is omitted from the wire
  * entirely when absent, so a reader written against the shape without it sees
@@ -3713,7 +3713,7 @@ export type SourceListings = SourceListing[]
 export interface Capabilities {
 /**
  * Whether the source has documents at all.
- * 
+ *
  * The same shape as [`projects`](Self::projects), and read the same way: it says what
  * the source *holds*, not which predicate it applies. It is therefore **not** one of
  * the predicates the second capability rule reaches — there is no wider result set to
@@ -3722,7 +3722,7 @@ export interface Capabilities {
  * exactly as it reads [`TaskSource::writes`](crate::TaskSource::writes), and a
  * document read across several sources reports such a source as holding none rather
  * than as having failed.
- * 
+ *
  * Defaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that
  * predates documents says nothing here and is read as the document-free source it is.
  */
@@ -3797,7 +3797,7 @@ kind: string
 pages_fetched: number
 /**
  * Predicates the source applied itself.
- * 
+ *
  * The four predicate vectors below partition one set of outcomes, and nothing in
  * the type says so: a `Predicate` could appear in two of them at once, or in none.
  * One `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that
@@ -3810,7 +3810,7 @@ pushed_down: Predicate[]
 source: string
 /**
  * Predicates neither side could answer, so the result is unconstrained.
- * 
+ *
  * Never [`Predicate::ReverseDependencies`]: `DependencySupport` has no
  * unsupported variant, so a reverse-dependency read is answered natively or
  * emulated by the engine's bounded scan, never abandoned. The type cannot say
@@ -3825,7 +3825,7 @@ export type SourcePlan = GeneratedSourcePlan.SourcePlan;
 export namespace GeneratedStatus {
 /**
  * A source's status, kept in both normalised and original form.
- * 
+ *
  * `category` is what every filter compares against; `name` is the source's own
  * wording, preserved so display never flattens "In Review" into "In Progress".
  */
@@ -3854,16 +3854,16 @@ export type StatusCategory = GeneratedStatusCategory.StatusCategory;
 export namespace GeneratedTask {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
- * 
+ *
  * Externally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or
  * `{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader
  * handed one of these knows what to *do* with it — open a link, or print a path and read
  * the file out — which is what a bare string could not have said.
- * 
+ *
  * It carries no third case on purpose. `None` on the field is the third case, and it
  * means the source did not say where the entity is, which is not the same as saying it is
  * nowhere.
- * 
+ *
  * This does **not** redefine, replace or derive from the `url` field of [`Task`],
  * [`Project`] or [`Document`]: a source that reports a web URL there goes on reporting
  * it, and every existing consumer sees exactly what it saw.
@@ -3875,7 +3875,7 @@ path: string
 })
 /**
  * A source's own opaque identifier for one item.
- * 
+ *
  * Deliberately unvalidated: a native id is whatever the upstream system says it
  * is, colons included. The engine parses a qualified id by splitting on the
  * *first* colon precisely so this stays true.
@@ -3908,7 +3908,7 @@ id: string
 labels: Label[]
 /**
  * Where this task is, when the source says (see [`Location`]).
- * 
+ *
  * Absent by default, so a source that predates this field — and every source that
  * simply does not say — reads as `None`, which means *the source did not say where
  * this is* rather than *this is nowhere*. It neither replaces nor derives from
@@ -3917,7 +3917,7 @@ labels: Label[]
 location?: (Location | null)
 /**
  * Caller-defined attributes, preserving their JSON types.
- * 
+ *
  * Keys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this
  * product — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are
  * the two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —
@@ -3989,7 +3989,7 @@ export type Task = GeneratedTask.Task;
 export namespace GeneratedTaskQuery {
 /**
  * A source's own opaque identifier for one item.
- * 
+ *
  * Deliberately unvalidated: a native id is whatever the upstream system says it
  * is, colons included. The engine parses a qualified id by splitting on the
  * *first* colon precisely so this stays true.
@@ -4002,7 +4002,7 @@ export type StatusCategory = ("draft" | "backlog" | "todo" | "in-progress" | "do
 
 /**
  * A filter over a source's tasks.
- * 
+ *
  * Every field narrows; an empty or `None` field means unfiltered.
  */
 export interface TaskQuery {
