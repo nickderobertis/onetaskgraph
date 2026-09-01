@@ -30,16 +30,44 @@ fn repository_root() -> PathBuf {
         .expect("the repository root is two directories above this crate")
 }
 
+/// Whether an id is the `<registry>:<name>` the probe can act on.
+///
+/// The registry is lowercase and hyphenated; the name is everything after the one
+/// colon between them, non-empty and carrying neither whitespace nor a second
+/// colon. Deliberately the *shape* rather than the set of registries: which
+/// registries exist is the probe's own answer, and a declaration naming one it
+/// does not carry earns the probe's refusal rather than this lane's.
+fn is_registry_qualified(identifier: &str) -> bool {
+    let Some((registry, name)) = identifier.split_once(':') else {
+        return false;
+    };
+    !registry.is_empty()
+        && registry.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+        && !name.is_empty()
+        && !name.contains(':')
+        && !name.chars().any(char::is_whitespace)
+}
+
 /// Every `[[target]]` id the declaration carries.
 ///
 /// A scan rather than a TOML parse — what the document *is* is held by
 /// `scripts/check-release-targets.sh` and by the canonical reader it runs, and
 /// what this lane needs is only the list of things a consumer waits on — but a
 /// scan that is strict about the two things it reads. A key is `id` exactly, not
-/// anything beginning with it, and its value is a quoted string; a line under
-/// `[[target]]` that spells `id` some other way, or carries none at all, panics
-/// here rather than being passed over, because a declared target this lane
-/// silently skipped is a target nothing asks a registry about.
+/// anything beginning with it, and its value is a quoted `<registry>:<name>`; a
+/// line under `[[target]]` that spells `id` some other way, or carries none at
+/// all, panics here rather than being passed over, because a declared target this
+/// lane silently skipped is a target nothing asks a registry about.
+///
+/// The id's own syntax is checked here as well as in the deterministic gate, and
+/// not because one spelling can drift from the other — the gate is authoritative
+/// about what the document is. It is because this lane hands each id straight to
+/// the probe, which refuses a malformed one as a usage error, and the lane would
+/// then report a declaration this could have refused by name as a registry that
+/// did not answer. A caller sent looking at crates.io for a typo in a TOML file
+/// is a caller this lane misdirected.
 fn declared_target_ids(root: &Path) -> Vec<String> {
     let declaration = root.join("release-targets.toml");
     let text = std::fs::read_to_string(&declaration)
@@ -82,7 +110,7 @@ fn declared_target_ids(root: &Path) -> Vec<String> {
             .strip_prefix('"')
             .and_then(|value| value.strip_suffix('"'))
             .filter(|value| !value.is_empty() && !value.contains('"'));
-        let Some(identifier) = quoted else {
+        let Some(identifier) = quoted.filter(|value| is_registry_qualified(value)) else {
             panic!(
                 "{} gives a [[target]] the id {value}, which is not a quoted <registry>:<name>",
                 declaration.display()

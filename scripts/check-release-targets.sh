@@ -61,6 +61,22 @@ work="$(mktemp -d)" || fatal \
   "check the temporary directory's permissions and free space, then rerun"
 trap 'rm -rf "$work"' EXIT
 
+# The one switch this check reads from the environment, held to the three values
+# it has before anything branches on it — the same three
+# `ONETASKGRAPH_LIVE_REQUIRED` is held to in
+# crates/onetaskgraph-github-projects/tests/lane/mod.rs, and for the same reason.
+# Every other value read as a plain `= 1` comparison means not-required, so a
+# caller that asked for the canonical reader with `=true` or `=yes` would get the
+# skip it was trying to turn off, and be told nothing.
+reader_required="${ONETASKGRAPH_RELEASE_READER_REQUIRED:-0}"
+case "$reader_required" in
+  0 | 1) ;;
+  *)
+    fatal "ONETASKGRAPH_RELEASE_READER_REQUIRED is '$reader_required', and it must be 1, 0 or unset" \
+      "set it to 1 to require the canonical reader, or unset it to let this skip where onevcs is absent"
+    ;;
+esac
+
 # The reader that actually consumes this document, run over the real file. It is
 # the whole point of writing one, so where it is installed it is not optional.
 reader_status=0
@@ -70,7 +86,7 @@ if command -v onevcs >/dev/null 2>&1; then
     fatal "the canonical reader refused release-targets.toml (its refusal is above)" \
       "fix the field it names; a document this reader refuses is one a consumer cannot read at all"
   fi
-elif [ "${ONETASKGRAPH_RELEASE_READER_REQUIRED:-0}" = 1 ]; then
+elif [ "$reader_required" = 1 ]; then
   fatal "onevcs is not on PATH and ONETASKGRAPH_RELEASE_READER_REQUIRED=1 asked for it" \
     "install onevcs (cargo install onevcs, or pip install onevcs-cli) and rerun"
 else

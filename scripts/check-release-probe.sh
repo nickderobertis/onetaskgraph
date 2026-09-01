@@ -55,6 +55,7 @@ python3 - "$PIN" "$PROBE" "$DECLARATION" "$work" <<'PY' || fatal \
   "scripts/release-probe.sh and config/registry-interfaces.toml disagree (the drift is above)" \
   "bring the probe back to the pinned interface, or re-observe that registry's interface and record the new observation in the pin"
 import json
+import re
 import sys
 from pathlib import Path
 from urllib.parse import quote
@@ -126,14 +127,62 @@ for position, registry in enumerate(registries, start=1):
                 f"{pin_path} [[registry]] #{position} holds '{field}' as "
                 f"{type(registry[field]).__name__}, and the pin's shape gives it {kind.__name__}"
             ])
+    # A type is not a value. `url = ""`, `method = "FETCH"` or `served_status =
+    # 999` are all a pin of the right shape describing an interface no registry
+    # has, and this file is the whole reason the offline cases count as evidence —
+    # so a pin nobody could have observed is refused here rather than reconciled
+    # against.
+    where = f"{pin_path} [[registry]] #{position}"
+    for field in ("registry", "service", "documentation", "observed", "observed_from",
+                  "method", "url", "name_in_url", "version_path", "served_version",
+                  "served_body", "absent_body"):
+        if not registry[field].strip():
+            refuse([f"{where} holds '{field}' blank, which describes nothing"])
+    # The provenance is a record of when this was read, so a date that is not one
+    # is a recollection wearing a date's clothes.
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", registry["observed"]):
+        refuse([
+            f"{where} was observed on '{registry['observed']}', which is not a YYYY-MM-DD date"
+        ])
+    # A probe reads. Anything that could change a registry's state is a method
+    # this pin may not describe, whatever the probe happens to send today.
+    if registry["method"] not in {"GET", "HEAD"}:
+        refuse([
+            f"{where} pins the method '{registry['method']}'; a probe reads, so it is GET or HEAD"
+        ])
+    for field in ("url", "observed_from", "documentation"):
+        if not registry[field].startswith("https://"):
+            refuse([f"{where} gives '{field}' as '{registry[field]}', which is not an https:// URL"])
+    if "{name}" not in registry["url"]:
+        refuse([
+            f"{where} pins the url '{registry['url']}', which carries no {{name}} for the "
+            "target's name to go into"
+        ])
     if registry["name_in_url"] not in {"verbatim", "percent-encoded"}:
         refuse([
-            f"{pin_path} [[registry]] #{position} spells its name in the URL as "
+            f"{where} spells its name in the URL as "
             f"'{registry['name_in_url']}', which is neither 'verbatim' nor 'percent-encoded'"
         ])
-    for decoy in registry["decoy_paths"]:
+    for field in ("served_status", "absent_status"):
+        if not 100 <= registry[field] <= 599:
+            refuse([f"{where} pins '{field}' as {registry[field]}, which is not an HTTP status"])
+    # The two answers are told apart by their status, so a pin giving them one
+    # status would make every absent answer read as a served one.
+    if registry["served_status"] == registry["absent_status"]:
+        refuse([
+            f"{where} pins served_status and absent_status both as "
+            f"{registry['served_status']}, so the two answers cannot be told apart"
+        ])
+    # A field path is what the probe walks the response document by, and a blank
+    # segment walks nowhere while still reading as a path.
+    field_paths = [("version_path", registry["version_path"])]
+    for index, decoy in enumerate(registry["decoy_paths"]):
         if not isinstance(decoy, str):
-            refuse([f"{pin_path} [[registry]] #{position} has a decoy path that is not a string"])
+            refuse([f"{where} has a decoy path that is not a string"])
+        field_paths.append((f"decoy_paths #{index + 1}", decoy))
+    for field, path in field_paths:
+        if any(not segment for segment in path.split(".")):
+            refuse([f"{where} gives {field} as '{path}', which is not a dotted field path"])
 seen = {}
 for position, registry in enumerate(registries, start=1):
     # Two tables for one registry would collapse into whichever came last, and the
