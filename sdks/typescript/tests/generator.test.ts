@@ -7,6 +7,15 @@ import { spawnSync } from "node:child_process";
 const packageRoot = resolve(import.meta.dir, "..");
 const binary = resolve(packageRoot, "../../target/debug/onetaskgraph");
 
+// Each test below spawns the generator a dozen times over, and on Windows every spawn goes
+// through a .cmd shim into node, so the wall clock they are given measures the runner far more
+// than it measures the generator. At 30s it measured the runner outright: one Windows lane ran
+// "generator rejects unsafe destinations and malformed executable output" in 17.8s and the next
+// took 34.2s and timed out, both siblings slowing by that same ~1.8x on identical code. The
+// budget below guards against a hang rather than against slowness, so it sits far above the
+// slowest run observed rather than beside it. It is spelled inline at each test because biome
+// reflows the whole file when the argument is a name instead of a literal.
+
 function executable(directory: string, name: string, body: string) {
   const windows = process.platform === "win32";
   const program = resolve(directory, `${name}.js`);
@@ -88,7 +97,7 @@ test("generation, clean check, stale check, and invalid arguments use the real b
   } finally {
     rmSync(generated, { recursive: true, force: true });
   }
-}, 30_000);
+}, 120_000);
 
 test("generator rejects unsafe destinations and malformed executable output", () => {
   const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generator-boundary-"));
@@ -183,7 +192,7 @@ test("generator rejects unsafe destinations and malformed executable output", ()
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }
-}, 30_000);
+}, 120_000);
 
 test("generator reports uncompileable roots and generated-file write failures", () => {
   const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generator-failures-"));
@@ -224,4 +233,4 @@ test("generator reports uncompileable roots and generated-file write failures", 
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }
-}, 30_000);
+}, 120_000);
