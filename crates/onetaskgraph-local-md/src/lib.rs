@@ -7,8 +7,8 @@
 //! service — which is what `Support::Native` means in the plugin contract: *the source
 //! applies this predicate itself*, wherever it applies it. No *predicate* here is
 //! unsupported, and none could be: a filter over files already read is a filter over files
-//! already read. `documents` is the one unsupported field, and it is not a predicate — it
-//! says this source has no documents to filter in the first place.
+//! already read. `documents` is not a predicate at all — it says whether this source has
+//! documents in the first place, and this one does: a third folder beside the other two.
 //!
 //! *Proven* means a shared journey drives it against the real binary over this source's
 //! own row in `crates/onetaskgraph/tests/e2e/fixtures.rs`, and
@@ -18,7 +18,7 @@
 //! | Field | Verdict |
 //! | --- | --- |
 //! | `projects` | **Supported and proven.** `projects/` is a folder of its own, and a task's `project:` key is what files it under one. |
-//! | `documents` | **Unsupported, and unimplemented.** This source reads task and project Markdown and nothing else, so it has no document side at all and refuses a document read rather than answering an empty page. A folder of Markdown could plainly hold one, which is what makes this work nobody has written rather than a limit; docs/follow-ups.md tracks it. |
+//! | `documents` | **Supported and proven.** `documents/` is a folder of its own beside the other two, read on the same terms: recursively, with a file's path under it and without `.md` as its identifier. A document's front matter is a task's minus the two things a document is not — no `status` and no `depends_on` — and both are refused rather than ignored. |
 //! | `orphan_tasks` | **Supported and proven.** A task document with no `project:` key belongs to none. |
 //! | `filter_by_label` | **Supported and proven,** over the `labels:` key, requiring every label asked for and excluding every label refused. |
 //! | `filter_by_status` | **Supported and proven,** over `status:` through this instance's own `status_mapping`. |
@@ -27,6 +27,15 @@
 //! | `task_dependencies` | **Supported and proven,** in both directions: the reverse read scans the folder's own `depends_on` keys, which is a read of data already in hand rather than an index. |
 //! | `project_dependencies` | **Supported and proven,** in both directions, the same way. |
 //! | `max_page_size` | **Supported and proven.** [`MAX_PAGE_SIZE`], the largest page one folder scan returns. |
+//!
+//! # Where this source says an entity is
+//!
+//! Every task, project and document this source reports carries a `Location::Path` naming
+//! the canonicalized absolute path of the file it was read from — the same path this source
+//! already computes, because the configured root and every traversed path are canonicalized
+//! and an identifier escaping the root is refused. That is what the location contract is
+//! for on this backend: a reader holding one of these entities can print the path or read
+//! the contents out for a person, knowing nothing about this plugin.
 #![deny(missing_docs)]
 
 use std::{
@@ -37,10 +46,10 @@ use std::{
 
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Health, ItemKind, ItemWrite, Label, LabelFilter, NativeId, Page, PageRequest,
-    Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName,
-    SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
-    TextQuery, WriteSupport,
+    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location,
+    NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
+    TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -54,7 +63,7 @@ pub const MAX_PAGE_SIZE: u32 = 200;
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LocalMdConfig {
-    /// Folder containing `tasks/` and `projects/`.
+    /// Folder containing `tasks/`, `projects/` and `documents/`.
     pub root: PathBuf,
     /// Case-insensitive source status to normalized-category mapping.
     #[serde(default = "default_statuses")]
@@ -139,6 +148,52 @@ fn default_status() -> String {
     "backlog".to_owned()
 }
 
+/// The front-matter keys every kind of file in this source carries.
+///
+/// A plain struct rather than a `#[serde(flatten)]` member, because both front matters
+/// above are `deny_unknown_fields` and serde cannot deny an unknown field beside a
+/// flattened one — and denying them is exactly what makes a document's missing `status`
+/// and `depends_on` a refusal rather than a shrug.
+struct SharedFront {
+    title: Option<String>,
+    labels: Vec<LabelInput>,
+    project: Option<String>,
+    url: Option<String>,
+    metadata: BTreeMap<String, serde_json::Value>,
+    repositories: Vec<Repository>,
+}
+
+impl FrontMatter {
+    /// This front matter split into what every kind carries, and what only work does.
+    fn split(self) -> (SharedFront, String, Vec<Dependency>) {
+        (
+            SharedFront {
+                title: self.title,
+                labels: self.labels,
+                project: self.project,
+                url: self.url,
+                metadata: self.metadata,
+                repositories: self.repositories,
+            },
+            self.status,
+            self.depends_on,
+        )
+    }
+}
+
+impl From<DocumentFrontMatter> for SharedFront {
+    fn from(front: DocumentFrontMatter) -> Self {
+        Self {
+            title: front.title,
+            labels: front.labels,
+            project: front.project,
+            url: front.url,
+            metadata: front.metadata,
+            repositories: front.repositories,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum Dependency {
@@ -188,30 +243,69 @@ enum EdgeKind {
     Related,
 }
 
-struct Document {
+/// The front matter of a document, which is a task's minus what a document does not have.
+///
+/// `deny_unknown_fields` is what makes the two omissions the contract rather than a
+/// convention: a `status:` or a `depends_on:` under `documents/` is refused naming the
+/// key, instead of being read and quietly dropped. A document is not work, so it has no
+/// place in a status filter and none in a dependency graph.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocumentFrontMatter {
+    title: Option<String>,
+    #[serde(default)]
+    labels: Vec<LabelInput>,
+    // llmlint: ignore[invalid_states_unrepresentable] `NativeId` is deliberately an opaque, unvalidated string in the frozen plugin contract (`onetaskgraph-plugin-api/src/id.rs`); replacing this wire value with a stricter local identifier would reject values the public type expressly permits.
+    project: Option<String>,
+    // llmlint: ignore[invalid_states_unrepresentable, boundary_inputs_validated] `Document::url` is frozen as `Option<String>` in the plugin contract, which permits source-native URL-like values; parsing here would narrow that approved boundary and is the contract owner's decision.
+    url: Option<String>,
+    #[serde(default)]
+    metadata: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    repositories: Vec<Repository>,
+}
+
+/// One work item's Markdown file, read: a task or a project.
+///
+/// A document is not one of these and has no `Entry`: it carries neither the status nor
+/// the edges below, so it is read straight into the contract's own [`Document`].
+struct Entry {
+    common: Common,
+    status: Status,
+    dependencies: Vec<DependencyEdge>,
+}
+
+/// What every Markdown file of this source carries, whichever folder it is in.
+struct Common {
     id: NativeId,
     title: String,
     body: Option<String>,
-    status: Status,
     labels: Vec<Label>,
     project: Option<NativeId>,
-    dependencies: Vec<DependencyEdge>,
     url: Option<String>,
+    location: Location,
     metadata: BTreeMap<String, serde_json::Value>,
     repositories: Vec<Repository>,
 }
 
+/// Which of this source's three folders an item lives in.
+///
+/// The folder **is** the discriminator, for tasks, projects and documents alike; see this
+/// crate's `docs/local-md.md` for why that was chosen over a metadata marker and over a
+/// distinct file extension.
 #[derive(Debug, Clone, Copy)]
-enum DocumentKind {
+enum Kind {
     Task,
     Project,
+    Document,
 }
 
-impl DocumentKind {
+impl Kind {
     const fn directory(self) -> &'static str {
         match self {
             Self::Task => "tasks",
             Self::Project => "projects",
+            Self::Document => "documents",
         }
     }
 }
@@ -237,7 +331,7 @@ impl LocalMdSource {
         })
     }
 
-    fn directory(&self, kind: DocumentKind) -> Result<PathBuf, SourceError> {
+    fn directory(&self, kind: Kind) -> Result<PathBuf, SourceError> {
         let path = self.root.join(kind.directory());
         if !path.exists() {
             return Ok(path);
@@ -260,7 +354,7 @@ impl LocalMdSource {
         Ok(canonical)
     }
 
-    fn paths(&self, kind: DocumentKind) -> Result<Vec<PathBuf>, SourceError> {
+    fn paths(&self, kind: Kind) -> Result<Vec<PathBuf>, SourceError> {
         fn visit(
             root: &Path,
             dir: &Path,
@@ -327,43 +421,51 @@ impl LocalMdSource {
         Ok(paths)
     }
 
-    fn parse(&self, kind: DocumentKind, path: &Path) -> Result<Document, SourceError> {
-        // Both callers canonicalize and confine the path before parsing it. Keeping that
-        // invariant explicit here makes future internal callers notice if they skip the
-        // boundary check without duplicating an unreachable user-facing branch.
-        debug_assert!(path.starts_with(&self.root));
+    /// One file's YAML front matter and its body, split apart.
+    fn read_split(path: &Path) -> Result<(String, String), SourceError> {
         let text = fs::read_to_string(path).map_err(|e| SourceError::Malformed {
             message: format!("{}: {e}", path.display()),
         })?;
-        let (yaml, body) = text
-            .strip_prefix("---\n")
+        text.strip_prefix("---\n")
             .and_then(|rest| rest.split_once("\n---\n"))
             .or_else(|| {
                 text.strip_prefix("---\r\n")
                     .and_then(|rest| rest.split_once("\r\n---\r\n"))
             })
+            .map(|(yaml, body)| (yaml.to_owned(), body.to_owned()))
             .ok_or_else(|| SourceError::Malformed {
                 message: format!(
                     "{}: expected YAML front matter delimited by ---",
                     path.display()
                 ),
-            })?;
-        let front: FrontMatter =
-            serde_norway::from_str(yaml).map_err(|e| SourceError::Malformed {
-                message: format!("{}: {e}", path.display()),
-            })?;
+            })
+    }
+
+    /// Everything a task, a project and a document all carry, read out of one file.
+    ///
+    /// The location is that file's own canonical absolute path, which is what makes this
+    /// backend's answer to *where is it* something a reader can act on: print the path, or
+    /// read the contents out, with no knowledge of this plugin.
+    fn common(
+        &self,
+        kind: Kind,
+        path: &Path,
+        body: &str,
+        front: SharedFront,
+    ) -> Result<Common, SourceError> {
         let base = self.directory(kind)?;
         let relative = path
             .strip_prefix(&base)
             .map_err(|_| SourceError::Malformed {
                 message: format!("{} is outside {}", path.display(), base.display()),
             })?;
+        let not_utf8 = || SourceError::Malformed {
+            message: format!("{} is not a UTF-8 path", path.display()),
+        };
         let id = relative
             .with_extension("")
             .to_str()
-            .ok_or_else(|| SourceError::Malformed {
-                message: format!("{} is not a UTF-8 path", path.display()),
-            })?
+            .ok_or_else(not_utf8)?
             .replace('\\', "/");
         let fallback = body
             .lines()
@@ -380,45 +482,57 @@ impl LocalMdSource {
                     .to_string_lossy()
                     .into_owned()
             });
-        let title = front.title.unwrap_or(fallback);
         let body = body.trim();
-        let labels = front
-            .labels
-            .into_iter()
-            .map(|label| match label {
-                LabelInput::Name(name) => Label {
-                    // llmlint: ignore[boundary_inputs_validated] `NativeId` deliberately accepts every upstream string in the frozen plugin contract; lowercasing the label name is this source's stable opaque-id mapping, not a validation boundary.
-                    id: NativeId(name.to_lowercase()),
-                    name,
-                    color: None,
-                },
-                LabelInput::Detailed { id, name, color } => Label {
-                    // llmlint: ignore[boundary_inputs_validated] `NativeId` is deliberately unvalidated and opaque in the frozen plugin contract, so this source must preserve the author's explicit id.
-                    id: NativeId(id),
-                    name,
-                    color,
-                },
-            })
-            .collect();
+        Ok(Common {
+            id: NativeId(id),
+            title: front.title.unwrap_or(fallback),
+            body: (!body.is_empty()).then(|| body.to_owned()),
+            labels: labels_of(front.labels),
+            // llmlint: ignore[boundary_inputs_validated] Project references use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
+            project: front.project.map(NativeId),
+            url: front.url,
+            location: Location::Path(path.to_str().ok_or_else(not_utf8)?.to_owned()),
+            metadata: front.metadata,
+            repositories: Repository::unique(front.repositories).map_err(|message| {
+                SourceError::Malformed {
+                    message: format!("{}: {message}", path.display()),
+                }
+            })?,
+        })
+    }
+
+    fn parse(&self, kind: Kind, path: &Path) -> Result<Entry, SourceError> {
+        // Both callers canonicalize and confine the path before parsing it. Keeping that
+        // invariant explicit here makes future internal callers notice if they skip the
+        // boundary check without duplicating an unreachable user-facing branch.
+        debug_assert!(path.starts_with(&self.root));
+        let (yaml, body) = Self::read_split(path)?;
+        let front: FrontMatter =
+            serde_norway::from_str(&yaml).map_err(|e| SourceError::Malformed {
+                message: format!("{}: {e}", path.display()),
+            })?;
+        let (shared, status, depends_on) = front.split();
+        let common = self.common(kind, path, &body, shared)?;
         let status = Status {
             category: self
                 .statuses
-                .get(&front.status.to_lowercase())
+                .get(&status.to_lowercase())
                 .copied()
                 .unwrap_or(StatusCategory::Unknown),
-            name: front.status,
+            name: status,
         };
-        let from = NativeId(id.clone());
+        let from = common.id.clone();
         let item_kind = match kind {
-            DocumentKind::Task => ItemKind::Task,
-            DocumentKind::Project => ItemKind::Project,
+            Kind::Project => ItemKind::Project,
+            // A document has no `depends_on` to reach this, and `Kind::Document` never
+            // reaches `parse`: it is read into the contract's own `Document` instead.
+            Kind::Task | Kind::Document => ItemKind::Task,
         };
         // A bare `depends_on: [b]` names this source's own item, colons and all, so it
         // stays an opaque native id. The expanded form is where an author says otherwise:
         // `{id: other:P-9, item: project}` names a far end this source cannot hold, and
         // `DependencyEndpoint::new` is what validates that qualified id.
-        let dependencies = front
-            .depends_on
+        let dependencies = depends_on
             .into_iter()
             .map(|d| match d {
                 // llmlint: ignore[boundary_inputs_validated] Dependency targets use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
@@ -441,33 +555,59 @@ impl LocalMdSource {
                 }),
             })
             .collect::<Result<Vec<_>, SourceError>>()?;
-        Ok(Document {
-            id: NativeId(id),
-            title,
-            body: (!body.is_empty()).then(|| body.to_owned()),
+        Ok(Entry {
+            common,
             status,
-            labels,
-            // llmlint: ignore[boundary_inputs_validated] Project references use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
-            project: front.project.map(NativeId),
             dependencies,
-            url: front.url,
-            metadata: front.metadata,
-            repositories: Repository::unique(front.repositories).map_err(|message| {
-                SourceError::Malformed {
-                    message: format!("{}: {message}", path.display()),
-                }
-            })?,
         })
     }
 
-    fn readable_documents(&self, kind: DocumentKind) -> Result<Vec<Document>, SourceError> {
+    /// One file under `documents/`, read straight into the contract's own type.
+    ///
+    /// There is no `Entry` on this path because there is nothing to hold in one: a
+    /// document has no status and no edges, so what a work item's parse computes for those
+    /// two has nothing here to compute it from.
+    fn parse_document(&self, path: &Path) -> Result<Document, SourceError> {
+        debug_assert!(path.starts_with(&self.root));
+        let (yaml, body) = Self::read_split(path)?;
+        let front: DocumentFrontMatter =
+            serde_norway::from_str(&yaml).map_err(|e| SourceError::Malformed {
+                message: format!("{}: {e}", path.display()),
+            })?;
+        let common = self.common(Kind::Document, path, &body, front.into())?;
+        Ok(Document {
+            id: common.id,
+            title: common.title,
+            content: common.body,
+            project: common.project,
+            labels: common.labels,
+            url: common.url,
+            location: Some(common.location),
+            created_at: None,
+            updated_at: None,
+            metadata: common.metadata,
+            repositories: common.repositories,
+        })
+    }
+
+    fn readable_work(&self, kind: Kind) -> Result<Vec<Entry>, SourceError> {
         self.paths(kind)?
             .into_iter()
             .filter_map(|p| self.parse(kind, &p).ok())
             .collect::<Vec<_>>()
             .pipe(Ok)
     }
-    fn find(&self, kind: DocumentKind, id: &NativeId) -> Result<Option<Document>, SourceError> {
+
+    fn readable_documents(&self) -> Result<Vec<Document>, SourceError> {
+        self.paths(Kind::Document)?
+            .into_iter()
+            .filter_map(|p| self.parse_document(&p).ok())
+            .collect::<Vec<_>>()
+            .pipe(Ok)
+    }
+
+    /// The confined canonical path `id` names under `kind`, when this source holds one.
+    fn locate(&self, kind: Kind, id: &NativeId) -> Result<Option<PathBuf>, SourceError> {
         let base = self.directory(kind)?;
         let candidate = base.join(&id.0).with_extension("md");
         if !candidate.exists() {
@@ -485,7 +625,13 @@ impl LocalMdSource {
                 ),
             });
         }
-        self.parse(kind, &canonical).map(Some)
+        Ok(Some(canonical))
+    }
+
+    fn find(&self, kind: Kind, id: &NativeId) -> Result<Option<Entry>, SourceError> {
+        self.locate(kind, id)?
+            .map(|path| self.parse(kind, &path))
+            .transpose()
     }
 
     fn paginate<T>(&self, items: Vec<T>, page: &PageRequest) -> Result<Page<T>, SourceError> {
@@ -525,6 +671,27 @@ trait Pipe: Sized {
 }
 impl<T> Pipe for T {}
 
+/// The labels one file's `labels:` key names, in the order it names them.
+fn labels_of(inputs: Vec<LabelInput>) -> Vec<Label> {
+    inputs
+        .into_iter()
+        .map(|label| match label {
+            LabelInput::Name(name) => Label {
+                // llmlint: ignore[boundary_inputs_validated] `NativeId` deliberately accepts every upstream string in the frozen plugin contract; lowercasing the label name is this source's stable opaque-id mapping, not a validation boundary.
+                id: NativeId(name.to_lowercase()),
+                name,
+                color: None,
+            },
+            LabelInput::Detailed { id, name, color } => Label {
+                // llmlint: ignore[boundary_inputs_validated] `NativeId` is deliberately unvalidated and opaque in the frozen plugin contract, so this source must preserve the author's explicit id.
+                id: NativeId(id),
+                name,
+                color,
+            },
+        })
+        .collect()
+}
+
 fn labels_match(labels: &[Label], f: &LabelFilter) -> bool {
     let has = |n: &String| labels.iter().any(|l| l.name.eq_ignore_ascii_case(n));
     (f.any_of.is_empty() || f.any_of.iter().any(has))
@@ -550,7 +717,7 @@ impl TaskSource for LocalMdSource {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
-            documents: Support::Unsupported,
+            documents: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -565,22 +732,23 @@ impl TaskSource for LocalMdSource {
         WriteSupport::Supported
     }
     async fn health(&self) -> Result<Health, SourceError> {
-        self.paths(DocumentKind::Task)?;
-        self.paths(DocumentKind::Project)?;
+        self.paths(Kind::Task)?;
+        self.paths(Kind::Project)?;
+        self.paths(Kind::Document)?;
         Ok(Health {
             reachable: true,
             detail: Some(format!("reading Markdown under {}", self.root.display())),
         })
     }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
-        Ok(self.find(DocumentKind::Task, id)?.map(task))
+        Ok(self.find(Kind::Task, id)?.map(task))
     }
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
-        Ok(self.find(DocumentKind::Project, id)?.map(project))
+        Ok(self.find(Kind::Project, id)?.map(project))
     }
     async fn query_tasks(&self, q: &TaskQuery, p: &PageRequest) -> Result<Page<Task>, SourceError> {
         let items = self
-            .readable_documents(DocumentKind::Task)?
+            .readable_work(Kind::Task)?
             .into_iter()
             .map(task)
             .filter(|t| {
@@ -604,7 +772,7 @@ impl TaskSource for LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         let items = self
-            .readable_documents(DocumentKind::Project)?
+            .readable_work(Kind::Project)?
             .into_iter()
             .map(project)
             .filter(|x| {
@@ -617,13 +785,51 @@ impl TaskSource for LocalMdSource {
             .collect();
         self.paginate(items, p)
     }
+    /// Every document under `documents/`, narrowed by every predicate `q` carries.
+    ///
+    /// The same three a task query carries minus the status filter, because a document has
+    /// no status for one to compare against.
+    async fn query_documents(
+        &self,
+        q: &DocumentQuery,
+        p: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        let items = self
+            .readable_documents()?
+            .into_iter()
+            .filter(|d| {
+                labels_match(&d.labels, &q.labels)
+                    && match &q.project {
+                        ProjectFilter::Any => true,
+                        ProjectFilter::Orphans => d.project.is_none(),
+                        ProjectFilter::Is(id) => d.project.as_ref() == Some(id),
+                    }
+                    && q.text
+                        .as_ref()
+                        .is_none_or(|x| text_match(&d.title, d.content.as_deref(), x))
+            })
+            .collect();
+        self.paginate(items, p)
+    }
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        self.locate(Kind::Document, id)?
+            .map(|path| self.parse_document(&path))
+            .transpose()
+    }
     async fn labels(&self, p: &PageRequest) -> Result<Page<Label>, SourceError> {
         let mut seen = BTreeSet::new();
+        // Documents too: a label a document carries is a label of this source, and reading
+        // one more folder that is already on disk is the same read as the other two.
         let mut items: Vec<Label> = self
-            .readable_documents(DocumentKind::Task)?
+            .readable_work(Kind::Task)?
             .into_iter()
-            .chain(self.readable_documents(DocumentKind::Project)?)
-            .flat_map(|d| d.labels)
+            .chain(self.readable_work(Kind::Project)?)
+            .flat_map(|d| d.common.labels)
+            .chain(
+                self.readable_documents()?
+                    .into_iter()
+                    .flat_map(|d| d.labels),
+            )
             .filter(|l| seen.insert(l.name.to_lowercase()))
             .collect();
         items.sort_by(|left, right| left.id.0.cmp(&right.id.0));
@@ -635,7 +841,7 @@ impl TaskSource for LocalMdSource {
         d: Direction,
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        self.edges(DocumentKind::Task, id, d, p)
+        self.edges(Kind::Task, id, d, p)
     }
     async fn project_dependencies(
         &self,
@@ -643,18 +849,18 @@ impl TaskSource for LocalMdSource {
         d: Direction,
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        self.edges(DocumentKind::Project, id, d, p)
+        self.edges(Kind::Project, id, d, p)
     }
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         let task = &write.item;
-        self.write_document(
-            DocumentKind::Task,
+        self.write_entry(
+            Kind::Task,
             write.target.as_ref(),
             &Outgoing {
                 id: &task.id,
                 title: &task.title,
                 content: task.content.as_deref(),
-                status: &task.status,
+                status: Some(&task.status),
                 labels: &task.labels,
                 project: task.project.as_ref(),
                 metadata: &task.metadata,
@@ -665,14 +871,14 @@ impl TaskSource for LocalMdSource {
     }
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
         let project = &write.item;
-        self.write_document(
-            DocumentKind::Project,
+        self.write_entry(
+            Kind::Project,
             write.target.as_ref(),
             &Outgoing {
                 id: &project.id,
                 title: &project.title,
                 content: project.content.as_deref(),
-                status: &project.status,
+                status: Some(&project.status),
                 labels: &project.labels,
                 project: None,
                 metadata: &project.metadata,
@@ -681,23 +887,49 @@ impl TaskSource for LocalMdSource {
             &write.depends_on,
         )
     }
+    /// One file under `documents/`, on exactly the terms a task lands under `tasks/`.
+    ///
+    /// No status and no edges reach the front matter, which is the contract rather than an
+    /// omission: `depends_on` is ignored because nothing may point at a document, and there
+    /// is no status on the incoming item to write.
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        let document = &write.item;
+        self.write_entry(
+            Kind::Document,
+            write.target.as_ref(),
+            &Outgoing {
+                id: &document.id,
+                title: &document.title,
+                content: document.content.as_deref(),
+                status: None,
+                labels: &document.labels,
+                project: document.project.as_ref(),
+                metadata: &document.metadata,
+                repositories: &document.repositories,
+            },
+            &[],
+        )
+    }
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
-        self.delete_document(DocumentKind::Task, id)
+        self.delete_entry(Kind::Task, id)
     }
     async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
-        self.delete_document(DocumentKind::Project, id)
+        self.delete_entry(Kind::Project, id)
+    }
+    async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.delete_entry(Kind::Document, id)
     }
 }
 impl LocalMdSource {
     fn edges(
         &self,
-        kind: DocumentKind,
+        kind: Kind,
         id: &NativeId,
         d: Direction,
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         let edges = self
-            .readable_documents(kind)?
+            .readable_work(kind)?
             .into_iter()
             .flat_map(|x| x.dependencies)
             .filter(|e| match d {
@@ -708,47 +940,48 @@ impl LocalMdSource {
         self.paginate(edges, p)
     }
 }
-fn task(d: Document) -> Task {
+fn task(d: Entry) -> Task {
     Task {
-        id: d.id,
-        title: d.title,
-        content: d.body,
+        id: d.common.id,
+        title: d.common.title,
+        content: d.common.body,
         status: d.status,
-        labels: d.labels,
-        project: d.project,
-        url: d.url,
-        location: None,
+        labels: d.common.labels,
+        project: d.common.project,
+        url: d.common.url,
+        location: Some(d.common.location),
         created_at: None,
         updated_at: None,
-        metadata: d.metadata,
-        repositories: d.repositories,
+        metadata: d.common.metadata,
+        repositories: d.common.repositories,
     }
 }
-fn project(d: Document) -> Project {
+fn project(d: Entry) -> Project {
     Project {
-        id: d.id,
-        title: d.title,
-        content: d.body,
+        id: d.common.id,
+        title: d.common.title,
+        content: d.common.body,
         status: d.status,
-        labels: d.labels,
-        url: d.url,
-        location: None,
+        labels: d.common.labels,
+        url: d.common.url,
+        location: Some(d.common.location),
         created_at: None,
         updated_at: None,
-        metadata: d.metadata,
-        repositories: d.repositories,
+        metadata: d.common.metadata,
+        repositories: d.common.repositories,
     }
 }
 
-/// One item on its way into a Markdown document, whichever kind it is.
+/// One item on its way into a Markdown file, whichever kind it is.
 ///
-/// A task and a project differ by one field here, so the write path is written once over
-/// this rather than twice over the two contract types.
+/// A task, a project and a document differ by two fields here, so the write path is
+/// written once over this rather than three times over the three contract types.
 struct Outgoing<'a> {
     id: &'a NativeId,
     title: &'a str,
     content: Option<&'a str>,
-    status: &'a Status,
+    /// `None` for a document, which has none — not a default standing in for one.
+    status: Option<&'a Status>,
     labels: &'a [Label],
     project: Option<&'a NativeId>,
     metadata: &'a BTreeMap<String, serde_json::Value>,
@@ -757,10 +990,15 @@ struct Outgoing<'a> {
 
 /// The front matter this source writes, which is the subset of [`FrontMatter`] a copy
 /// carries: `url` is the destination's own and is never written.
+///
+/// `status` is omitted entirely for a document, so what lands under `documents/` is a
+/// [`DocumentFrontMatter`] — which refuses that key — rather than a task's front matter
+/// with one value left blank.
 #[derive(Serialize)]
 struct WrittenFrontMatter {
     title: String,
-    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     labels: Vec<WrittenLabel>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -839,9 +1077,9 @@ fn document_stem(id: &NativeId) -> Result<String, SourceError> {
 
 impl LocalMdSource {
     /// Create or update one document, answering with the id it is filed under.
-    fn write_document(
+    fn write_entry(
         &self,
-        kind: DocumentKind,
+        kind: Kind,
         target: Option<&NativeId>,
         outgoing: &Outgoing<'_>,
         depends_on: &[DependencyEdge],
@@ -867,7 +1105,7 @@ impl LocalMdSource {
     /// An id naming no document is not an error: the file is already gone, which is the
     /// state this asks for. `existing` refuses that case because an *update* of a missing
     /// document is a caller mistake, and this is not one.
-    fn delete_document(&self, kind: DocumentKind, id: &NativeId) -> Result<(), SourceError> {
+    fn delete_entry(&self, kind: Kind, id: &NativeId) -> Result<(), SourceError> {
         let path = match self.existing(kind, id) {
             Ok(path) => path,
             Err(SourceError::Refused { .. }) => return Ok(()),
@@ -879,7 +1117,7 @@ impl LocalMdSource {
     }
 
     /// The path of the document `id` names, refusing when this source holds no such one.
-    fn existing(&self, kind: DocumentKind, id: &NativeId) -> Result<PathBuf, SourceError> {
+    fn existing(&self, kind: Kind, id: &NativeId) -> Result<PathBuf, SourceError> {
         let base = self.directory(kind)?;
         let candidate = base.join(&id.0).with_extension("md");
         if !candidate.exists() {
@@ -907,11 +1145,7 @@ impl LocalMdSource {
     }
 
     /// A path no document occupies, and the id it will be read back under.
-    fn unused(
-        &self,
-        kind: DocumentKind,
-        id: &NativeId,
-    ) -> Result<(NativeId, PathBuf), SourceError> {
+    fn unused(&self, kind: Kind, id: &NativeId) -> Result<(NativeId, PathBuf), SourceError> {
         let base = self.directory(kind)?;
         let stem = document_stem(id)?;
         for attempt in 1..=1_000_u32 {
@@ -934,33 +1168,35 @@ impl LocalMdSource {
         })
     }
 
-    /// One document's whole text, or a refusal naming the field this source cannot hold.
+    /// One file's whole text, or a refusal naming the field this source cannot hold.
     fn render(
         &self,
         outgoing: &Outgoing<'_>,
         depends_on: &[DependencyEdge],
     ) -> Result<String, SourceError> {
-        let mapped = self
-            .statuses
-            .get(&outgoing.status.name.to_lowercase())
-            .copied()
-            .unwrap_or(StatusCategory::Unknown);
-        if mapped != outgoing.status.category {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "cannot represent the field `status`: this source reads {:?} as {}, not \
-                     {}; next: map {:?} to {} under this source's status_mapping",
-                    outgoing.status.name,
-                    category_name(mapped),
-                    category_name(outgoing.status.category),
-                    outgoing.status.name,
-                    category_name(outgoing.status.category),
-                ),
-            });
+        if let Some(status) = outgoing.status {
+            let mapped = self
+                .statuses
+                .get(&status.name.to_lowercase())
+                .copied()
+                .unwrap_or(StatusCategory::Unknown);
+            if mapped != status.category {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "cannot represent the field `status`: this source reads {:?} as {}, not \
+                         {}; next: map {:?} to {} under this source's status_mapping",
+                        status.name,
+                        category_name(mapped),
+                        category_name(status.category),
+                        status.name,
+                        category_name(status.category),
+                    ),
+                });
+            }
         }
         let front = WrittenFrontMatter {
             title: outgoing.title.to_owned(),
-            status: outgoing.status.name.clone(),
+            status: outgoing.status.map(|status| status.name.clone()),
             labels: outgoing
                 .labels
                 .iter()

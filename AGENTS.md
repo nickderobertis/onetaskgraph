@@ -226,8 +226,8 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   the Rust caller that links the crate.
 - **A document copy is proven against a destination that outlives the invocation.** One
   command line is one process, so an `in-memory` destination cannot be read back by a later
-  command and `local-md` declares it holds no documents — which once left the document copy
-  observable only through the report it printed. `onetaskgraph-document-store` closes it: a
+  command and `local-md` declared, when this was written, that it holds no documents —
+  which once left the document copy observable only through the report it printed. `onetaskgraph-document-store` closes it: a
   file-backed peer spawned over a real pipe, so what one invocation writes the next one
   reads. **It is Python, and that is not incidental.** A spawned plugin can never be
   measured — the engine clears the child's environment (§3.1), which takes
