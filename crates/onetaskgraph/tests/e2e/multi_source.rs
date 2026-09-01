@@ -8,7 +8,9 @@
 use std::process::Output;
 
 use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
-use crate::fixtures::{NATIVE, ROWS, SCANNED, dataset, document, pair_at, qualified};
+use crate::fixtures::{
+    NATIVE, ROWS, SCANNED, dataset, document, native_capabilities, pair_at, qualified,
+};
 use serde_json::json;
 
 /// A sandbox holding both `in-memory` sources.
@@ -178,7 +180,7 @@ fn one_source_failing_leaves_the_others_intact_and_costs_exit_four_unless_allowe
         // Linear is deliberately configured without its credential.
         let sandbox = Sandbox::new();
         let mut block = dataset();
-        block["capabilities"] = json!({"max_page_size": 50});
+        block["capabilities"] = native_capabilities();
         sandbox.project_document(&document(&json!({
             "broken": {"plugin": "linear", "config": {}},
             "work": boundary.source(ROWS[0].plugin, block),
@@ -242,6 +244,9 @@ fn a_source_that_declares_nothing_native_says_so_and_the_plan_of_a_missing_sourc
         let sandbox = Sandbox::new();
         let mut bare = dataset();
         bare["capabilities"] = json!({
+            // Native because this source *holds* documents; `documents` is not one of the
+            // predicates "declares nothing native" is about.
+            "documents": "native",
             "projects": "unsupported",
             "orphan_tasks": "unsupported",
             "filter_by_label": "unsupported",

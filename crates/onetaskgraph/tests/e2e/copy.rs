@@ -1717,3 +1717,223 @@ fn a_creation_whose_filing_and_cleanup_both_fail_still_reports_the_filing() {
     let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
     assert_eq!(listed.matches("First step").count(), 1, "{listed}");
 }
+
+/// The document-bearing destination the document copy journeys copy into.
+const STORE: &str = "store";
+
+/// A document-bearing destination already holding `held`.
+///
+/// A destination a copy can be observed *against*, which is what an in-memory source can
+/// be from a second process and a written one cannot: its work lives for one run, so the
+/// only way this suite can assert what a copy would write is to configure the destination
+/// as the copy would leave it and read the outcome back. `unchanged` then means every
+/// field the copy would have written — title, body, labels, owning project, every
+/// caller-defined metadata key with its JSON types, and the repository origins — already
+/// reads exactly that way, and any difference in any of them reports `updated` instead.
+/// The same copy driven as a library call, where the destination outlives the write and
+/// its fields are read back one by one, is in `crates/onetaskgraph-core/tests/copy.rs`.
+fn store_holding(held: Value) -> Value {
+    json!({"plugin": "in-memory", "config": {
+        "capabilities": {"documents": "native"},
+        "projects": [{"id": "P-1", "title": "Engine", "content": null,
+                      "status": {"category": "in-progress", "name": "Doing"}, "labels": []}],
+        "documents": [held],
+    }})
+}
+
+/// `D-1` of the shared dataset exactly as a copy of it would leave a destination.
+fn copied_document(overrides: Value) -> Value {
+    let mut held = json!({
+        "id": "D-1",
+        "title": "Alpha design",
+        "content": "the engine core, reviewed",
+        "project": "P-1",
+        "labels": [{"id": "L-1", "name": "bug"}],
+        "metadata": {
+            "onepipeline.turn_budget": 12,
+            "caller.flags": [true, null],
+            "onetaskgraph.origin": "work:D-1",
+        },
+        "repositories": ["github.com/nickderobertis/onetaskgraph"],
+    });
+    for (key, value) in overrides.as_object().expect("an object of overrides") {
+        held[key] = value.clone();
+    }
+    held
+}
+
+/// Every row whose source holds documents; the rest assert the refusal below.
+fn documentary_rows() -> impl Iterator<Item = &'static crate::fixtures::Row> {
+    ROWS.iter()
+        .filter(|row| row.declared().documents.is_native())
+}
+
+#[test]
+fn a_document_copies_into_another_source_whole_and_a_second_copy_updates_it() {
+    for row in documentary_rows() {
+        let sandbox = Sandbox::new();
+        // The row's own source as the table configures it, and a destination configured as
+        // the copy would leave it.
+        let mut sources: Value =
+            serde_json::from_str(&row.document_with_store(&sandbox, STORE)).expect("a document");
+        sources["sources"][STORE] = store_holding(copied_document(json!({})));
+        sandbox.project_document(&serde_json::to_string(&sources).expect("a document renders"));
+
+        // The destination already holds this document, recorded as copied from `work:D-1`,
+        // with every field a copy would write. So the copy finds it rather than creating a
+        // second one, and reports that nothing about it would change.
+        let settled = reported(&ok(
+            &sandbox,
+            &[
+                "document",
+                "copy",
+                &qualified(SOURCE, "D-1"),
+                "--to",
+                STORE,
+                "--json",
+            ],
+        ));
+        assert_eq!(
+            settled,
+            vec![(
+                qualified(SOURCE, "D-1"),
+                json!(qualified(STORE, "D-1")),
+                "unchanged".to_owned()
+            )],
+            "{}: a second copy updates the one already there rather than adding a duplicate",
+            row.name
+        );
+
+        // Not vacuously: a destination differing in one caller-defined metadata value —
+        // the JSON type of it, at that — is `updated` instead.
+        let mut differing: Value =
+            serde_json::from_str(&row.document_with_store(&sandbox, STORE)).expect("a document");
+        differing["sources"][STORE] = store_holding(copied_document(json!({
+            "metadata": {
+                "onepipeline.turn_budget": "12",
+                "caller.flags": [true, null],
+                "onetaskgraph.origin": "work:D-1",
+            }
+        })));
+        sandbox.project_document(&serde_json::to_string(&differing).expect("a document renders"));
+        let rewritten = reported(&ok(
+            &sandbox,
+            &[
+                "document",
+                "copy",
+                &qualified(SOURCE, "D-1"),
+                "--to",
+                STORE,
+                "--json",
+            ],
+        ));
+        assert_eq!(
+            rewritten,
+            vec![(
+                qualified(SOURCE, "D-1"),
+                json!(qualified(STORE, "D-1")),
+                "updated".to_owned()
+            )],
+            "{}: a field that differs is a field this copy writes",
+            row.name
+        );
+
+        // A document the destination has never held is created, and a dry run of the same
+        // copy reads everything and writes nothing — so it reports no destination id,
+        // because nothing was created and inventing one would be a claim about an id the
+        // destination never issued.
+        sandbox.project_document(&serde_json::to_string(&sources).expect("a document renders"));
+        let created = reported(&ok(
+            &sandbox,
+            &[
+                "document",
+                "copy",
+                &qualified(SOURCE, "D-2"),
+                "--to",
+                STORE,
+                "--json",
+            ],
+        ));
+        assert_eq!(
+            created,
+            vec![(
+                qualified(SOURCE, "D-2"),
+                json!(qualified(STORE, "D-2")),
+                "created".to_owned()
+            )],
+            "{}",
+            row.name
+        );
+        let dry = reported(&ok(
+            &sandbox,
+            &[
+                "document",
+                "copy",
+                &qualified(SOURCE, "D-2"),
+                "--to",
+                STORE,
+                "--dry-run",
+                "--json",
+            ],
+        ));
+        assert_eq!(
+            dry,
+            vec![(qualified(SOURCE, "D-2"), json!(null), "created".to_owned())],
+            "{}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn a_document_copy_into_a_source_that_has_none_is_refused_naming_it_and_its_plugin() {
+    // Refused from the declaration rather than from a failed write, so nothing is read
+    // first — the same shape the write-support refusal already has.
+    for row in documentary_rows() {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&row.document_with_folder(&sandbox, NOTES));
+
+        let complaint = refused(
+            &sandbox,
+            &["document", "copy", &qualified(SOURCE, "D-1"), "--to", NOTES],
+            1,
+        );
+        assert!(
+            complaint.contains(NOTES) && complaint.contains("local-md"),
+            "{}: the refusal names the source and its plugin:\n{complaint}",
+            row.name
+        );
+        assert!(
+            complaint.contains("has no documents"),
+            "{}: and says what is wrong with it:\n{complaint}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn a_document_copy_out_of_a_source_that_has_none_is_refused_naming_it_and_its_plugin() {
+    for row in ROWS
+        .iter()
+        .filter(|row| !row.declared().documents.is_native())
+    {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&row.document_with_store(&sandbox, STORE));
+
+        let complaint = refused(
+            &sandbox,
+            &["document", "copy", &qualified(SOURCE, "D-1"), "--to", STORE],
+            1,
+        );
+        assert!(
+            complaint.contains(SOURCE) && complaint.contains(row.plugin),
+            "{}: the refusal names the source and its plugin:\n{complaint}",
+            row.name
+        );
+        assert!(
+            complaint.contains("has no documents"),
+            "{}: and says what is wrong with it:\n{complaint}",
+            row.name
+        );
+    }
+}

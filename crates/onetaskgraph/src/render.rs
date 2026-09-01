@@ -15,7 +15,7 @@ use onetaskgraph_core::{
     CopyReport, Predicate, Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing,
     SourceState,
 };
-use onetaskgraph_plugin_api::{Capabilities, Label, Project, Support, Task};
+use onetaskgraph_plugin_api::{Capabilities, Document, Label, Location, Project, Support, Task};
 use serde::Serialize;
 
 /// One value as the wire spells it — `in-progress`, `search-title`, `blocks`.
@@ -80,6 +80,45 @@ pub fn tasks(items: &[Qualified<Task>]) -> String {
                     task.id.to_string(),
                     wire(&task.item.status.category),
                     task.item.title.clone(),
+                ]
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Where an entity is, as one cell: which kind of place, then the place itself.
+///
+/// The key is the kind, read off the type's own `Serialize` rather than written out again
+/// in a `match`, for the reason [`wire`] gives: `Location` is externally tagged with
+/// exactly two variants, so what a consumer branches on in JSON is what a reader sees here.
+fn located(location: &Location) -> String {
+    let rendered = serde_json::to_value(location).expect("a contract enum serialises");
+    let (kind, place) = rendered
+        .as_object()
+        .and_then(|object| object.iter().next())
+        .expect("an externally tagged enum is an object of exactly one member");
+    format!("{kind} {}", place.as_str().unwrap_or_default())
+}
+
+/// One line per document: qualified id, where it is, title.
+///
+/// Where a task list prints the normalised status, this prints the location: a document
+/// has no status, and where it is is what a reader does something with — open the link, or
+/// read the file out. A document whose source did not say prints `-`, which is not the
+/// same as saying it is nowhere.
+pub fn documents(items: &[Qualified<Document>]) -> String {
+    columns(
+        &items
+            .iter()
+            .map(|document| {
+                vec![
+                    document.id.to_string(),
+                    document
+                        .item
+                        .location
+                        .as_ref()
+                        .map_or_else(|| "-".to_owned(), located),
+                    document.item.title.clone(),
                 ]
             })
             .collect::<Vec<_>>(),
@@ -189,7 +228,39 @@ pub fn task_detail(task: &Qualified<Task>) -> String {
             None => "none".to_owned(),
         },
     ));
-    detail(&mut fields, &item.labels, item.url.as_deref());
+    detail(
+        &mut fields,
+        &item.labels,
+        item.url.as_deref(),
+        item.location.as_ref(),
+    );
+    body(&fields, item.content.as_deref())
+}
+
+/// One document in full, body last.
+///
+/// No status line, because a document has none — and no dependency line, because it is in
+/// no graph. What it has that a task does not print above its body is the same `location`
+/// every entity now carries.
+pub fn document_detail(document: &Qualified<Document>) -> String {
+    let item = &document.item;
+    let mut fields = vec![
+        ("id", document.id.to_string()),
+        ("title", item.title.clone()),
+        (
+            "project",
+            match &item.project {
+                Some(project) => format!("{}:{project}", document.id.source),
+                None => "none".to_owned(),
+            },
+        ),
+    ];
+    detail(
+        &mut fields,
+        &item.labels,
+        item.url.as_deref(),
+        item.location.as_ref(),
+    );
     body(&fields, item.content.as_deref())
 }
 
@@ -204,12 +275,27 @@ pub fn project_detail(project: &Qualified<Project>) -> String {
             format!("{} ({})", wire(&item.status.category), item.status.name),
         ),
     ];
-    detail(&mut fields, &item.labels, item.url.as_deref());
+    detail(
+        &mut fields,
+        &item.labels,
+        item.url.as_deref(),
+        item.location.as_ref(),
+    );
     body(&fields, item.content.as_deref())
 }
 
-/// The fields a task and a project share below their own.
-fn detail(fields: &mut Vec<(&'static str, String)>, item_labels: &[Label], url: Option<&str>) {
+/// The fields a task, a project and a document share below their own.
+///
+/// `location` is a line of its own rather than folded into `url`, and it says which kind
+/// of place it names: a reader handed one has to know whether to open a link or read a
+/// file out, and the two are different actions. It does not replace `url` — a source that
+/// reports one goes on reporting it, and both lines appear when a source gives both.
+fn detail(
+    fields: &mut Vec<(&'static str, String)>,
+    item_labels: &[Label],
+    url: Option<&str>,
+    location: Option<&Location>,
+) {
     if !item_labels.is_empty() {
         fields.push((
             "labels",
@@ -222,6 +308,9 @@ fn detail(fields: &mut Vec<(&'static str, String)>, item_labels: &[Label], url: 
     }
     if let Some(url) = url {
         fields.push(("url", url.to_owned()));
+    }
+    if let Some(location) = location {
+        fields.push(("location", located(location)));
     }
 }
 

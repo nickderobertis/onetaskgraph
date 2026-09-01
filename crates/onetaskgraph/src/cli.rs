@@ -74,6 +74,15 @@ pub enum Command {
         command: ProjectCommand,
     },
 
+    /// List, show and copy documents.
+    ///
+    /// A document is not work: it has no status and takes part in no dependency graph, so
+    /// this group carries no `--status` filter and no `deps` verb.
+    Document {
+        #[command(subcommand)]
+        command: DocumentCommand,
+    },
+
     /// List the labels the sources know.
     Label {
         #[command(subcommand)]
@@ -120,6 +129,20 @@ pub enum ProjectCommand {
     Copy(ProjectCopyArgs),
 }
 
+/// What `onetaskgraph document` can do.
+///
+/// No `deps`: a document takes part in no dependency graph, so there is nothing for a
+/// dependency verb here to walk.
+#[derive(Debug, Subcommand)]
+pub enum DocumentCommand {
+    /// List documents across the selected sources.
+    List(DocumentListArgs),
+    /// Show one document by its qualified id, `<source>:<native-id>`.
+    Show(ShowArgs),
+    /// Copy documents into another configured source, by qualified id.
+    Copy(DocumentCopyArgs),
+}
+
 /// What `onetaskgraph label` can do.
 #[derive(Debug, Subcommand)]
 pub enum LabelCommand {
@@ -158,6 +181,30 @@ pub struct FilterArgs {
     pub status: Vec<StatusArg>,
 
     /// Keep items matching this text.
+    #[arg(long, value_name = "TEXT")]
+    pub search: Option<String>,
+
+    /// Which fields --search looks in.
+    #[arg(long = "in", value_name = "FIELDS", default_value = "both")]
+    pub fields: FieldsArg,
+}
+
+/// The filters a document list carries.
+///
+/// [`FilterArgs`] without `--status`, and its own type rather than a shared one for the
+/// reason [`DocumentFilters`](onetaskgraph_core::DocumentFilters) is: a document has no
+/// status, so a status flag here could only be accepted and ignored.
+#[derive(Debug, Args)]
+pub struct DocumentFilterArgs {
+    /// Keep documents carrying this label. Repeat to require several at once.
+    #[arg(long = "label", value_name = "L")]
+    pub label: Vec<String>,
+
+    /// Drop documents carrying this label. Repeat for several.
+    #[arg(long = "not-label", value_name = "L")]
+    pub not_label: Vec<String>,
+
+    /// Keep documents matching this text.
     #[arg(long, value_name = "TEXT")]
     pub search: Option<String>,
 
@@ -229,6 +276,30 @@ pub struct ProjectListArgs {
 
     #[command(flatten)]
     pub filters: FilterArgs,
+
+    #[command(flatten)]
+    pub paging: PageArgs,
+}
+
+/// `onetaskgraph document list`.
+#[derive(Debug, Args)]
+pub struct DocumentListArgs {
+    #[command(flatten)]
+    pub selection: SelectionArgs,
+
+    #[command(flatten)]
+    pub filters: DocumentFilterArgs,
+
+    /// Keep documents in this project, qualified (`work:PROJ-1`) or by native id.
+    ///
+    /// A qualified id names one project of one source, so it narrows the query to that
+    /// source. A bare id is asked of every selected source.
+    #[arg(long, value_name = "P", conflicts_with = "no_project")]
+    pub project: Option<String>,
+
+    /// Keep only documents belonging to no project at all.
+    #[arg(long = "no-project")]
+    pub no_project: bool,
 
     #[command(flatten)]
     pub paging: PageArgs,
@@ -344,6 +415,19 @@ pub struct ProjectCopyArgs {
     /// Copy the project alone, leaving the tasks in it where they are.
     #[arg(long = "no-tasks")]
     pub no_tasks: bool,
+
+    #[command(flatten)]
+    pub copy: CopyArgs,
+}
+
+/// `onetaskgraph document copy`.
+#[derive(Debug, Args)]
+pub struct DocumentCopyArgs {
+    /// The qualified ids to copy, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCopyArgs::id`.
+    #[arg(value_name = "ID", required = true)]
+    pub id: Vec<String>,
 
     #[command(flatten)]
     pub copy: CopyArgs,

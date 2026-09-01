@@ -9,14 +9,20 @@
 use serde_json::Value;
 
 use crate::common::{SOURCE_BOUNDARIES, Sandbox, stdout};
-use crate::fixtures::{NATIVE, SCANNED, empty_folder, pair_at, qualified};
+use crate::fixtures::{NATIVE, SCANNED, empty_document_store, empty_folder, pair_at, qualified};
 
-/// The capability pair, plus the writable folder a copy needs a destination for.
+/// The capability pair, plus the two destinations a copy needs.
+///
+/// A folder of Markdown for tasks and projects, and an in-memory source that has documents
+/// for documents: `local-md` declares it holds none, so a document copy naming it is
+/// refused before anything is read and there would be no report to validate.
 fn with_a_destination(sandbox: &Sandbox, boundary: crate::common::SourceBoundary) -> String {
     let mut document: Value =
         serde_json::from_str(&pair_at(sandbox, boundary)).expect("a fixture document is JSON");
     document["sources"]["notes"] =
         serde_json::json!({"plugin": "local-md", "config": empty_folder(sandbox, "notes")});
+    document["sources"]["store"] =
+        serde_json::json!({"plugin": "in-memory", "config": empty_document_store()});
     serde_json::to_string(&document).expect("a document renders")
 }
 
@@ -74,6 +80,14 @@ fn every_verbs_machine_readable_output_validates_against_the_emitted_schema() {
             (
                 vec!["project", "show", &qualified(NATIVE, "P-1"), "--json"],
                 "QueryResponseOfQualifiedProject",
+            ),
+            (
+                vec!["document", "list", "--json"],
+                "QueryResponseOfQualifiedDocument",
+            ),
+            (
+                vec!["document", "show", &qualified(NATIVE, "D-1"), "--json"],
+                "QueryResponseOfQualifiedDocument",
             ),
             (
                 vec!["label", "list", "--json"],
@@ -189,6 +203,34 @@ fn every_verbs_machine_readable_output_validates_against_the_emitted_schema() {
         assert_eq!(
             copied_project["items"][0]["action"], "created",
             "the project copy has to have done something: {copied_project}"
+        );
+
+        let copied_document = stdout(
+            sandbox
+                .command()
+                .args([
+                    "document",
+                    "copy",
+                    &qualified(NATIVE, "D-1"),
+                    "--to",
+                    "store",
+                    "--json",
+                ])
+                .assert()
+                .success()
+                .get_output(),
+        );
+        let copied_document: Value =
+            serde_json::from_str(&copied_document).expect("a document copy emits JSON");
+        validates(
+            &bundle,
+            "CopyReport",
+            &copied_document,
+            "document copy --json",
+        );
+        assert_eq!(
+            copied_document["items"][0]["action"], "created",
+            "the document copy has to have done something: {copied_document}"
         );
 
         // `config show --json` answers about the configuration rather than about work, so it
