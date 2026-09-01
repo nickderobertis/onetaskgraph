@@ -333,7 +333,14 @@ impl Limited {
     /// and it carries no message in which to say otherwise. The primary budget keeps it,
     /// because there waiting really is the answer and `retry_after_seconds` really is how
     /// long.
-    fn exhausted(self, doing: &str, waits: u32, waited: Duration, needed: Duration) -> SourceError {
+    fn exhausted(
+        self,
+        doing: &str,
+        waits: u32,
+        waited: Duration,
+        needed: Duration,
+        budget: Duration,
+    ) -> SourceError {
         match self.limiter {
             Limiter::Primary => SourceError::RateLimited {
                 retry_after_seconds: self.hint,
@@ -352,7 +359,7 @@ impl Limited {
                     plural(waits, "refusal"),
                     seconds(waited),
                     seconds(needed),
-                    seconds(waited + needed),
+                    seconds(budget),
                 ),
             },
         }
@@ -968,7 +975,13 @@ impl GitHubProjectsSource {
             };
             let remaining = self.pacing.retry_budget.saturating_sub(waited);
             if wait > remaining {
-                return Err(limited.exhausted(doing, waits, waited, wait));
+                return Err(limited.exhausted(
+                    doing,
+                    waits,
+                    waited,
+                    wait,
+                    self.pacing.retry_budget,
+                ));
             }
             tokio::time::sleep(wait).await;
             waited += wait;
