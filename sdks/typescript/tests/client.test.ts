@@ -301,11 +301,11 @@ test("copy drives the real binary and reports what it did to each item", async (
 });
 
 test("a document copy drives the real binary and is refused by a source with none", async () => {
-  // One client call is one process, so an in-memory destination cannot be read back by
-  // the next call — the round trip is proven end to end against a persistent peer in
-  // `crates/onetaskgraph/tests/e2e/document_store.rs`. What this owes is that the method
-  // carries the operands the verb requires: a `document copy` invoked without its ids is
-  // refused by clap as a bad invocation, so a method that dropped them reaches no report.
+  // `notes` is a folder of Markdown, whose documents are files that outlive the process,
+  // so what one client call copied the next one reads back — which is what proves the copy
+  // landed rather than only that a report was printed. `sealed` is an in-memory source
+  // without the `documents` capability, so it holds none and is refused as a destination
+  // before anything is read.
   const documentRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-document-"));
   mkdirSync(resolve(documentRoot, "notes"), { recursive: true });
   writeFileSync(
@@ -316,31 +316,55 @@ test("a document copy drives the real binary and is refused by a source with non
           plugin: "in-memory",
           config: {
             capabilities: { documents: "native" },
-            documents: [{ id: "D-1", title: "Alpha design", content: "reviewed", labels: [] }],
+            documents: [
+              {
+                id: "D-1",
+                title: "Alpha design",
+                content: "reviewed",
+                labels: [],
+                location: { url: "https://example.invalid/D-1" },
+                metadata: { "caller.reviewers": ["ada", "grace"], "caller.rounds": 2 },
+              },
+            ],
           },
         },
-        store: { plugin: "in-memory", config: { capabilities: { documents: "native" } } },
-        // A folder of Markdown declares it holds no documents, so it is refused as a
-        // destination before anything is read.
         notes: {
           plugin: "local-md",
           config: { root: resolve(documentRoot, "notes"), status_mapping: { todo: "todo" } },
         },
+        sealed: { plugin: "in-memory", config: {} },
       },
     }),
   );
   try {
     const documentClient = new OnetaskgraphClient({ binaryPath: binary, cwd: documentRoot });
 
-    const planned = await documentClient.documentCopy(["from:D-1"], "store", { dryRun: true });
+    const planned = await documentClient.documentCopy(["from:D-1"], "notes", { dryRun: true });
     expect(planned.items).toEqual([{ source: "from:D-1", action: "created", destination: null }]);
 
-    const created = await documentClient.documentCopy(["from:D-1"], "store");
+    const created = await documentClient.documentCopy(["from:D-1"], "notes");
     expect(created.items).toEqual([
-      { source: "from:D-1", action: "created", destination: "store:D-1" },
+      { source: "from:D-1", action: "created", destination: "notes:D-1" },
     ]);
 
-    await expect(documentClient.documentCopy(["from:D-1"], "notes")).rejects.toThrow(
+    // The destination really holds it, read back through the same binary: every
+    // caller-defined key with its JSON type intact, and a location that is the
+    // destination's own — the path of the file this folder put it in, not the URL the
+    // source reported.
+    const copied = await documentClient.documentShow("notes:D-1");
+    expect(copied.items[0]?.item).toMatchObject({
+      title: "Alpha design",
+      content: "reviewed",
+      url: null,
+      location: { path: resolve(documentRoot, "notes/documents/D-1.md") },
+      metadata: {
+        "caller.reviewers": ["ada", "grace"],
+        "caller.rounds": 2,
+        "onetaskgraph.origin": "from:D-1",
+      },
+    });
+
+    await expect(documentClient.documentCopy(["from:D-1"], "sealed")).rejects.toThrow(
       "has no documents",
     );
   } finally {
