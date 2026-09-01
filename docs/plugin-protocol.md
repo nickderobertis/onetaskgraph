@@ -537,7 +537,8 @@ to the empty list.
 create is free to choose an id other than the one `item` suggested; an update answers
 with `target`.
 
-`url`, `created_at` and `updated_at` are the destination's own and are never written.
+`url`, `location` (§4.13), `created_at` and `updated_at` are the destination's own and are
+never written — where the *source* holds an item says nothing about where this one does.
 Everything else `item` carries is, and **nothing is silently dropped**: a field this
 source cannot represent, and a metadata key it cannot carry, are each a
 `{"kind": "refused"}` naming the field or the keys. A `target` this source does not hold
@@ -776,8 +777,8 @@ Engine to plugin:
 Plugin to engine:
 
 ```
-{"id":"0","result":{"protocol_version":2,"kind":"local-md","capabilities":{"projects":"native","orphan_tasks":"native","filter_by_label":"native","filter_by_status":"unsupported","search_title":"native","search_content":"unsupported","task_dependencies":"forward-only","project_dependencies":"forward-only","max_page_size":200}}}
-{"id":"1","result":{"items":[{"id":"tasks/migrate.md","title":"Migrate the store","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"url":null,"created_at":null,"updated_at":null},{"id":"tasks/schema.md","title":"Settle the schema","content":null,"status":{"category":"in-progress","name":"Doing"},"labels":[],"project":null,"url":null,"created_at":null,"updated_at":null}],"next":"b2Zmc2V0PTI"}}
+{"id":"0","result":{"protocol_version":2,"kind":"local-md","capabilities":{"projects":"native","documents":"unsupported","orphan_tasks":"native","filter_by_label":"native","filter_by_status":"unsupported","search_title":"native","search_content":"unsupported","task_dependencies":"forward-only","project_dependencies":"forward-only","max_page_size":200}}}
+{"id":"1","result":{"items":[{"id":"tasks/migrate.md","title":"Migrate the store","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"url":null,"location":null,"created_at":null,"updated_at":null},{"id":"tasks/schema.md","title":"Settle the schema","content":null,"status":{"category":"in-progress","name":"Doing"},"labels":[],"project":null,"url":null,"location":null,"created_at":null,"updated_at":null}],"next":"b2Zmc2V0PTI"}}
 {"id":"2","result":{"items":[{"from":"tasks/migrate.md","to":"tasks/schema.md","kind":"blocks"}],"next":null}}
 ```
 

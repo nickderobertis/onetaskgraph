@@ -97,6 +97,12 @@ class SourceListingUnavailable(BaseModel):
 
 
 class Capabilities(BaseModel):
+    documents: Annotated[
+        Support | None,
+        Field(
+            description="Whether the source has documents at all.\n\nThe same shape as [`projects`](Self::projects), and read the same way: it says what\nthe source *holds*, not which predicate it applies. It is therefore **not** one of\nthe predicates the second capability rule reaches — there is no wider result set to\nreturn and nothing for the engine to narrow. A source declaring `Unsupported` is\nnever asked for a document at all; the engine reads this once at the handshake,\nexactly as it reads [`TaskSource::writes`](crate::TaskSource::writes), and a\ndocument read across several sources reports such a source as holding none rather\nthan as having failed.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates documents says nothing here and is read as the document-free source it is."
+        ),
+    ] = Support.SupportUnsupported
     filter_by_label: Annotated[
         Support, Field(description="Whether the source filters by label itself.")
     ]

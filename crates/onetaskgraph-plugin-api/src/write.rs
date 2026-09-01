@@ -54,8 +54,9 @@ pub struct ItemWrite<T> {
     ///
     /// Its `id` is the id the item was read under at the **source**. A destination
     /// updating an item addresses [`target`](Self::target) and ignores it; a destination
-    /// creating one may derive a name from it and is free not to. Its `url`,
-    /// `created_at` and `updated_at` are the destination's own and are never written.
+    /// creating one may derive a name from it and is free not to. Its `url`, `location`,
+    /// `created_at` and `updated_at` are the destination's own and are never written —
+    /// where the *source* holds an item says nothing about where the destination does.
     pub item: T,
     /// The forward dependency edges the copy read, with their far ends already resolved.
     ///

@@ -140,7 +140,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 7);
+    assert_eq!(bundle["version"], 8);
     assert_eq!(
         bundle["commands"],
         serde_json::json!([
