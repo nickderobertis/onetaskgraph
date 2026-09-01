@@ -365,17 +365,19 @@ test("a document copy drives the real binary and is refused by a source with non
     // source canonicalizes, and a canonical path is spelled differently on each platform —
     // macOS resolves the temporary tree's symlink under `/var/folders`, and Windows answers
     // with an extended-length `\\?\` path over an account name no other language here
-    // writes. Resolving both sides through `fs.realpathSync` does not settle that: on
-    // Windows this runtime returns each path unchanged, so the comparison stayed
-    // `\\?\C:\Users\runneradmin\…` against the `C:\Users\RUNNER~1\…` short form this test
-    // built, which is what `check (windows-latest)` refused. Write a sentinel through the
-    // path this test built and read it back through the path the source reported instead:
-    // one file has it and no other file can, which is the question the assertion is really
-    // making, and reading also fails outright when the reported path names nothing — as
-    // comparing two strings does not. The extended-length prefix is dropped first, because
-    // it is a spelling for Windows' own API rather than for a file call of this runtime —
-    // and only ahead of a drive letter, the one form a temporary tree takes, so the `UNC\\`
-    // spelling this test never produces is left whole rather than turned into a bad path.
+    // writes. `fs.realpathSync` settled macOS and not Windows: run over the path this test
+    // built, it left Windows' 8.3 short name in place, so the comparison ran
+    // `C:\Users\RUNNER~1\…` against the `\\?\C:\Users\runneradmin\…` the source reported and
+    // `check (windows-latest)` refused it. Putting the reported side through it too was
+    // not measured and is not the answer to reach for, because what two canonical spellings
+    // are is not what this assertion asks. Write a sentinel through the path this test built
+    // and read it back through the path the source reported instead: one file has it and no
+    // other file can, which is the question the assertion is really making, and reading also
+    // fails outright when the reported path names nothing — as comparing two strings does
+    // not. The extended-length prefix is dropped first, because it is a spelling for Windows'
+    // own API rather than for a file call of this runtime — and only ahead of a drive letter,
+    // the one form a temporary tree takes, so the `UNC\\` spelling this test never produces
+    // is left whole rather than turned into a bad path.
     const located = document?.location as { path: string };
     const openable = located.path.replace(/^\\\\\?\\(?=[A-Za-z]:\\)/, "");
     const sentinel = "read back through the location this source reported";
