@@ -3497,11 +3497,18 @@ export const runtimeSchemas = {
             "type": "object"
           },
           {
-            "description": "The source asked the caller to slow down.",
+            "description": "The source asked the caller to slow down.\n\nA rate limit is the one refusal whose *reason* an operator cannot guess from the\nkind alone. A hosted service typically has more than one limiter, only some of\nthem are reported by the endpoint an operator would go and check, and the right\nnext step differs between them — so a source that knows which one refused it, and\nwhat it was doing when it did, says so in [`message`](Self::RateLimited::message)\nrather than leaving the operator to infer it and infer it wrong.",
             "properties": {
               "kind": {
                 "const": "rate-limited",
                 "type": "string"
+              },
+              "message": {
+                "description": "What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "retry_after_seconds": {
                 "description": "How long the source asked us to wait, when it said.",
@@ -3844,11 +3851,18 @@ export const runtimeSchemas = {
             "type": "object"
           },
           {
-            "description": "The source asked the caller to slow down.",
+            "description": "The source asked the caller to slow down.\n\nA rate limit is the one refusal whose *reason* an operator cannot guess from the\nkind alone. A hosted service typically has more than one limiter, only some of\nthem are reported by the endpoint an operator would go and check, and the right\nnext step differs between them — so a source that knows which one refused it, and\nwhat it was doing when it did, says so in [`message`](Self::RateLimited::message)\nrather than leaving the operator to infer it and infer it wrong.",
             "properties": {
               "kind": {
                 "const": "rate-limited",
                 "type": "string"
+              },
+              "message": {
+                "description": "What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "retry_after_seconds": {
                 "description": "How long the source asked us to wait, when it said.",
@@ -4313,11 +4327,18 @@ export const runtimeSchemas = {
             "type": "object"
           },
           {
-            "description": "The source asked the caller to slow down.",
+            "description": "The source asked the caller to slow down.\n\nA rate limit is the one refusal whose *reason* an operator cannot guess from the\nkind alone. A hosted service typically has more than one limiter, only some of\nthem are reported by the endpoint an operator would go and check, and the right\nnext step differs between them — so a source that knows which one refused it, and\nwhat it was doing when it did, says so in [`message`](Self::RateLimited::message)\nrather than leaving the operator to infer it and infer it wrong.",
             "properties": {
               "kind": {
                 "const": "rate-limited",
                 "type": "string"
+              },
+              "message": {
+                "description": "What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "retry_after_seconds": {
                 "description": "How long the source asked us to wait, when it said.",
@@ -4753,11 +4774,18 @@ export const runtimeSchemas = {
             "type": "object"
           },
           {
-            "description": "The source asked the caller to slow down.",
+            "description": "The source asked the caller to slow down.\n\nA rate limit is the one refusal whose *reason* an operator cannot guess from the\nkind alone. A hosted service typically has more than one limiter, only some of\nthem are reported by the endpoint an operator would go and check, and the right\nnext step differs between them — so a source that knows which one refused it, and\nwhat it was doing when it did, says so in [`message`](Self::RateLimited::message)\nrather than leaving the operator to infer it and infer it wrong.",
             "properties": {
               "kind": {
                 "const": "rate-limited",
                 "type": "string"
+              },
+              "message": {
+                "description": "What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "retry_after_seconds": {
                 "description": "How long the source asked us to wait, when it said.",
@@ -5429,11 +5457,18 @@ export const runtimeSchemas = {
             "type": "object"
           },
           {
-            "description": "The source asked the caller to slow down.",
+            "description": "The source asked the caller to slow down.\n\nA rate limit is the one refusal whose *reason* an operator cannot guess from the\nkind alone. A hosted service typically has more than one limiter, only some of\nthem are reported by the endpoint an operator would go and check, and the right\nnext step differs between them — so a source that knows which one refused it, and\nwhat it was doing when it did, says so in [`message`](Self::RateLimited::message)\nrather than leaving the operator to infer it and infer it wrong.",
             "properties": {
               "kind": {
                 "const": "rate-limited",
                 "type": "string"
+              },
+              "message": {
+                "description": "What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "retry_after_seconds": {
                 "description": "How long the source asked us to wait, when it said.",
@@ -6444,11 +6479,18 @@ export const runtimeSchemas = {
         "type": "object"
       },
       {
-        "description": "The source asked the caller to slow down.",
+        "description": "The source asked the caller to slow down.\n\nA rate limit is the one refusal whose *reason* an operator cannot guess from the\nkind alone. A hosted service typically has more than one limiter, only some of\nthem are reported by the endpoint an operator would go and check, and the right\nnext step differs between them — so a source that knows which one refused it, and\nwhat it was doing when it did, says so in [`message`](Self::RateLimited::message)\nrather than leaving the operator to infer it and infer it wrong.",
         "properties": {
           "kind": {
             "const": "rate-limited",
             "type": "string"
+          },
+          "message": {
+            "description": "What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "retry_after_seconds": {
             "description": "How long the source asked us to wait, when it said.",
@@ -6564,11 +6606,18 @@ export const runtimeSchemas = {
             "type": "object"
           },
           {
-            "description": "The source asked the caller to slow down.",
+            "description": "The source asked the caller to slow down.\n\nA rate limit is the one refusal whose *reason* an operator cannot guess from the\nkind alone. A hosted service typically has more than one limiter, only some of\nthem are reported by the endpoint an operator would go and check, and the right\nnext step differs between them — so a source that knows which one refused it, and\nwhat it was doing when it did, says so in [`message`](Self::RateLimited::message)\nrather than leaving the operator to infer it and infer it wrong.",
             "properties": {
               "kind": {
                 "const": "rate-limited",
                 "type": "string"
+              },
+              "message": {
+                "description": "What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "retry_after_seconds": {
                 "description": "How long the source asked us to wait, when it said.",
@@ -6783,11 +6832,18 @@ export const runtimeSchemas = {
             "type": "object"
           },
           {
-            "description": "The source asked the caller to slow down.",
+            "description": "The source asked the caller to slow down.\n\nA rate limit is the one refusal whose *reason* an operator cannot guess from the\nkind alone. A hosted service typically has more than one limiter, only some of\nthem are reported by the endpoint an operator would go and check, and the right\nnext step differs between them — so a source that knows which one refused it, and\nwhat it was doing when it did, says so in [`message`](Self::RateLimited::message)\nrather than leaving the operator to infer it and infer it wrong.",
             "properties": {
               "kind": {
                 "const": "rate-limited",
                 "type": "string"
+              },
+              "message": {
+                "description": "What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "retry_after_seconds": {
                 "description": "How long the source asked us to wait, when it said.",
@@ -7055,11 +7111,18 @@ export const runtimeSchemas = {
             "type": "object"
           },
           {
-            "description": "The source asked the caller to slow down.",
+            "description": "The source asked the caller to slow down.\n\nA rate limit is the one refusal whose *reason* an operator cannot guess from the\nkind alone. A hosted service typically has more than one limiter, only some of\nthem are reported by the endpoint an operator would go and check, and the right\nnext step differs between them — so a source that knows which one refused it, and\nwhat it was doing when it did, says so in [`message`](Self::RateLimited::message)\nrather than leaving the operator to infer it and infer it wrong.",
             "properties": {
               "kind": {
                 "const": "rate-limited",
                 "type": "string"
+              },
+              "message": {
+                "description": "What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "retry_after_seconds": {
                 "description": "How long the source asked us to wait, when it said.",

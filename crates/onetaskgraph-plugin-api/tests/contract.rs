@@ -106,6 +106,7 @@ impl TaskSource for Refusing {
     async fn get_task(&self, _id: &NativeId) -> Result<Option<Task>, SourceError> {
         Err(SourceError::RateLimited {
             retry_after_seconds: Some(30),
+            message: None,
         })
     }
     async fn get_project(&self, _id: &NativeId) -> Result<Option<Project>, SourceError> {
@@ -237,7 +238,8 @@ async fn every_remaining_trait_method_is_reachable_through_dyn() {
     assert_eq!(
         error,
         SourceError::RateLimited {
-            retry_after_seconds: Some(30)
+            retry_after_seconds: Some(30),
+            message: None,
         }
     );
     assert!(
@@ -1135,8 +1137,18 @@ fn every_error_variant_renders_a_message_and_survives_the_stdio_boundary() {
         (
             SourceError::RateLimited {
                 retry_after_seconds: Some(30),
+                message: None,
             },
             "the source rate-limited the request",
+            "rate-limited",
+        ),
+        (
+            SourceError::RateLimited {
+                retry_after_seconds: None,
+                message: Some("the burst limiter refused this, and nothing reports it".to_owned()),
+            },
+            "the source rate-limited the request: the burst limiter refused this, and nothing \
+             reports it",
             "rate-limited",
         ),
         (
@@ -1164,6 +1176,61 @@ fn every_error_variant_renders_a_message_and_survives_the_stdio_boundary() {
             error
         );
     }
+}
+
+#[test]
+fn a_rate_limits_optional_message_is_omitted_when_absent_and_read_back_when_it_is_not() {
+    // `rate-limited` gained `message` after the protocol had shipped, and §2.1 of
+    // docs/plugin-protocol.md is what makes that safe without a version bump: an added
+    // member is optional, has a documented default when absent, and an old reader ignores
+    // it. Both halves of that are asserted here rather than assumed.
+    let silent = SourceError::RateLimited {
+        retry_after_seconds: Some(30),
+        message: None,
+    };
+    let encoded = serde_json::to_value(&silent).expect("encodes");
+    assert_eq!(
+        encoded,
+        serde_json::json!({"kind":"rate-limited","retry_after_seconds":30}),
+        "a rate limit with nothing to add is not the shape it was before the member existed"
+    );
+
+    // What a peer written before the member sends: it is read back as the documented
+    // default rather than refused.
+    assert_eq!(
+        serde_json::from_value::<SourceError>(
+            serde_json::json!({"kind":"rate-limited","retry_after_seconds":null})
+        )
+        .expect("an old peer's rate limit still decodes"),
+        SourceError::RateLimited {
+            retry_after_seconds: None,
+            message: None,
+        }
+    );
+
+    let said = SourceError::RateLimited {
+        retry_after_seconds: None,
+        message: Some("the secondary limiter refused this while creating an issue".to_owned()),
+    };
+    let encoded = serde_json::to_value(&said).expect("encodes");
+    assert_eq!(
+        encoded["message"],
+        "the secondary limiter refused this while creating an issue"
+    );
+    assert_eq!(
+        serde_json::from_value::<SourceError>(encoded).expect("decodes"),
+        said,
+        "the diagnostic did not survive the stdio boundary"
+    );
+
+    // And the schema says it is optional, which is what the SDKs are generated from.
+    let schema = serde_json::to_value(schema_for!(SourceError)).expect("a schema");
+    let text = schema.to_string();
+    assert!(text.contains("rate-limited"), "{text}");
+    assert!(
+        !text.contains(r#""required":["kind","message","retry_after_seconds"]"#),
+        "the added member is required, which refuses every peer written before it: {text}"
+    );
 }
 
 #[test]

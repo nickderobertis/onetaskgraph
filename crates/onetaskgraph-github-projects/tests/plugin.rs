@@ -3806,30 +3806,60 @@ async fn every_shape_a_rate_limit_arrives_in_is_classified_as_one_and_never_as_a
         headers: "retry-after: 30\r\n".to_owned(),
         body: "{}".to_owned(),
     };
-    for (what, shape) in [
-        ("a too-many-requests status", too_many),
+    for (what, shape, expected_hint, limiter) in [
+        (
+            "a too-many-requests status",
+            too_many,
+            Some(30),
+            "primary API rate limit",
+        ),
         (
             "a forbidden status naming it",
             Refusal::secondary_forbidden(),
+            None,
+            "secondary rate limit",
         ),
-        ("a successful response naming it", secondary_in_a_success),
+        (
+            "a successful response naming it",
+            secondary_in_a_success,
+            None,
+            "secondary rate limit",
+        ),
     ] {
         let error = paced(&always(&shape), no_waiting())
             .query_tasks(&TaskQuery::default(), &page(10))
             .await
             .expect_err(what);
-        assert!(
-            !matches!(error, SourceError::Auth { .. }),
-            "{what} was classified as a credential problem: {error:?}"
+        // The exact variant, not merely "not Auth": the kind is what a caller matches on,
+        // and a rate limit reported under any other kind is a caller that cannot tell this
+        // from a permission problem or a refusal it should not retry.
+        let SourceError::RateLimited {
+            retry_after_seconds,
+            message: Some(said),
+        } = &error
+        else {
+            panic!("{what} was not classified as a rate limit: {error:?}");
+        };
+        assert_eq!(
+            *retry_after_seconds, expected_hint,
+            "{what} did not carry the wait GitHub asked for"
         );
-        let message = refusal(error).to_ascii_lowercase();
         assert!(
-            message.contains("rate limit") || message.contains("rate-limited"),
-            "{what} does not read as a rate limit: {message}"
+            said.contains(limiter),
+            "{what} does not name which limiter refused: {said}"
         );
         assert!(
-            !message.contains("grant it projects and issues"),
-            "{what} still sends the operator to re-scope a token that is fine: {message}"
+            said.contains("reading the board"),
+            "{what} does not say what this source was doing: {said}"
+        );
+        assert!(
+            !said.contains("Projects and Issues read/write"),
+            "{what} still sends the operator to re-scope a token that is fine: {said}"
+        );
+        // And the whole of it reaches a caller that only renders the error.
+        assert!(
+            error.to_string().contains(said.as_str()),
+            "the diagnostic is carried but not rendered: {error}"
         );
     }
 }
@@ -4286,10 +4316,11 @@ fn a_pacing_setting_that_would_not_pace_is_refused_when_the_source_is_built() {
 
 #[tokio::test]
 async fn the_primary_budget_is_waited_out_and_then_reported_as_the_rate_limit_it_is() {
-    // The other limiter. It is the one `gh api rate_limit` reports and the one a wait
-    // really does answer, so it keeps `SourceError::RateLimited` — and it reaches this
-    // source in two shapes of its own: the `x-ratelimit-remaining: 0` header, and a
-    // successful response whose GraphQL errors name it.
+    // The other limiter. Both report as `SourceError::RateLimited`, because that is what
+    // happened; what tells them apart is the message, and the primary one sends the
+    // operator to the endpoint that really does report it. It reaches this source in two
+    // shapes of its own: the `x-ratelimit-remaining: 0` header, and a successful response
+    // whose GraphQL errors name it.
     let exhausted = Refusal {
         status: "200 OK",
         headers: "x-ratelimit-remaining: 0\r\n".to_owned(),
@@ -4324,12 +4355,16 @@ async fn the_primary_budget_is_waited_out_and_then_reported_as_the_rate_limit_it
     .query_tasks(&TaskQuery::default(), &page(10))
     .await
     .expect_err("an exhausted primary budget");
-    assert_eq!(
-        error,
-        SourceError::RateLimited {
-            retry_after_seconds: Some(30)
-        },
-        "the primary budget stopped reporting the wait it asked for"
+    let SourceError::RateLimited {
+        retry_after_seconds: Some(30),
+        message: Some(said),
+    } = &error
+    else {
+        panic!("the primary budget reported as {error:?}");
+    };
+    assert!(
+        said.contains("primary API rate limit") && said.contains("`gh api rate_limit` reports"),
+        "the primary limit does not send the operator to the endpoint that reports it: {said}"
     );
 
     // And in the shape that arrives as a successful response.
@@ -4344,13 +4379,14 @@ async fn the_primary_budget_is_waited_out_and_then_reported_as_the_rate_limit_it
         .query_tasks(&TaskQuery::default(), &page(10))
         .await
         .expect_err("a primary rate limit named in a successful response");
-    assert_eq!(
-        error,
-        SourceError::RateLimited {
-            retry_after_seconds: None
-        },
-        "a primary rate limit inside a successful response was not read as one: {error:?}"
-    );
+    let SourceError::RateLimited {
+        retry_after_seconds: None,
+        message: Some(said),
+    } = &error
+    else {
+        panic!("a primary rate limit inside a successful response reported as {error:?}");
+    };
+    assert!(said.contains("primary API rate limit"), "{said}");
 }
 
 #[tokio::test]
@@ -4408,6 +4444,7 @@ async fn an_exhausted_budget_reports_when_it_comes_back_rather_than_burning_the_
     );
     let SourceError::RateLimited {
         retry_after_seconds: Some(seconds),
+        ..
     } = error
     else {
         panic!("an exhausted primary budget reported as {error:?}");

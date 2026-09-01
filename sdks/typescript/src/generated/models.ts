@@ -2058,6 +2058,15 @@ message: string
 } | {
 kind: "rate-limited"
 /**
+ * What the source can add about *which* limit refused it and what it was doing.
+ * 
+ * Absent means the source had nothing to add beyond the kind, which is what
+ * every source said before this member existed; it is omitted from the wire
+ * entirely when absent, so a reader written against the shape without it sees
+ * exactly the shape it was written for. Never contains a credential.
+ */
+message?: (string | null)
+/**
  * How long the source asked us to wait, when it said.
  */
 retry_after_seconds?: (number | null)
@@ -2268,6 +2277,15 @@ message: string
 [k: string]: any
 } | {
 kind: "rate-limited"
+/**
+ * What the source can add about *which* limit refused it and what it was doing.
+ * 
+ * Absent means the source had nothing to add beyond the kind, which is what
+ * every source said before this member existed; it is omitted from the wire
+ * entirely when absent, so a reader written against the shape without it sees
+ * exactly the shape it was written for. Never contains a credential.
+ */
+message?: (string | null)
 /**
  * How long the source asked us to wait, when it said.
  */
@@ -2490,6 +2508,15 @@ message: string
 [k: string]: any
 } | {
 kind: "rate-limited"
+/**
+ * What the source can add about *which* limit refused it and what it was doing.
+ * 
+ * Absent means the source had nothing to add beyond the kind, which is what
+ * every source said before this member existed; it is omitted from the wire
+ * entirely when absent, so a reader written against the shape without it sees
+ * exactly the shape it was written for. Never contains a credential.
+ */
+message?: (string | null)
 /**
  * How long the source asked us to wait, when it said.
  */
@@ -2786,6 +2813,15 @@ message: string
 } | {
 kind: "rate-limited"
 /**
+ * What the source can add about *which* limit refused it and what it was doing.
+ * 
+ * Absent means the source had nothing to add beyond the kind, which is what
+ * every source said before this member existed; it is omitted from the wire
+ * entirely when absent, so a reader written against the shape without it sees
+ * exactly the shape it was written for. Never contains a credential.
+ */
+message?: (string | null)
+/**
  * How long the source asked us to wait, when it said.
  */
 retry_after_seconds?: (number | null)
@@ -3066,6 +3102,15 @@ message: string
 } | {
 kind: "rate-limited"
 /**
+ * What the source can add about *which* limit refused it and what it was doing.
+ * 
+ * Absent means the source had nothing to add beyond the kind, which is what
+ * every source said before this member existed; it is omitted from the wire
+ * entirely when absent, so a reader written against the shape without it sees
+ * exactly the shape it was written for. Never contains a credential.
+ */
+message?: (string | null)
+/**
  * How long the source asked us to wait, when it said.
  */
 retry_after_seconds?: (number | null)
@@ -3330,6 +3375,15 @@ message: string
 } | {
 kind: "rate-limited"
 /**
+ * What the source can add about *which* limit refused it and what it was doing.
+ * 
+ * Absent means the source had nothing to add beyond the kind, which is what
+ * every source said before this member existed; it is omitted from the wire
+ * entirely when absent, so a reader written against the shape without it sees
+ * exactly the shape it was written for. Never contains a credential.
+ */
+message?: (string | null)
+/**
  * How long the source asked us to wait, when it said.
  */
 retry_after_seconds?: (number | null)
@@ -3383,6 +3437,15 @@ message: string
 [k: string]: any
 } | {
 kind: "rate-limited"
+/**
+ * What the source can add about *which* limit refused it and what it was doing.
+ * 
+ * Absent means the source had nothing to add beyond the kind, which is what
+ * every source said before this member existed; it is omitted from the wire
+ * entirely when absent, so a reader written against the shape without it sees
+ * exactly the shape it was written for. Never contains a credential.
+ */
+message?: (string | null)
 /**
  * How long the source asked us to wait, when it said.
  */
@@ -3463,6 +3526,15 @@ message: string
 [k: string]: any
 } | {
 kind: "rate-limited"
+/**
+ * What the source can add about *which* limit refused it and what it was doing.
+ * 
+ * Absent means the source had nothing to add beyond the kind, which is what
+ * every source said before this member existed; it is omitted from the wire
+ * entirely when absent, so a reader written against the shape without it sees
+ * exactly the shape it was written for. Never contains a credential.
+ */
+message?: (string | null)
 /**
  * How long the source asked us to wait, when it said.
  */
@@ -3601,6 +3673,15 @@ message: string
 [k: string]: any
 } | {
 kind: "rate-limited"
+/**
+ * What the source can add about *which* limit refused it and what it was doing.
+ * 
+ * Absent means the source had nothing to add beyond the kind, which is what
+ * every source said before this member existed; it is omitted from the wire
+ * entirely when absent, so a reader written against the shape without it sees
+ * exactly the shape it was written for. Never contains a credential.
+ */
+message?: (string | null)
 /**
  * How long the source asked us to wait, when it said.
  */

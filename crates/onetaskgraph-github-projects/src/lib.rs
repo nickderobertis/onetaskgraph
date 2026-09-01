@@ -356,6 +356,38 @@ impl Limiter {
             Self::Secondary => "GitHub's secondary rate limit",
         }
     }
+
+    /// What the endpoint an operator would go and check says about this limiter.
+    ///
+    /// The whole point of naming the limiter. `gh api rate_limit` reports the primary
+    /// budget and nothing else, so an operator who reads a secondary refusal as a primary
+    /// one checks there, sees room, and retries harder — which extends the limit.
+    const fn where_to_look(self) -> &'static str {
+        match self {
+            Self::Primary => {
+                "That is the budget `gh api rate_limit` reports, so that endpoint says when it \
+                 comes back."
+            }
+            Self::Secondary => {
+                "That limiter is not the primary API budget: `gh api rate_limit` reports the \
+                 primary budget and does not report this one, so budget showing there says \
+                 nothing about this refusal, and every further attempt extends it."
+            }
+        }
+    }
+
+    /// The next step this limiter actually calls for.
+    const fn what_to_do(self) -> &'static str {
+        match self {
+            Self::Primary => {
+                "wait for the reset `gh api rate_limit` reports, then run the command again."
+            }
+            Self::Secondary => {
+                "leave this board alone for a few minutes, then run the command again — or \
+                 raise pacing.min_mutation_interval_ms on this source so it writes more slowly."
+            }
+        }
+    }
 }
 
 /// One rate-limit refusal, and the wait GitHub asked for if it asked for one.
@@ -368,12 +400,12 @@ struct Limited {
 impl Limited {
     /// What the caller is told once this source has waited as long as it may.
     ///
-    /// The secondary limiter reports as a refusal carrying its reason rather than as
-    /// [`SourceError::RateLimited`], and the difference is the advice: that variant means
-    /// "slow down and try again", which is the one thing that extends a secondary limit,
-    /// and it carries no message in which to say otherwise. The primary budget keeps it,
-    /// because there waiting really is the answer and `retry_after_seconds` really is how
-    /// long.
+    /// Both limiters report as [`SourceError::RateLimited`], because that is what
+    /// happened: the kind a caller matches on says a rate limit refused this, and nothing
+    /// about *which* limiter it was makes it a different kind of failure. What differs is
+    /// the operator's next step, and that is what the message carries — a secondary
+    /// refusal read as a primary one sends an operator to `gh api rate_limit`, where the
+    /// budget looks fine, and then back to retry the very burst that was refused.
     fn exhausted(
         self,
         doing: &str,
@@ -382,27 +414,20 @@ impl Limited {
         needed: Duration,
         budget: Duration,
     ) -> SourceError {
-        match self.limiter {
-            Limiter::Primary => SourceError::RateLimited {
-                retry_after_seconds: self.hint,
-            },
-            Limiter::Secondary => SourceError::Refused {
-                message: format!(
-                    "{} refused this source while {doing}; it waited {} out over {} and was \
-                     refused again, and the next wait of {} would take it past the {} one call \
-                     may spend waiting. That limiter is not the primary API budget: `gh api \
-                     rate_limit` reports the primary budget and does not report this one, so \
-                     budget showing there says nothing about this refusal, and every further \
-                     attempt extends it. next: leave this board alone for a few minutes, then \
-                     run the command again — or raise pacing.min_mutation_interval_ms on this \
-                     source so it writes more slowly.",
-                    self.limiter.name(),
-                    plural(waits, "refusal"),
-                    seconds(waited),
-                    seconds(needed),
-                    seconds(budget),
-                ),
-            },
+        SourceError::RateLimited {
+            retry_after_seconds: self.hint,
+            message: Some(format!(
+                "{} refused this source while {doing}; it waited {} out over {} and was refused \
+                 again, and the next wait of {} would take it past the {} one call may spend \
+                 waiting. {} next: {}",
+                self.limiter.name(),
+                plural(waits, "refusal"),
+                seconds(waited),
+                seconds(needed),
+                seconds(budget),
+                self.limiter.where_to_look(),
+                self.limiter.what_to_do(),
+            )),
         }
     }
 }

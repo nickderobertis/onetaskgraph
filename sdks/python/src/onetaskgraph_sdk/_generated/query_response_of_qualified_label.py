@@ -61,6 +61,12 @@ class SourceErrorRefused(BaseModel):
 
 class SourceErrorRateLimited(BaseModel):
     kind: Literal["rate-limited"]
+    message: Annotated[
+        str | None,
+        Field(
+            description="What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential."
+        ),
+    ] = None
     retry_after_seconds: Annotated[
         int | None,
         Field(description="How long the source asked us to wait, when it said.", ge=0),

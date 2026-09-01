@@ -29,10 +29,25 @@ pub enum SourceError {
         message: String,
     },
     /// The source asked the caller to slow down.
-    #[error("the source rate-limited the request")]
+    ///
+    /// A rate limit is the one refusal whose *reason* an operator cannot guess from the
+    /// kind alone. A hosted service typically has more than one limiter, only some of
+    /// them are reported by the endpoint an operator would go and check, and the right
+    /// next step differs between them — so a source that knows which one refused it, and
+    /// what it was doing when it did, says so in [`message`](Self::RateLimited::message)
+    /// rather than leaving the operator to infer it and infer it wrong.
+    #[error("the source rate-limited the request{}", rate_limit_detail(.message))]
     RateLimited {
         /// How long the source asked us to wait, when it said.
         retry_after_seconds: Option<u64>,
+        /// What the source can add about *which* limit refused it and what it was doing.
+        ///
+        /// Absent means the source had nothing to add beyond the kind, which is what
+        /// every source said before this member existed; it is omitted from the wire
+        /// entirely when absent, so a reader written against the shape without it sees
+        /// exactly the shape it was written for. Never contains a credential.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     /// The source could not be reached at all.
     #[error("the source could not be reached: {message}")]
@@ -46,4 +61,16 @@ pub enum SourceError {
         /// What could not be represented.
         message: String,
     },
+}
+
+/// The trailing detail a rate limit renders, or nothing when it carried none.
+///
+/// Split out so that a `RateLimited` with no message renders exactly the sentence it
+/// rendered before the member existed, which is what keeps the addition invisible to
+/// everything that was reading it.
+fn rate_limit_detail(message: &Option<String>) -> String {
+    message
+        .as_ref()
+        .map(|said| format!(": {said}"))
+        .unwrap_or_default()
 }

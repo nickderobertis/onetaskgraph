@@ -670,16 +670,29 @@ variant's data is owned — the type was shaped this way for exactly this bounda
 | `config` | `message` (string) | The configuration for this source is invalid. |
 | `auth` | `message` (string) | Authentication failed or a credential is absent. |
 | `refused` | `message` (string) | The source understood the request and refused it. |
-| `rate-limited` | `retry_after_seconds` (integer or `null`) | The source rate-limited the request. |
+| `rate-limited` | `retry_after_seconds` (integer or `null`), `message` (string, optional) | The source rate-limited the request. |
 | `unavailable` | `message` (string) | The source could not be reached. |
 | `malformed` | `message` (string) | The source returned data this interface cannot represent. |
 
 ```json
 { "id": "3", "error": { "kind": "rate-limited", "retry_after_seconds": 30 } }
+{ "id": "4", "error": { "kind": "rate-limited", "retry_after_seconds": null,
+                        "message": "the secondary rate limit refused this while creating an issue; `gh api rate_limit` does not report that limiter" } }
 ```
 
 A `message` is for a person to read. It must not contain a credential, and it must
 not contain a qualified id (§3.2).
+
+**On `rate-limited`, `message` is optional and is omitted when the plugin has nothing to
+add.** Absent means exactly what every plugin said before the member existed — that the
+kind is the whole of what is known — so a reader that has never heard of it sees the shape
+it was written for. It is there because a rate limit is the one refusal whose reason a
+person cannot infer from the kind: a hosted service usually has more than one limiter, only
+some of them are reported by the endpoint an operator would go and check, and reading one
+as the other sends them to check a budget that looks fine and then to retry the burst that
+was refused. A plugin that knows which limiter refused it, and what it was doing at the
+time, says so here. `retry_after_seconds` is unchanged and stays the member a caller acts
+on.
 
 One source failing never fails a whole query: the engine records the failure against
 that source, keeps every other source's results, and exits non-zero unless the caller
@@ -695,6 +708,13 @@ under §2.1: a plugin speaking version 1 has never heard of either, and the one 
 engine sends them is while it is undoing a copy that has already written to that plugin.
 Refusing such a plugin at the handshake, by name, is the only place that difference can be
 reported before anything has been written.
+
+The optional `message` of the `rate-limited` error envelope (§5) was added **without** a
+bump, and it is the plainest case of §2.1 there is: an added optional member with a
+documented default, which a reader that has never heard of it skips. A plugin written
+before it omits it and is read exactly as it was; an engine written before it ignores it
+and acts on `retry_after_seconds` as it always did. Bumping for it would refuse every
+existing plugin at the handshake over a member none of them has to understand.
 
 The documents of §4.11 and §4.12, and the `location` member of §4.13, were added **without**
 a bump, and the difference from §4.10 above is the whole reason. The engine sends a document
