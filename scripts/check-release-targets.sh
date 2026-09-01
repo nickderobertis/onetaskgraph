@@ -246,16 +246,35 @@ retired_entries = declared.get("retired", [])
 if not isinstance(retired_entries, list):
     problems.append(f"{DECLARATION}'s retired is not the array of tables the schema declares")
     retired_entries = []
+retired_ids = {}
 for position, retired in enumerate(retired_entries, start=1):
+    where = f"{DECLARATION} [[retired]] #{position}"
     if not isinstance(retired, dict):
-        problems.append(f"{DECLARATION} [[retired]] #{position} is not a table")
+        problems.append(f"{where} is not a table")
         continue
     for key in sorted(set(retired) - RETIRED_KEYS):
-        problems.append(f"a [[retired]] entry carries the key '{key}', which schema version {SCHEMA_VERSION} does not declare")
+        problems.append(f"{where} carries the key '{key}', which schema version {SCHEMA_VERSION} does not declare")
     for key in sorted(RETIRED_KEYS - set(retired)):
-        problems.append(f"a [[retired]] entry is missing the required key '{key}'")
-    if retired.get("id") in seen_ids:
-        problems.append(f"{DECLARATION} retires '{retired['id']}' and declares it as a target")
+        problems.append(f"{where} is missing the required key '{key}'")
+    # Held to the same types and the same syntax a target's are. An entry exists to
+    # tell a consumer still naming something that it is gone, which it can only do
+    # if it names it the way that consumer does.
+    if "why" in retired:
+        why = typed(retired.get("why"), str, where, "why")
+        if isinstance(why, str) and (not why.strip() or "\n" in why or len(why) > MAX_PROSE):
+            problems.append(f"{where}'s why is not one non-blank line of at most {MAX_PROSE} characters")
+    if "id" not in retired:
+        continue
+    identifier = typed(retired.get("id"), str, where, "id")
+    if not isinstance(identifier, str):
+        continue
+    if not ID_SYNTAX.match(identifier):
+        problems.append(f"{where} has the id '{identifier}', which is not <registry>:<name>")
+    if identifier in seen_ids:
+        problems.append(f"{DECLARATION} retires '{identifier}' and declares it as a target")
+    if identifier in retired_ids:
+        problems.append(f"{where} retires '{identifier}', which [[retired]] #{retired_ids[identifier]} already retires")
+    retired_ids[identifier] = position
 
 probe = declared.get("probe")
 if probe is not None and not isinstance(probe, str):

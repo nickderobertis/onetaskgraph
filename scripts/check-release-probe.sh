@@ -446,16 +446,24 @@ done < "$work/plan.tsv"
 # non-zero, nothing on stdout, and a reason on stderr about the branch the case is
 # actually testing.
 
-# assert_refused <description> <reason fragment> <PATH> <probe> <status> <body> <transport-fails> [arguments...]
+# assert_refused <description> <reason fragment> <expected exit, or "" for any
+# non-zero> <PATH> <probe> <status> <body> <transport-fails> [arguments...]
 assert_refused() {
-  local description=$1 expected=$2 path=$3 script=$4 http=$5 body=$6 transport=$7
-  shift 7
+  local description=$1 expected=$2 wanted=$3 path=$4 script=$5 http=$6 body=$7 transport=$8
+  shift 8
   local status=0
   STUB_REQUEST="$work/request" STUB_AGENT="$work/agent" STUB_METHOD="$work/method" \
     STUB_BODY="$body" STUB_STATUS="$http" STUB_TRANSPORT_FAILS="$transport" PATH="$path" \
     "$script" "$@" > "$work/out" 2> "$work/err" || status=$?
   if [ "$status" -eq 0 ]; then
     fail "$description was answered (exit 0) instead of refused; a caller cannot tell that from the registry saying it serves nothing"
+    return
+  fi
+  # Where the probe's own contract names a status, that status is part of what a
+  # caller reads: exit 2 says the caller asked wrongly rather than anything about
+  # a release, and a refusal that reported it as 1 would say the opposite.
+  if [ -n "$wanted" ] && [ "$status" -ne "$wanted" ]; then
+    fail "$description exited $status, and scripts/release-probe.sh's documented contract gives that branch exit $wanted"
     return
   fi
   if [ -s "$work/out" ]; then
@@ -479,11 +487,11 @@ served_http="$(head -n 1 "$work/plan.tsv" | cut -f 4)"
 # The identifier: none, several, and one this repository does not release. The
 # last is not answered rather than answered emptily, because an artifact nobody
 # publishes says nothing about whether anything was released.
-assert_refused "an invocation with no identifier" "takes exactly one" \
+assert_refused "an invocation with no identifier" "takes exactly one" 2 \
   "$stub_path" "$PROBE" "$served_http" "$served_body" 0
-assert_refused "an invocation with two identifiers" "takes exactly one" \
+assert_refused "an invocation with two identifiers" "takes exactly one" 2 \
   "$stub_path" "$PROBE" "$served_http" "$served_body" 0 "$first_target" "$first_target"
-assert_refused "an identifier this repository does not declare" "is not one this repository declares" \
+assert_refused "an identifier this repository does not declare" "is not one this repository declares" 1 \
   "$stub_path" "$PROBE" "$served_http" "$served_body" 0 "crate:not-a-thing-here"
 
 # A declaration this probe cannot use. It resolves one from its own location, so
@@ -498,13 +506,13 @@ scratch_probe() {
   printf '%s' "$work/$case_name/scripts/release-probe.sh"
 }
 
-assert_refused "a checkout carrying no declaration" "is missing or unreadable" \
+assert_refused "a checkout carrying no declaration" "is missing or unreadable" "" \
   "$stub_path" "$(scratch_probe undeclared "")" "$served_http" "$served_body" 0 "$first_target"
-assert_refused "a declaration that is not TOML" "could not be read" \
+assert_refused "a declaration that is not TOML" "could not be read" "" \
   "$stub_path" "$(scratch_probe malformed 'this is not = = toml')" "$served_http" "$served_body" 0 "$first_target"
-assert_refused "a declaration with no target in it" "declares no release target at all" \
+assert_refused "a declaration with no target in it" "declares no release target at all" "" \
   "$stub_path" "$(scratch_probe empty 'schema_version = 2')" "$served_http" "$served_body" 0 "$first_target"
-assert_refused "a target on a registry this probe cannot read" "cannot read" \
+assert_refused "a target on a registry this probe cannot read" "cannot read" "" \
   "$stub_path" \
   "$(scratch_probe unknown_registry 'schema_version = 2
 [[target]]
@@ -528,18 +536,18 @@ for tool in bash dirname mktemp rm; do
   ln -sf "$tool_path" "$work/minbin/$tool"
 done
 ln -sf "$(type -P python3)" "$work/minbin/python3"
-assert_refused "a host with no curl" "curl is not on PATH" \
+assert_refused "a host with no curl" "curl is not on PATH" "" \
   "$work/minbin" "$PROBE" "$served_http" "$served_body" 0 "$first_target"
 rm -f "$work/minbin/python3"
 ln -sf "$work/bin/curl" "$work/minbin/curl"
-assert_refused "a host with no python3" "python3 is not on PATH" \
+assert_refused "a host with no python3" "python3 is not on PATH" "" \
   "$work/minbin" "$PROBE" "$served_http" "$served_body" 0 "$first_target"
 
 # A declared identifier whose name is not one a registry serves. It becomes a path
 # segment of a URL, so it is refused before it is spelled into one — and refused
 # rather than answered emptily, because a name nobody can look up says nothing
 # about what has been released.
-assert_refused "a declared name that opens an npm scope it does not finish" "opens an npm scope" \
+assert_refused "a declared name that opens an npm scope it does not finish" "opens an npm scope" "" \
   "$stub_path" \
   "$(scratch_probe unfinished_scope 'schema_version = 2
 [[target]]
@@ -548,7 +556,7 @@ name = "npm"
 what = "A scoped name with no package after the scope."
 published_by = "nothing; this is a fixture."')" \
   "$served_http" "$served_body" 0 "npm:@onetaskgraph/"
-assert_refused "a declared name outside the alphabet a registry serves" "is not one a registry serves" \
+assert_refused "a declared name outside the alphabet a registry serves" "is not one a registry serves" "" \
   "$stub_path" \
   "$(scratch_probe unserved_name 'schema_version = 2
 [[target]]
@@ -561,7 +569,7 @@ published_by = "nothing; this is a fixture."')" \
 # A host that cannot give the probe a temporary file to read the answer into. It
 # is the registry read that has not happened, so it is not answered.
 TMPDIR="$work/no-such-directory" assert_refused "a host with no writable temporary directory" \
-  "could not create a temporary file" \
+  "could not create a temporary file" "" \
   "$stub_path" "$PROBE" "$served_http" "$served_body" 0 "$first_target"
 
 # A version its own registry's grammar allows and another's does not: PyPI serves
@@ -582,13 +590,13 @@ fi
 printf 'not json at all\n' > "$work/not-json"
 printf '{"crate":{"max_stable_version":9}}\n' > "$work/not-a-string"
 printf '{"crate":{"max_stable_version":"not a version"}}\n' > "$work/not-a-version"
-assert_refused "a registry answering 500" "cannot say what is released" \
+assert_refused "a registry answering 500" "cannot say what is released" "" \
   "$stub_path" "$PROBE" 500 "$served_body" 0 "$first_target"
-assert_refused "a body that is not JSON" "without a readable" \
+assert_refused "a body that is not JSON" "without a readable" "" \
   "$stub_path" "$PROBE" "$served_http" "$work/not-json" 0 "$first_target"
-assert_refused "a version field that is not a string" "without a readable" \
+assert_refused "a version field that is not a string" "without a readable" "" \
   "$stub_path" "$PROBE" "$served_http" "$work/not-a-string" 0 "$first_target"
-assert_refused "a version field that is not a version" "which is not a version" \
+assert_refused "a version field that is not a version" "which is not a version" "" \
   "$stub_path" "$PROBE" "$served_http" "$work/not-a-version" 0 "$first_target"
 
 [ "$failures" -eq 0 ] || fatal \
