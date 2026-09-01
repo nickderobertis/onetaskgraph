@@ -37,22 +37,35 @@ fn repository_root() -> PathBuf {
 /// what this lane needs is only the list of things a consumer waits on — but a
 /// scan that is strict about the two things it reads. A key is `id` exactly, not
 /// anything beginning with it, and its value is a quoted string; a line under
-/// `[[target]]` that spells `id` some other way panics here rather than being
-/// passed over, because a declared target this lane silently skipped is a target
-/// nothing asks a registry about.
+/// `[[target]]` that spells `id` some other way, or carries none at all, panics
+/// here rather than being passed over, because a declared target this lane
+/// silently skipped is a target nothing asks a registry about.
 fn declared_target_ids(root: &Path) -> Vec<String> {
     let declaration = root.join("release-targets.toml");
     let text = std::fs::read_to_string(&declaration)
         .unwrap_or_else(|error| panic!("could not read {}: {error}", declaration.display()));
     let mut ids = Vec::new();
     let mut in_target = false;
+    let mut targets = 0usize;
     for line in text.lines() {
         let line = line.trim();
         if line.starts_with('#') {
             continue;
         }
         if line.starts_with('[') {
+            // Every table this leaves has to have given up exactly one id. A
+            // target with none would otherwise be skipped in silence, which is
+            // the one outcome this scan may not have.
+            assert_eq!(
+                ids.len(),
+                targets,
+                "{} has a [[target]] with no id in it",
+                declaration.display()
+            );
             in_target = line.starts_with("[[target]]");
+            if in_target {
+                targets += 1;
+            }
             continue;
         }
         if !in_target {
@@ -75,8 +88,20 @@ fn declared_target_ids(root: &Path) -> Vec<String> {
                 declaration.display()
             )
         };
+        assert_eq!(
+            ids.len() + 1,
+            targets,
+            "{} gives one [[target]] two ids, the second being {identifier}",
+            declaration.display()
+        );
         ids.push(identifier.to_string());
     }
+    assert_eq!(
+        ids.len(),
+        targets,
+        "{} has a [[target]] with no id in it",
+        declaration.display()
+    );
     assert!(
         !ids.is_empty(),
         "{} declares no target, so there is nothing to ask a registry about",
