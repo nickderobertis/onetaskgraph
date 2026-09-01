@@ -214,6 +214,10 @@ struct Limits {
     /// Operations this board answers normally, with the budget reported as spent — which
     /// is what GitHub sends on the last request a budget allows.
     spends_the_budget: BTreeSet<String>,
+    /// How long this board sits on a mutation's answer before sending it, which is how a
+    /// fixture on loopback stands in for the transit a real request spends between leaving
+    /// the source and arriving here.
+    mutation_response_delay: Option<Duration>,
     /// When the last mutation arrived, for the interval above.
     last_mutation: Option<Instant>,
     /// How many mutations this board refused for arriving too fast.
@@ -350,6 +354,15 @@ impl Fixture {
     fn rate_limit_mutations(&self, interval: Duration) {
         self.state.lock().unwrap().limits.min_mutation_interval = Some(interval);
     }
+    /// Sit on every mutation's answer for `delay` before sending it.
+    ///
+    /// A real request costs time in both directions and this fixture answers instantly, so
+    /// nothing here would otherwise separate a source that spaces its departures from one
+    /// that spaces from the moment the last request finished. Holding the answer makes that
+    /// difference measurable in the arrival gaps this board records.
+    fn delay_mutation_responses(&self, delay: Duration) {
+        self.state.lock().unwrap().limits.mutation_response_delay = Some(delay);
+    }
     /// Refuse every mutation with a secondary rate limit, however slowly it arrives.
     fn refuse_every_mutation(&self) {
         self.state.lock().unwrap().limits.refuse_every_mutation = true;
@@ -457,6 +470,12 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
+            // The stand-in for transit, held after the arrival above is recorded and before
+            // the answer goes back — which is where a real round trip spends its time.
+            let delay = served.lock().unwrap().limits.mutation_response_delay;
+            if let (Some(delay), true) = (delay, is_mutation(query)) {
+                thread::sleep(delay);
+            }
             stream.write_all(response.as_bytes()).expect("a response");
         }
     });
@@ -4329,6 +4348,56 @@ async fn content_creating_mutations_leave_this_source_no_faster_than_the_shipped
     assert!(
         started.elapsed() < floor,
         "a read was paced as though it created content"
+    );
+}
+
+#[tokio::test]
+async fn the_interval_a_board_sees_is_the_full_one_however_long_a_request_is_in_transit() {
+    // The board counts arrivals; the source can only choose departures. A source spacing
+    // one departure from the last hands the board a gap of the interval *less* whatever the
+    // previous request spent in transit — so it can pace correctly and still be seen going
+    // too fast, which is how a copy paced at 60 ms against a board allowing 45 ms passed on
+    // a quick machine and was refused on a slower one.
+    //
+    // This board holds each mutation's answer for 120 ms, which stands in for that transit
+    // and is far longer than the 60 ms interval so the two behaviours cannot be confused. A
+    // source spacing from the release moment finds every slot already in the past and sends
+    // the moment the previous answer lands: arrival gaps of about 120 ms, the transit alone
+    // and none of the interval. Spacing from completion adds the interval on top, so the
+    // board sees at least 180 ms and would see at least the interval however slow transit
+    // got.
+    let transit = Duration::from_millis(120);
+    let interval = Duration::from_millis(60);
+    let fixture = board(vec![]);
+    fixture.delay_mutation_responses(transit);
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":60,"retry_budget_ms":0}),
+    );
+    source
+        .write_task(&write(task(
+            "T-1",
+            "Publish",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("one task");
+    let gaps = fixture.mutation_gaps();
+    assert!(
+        gaps.len() >= 3,
+        "a created task is several mutations, and this saw {}",
+        gaps.len() + 1
+    );
+    // No tolerance is subtracted here and none is needed: the ordering that makes this
+    // hold is causal rather than clocked. The previous request had arrived before its
+    // answer was held, the answer was held for `transit`, and the next mutation waited
+    // `interval` after receiving it, so `transit + interval` has elapsed on this board's
+    // own clock between the two arrivals it recorded.
+    assert!(
+        gaps.iter().all(|gap| *gap >= transit + interval),
+        "a mutation arrived without the full interval after the last one finished, so the \
+         interval was measured from the release moment and transit was subtracted from it: \
+         {gaps:?}"
     );
 }
 

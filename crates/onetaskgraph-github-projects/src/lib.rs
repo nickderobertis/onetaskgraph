@@ -985,8 +985,11 @@ pub struct GitHubProjectsSource {
     created: Mutex<Vec<Resolved>>,
     /// How fast this source writes, and how long it waits out a refusal.
     pacing: Pacing,
-    /// When the last content-creating mutation was released, so the next one can be
-    /// spaced from it. See [`MIN_MUTATION_INTERVAL_MS`].
+    /// When the last content-creating mutation finished, or the moment the furthest-out
+    /// reserved slot releases the next one, whichever is later — so the one after it can be
+    /// spaced from that. See [`MIN_MUTATION_INTERVAL_MS`] for the interval and
+    /// [`GitHubProjectsSource::finish_mutation`] for why completion rather than release is
+    /// what it is measured from.
     last_mutation: Mutex<Option<Instant>>,
     /// The board as this process last read it, for the length of one command.
     ///
@@ -1100,7 +1103,11 @@ impl GitHubProjectsSource {
                     tokio::time::sleep(spacing).await;
                 }
             }
-            let limited = match self.send_once(query, &variables).await {
+            let attempt = self.send_once(query, &variables).await;
+            if is_mutation(query) {
+                self.finish_mutation();
+            }
+            let limited = match attempt {
                 Ok(data) => return Ok(data),
                 Err(Attempt::Failed(error)) => return Err(error),
                 Err(Attempt::Limited(limited)) => limited,
@@ -1138,6 +1145,10 @@ impl GitHubProjectsSource {
     /// The slot is reserved under the lock and the waiting happens outside it, so two
     /// callers take two slots rather than the same one — and no lock is held across an
     /// await.
+    ///
+    /// The moment it is spaced from is the previous mutation's *completion*, which
+    /// [`Self::finish_mutation`] records. See that method for why the release moment on its
+    /// own is the wrong thing to measure from.
     fn reserve_mutation_slot(&self) -> Duration {
         if self.pacing.min_mutation_interval.is_zero() {
             return Duration::ZERO;
@@ -1158,6 +1169,43 @@ impl GitHubProjectsSource {
         });
         *last = Some(at);
         at.saturating_duration_since(now)
+    }
+
+    /// Record that a content-creating mutation has finished, so the next one is spaced
+    /// from here rather than from the moment this one was released.
+    ///
+    /// This source can only choose when a request *departs*; the limiter counts when it
+    /// *arrives*, and the two differ by whatever the request spent in transit. Spacing one
+    /// departure from the last therefore hands the limiter a gap of the interval less that
+    /// transit, so a source pacing at 750 ms can still be seen arriving faster — which is
+    /// exactly how a copy paced well inside a board's threshold was refused by it on a
+    /// slower machine while passing on a quick one.
+    ///
+    /// Spacing from completion removes the subtraction rather than budgeting for it. The
+    /// previous request had already arrived before its response came back, so its arrival
+    /// is no later than this moment, and the next mutation is released at least the
+    /// interval after this moment and arrives no earlier than it is released: the gap the
+    /// limiter measures is therefore at least the interval, whatever transit costs and on
+    /// whatever platform. The price is that a mutation's own round trip no longer counts
+    /// towards its spacing, which makes this source slightly slower than the configured
+    /// rate rather than slightly faster — the safe side of a limit that punishes being
+    /// wrong by refusing reads for the next fifty minutes.
+    ///
+    /// A failed attempt is recorded too: a request refused by the limiter still arrived,
+    /// and one that never left costs only a wait nobody needed.
+    fn finish_mutation(&self) {
+        if self.pacing.min_mutation_interval.is_zero() {
+            return;
+        }
+        // A poisoned lock here costs pacing, not correctness, exactly as in the reservation.
+        let mut last = self
+            .last_mutation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = Instant::now();
+        // `max` rather than an assignment: a concurrent caller may already have reserved a
+        // slot further out, and completing this request must never pull that slot back in.
+        *last = Some(last.map_or(now, |reserved| reserved.max(now)));
     }
 
     /// One HTTP attempt, classified into an answer, a rate limit to wait out, or a
