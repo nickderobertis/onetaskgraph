@@ -41,6 +41,36 @@ if [ "$release_plz_version" != "release-plz $release_plz_pin" ]; then
 fi
 # llmlint: ignore-end[changed_behavior_has_e2e]
 
+# The canonical release-target reader, warmed into the uv cache at the version
+# scripts/check-release-targets.sh pins. That check runs it with `--offline`, because a
+# required check does not reach the network — so somebody has to have fetched it once,
+# and this is that once. The pin is READ from the check rather than restated, the way the
+# release-plz pin above is read from the workflow that owns it.
+reader_package="$(sed -n 's/^readonly READER_PACKAGE="\([^"]*\)"$/\1/p' scripts/check-release-targets.sh | head -n1)"
+reader_version="$(sed -n 's/^readonly READER_VERSION="\([^"]*\)"$/\1/p' scripts/check-release-targets.sh | head -n1)"
+if [ -z "$reader_package" ] || [ -z "$reader_version" ]; then
+  echo "bootstrap-workspace: scripts/check-release-targets.sh no longer spells the canonical reader's pin where this can read it" >&2
+  echo "bootstrap-workspace: next: restore the READER_PACKAGE and READER_VERSION lines in that script, then rerun 'just bootstrap'" >&2
+  exit 1
+fi
+# A failure here is reported and does not stop bootstrap, for the same reason the judged
+# tier's is below: this needs the network, and `just check` still runs without it — the
+# reader check falls back to a capable onevcs on PATH and, failing that, says it could not
+# resolve one rather than passing quietly.
+# llmlint: ignore-block[changed_behavior_has_e2e] Its three paths are the presence of uv
+# and the reachability of PyPI, both host state outside this repository — the same reason
+# the release-plz installer above carries this directive, and the same remedy: what the
+# warm is FOR is verified where it is used, by scripts/check-release-targets.sh resolving
+# the pinned reader offline and refusing to pass on an incapable one.
+if command -v uvx >/dev/null 2>&1; then
+  if ! warm_output="$(uvx --from "$reader_package==$reader_version" onevcs --version 2>&1)"; then
+    echo "bootstrap-workspace: $reader_package $reader_version did not fetch (${warm_output##*$'\n'}); 'just check' still runs, and next action is to fix that and rerun 'just bootstrap'" >&2
+  fi
+else
+  echo "bootstrap-workspace: uv is not installed, so $reader_package $reader_version was not warmed; 'just check' still runs, and next action is to install uv and rerun 'just bootstrap'" >&2
+fi
+# llmlint: ignore-end[changed_behavior_has_e2e]
+
 # The judged tier is out of `just check`, but a contributor should not have to discover
 # how to install it. Through the documented recipe, so there is one way to do it.
 #

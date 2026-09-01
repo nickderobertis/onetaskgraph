@@ -24,6 +24,9 @@ RESPONSE_ROOTS = {
     "project_show": "QueryResponseOfQualifiedProject",
     "project_deps": "QueryResponseOfQualifiedEdge",
     "project_copy": "CopyReport",
+    "document_list": "QueryResponseOfQualifiedDocument",
+    "document_show": "QueryResponseOfQualifiedDocument",
+    "document_copy": "CopyReport",
     "label_list": "QueryResponseOfQualifiedLabel",
     "search": "QueryResponseOfSearchHit",
     "sources_list": "SourceListing",
@@ -31,12 +34,12 @@ RESPONSE_ROOTS = {
 }
 # Roots no command returns directly, which the package generates and exports anyway.
 #
-# The first four are reachable inside a response and are named here so a consumer has them
-# under their own names rather than only as nested definitions. The documents contract is
-# here for a different reason: `Document`, `DocumentQuery`, `Location` and `PageOfDocument`
-# are the contract's types, and the SDK owes a caller a model for each whether or not a
-# verb reaches one yet — no verb does today, and a generated surface that waited for one
-# would leave both SDKs describing different contracts.
+# Each is reachable inside a response and is named here so a consumer has it under its own
+# name rather than only as a nested definition. `Location` is the one a caller most needs
+# named: a document read answers with one, and acting on it means switching on which of its
+# two keys is present. `DocumentQuery` and `PageOfDocument` are the plugin-facing halves of
+# the same contract, which the SDK owes a caller a model for whether or not a verb returns
+# one directly.
 CONTRACT_ROOTS = {
     "SourceFailure",
     "QueryPlan",
@@ -374,6 +377,19 @@ def camel_to_snake(value: str) -> str:
     return "".join(chars)
 
 
+def operand(command: tuple[str, ...]) -> str | None:
+    """Name the positional one command takes ahead of its options, if it takes one."""
+    match command:
+        case ("search",):
+            return "text"
+        case ("task" | "document", "copy"):
+            return "ids"
+        case ("task" | "project" | "document", "show" | "deps" | "copy"):
+            return "id"
+        case _:
+            return None
+
+
 def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     """Generate one typed method per discovered public command."""
     names = {"_".join(command): command for command in commands}
@@ -383,6 +399,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
             "client has no method for command: "
             + ", ".join(name.replace("_", " ") for name in missing)
         )
+    positionals = {command: operand(command) for command in commands if operand(command)}
     lines = [
         '"""Generated typed client methods. Do not edit."""',
         "from __future__ import annotations",
@@ -396,6 +413,20 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         ],
         ")",
         "",
+        "POSITIONALS: dict[tuple[str, ...], str] = {",
+        *[
+            f"    {command!r}: {positional!r},"
+            for command, positional in sorted(positionals.items())
+        ],
+        "}",
+        '"""The operand each command takes ahead of its options, by command.',
+        "",
+        "The runtime client builds the argument vector from this rather than from a second",
+        "table of its own: a verb whose operand was named in one place and forgotten in the",
+        "other generates a method that cannot do what it is named for, and nothing would say",
+        "so until the binary refused the invocation.",
+        '"""',
+        "",
         "class GeneratedClient:",
         '    """Methods generated from the binary command surface."""',
         "",
@@ -408,20 +439,12 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     for name, command in sorted(names.items()):
         root = RESPONSE_ROOTS[name]
         return_type = RETURN_TYPES.get(name, root)
-        match command:
-            case ("search",):
-                positional = "text"
-            case ("task", "copy"):
-                positional = "ids"
-            case ("task" | "project", "show" | "deps" | "copy"):
-                positional = "id"
-            case _:
-                positional = None
+        positional = positionals.get(command)
         keywords = [item for item in option_names(command) if item != positional]
         positional_type = {
             "id": "GlobalId | str",
-            # `task copy` takes one or more ids, which is the one variadic positional the
-            # command surface has; the client passes each of them through.
+            # `task copy` and `document copy` take one or more ids, which are the variadic
+            # positionals the command surface has; the client passes each of them through.
             "ids": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
         }.get(positional, "str")
         parameters = (

@@ -26,9 +26,9 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, Direction, Label, LabelFilter, NativeId, Page,
-    PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName,
-    StatusCategory, Task, TaskQuery, TextFields, TextQuery,
+    Capabilities, Cursor, DependencyEdge, Direction, Document, DocumentQuery, Label, LabelFilter,
+    NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
+    SourceName, StatusCategory, Task, TaskQuery, TextFields, TextQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -40,7 +40,7 @@ use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available};
 
 use fetch::{Fetched, Stream, fits, merge, walk};
 use join::join_all;
-use local::{LocalProjects, LocalTasks};
+use local::{LocalDocuments, LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
@@ -196,6 +196,33 @@ pub struct ProjectRequest {
     pub paging: Paging,
 }
 
+/// The filters a document list carries.
+///
+/// Its own type rather than [`Filters`], and the difference is the whole of it: there are
+/// no statuses here. A document is not work and carries no status, so a status filter has
+/// nothing to compare against — and a shared type with a `statuses` field would let a
+/// caller write one down and leave every reader to decide what it meant.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DocumentFilters {
+    /// Free-text search, when the caller asked for one.
+    pub text: Option<TextQuery>,
+    /// Label membership, by name.
+    pub labels: LabelFilter,
+}
+
+/// A request for a page of documents.
+#[derive(Debug, Clone)]
+pub struct DocumentRequest {
+    /// Which sources to address. Empty means the configuration's own selection.
+    pub sources: Vec<SourceName>,
+    /// What to keep.
+    pub filters: DocumentFilters,
+    /// Which project the documents live in.
+    pub project: ProjectSelector,
+    /// Which page.
+    pub paging: Paging,
+}
+
 /// A request for a page of labels.
 #[derive(Debug, Clone)]
 pub struct LabelRequest {
@@ -279,6 +306,24 @@ pub enum EngineError {
     )]
     NotWritable {
         /// The configured name of the destination.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+    },
+
+    /// A document read or write named a source whose plugin has no documents.
+    ///
+    /// The same shape [`NotWritable`](Self::NotWritable) has, and for the same reason: the
+    /// declaration is read once at the handshake, so a source that says it has no
+    /// documents is refused before anything is read rather than asked and then apologised
+    /// for.
+    #[error(
+        "source {name} has no documents: its plugin is {kind}, which holds none\n\
+         next: name a source whose plugin has documents — `onetaskgraph sources list` \
+         reports each one's plugin and what it declares."
+    )]
+    NoDocuments {
+        /// The configured name of the source.
         name: String,
         /// The plugin behind it.
         kind: String,
@@ -667,6 +712,92 @@ impl Engine {
         )
     }
 
+    /// One page of documents.
+    ///
+    /// A source declaring it has no documents is **not asked**: the declaration is read
+    /// once here, that source contributes no rows, and the plan reports
+    /// [`Predicate::Document`] unavailable for it. So a document list spanning a mixed set
+    /// of sources answers with what the document-bearing ones hold and says nothing
+    /// alarming about the others — the same shape a source with no project table takes.
+    ///
+    /// # Errors
+    ///
+    /// As [`tasks`](Self::tasks).
+    pub async fn documents(
+        &self,
+        request: &DocumentRequest,
+    ) -> Result<QueryResponse<Qualified<Document>>, EngineError> {
+        let mut names = self.resolve_selection(&request.sources)?;
+        // A qualified project id names one project of one source, exactly as it does for
+        // tasks, so no other source can hold a document in it.
+        if let ProjectSelector::Qualified(id) = &request.project {
+            self.known(&id.source)?;
+            names.retain(|name| name == &id.source);
+        }
+        let query = shape(
+            "document-list",
+            &names,
+            &(&request.filters, &request.project),
+        );
+        let states = resumption(
+            self,
+            request.paging.token.as_ref(),
+            &[StreamKind::Items],
+            &query,
+        )?;
+        let budget = request.paging.limit.get();
+
+        let mut answer = Answer::new();
+        let mut with_documents = Vec::new();
+        for source in answer.split(self, &names) {
+            if source.source().capabilities().documents.is_native() {
+                with_documents.push(source);
+            } else {
+                answer.unreachable_predicate(source, Predicate::Document);
+            }
+        }
+        let (ready, starts) = walking(with_documents, &states, StreamKind::Items);
+
+        let shapes: Vec<DocumentShape> = ready
+            .iter()
+            .map(|source| {
+                shape_documents(
+                    &source.source().capabilities(),
+                    &request.filters,
+                    &project_filter(&request.project),
+                )
+            })
+            .collect();
+        let counters: Vec<AtomicU32> = ready.iter().map(|_| AtomicU32::new(0)).collect();
+        let outcomes: Vec<Outcomes> = shapes.iter().map(|shape| shape.outcomes.clone()).collect();
+
+        let walks = ready
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                fetch_documents(
+                    source,
+                    &shapes[index],
+                    &starts[index],
+                    budget,
+                    &counters[index],
+                )
+            })
+            .collect();
+
+        let streams = answer.collect(&ready, join_all(walks).await, &counters, outcomes);
+        answer.finish(
+            streams,
+            budget,
+            owed(&states),
+            &query,
+            |name, document: Document| Qualified {
+                id: GlobalId::new(name.clone(), document.id.clone()),
+                item: document,
+            },
+        )
+    }
+
     /// One page of labels.
     ///
     /// # Errors
@@ -851,6 +982,37 @@ impl Engine {
         answer.one(source, found, |project| Qualified {
             id: qualified,
             item: project,
+        })
+    }
+
+    /// One document by its qualified id, or an empty page when there is no such document.
+    ///
+    /// A source declaring it has no documents holds none, so it is not asked and the
+    /// answer is the empty page with [`Predicate::Document`] reported unavailable — the
+    /// same answer the list verb gives, rather than a failure.
+    ///
+    /// # Errors
+    ///
+    /// As [`task`](Self::task).
+    pub async fn document(
+        &self,
+        id: &GlobalId,
+    ) -> Result<QueryResponse<Qualified<Document>>, EngineError> {
+        let name = self.known(&id.source)?;
+        let mut answer = Answer::new();
+        let selected = answer.split(self, std::slice::from_ref(&name));
+        let Some(source) = selected.first() else {
+            return answer.nothing();
+        };
+        if !source.source().capabilities().documents.is_native() {
+            answer.unreachable_predicate(source, Predicate::Document);
+            return answer.nothing();
+        }
+        let found = source.source().get_document(&id.native).await;
+        let qualified = GlobalId::new(source.name().clone(), id.native.clone());
+        answer.one(source, found, |document| Qualified {
+            id: qualified,
+            item: document,
         })
     }
 
@@ -1093,6 +1255,16 @@ struct ProjectShape {
     pushed: ProjectQuery,
     /// What the engine narrows afterwards.
     local: LocalProjects,
+    /// What to report.
+    outcomes: Outcomes,
+}
+
+/// As [`TaskShape`], for documents.
+struct DocumentShape {
+    /// What the source is asked.
+    pushed: DocumentQuery,
+    /// What the engine narrows afterwards.
+    local: LocalDocuments,
     /// What to report.
     outcomes: Outcomes,
 }
@@ -1663,6 +1835,67 @@ fn shape_projects(capabilities: &Capabilities, filters: &Filters) -> ProjectShap
     }
 }
 
+/// Split a document query between the source and the engine.
+///
+/// The same three predicates a task query is split by, minus the status filter a document
+/// has nothing to compare against.
+fn shape_documents(
+    capabilities: &Capabilities,
+    filters: &DocumentFilters,
+    project: &ProjectFilter,
+) -> DocumentShape {
+    let mut pushed = DocumentQuery::default();
+    let mut local = LocalDocuments::default();
+    let mut outcomes = Outcomes::default();
+
+    if !filters.labels.is_empty() {
+        if capabilities.filter_by_label.is_native() {
+            pushed.labels = filters.labels.clone();
+            outcomes.record(Predicate::Label, Outcome::PushedDown);
+        } else {
+            local.labels = Some(filters.labels.clone());
+            outcomes.record(Predicate::Label, Outcome::AppliedLocally);
+        }
+    }
+    if let Some(text) = &filters.text {
+        let predicates = text_predicates(text.fields);
+        if searches_natively(capabilities, text.fields) {
+            pushed.text = Some(text.clone());
+            outcomes.record_all(predicates, Outcome::PushedDown);
+        } else {
+            local.text = Some(text.clone());
+            outcomes.record_all(predicates, Outcome::AppliedLocally);
+        }
+    }
+    match project {
+        ProjectFilter::Any => {}
+        ProjectFilter::Orphans => {
+            if capabilities.orphan_tasks.is_native() {
+                pushed.project = ProjectFilter::Orphans;
+                outcomes.record(Predicate::Project, Outcome::PushedDown);
+            } else {
+                local.project = Some(ProjectFilter::Orphans);
+                outcomes.record(Predicate::Project, Outcome::AppliedLocally);
+            }
+        }
+        ProjectFilter::Is(id) => {
+            if capabilities.projects.is_native() {
+                pushed.project = ProjectFilter::Is(id.clone());
+                outcomes.record(Predicate::Project, Outcome::PushedDown);
+            } else {
+                local.project = Some(ProjectFilter::Is(id.clone()));
+                outcomes.record(Predicate::Project, Outcome::AppliedLocally);
+            }
+        }
+    }
+
+    DocumentShape {
+        pushed,
+        local,
+        outcomes,
+    }
+}
+
 /// Split one entity's half of a search between the source and the engine.
 fn shape_hits(capabilities: &Capabilities, filters: &Filters, stream: StreamKind) -> HitShape {
     match stream {
@@ -1753,6 +1986,32 @@ async fn fetch_projects(
             source
                 .source()
                 .query_projects(&shape.pushed, &request)
+                .await
+        },
+    )
+    .await
+}
+
+/// Walk one source's documents, narrowing whatever it did not apply itself.
+async fn fetch_documents(
+    source: &ResolvedSource,
+    shape: &DocumentShape,
+    start: &Resume,
+    budget: u32,
+    calls: &AtomicU32,
+) -> Result<Fetched<Document>, SourceError> {
+    let compensating = shape.local != LocalDocuments::default();
+    walk(
+        start,
+        budget,
+        page_size(compensating, budget, ceiling(source)),
+        |document| shape.local.keeps(document),
+        |cursor, limit| async move {
+            calls.fetch_add(1, Ordering::Relaxed);
+            let request = PageRequest { cursor, limit };
+            source
+                .source()
+                .query_documents(&shape.pushed, &request)
                 .await
         },
     )

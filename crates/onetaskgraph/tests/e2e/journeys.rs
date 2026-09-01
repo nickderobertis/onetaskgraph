@@ -58,6 +58,19 @@ fn listed(rendered: &str) -> Vec<String> {
         .collect()
 }
 
+/// The value of one field of a detail rendering, whatever the label column is padded to.
+///
+/// Read by label rather than by column width because the width is the widest label
+/// present, so a row that carries a `location` line pads every other label one further —
+/// and an assertion written against a literal run of spaces would be asserting on which
+/// *other* fields the source happened to give.
+fn field(rendered: &str, name: &str) -> Option<String> {
+    rendered
+        .lines()
+        .find_map(|line| line.trim_end().strip_prefix(&format!("{name}:")))
+        .map(|value| value.trim().to_owned())
+}
+
 fn edge_starts(rendered: &str) -> Vec<String> {
     rendered
         .lines()
@@ -466,8 +479,9 @@ fn every_complete_dataset_source_lists_its_tasks_and_shows_one_by_its_qualified_
                 row.name
             );
         }
-        assert!(
-            shown.contains(&format!("project:  {}", qualified(SOURCE, "P-1"))),
+        assert_eq!(
+            field(&shown, "project").as_deref(),
+            Some(qualified(SOURCE, "P-1").as_str()),
             "{}: a task's project is qualified too:\n{shown}",
             row.name
         );
@@ -1369,8 +1383,9 @@ fn a_shown_item_carries_the_fields_the_source_gave_it_and_says_when_it_has_none(
         // An orphan says so rather than leaving the row out, which would read as a task
         // whose project the renderer forgot.
         let orphan = ok(row, &sandbox, &["task", "show", &qualified(SOURCE, "T-3")]);
-        assert!(
-            orphan.contains("project:  none"),
+        assert_eq!(
+            field(&orphan, "project").as_deref(),
+            Some("none"),
             "{}: a task in no project says so:\n{orphan}",
             row.name
         );
@@ -1543,6 +1558,9 @@ fn the_kind_marker_one_plugin_owns_is_ordinary_caller_metadata_everywhere_else()
         "status":{"category":"todo","name":"Todo"},"labels":[],
         "metadata":{"onetaskgraph.item_kind":{"shape":[1, true, null]}}}]);
     memory["task_dependencies"] = json!([]);
+    // One task and nothing else: this fixture is about one metadata key, and a document
+    // table beside it would be work no assertion here reads.
+    memory["documents"] = json!([]);
     sandbox.project_document(&document(&json!({
         "folder": {"plugin":"local-md","config":{"root":root}},
         "memory": {"plugin":"in-memory","config":memory},
@@ -1576,6 +1594,338 @@ fn ok_at(sandbox: &Sandbox, arguments: &[&str]) -> String {
     stdout(&output)
 }
 
+/// Rows whose source holds documents, and rows that declare it holds none.
+///
+/// Both halves are driven by the journeys below: a row that declares no documents asserts
+/// the honest answer — reported as holding none, never as having failed — rather than
+/// skipping, which would leave the honest-capability rule proven by nothing.
+fn documentary_rows() -> impl Iterator<Item = &'static Row> {
+    ROWS.iter()
+        .filter(|row| row.declared().documents.is_native())
+}
+
+fn documentless_rows() -> impl Iterator<Item = &'static Row> {
+    ROWS.iter()
+        .filter(|row| !row.declared().documents.is_native())
+}
+
+#[test]
+fn every_row_lists_the_documents_it_holds_and_shows_one_by_its_qualified_id() {
+    for row in documentary_rows() {
+        let sandbox = host(row);
+
+        let listing = ok(row, &sandbox, &["document", "list"]);
+        assert_eq!(
+            listed(&listing),
+            ours(&["D-1", "D-2", "D-3"]),
+            "{}: every document, in the source's own order",
+            row.name
+        );
+        assert!(
+            listing.contains("Alpha design") && listing.contains("Loose note"),
+            "{}: a list carries each document's title:\n{listing}",
+            row.name
+        );
+
+        let shown = ok(
+            row,
+            &sandbox,
+            &["document", "show", &qualified(SOURCE, "D-1")],
+        );
+        for expected in ["Alpha design", "bug", "the engine core, reviewed"] {
+            assert!(
+                shown.contains(expected),
+                "{}: `document show` omits {expected}:\n{shown}",
+                row.name
+            );
+        }
+        assert_eq!(
+            field(&shown, "project").as_deref(),
+            Some(qualified(SOURCE, "P-1").as_str()),
+            "{}: a document's project is qualified too:\n{shown}",
+            row.name
+        );
+        // A document is not work, so it has no status to show and no graph to walk.
+        assert!(
+            field(&shown, "status").is_none(),
+            "{}: a document carries no status:\n{shown}",
+            row.name
+        );
+        let orphan = ok(
+            row,
+            &sandbox,
+            &["document", "show", &qualified(SOURCE, "D-3")],
+        );
+        assert_eq!(
+            field(&orphan, "project").as_deref(),
+            Some("none"),
+            "{}: a document in no project says so:\n{orphan}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn a_source_declaring_it_has_no_documents_is_reported_as_holding_none_rather_than_as_failing() {
+    // The honest-capability rule, end to end: the engine read the declaration once and did
+    // not ask, so the run succeeds, the answer is empty, and the plan says why — rather
+    // than the source appearing as one that could not answer.
+    for row in documentless_rows() {
+        let sandbox = host(row);
+
+        let output = run(&sandbox, &["document", "list", "--explain"]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}: a source that holds no documents has not failed\n{}",
+            row.name,
+            stderr(&output)
+        );
+        let rendered = stdout(&output);
+        assert!(
+            listed(&rendered).is_empty(),
+            "{}: it holds none:\n{rendered}",
+            row.name
+        );
+        plan_says(row, &rendered, "unavailable", "document");
+        assert!(
+            !stderr(&output).contains("could not answer"),
+            "{}: holding none is not failing:\n{}",
+            row.name,
+            stderr(&output)
+        );
+
+        // And one document of it by id: nothing there either, said as plainly.
+        let shown = run(&sandbox, &["document", "show", &qualified(SOURCE, "D-1")]);
+        assert_eq!(shown.status.code(), Some(1), "{}", row.name);
+        assert!(
+            stderr(&shown).contains("no document with that id"),
+            "{}: {}",
+            row.name,
+            stderr(&shown)
+        );
+    }
+}
+
+#[test]
+fn a_document_list_narrows_by_project_by_label_and_by_text_and_has_no_status_filter() {
+    for row in documentary_rows() {
+        let sandbox = host(row);
+
+        let in_project = ok(
+            row,
+            &sandbox,
+            &[
+                "document",
+                "list",
+                "--project",
+                &qualified(SOURCE, "P-1"),
+                "--explain",
+            ],
+        );
+        assert_eq!(listed(&in_project), ours(&["D-1"]), "{}", row.name);
+
+        let orphans = ok(
+            row,
+            &sandbox,
+            &["document", "list", "--no-project", "--explain"],
+        );
+        assert_eq!(listed(&orphans), ours(&["D-3"]), "{}", row.name);
+
+        // The same rows whoever applied the predicate, and a plan that says which it was.
+        let labelled = ok(
+            row,
+            &sandbox,
+            &["document", "list", "--label", "bug", "--explain"],
+        );
+        assert_eq!(listed(&labelled), ours(&["D-1"]), "{}", row.name);
+        plan_says(
+            row,
+            &labelled,
+            if row.declared().filter_by_label.is_native() {
+                "pushed down"
+            } else {
+                "applied locally"
+            },
+            "label",
+        );
+
+        let excluded = ok(row, &sandbox, &["document", "list", "--not-label", "bug"]);
+        assert_eq!(listed(&excluded), ours(&["D-2", "D-3"]), "{}", row.name);
+
+        // `D-1` matches in its title and `D-2` in its body, so a search over either has to
+        // return both — which is what a source that can only search one half must not
+        // half-apply.
+        let searched = ok(
+            row,
+            &sandbox,
+            &[
+                "document",
+                "list",
+                "--search",
+                "alpha design",
+                "--in",
+                "both",
+                "--explain",
+            ],
+        );
+        assert_eq!(listed(&searched), ours(&["D-1", "D-2"]), "{}", row.name);
+        plan_says(
+            row,
+            &searched,
+            if row.declared().search_title.is_native() && row.declared().search_content.is_native()
+            {
+                "pushed down"
+            } else {
+                "applied locally"
+            },
+            "search-title",
+        );
+
+        let by_title = ok(
+            row,
+            &sandbox,
+            &[
+                "document",
+                "list",
+                "--search",
+                "alpha design",
+                "--in",
+                "title",
+            ],
+        );
+        assert_eq!(listed(&by_title), ours(&["D-1"]), "{}", row.name);
+
+        // No status filter, because a document has no status: the flag is not a flag this
+        // verb has, and clap refuses the invocation rather than accepting and ignoring it.
+        let with_status = run(&sandbox, &["document", "list", "--status", "todo"]);
+        assert_eq!(
+            with_status.status.code(),
+            Some(2),
+            "{}: `document list` has no --status:\n{}",
+            row.name,
+            stderr(&with_status)
+        );
+
+        // And no dependency verb, for the same reason: nothing may point at a document.
+        let deps = run(&sandbox, &["document", "deps", &qualified(SOURCE, "D-1")]);
+        assert_eq!(
+            deps.status.code(),
+            Some(2),
+            "{}: `document deps` is not a verb:\n{}",
+            row.name,
+            stderr(&deps)
+        );
+    }
+}
+
+#[test]
+fn both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_alike() {
+    for row in documentary_rows() {
+        let sandbox = host(row);
+
+        // The human rendering says which kind of place it is, so a reader knows whether to
+        // open a link or read a file out.
+        for (verb, id, expected) in [
+            ("document", "D-1", "url https://example.invalid/D-1"),
+            ("document", "D-2", "path /srv/notes/D-2.md"),
+            ("task", "T-1", "url https://example.invalid/T-1"),
+            ("project", "P-1", "path /srv/engine"),
+        ] {
+            let shown = ok(row, &sandbox, &[verb, "show", &qualified(SOURCE, id)]);
+            assert_eq!(
+                field(&shown, "location").as_deref(),
+                Some(expected),
+                "{}: `{verb} show {id}` must say where it is and which kind of place:\n{shown}",
+                row.name
+            );
+        }
+
+        // A source that did not say where an entity is leaves the line out entirely,
+        // which is not the same as saying it is nowhere.
+        let unplaced = ok(
+            row,
+            &sandbox,
+            &["document", "show", &qualified(SOURCE, "D-3")],
+        );
+        assert!(
+            field(&unplaced, "location").is_none(),
+            "{}: a location the source did not give is left out:\n{unplaced}",
+            row.name
+        );
+
+        // The machine rendering carries the contract type's own JSON, so a consumer
+        // branches on which key is present rather than parsing a sentence.
+        for (verb, id, key, place) in [
+            ("document", "D-1", "url", "https://example.invalid/D-1"),
+            ("document", "D-2", "path", "/srv/notes/D-2.md"),
+            ("task", "T-1", "url", "https://example.invalid/T-1"),
+            ("project", "P-1", "path", "/srv/engine"),
+        ] {
+            let response: serde_json::Value = serde_json::from_str(&ok(
+                row,
+                &sandbox,
+                &[verb, "show", &qualified(SOURCE, id), "--json"],
+            ))
+            .expect("a show emits JSON");
+            let location = &response["items"][0]["item"]["location"];
+            assert_eq!(
+                location,
+                &json!({key: place}),
+                "{}: `{verb} show {id} --json` carries the location's own JSON:\n{location}",
+                row.name
+            );
+        }
+        let none: serde_json::Value = serde_json::from_str(&ok(
+            row,
+            &sandbox,
+            &["document", "show", &qualified(SOURCE, "D-3"), "--json"],
+        ))
+        .expect("a show emits JSON");
+        assert_eq!(
+            none["items"][0]["item"]["location"],
+            json!(null),
+            "{}: a source that did not say reports null, not a third variant",
+            row.name
+        );
+
+        // And the list rendering says it too, because a document list is where a reader
+        // finds the thing they were asked to open.
+        let listing = ok(row, &sandbox, &["document", "list"]);
+        assert!(
+            listing.contains("url https://example.invalid/D-1")
+                && listing.contains("path /srv/notes/D-2.md"),
+            "{}: a document list says where each one is:\n{listing}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn a_document_walk_pages_to_exhaustion_in_a_stable_order() {
+    for row in documentary_rows() {
+        let sandbox = host(row);
+        let mut walked = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut arguments = vec!["document", "list", "--limit", "1"];
+            if let Some(page) = &token {
+                arguments.extend(["--page", page]);
+            }
+            let rendered = ok(row, &sandbox, &arguments);
+            walked.extend(listed(&rendered));
+            token = rendered
+                .lines()
+                .find_map(|line| line.strip_prefix("next page: --page "))
+                .map(str::to_owned);
+            if token.is_none() {
+                break;
+            }
+        }
+        assert_eq!(walked, ours(&["D-1", "D-2", "D-3"]), "{}", row.name);
+    }
+}
+
 #[test]
 fn writing_an_items_identifier_where_its_title_belongs_is_caught_by_every_row() {
     // A shipped defect wrote a project's *identifier* into the field its *title* belongs
@@ -1593,7 +1943,19 @@ fn writing_an_items_identifier_where_its_title_belongs_is_caught_by_every_row() 
     // against, which are Rust and out of that check's reach.
     for row in ROWS {
         let sandbox = host(row);
-        for (verb, noun) in [("task", "tasks"), ("project", "projects")] {
+        // The document verbs only where the row's source has documents; a row that holds
+        // none has no document rows for this to discriminate between, and the honest
+        // refusal it answers with is what that row's own journey asserts.
+        let entities: &[(&str, &str)] = if row.declared().documents.is_native() {
+            &[
+                ("task", "tasks"),
+                ("project", "projects"),
+                ("document", "documents"),
+            ]
+        } else {
+            &[("task", "tasks"), ("project", "projects")]
+        };
+        for &(verb, noun) in entities {
             let rendered = ok(row, &sandbox, &[verb, "list", "--json"]);
             let response: serde_json::Value =
                 serde_json::from_str(&rendered).expect("a list emits JSON");

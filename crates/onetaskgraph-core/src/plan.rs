@@ -94,6 +94,13 @@ pub enum Predicate {
     SearchContent,
     /// Filter by owning project.
     Project,
+    /// Read the source's documents.
+    ///
+    /// Not a filter, and reported only as [`unavailable`](SourcePlan::unavailable): a
+    /// source declaring it has no documents contributes no document rows and there is
+    /// nothing for the engine to narrow, which is the same shape `Project` takes for a
+    /// source with no project table.
+    Document,
     /// Walk dependency edges backwards.
     ReverseDependencies,
 }

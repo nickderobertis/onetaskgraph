@@ -86,7 +86,7 @@ fn planted(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
             "status_mapping": {SENTINELS[4]: "todo"},
         }},
         "work": boundary.source("in-memory", json!({
-                "capabilities": {"max_page_size": 2},
+                "capabilities": {"documents": "native", "max_page_size": 2},
                 "tasks": [
                     {"id": "T-1", "title": SENTINELS[0], "content": SENTINELS[1],
                      "status": {"category": "todo", "name": SENTINELS[4]},
@@ -105,6 +105,14 @@ fn planted(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
                     {"id": "P-2", "title": "second project", "content": SENTINELS[1],
                      "status": {"category": "todo", "name": "Todo"}, "labels": []}
                 ],
+                "documents": [
+                    {"id": "D-1", "title": SENTINELS[0], "content": SENTINELS[1],
+                     "project": "P-1",
+                     "labels": [{"id": "L-1", "name": SENTINELS[2]}],
+                     "location": {"path": SENTINELS[1]}},
+                    {"id": "D-2", "title": "second document", "content": SENTINELS[1],
+                     "project": null, "labels": []}
+                ],
                 "labels": [{"id": "L-1", "name": SENTINELS[2]}],
                 "task_dependencies": [{"from": "T-1", "to": "T-2", "kind": "blocks"}],
                 "project_dependencies": [{"from": "P-1", "to": "P-2", "kind": "blocks"}]
@@ -116,6 +124,7 @@ fn planted(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
 fn every_verb() -> Vec<Vec<String>> {
     let task = qualified("work", "T-1");
     let project = qualified("work", "P-1");
+    let held_document = qualified("work", "D-1");
     let owned = |arguments: &[&str]| arguments.iter().map(|part| (*part).to_owned()).collect();
     vec![
         // The write, twice: once creating and once updating, so both halves of the verb
@@ -153,6 +162,24 @@ fn every_verb() -> Vec<Vec<String>> {
         owned(&["project", "list"]),
         owned(&["project", "show", &project]),
         owned(&["project", "deps", &project]),
+        // The document verbs read a user's work exactly as the task verbs do, so they are
+        // held to the same rule. There is no `document copy` here because the one
+        // destination this journey configures is a folder of Markdown, which declares it
+        // has no documents and refuses such a copy before anything is read.
+        owned(&["document", "list"]),
+        owned(&["document", "list", "--explain", "--json"]),
+        owned(&["document", "list", "--label", SENTINELS[2]]),
+        owned(&[
+            "document",
+            "list",
+            "--search",
+            SENTINELS[0],
+            "--in",
+            "title",
+        ]),
+        owned(&["document", "list", "--no-project"]),
+        owned(&["document", "list", "--limit", "1"]),
+        owned(&["document", "show", &held_document]),
         owned(&["label", "list"]),
         owned(&["search", SENTINELS[1]]),
         owned(&["config", "show"]),

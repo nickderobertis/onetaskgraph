@@ -14,8 +14,8 @@
 //! the answer would depend on which plugin happened to be first in the list.
 
 use onetaskgraph_plugin_api::{
-    Label, LabelFilter, NativeId, Project, ProjectFilter, StatusCategory, Task, TextFields,
-    TextQuery,
+    Document, Label, LabelFilter, NativeId, Project, ProjectFilter, StatusCategory, Task,
+    TextFields, TextQuery,
 };
 
 /// The task predicates this source left to the engine.
@@ -84,6 +84,41 @@ impl LocalProjects {
         match &self.text {
             None => true,
             Some(query) => text_matches(&project.title, project.content.as_deref(), query),
+        }
+    }
+}
+
+/// The document predicates this source left to the engine.
+///
+/// No statuses, deliberately: a document is not work and carries none, so a status filter
+/// has nothing here to compare against.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct LocalDocuments {
+    /// Label membership, when the source does not filter by label.
+    pub labels: Option<LabelFilter>,
+    /// Free text, when the source does not search every field the query names.
+    pub text: Option<TextQuery>,
+    /// The owning project, when the source does not filter by it.
+    pub project: Option<ProjectFilter>,
+}
+
+impl LocalDocuments {
+    /// Whether `document` survives every predicate left to the engine.
+    pub fn keeps(&self, document: &Document) -> bool {
+        if let Some(filter) = &self.labels
+            && !labels_match(&document.labels, filter)
+        {
+            return false;
+        }
+        if let Some(query) = &self.text
+            && !text_matches(&document.title, document.content.as_deref(), query)
+        {
+            return false;
+        }
+        match &self.project {
+            None | Some(ProjectFilter::Any) => true,
+            Some(ProjectFilter::Orphans) => document.project.is_none(),
+            Some(ProjectFilter::Is(id)) => document.project.as_ref() == Some(id),
         }
     }
 }

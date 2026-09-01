@@ -14,6 +14,7 @@ class Predicate(StrEnum):
     PredicateSearchTitle = "search-title"
     PredicateSearchContent = "search-content"
     PredicateProject = "project"
+    PredicateDocument = "document"
     PredicateReverseDependencies = "reverse-dependencies"
 
 

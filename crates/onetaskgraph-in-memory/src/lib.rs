@@ -10,20 +10,25 @@
 //!
 //! # What this source declares, field by field
 //!
-//! **This source's capabilities are configured per source, not fixed by the plugin —
-//! `documents` excepted.** Every other field below is a [`CapabilityConfig`] key a document
-//! sets, so the verdict for this plugin is about what it *can* apply rather than about one
-//! number it always reports. `documents` is fixed at `Unsupported` because this source
-//! holds none: a key that could declare it native would let a configuration claim
-//! something no code here can serve, which is the one thing the capability rules forbid. Where a configuration declares a field `Native`, this source applies it — it
+//! **This source's capabilities are configured per source, not fixed by the plugin.**
+//! Every field below is a [`CapabilityConfig`] key a document sets, so the verdict for this
+//! plugin is about what it *can* apply rather than about one number it always reports.
+//! Where a configuration declares a field `Native`, this source applies it — it
 //! holds every item in memory, so there is no predicate here it could not apply — and
 //! where a configuration declares it `Unsupported`, this source ignores it and returns the
 //! wider set, which is capability rule 2 and is the whole reason this plugin exists.
 //!
+//! `documents` is the one key that is not a predicate: it says whether this source has
+//! documents *at all*, and it defaults to `Unsupported` so a source configured without a
+//! `documents:` list says it has none and is never asked for one. Declaring it `Native` is
+//! what gives the source a document table, and a configuration that lists documents
+//! without declaring it is refused where the configuration is read rather than holding
+//! work no query could reach.
+//!
 //! | Field | Verdict |
 //! | --- | --- |
 //! | `projects` | **Supported and proven,** and configurable. Note that in the contract this field means *the source has projects at all*: a source declaring it unsupported contributes no project rows and the engine reports the predicate unreachable rather than compensating. |
-//! | `documents` | **Unsupported, and unimplemented,** and — alone among these fields — *not* configurable. This source holds no documents at all, so a key that could declare it native would let a configuration claim something no code here can serve. docs/follow-ups.md tracks it. |
+//! | `documents` | **Supported and proven,** and configurable. Unlike every other field here it is not a predicate: in the contract it means *the source has documents at all*, so a source declaring it unsupported is never asked for a document and refuses one that arrives anyway, rather than answering an empty page. |
 //! | `orphan_tasks` | **Supported and proven,** and configurable. |
 //! | `filter_by_label` | **Supported and proven,** and configurable. |
 //! | `filter_by_status` | **Supported and proven,** and configurable. |

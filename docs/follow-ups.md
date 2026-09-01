@@ -38,18 +38,17 @@ otherwise fail, naming the row and the field — and deleting this entry and the
 the field line above and fails while it names a capability that plugin no longer calls
 unsupported, so the entry cannot outlive the gap it describes.
 
-## Documents: no source has one yet
+## Documents: three of the four hosted sources have none yet
 
 Unsupported fields: `onetaskgraph-github-projects` `documents`
-Unsupported fields: `onetaskgraph-in-memory` `documents`
 Unsupported fields: `onetaskgraph-linear` `documents`
 Unsupported fields: `onetaskgraph-local-md` `documents`
 
 The plugin contract carries documents — `Document`, `Location`, `DocumentQuery`, the
-`documents` capability, and the four `TaskSource` methods — and **no source implements
-them**. Every plugin declares `documents: Support::Unsupported`, and the four methods keep
-their defaults, which refuse: `documentless` for the two reads, `unwritable` for the two
-writes.
+`documents` capability, and the four `TaskSource` methods — and `in-memory` is the one
+source that implements them. The three above declare `documents: Support::Unsupported` and
+keep the four methods' defaults, which refuse: `documentless` for the two reads,
+`unwritable` for the two writes.
 
 That is sound as it stands, and it is what the capability rules ask for. `documents` is
 not a predicate the engine compensates for; it says whether a source has documents at all,
@@ -59,14 +58,13 @@ a document read across several sources reports such a source as holding none rat
 as having failed. What a plugin must never do here is answer an empty page, which reads as
 a source that has documents and holds none matching.
 
-It is a gap rather than a limit for all four, and each plugin's own verdict row says why:
+It is a gap rather than a limit for all three, and each plugin's own verdict row says why:
 Linear has documents of its own; a GitHub repository holds files a board item could name;
-a folder of Markdown is already files on disk; and the in-memory source holds whatever a
-document configures it to. `documents` is the one `in-memory` field that is *not* a
-`CapabilityConfig` key, because a key that could declare it native would let a
-configuration claim something no code there can serve.
+and a folder of Markdown is already files on disk.
 
 Closing an entry means: implementing that plugin's four methods, flipping its `documents`
 to `Support::Native`, updating its row in `crates/onetaskgraph/tests/e2e/fixtures.rs` —
 which the reconciliation journey will otherwise fail, naming the row and the field — and
-deleting that plugin's line above together with the verdict row's wording.
+deleting that plugin's line above together with the verdict row's wording. That is what
+`in-memory` did: its `documents` is a `CapabilityConfig` key a document sets, and a
+configuration listing documents without declaring it is refused where it is read.

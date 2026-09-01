@@ -180,7 +180,8 @@ def test_an_omitted_location_and_an_omitted_documents_capability_read_as_their_d
 def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects() -> None:
     """The bundle version is what lets an SDK refuse a bundle it was not generated for.
 
-    Version 8 is the one that published the documents contract's four roots, so this
+    Version 8 published the documents contract's four types; version 9 published the two
+    roots a document *read* answers with, which is what made those types reachable. So this
     asserts the version and the roots together — a version bumped without them, or them
     without the bump, is the drift the number exists to make visible.
     """
@@ -205,7 +206,14 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 8
+    assert emitted_bundle["version"] == 9
     for root in ("Document", "DocumentQuery", "Location", "PageOfDocument"):
         assert root in bundle["roots"], root
         assert root in generate.CONTRACT_ROOTS, root
+    # The two the `document` verb group returns, which is what an SDK generates a model
+    # for and what a caller of `document_list` or `document_show` is handed.
+    for root in ("QualifiedDocument", "QueryResponseOfQualifiedDocument"):
+        assert root in bundle["roots"], root
+    assert generate.RESPONSE_ROOTS["document_list"] == "QueryResponseOfQualifiedDocument"
+    assert generate.RESPONSE_ROOTS["document_show"] == "QueryResponseOfQualifiedDocument"
+    assert generate.RESPONSE_ROOTS["document_copy"] == "CopyReport"

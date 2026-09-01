@@ -224,6 +224,22 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   `Engine::copy` as a library call. The second is not a duplicate: this product is exposed
   three ways from one engine, and the consumer a command-line-only copy would strand is
   the Rust caller that links the crate.
+- **A document copy is proven against a destination that outlives the invocation.** One
+  command line is one process, so an `in-memory` destination cannot be read back by a later
+  command and `local-md` declares it holds no documents — which once left the document copy
+  observable only through the report it printed. `onetaskgraph-document-store` closes it: a
+  file-backed peer spawned over a real pipe, so what one invocation writes the next one
+  reads. **It is Python, and that is not incidental.** A spawned plugin can never be
+  measured — the engine clears the child's environment (§3.1), which takes
+  `LLVM_PROFILE_FILE` with it, and `bin/onetaskgraph-source.rs` sits at 0% for exactly that
+  reason — so a peer of any size written in Rust would be permanently uncovered lines in the
+  binary crate. Being another language also makes the journeys test the seam's actual claim,
+  that a plugin can be written against the protocol document alone, rather than restating
+  the engine's own half back to itself. `python3` is already what every guard under
+  `workspace:lint` runs on all three platforms, so it costs the gate nothing. **Do not
+  replace that round trip with a destination pre-populated as the copy would leave it and an
+  assertion that nothing changed.** That proves what a copy *would* write; it does not prove
+  one landed, and the difference is the whole of what the journey is for.
 - **Coverage: 95% lines, per project, and each project measures only its own crate.**
   A workspace average lets a weak crate hide behind a strong one — and, decisively, a
   workspace-wide pass runs every crate's tests on every change, which is what affected
@@ -336,6 +352,23 @@ them do; this is the inventory of what is owed, not a status board.
 32. A copy resolves a dependency on an item it created earlier in the same run — including
     one in another project of the same command, and against a destination whose own read
     of itself is behind. No item a copy created is ever reported as not found.
+33. Documents are listed, narrowed to a project, selected on their own when they are in
+    none, filtered by label and by exclusion, and searched by title, by content and by
+    either; one is shown by its qualified id, and a limit smaller than the result set walks
+    to exhaustion in a stable order. `document list` has no status filter and `document`
+    has no dependency verb: both are refused as invocations rather than accepted and
+    ignored, because a document is not work.
+34. A source declaring it has no documents is reported as holding none rather than as
+    having failed — a document list spanning one exits zero with the plan naming the
+    predicate unavailable, and a document copy naming it at either end is refused before
+    anything is read, naming the source and its plugin.
+35. Both renderings report where an entity is, for documents, tasks and projects alike: the
+    human rendering says which kind of place it is, the machine rendering carries the
+    contract type's own JSON so a consumer branches on which key is present, and a location
+    the source did not give is absent rather than a third variant.
+36. A document copies into another document-bearing source with every field and every
+    caller-defined metadata key it was read with, its JSON types intact, and a second copy
+    of the same document updates the one already there rather than adding a duplicate.
 
 ## Recorded decisions
 
@@ -393,6 +426,30 @@ them do; this is the inventory of what is owed, not a status board.
   from no source change at all, and auto-merge fed each proposal back in as the next push.
   `scripts/check-release-tooling-selection.sh` and `scripts/check-real-release-preparation.sh`
   drive both decisions, the second against the real pinned tool over a real checkout.
+- **`release-targets.toml` is what a consumer waits on, and its short names are frozen.**
+  It declares every artifact this repository publishes in the canonical schema `onevcs`
+  defines and reads, because a dependent that has to guess a release happened either
+  launches too early or waits by hand. The set is frozen at five — `crate`, `pypi`,
+  `sdk-pypi`, `npm`, `sdk-npm` — because that is how another repository names one of these
+  and it cannot see this file to notice one moved or a sixth appeared. A name is one of
+  the five when a dependent writes it down, which is why both SDKs are targets and neither
+  is folded into the binary's: `sdk-npm` is to `npm` what `sdk-pypi` is to `pypi`.
+  Everything else this repository publishes — the five per-platform npm carriers, the six
+  sibling crates — is covered by the target whose release carries it. Both rules go
+  through `scripts/check-release-targets.sh`, the drift gate that makes the second
+  spelling safe and that reconciles the declared set against the real release workflow
+  both ways.
+- **The probe's three answers are not interchangeable.** `scripts/release-probe.sh` prints
+  a version, prints nothing when that registry serves none, or exits non-zero because the
+  lookup could not be made — and a consumer holds indefinitely on the third and stops
+  holding on the second, so reporting a failed lookup as "nothing published" is the one
+  thing it must never do. It is a probe rather than a gate: it rules on no change. Each
+  registry's request and the field read out of the answer are pinned with their provenance
+  in `config/registry-interfaces.toml`; `scripts/check-release-probe.sh` holds the probe to
+  that pin and drives all three answers against documents built from it, so what makes
+  those answers evidence is the pin rather than a registry being reachable, and
+  `crates/onetaskgraph/tests/live.rs` re-observes the real registries from outside every
+  required check.
 
 ## Conventions
 

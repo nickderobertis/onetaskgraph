@@ -52,26 +52,19 @@ PLUGINS = {
 
 # The fields a `configured` plugin FIXES rather than reads from its configuration, each
 # with the reason. `configured` above means "every field is whatever something else
-# decided, so there is no value of this plugin's own to reconcile" — and one field of
-# `in-memory` is not that, which would otherwise leave two bad options: a verdict row
-# claiming a capability the plugin does not have, or a configuration key that could claim
-# one it cannot serve.
+# decided, so there is no value of this plugin's own to reconcile", and a field that is not
+# that would otherwise leave two bad options: a verdict row claiming a capability the plugin
+# does not have, or a configuration key that could claim one it cannot serve.
 #
-# A fixed field is held to exactly what a `literal` plugin's field is held to: its verdict
-# must be Unsupported, must say `unimplemented` or `unsupportable`, and an unimplemented one
-# must be tracked in docs/follow-ups.md. What is not reconciled here is the declaration
-# itself, because it is not in the file this check reads — the shared journey
-# `every_row_declares_exactly_what_its_plugin_reports` is what holds `in-memory`'s real
-# declaration against the table, at the boundary a user reads it from.
-FIXED = {
-    ("in-memory", "documents"): (
-        "this source holds no documents at all, so a `CapabilityConfig` key that could "
-        "declare it native would let a configuration claim something no code there can "
-        "serve — which is capability rule 1's failure, and the one this product has "
-        "already shipped once. The value is fixed in `impl From<&CapabilityConfig> for "
-        "Capabilities` (crates/onetaskgraph-in-memory/src/config.rs)"
-    ),
-}
+# Empty today, and that is a state rather than a stub: every field of both `configured`
+# plugins is now read from something else. A fixed field is held to exactly what a
+# `literal` plugin's field is held to — its verdict must be Unsupported, must say
+# `unimplemented` or `unsupportable`, and an unimplemented one must be tracked in
+# docs/follow-ups.md. What is not reconciled here is the declaration itself, because it is
+# not in the file this check reads: the shared journey
+# `every_row_declares_exactly_what_its_plugin_reports` is what holds a configured plugin's
+# real declaration against the table, at the boundary a user reads it from.
+FIXED: dict[tuple[str, str], str] = {}
 
 HEADING = "# What this source declares, field by field"
 VERDICT_ROW = re.compile(r"^//!\s*\|\s*`(\w+)`\s*\|\s*\*\*(Supported|Unsupported)(.*)$")

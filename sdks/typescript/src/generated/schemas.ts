@@ -2168,6 +2168,11 @@ export const runtimeSchemas = {
         "type": "string"
       },
       {
+        "const": "document",
+        "description": "Read the source's documents.\n\nNot a filter, and reported only as [`unavailable`](SourcePlan::unavailable): a\nsource declaring it has no documents contributes no document rows and there is\nnothing for the engine to narrow, which is the same shape `Project` takes for a\nsource with no project table.",
+        "type": "string"
+      },
+      {
         "const": "reverse-dependencies",
         "description": "Walk dependency edges backwards.",
         "type": "string"
@@ -2532,6 +2537,189 @@ export const runtimeSchemas = {
       "statuses"
     ],
     "title": "ProjectQuery",
+    "type": "object"
+  },
+  "QualifiedDocument": {
+    "$defs": {
+      "Document": {
+        "description": "One piece of information that lives in a project and is not work.\n\nA document carries **no status** and **no dependencies**, and both omissions are the\ncontract rather than an oversight: a document is not work, so it has no place in a\nstatus filter and no place in a dependency graph. [`ItemKind`] therefore gains no\ndocument variant — that enum names what a dependency endpoint points at, and nothing\nmay point at a document.\n\nA source says whether it has documents at all through\n[`Capabilities::documents`](crate::Capabilities::documents), and one that says it has\nnone is never asked for one.",
+        "properties": {
+          "content": {
+            "description": "The long-form body, when the source has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When the source says it was created.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The source's own opaque identifier."
+          },
+          "labels": {
+            "description": "Inline, on the same terms as a [`Task`]'s.",
+            "items": {
+              "$ref": "#/$defs/Label"
+            },
+            "type": "array"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Location"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Where it is, when the source says (see [`Location`])."
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "default": {},
+            "description": "Caller-defined attributes, preserving their JSON types, with the same reserved\nprefixes [`Task::metadata`] carries.",
+            "type": "object"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NativeId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The project it lives in; `None` is an orphan document, exactly as it is on a\n[`Task`]."
+          },
+          "repositories": {
+            "default": [],
+            "description": "Normalized repository origins this document concerns, in source order and without\nrepeats, as a [`Task`]'s.",
+            "items": {
+              "$ref": "#/$defs/Repository"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "The one-line summary a person recognises it by.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the source says it last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a person can open it, on the same terms as a [`Task`]'s.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "labels"
+        ],
+        "type": "object"
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "Label": {
+        "description": "A tag a source attaches to work.",
+        "properties": {
+          "color": {
+            "description": "The source's own colour for the label, when it has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The source's own opaque identifier."
+          },
+          "name": {
+            "description": "What a user filtering across sources actually types.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "Location": {
+        "description": "Where an entity is, in the one form a consumer can act on without knowing the backend.\n\nExternally tagged with exactly two variants, so the JSON is `{\"url\": \"https://…\"}` or\n`{\"path\": \"/home/…\"}` and a consumer tells them apart by which key is present. A reader\nhanded one of these knows what to *do* with it — open a link, or print a path and read\nthe file out — which is what a bare string could not have said.\n\nIt carries no third case on purpose. `None` on the field is the third case, and it\nmeans the source did not say where the entity is, which is not the same as saying it is\nnowhere.\n\nThis does **not** redefine, replace or derive from the `url` field of [`Task`],\n[`Project`] or [`Document`]: a source that reports a web URL there goes on reporting\nit, and every existing consumer sees exactly what it saw.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "The entity lives at an external website, and this is a link a reader can open.",
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "The entity is a file on the machine the source runs on, and this is that file's\nabsolute path, so a reader can print the path or read the contents out.",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One item, under the qualified id the engine addresses it by.\n\nA plugin only ever deals in its own [`NativeId`]; qualifying one is the engine's job,\nso this type is the engine's and a plugin never constructs one.",
+    "properties": {
+      "id": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "`<source>:<native>`, the form a user types back at the command line."
+      },
+      "item": {
+        "$ref": "#/$defs/Document",
+        "description": "The item as its source reported it, unchanged."
+      }
+    },
+    "required": [
+      "id",
+      "item"
+    ],
+    "title": "Qualified",
     "type": "object"
   },
   "QualifiedEdge": {
@@ -3221,6 +3409,11 @@ export const runtimeSchemas = {
             "type": "string"
           },
           {
+            "const": "document",
+            "description": "Read the source's documents.\n\nNot a filter, and reported only as [`unavailable`](SourcePlan::unavailable): a\nsource declaring it has no documents contributes no document rows and there is\nnothing for the engine to narrow, which is the same shape `Project` takes for a\nsource with no project table.",
+            "type": "string"
+          },
+          {
             "const": "reverse-dependencies",
             "description": "Walk dependency edges backwards.",
             "type": "string"
@@ -3307,6 +3500,486 @@ export const runtimeSchemas = {
     "title": "QueryPlan",
     "type": "object"
   },
+  "QueryResponseOfQualifiedDocument": {
+    "$defs": {
+      "Document": {
+        "description": "One piece of information that lives in a project and is not work.\n\nA document carries **no status** and **no dependencies**, and both omissions are the\ncontract rather than an oversight: a document is not work, so it has no place in a\nstatus filter and no place in a dependency graph. [`ItemKind`] therefore gains no\ndocument variant — that enum names what a dependency endpoint points at, and nothing\nmay point at a document.\n\nA source says whether it has documents at all through\n[`Capabilities::documents`](crate::Capabilities::documents), and one that says it has\nnone is never asked for one.",
+        "properties": {
+          "content": {
+            "description": "The long-form body, when the source has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When the source says it was created.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The source's own opaque identifier."
+          },
+          "labels": {
+            "description": "Inline, on the same terms as a [`Task`]'s.",
+            "items": {
+              "$ref": "#/$defs/Label"
+            },
+            "type": "array"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Location"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Where it is, when the source says (see [`Location`])."
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "default": {},
+            "description": "Caller-defined attributes, preserving their JSON types, with the same reserved\nprefixes [`Task::metadata`] carries.",
+            "type": "object"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NativeId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The project it lives in; `None` is an orphan document, exactly as it is on a\n[`Task`]."
+          },
+          "repositories": {
+            "default": [],
+            "description": "Normalized repository origins this document concerns, in source order and without\nrepeats, as a [`Task`]'s.",
+            "items": {
+              "$ref": "#/$defs/Repository"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "The one-line summary a person recognises it by.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the source says it last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a person can open it, on the same terms as a [`Task`]'s.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "labels"
+        ],
+        "type": "object"
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "Label": {
+        "description": "A tag a source attaches to work.",
+        "properties": {
+          "color": {
+            "description": "The source's own colour for the label, when it has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The source's own opaque identifier."
+          },
+          "name": {
+            "description": "What a user filtering across sources actually types.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "Location": {
+        "description": "Where an entity is, in the one form a consumer can act on without knowing the backend.\n\nExternally tagged with exactly two variants, so the JSON is `{\"url\": \"https://…\"}` or\n`{\"path\": \"/home/…\"}` and a consumer tells them apart by which key is present. A reader\nhanded one of these knows what to *do* with it — open a link, or print a path and read\nthe file out — which is what a bare string could not have said.\n\nIt carries no third case on purpose. `None` on the field is the third case, and it\nmeans the source did not say where the entity is, which is not the same as saying it is\nnowhere.\n\nThis does **not** redefine, replace or derive from the `url` field of [`Task`],\n[`Project`] or [`Document`]: a source that reports a web URL there goes on reporting\nit, and every existing consumer sees exactly what it saw.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "The entity lives at an external website, and this is a link a reader can open.",
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "The entity is a file on the machine the source runs on, and this is that file's\nabsolute path, so a reader can print the path or read the contents out.",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "PageToken": {
+        "description": "The engine's own resume token: one plugin cursor per source stream, opaque to the\ncaller exactly as a plugin's cursor is opaque to the engine.\n\nRendered as lower-case hex, which is not obfuscation — the inside is not a secret —\nbut the one property a token a person copies off a terminal has to have: it survives\na shell. The document underneath holds a plugin's own cursor, and a cursor may hold\nanything at all, so a token spelled as the raw JSON would carry quotes, braces and\nspaces straight into the next command line. Hex has no character a shell reads.\n\n# What a token is and is not checked for\n\nBoth ways in go through [`parse`](Self::parse) — including deserialising one — and\nwhat that establishes is **structural**: the string is hex, the bytes are this\nengine's own resume document, and every state in it is well formed. It does not, and\ncannot, establish that this engine is the one that wrote it. A token is not a\ncredential and carries nothing secret; forging one buys a caller nothing they could\nnot have asked for outright, since every cursor inside is handed straight back to the\nsource that issued it and is validated there.\n\nWhat a forged token *could* do is name a stream this configuration has no source for,\nor resume further into a page than the engine ever pages. Both are refused where the\ntoken meets the query it is resuming, by\n[`Engine`](crate::Engine) — see `EngineError::Token` — because only the engine knows\nwhich sources are configured and what page ceiling each declares.",
+        "type": "string"
+      },
+      "Predicate": {
+        "description": "One thing a query can ask of a source.",
+        "oneOf": [
+          {
+            "const": "label",
+            "description": "Filter by label name.",
+            "type": "string"
+          },
+          {
+            "const": "status",
+            "description": "Filter by status category.",
+            "type": "string"
+          },
+          {
+            "const": "search-title",
+            "description": "Search titles.",
+            "type": "string"
+          },
+          {
+            "const": "search-content",
+            "description": "Search bodies.",
+            "type": "string"
+          },
+          {
+            "const": "project",
+            "description": "Filter by owning project.",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "description": "Read the source's documents.\n\nNot a filter, and reported only as [`unavailable`](SourcePlan::unavailable): a\nsource declaring it has no documents contributes no document rows and there is\nnothing for the engine to narrow, which is the same shape `Project` takes for a\nsource with no project table.",
+            "type": "string"
+          },
+          {
+            "const": "reverse-dependencies",
+            "description": "Walk dependency edges backwards.",
+            "type": "string"
+          }
+        ]
+      },
+      "Qualified": {
+        "description": "One item, under the qualified id the engine addresses it by.\n\nA plugin only ever deals in its own [`NativeId`]; qualifying one is the engine's job,\nso this type is the engine's and a plugin never constructs one.",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "`<source>:<native>`, the form a user types back at the command line."
+          },
+          "item": {
+            "$ref": "#/$defs/Document",
+            "description": "The item as its source reported it, unchanged."
+          }
+        },
+        "required": [
+          "id",
+          "item"
+        ],
+        "type": "object"
+      },
+      "QueryPlan": {
+        "description": "What the engine did, per source.",
+        "properties": {
+          "per_source": {
+            "description": "One entry per source the query reached.",
+            "items": {
+              "$ref": "#/$defs/SourcePlan"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "per_source"
+        ],
+        "type": "object"
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      },
+      "SourceError": {
+        "description": "Why a source could not answer.\n\nEvery variant carries owned data only, so an error survives the JSON-over-stdio\nboundary a subprocess-hosted plugin crosses without losing anything.",
+        "oneOf": [
+          {
+            "description": "The source's configuration block is wrong, or names something absent.",
+            "properties": {
+              "kind": {
+                "const": "config",
+                "type": "string"
+              },
+              "message": {
+                "description": "What is wrong, in a form a user can act on.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The credential was missing, malformed, or rejected.",
+            "properties": {
+              "kind": {
+                "const": "auth",
+                "type": "string"
+              },
+              "message": {
+                "description": "What failed. Never contains the credential itself.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source understood the request and declined it.",
+            "properties": {
+              "kind": {
+                "const": "refused",
+                "type": "string"
+              },
+              "message": {
+                "description": "The source's own reason.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source asked the caller to slow down.",
+            "properties": {
+              "kind": {
+                "const": "rate-limited",
+                "type": "string"
+              },
+              "retry_after_seconds": {
+                "description": "How long the source asked us to wait, when it said.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source could not be reached at all.",
+            "properties": {
+              "kind": {
+                "const": "unavailable",
+                "type": "string"
+              },
+              "message": {
+                "description": "What went wrong reaching it.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source answered with something this interface cannot represent.",
+            "properties": {
+              "kind": {
+                "const": "malformed",
+                "type": "string"
+              },
+              "message": {
+                "description": "What could not be represented.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SourceFailure": {
+        "description": "One source's failure, kept beside the results the other sources returned.",
+        "properties": {
+          "error": {
+            "$ref": "#/$defs/SourceError",
+            "description": "Why."
+          },
+          "source": {
+            "$ref": "#/$defs/SourceName",
+            "description": "The source that failed."
+          }
+        },
+        "required": [
+          "source",
+          "error"
+        ],
+        "type": "object"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "SourcePlan": {
+        "description": "What one source was asked for, and what happened to each predicate.",
+        "properties": {
+          "applied_locally": {
+            "description": "Predicates the engine applied in memory over a wider result set.",
+            "items": {
+              "$ref": "#/$defs/Predicate"
+            },
+            "type": "array"
+          },
+          "emulated": {
+            "description": "Predicates the engine answered by a bounded scan of the source.",
+            "items": {
+              "$ref": "#/$defs/Predicate"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "description": "The plugin kind behind it.",
+            "type": "string"
+          },
+          "pages_fetched": {
+            "description": "How many pages the engine pulled from this source to answer.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pushed_down": {
+            "description": "Predicates the source applied itself.\n\nThe four predicate vectors below partition one set of outcomes, and nothing in\nthe type says so: a `Predicate` could appear in two of them at once, or in none.\nOne `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that\nunrepresentable. See the directive below for why it stays as it is.",
+            "items": {
+              "$ref": "#/$defs/Predicate"
+            },
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/$defs/SourceName",
+            "description": "The configured source this describes."
+          },
+          "unavailable": {
+            "description": "Predicates neither side could answer, so the result is unconstrained.\n\nNever [`Predicate::ReverseDependencies`]: `DependencySupport` has no\nunsupported variant, so a reverse-dependency read is answered natively or\nemulated by the engine's bounded scan, never abandoned. The type cannot say\nso — see the directive below.",
+            "items": {
+              "$ref": "#/$defs/Predicate"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "source",
+          "kind",
+          "pushed_down",
+          "applied_locally",
+          "emulated",
+          "unavailable",
+          "pages_fetched"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One page of engine output, with the plan that produced it.",
+    "properties": {
+      "errors": {
+        "description": "Sources that failed. One failure never fails the whole query.",
+        "items": {
+          "$ref": "#/$defs/SourceFailure"
+        },
+        "type": "array"
+      },
+      "items": {
+        "description": "This page's items, already qualified and merged across sources.",
+        "items": {
+          "$ref": "#/$defs/Qualified"
+        },
+        "type": "array"
+      },
+      "next": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PageToken"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Where to resume, or `None` when every source is exhausted."
+      },
+      "plan": {
+        "$ref": "#/$defs/QueryPlan",
+        "description": "What each source was asked to do, and what the engine did instead."
+      }
+    },
+    "required": [
+      "items",
+      "plan",
+      "errors"
+    ],
+    "title": "QueryResponse",
+    "type": "object"
+  },
   "QueryResponseOfQualifiedEdge": {
     "$defs": {
       "DependencyKind": {
@@ -3373,6 +4046,11 @@ export const runtimeSchemas = {
           {
             "const": "project",
             "description": "Filter by owning project.",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "description": "Read the source's documents.\n\nNot a filter, and reported only as [`unavailable`](SourcePlan::unavailable): a\nsource declaring it has no documents contributes no document rows and there is\nnothing for the engine to narrow, which is the same shape `Project` takes for a\nsource with no project table.",
             "type": "string"
           },
           {
@@ -3750,6 +4428,11 @@ export const runtimeSchemas = {
           {
             "const": "project",
             "description": "Filter by owning project.",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "description": "Read the source's documents.\n\nNot a filter, and reported only as [`unavailable`](SourcePlan::unavailable): a\nsource declaring it has no documents contributes no document rows and there is\nnothing for the engine to narrow, which is the same shape `Project` takes for a\nsource with no project table.",
             "type": "string"
           },
           {
@@ -4135,6 +4818,11 @@ export const runtimeSchemas = {
           {
             "const": "project",
             "description": "Filter by owning project.",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "description": "Read the source's documents.\n\nNot a filter, and reported only as [`unavailable`](SourcePlan::unavailable): a\nsource declaring it has no documents contributes no document rows and there is\nnothing for the engine to narrow, which is the same shape `Project` takes for a\nsource with no project table.",
             "type": "string"
           },
           {
@@ -4669,6 +5357,11 @@ export const runtimeSchemas = {
           {
             "const": "project",
             "description": "Filter by owning project.",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "description": "Read the source's documents.\n\nNot a filter, and reported only as [`unavailable`](SourcePlan::unavailable): a\nsource declaring it has no documents contributes no document rows and there is\nnothing for the engine to narrow, which is the same shape `Project` takes for a\nsource with no project table.",
             "type": "string"
           },
           {
@@ -5214,6 +5907,11 @@ export const runtimeSchemas = {
           {
             "const": "project",
             "description": "Filter by owning project.",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "description": "Read the source's documents.\n\nNot a filter, and reported only as [`unavailable`](SourcePlan::unavailable): a\nsource declaring it has no documents contributes no document rows and there is\nnothing for the engine to narrow, which is the same shape `Project` takes for a\nsource with no project table.",
             "type": "string"
           },
           {
@@ -7289,6 +7987,11 @@ export const runtimeSchemas = {
           {
             "const": "project",
             "description": "Filter by owning project.",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "description": "Read the source's documents.\n\nNot a filter, and reported only as [`unavailable`](SourcePlan::unavailable): a\nsource declaring it has no documents contributes no document rows and there is\nnothing for the engine to narrow, which is the same shape `Project` takes for a\nsource with no project table.",
             "type": "string"
           },
           {

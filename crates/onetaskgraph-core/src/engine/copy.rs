@@ -21,8 +21,9 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, ItemKind, ItemWrite, NativeId,
-    Page, PageRequest, Project, ProjectQuery, Repository, SourceError, SourceName, Task, TaskQuery,
+    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
+    ItemKind, ItemWrite, NativeId, Page, PageRequest, Project, ProjectQuery, Repository,
+    SourceError, SourceName, Task, TaskQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -89,6 +90,11 @@ pub enum CopyScope {
         /// Whether the tasks in each project are copied too.
         tasks: bool,
     },
+    /// The ids name documents, and only those documents are copied.
+    ///
+    /// Nothing travels with a document: it takes part in no dependency graph, and it holds
+    /// nothing of its own the way a project holds tasks.
+    Documents,
 }
 
 /// The caller-named escape for a correspondence neither origin rule can find.
@@ -272,7 +278,7 @@ enum Undo {
     /// The copy created it, so undoing means removing it.
     Created {
         /// Which write interface removes it.
-        kind: ItemKind,
+        kind: Level,
         /// The destination id it was created under.
         id: NativeId,
     },
@@ -297,18 +303,18 @@ impl Undo {
         }
     }
 
-    /// Which of the destination's two write interfaces this entry belongs to.
+    /// Which of the destination's three write interfaces this entry belongs to.
     ///
     /// An id alone does not identify a destination item: nothing stops a destination
     /// numbering its tasks and its projects in one namespace, and a local-Markdown store
     /// filing `alpha.md` under both is the ordinary case rather than the contrived one.
     /// So this pairs with `id` wherever one entry has to be told from another.
-    fn kind(&self) -> ItemKind {
+    fn kind(&self) -> Level {
         match self {
             Self::Created { kind, .. } => *kind,
             // Read off what was there, for the reason the variant carries no `kind` of
             // its own: two spellings of one fact can disagree, and this one cannot.
-            Self::Updated { prior, .. } => prior.item.kind(),
+            Self::Updated { prior, .. } => prior.item.level(),
         }
     }
 }
@@ -355,13 +361,15 @@ struct Planned {
     target: Target,
 }
 
-/// A task or a project, so the copy path is written once.
+/// A task, a project or a document, so the copy path is written once.
 #[derive(Clone)]
 enum Item {
     /// A task.
     Task(Box<Task>),
     /// A project.
     Project(Box<Project>),
+    /// A document.
+    Document(Box<Document>),
 }
 
 impl Item {
@@ -369,15 +377,33 @@ impl Item {
         match self {
             Self::Task(task) => &task.id,
             Self::Project(project) => &project.id,
+            Self::Document(document) => &document.id,
         }
     }
 
-    fn kind(&self) -> ItemKind {
+    fn level(&self) -> Level {
         match self {
-            Self::Task(_) => ItemKind::Task,
-            Self::Project(_) => ItemKind::Project,
+            Self::Task(_) => Level::Task,
+            Self::Project(_) => Level::Project,
+            Self::Document(_) => Level::Document,
         }
     }
+}
+
+/// Which of a destination's three read-and-write interfaces one item belongs to.
+///
+/// Deliberately not [`ItemKind`]: that enum names what a *dependency endpoint* points at,
+/// and the contract gives it no document variant because nothing may point at a document.
+/// This one names which pair of methods reads and writes an item, which is a different
+/// question with a third answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Level {
+    /// `get_task`, `write_task`, `delete_task`.
+    Task,
+    /// `get_project`, `write_project`, `delete_project`.
+    Project,
+    /// `get_document`, `write_document`, `delete_document`.
+    Document,
 }
 
 impl Engine {
@@ -389,13 +415,19 @@ impl Engine {
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError`] when the destination is not configured, cannot be built or
-    /// cannot be written; when an id names nothing; when an origin names an item the
+    /// Returns [`EngineError`] when the destination is not configured, cannot be built,
+    /// cannot be written, or — for a document copy — declares it has no documents; when an
+    /// id names nothing; when an origin names an item the
     /// destination no longer holds and `--recreate` was not given; and when the
     /// destination refuses the write — including a field or a metadata key it cannot
     /// carry, which it names rather than dropping.
     pub async fn copy(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
         let destination = self.writable(&request.destination)?;
+        // Before anything is read, and from the declaration rather than from a failed
+        // write: a destination that says it has no documents has nowhere to put one.
+        if request.scope == CopyScope::Documents {
+            documentary(destination)?;
+        }
         let mut journal = Journal::default();
         match self.copy_all(destination, request, &mut journal).await {
             Ok(report) => Ok(report),
@@ -428,7 +460,9 @@ impl Engine {
         let mut membership = Vec::new();
         let mut copied = Vec::new();
         match request.scope {
-            CopyScope::Tasks => copied.extend(request.items.as_slice().iter().cloned()),
+            CopyScope::Tasks | CopyScope::Documents => {
+                copied.extend(request.items.as_slice().iter().cloned());
+            }
             CopyScope::Projects { tasks } => {
                 for id in request.items.as_slice() {
                     let members = if tasks {
@@ -443,11 +477,14 @@ impl Engine {
             }
         }
         let items = match request.scope {
-            CopyScope::Tasks => {
+            CopyScope::Tasks | CopyScope::Documents => {
                 self.copy_items(
                     destination,
                     request,
-                    ItemKind::Task,
+                    match request.scope {
+                        CopyScope::Documents => Level::Document,
+                        _ => Level::Task,
+                    },
                     request.items.as_slice(),
                     None,
                     &copied,
@@ -538,7 +575,7 @@ impl Engine {
         journal: Journal,
         error: EngineError,
     ) -> EngineError {
-        let created: Vec<(ItemKind, &NativeId)> = journal
+        let created: Vec<(Level, &NativeId)> = journal
             .entries
             .iter()
             .filter_map(|entry| match entry {
@@ -554,7 +591,7 @@ impl Engine {
         for entry in journal.entries.iter().rev() {
             let outcome = match entry {
                 Undo::Created { kind, id } => remove(destination, *kind, id).await,
-                Undo::Updated { id, prior, .. } if !created.contains(&(prior.item.kind(), id)) => {
+                Undo::Updated { id, prior, .. } if !created.contains(&(prior.item.level(), id)) => {
                     restore(destination, id, prior).await
                 }
                 Undo::Updated { .. } => Ok(()),
@@ -622,24 +659,20 @@ impl Engine {
         // On a repeat copy, compare the project with its final remapped edges before the
         // first pass temporarily rewrites it. This preserves an `unchanged` outcome when
         // the project and every copied member already have counterparts.
-        let project_plan = self
-            .plan(destination, request, ItemKind::Project, id)
-            .await?;
+        let project_plan = self.plan(destination, request, Level::Project, id).await?;
         let mut known = BTreeMap::new();
         if let Target::Update(target) = &project_plan.target {
             known.insert(id.to_string(), target.clone());
         }
         for member in members {
-            let member_plan = self
-                .plan(destination, request, ItemKind::Task, member)
-                .await?;
+            let member_plan = self.plan(destination, request, Level::Task, member).await?;
             if let Target::Update(target) = member_plan.target {
                 known.insert(member.to_string(), target);
             }
         }
         let project_was_unchanged = if let Target::Update(target) = &project_plan.target {
             let edges = mapped_edges(&project_plan.edges, &id.source, destination, copied, &known);
-            let held = self.prior(destination, ItemKind::Project, target).await?;
+            let held = self.prior(destination, Level::Project, target).await?;
             !edges.iter().any(Option::is_none)
                 && !changes(
                     held.as_ref(),
@@ -655,7 +688,7 @@ impl Engine {
             .copy_items(
                 destination,
                 request,
-                ItemKind::Project,
+                Level::Project,
                 std::slice::from_ref(id),
                 None,
                 copied,
@@ -675,7 +708,7 @@ impl Engine {
             .copy_items(
                 destination,
                 request,
-                ItemKind::Task,
+                Level::Task,
                 members,
                 project.as_ref().map(|project| project.native.clone()),
                 copied,
@@ -786,7 +819,7 @@ impl Engine {
         &self,
         destination: &ResolvedSource,
         request: &CopyRequest,
-        kind: ItemKind,
+        kind: Level,
         items: &[GlobalId],
         project: Option<NativeId>,
         copied: &[GlobalId],
@@ -871,26 +904,35 @@ impl Engine {
         &self,
         destination: &ResolvedSource,
         request: &CopyRequest,
-        kind: ItemKind,
+        kind: Level,
         id: &GlobalId,
     ) -> Result<Planned, EngineError> {
         let source = self.readable(&id.source)?;
+        if kind == Level::Document {
+            documentary(source)?;
+        }
         let item = match kind {
-            ItemKind::Task => source
+            Level::Task => source
                 .source()
                 .get_task(&id.native)
                 .await
                 .map_err(|error| refused(source, error))?
                 .map(|task| Item::Task(Box::new(task))),
-            ItemKind::Project => source
+            Level::Project => source
                 .source()
                 .get_project(&id.native)
                 .await
                 .map_err(|error| refused(source, error))?
                 .map(|project| Item::Project(Box::new(project))),
+            Level::Document => source
+                .source()
+                .get_document(&id.native)
+                .await
+                .map_err(|error| refused(source, error))?
+                .map(|document| Item::Document(Box::new(document))),
         }
         .ok_or_else(|| EngineError::NoSuchItem { id: id.to_string() })?;
-        let edges = forward_edges(source, &id.native, item.kind()).await?;
+        let edges = forward_edges(source, &id.native, item.level()).await?;
         let target = self.target(destination, request, id, &item).await?;
         Ok(Planned {
             source: id.clone(),
@@ -913,7 +955,7 @@ impl Engine {
         if let Some(origin) = origin_of(metadata)
             && &origin.source == destination.name()
         {
-            if exists(destination, &origin.native, item.kind()).await? {
+            if exists(destination, &origin.native, item.level()).await? {
                 return Ok(Target::Update(origin.native));
             }
             if !request.recreate {
@@ -924,7 +966,7 @@ impl Engine {
             }
         }
         if let Some(found) = self
-            .scan(destination, item.kind(), &Wanted::Origin(id.to_string()))
+            .scan(destination, item.level(), &Wanted::Origin(id.to_string()))
             .await?
         {
             return Ok(Target::Update(found));
@@ -937,7 +979,7 @@ impl Engine {
             None => None,
         };
         if let Some(wanted) = wanted
-            && let Some(found) = self.scan(destination, item.kind(), &wanted).await?
+            && let Some(found) = self.scan(destination, item.level(), &wanted).await?
         {
             return Ok(Target::Update(found));
         }
@@ -951,13 +993,13 @@ impl Engine {
     async fn scan(
         &self,
         destination: &ResolvedSource,
-        kind: ItemKind,
+        kind: Level,
         wanted: &Wanted,
     ) -> Result<Option<NativeId>, EngineError> {
         let mut cursor = None;
         loop {
             let next = match kind {
-                ItemKind::Task => {
+                Level::Task => {
                     let page = destination
                         .source()
                         .query_tasks(&TaskQuery::default(), &request_for(destination, cursor))
@@ -970,7 +1012,7 @@ impl Engine {
                     }
                     page.next
                 }
-                ItemKind::Project => {
+                Level::Project => {
                     let page = destination
                         .source()
                         .query_projects(&ProjectQuery::default(), &request_for(destination, cursor))
@@ -979,6 +1021,22 @@ impl Engine {
                     for project in &page.items {
                         if wanted.found(&project.title, &project.metadata) {
                             return Ok(Some(project.id.clone()));
+                        }
+                    }
+                    page.next
+                }
+                Level::Document => {
+                    let page = destination
+                        .source()
+                        .query_documents(
+                            &DocumentQuery::default(),
+                            &request_for(destination, cursor),
+                        )
+                        .await
+                        .map_err(|error| refused(destination, error))?;
+                    for document in &page.items {
+                        if wanted.found(&document.title, &document.metadata) {
+                            return Ok(Some(document.id.clone()));
                         }
                     }
                     page.next
@@ -1012,7 +1070,7 @@ impl Engine {
         // One read of the destination item, used to decide whether the write changes
         // anything and — if the copy cannot finish — to put that item back.
         let prior = match &target {
-            Some(id) => self.prior(destination, item.item.kind(), id).await?,
+            Some(id) => self.prior(destination, item.item.level(), id).await?,
             None => None,
         };
         let edges = resolved(edges);
@@ -1086,8 +1144,15 @@ impl Engine {
         project: Option<NativeId>,
     ) -> Result<Option<NativeId>, EngineError> {
         match (&item.item, project) {
-            (Item::Task(task), None) => self.counterpart(destination, item, task).await,
-            (Item::Task(_), filed) => Ok(filed),
+            (Item::Task(task), None) => {
+                self.counterpart(destination, item, task.project.as_ref())
+                    .await
+            }
+            (Item::Document(document), None) => {
+                self.counterpart(destination, item, document.project.as_ref())
+                    .await
+            }
+            (Item::Task(_) | Item::Document(_), filed) => Ok(filed),
             (Item::Project(_), _) => Ok(None),
         }
     }
@@ -1101,16 +1166,16 @@ impl Engine {
         &self,
         destination: &ResolvedSource,
         item: &Planned,
-        task: &Task,
+        project: Option<&NativeId>,
     ) -> Result<Option<NativeId>, EngineError> {
-        let Some(project) = &task.project else {
+        let Some(project) = project else {
             return Ok(None);
         };
         let qualified = GlobalId::new(item.source.source.clone(), project.clone());
         let found = self
             .scan(
                 destination,
-                ItemKind::Project,
+                Level::Project,
                 &Wanted::Origin(qualified.to_string()),
             )
             .await?;
@@ -1125,22 +1190,28 @@ impl Engine {
     async fn prior(
         &self,
         destination: &ResolvedSource,
-        kind: ItemKind,
+        kind: Level,
         id: &NativeId,
     ) -> Result<Option<Prior>, EngineError> {
         let held = match kind {
-            ItemKind::Task => destination
+            Level::Task => destination
                 .source()
                 .get_task(id)
                 .await
                 .map_err(|error| refused(destination, error))?
                 .map(|task| Item::Task(Box::new(task))),
-            ItemKind::Project => destination
+            Level::Project => destination
                 .source()
                 .get_project(id)
                 .await
                 .map_err(|error| refused(destination, error))?
                 .map(|project| Item::Project(Box::new(project))),
+            Level::Document => destination
+                .source()
+                .get_document(id)
+                .await
+                .map_err(|error| refused(destination, error))?
+                .map(|document| Item::Document(Box::new(document))),
         };
         let Some(item) = held else {
             return Ok(None);
@@ -1166,7 +1237,7 @@ impl Engine {
         prior: Option<Prior>,
         journal: &mut Journal,
     ) -> Result<NativeId, EngineError> {
-        let created_kind = item.item.kind();
+        let created_kind = item.item.level();
         let suggested = target.clone().unwrap_or_else(|| item.item.id().clone());
         // Recorded *before* the write rather than after it. A destination's own write is
         // several calls — `docs/plugin-protocol.md` §4.9 — and one of them failing leaves
@@ -1195,6 +1266,17 @@ impl Engine {
                     target: target.clone(),
                     item: *project,
                     depends_on: edges.to_vec(),
+                })
+                .await
+                .map_err(|error| refused(destination, error))?,
+            // No edges, and that is the contract: a document takes part in no dependency
+            // graph, so there is nothing here for `depends_on` to carry.
+            Item::Document(document) => destination
+                .source()
+                .write_document(&ItemWrite {
+                    target: target.clone(),
+                    item: *document,
+                    depends_on: Vec::new(),
                 })
                 .await
                 .map_err(|error| refused(destination, error))?,
@@ -1263,12 +1345,13 @@ fn changes(
 /// Remove one item this copy created, through the destination's own write interface.
 async fn remove(
     destination: &ResolvedSource,
-    kind: ItemKind,
+    kind: Level,
     id: &NativeId,
 ) -> Result<(), SourceError> {
     match kind {
-        ItemKind::Task => destination.source().delete_task(id).await,
-        ItemKind::Project => destination.source().delete_project(id).await,
+        Level::Task => destination.source().delete_task(id).await,
+        Level::Project => destination.source().delete_project(id).await,
+        Level::Document => destination.source().delete_document(id).await,
     }
 }
 
@@ -1297,7 +1380,33 @@ async fn restore(
             })
             .await
             .map(|_| ()),
+        Item::Document(document) => destination
+            .source()
+            .write_document(&ItemWrite {
+                target: Some(id.clone()),
+                item: (**document).clone(),
+                depends_on: Vec::new(),
+            })
+            .await
+            .map(|_| ()),
     }
+}
+
+/// Refuse a document copy addressed to a source that declares it has none.
+///
+/// Read off the declaration rather than by asking, which is what "not asked" means: the
+/// engine learned at the handshake that this source holds no documents, so it refuses
+/// naming the source and its plugin instead of sending a read that would be refused there.
+/// Applied at both ends of a copy — a source with no documents holds nothing to copy out,
+/// and a destination with none has nowhere to put one.
+fn documentary(source: &ResolvedSource) -> Result<(), EngineError> {
+    if source.source().capabilities().documents.is_native() {
+        return Ok(());
+    }
+    Err(EngineError::NoDocuments {
+        name: source.name().to_string(),
+        kind: source.kind().to_owned(),
+    })
 }
 
 /// One source failing while a copy was mid-flight.
@@ -1312,19 +1421,24 @@ fn refused(source: &ResolvedSource, error: SourceError) -> EngineError {
 async fn forward_edges(
     source: &ResolvedSource,
     id: &NativeId,
-    kind: ItemKind,
+    kind: Level,
 ) -> Result<Vec<DependencyEdge>, EngineError> {
+    // A document has no edges to walk, and asking for them would mean asking a source for
+    // a graph the contract says nothing may point into.
+    if kind == Level::Document {
+        return Ok(Vec::new());
+    }
     let mut edges = Vec::new();
     let mut cursor = None;
     loop {
         let page = match kind {
-            ItemKind::Task => {
+            Level::Task | Level::Document => {
                 source
                     .source()
                     .task_dependencies(id, Direction::DependsOn, &request_for(source, cursor))
                     .await
             }
-            ItemKind::Project => {
+            Level::Project => {
                 source
                     .source()
                     .project_dependencies(id, Direction::DependsOn, &request_for(source, cursor))
@@ -1354,21 +1468,26 @@ fn described(item: &Item) -> (&str, &BTreeMap<String, Value>) {
     match item {
         Item::Task(task) => (&task.title, &task.metadata),
         Item::Project(project) => (&project.title, &project.metadata),
+        Item::Document(document) => (&document.title, &document.metadata),
     }
 }
 
 /// The item as the destination should hold it.
 ///
-/// `url`, `created_at` and `updated_at` are the destination's own and are never written.
-/// The two reserved keys this product encodes typed fields under are removed, because
-/// those fields travel as themselves — leaving the encoding beside them would have the
-/// destination hold one thing twice, and disagree with itself the moment one changed.
+/// `url`, `location`, `created_at` and `updated_at` are the destination's own and are
+/// never written — where the *source* holds an item says nothing about where the
+/// destination does, which is why a copied document does not arrive claiming the path or
+/// the link its source reported. The two reserved keys this product encodes typed fields
+/// under are removed, because those fields travel as themselves — leaving the encoding
+/// beside them would have the destination hold one thing twice, and disagree with itself
+/// the moment one changed.
 fn outgoing(item: &Planned, id: NativeId, project: Option<NativeId>) -> Item {
     let origin = item.source.to_string();
     match &item.item {
         Item::Task(task) => Item::Task(Box::new(Task {
             id,
             url: None,
+            location: None,
             created_at: None,
             updated_at: None,
             project,
@@ -1378,10 +1497,21 @@ fn outgoing(item: &Planned, id: NativeId, project: Option<NativeId>) -> Item {
         Item::Project(project) => Item::Project(Box::new(Project {
             id,
             url: None,
+            location: None,
             created_at: None,
             updated_at: None,
             metadata: carried(&project.metadata, &origin),
             ..(**project).clone()
+        })),
+        Item::Document(document) => Item::Document(Box::new(Document {
+            id,
+            url: None,
+            location: None,
+            created_at: None,
+            updated_at: None,
+            project,
+            metadata: carried(&document.metadata, &origin),
+            ..(**document).clone()
         })),
     }
 }
@@ -1418,6 +1548,15 @@ fn same(held: &Item, outgoing: &Item) -> bool {
                 && held.content == outgoing.content
                 && held.status == outgoing.status
                 && held.labels == outgoing.labels
+                && held.metadata == outgoing.metadata
+                && held.repositories == outgoing.repositories
+        }
+        // No status, because a document has none; no edges, because it is in no graph.
+        (Item::Document(held), Item::Document(outgoing)) => {
+            held.title == outgoing.title
+                && held.content == outgoing.content
+                && held.labels == outgoing.labels
+                && held.project == outgoing.project
                 && held.metadata == outgoing.metadata
                 && held.repositories == outgoing.repositories
         }
@@ -1496,18 +1635,24 @@ fn resolved(edges: &[Option<DependencyEdge>]) -> Vec<DependencyEdge> {
 async fn exists(
     destination: &ResolvedSource,
     id: &NativeId,
-    kind: ItemKind,
+    kind: Level,
 ) -> Result<bool, EngineError> {
     let found = match kind {
-        ItemKind::Task => destination
+        Level::Task => destination
             .source()
             .get_task(id)
             .await
             .map_err(|error| refused(destination, error))?
             .is_some(),
-        ItemKind::Project => destination
+        Level::Project => destination
             .source()
             .get_project(id)
+            .await
+            .map_err(|error| refused(destination, error))?
+            .is_some(),
+        Level::Document => destination
+            .source()
+            .get_document(id)
             .await
             .map_err(|error| refused(destination, error))?
             .is_some(),

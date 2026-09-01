@@ -8,14 +8,15 @@ use std::process::Output;
 
 use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
 use crate::fixtures::{
-    ROWS, dataset, document, github_projects_recording, linear_recording, qualified,
+    ROWS, dataset, document, github_projects_recording, linear_recording, native_capabilities,
+    qualified,
 };
 use serde_json::{Value, json};
 
 fn host_at(boundary: SourceBoundary) -> Sandbox {
     let sandbox = Sandbox::new();
     let mut block = dataset();
-    block["capabilities"] = json!({"max_page_size": 50});
+    block["capabilities"] = native_capabilities();
     sandbox.project_document(&document(
         &json!({"work": boundary.source(ROWS[0].plugin, block)}),
     ));
@@ -135,9 +136,16 @@ fn an_id_that_names_nothing_is_refused_and_says_where_to_look() {
         let no_project = run(&sandbox, &["project", "show", &qualified("work", "NOPE")]);
         refused(&no_project, "no project with that id", "project list");
 
-        // Unqualified, which is a different mistake and gets a different message.
-        let unqualified = run(&sandbox, &["task", "show", "T-1"]);
-        refused(&unqualified, "is not a qualified id", "sources list");
+        let no_document = run(&sandbox, &["document", "show", &qualified("work", "NOPE")]);
+        refused(&no_document, "no document with that id", "document list");
+
+        // Unqualified, which is a different mistake and gets a different message — and the
+        // same message, at the same exit code, from every show verb.
+        for verb in ["task", "project", "document"] {
+            let unqualified = run(&sandbox, &[verb, "show", "T-1"]);
+            refused(&unqualified, "is not a qualified id", "sources list");
+            assert_eq!(unqualified.status.code(), Some(1), "{verb} show");
+        }
 
         // And an id whose source is not configured at all.
         let elsewhere = run(&sandbox, &["task", "show", "elsewhere:T-1"]);
