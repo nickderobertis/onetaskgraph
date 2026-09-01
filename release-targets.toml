@@ -1,0 +1,101 @@
+# What this repository publishes, and the only identifiers scripts/release-probe.sh
+# will answer for. The schema is the canonical release-target schema that
+# nickderobertis/onevcs defines and reads; scripts/check-release-targets.sh holds
+# this document to it, loads it back through that reader, and reconciles it against
+# the real release workflow both ways.
+#
+# **Every `id` is `<registry>:<name>`, and the qualification is load-bearing.**
+# This repository publishes `onetaskgraph` to crates.io and `onetaskgraph-cli` to
+# PyPI from one version, so a bare name says which registry serves it only by
+# accident. The name is exactly what that registry serves — `@onetaskgraph/cli`
+# scoped, because that is npm's own spelling of it.
+#
+# **The five short names are frozen**, because they are what another repository's
+# plan waits on and it cannot read this file to learn that one moved or a sixth
+# appeared. A name is one of the five when a dependent writes it down, which is why
+# both SDKs are targets: `sdk-npm` is to `npm` what `sdk-pypi` is to `pypi`.
+#
+# Everything else this repository publishes is a `covers` entry under the target
+# whose release carries it — the five `@onetaskgraph/cli-<platform>` carriers, which
+# exist only so the launcher can resolve one at its own exact version, and the six
+# sibling crates, which publish at the one `[workspace.package]` version in the same
+# run. Nothing names either kind on its own, so a target apiece would be several
+# identical answers under several names.
+#
+# **The GitHub Release archives are deliberately not a target, and cannot be one.**
+# A target identifier is registry-qualified, and the per-platform `.tar.gz`/`.zip`
+# archives attached to the GitHub Release belong to no registry — there is no
+# `<registry>:<name>` that names one, so a sixth target for them could not be
+# spelled. They are not `[[retired]]` either: that records something no longer
+# published, and these ship on every release. A consumer that installs them
+# (scripts/install.sh does) waits on `pypi`, which is sound because that job uploads
+# the archives before the wheels it then publishes are built from the same run.
+#
+# `schema_version` states what shape this document is written in; it is not a second
+# gate the identifiers are put through. `2` is the version that admits npm's scoped
+# spelling, which this file uses. Nothing here declares `adoption_instructions`, the
+# key version 3 adds.
+schema_version = 2
+probe = "scripts/release-probe.sh"
+
+# The engine, the plugin crates and the binary, as a Rust dependent takes them.
+# All seven publish together at the one `[workspace.package]` version, which is
+# why the six siblings are covered rather than declared.
+[[target]]
+id = "crate:onetaskgraph"
+name = "crate"
+what = "The engine, the plugin API and the `onetaskgraph` binary, as a Rust dependent takes them from crates.io."
+published_by = ".github/workflows/release.yml — the publish-crates job, which publishes every crate the workspace names, under crates/onetaskgraph/Cargo.toml's [package] name."
+manifest = "crates/onetaskgraph/Cargo.toml"
+covers = [
+    "crate:onetaskgraph-plugin-api",
+    "crate:onetaskgraph-in-memory",
+    "crate:onetaskgraph-local-md",
+    "crate:onetaskgraph-linear",
+    "crate:onetaskgraph-github-projects",
+    "crate:onetaskgraph-core",
+]
+
+# The standalone command-line binary as a wheel: the per-platform wheels maturin
+# builds, published under the one project name pyproject.toml declares.
+[[target]]
+id = "pypi:onetaskgraph-cli"
+name = "pypi"
+what = "The standalone `onetaskgraph` binary as a wheel, so `pip install onetaskgraph-cli` puts it on PATH without compiling anything."
+published_by = ".github/workflows/release.yml — the publish-python job, from the build-wheels artifacts, under pyproject.toml's [project] name."
+manifest = "pyproject.toml"
+
+# The Python SDK, which drives the `pypi:onetaskgraph-cli` release it pins by
+# exact version rather than reimplementing the engine.
+[[target]]
+id = "pypi:onetaskgraph-sdk"
+name = "sdk-pypi"
+what = "The typed Python SDK, imported as `onetaskgraph_sdk`, which drives the pinned `onetaskgraph-cli` release as a subprocess."
+published_by = ".github/workflows/release.yml — the publish-python job, from the distribution build-distributions produces, under sdks/python/pyproject.toml's [project] name."
+manifest = "sdks/python/pyproject.toml"
+
+# The launcher an `npm install @onetaskgraph/cli` resolves, published after the
+# five per-platform carriers it pins at its own exact version.
+[[target]]
+id = "npm:@onetaskgraph/cli"
+name = "npm"
+what = "The `onetaskgraph` binary as an npm launcher, which resolves and execs the carrier for the host it is installed on."
+published_by = ".github/workflows/release.yml — the publish-npm job, through scripts/publish-npm.sh, under npm/cli/package.json's name."
+manifest = "npm/cli/package.json"
+covers = [
+    "npm:@onetaskgraph/cli-linux-x64",
+    "npm:@onetaskgraph/cli-linux-arm64",
+    "npm:@onetaskgraph/cli-darwin-x64",
+    "npm:@onetaskgraph/cli-darwin-arm64",
+    "npm:@onetaskgraph/cli-win32-x64",
+]
+
+# The TypeScript SDK. It is a target of its own for the same reason `sdk-pypi` is:
+# a TypeScript application names it in its own dependencies, so it is something a
+# consumer waits on rather than something the launcher's release merely carries.
+[[target]]
+id = "npm:@onetaskgraph/sdk"
+name = "sdk-npm"
+what = "The typed TypeScript SDK, imported as `@onetaskgraph/sdk`, which drives the `onetaskgraph` binary it ships beside as a subprocess."
+published_by = ".github/workflows/release.yml — the publish-npm job, through scripts/publish-npm.sh, under sdks/typescript/package.json's name."
+manifest = "sdks/typescript/package.json"
