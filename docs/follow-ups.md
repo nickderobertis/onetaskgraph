@@ -67,3 +67,24 @@ which the reconciliation journey will otherwise fail, naming the row and the fie
 deleting that plugin's line above together with the verdict row's wording. That is what
 `local-md` did: `documents/` is a folder beside the `tasks/` and `projects/` it already
 read, and `docs/local-md.md` records why the folder is the discriminator.
+
+## What a Windows location is spelled like, and who decides
+
+`local-md` reports a location by handing `std::fs::canonicalize` to `Location::Path`. On
+Windows that answers with an extended-length path — `\\?\C:\…` — and that spelling is not
+what `docs/local-md.md` implies when it says a reader "can print the path or read the
+contents out for a person, without knowing anything about this plugin": no other language
+in this repository writes a path that way, and many tools a person would hand it to refuse
+it. It is nevertheless *the* canonicalized absolute path on that platform, which is what
+the source promises, so both readings stand and the choice between them is the contract's
+rather than a test's.
+
+Nothing is wrong today. Every assertion over a location compares the file named rather
+than the string: the Rust tests canonicalize on the expectation side too, and the two SDK
+tests resolve both sides through the operating system (`Path.samefile`, `fs.realpathSync`),
+which is also what makes them independent of the symlinked temporary tree macOS hands out.
+
+Settling it means deciding whether `local-md` strips the `\\?\` prefix before reporting —
+so a Windows location reads `C:\…` — and if so, saying that in `docs/local-md.md` beside
+the sentence above and stripping it in the six Rust sites that canonicalize on the
+expectation side, so the two halves of each comparison keep agreeing.

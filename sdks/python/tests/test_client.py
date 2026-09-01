@@ -308,13 +308,22 @@ def test_document_copy_drives_the_binary_and_refuses_a_destination_with_no_docum
     # folder put it in rather than the URL the source reported, and no URL or timestamps,
     # which this destination does not have for a document it just wrote.
     copied = run(client.document_show(id="markdown:D-1")).items[0].item
-    assert copied.model_dump(mode="json", exclude_none=True) == {
+    dumped = copied.model_dump(mode="json", exclude_none=True)
+    # The location is compared by the file it names rather than by how it is spelled: this
+    # source canonicalizes, and a canonical path is spelled differently on each platform —
+    # macOS resolves the temporary tree's symlink, and Windows answers with an
+    # extended-length `\\?\` path that no other language writes. `samefile` asks the
+    # operating system the question the assertion is really making, and answers it on all
+    # three; it also proves the path names a file that is really there, which comparing two
+    # strings does not.
+    located = Path(dumped.pop("location")["path"])
+    assert located.samefile(root / "markdown" / "documents" / "D-1.md")
+    assert dumped == {
         "id": "D-1",
         "title": "Memory document",
         "content": "the engine core, reviewed",
         "project": "P-1",
         "labels": [{"id": "L-1", "name": "sdk"}],
-        "location": {"path": str(root / "markdown" / "documents" / "D-1.md")},
         "metadata": {"caller.note": "a string", "onetaskgraph.origin": "memory:D-1"},
         "repositories": ["github.com/nickderobertis/onetaskgraph"],
     }
