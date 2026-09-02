@@ -200,3 +200,10 @@ A copy adds one reserved key of its own, `onetaskgraph.origin`, whose value is t
 qualified id the item was copied from. It is what makes a second copy an update rather
 than a duplicate, and it lives on the item inside the plugin that owns it — nothing
 anywhere holds a mapping.
+
+One copy does not write it: a copy **back**, which is a copy whose counterpart was found
+because the item being copied already named it. There the destination is the original and
+the item being copied came out of it, so the destination keeps the origin it holds — and
+keeps holding none where it holds none. The original's provenance is its own, and
+overwriting it with the id of its own copy would leave the next ordinary copy from the
+store the item was authored in matching nothing and creating a second item beside it.

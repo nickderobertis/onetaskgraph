@@ -14,6 +14,12 @@
 //!    an item whose origin is the id being copied. Found, the copy updates it; not found,
 //!    the copy creates one carrying that origin.
 //!
+//! Which rule found the item decides what the copy records there. A copy that got its
+//! target from rule 1 is a copy-back — the destination is the *original*, and the item
+//! being copied is the one that came from it — so the destination keeps the origin it
+//! already holds, holding none included. Every other copy records the id it was copied
+//! from. See [`recorded`] for what stamping a copy-back's own id there costs.
+//!
 //! A destination write is at the user's explicit request, names its destination, goes
 //! through that source's own write interface into that source's own store, and is never
 //! read back to answer a query. That is what makes it a write and not a cache.
@@ -215,10 +221,28 @@ impl CopyAction {
 
 /// Where one item is going at the destination.
 enum Target {
-    /// Update the destination item with this id.
-    Update(NativeId),
+    /// Update the destination item with this id, reached by the rule named.
+    Update {
+        /// The destination item this copy updates.
+        id: NativeId,
+        /// Which rule found it.
+        found: Found,
+    },
     /// Create one.
     Create,
+}
+
+/// Which of the rules above found the destination item a copy is updating.
+///
+/// The two are the same instruction — update that item — and a different answer about the
+/// origin, which is why the distinction is carried this far rather than dropped where it
+/// is made. See [`recorded`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Found {
+    /// Rule 1: the item being copied already named it, so this copy is a copy-back.
+    Origin,
+    /// Rule 2 or the caller's matching escape: the destination was searched for it.
+    Search,
 }
 
 /// What a scan of the destination is looking for.
@@ -661,16 +685,17 @@ impl Engine {
         // the project and every copied member already have counterparts.
         let project_plan = self.plan(destination, request, Level::Project, id).await?;
         let mut known = BTreeMap::new();
-        if let Target::Update(target) = &project_plan.target {
+        if let Target::Update { id: target, .. } = &project_plan.target {
             known.insert(id.to_string(), target.clone());
         }
         for member in members {
             let member_plan = self.plan(destination, request, Level::Task, member).await?;
-            if let Target::Update(target) = member_plan.target {
+            if let Target::Update { id: target, .. } = member_plan.target {
                 known.insert(member.to_string(), target);
             }
         }
-        let project_was_unchanged = if let Target::Update(target) = &project_plan.target {
+        let project_was_unchanged = if let Target::Update { id: target, .. } = &project_plan.target
+        {
             let edges = mapped_edges(&project_plan.edges, &id.source, destination, copied, &known);
             let held = self.prior(destination, Level::Project, target).await?;
             !edges.iter().any(Option::is_none)
@@ -833,7 +858,7 @@ impl Engine {
         }
 
         for item in &planned {
-            if let Target::Update(id) = &item.target {
+            if let Target::Update { id, .. } = &item.target {
                 written.insert(item.source.to_string(), id.clone());
             }
         }
@@ -956,7 +981,10 @@ impl Engine {
             && &origin.source == destination.name()
         {
             if exists(destination, &origin.native, item.level()).await? {
-                return Ok(Target::Update(origin.native));
+                return Ok(Target::Update {
+                    id: origin.native,
+                    found: Found::Origin,
+                });
             }
             if !request.recreate {
                 return Err(EngineError::StaleOrigin {
@@ -969,7 +997,10 @@ impl Engine {
             .scan(destination, item.level(), &Wanted::Origin(id.to_string()))
             .await?
         {
-            return Ok(Target::Update(found));
+            return Ok(Target::Update {
+                id: found,
+                found: Found::Search,
+            });
         }
         let wanted = match &request.match_by {
             Some(MatchBy::Title) => Some(Wanted::Title(title.to_owned())),
@@ -981,7 +1012,10 @@ impl Engine {
         if let Some(wanted) = wanted
             && let Some(found) = self.scan(destination, item.level(), &wanted).await?
         {
-            return Ok(Target::Update(found));
+            return Ok(Target::Update {
+                id: found,
+                found: Found::Search,
+            });
         }
         Ok(Target::Create)
     }
@@ -1064,7 +1098,7 @@ impl Engine {
         journal: &mut Journal,
     ) -> Result<(CopyOutcome, Option<Prior>), EngineError> {
         let target = match &item.target {
-            Target::Update(id) => Some(id.clone()),
+            Target::Update { id, .. } => Some(id.clone()),
             Target::Create => None,
         };
         // One read of the destination item, used to decide whether the write changes
@@ -1239,6 +1273,9 @@ impl Engine {
     ) -> Result<NativeId, EngineError> {
         let created_kind = item.item.level();
         let suggested = target.clone().unwrap_or_else(|| item.item.id().clone());
+        // Settled before the journal takes `prior`, and from that same read: what the
+        // destination holds at the origin key is what a copy-back leaves there.
+        let origin = recorded(item, prior.as_ref());
         // Recorded *before* the write rather than after it. A destination's own write is
         // several calls — `docs/plugin-protocol.md` §4.9 — and one of them failing leaves
         // the ones before it applied. No source can put those back, because only this
@@ -1250,7 +1287,7 @@ impl Engine {
         if let (Some(id), Some(prior)) = (target.clone(), prior) {
             journal.record(Undo::Updated { id, prior });
         }
-        let landed = match outgoing(item, suggested, project) {
+        let landed = match outgoing(item, suggested, project, &origin) {
             Item::Task(task) => destination
                 .source()
                 .write_task(&ItemWrite {
@@ -1338,7 +1375,12 @@ fn changes(
     let Some(held) = held else {
         return true;
     };
-    let outgoing = outgoing(item, target.clone(), project.clone());
+    let outgoing = outgoing(
+        item,
+        target.clone(),
+        project.clone(),
+        &recorded(item, Some(held)),
+    );
     !same(&held.item, &outgoing) || !same_edges(&held.edges, edges)
 }
 
@@ -1481,8 +1523,7 @@ fn described(item: &Item) -> (&str, &BTreeMap<String, Value>) {
 /// under are removed, because those fields travel as themselves — leaving the encoding
 /// beside them would have the destination hold one thing twice, and disagree with itself
 /// the moment one changed.
-fn outgoing(item: &Planned, id: NativeId, project: Option<NativeId>) -> Item {
-    let origin = item.source.to_string();
+fn outgoing(item: &Planned, id: NativeId, project: Option<NativeId>, origin: &Origin) -> Item {
     match &item.item {
         Item::Task(task) => Item::Task(Box::new(Task {
             id,
@@ -1491,7 +1532,7 @@ fn outgoing(item: &Planned, id: NativeId, project: Option<NativeId>) -> Item {
             created_at: None,
             updated_at: None,
             project,
-            metadata: carried(&task.metadata, &origin),
+            metadata: carried(&task.metadata, origin),
             ..(**task).clone()
         })),
         Item::Project(project) => Item::Project(Box::new(Project {
@@ -1500,7 +1541,7 @@ fn outgoing(item: &Planned, id: NativeId, project: Option<NativeId>) -> Item {
             location: None,
             created_at: None,
             updated_at: None,
-            metadata: carried(&project.metadata, &origin),
+            metadata: carried(&project.metadata, origin),
             ..(**project).clone()
         })),
         Item::Document(document) => Item::Document(Box::new(Document {
@@ -1510,22 +1551,69 @@ fn outgoing(item: &Planned, id: NativeId, project: Option<NativeId>) -> Item {
             created_at: None,
             updated_at: None,
             project,
-            metadata: carried(&document.metadata, &origin),
+            metadata: carried(&document.metadata, origin),
             ..(**document).clone()
         })),
     }
 }
 
-/// The metadata a copy carries: the caller's own keys untouched, and the origin recorded.
-fn carried(metadata: &BTreeMap<String, Value>, origin: &str) -> BTreeMap<String, Value> {
+/// The metadata a copy carries: the caller's own keys untouched, and the origin settled.
+///
+/// The key is removed before it is settled rather than overwritten, because the item being
+/// copied carries an origin of its own and [`Origin::Keeps`] must not let it through.
+fn carried(metadata: &BTreeMap<String, Value>, origin: &Origin) -> BTreeMap<String, Value> {
     let mut carried = metadata.clone();
     carried.remove(Repository::METADATA_KEY);
     carried.remove(DependencyEdge::RECORDED_KEY);
-    carried.insert(
-        GlobalId::ORIGIN_KEY.to_owned(),
-        Value::String(origin.to_owned()),
-    );
+    carried.remove(GlobalId::ORIGIN_KEY);
+    let held = match origin {
+        Origin::Records(id) => Some(Value::String(id.to_string())),
+        Origin::Keeps(held) => held.clone(),
+    };
+    if let Some(held) = held {
+        carried.insert(GlobalId::ORIGIN_KEY.to_owned(), held);
+    }
     carried
+}
+
+/// What one landed item records at [`GlobalId::ORIGIN_KEY`].
+enum Origin {
+    /// The qualified id this item was copied from, as the id type rather than as its
+    /// spelling: the key holds a [`GlobalId`] and nothing else may be recorded there.
+    Records(GlobalId),
+    /// Whatever the destination already holds there — `None` when it holds nothing, which
+    /// is written as the key being absent rather than as a null.
+    ///
+    /// A [`Value`] and not a [`GlobalId`], because this variant does not interpret what it
+    /// carries: it is the destination's own metadata entry, held for the length of one
+    /// write and put back exactly as it was read. Parsing it would turn a value a
+    /// destination holds and this engine cannot read into a value this engine deletes,
+    /// which is the opposite of what keeping it means.
+    Keeps(Option<Value>),
+}
+
+/// Which of the two a copy of this item does.
+///
+/// A copy that reached its target by rule 1 is a copy-back: the item being copied names
+/// the destination item, so the destination is the *original* and the id being copied
+/// belongs to the copy that came out of it. Recording that id there would overwrite the
+/// original's own provenance — and with it the correspondence every later copy from the
+/// source it was authored in depends on. That copy would then match nothing and create a
+/// second item beside the one it meant to update, which is the whole failure: nothing is
+/// reported, and whoever reads that board now has two. So a copy-back leaves the
+/// destination's origin exactly as the destination holds it, absent included, and every
+/// other copy records the id it was copied from.
+fn recorded(item: &Planned, held: Option<&Prior>) -> Origin {
+    if let Target::Update {
+        found: Found::Origin,
+        ..
+    } = &item.target
+    {
+        return Origin::Keeps(
+            held.and_then(|held| described(&held.item).1.get(GlobalId::ORIGIN_KEY).cloned()),
+        );
+    }
+    Origin::Records(item.source.clone())
 }
 
 /// Whether the destination already reads exactly as this copy would leave it.
