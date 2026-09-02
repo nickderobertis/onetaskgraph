@@ -18,7 +18,7 @@ use std::{
 };
 
 use onetaskgraph_github_projects::accounting::{
-    Accounting, Method, Mode, Outcome, RateLimit, Request,
+    Accounting, Endpoint, Method, Mode, Outcome, RateLimit, Request,
 };
 use onetaskgraph_github_projects::{graphql, largest_page_sizes, worst_case_node_count};
 use onetaskgraph_live::Session;
@@ -569,7 +569,12 @@ async fn rest(
     body: Option<Value>,
     what: &str,
 ) -> Result<Value, String> {
-    let sending = || Request::rest(method, endpoint);
+    // Refused here rather than recorded: an endpoint the accounting will not name is a
+    // mis-spelled call site, and this lane learns that before it sends anything.
+    let named = Endpoint::parse(method, endpoint).ok_or_else(|| {
+        format!("{what} names {endpoint}, which is not spelled like a GitHub endpoint template")
+    })?;
+    let sending = || Request::rest(named.clone());
     let mut path = endpoint.to_owned();
     for (name, value) in parameters {
         path = path.replace(&format!("{{{name}}}"), value);

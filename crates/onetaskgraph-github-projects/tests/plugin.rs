@@ -1144,8 +1144,8 @@ fn recording(endpoint: &str, ledger: &Arc<Accounting>) -> Box<dyn TaskSource> {
 }
 
 use onetaskgraph_github_projects::accounting::{
-    Accounting, Basis, Budget, BudgetReport, Method, Mode, Outcome, RateLimit, Request, Session,
-    StatusCode,
+    Accounting, Basis, Budget, BudgetReport, Endpoint, Method, Mode, Outcome, RateLimit, Request,
+    Session, StatusCode,
 };
 use onetaskgraph_github_projects::{DESIGN_TITLE_PREFIX, Plugin, graphql};
 
@@ -7036,8 +7036,11 @@ async fn a_callers_own_graphql_and_rest_calls_join_the_sources_in_one_session() 
         ("x-ratelimit-resource".to_owned(), "core".to_owned()),
     ]);
     ledger.record(
-        Request::rest(Method::Get, "/repos/{owner}/{repo}/labels")
-            .answered(RateLimit::read(|name| rest_headers.get(name).cloned())),
+        Request::rest(
+            Endpoint::parse(Method::Get, "/repos/{owner}/{repo}/labels")
+                .expect("a documented endpoint"),
+        )
+        .answered(RateLimit::read(|name| rest_headers.get(name).cloned())),
     );
     // And a caller's own GraphQL document, which the inventory does not name and which was
     // shaped so GitHub reported what it cost.
@@ -7176,26 +7179,51 @@ async fn a_caller_tells_an_answer_from_a_refusal_from_a_rate_limit_the_way_this_
     // A REST record: named by its endpoint, no node count, and one request against a budget
     // metered in requests however it ended — except a rate limiter's refusal, which never
     // ran.
-    let listed =
-        Request::rest(Method::Get, "/repos/{owner}/{repo}/labels").answered(RateLimit::default());
+    let endpoint = |method, path| Endpoint::parse(method, path).expect("a documented endpoint");
+    let labels = endpoint(Method::Get, "/repos/{owner}/{repo}/labels");
+    assert_eq!(labels.method(), Method::Get);
+    assert_eq!(labels.path(), "/repos/{owner}/{repo}/labels");
+    assert_eq!(labels.name(), "GET /repos/{owner}/{repo}/labels");
+    let listed = Request::rest(labels.clone()).answered(RateLimit::default());
     assert_eq!(
         listed.call(),
-        &onetaskgraph_github_projects::accounting::Call::Endpoint {
-            endpoint: "GET /repos/{owner}/{repo}/labels".to_owned()
-        }
+        &onetaskgraph_github_projects::accounting::Call::Endpoint { endpoint: labels }
     );
+    assert_eq!(listed.name(), "GET /repos/{owner}/{repo}/labels");
     assert_eq!(listed.node_count(), None);
     assert_eq!(listed.spend().basis(), Basis::Counted);
     assert_eq!(listed.spend().amount(), 1);
-    let refused = Request::rest(Method::Delete, "/repos/{owner}/{repo}/labels/{name}")
-        .finished(Outcome::Refused, RateLimit::default());
+    let refused = Request::rest(endpoint(
+        Method::Delete,
+        "/repos/{owner}/{repo}/labels/{name}",
+    ))
+    .finished(Outcome::Refused, RateLimit::default());
     assert_eq!(refused.mode(), Mode::Write);
     assert_eq!(refused.spend().basis(), Basis::Counted);
     assert_eq!(refused.spend().amount(), 1);
-    let limited = Request::rest(Method::Post, "/repos/{owner}/{repo}/labels")
+    let limited = Request::rest(endpoint(Method::Post, "/repos/{owner}/{repo}/labels"))
         .finished(Outcome::RateLimited, RateLimit::default());
     assert_eq!(limited.spend().basis(), Basis::NotRun);
     assert_eq!(limited.spend().amount(), 0);
+    // What a record may hold is settled where the endpoint is written: a URL a run built,
+    // and everything else it could carry into a report that promises to carry none of it,
+    // is refused there rather than named in the report.
+    for refused in [
+        "https://api.github.com/repos/octo-org/board/labels",
+        "/repos/{owner}/{repo}/labels?per_page=100&token=secret",
+        "/repos/{owner}/{repo}/labels#fragment",
+        "repos/{owner}/{repo}/labels",
+        "/repos//labels",
+        "/repos/{owner}/{repo}/labels/a label",
+        "/repos/{}/labels",
+        "",
+    ] {
+        assert_eq!(
+            Endpoint::parse(Method::Get, refused),
+            None,
+            "{refused} is not spelled like an endpoint template"
+        );
+    }
 
     // A document the calculation cannot rule on carries no node count, which is a defect in
     // the document rather than a cost of nothing.

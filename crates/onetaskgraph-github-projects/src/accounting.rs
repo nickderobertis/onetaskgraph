@@ -52,8 +52,8 @@
 //! `tests/live.rs` prints it at the end of every run, passed or failed — from a `Drop`, so
 //! that the run whose cost is most worth reading, the one that broke, is not the run that
 //! skips it. It carries no credential, no token, no issue body and no board content: a call
-//! is named by a document description this crate wrote or by an endpoint the caller spelled,
-//! and everything else in it is a number.
+//! is named by a document description this crate wrote or by an [`Endpoint`], which is a
+//! path template rather than the URL a run built, and everything else in it is a number.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -423,6 +423,97 @@ impl Spend {
     }
 }
 
+/// A REST endpoint, spelled the way GitHub's own documentation spells one.
+///
+/// `GET /repos/{owner}/{repo}/labels`: a method and a path template whose segments are
+/// literals or `{placeholder}`s, never the URL a run built from it. That is what makes two
+/// runs' reports compare line for line, and it is why this is a type with one constructor
+/// rather than a string a caller fills in — a record holding
+/// `https://api.github.com/repos/octo-org/board/labels?per_page=100` would put a board's
+/// name, and whatever else a query string carried, into a report that promises to carry
+/// neither.
+///
+/// **What it rules on, and what it cannot.** [`Endpoint::parse`] refuses a host, a query
+/// string, a fragment, whitespace, a byte outside the small set a path template is spelled
+/// from, and anything long — every way an addressed URL differs in *shape* from a template.
+/// It cannot tell a template's literal segment from a filled-in one, because
+/// `/repos/octo-org/board/labels` is spelled exactly like a template of literals; keeping
+/// the placeholders unfilled is the caller's, and the reason `Request::rest`'s own
+/// documentation says to pass the template.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Endpoint {
+    method: Method,
+    path: String,
+    name: String,
+}
+
+impl Endpoint {
+    /// The endpoint `path` spells under `method`, or `None` when `path` is not spelled like
+    /// a path template at all.
+    ///
+    /// Refusing it here is refusing it where it is written, which is the same answer
+    /// [`Method::parse`] gives a method HTTP has no verb for: a caller learns at the call
+    /// site rather than finding a URL in a report that was supposed to hold none.
+    #[must_use]
+    pub fn parse(method: Method, path: &str) -> Option<Self> {
+        if !is_path_template(path) {
+            return None;
+        }
+        Some(Self {
+            method,
+            path: path.to_owned(),
+            name: format!("{} {path}", method.name()),
+        })
+    }
+    /// The method it is addressed with.
+    #[must_use]
+    pub const fn method(&self) -> Method {
+        self.method
+    }
+    /// The path template, without the method.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+    /// What it is called in a report: the method and the template, as above.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// Whether `path` is spelled like one of GitHub's documented endpoint templates.
+///
+/// An absolute path of `/`-separated segments, each a literal of the bytes a documented
+/// endpoint uses or a single `{placeholder}`. A host, a query string, a fragment, an empty
+/// segment and anything over the length GitHub's own longest endpoint needs are all refused,
+/// because each of them is a way an addressed URL — which carries what a run touched —
+/// differs from the template it was built from.
+fn is_path_template(path: &str) -> bool {
+    if path.is_empty() || path.len() > 128 || !path.starts_with('/') {
+        return false;
+    }
+    path[1..].split('/').all(|segment| {
+        let placeholder = segment
+            .strip_prefix('{')
+            .and_then(|rest| rest.strip_suffix('}'));
+        match placeholder {
+            Some(name) => {
+                !name.is_empty()
+                    && name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            }
+            None => {
+                !segment.is_empty()
+                    && segment.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_' || byte == b'.'
+                    })
+            }
+        }
+    })
+}
+
 /// What one request asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Call {
@@ -439,10 +530,9 @@ pub enum Call {
     },
     /// A REST request, which sends no document and has no node count.
     Endpoint {
-        /// The endpoint it addressed, spelled the way GitHub's own documentation spells
-        /// one — `GET /repos/{owner}/{repo}/labels` — so two runs compare line for line
-        /// and no board content reaches the report.
-        endpoint: String,
+        /// The endpoint it addressed. An [`Endpoint`] rather than a string, so a record
+        /// cannot hold the URL a run built — see that type for what it rules on.
+        endpoint: Endpoint,
     },
 }
 
@@ -452,7 +542,7 @@ impl Call {
     pub fn name(&self) -> &str {
         match self {
             Self::Document { name, .. } => name,
-            Self::Endpoint { endpoint } => endpoint,
+            Self::Endpoint { endpoint } => endpoint.name(),
         }
     }
     /// The budget it draws on.
@@ -595,14 +685,14 @@ impl Request {
     ///
     /// `endpoint` is the endpoint rather than the URL that was built from it — `GET
     /// /repos/{owner}/{repo}/labels`, not the repository and label a run happened to name —
-    /// because a report is compared between runs and carries no board content.
+    /// because a report is compared between runs and carries no board content. It is an
+    /// [`Endpoint`] rather than a string for that reason: what a report may hold is settled
+    /// where the endpoint is written, not here.
     #[must_use]
-    pub fn rest(method: Method, endpoint: &str) -> Sending {
+    pub fn rest(endpoint: Endpoint) -> Sending {
         Sending {
-            call: Call::Endpoint {
-                endpoint: format!("{} {endpoint}", method.name()),
-            },
-            mode: method.mode(),
+            mode: endpoint.method().mode(),
+            call: Call::Endpoint { endpoint },
             drawn: Drawn::Rest,
         }
     }
