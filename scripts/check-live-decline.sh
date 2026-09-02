@@ -56,12 +56,7 @@ fail() {
 # test is the one this case is about. None of them is a credential and none is ever sent:
 # every case below stops before the journey's first request.
 #
-# llmlint: ignore[work_goes_through_command_surface] This function is called BY the command
-# surface: it is a command of each hosted plugin's own Nx `test` target, so routing it back
-# through `just test` would re-enter the target that is running it. What it needs is one
-# test binary run three times under three environments, which is a narrower thing than any
-# recipe offers — and the recipe that comes closest, `just test`, would select every
-# affected project rather than the one crate whose three outcomes are under test.
+# llmlint: ignore[work_goes_through_command_surface] This function is called BY the command surface: it is a command of each hosted plugin's own Nx `test` target, so routing it back through `just test` would re-enter the target that is running it. What it needs is one test binary run three times under three environments, which is narrower than any recipe offers — and the closest, `just test`, would select every affected project rather than the one crate whose three outcomes are under test.
 run_journey() {
   local seats="$1" demand="$2"
   shift 2

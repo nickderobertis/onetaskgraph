@@ -43,6 +43,7 @@ use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
+use std::process;
 use std::time::{Duration, SystemTime};
 
 /// The directory the session seats live in, when the default is not wanted.
@@ -74,12 +75,7 @@ const SEAT_IS_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
 /// # Errors
 ///
 /// When the value is neither `1`, `0`, empty nor absent.
-// llmlint: ignore[invalid_states_unrepresentable] The answer really is two-valued and every
-// `bool` is one of the two, so there is no unrepresentable state for a `Demand` enum to
-// remove — what this function exists to make unrepresentable is the *third* reading, "a
-// value nobody can parse quietly means not-required", and it does that by returning `Err`
-// rather than by the shape of its success. Its one caller passes it straight to `missing`
-// below, which takes no other boolean.
+// llmlint: ignore[invalid_states_unrepresentable] The answer really is two-valued and every `bool` is one of the two, so there is no unrepresentable state a `Demand` enum would remove. What this function exists to make unrepresentable is the *third* reading — "a value nobody can parse quietly means not-required" — and it does that by returning `Err`, not by the shape of its success. Its one caller passes the answer straight to `missing` below, which takes no other boolean.
 pub fn required(raw: Option<&str>) -> Result<bool, String> {
     match raw.map(str::trim) {
         None | Some("") | Some("0") => Ok(false),
@@ -99,18 +95,7 @@ pub fn required(raw: Option<&str>) -> Result<bool, String> {
 /// # Errors
 ///
 /// When `required` is true, so the absent input is a failure rather than a skip.
-// llmlint: ignore[invalid_states_unrepresentable] Its `required` is the answer [`required`]
-// above already validated, and it is the only boolean here, so there is no pair of them a
-// caller could transpose and no third state to represent.
-//
-// llmlint: ignore[live_tier_compiles_and_requires_credential] `Ok` is the skip, and it is
-// reached only when `required` is false — which is the run where no credential was ever
-// expected: a contributor with no keys, and a fork pull request, to which GitHub supplies no
-// secrets at all. The run where one IS expected sets `ONETASKGRAPH_LIVE_REQUIRED=1`, and
-// `.github/workflows/ci.yml` sets it on every run but that one, so this same call returns
-// the `Err` this rule asks for. Making the skip fail unconditionally would not add a demand
-// anywhere; it would only fail every outside contribution for a secret its author cannot
-// have.
+// llmlint: ignore[invalid_states_unrepresentable, live_tier_compiles_and_requires_credential] Its `required` is the answer [`required`] above already validated and the only boolean here, so there is no pair a caller could transpose and no third state to represent. And its `Ok` — the skip — is reached only when `required` is false, which is the run where no credential was ever expected: a contributor with no keys, and a fork pull request, to which GitHub supplies no secrets at all. The run where one IS expected sets `ONETASKGRAPH_LIVE_REQUIRED=1`, which `.github/workflows/ci.yml` sets on every run but that one, so this same call returns the `Err` the credential rule asks for. Failing unconditionally would add a demand nowhere; it would only fail every outside contribution for a secret its author cannot have.
 pub fn missing(required: bool, session: &str, reason: impl Into<String>) -> Result<String, String> {
     let reason = reason.into();
     if required {
@@ -154,14 +139,7 @@ impl Declined {
     /// # Panics
     ///
     /// Always. That is what it is for.
-    // llmlint: ignore[no_panics_on_recoverable_errors] The panic IS the recovery, and there
-    // is nowhere to propagate to: the caller is a `#[test]`, and a test that returned early
-    // instead would be reported as passed. A run that never happened must conclude neither
-    // success nor anything branch protection accepts in place of success, which for a cargo
-    // test harness means failing. `Session::open` returns a `Result` precisely so a caller
-    // that has something better to do can do it; this is the answer for the one that does
-    // not, and its message leads with the tests not having run so the failure is not read as
-    // a defect in the code under test.
+    // llmlint: ignore[no_panics_on_recoverable_errors] There is nowhere to propagate to: the caller is a `#[test]`, and a test that returned early instead would be reported as passed — a run that never happened concluding as success is the exact hole this arrangement exists to close, since branch protection accepts nothing in place of success either. Failing is what a cargo test harness has instead of a third conclusion. `Session::open` returns the `Result` precisely so a caller with something better to do can do it; this is the answer for the one that has not, and its message leads with the tests not having run, so the failure is not read as a defect in the code under test.
     pub fn refuse(self) -> ! {
         panic!("{}", self.message())
     }
@@ -290,47 +268,10 @@ impl Seat {
         match Self::create(&path) {
             Ok(seat) => Ok(seat),
             Err(held) if held.kind() == ErrorKind::AlreadyExists => {
-                let stale = fs::metadata(&path)
-                    .and_then(|metadata| metadata.modified())
-                    .is_ok_and(|modified| {
-                        SystemTime::now()
-                            .duration_since(modified)
-                            .is_ok_and(|age| age > SEAT_IS_STALE_AFTER)
-                    });
-                if !stale {
-                    return Err(format!(
-                        "another instance of it is already running against the same shared \
-                         fixture, and two of them would delete each other's in-flight items — \
-                         each sweeps residue by title before it starts, and that sweep \
-                         recognises any run's artifacts. Its seat is {}; wait for that run to \
-                         finish, or delete that file if no run holds it",
-                        path.display()
-                    ));
+                if !Self::is_stale(&path) {
+                    return Err(Self::already_running(&path));
                 }
-                // An interrupted run's seat, older than any session lasts. Reclaiming it is
-                // the self-healing half: `create_new` again rather than a plain create, so
-                // two runs reclaiming at once still leave exactly one holder.
-                //
-                // llmlint: ignore-block[changed_behavior_has_e2e] Reclaiming is the branch
-                // that lets the session open, and a session that opens is a journey that
-                // reaches the real API on its next line — so driving this one through either
-                // live journey means spending a live session against a third party to prove a
-                // decision about a file's age, on every run of the required check, and cannot
-                // be arranged at all without a credential. The half that *can* be driven
-                // through the real journey binary is, in `scripts/check-live-decline.sh`: a
-                // seat a live run still holds declines, and the run that was declined leaves
-                // it where it found it. What is left here is the age comparison and the
-                // re-creation, which the crate's own tests drive against a real seat file
-                // whose modification time is really in the past.
-                let _ = fs::remove_file(&path);
-                Self::create(&path).map_err(|problem| {
-                    format!(
-                        "its seat {} was left by an interrupted run and could not be reclaimed: \
-                         {problem}. Delete that file, then re-run",
-                        path.display()
-                    )
-                })
-                // llmlint: ignore-end[changed_behavior_has_e2e]
+                Self::reclaim(&path)
             }
             Err(problem) => Err(format!(
                 "its seat {} could not be taken: {problem}. Make that directory writable, or \
@@ -340,13 +281,102 @@ impl Seat {
         }
     }
 
+    /// The refusal a run gets when a live session still holds this seat.
+    fn already_running(path: &Path) -> String {
+        format!(
+            "another instance of it is already running against the same shared fixture, and \
+             two of them would delete each other's in-flight items — each sweeps residue by \
+             title before it starts, and that sweep recognises any run's artifacts. Its seat \
+             is {}; wait for that run to finish, or delete that file if no run holds it",
+            path.display()
+        )
+    }
+
+    /// Whether the file at `path` was last touched longer ago than any session lasts.
+    ///
+    /// A file that is not there is not stale — it is absent, which is a different answer and
+    /// belongs to whoever asked.
+    fn is_stale(path: &Path) -> bool {
+        fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| {
+                SystemTime::now()
+                    .duration_since(modified)
+                    .is_ok_and(|age| age > SEAT_IS_STALE_AFTER)
+            })
+    }
+
+    /// Take over an interrupted run's seat, with at most one run reclaiming at a time.
+    ///
+    /// The exclusion is the point rather than a refinement. Reclaiming is delete-then-create,
+    /// and two runs that had each read the same stale seat would otherwise interleave into
+    /// each deleting the *other's* freshly created seat and each believing it held one —
+    /// which is two concurrent sessions against one shared external fixture, the very thing
+    /// the seat exists to prevent. So a reclaim is done under a claim file taken with
+    /// `create_new`, and the staleness is read again inside it: a run that arrives with an
+    /// out-of-date reading finds the seat fresh under the claim and is declined instead of
+    /// deleting a live run's seat.
+    ///
+    /// llmlint: ignore-block[changed_behavior_has_e2e] Reclaiming is the branch that lets the session open, and a session that opens is a journey that reaches the real API on its next line — so driving this one through either live journey means spending a live session against a third party to prove a decision about a file's age, on every run of the required check, and cannot be arranged at all without a credential. The half that CAN be driven through the real journey binary is, in `scripts/check-live-decline.sh`: a seat a live run still holds declines, and the run that was declined leaves it where it found it. What is left is the age comparison, the claim and the re-creation, which this crate's own tests drive against a real seat file whose modification time is really in the past and against real concurrent reclaimers.
+    fn reclaim(path: &Path) -> Result<Self, String> {
+        let claim = path.with_extension("reclaim");
+        if Self::hold(&claim).is_err() {
+            return Err(format!(
+                "another run is reclaiming the seat {} an interrupted run left, so exactly \
+                 one of the two of you gets it. Re-run once that one has finished",
+                path.display()
+            ));
+        }
+        let reclaimed = if Self::is_stale(path) {
+            let _ = fs::remove_file(path);
+            Self::create(path).map_err(|problem| {
+                format!(
+                    "its seat {} was left by an interrupted run and this run did not get it: \
+                     {problem}. Delete that file, then re-run",
+                    path.display()
+                )
+            })
+        } else {
+            // Somebody reclaimed it while this run was deciding, and what is there now is
+            // theirs. Reading it again under the claim is what stops this run deleting it.
+            Err(Self::already_running(path))
+        };
+        let _ = fs::remove_file(&claim);
+        reclaimed
+    }
+    // llmlint: ignore-end[changed_behavior_has_e2e]
+
+    /// Take the claim file, or fail because another run holds it.
+    ///
+    /// A claim a killed run left behind goes stale on the same clock the seat does, so a
+    /// reclaim interrupted between its two halves does not decline every later run for ever.
+    fn hold(claim: &Path) -> std::io::Result<()> {
+        // Not a `Seat`: that type releases its file on drop, and this one has to outlive the
+        // reclaim it guards. `reclaim` removes it on every path out of itself instead.
+        let create = || {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(claim)
+                .map(drop)
+        };
+        match create() {
+            Ok(()) => Ok(()),
+            Err(taken) if taken.kind() == ErrorKind::AlreadyExists && Self::is_stale(claim) => {
+                let _ = fs::remove_file(claim);
+                create()
+            }
+            Err(problem) => Err(problem),
+        }
+    }
+
     /// Create the seat file, failing when one is already there.
     fn create(path: &Path) -> std::io::Result<Self> {
         let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
         // Who holds it, for the reader of a refusal that names this file. Best effort: the
         // seat is the file's existence, not its contents, so a failed write must not hand
         // the seat to a second run.
-        let _ = writeln!(file, "held by process {}", std::process::id());
+        let _ = writeln!(file, "held by process {}", process::id());
         Ok(Self {
             path: path.to_owned(),
         })
@@ -381,7 +411,19 @@ fn slug(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Barrier};
+
     use super::*;
+
+    /// Plant a seat file that was last touched longer ago than any session lasts.
+    fn interrupted_runs_file(path: &Path) {
+        fs::write(path, "held by an interrupted run\n").expect("the file is writable");
+        let long_ago = SystemTime::now() - SEAT_IS_STALE_AFTER - Duration::from_secs(60);
+        fs::File::open(path)
+            .expect("the file opens")
+            .set_modified(long_ago)
+            .expect("its modification time is settable");
+    }
 
     fn credential(raw: &str) -> Credential {
         Credential::new(raw).expect("this test's placeholder credential is not blank")
@@ -468,16 +510,88 @@ mod tests {
     fn an_interrupted_runs_seat_is_reclaimed_rather_than_declining_for_ever() {
         let directory = scratch();
         let path = directory.join("onetaskgraph-live-linear.seat");
-        fs::write(&path, "held by process 1\n").expect("a seat file is writable");
-        let long_ago = SystemTime::now() - SEAT_IS_STALE_AFTER - Duration::from_secs(60);
-        fs::File::open(&path)
-            .expect("the seat file opens")
-            .set_modified(long_ago)
-            .expect("its modification time is settable");
+        interrupted_runs_file(&path);
 
         let reclaimed = Session::open_in(&directory, "Linear", credential("live-key"))
             .expect("a seat older than any session lasts is an interrupted run's");
         assert_eq!(reclaimed.seat_path(), path);
+    }
+
+    #[test]
+    fn a_run_already_reclaiming_the_seat_declines_the_next_one_rather_than_racing_it() {
+        // The interleaving the thread test can only sometimes produce, produced on purpose:
+        // one run is between reading the seat as stale and writing its own, and a second run
+        // reads the same stale seat. Without the claim both delete the other's and both hold.
+        let directory = scratch();
+        let path = directory.join("onetaskgraph-live-github-projects.seat");
+        interrupted_runs_file(&path);
+        fs::write(
+            path.with_extension("reclaim"),
+            "held by the run reclaiming it\n",
+        )
+        .expect("the claim is writable");
+
+        let declined = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
+            .expect_err("a second reclaimer must be declined rather than delete the first's seat");
+        let message = declined.message();
+        assert!(message.contains("DID NOT RUN"), "{message}");
+        assert!(message.contains("is reclaiming"), "{message}");
+    }
+
+    #[test]
+    fn a_claim_an_interrupted_reclaim_left_does_not_decline_every_later_run_for_ever() {
+        let directory = scratch();
+        let path = directory.join("onetaskgraph-live-linear.seat");
+        let claim = path.with_extension("reclaim");
+        interrupted_runs_file(&path);
+        interrupted_runs_file(&claim);
+
+        let reclaimed = Session::open_in(&directory, "Linear", credential("live-key"))
+            .expect("a claim older than any session lasts is an interrupted reclaim's");
+        assert_eq!(reclaimed.seat_path(), path);
+        assert!(
+            !claim.exists(),
+            "a finished reclaim leaves no claim for the next run to wait behind"
+        );
+    }
+
+    #[test]
+    fn two_runs_reclaiming_one_interrupted_seat_leave_exactly_one_holder() {
+        // The race a delete-then-create reclaim loses: both runs find the seat stale, each
+        // removes what the other just wrote, and both believe they hold it — which is two
+        // concurrent sessions against one shared external fixture, deleting each other's
+        // in-flight items. Real threads against a real seat file, because the interleaving
+        // is the whole of what is under test.
+        let directory = scratch();
+        let path = directory.join("onetaskgraph-live-github-projects.seat");
+        interrupted_runs_file(&path);
+
+        let start = Arc::new(Barrier::new(8));
+        let holders: Vec<_> = (0..8)
+            .map(|_| {
+                let directory = directory.clone();
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    Session::open_in(&directory, "GitHub Projects", credential("live-token")).ok()
+                })
+            })
+            .collect();
+        let held: Vec<_> = holders
+            .into_iter()
+            .filter_map(|thread| thread.join().expect("no reclaiming thread panicked"))
+            .collect();
+        assert_eq!(
+            held.len(),
+            1,
+            "{} runs reclaimed one interrupted seat at once, so that many sessions would \
+             have written to the same shared fixture",
+            held.len()
+        );
+        assert!(
+            held[0].seat_path().exists(),
+            "the winner really holds a seat"
+        );
     }
 
     #[test]
