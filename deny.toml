@@ -35,15 +35,6 @@ allow = [
 unknown-registry = "deny"
 unknown-git = "deny"
 
-# One named git source, and it stays one. `github-graphql-node-count` is this account's
-# own crate — the offline calculation of GitHub's published per-query node limit, which
-# `onetaskgraph-github-projects` holds every document it sends below — and it is not on a
-# registry yet, so a git source is the only spelling available for it. It is pinned to a
-# revision in [workspace.dependencies], so what this allows is one immutable commit of one
-# repository rather than whatever that repository's default branch happens to hold. The
-# entry goes away the moment the crate publishes and the dependency becomes a version.
-allow-git = ["https://github.com/nickderobertis/github-graphql-node-count"]
-
 [bans]
 multiple-versions = "deny"
 wildcards = "deny"

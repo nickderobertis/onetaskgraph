@@ -477,7 +477,8 @@ dependencies = [
 [[package]]
 name = "github-graphql-node-count"
 version = "0.0.0"
-source = "git+https://github.com/nickderobertis/github-graphql-node-count?rev=723b512025843472140c77dc46a360c62c56102e#723b512025843472140c77dc46a360c62c56102e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e9221f0e074db97ca3d97a1e372e0a4ee8ac5e598d06555908be139937a9aff"
 dependencies = [
  "graphql-parser",
 ]
