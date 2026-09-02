@@ -222,8 +222,8 @@
 //!
 //! # What a session of requests costs, and where the report is
 //!
-//! This source records **every** request it sends — at [`GitHubProjectsSource::send_once`],
-//! the one place a request leaves this crate — into [`accounting::Accounting`]. One record
+//! This source records **every** request it sends — at `send_once`, the one place a request
+//! leaves this crate — into [`accounting::Accounting`]. One record
 //! per request: the document it sent, named from [`graphql::DOCUMENTS`], with that
 //! document's node count under the bindings it really bound; or, for a REST call, the
 //! endpoint it addressed and no node count. Each says whether it read or wrote, whether it

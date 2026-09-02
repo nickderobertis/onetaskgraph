@@ -8,16 +8,16 @@
 //! # What one record carries
 //!
 //! One [`Request`] per outgoing HTTP request. A GraphQL request is named by the document
-//! it sent, read out of [`graphql::DOCUMENTS`](crate::graphql::DOCUMENTS) rather than from
+//! it sent, read out of [`graphql::DOCUMENTS`] rather than from
 //! a second list of names, and carries that document's worst-case node count under the
-//! bindings that request actually sent — [`node_count`](crate::node_count), the same
+//! bindings that request actually sent — [`node_count`], the same
 //! offline calculation `tests/node_count.rs` holds every document to, never a second
 //! arithmetic. A REST request sends no document and has no node count, so it names the
 //! endpoint it addressed instead. Both record whether they read or wrote, how they ended,
 //! and the rate-limit facts that response's own headers carried.
 //!
 //! **Two quantities of GitHub's, kept apart by name.** `nodeCount` is the most nodes *one
-//! query may return*, checked per query; it is what [`Call::Document::node_count`] carries.
+//! query may return*, checked per query; it is what [`Call::Document`] carries.
 //! `cost` is rate-limit points, metered per hour across everything one credential does; it
 //! is what [`Spend`] is in. A document well under the node limit says nothing about the
 //! second.
@@ -275,7 +275,7 @@ pub enum Call {
     /// A GraphQL request, which sends a document.
     Document {
         /// What the sender was doing, from
-        /// [`graphql::DOCUMENTS`](crate::graphql::DOCUMENTS) when the document is one of
+        /// [`graphql::DOCUMENTS`] when the document is one of
         /// this source's own, and from the caller's own name when it is not.
         name: String,
         /// The document's worst-case node count under the bindings that request sent, or
@@ -413,9 +413,9 @@ pub struct Request {
 impl Request {
     /// Begin recording one GraphQL request carrying `document` under `variables`.
     ///
-    /// The name comes from [`graphql::DOCUMENTS`](crate::graphql::DOCUMENTS) — the
+    /// The name comes from [`graphql::DOCUMENTS`] — the
     /// inventory, not a second list — and the node count from
-    /// [`node_count`](crate::node_count) under the page sizes `variables` really binds, so
+    /// [`node_count`] under the page sizes `variables` really binds, so
     /// a page read with a caller's smaller limit is counted at that limit rather than at
     /// the worst case. Any page-size variable the request leaves unbound keeps the largest
     /// value this source could send it, which is the worst case for exactly that document.
