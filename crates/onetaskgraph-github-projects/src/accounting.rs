@@ -49,10 +49,11 @@
 //! # Where a reader finds the report
 //!
 //! [`Session::report`] renders one from a snapshot, and the credentialed lane in
-//! `tests/live.rs` prints it at the end of every run, passed or failed. It carries no
-//! credential, no token, no issue body and no board content: a call is named by a document
-//! description this crate wrote or by an endpoint the caller spelled, and everything else
-//! in it is a number.
+//! `tests/live.rs` prints it at the end of every run, passed or failed — from a `Drop`, so
+//! that the run whose cost is most worth reading, the one that broke, is not the run that
+//! skips it. It carries no credential, no token, no issue body and no board content: a call
+//! is named by a document description this crate wrote or by an endpoint the caller spelled,
+//! and everything else in it is a number.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -323,38 +324,33 @@ impl Call {
 /// [`Sending::finished`], and [`Sending::answered`] for the ordinary case, are what turn it
 /// into a [`Request`]: a record with no outcome is one nobody could add up, so the outcome
 /// is the step that produces the record rather than a field that might be missing.
+///
+/// Everything a request carries before it is sent is settled by the constructor that made
+/// it, which is why there is no builder step here that could attach a reported GraphQL cost
+/// to a REST call — a budget metered in requests has no such figure, and GitHub reports
+/// none for one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sending {
     call: Call,
     mode: Mode,
-    reported_cost: Option<u64>,
+    drawn: Drawn,
+}
+
+/// What a request draws on, and what only that kind of request can carry.
+///
+/// The reported cost lives inside the GraphQL arm rather than beside the call, because a
+/// REST request has nowhere to have got one from: GitHub meters that budget in requests and
+/// reports no per-call figure at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Drawn {
+    /// The GraphQL budget, with GitHub's own reported cost for this call when the request
+    /// was shaped so GitHub reported one.
+    Graphql { reported_cost: Option<u64> },
+    /// The REST budget, which a call is its own measure of.
+    Rest,
 }
 
 impl Sending {
-    /// Name a GraphQL document that is not one of this source's own.
-    ///
-    /// A document in [`graphql::DOCUMENTS`](crate::graphql::DOCUMENTS) is already named by
-    /// its entry there and this leaves that name alone, so a caller may say it either way
-    /// without having to know which documents the inventory holds.
-    #[must_use]
-    pub fn named(mut self, name: &str) -> Self {
-        if let Call::Document { name: current, .. } = &mut self.call
-            && current == UNNAMED_DOCUMENT
-        {
-            *current = name.to_owned();
-        }
-        self
-    }
-    /// GitHub's own reported `cost` for this call, from a response to a request shaped to
-    /// report it.
-    ///
-    /// This is the call's *own* cost. A `rateLimit(dryRun: true)` probe reports what some
-    /// other document would cost and never this one, so its figure does not belong here.
-    #[must_use]
-    pub const fn costing(mut self, points: u64) -> Self {
-        self.reported_cost = Some(points);
-        self
-    }
     /// GitHub answered it, with the rate-limit facts its response's headers carried.
     #[must_use]
     pub fn answered(self, limits: RateLimit) -> Request {
@@ -363,20 +359,30 @@ impl Sending {
     /// However it ended, with the rate-limit facts its response's headers carried.
     #[must_use]
     pub fn finished(self, outcome: Outcome, limits: RateLimit) -> Request {
-        let spend = match (self.call.budget(), outcome, self.reported_cost) {
-            (_, Outcome::RateLimited, _) => Spend {
+        let spend = match (self.drawn, outcome) {
+            (_, Outcome::RateLimited) => Spend {
                 amount: 0,
                 basis: Basis::NotRun,
             },
-            (Budget::Rest, _, _) => Spend {
+            (Drawn::Rest, _) => Spend {
                 amount: 1,
                 basis: Basis::Counted,
             },
-            (Budget::Graphql, _, Some(cost)) => Spend {
+            (
+                Drawn::Graphql {
+                    reported_cost: Some(cost),
+                },
+                _,
+            ) => Spend {
                 amount: cost,
                 basis: Basis::Reported,
             },
-            (Budget::Graphql, _, None) => Spend {
+            (
+                Drawn::Graphql {
+                    reported_cost: None,
+                },
+                _,
+            ) => Spend {
                 amount: 1,
                 basis: Basis::Modelled,
             },
@@ -413,15 +419,34 @@ impl Request {
     /// a page read with a caller's smaller limit is counted at that limit rather than at
     /// the worst case. Any page-size variable the request leaves unbound keeps the largest
     /// value this source could send it, which is the worst case for exactly that document.
+    ///
+    /// `otherwise` names a document the inventory does not hold, which is how a caller's own
+    /// calls — a schema introspection, a residue sweep — are named beside this source's;
+    /// `None` leaves such a document under the placeholder, and a document the inventory
+    /// does hold keeps its entry's name either way.
+    ///
+    /// `reported_cost` is GitHub's own `cost` for **this** call, from a response to a
+    /// request shaped to report one. A `rateLimit(dryRun: true)` probe reports what some
+    /// other document would cost and never what this call spent, so its figure does not
+    /// belong here.
     #[must_use]
-    pub fn graphql(document: &str, variables: &Value) -> Sending {
+    pub fn graphql(
+        document: &str,
+        variables: &Value,
+        otherwise: Option<&str>,
+        reported_cost: Option<u64>,
+    ) -> Sending {
+        let name = document_name(document);
         Sending {
             call: Call::Document {
-                name: document_name(document).to_owned(),
+                name: match (name, otherwise) {
+                    (UNNAMED_DOCUMENT, Some(otherwise)) => otherwise.to_owned(),
+                    (name, _) => name.to_owned(),
+                },
                 node_count: node_count(document, &bindings(variables)).ok(),
             },
             mode: Mode::of_document(document),
-            reported_cost: None,
+            drawn: Drawn::Graphql { reported_cost },
         }
     }
     /// Begin recording one REST request against `endpoint`.
@@ -436,7 +461,7 @@ impl Request {
                 endpoint: format!("{} {endpoint}", method.trim().to_ascii_uppercase()),
             },
             mode: Mode::of_method(method),
-            reported_cost: None,
+            drawn: Drawn::Rest,
         }
     }
     /// What was called.
@@ -736,13 +761,15 @@ pub struct BudgetReport {
 }
 
 impl BudgetReport {
-    /// How far the **account's** remaining allowance moved while this session ran.
+    /// How far the **account's** remaining allowance fell while this session ran.
     ///
-    /// It is not this session's spend and the report says so where it prints it: this
-    /// account is shared, so the difference between two readings of a shared counter
-    /// measures the account.
+    /// A fall rather than a movement, and the difference is not pedantry: an allowance that
+    /// *rose* is the hourly window having reset mid-session, which is not a negative spend
+    /// and answers zero here. Either way it is not this session's spend, and the report says
+    /// so where it prints it — this account is shared, so the difference between two
+    /// readings of a shared counter measures the account.
     #[must_use]
-    pub fn account_movement(&self) -> Option<u64> {
+    pub fn account_allowance_fall(&self) -> Option<u64> {
         Some(
             self.remaining_first_seen?
                 .saturating_sub(self.remaining_last_seen?),
@@ -783,10 +810,10 @@ impl BudgetReport {
         );
         let _ = writeln!(
             lines,
-            "  the account's remaining allowance moved {} while this session ran; that is the \
-             account's movement and not this session's spend, because other work draws on the \
-             same budget in the same window",
-            unknown(self.account_movement()),
+            "  the account's remaining allowance fell {} while this session ran; that is the \
+             account's own consumption and not this session's spend, because other work \
+             draws on the same budget in the same window",
+            unknown(self.account_allowance_fall()),
         );
         lines
     }

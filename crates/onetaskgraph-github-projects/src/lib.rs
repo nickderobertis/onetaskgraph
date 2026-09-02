@@ -1624,11 +1624,9 @@ impl GitHubProjectsSource {
             limits,
             reported_cost,
         } = self.attempt(query, variables).await;
-        let sending = accounting::Request::graphql(query, variables);
-        let sending = match reported_cost {
-            Some(cost) => sending.costing(cost),
-            None => sending,
-        };
+        // No `otherwise` name: every document this source sends is one of its own, and the
+        // inventory gate on `graphql::DOCUMENTS` is what keeps that true.
+        let sending = accounting::Request::graphql(query, variables, None, reported_cost);
         let outcome = match &result {
             Ok(_) => accounting::Outcome::Answered,
             Err(Attempt::Limited(_)) => accounting::Outcome::RateLimited,

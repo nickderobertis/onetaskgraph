@@ -646,7 +646,10 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                 None => (
                     "200 OK",
                     format!(
-                        "x-ratelimit-limit: {FIXTURE_BUDGET_LIMIT}\r\nx-ratelimit-used:                          {used}\r\nx-ratelimit-remaining: {remaining}\r\nx-ratelimit-resource:                          graphql\r\n"
+                        "x-ratelimit-limit: {FIXTURE_BUDGET_LIMIT}\r\n\
+                         x-ratelimit-used: {used}\r\n\
+                         x-ratelimit-remaining: {remaining}\r\n\
+                         x-ratelimit-resource: graphql\r\n"
                     ),
                     match refused(&served, query, variables) {
                         Some(message) => json!({"errors":[{"message":message}]}).to_string(),
@@ -6730,8 +6733,8 @@ async fn the_session_report_counts_every_request_the_board_served_and_what_each_
     );
     // And it really is the bindings that decide it rather than the document alone: the same
     // document over a tenth of the page costs a tenth of the nodes.
-    let narrower =
-        Request::graphql(graphql::BOARD, &json!({"first":10})).answered(RateLimit::default());
+    let narrower = Request::graphql(graphql::BOARD, &json!({"first":10}), None, None)
+        .answered(RateLimit::default());
     assert!(
         narrower.node_count() < board_read.node_count(),
         "a smaller page bound {:?} should cost fewer nodes than {:?}",
@@ -6836,20 +6839,20 @@ async fn a_budget_something_else_is_spending_does_not_move_this_sessions_reporte
         "the session's spend moved with the account's allowance"
     );
     assert!(
-        shared_budget.account_movement() > alone_budget.account_movement(),
+        shared_budget.account_allowance_fall() > alone_budget.account_allowance_fall(),
         "the shared board's allowance was supposed to fall faster"
     );
     assert!(
-        shared_budget.account_movement().unwrap() > shared_budget.spent,
-        "the account moved by {:?} and this session spent {}",
-        shared_budget.account_movement(),
+        shared_budget.account_allowance_fall().unwrap() > shared_budget.spent,
+        "the account's allowance fell by {:?} and this session spent {}",
+        shared_budget.account_allowance_fall(),
         shared_budget.spent
     );
     let report = shared_session.report();
     assert!(
         report.contains(
-            "that is the account's movement and not this session's spend, because other work \
-             draws on the same budget in the same window"
+            "that is the account's own consumption and not this session's spend, because \
+             other work draws on the same budget in the same window"
         ),
         "{report}"
     );
@@ -6938,10 +6941,13 @@ async fn a_callers_own_graphql_and_rest_calls_join_the_sources_in_one_session() 
     // And a caller's own GraphQL document, which the inventory does not name and which was
     // shaped so GitHub reported what it cost.
     ledger.record(
-        Request::graphql("query MutationContract { __typename }", &json!({}))
-            .named("mutation contract introspection")
-            .costing(37)
-            .answered(RateLimit::default()),
+        Request::graphql(
+            "query MutationContract { __typename }",
+            &json!({}),
+            Some("mutation contract introspection"),
+            Some(37),
+        )
+        .answered(RateLimit::default()),
     );
 
     let session = ledger.snapshot();

@@ -57,6 +57,22 @@ fn say(line: &str) {
     let _ = writeln!(std::io::stderr(), "{line}");
 }
 
+/// Prints this run's session report when the run ends, however it ends.
+///
+/// A `Drop` rather than a line at the end of the test, because every check in this lane
+/// reports a failure by panicking — the schema verification, the node-count reconciliation,
+/// the board lookup, the residue sweep, the journey itself — and a line at the end is only
+/// reached by the ones that do not fail. The run whose cost is most worth reading is the run
+/// that broke, so this has to survive an unwind rather than sit after it. Held from the
+/// moment this lane knows it is running, so a skip prints nothing.
+struct ReportWhateverHappens;
+
+impl Drop for ReportWhateverHappens {
+    fn drop(&mut self) {
+        say(&SESSION.snapshot().report());
+    }
+}
+
 async fn graphql(token: &str, query: &str, query_name: &str) -> Result<Value, String> {
     graphql_variables(token, query, query_name, json!({})).await
 }
@@ -67,7 +83,8 @@ async fn graphql_variables(
     query_name: &str,
     variables: Value,
 ) -> Result<Value, String> {
-    let sending = || Request::graphql(query, &variables).named(query_name);
+    let sending =
+        |reported_cost| Request::graphql(query, &variables, Some(query_name), reported_cost);
     let response = match reqwest::Client::new()
         .post("https://api.github.com/graphql")
         .header("user-agent", "onetaskgraph-live-test")
@@ -80,7 +97,7 @@ async fn graphql_variables(
         Err(error) => {
             // A request that never reached GitHub carries no headers to read, and is a
             // refusal rather than a rate limit: nothing said it was one.
-            SESSION.record(sending().finished(Outcome::Refused, RateLimit::default()));
+            SESSION.record(sending(None).finished(Outcome::Refused, RateLimit::default()));
             return Err(format!(
                 "{query_name} query could not reach GitHub: {error}"
             ));
@@ -94,7 +111,7 @@ async fn graphql_variables(
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned)
     });
-    let outcome = |outcome: Outcome| sending().finished(outcome, limits.clone());
+    let outcome = |outcome: Outcome| sending(None).finished(outcome, limits.clone());
     let body = match response.text().await {
         Ok(body) => body,
         Err(error) => {
@@ -132,12 +149,7 @@ async fn graphql_variables(
                 .and_then(Value::as_u64)
         })
         .flatten();
-    let recorded = sending();
-    let recorded = match reported_cost {
-        Some(cost) => recorded.costing(cost),
-        None => recorded,
-    };
-    SESSION.record(recorded.finished(ended, limits));
+    SESSION.record(sending(reported_cost).finished(ended, limits));
     Ok(response)
 }
 
@@ -170,7 +182,10 @@ async fn reconcile_node_counts(token: &str) -> Result<(), String> {
         if Mode::of_document(document) == Mode::Write {
             if ours != 0 {
                 return Err(format!(
-                    "the mutation for {doing} computes {ours} nodes, and GitHub cannot be asked                      about a mutation — `rateLimit` is a field of Query. Either it grew a                      connection, in which case reconcile it another way, or the calculation is                      wrong"
+                    "the mutation for {doing} computes {ours} nodes, and GitHub cannot be asked \
+                     about a mutation — `rateLimit` is a field of Query. Either it grew a \
+                     connection, in which case reconcile it another way, or the \
+                     calculation is wrong"
                 ));
             }
             continue;
@@ -188,14 +203,19 @@ async fn reconcile_node_counts(token: &str) -> Result<(), String> {
             .ok_or_else(|| format!("GitHub answered no nodeCount for the document for {doing}"))?;
         if theirs != ours {
             return Err(format!(
-                "GitHub says the document for {doing} may return {theirs} nodes and this                  workspace computes {ours}; GitHub is the authority, so the calculation or the                  page sizes it is driven with are what is wrong"
+                "GitHub says the document for {doing} may return {theirs} nodes and this \
+                 workspace computes {ours}; GitHub is the authority, so the calculation \
+                 or the page sizes it is driven with are what is wrong"
             ));
         }
         asked += 1;
     }
     let (_, after) = account_allowance(token, "after").await?;
     say(&format!(
-        "node-count reconciliation: {asked} documents agreed with GitHub's own dryRun          nodeCount; the account's GraphQL allowance read {before} of {limit} before and          {after} after, a movement of {} across the whole reconciliation (the account's,          shared with everything else this credential does)",
+        "node-count reconciliation: {asked} documents agreed with GitHub's own dryRun \
+         nodeCount; the account's GraphQL allowance read {before} of {limit} before and \
+         {after} after, a movement of {} across the whole reconciliation (the \
+         account's, shared with everything else this credential does)",
         before.saturating_sub(after)
     ));
     Ok(())
@@ -1829,6 +1849,9 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         }
     };
     // llmlint: ignore-end[live_tier_compiles_and_requires_credential]
+    // From here on this run is really running, and whatever it does next it says what it
+    // cost before it ends.
+    let _report = ReportWhateverHappens;
     verify_mutation_schema(&token)
         .await
         .unwrap_or_else(|error| panic!("GitHub mutation schema drifted: {error}"));
@@ -2003,7 +2026,7 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
             .unwrap_or_else(|error| panic!("the live write configuration was refused: {error}"))
     };
     let writer = rebuild();
-    let journey = run_then_cleanup(
+    run_then_cleanup(
         || drive_every_declared_capability(&run, writer.as_ref(), &rebuild),
         || {
             remove_live_state(
@@ -2015,10 +2038,6 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
             )
         },
     )
-    .await;
-    // What this run cost, printed before the verdict so a failed run says it too: a run that
-    // only reports its cost when it passes cannot be compared with the run that changed
-    // something and broke.
-    say(&SESSION.snapshot().report());
-    journey.unwrap_or_else(|error| panic!("GitHub live capability journey failed: {error}"));
+    .await
+    .unwrap_or_else(|error| panic!("GitHub live capability journey failed: {error}"));
 }
