@@ -1140,7 +1140,8 @@ fn recording(endpoint: &str, ledger: &Arc<Accounting>) -> Box<dyn TaskSource> {
 }
 
 use onetaskgraph_github_projects::accounting::{
-    Accounting, Basis, Budget, BudgetReport, Mode, Outcome, RateLimit, Request, Session,
+    Accounting, Basis, Budget, BudgetReport, Method, Mode, Outcome, RateLimit, Request, Session,
+    StatusCode,
 };
 use onetaskgraph_github_projects::{DESIGN_TITLE_PREFIX, Plugin, graphql};
 
@@ -6935,7 +6936,7 @@ async fn a_callers_own_graphql_and_rest_calls_join_the_sources_in_one_session() 
         ("x-ratelimit-resource".to_owned(), "core".to_owned()),
     ]);
     ledger.record(
-        Request::rest("get", "/repos/{owner}/{repo}/labels")
+        Request::rest(Method::Get, "/repos/{owner}/{repo}/labels")
             .answered(RateLimit::read(|name| rest_headers.get(name).cloned())),
     );
     // And a caller's own GraphQL document, which the inventory does not name and which was
@@ -6987,22 +6988,25 @@ async fn a_callers_own_graphql_and_rest_calls_join_the_sources_in_one_session() 
     );
 }
 
-/// The public helpers a caller outside this crate classifies its own responses with.
+/// The public helpers a caller outside this crate records its own calls with.
 ///
-/// The credentialed lane is the caller, and it is `#[ignore]`d, so what makes these
-/// correct has to be provable without a credential: they read GitHub's refusal wordings
-/// through the same limiter this source's own requests go through, so a secondary rate
-/// limit under a forbidden status is a rate limit here exactly as it is there.
+/// The credentialed lane is that caller, and it is `#[ignore]`d, so what makes these correct
+/// has to be provable without a credential: they read GitHub's refusal wordings through the
+/// same limiter this source's own requests go through, so a secondary rate limit under a
+/// forbidden status is a rate limit here exactly as it is there.
 #[tokio::test]
 async fn a_caller_tells_an_answer_from_a_refusal_from_a_rate_limit_the_way_this_source_does() {
-    assert_eq!(Outcome::of_response(200, false, "{}"), Outcome::Answered);
     assert_eq!(
-        Outcome::of_response(404, false, r#"{"message":"Not Found"}"#),
+        Outcome::of_response(StatusCode::OK, false, "{}"),
+        Outcome::Answered
+    );
+    assert_eq!(
+        Outcome::of_response(StatusCode::NOT_FOUND, false, r#"{"message":"Not Found"}"#),
         Outcome::Refused
     );
     assert_eq!(
         Outcome::of_response(
-            403,
+            StatusCode::FORBIDDEN,
             false,
             r#"{"message":"You have exceeded a secondary rate limit."}"#
         ),
@@ -7010,19 +7014,53 @@ async fn a_caller_tells_an_answer_from_a_refusal_from_a_rate_limit_the_way_this_
     );
     // A spent budget explains a failing response; it never turns a good answer into one.
     assert_eq!(
-        Outcome::of_response(403, true, r#"{"message":"Forbidden"}"#),
+        Outcome::of_response(StatusCode::FORBIDDEN, true, r#"{"message":"Forbidden"}"#),
         Outcome::RateLimited
     );
-    assert_eq!(Outcome::of_response(200, true, "{}"), Outcome::Answered);
+    assert_eq!(
+        Outcome::of_response(StatusCode::OK, true, "{}"),
+        Outcome::Answered
+    );
 
     let spent = RateLimit::read(|name| (name == "x-ratelimit-remaining").then(|| "0".to_owned()));
     assert!(spent.exhausted());
     assert!(!RateLimit::default().exhausted());
+    // The one header here that is not a number is the one that could carry a third party's
+    // arbitrary bytes, so a value not spelled like a resource name is dropped.
+    let named = |value: &'static str| {
+        RateLimit::read(move |name| (name == "x-ratelimit-resource").then(|| value.to_owned()))
+            .resource
+    };
+    assert_eq!(named("  graphql  ").as_deref(), Some("graphql"));
+    assert_eq!(
+        named("integration_manifest").as_deref(),
+        Some("integration_manifest")
+    );
+    assert_eq!(named("<script>alert(1)</script>"), None);
+    assert_eq!(named(""), None);
 
-    assert_eq!(Mode::of_method("get"), Mode::Read);
-    assert_eq!(Mode::of_method("delete"), Mode::Write);
+    for (spelled, method, mode) in [
+        ("get", Method::Get, Mode::Read),
+        ("HEAD", Method::Head, Mode::Read),
+        (" post ", Method::Post, Mode::Write),
+        ("put", Method::Put, Mode::Write),
+        ("patch", Method::Patch, Mode::Write),
+        ("delete", Method::Delete, Mode::Write),
+    ] {
+        assert_eq!(Method::parse(spelled), Some(method), "{spelled}");
+        assert_eq!(method.mode(), mode, "{}", method.name());
+        assert_eq!(Method::parse(method.name()), Some(method));
+    }
+    // A method HTTP has no verb for is refused where it is spelled rather than counted as a
+    // write somewhere further on.
+    assert_eq!(Method::parse("GTE"), None);
+    assert_eq!(Method::parse(""), None);
+
+    // A REST record: named by its endpoint, no node count, and one request against a budget
+    // metered in requests however it ended — except a rate limiter's refusal, which never
+    // ran.
     let listed =
-        Request::rest("get", "/repos/{owner}/{repo}/labels").answered(RateLimit::default());
+        Request::rest(Method::Get, "/repos/{owner}/{repo}/labels").answered(RateLimit::default());
     assert_eq!(
         listed.call(),
         &onetaskgraph_github_projects::accounting::Call::Endpoint {
@@ -7030,4 +7068,97 @@ async fn a_caller_tells_an_answer_from_a_refusal_from_a_rate_limit_the_way_this_
         }
     );
     assert_eq!(listed.node_count(), None);
+    assert_eq!(listed.spend().basis, Basis::Counted);
+    assert_eq!(listed.spend().amount, 1);
+    let refused = Request::rest(Method::Delete, "/repos/{owner}/{repo}/labels/{name}")
+        .finished(Outcome::Refused, RateLimit::default());
+    assert_eq!(refused.mode(), Mode::Write);
+    assert_eq!(refused.spend().basis, Basis::Counted);
+    assert_eq!(refused.spend().amount, 1);
+    let limited = Request::rest(Method::Post, "/repos/{owner}/{repo}/labels")
+        .finished(Outcome::RateLimited, RateLimit::default());
+    assert_eq!(limited.spend().basis, Basis::NotRun);
+    assert_eq!(limited.spend().amount, 0);
+
+    // A document the calculation cannot rule on carries no node count, which is a defect in
+    // the document rather than a cost of nothing.
+    let uncountable = Request::graphql("this is not a GraphQL document", &json!({}), None, None)
+        .answered(RateLimit::default());
+    assert_eq!(uncountable.node_count(), None);
+    assert_eq!(uncountable.name(), "talking to GitHub");
+    let session = {
+        let ledger = Accounting::new();
+        ledger.record(uncountable);
+        ledger.snapshot()
+    };
+    assert_eq!(session.total_node_count(), 0);
+    assert!(
+        session
+            .report()
+            .contains("node count 0 over 0 GraphQL requests that have one"),
+        "{}",
+        session.report()
+    );
+}
+
+/// A request that never got an answer is recorded too, and carries no budget figures.
+///
+/// Both halves matter. A send that failed and a body that could not be read are the two ways
+/// this source can end a request with nothing to read, and a session that quietly stopped
+/// counting at either would report a cheap run where there was an expensive one. Neither
+/// response says anything about the budget, so both records say so rather than guessing.
+#[tokio::test]
+async fn a_request_that_never_answered_is_recorded_as_refused_with_no_rate_limit_facts() {
+    // Nothing is listening on port 1, so the send itself fails.
+    let ledger = Arc::new(Accounting::new());
+    let unreachable = recording("http://127.0.0.1:1/graphql", &ledger);
+    let failure = refusal(
+        unreachable
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .expect_err("nothing is listening there"),
+    );
+    assert!(failure.contains("request failed"), "{failure}");
+    let session = ledger.snapshot();
+    assert_eq!(session.total_requests(), 1);
+    let record = &session.requests()[0];
+    assert_eq!(record.outcome(), Outcome::Refused);
+    assert_eq!(record.rate_limit(), &RateLimit::default());
+    assert_eq!(session.spent(Budget::Graphql), 1);
+
+    // And a response that promises more body than it sends, which fails while being read.
+    let ledger = Arc::new(Accounting::new());
+    let truncated = recording(&truncating_server(), &ledger);
+    let failure = refusal(
+        truncated
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .expect_err("that response cannot be read"),
+    );
+    // Named, so this proves the body-read path rather than the send path above it.
+    assert!(failure.contains("response could not be read"), "{failure}");
+    let session = ledger.snapshot();
+    assert_eq!(session.total_requests(), 1);
+    assert_eq!(session.requests()[0].outcome(), Outcome::Refused);
+    assert_eq!(session.requests()[0].name(), "reading the board");
+}
+
+/// A server that promises a body far longer than the one it sends, then hangs up.
+///
+/// That is the one way to make reading a response's body fail without failing the send: the
+/// status and the headers arrive, and the read of what they promised does not.
+fn truncating_server() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut request = [0_u8; 8192];
+            let _ = stream.read(&mut request).unwrap();
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4096\r\n\r\n{}",
+            );
+        }
+    });
+    format!("http://{address}/graphql")
 }

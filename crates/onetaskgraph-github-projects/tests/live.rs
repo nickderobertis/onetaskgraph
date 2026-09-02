@@ -17,7 +17,9 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use onetaskgraph_github_projects::accounting::{Accounting, Mode, Outcome, RateLimit, Request};
+use onetaskgraph_github_projects::accounting::{
+    Accounting, Method, Mode, Outcome, RateLimit, Request,
+};
 use onetaskgraph_github_projects::{graphql, largest_page_sizes, worst_case_node_count};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
@@ -121,7 +123,7 @@ async fn graphql_variables(
             ));
         }
     };
-    let ended = Outcome::of_response(status.as_u16(), limits.exhausted(), &body);
+    let ended = Outcome::of_response(status, limits.exhausted(), &body);
     if !status.is_success() {
         SESSION.record(outcome(ended));
         return Err(format!("{query_name} query failed: HTTP {status}"));
@@ -527,24 +529,59 @@ macro_rules! ensure {
     };
 }
 
+/// GitHub's REST host, which every endpoint below hangs off.
+const REST_HOST: &str = "https://api.github.com";
+
+/// The HTTP client's spelling of a method the accounting names.
+///
+/// One conversion in one place, so a call says its method once and both the request and the
+/// record it leaves take that same one.
+fn client_method(method: Method) -> reqwest::Method {
+    match method {
+        Method::Get => reqwest::Method::GET,
+        Method::Head => reqwest::Method::HEAD,
+        Method::Post => reqwest::Method::POST,
+        Method::Put => reqwest::Method::PUT,
+        Method::Patch => reqwest::Method::PATCH,
+        Method::Delete => reqwest::Method::DELETE,
+    }
+}
+
 /// One REST call to GitHub, for the label lifecycle GraphQL puts behind a schema preview.
 ///
-/// `endpoint` is GitHub's own spelling of the endpoint — `GET /repos/{owner}/{repo}/labels`
-/// — rather than the URL built from it, because that is what the session report names this
-/// call by, and a report is compared between runs and carries no board content. A REST call
-/// draws on a different budget from the GraphQL ones beside it, which is why the accounting
-/// keeps the two apart.
+/// **`endpoint` is the one spelling of what is called.** It is GitHub's own template — `GET
+/// /repos/{owner}/{repo}/labels` — and the URL this sends to is built from it here by
+/// filling `parameters` in, so the name the session report carries cannot come to describe a
+/// call this lane no longer makes. A template with a parameter nobody filled in is a
+/// failure naming it rather than a request to a literal `{repo}`. That template is also why
+/// no board content reaches the report: what is named is the shape, never the repository or
+/// the label a run happened to touch.
+///
+/// A REST call draws on a different budget from the GraphQL ones beside it, which is why the
+/// accounting keeps the two apart.
 async fn rest(
     token: &str,
-    method: reqwest::Method,
+    method: Method,
     endpoint: &str,
-    url: &str,
+    parameters: &[(&str, &str)],
+    query: &str,
     body: Option<Value>,
     what: &str,
 ) -> Result<Value, String> {
-    let sending = || Request::rest(method.as_str(), endpoint);
+    let sending = || Request::rest(method, endpoint);
+    let mut path = endpoint.to_owned();
+    for (name, value) in parameters {
+        path = path.replace(&format!("{{{name}}}"), value);
+    }
+    if let Some(unfilled) = path.find('{') {
+        return Err(format!(
+            "{what} left {} unfilled in the endpoint {endpoint}",
+            &path[unfilled..]
+        ));
+    }
+    let url = format!("{REST_HOST}{path}{query}");
     let mut request = reqwest::Client::new()
-        .request(method.clone(), url)
+        .request(client_method(method), &url)
         .header("user-agent", "onetaskgraph-live-test")
         .header("accept", "application/vnd.github+json")
         .bearer_auth(token);
@@ -575,7 +612,7 @@ async fn rest(
         }
     };
     SESSION.record(outcome(Outcome::of_response(
-        status.as_u16(),
+        status,
         limits.exhausted(),
         &text,
     )));
@@ -588,6 +625,17 @@ async fn rest(
     serde_json::from_str(&text).map_err(|error| format!("{what} returned invalid JSON: {error}"))
 }
 
+/// The `{owner}` and `{repo}` every endpoint here names, out of one `owner/name`.
+///
+/// `live_lane` has already refused a `GH_PROJECTS_REPOSITORY` that is not spelled that way,
+/// so the split cannot fail by the time anything reaches here; a value that somehow was not
+/// leaves `{repo}` empty and `rest` refuses the call naming the endpoint rather than sending
+/// it somewhere else.
+fn repository_parameters(repository: &str) -> Vec<(&str, &str)> {
+    let (owner, name) = repository.split_once('/').unwrap_or((repository, ""));
+    vec![("owner", owner), ("repo", name)]
+}
+
 /// Creates the one repository label this run filters by, and reports its node id.
 async fn create_artifact_label(
     token: &str,
@@ -596,9 +644,10 @@ async fn create_artifact_label(
 ) -> Result<String, String> {
     let created = rest(
         token,
-        reqwest::Method::POST,
+        Method::Post,
         "/repos/{owner}/{repo}/labels",
-        &format!("https://api.github.com/repos/{repository}/labels"),
+        &repository_parameters(repository),
+        "",
         Some(json!({"name":name,"color":"ededed",
                     "description":"temporary onetaskgraph live-lane label"})),
         "live label creation",
@@ -640,9 +689,10 @@ async fn remove_artifact_labels(
     for number in 1..=50 {
         let listed = rest(
             token,
-            reqwest::Method::GET,
+            Method::Get,
             "/repos/{owner}/{repo}/labels",
-            &format!("https://api.github.com/repos/{repository}/labels?per_page=100&page={number}"),
+            &repository_parameters(repository),
+            &format!("?per_page=100&page={number}"),
             None,
             "live label lookup",
         )
@@ -663,11 +713,14 @@ async fn remove_artifact_labels(
     }
     for name in &names {
         // Safe unescaped: `matches` accepts only the grammar `LABEL_PREFIX` documents.
+        let mut parameters = repository_parameters(repository);
+        parameters.push(("name", name));
         rest(
             token,
-            reqwest::Method::DELETE,
+            Method::Delete,
             "/repos/{owner}/{repo}/labels/{name}",
-            &format!("https://api.github.com/repos/{repository}/labels/{name}"),
+            &parameters,
+            "",
             None,
             "live label cleanup",
         )

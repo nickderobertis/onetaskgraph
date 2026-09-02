@@ -59,8 +59,9 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Mutex;
 
-use reqwest::StatusCode;
 use serde_json::Value;
+
+pub use reqwest::StatusCode;
 
 use crate::{Limiter, Variables, graphql, largest_page_sizes, node_count};
 
@@ -118,20 +119,70 @@ impl Mode {
             Self::Read
         }
     }
-    /// What an HTTP method does. Anything that is not a plain retrieval writes.
-    #[must_use]
-    pub fn of_method(method: &str) -> Self {
-        match method.trim().to_ascii_uppercase().as_str() {
-            "GET" | "HEAD" | "OPTIONS" => Self::Read,
-            _ => Self::Write,
-        }
-    }
     /// This mode's name in a report.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Read => "read",
             Self::Write => "write",
+        }
+    }
+}
+
+/// The HTTP methods a REST call to GitHub is made with.
+///
+/// A closed set rather than a string: a record cannot then carry a method that is not one,
+/// and a misspelling is refused by [`Method::parse`] where it happens rather than quietly
+/// counted as a write. It is this crate's own enum rather than an HTTP client's, so which
+/// client a caller sends its own requests with stays the caller's business.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Method {
+    /// `GET`.
+    Get,
+    /// `HEAD`.
+    Head,
+    /// `POST`.
+    Post,
+    /// `PUT`.
+    Put,
+    /// `PATCH`.
+    Patch,
+    /// `DELETE`.
+    Delete,
+}
+
+impl Method {
+    /// The method `name` spells, whatever its case, or `None` when it spells none of them.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name.trim().to_ascii_uppercase().as_str() {
+            "GET" => Self::Get,
+            "HEAD" => Self::Head,
+            "POST" => Self::Post,
+            "PUT" => Self::Put,
+            "PATCH" => Self::Patch,
+            "DELETE" => Self::Delete,
+            _ => return None,
+        })
+    }
+    /// Its name, as HTTP spells it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Head => "HEAD",
+            Self::Post => "POST",
+            Self::Put => "PUT",
+            Self::Patch => "PATCH",
+            Self::Delete => "DELETE",
+        }
+    }
+    /// Whether it reads or writes.
+    #[must_use]
+    pub const fn mode(self) -> Mode {
+        match self {
+            Self::Get | Self::Head => Mode::Read,
+            Self::Post | Self::Put | Self::Patch | Self::Delete => Mode::Write,
         }
     }
 }
@@ -155,9 +206,12 @@ impl Outcome {
     /// *explains* a failing response rather than making a successful one fail. A GraphQL
     /// success carrying `errors` is a refusal only its caller can rule on, so this answers
     /// [`Outcome::Answered`] for one and the caller narrows it.
+    ///
+    /// The status is a [`StatusCode`] rather than a number, so a status HTTP has no room
+    /// for cannot be asked about at all — and an HTTP client has already parsed one for
+    /// every response it hands back, so nothing is asked of a caller that it did not have.
     #[must_use]
-    pub fn of_response(status: u16, budget_exhausted: bool, body: &str) -> Self {
-        let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    pub fn of_response(status: StatusCode, budget_exhausted: bool, body: &str) -> Self {
         if Limiter::classify(status, budget_exhausted, body).is_some() {
             return Self::RateLimited;
         }
@@ -219,7 +273,13 @@ impl RateLimit {
             remaining: number("x-ratelimit-remaining"),
             used: number("x-ratelimit-used"),
             reset: number("x-ratelimit-reset"),
-            resource: header("x-ratelimit-resource"),
+            // The one field here that is not a number, so the one that could carry a third
+            // party's arbitrary bytes into a value this crate hands back. GitHub names these
+            // `core`, `graphql`, `search`, `integration_manifest`; anything that is not
+            // spelled like one is dropped rather than stored.
+            resource: header("x-ratelimit-resource")
+                .map(|value| value.trim().to_owned())
+                .filter(|value| is_resource_name(value)),
         }
     }
     /// Whether these headers say the budget is exactly spent, which is what
@@ -228,6 +288,20 @@ impl RateLimit {
     pub fn exhausted(&self) -> bool {
         self.remaining == Some(0)
     }
+}
+
+/// Whether a value is spelled like one of GitHub's rate-limit resource names.
+///
+/// ASCII letters, digits, underscores and hyphens, and short. It is a shape rather than a
+/// list because GitHub adds resources — `code_search` arrived after `search` — and a name
+/// this does not recognise should be reported as GitHub sent it rather than dropped for
+/// being new.
+fn is_resource_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
 /// Where one call's attributed spend came from.
@@ -455,12 +529,12 @@ impl Request {
     /// /repos/{owner}/{repo}/labels`, not the repository and label a run happened to name —
     /// because a report is compared between runs and carries no board content.
     #[must_use]
-    pub fn rest(method: &str, endpoint: &str) -> Sending {
+    pub fn rest(method: Method, endpoint: &str) -> Sending {
         Sending {
             call: Call::Endpoint {
-                endpoint: format!("{} {endpoint}", method.trim().to_ascii_uppercase()),
+                endpoint: format!("{} {endpoint}", method.name()),
             },
-            mode: Mode::of_method(method),
+            mode: method.mode(),
             drawn: Drawn::Rest,
         }
     }
