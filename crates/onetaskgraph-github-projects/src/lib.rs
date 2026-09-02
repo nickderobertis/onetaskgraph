@@ -145,22 +145,27 @@
 //! `an_item_reports_the_same_labels_title_status_and_id_however_it_is_reached` in
 //! `tests/plugin.rs`, which drives each of the four documents against the fixture board.
 //!
-//! # What one read may return, and what holds every document under it
+//! The last row is still the board's own item connection, and deliberately: a **draft**
+//! board item is not an issue, so no search and no node read can reach one, and the reads
+//! that have to answer for the whole board are the ones whose cost is the board's size
+//! anyway.
 //!
-//! GitHub caps the number of nodes **one query may return** at [`NODE_COUNT_LIMIT`] and
-//! refuses a query above that before executing it: the answer is an error naming the
-//! connection the count crossed at, not a slow or a partial result. Every board this
-//! source reads is refused the same way, so this is a property of the documents rather
-//! than of anybody's board.
+//! **What a read may return is capped too, and that cap is on the document rather than on
+//! the board.** GitHub limits the number of nodes **one query may return** to
+//! [`NODE_COUNT_LIMIT`] and refuses a query above that before executing it: the answer is
+//! an error naming the connection the count crossed at, not a slow or a partial result.
+//! Every board this source reads is refused the same way, so no board is too big for these
+//! documents and none is small enough to save one that is over.
 //!
 //! The count is arithmetic over the document's own text: each connection contributes the
 //! `first:` it asks for, counts **multiply** down a nested path and **sum** across sibling
 //! paths. Those are [GitHub's published rules][node-limits] and this workspace does not
 //! restate them — `github-graphql-node-count` implements them, and
 //! [`worst_case_node_count`] under [`largest_page_sizes`] is where every node count here
-//! comes from. `tests/node_count.rs` recomputes every document in [`graphql::DOCUMENTS`]
-//! from that same text on every run and fails naming any that reaches the limit, so a
-//! connection added to a shared fragment is caught there rather than by GitHub.
+//! comes from. `every_document_this_source_sends_stays_under_githubs_node_limit`, in
+//! `tests/node_count.rs`, recomputes every document in [`graphql::DOCUMENTS`] from that
+//! same text on every run and fails naming any that reaches the limit — so a connection
+//! added to a shared fragment is caught there rather than by GitHub.
 //!
 //! What decides those counts is the page sizes: [`MAX_PAGE_SIZE`] on the outer page,
 //! `NESTED_PAGE_SIZE` on the connections hanging off one item, and
@@ -169,17 +174,12 @@
 //! why it is the one the limit is most sensitive to.
 //!
 //! **`nodeCount` and `cost` are two numbers against two limits, and none of this is about
-//! the second.** `nodeCount` is what this section bounds: the most nodes one query may
-//! return, checked per query. `cost` is rate-limit points, metered per hour across
-//! everything one credential does; it is what the two limiters [`Limiter`] tells apart
-//! meter, and a document under [`NODE_COUNT_LIMIT`] says nothing about it.
+//! the second.** `nodeCount` is the one above: the most nodes one query may return,
+//! checked per query. `cost` is rate-limit points, metered per hour across everything one
+//! credential does; it is what the two limiters [`Limiter`] tells apart meter, and a
+//! document under [`NODE_COUNT_LIMIT`] says nothing about it.
 //!
 //! [node-limits]: https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api
-//!
-//! The last row is still the board's own item connection, and deliberately: a **draft**
-//! board item is not an issue, so no search and no node read can reach one, and the reads
-//! that have to answer for the whole board are the ones whose cost is the board's size
-//! anyway.
 //!
 //! **Where a read-after-write guarantee comes from, since a search index cannot supply
 //! one.** GitHub's issue search is eventually consistent and answers a write made moments
@@ -263,17 +263,17 @@ pub const MAX_PAGE_SIZE: u32 = 100;
 /// This is `nodeCount`, the maximum number of nodes *one query may return*. It is not
 /// `cost`, the rate-limit points a call spends against an hourly allowance shared by
 /// everything the credential does. Two numbers, two limits; nothing here is about the
-/// second. See the module section on the three ways this source reaches an item for how
-/// the count is arrived at, and for the page sizes below that decide it.
+/// second. The module section on the three ways this source reaches an item says how the
+/// count is arrived at, and which of the page sizes below decide it.
 pub const NODE_COUNT_LIMIT: u64 = github_graphql_node_count::NODE_LIMIT;
 
 /// Nested connection size for the connections that hang off one item.
 ///
 /// It multiplies through every document that reaches an item under a page — the count
 /// rules multiply down a nested path — so it is the constant [`NODE_COUNT_LIMIT`] is most
-/// sensitive to. `document_node_count` in `tests/node_count.rs` is what holds the pair
-/// together: it recomputes every document under these constants and fails naming any that
-/// reaches the limit, so raising this is caught here rather than by GitHub.
+/// sensitive to. `tests/node_count.rs` is what holds the pair together: it recomputes
+/// every document under these constants and fails naming any that reaches the limit, so
+/// raising this is caught there rather than by GitHub.
 const NESTED_PAGE_SIZE: u32 = 50;
 /// How many of one issue's board memberships are read when an issue is reached directly.
 ///
