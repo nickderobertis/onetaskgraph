@@ -1087,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-live"
-version = "0.2.19"
+version = "0.2.21"
 
 [[package]]
 name = "onetaskgraph-local-md"
