@@ -67,13 +67,6 @@
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph"
       }
-    },
-    "test-live": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "cargo test --quiet -p onetaskgraph --test live --all-features --locked -- --include-ignored"
-      },
-      "//": "Uncached: this lane asks the public registries what they serve right now, which is not an input in this tree \u2014 a cache hit would report yesterday's verdict as today's. It needs no credential; these registries are public. It is never selected by the affected tier either: scripts/test-live.sh runs `nx run-many -t test-live`, over every project or over the ones named on its command line, so no graph edge can drag it into a pull request's gate."
     }
   }
 }

@@ -10,6 +10,7 @@
     "onetaskgraph-github-projects",
     "onetaskgraph-in-memory",
     "onetaskgraph-linear",
+    "onetaskgraph-live",
     "onetaskgraph-local-md",
     "onetaskgraph-plugin-api",
     "sdk-python",
@@ -60,6 +61,7 @@
           "bash scripts/check-contract-inventory.sh",
           "bash scripts/check-protocol-contract.sh",
           "bash scripts/check-credential-names.sh",
+          "bash scripts/check-live-lane.sh",
           "bash scripts/check-journey-matrix.sh",
           "bash scripts/check-origin-key-spelling.sh",
           "bash scripts/check-metadata-slot-encoding.sh",
@@ -90,8 +92,10 @@
         "{workspaceRoot}/scripts/check-protocol-contract.sh",
         "{workspaceRoot}/README.md",
         "{workspaceRoot}/gh-secrets.json",
-        "{workspaceRoot}/.github/workflows/live.yml",
+        "{workspaceRoot}/.github/workflows/ci.yml",
         "{workspaceRoot}/scripts/check-live-lane.sh",
+        "{workspaceRoot}/justfile",
+        "{workspaceRoot}/scripts/rust-coverage.sh",
         "{workspaceRoot}/scripts/check-credential-names.sh",
         "{workspaceRoot}/crates/onetaskgraph-core/src/registry.rs",
         "{workspaceRoot}/crates/onetaskgraph/tests/e2e/fixtures.rs",
@@ -126,7 +130,6 @@
         "commands": [
           "bash scripts/check-hook-safety.sh",
           "bash scripts/check-pre-push-provisioning.sh",
-          "bash scripts/check-test-live-boundary.sh",
           "bash scripts/check-affected-selection.sh",
           "bash scripts/check-plugin-isolation-concurrent.sh",
           "bash scripts/check-isolation-enforced.sh"
@@ -148,14 +151,6 @@
         "{workspaceRoot}/scripts/rust-coverage.sh",
         "{workspaceRoot}/scripts/check-coverage-enforced.sh"
       ]
-    },
-    "test-live": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "bash scripts/check-live-lane.sh"
-      },
-      "cache": false,
-      "//": "Uncached for the same reason as every other test-live target: the live lane's result depends on credentials and third-party services that are not inputs in this tree."
     },
     "deny": {
       "executor": "nx:run-commands",

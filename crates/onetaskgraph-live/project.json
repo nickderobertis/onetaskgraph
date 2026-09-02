@@ -1,10 +1,9 @@
 {
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "name": "onetaskgraph-local-md",
+  "name": "onetaskgraph-live",
   "projectType": "library",
-  "tags": ["lang:rust", "layer:plugin"],
-  "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree.",
-  "implicitDependencies": ["onetaskgraph-plugin-api"],
+  "tags": ["lang:rust", "layer:testing"],
+  "//": "This crate depends on nothing of this workspace, so it declares no implicitDependencies; scripts/check-nx-graph.sh fails, naming the pair, if that ever stops being true. The two hosted plugin crates name it as a dev-dependency, so editing it selects both of them \u2014 which is right: it is the gate their live sessions open.",
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",
@@ -19,7 +18,7 @@
     "format": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo fmt -p onetaskgraph-local-md"
+        "command": "cargo fmt -p onetaskgraph-live"
       },
       "cache": false,
       "//": "Uncached: it rewrites the tree in place, so replaying a cached result would be a no-op that silently leaves the tree unformatted."
@@ -27,31 +26,31 @@
     "format-check": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo fmt -p onetaskgraph-local-md -- --check"
+        "command": "cargo fmt -p onetaskgraph-live -- --check"
       }
     },
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo clippy --quiet -p onetaskgraph-local-md --all-targets --all-features --locked -- -D warnings"
+        "command": "cargo clippy --quiet -p onetaskgraph-live --all-targets --all-features --locked -- -D warnings"
       }
     },
     "typecheck": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo check --quiet -p onetaskgraph-local-md --all-targets --all-features --locked"
+        "command": "cargo check --quiet -p onetaskgraph-live --all-targets --all-features --locked"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo test --quiet -p onetaskgraph-local-md --all-features --locked"
+        "command": "cargo test --quiet -p onetaskgraph-live --all-features --locked"
       }
     },
     "coverage": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bash scripts/rust-coverage.sh onetaskgraph-local-md"
+        "command": "bash scripts/rust-coverage.sh onetaskgraph-live"
       }
     }
   }

@@ -21,6 +21,7 @@ use onetaskgraph_github_projects::accounting::{
     Accounting, Method, Mode, Outcome, RateLimit, Request,
 };
 use onetaskgraph_github_projects::{graphql, largest_page_sizes, worst_case_node_count};
+use onetaskgraph_live::Session;
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
     Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter, NativeId, PageRequest, Project,
@@ -32,9 +33,9 @@ use serde_json::{Value, json};
 mod lane;
 
 use lane::{
-    ARTIFACT_PREFIX, LABEL_PREFIX, LiveLane, LiveSecret, artifact_label, artifact_title,
-    is_artifact_label, is_artifact_title, is_run_artifact_title, live_lane, live_write_config,
-    run_then_cleanup,
+    ARTIFACT_PREFIX, LABEL_PREFIX, LiveLane, LiveSecret, SESSION_NAME, artifact_label,
+    artifact_title, is_artifact_label, is_artifact_title, is_run_artifact_title, live_lane,
+    live_write_config, run_then_cleanup,
 };
 
 /// Everything this run costs GitHub, this lane's own calls and the source's alike.
@@ -1877,16 +1878,21 @@ async fn drive_every_declared_capability(
 }
 
 #[tokio::test]
-#[ignore = "the live lane: run it with `just test-live onetaskgraph-github-projects`"]
 async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
-    // llmlint: ignore-block[live_tier_compiles_and_requires_credential] This lane is non-required by decision (AGENTS.md), so an absent credential or an unnamed board skips; `ONETASKGRAPH_LIVE_REQUIRED=1` demands both.
+    // llmlint: ignore-block[live_tier_compiles_and_requires_credential] An absent credential
+    // skips only where none was expected — a contributor with no keys, and a fork pull
+    // request, which the host gives no secrets. `ONETASKGRAPH_LIVE_REQUIRED=1`, which
+    // .github/workflows/ci.yml sets on the one lane the credentials reach, turns every skip
+    // below into the failure this rule asks for.
     let lane = live_lane(
         env::var("GH_PROJECTS_TOKEN").ok().as_deref(),
-        // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The live workflow spells these three names too, and the drift gate is the lane's own refusal: project.json runs test-live with ONETASKGRAPH_LIVE_REQUIRED=1, so a name spelled differently on either side fails that job naming the variable rather than skipping green.
+        // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] .github/workflows/ci.yml spells these three names too, and the drift gate is the lane's own refusal: that workflow sets ONETASKGRAPH_LIVE_REQUIRED=1 on the lane it hands the credential to, so a name spelled differently on either side fails the required check naming the variable rather than skipping green.
         env::var("GH_PROJECTS_OWNER").ok().as_deref(),
         env::var("GH_PROJECTS_NUMBER").ok().as_deref(),
         env::var("GH_PROJECTS_REPOSITORY").ok().as_deref(),
-        env::var("ONETASKGRAPH_LIVE_REQUIRED").ok().as_deref(),
+        env::var(onetaskgraph_live::REQUIRED_VARIABLE)
+            .ok()
+            .as_deref(),
     )
     .unwrap_or_else(|error| panic!("the GitHub Projects live lane cannot run: {error}"));
     let (token, owner, project_number, repository) = match lane {
@@ -1902,6 +1908,11 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
         }
     };
     // llmlint: ignore-end[live_tier_compiles_and_requires_credential]
+    // The one gate: nothing below may reach GitHub until the session is open, because the
+    // token below is the one this returns rather than the one the lane read. A session that
+    // is refused did not run and did not pass, and says so.
+    let session = Session::open(SESSION_NAME, token).unwrap_or_else(|declined| declined.refuse());
+    let token = session.credential().to_owned();
     // From here on this run is really running, and whatever it does next it says what it
     // cost before it ends.
     let _report = ReportWhateverHappens;

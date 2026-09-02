@@ -7,9 +7,13 @@
 //! one project, or one where every issue carries the label, answers a filter the same way
 //! whether or not the source applies it.
 //!
-//! It skips, printing why, without `LINEAR_API_KEY` or without the scratch team: this
-//! lane is non-required by decision (AGENTS.md), because a required check a third party
-//! can turn red is a check that stops being trusted.
+//! It is an ordinary test in this crate's ordinary `test` target: change this plugin and
+//! it runs in the required check, change anything else and affected selection does not
+//! select it. Without `LINEAR_API_KEY` or without the scratch team `LINEAR_WRITE_TEAM`
+//! names it skips, printing why — a contributor with no keys, and a pull request from a
+//! fork, which the host gives no secrets. Where one *is* expected the run sets
+//! `ONETASKGRAPH_LIVE_REQUIRED=1` and each of those skips becomes a failure naming the
+//! variable, so the required lane cannot pass green for want of a credential.
 //!
 //! Everything it creates it deletes, whether its assertions passed or failed, and it
 //! clears residue titled the way it titles its own before it starts — which is
@@ -17,6 +21,7 @@
 
 use std::{collections::BTreeMap, env, future::Future};
 
+use onetaskgraph_live::{Session, missing, required};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
     Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId,
@@ -69,6 +74,9 @@ async fn linear(key: &str, query: &str, variables: Value, what: &str) -> Result<
         .cloned()
         .ok_or_else(|| format!("{what} returned no data: {body}"))
 }
+
+/// The session this lane opens against Linear, by the name its seat and its refusals use.
+const SESSION_NAME: &str = "Linear";
 
 /// The prefix of every issue, project and label this lane writes.
 ///
@@ -1030,29 +1038,50 @@ async fn drive_documents(
     Ok(())
 }
 
-#[ignore = "the live lane: run it with `just test-live onetaskgraph-linear`"]
 #[tokio::test]
 async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
-    // llmlint: ignore-block[live_tier_compiles_and_requires_credential,tests_assert_real_behavior] This non-required third-party lane deliberately reports an absent credential or an unnamed scratch team as a skip, matching every live target in this repository (AGENTS.md: a required check a third party can turn red stops being trusted); required checks compile but never execute this ignored test.
+    // llmlint: ignore-block[live_tier_compiles_and_requires_credential,tests_assert_real_behavior] An absent credential or an unnamed scratch team skips only where none was expected — a contributor with no keys, and a fork pull request, which the host gives no secrets. `ONETASKGRAPH_LIVE_REQUIRED=1`, which .github/workflows/ci.yml sets on the one lane the credentials reach, turns each skip below into the failure this rule asks for.
+    let live_required = required(
+        env::var(onetaskgraph_live::REQUIRED_VARIABLE)
+            .ok()
+            .as_deref(),
+    )
+    .unwrap_or_else(|error| panic!("the Linear live lane cannot run: {error}"));
+    let skip = |reason: &str| -> Option<String> {
+        match missing(live_required, SESSION_NAME, reason) {
+            Ok(reason) => {
+                eprintln!("skipped live Linear journey: {reason}");
+                None
+            }
+            Err(error) => panic!("the Linear live lane cannot run: {error}"),
+        }
+    };
     let Some(key) = env::var("LINEAR_API_KEY")
         .ok()
         .filter(|value| !value.trim().is_empty())
     else {
-        eprintln!("skipped live Linear journey: LINEAR_API_KEY is missing");
+        skip("LINEAR_API_KEY is not set");
         return;
     };
+    // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] .github/workflows/ci.yml spells this name too, and the drift gate is this lane's own refusal: that workflow sets ONETASKGRAPH_LIVE_REQUIRED=1 on the lane it hands the credential to, so a name spelled differently on either side fails the required check naming the variable rather than skipping green.
     let Some(team) = env::var("LINEAR_WRITE_TEAM")
         .ok()
         .filter(|value| !value.trim().is_empty())
     else {
-        eprintln!(
-            "skipped live Linear journey: LINEAR_WRITE_TEAM is missing, and this lane writes \
-             only to the scratch team that name gives rather than discovering one; no mutation \
-             was sent"
+        skip(
+            "LINEAR_WRITE_TEAM is not set, and this lane writes only to the scratch team that \
+             name gives rather than discovering one; no mutation was sent. Set it to that \
+             team's key — in CI it is the LINEAR_WRITE_TEAM repository variable, and locally \
+             it is an environment variable",
         );
         return;
     };
     // llmlint: ignore-end[live_tier_compiles_and_requires_credential,tests_assert_real_behavior]
+    // The one gate: nothing below may reach Linear until the session is open, because the
+    // key below is the one this returns rather than the one the environment held. A session
+    // that is refused did not run and did not pass, and says so.
+    let session = Session::open(SESSION_NAME, key).unwrap_or_else(|declined| declined.refuse());
+    let key = session.credential().to_owned();
     let source = onetaskgraph_linear::Plugin
         .build(
             &SourceName::new("live").unwrap(),

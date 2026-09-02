@@ -52,6 +52,7 @@ RECONCILED_VERSION_FILES: Tuple[VersionFile, ...] = (
             "onetaskgraph-github-projects",
             "onetaskgraph-in-memory",
             "onetaskgraph-linear",
+            "onetaskgraph-live",
             "onetaskgraph-local-md",
             "onetaskgraph-plugin-api",
         )

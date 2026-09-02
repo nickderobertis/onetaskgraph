@@ -77,8 +77,8 @@
 //! relations for same-source dependencies. Only cross-source far ends use the reserved
 //! `onetaskgraph.depends_on` metadata key.
 //!
-//! Fixture provenance is recorded in `tests/fixtures/README.md`. The ignored live lane
-//! drives every field of the table above against Linear itself: it builds its own fixture
+//! Fixture provenance is recorded in `tests/fixtures/README.md`. The live journey in
+//! `tests/live.rs` drives every field of the table above against Linear itself: it builds its own fixture
 //! on the scratch team `LINEAR_WRITE_TEAM` names — two projects, one issue filed under
 //! each, one filed under neither, two labels and two workflow states — because that shape
 //! is what tells an honoured predicate from an ignored one, and a workspace where every

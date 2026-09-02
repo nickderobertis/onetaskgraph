@@ -53,8 +53,8 @@ trap 'rm -rf "$work"' EXIT
 
 # The one switch this check reads from the environment, held to the three values
 # it has before anything branches on it — the same three
-# `ONETASKGRAPH_LIVE_REQUIRED` is held to in
-# crates/onetaskgraph-github-projects/tests/lane/mod.rs, and for the same reason.
+# `ONETASKGRAPH_LIVE_REQUIRED` is held to in crates/onetaskgraph-live/src/lib.rs,
+# and for the same reason.
 # Every other value read as a plain `= 1` comparison means not-required, so a
 # caller that asked for the canonical reader with `=true` or `=yes` would get the
 # skip it was trying to turn off, and be told nothing.

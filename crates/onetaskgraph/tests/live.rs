@@ -1,12 +1,19 @@
 // llmlint: ignore-file[live_tier_compiles_and_requires_credential] The registries this
-// lane reads — crates.io, PyPI and npm — are public, so there is no credential to require
-// and none whose absence it could fail fast on. It keeps the half it can: it stays
-// compiled by `cargo test -p onetaskgraph`, and a registry that does not answer fails it.
-//! The live lane for this crate: what the public registries really serve.
+// test reads — crates.io, PyPI and npm — are public, so there is no credential to require
+// and none whose absence it could fail fast on. It keeps the half it can: it is an
+// ordinary test of `cargo test -p onetaskgraph`, and a registry that does not answer fails
+// it rather than leaving the pin unobserved.
+//! What the public registries really serve, asked of the real ones.
 //!
 //! The deterministic gate proves the probe against config/registry-interfaces.toml
 //! without reaching a registry. This is the half that asks the real ones, so a
 //! registry that changes its published interface is noticed and the pin re-observed.
+//!
+//! An ordinary test in this crate's ordinary `test` target: nothing selects it but the
+//! affected selection, and nothing runs it but the everyday gate. A registry that is
+//! unreachable therefore fails the required check, which is the accepted cost of the
+//! decision AGENTS.md records — the answer is to re-run once the registry answers, never
+//! to bypass the check.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -137,7 +144,6 @@ fn declared_target_ids(root: &Path) -> Vec<String> {
 /// probe's own reason distinguishes a transport failure from a document that no
 /// longer carries the pinned field.
 #[test]
-#[ignore = "reaches the public registries; run it with `just test-live`"]
 fn every_declared_target_answers_from_its_real_registry() {
     let root = repository_root();
     let probe = root.join("scripts").join("release-probe.sh");

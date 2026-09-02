@@ -67,13 +67,6 @@
         "command": "uv run --frozen pytest -q",
         "cwd": "sdks/python"
       }
-    },
-    "test-live": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "bash scripts/pytest-live.sh sdks/python"
-      },
-      "//": "Uncached: a live test reaches a third-party API and reads a credential from the environment, neither of which is an input in this tree."
     }
   }
 }

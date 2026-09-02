@@ -4,7 +4,7 @@
   "projectType": "library",
   "tags": ["lang:rust", "layer:plugin", "live:linear"],
   "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree.",
-  "implicitDependencies": ["onetaskgraph-plugin-api"],
+  "implicitDependencies": ["onetaskgraph-live", "onetaskgraph-plugin-api"],
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",
@@ -45,21 +45,20 @@
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo test --quiet -p onetaskgraph-linear --all-features --locked"
-      }
+        "commands": [
+          "cargo test --quiet -p onetaskgraph-linear --all-features --locked",
+          "bash scripts/check-live-decline.sh onetaskgraph-linear onetaskgraph-live-linear.seat"
+        ],
+        "parallel": false
+      },
+      "//": "The live journey is one of the tests the first command runs. The second drives it through all three of its outcomes without a credential and without reaching the API \u2014 it skipped, a credential was expected and absent, and it declined \u2014 because a run that declined tested nothing and must not read as a pass, and one that skipped must not read as a defect. Serial: the second re-runs the same test binary the first builds.",
+      "inputs": ["default", "^default", "{workspaceRoot}/scripts/check-live-decline.sh"]
     },
     "coverage": {
       "executor": "nx:run-commands",
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-linear"
       }
-    },
-    "test-live": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "cargo test --quiet -p onetaskgraph-linear --test live --all-features --locked -- --include-ignored"
-      },
-      "//": "Uncached: a live test reaches a third-party API and reads a credential from the environment, neither of which is an input in this tree \u2014 a cache hit would report yesterday's verdict as today's. `--include-ignored` because the live test is `#[ignore]`d for exactly that reason: this lane is the only one that may run it, so the cached `test` target cannot sweep it in."
     }
   }
 }

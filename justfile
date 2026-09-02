@@ -85,6 +85,12 @@ test:
 # skipped on Windows with a printed notice (see scripts/rust-coverage.sh), where
 # instrumentation does not attribute subprocess coverage; the functional lanes still
 # gate that platform.
+#
+# `cargo llvm-cov` re-runs the very integration tests `test` above just ran, so with the
+# live credentials still in the environment this phase would open a SECOND live session
+# per lane, against the shared external fixture the first one is still writing to.
+# scripts/rust-coverage.sh clears them for exactly that reason; see the note there before
+# changing either this recipe or the platform matrix in .github/workflows/ci.yml.
 
 # Coverage only, for the affected projects. Fails below 95% lines.
 coverage:
@@ -105,16 +111,6 @@ format-check:
 # Format every project in place.
 format:
     @{{nx}} run-many -t format --all
-
-# A project with no live tests passes with nothing to run, which is what makes the
-# target uniform. Neither hosted plugin's credential is required: without one, that
-# plugin's own tests skip rather than fail.
-
-# Sweep the credential-gated live lane. Pass a project to run just that one — which is
-# what .github/workflows/live.yml does, so each hosted plugin's job stays scoped to its
-# own crate and its own single credential.
-test-live projects="":
-    @scripts/test-live.sh {{projects}}
 
 # Supply-chain gate: banned crates, licences, sources and advisories. Linux-only in CI,
 # where it is its own required check.

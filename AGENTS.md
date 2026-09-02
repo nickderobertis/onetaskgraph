@@ -247,16 +247,59 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   selection exists to avoid. The *measurement* is skipped on Windows with a printed
   notice (instrumentation there does not attribute subprocess coverage); the functional
   lanes still gate that platform.
-- **The live lane** is a uniform `test-live` target on every project, empty ones included.
-  It is **not** a required check, and that is a decision: a required check a third party
-  can turn red is a check that stops being trusted, and a Linear or GitHub outage must not
-  block an unrelated merge. **Every live test carries `#[ignore]`, and that is what makes
-  the decision true rather than stated.** `check` runs `cargo test -p <crate>`, which runs
-  every test target the crate has — so an un-ignored live test is part of a required check
-  on any machine exporting the credential, and part of a *cached* one, replaying a
-  third-party verdict against a tree that cannot describe it. The test stays compiled and
-  linted; `test-live` passes `--include-ignored`, which is the only place it runs.
-  **A live lane that writes names the board it writes to.** The GitHub Projects lane takes its
+- **The tests that reach a real API are ordinary tests, and that reverses an earlier
+  decision.** They were a separate `test-live` target on every project, run by a workflow of
+  their own on a schedule and on every pull request, deliberately outside the required set —
+  because a required check a third party can turn red is a check that stops being trusted.
+  **That arrangement is what let a query GitHub refuses outright merge:** the advisory lane
+  failed on the pull request that introduced it, with GitHub's own node-limit error, and
+  auto-merge squashed it anyway, because auto-merge waits only on *required* checks and
+  nobody was there to read a red advisory one. So there is now no live workflow, no live
+  job, no live target, no live recipe and no `#[ignore]`: change the GitHub Projects plugin
+  and its GitHub tests run in the required check and can fail it, change the Linear plugin
+  and its Linear tests do, change the engine or another plugin and neither runs, because
+  affected selection does not select them. `scripts/check-live-lane.sh`, a target in
+  `check`, asserts the whole of that shape so no part of it can be quietly undone.
+  **A third party being down now blocks a merge, and that is the accepted cost** — the
+  answer is to re-run once it answers, never to bypass the check, and never to reinstate a
+  signal the merge does not wait on. It is a different outcome from a session that
+  *declined*: an outage makes a run that happened fail, and a decline is a run that never
+  happened, which says so on its face and is not read as a defect in the code.
+- **One gate, because the next precondition has to govern every path.** A live test cannot
+  hold its credential except from `onetaskgraph_live::Session::open`
+  (`crates/onetaskgraph-live`), which runs every precondition first and hands the credential
+  back only if they pass. That is where a precondition governing every path by which these
+  tests reach a real API is added — one place rather than one per lane — and
+  `check-live-lane.sh` fails when a journey stops opening it. Its three answers are not
+  interchangeable: **run**; **skip**, when a credential or a nomination was not given and
+  none was expected, which is a contributor with no keys and a pull request from a fork,
+  where the host supplies no secrets; and **declined**, when the session could have run and
+  a precondition refused it. A decline is not a pass — it fails the run, so the required
+  check concludes neither success nor any conclusion (`neutral`, `skipped`) branch
+  protection accepts in place of success — and its message leads with the tests not having
+  run, so a refusal is not read as a code defect.
+  `ONETASKGRAPH_LIVE_REQUIRED=1` turns a skip into a failure, which is what stops the
+  required lane passing green merely because a credential went missing where one was
+  expected; `.github/workflows/ci.yml` sets it everywhere but a fork pull request.
+  `scripts/check-live-decline.sh`, a command in each hosted plugin's own `test` target,
+  drives all three outcomes without a credential and without reaching the API.
+- **A test that reads and writes a shared external fixture must not run concurrently with
+  another instance of itself.** That is a general property of this repository rather than an
+  exemption for two plugins, and the reason is the self-healing half of these journeys: each
+  sweeps residue by title before it starts, and that sweep recognises *any* run's artifacts,
+  so two concurrent runs delete each other's in-flight items. Concurrency here is a
+  correctness problem, not a cost one. Three things hold it, and **the second is the one a
+  fold that stops at the test target gets wrong**: the session's own seat, which declines a
+  second instance on the same machine; `scripts/rust-coverage.sh` clearing the credentials,
+  because `just check` performs the affected `test` target **and** the affected `coverage`
+  target, and coverage is `cargo llvm-cov --package <crate>`, which re-runs the very same
+  integration tests — so a fold that stops at `test` opens a second session per lane; and
+  `.github/workflows/ci.yml` handing the credentials to exactly one leg of its three-platform
+  matrix, so the count is one session per run rather than six. A run of the required check
+  opens at most one session per journey. If you are changing the matrix or the coverage
+  target, that trio is what has to stay true, and the note in `rust-coverage.sh` says it
+  where you will meet it.
+- **A live lane that writes names what it writes to.** The GitHub Projects lane takes its
   board from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` and the repository it creates its
   issues in from `GH_PROJECTS_REPOSITORY` — a project there is an issue and a board has no
   repository of its own — all three being required inputs of it alongside
@@ -267,7 +310,14 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   Requiring the board to be named is what keeps the lane off a board nobody nominated. The
   lane's separate sweep of items titled the way it titles its own artifacts is self-healing
   after an interrupted run — it recovers residue a killed process left behind, and it is not
-  what bounds where the lane may write.
+  what bounds where the lane may write. **The Linear lane names its scratch team the same
+  way**, through `LINEAR_WRITE_TEAM`, which is the `LINEAR_WRITE_TEAM` repository variable
+  on this repository — a variable rather than a secret, because a nomination has to be
+  readable for anyone reviewing where a credentialed write may land, and it names the
+  scratch team the operator set aside for it. A run that reaches that lane without the
+  nomination fails naming the variable and how to set it, rather than skipping: a nomination
+  is not a credential, and collapsing the two would rebuild, one level in, the silent skip
+  this arrangement exists to remove.
 
 ### The journeys this repository owes
 
@@ -389,6 +439,13 @@ them do; this is the inventory of what is owed, not a status board.
 - **Squash-merge only, via pull request, with auto-merge.** One PR is one commit whose
   subject is the PR title and whose body is the PR description. Queue it with
   `gh pr merge --auto --squash`.
+- **Auto-merge proceeds on a required check that concludes success — and on any conclusion
+  the required check accepts *in place of* success, which is the same hole under a gentler
+  name.** `neutral` and `skipped` read as "did not run" and satisfy branch protection
+  anyway. Everything about how a signal that never ran must conclude rests on this, and so
+  does why an advisory check cannot substitute for a required one: a query GitHub refuses
+  outright reached the default branch because auto-merge waited only on the required set
+  while the advisory lane that caught it sat red.
 - **Six required checks — `check` on all three platforms, `deny`, `llmlint`, `pr-title` —
   and they are the only thing that can refuse a merge here.** Re-apply or verify the whole
   arrangement with the create-repo skill's `setup_github_governance.py`, which is its
@@ -451,8 +508,9 @@ them do; this is the inventory of what is owed, not a status board.
   in `config/registry-interfaces.toml`; `scripts/check-release-probe.sh` holds the probe to
   that pin and drives all three answers against documents built from it, so what makes
   those answers evidence is the pin rather than a registry being reachable, and
-  `crates/onetaskgraph/tests/live.rs` re-observes the real registries from outside every
-  required check.
+  `crates/onetaskgraph/tests/live.rs` re-observes the real registries as an ordinary test of
+  the binary crate — inside the required check, like every other test that reaches something
+  real.
 
 ## Conventions
 

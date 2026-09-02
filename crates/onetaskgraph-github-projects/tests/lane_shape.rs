@@ -2,9 +2,10 @@
 //!
 //! Which board and repository the credentialed lane may write to, which artifacts a run
 //! recognises as its own and as an interrupted earlier run's, and that cleanup runs whether the
-//! journey passed or failed. None of it touches the network or reads a credential, so it runs in
-//! the everyday gate rather than in `test-live` — which is why it lives here and not in
-//! `tests/live.rs`, where `scripts/check-live-lane.sh` requires every test to carry `#[ignore]`.
+//! journey passed or failed. None of it touches the network or reads a credential, so these
+//! assertions hold on every machine — including the ones the journey beside them skips on for
+//! want of a credential, which is where the decisions asserted here would otherwise go
+//! unproven.
 
 mod lane;
 

@@ -16,6 +16,30 @@ set -euo pipefail
 readonly CRATE="${1:?usage: scripts/rust-coverage.sh <crate-name>}"
 readonly MIN_LINES=95
 
+# ONE live session per run of the gate, and this is where the second one would come from.
+#
+# The tests that reach a real API are ordinary tests of the `test` target now. `just check`
+# runs `test` AND `coverage`, and `cargo llvm-cov --package <crate>` below re-runs the very
+# same integration tests — so with the credentials still set this phase would open a second
+# session against the shared external fixture the first one may still be writing to, and a
+# test that reads and writes a shared external fixture must not run concurrently with
+# another instance of itself: each sweeps residue by title before it starts, and that sweep
+# recognises ANY run's artifacts, so two concurrent runs delete each other's in-flight
+# items.
+#
+# Clearing them makes the live tests take their own skip path here, printing why. The
+# demand is cleared with them: `ONETASKGRAPH_LIVE_REQUIRED=1` left set would turn that skip
+# into a failure and this phase would fail for a session it is deliberately not running.
+#
+# Nothing is lost by it. These tests were never measured before this change — they carried
+# `#[ignore]` and `cargo llvm-cov` does not pass `--include-ignored` — so the number below
+# is the number this crate has always reported.
+#
+# The other half of "one session per run" is the platform matrix:
+# .github/workflows/ci.yml hands the credentials to exactly one of its three `check` lanes.
+# If you are here to change the matrix or this target, that is the pair to keep true.
+unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
+
 case "${OS:-}${OSTYPE:-}" in
   *Windows_NT* | *msys* | *cygwin* | *win32*)
     echo "rust-coverage: $CRATE measurement skipped on Windows (instrumentation there does not attribute subprocess coverage); the functional lanes still gate this platform" >&2

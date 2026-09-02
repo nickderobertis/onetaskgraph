@@ -1045,6 +1045,7 @@ dependencies = [
  "chrono",
  "github-graphql-node-count",
  "graphql-parser",
+ "onetaskgraph-live",
  "onetaskgraph-plugin-api",
  "reqwest",
  "schemars",
@@ -1074,6 +1075,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "graphql-parser",
+ "onetaskgraph-live",
  "onetaskgraph-plugin-api",
  "reqwest",
  "schemars",
@@ -1082,6 +1084,10 @@ dependencies = [
  "serde_json",
  "tokio",
 ]
+
+[[package]]
+name = "onetaskgraph-live"
+version = "0.2.19"
 
 [[package]]
 name = "onetaskgraph-local-md"

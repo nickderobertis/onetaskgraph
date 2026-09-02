@@ -1,0 +1,15 @@
+[package]
+name = "onetaskgraph-live"
+description = "The one gate every live test in this workspace passes through before it may reach a real API."
+version = "0.2.19"
+# Not published: this is the workspace's own test-support crate, and the plugin crates
+# name it as a path-only dev-dependency, which cargo strips when it packages them. It
+# carries the workspace version anyway so scripts/set-version.sh sees one number here.
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]

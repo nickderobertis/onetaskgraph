@@ -6990,8 +6990,8 @@ async fn a_callers_own_graphql_and_rest_calls_join_the_sources_in_one_session() 
 
 /// The public helpers a caller outside this crate records its own calls with.
 ///
-/// The credentialed lane is that caller, and it is `#[ignore]`d, so what makes these correct
-/// has to be provable without a credential: they read GitHub's refusal wordings through the
+/// The credentialed lane is that caller, and it skips wherever no credential was given, so
+/// what makes these correct has to be provable without one: they read GitHub's refusal wordings through the
 /// same limiter this source's own requests go through, so a secondary rate limit under a
 /// forbidden status is a rate limit here exactly as it is there.
 #[tokio::test]

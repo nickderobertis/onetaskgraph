@@ -192,6 +192,11 @@ report_on_failure "editing onetaskgraph-core" "$selection" "$before"
 reset_scratch
 
 # 3. One plugin changed; its siblings are untouched.
+#
+# Both hosted plugins are driven, in both directions, because what rides on this is no
+# longer only build time: their tests reach a real API, and each writes to a shared
+# external fixture. A graph that selected a sibling would open a session nothing about the
+# change could have needed, against somebody's real board or team.
 selection="$(select_after_editing crates/onetaskgraph-linear/src/lib.rs)"
 before=$failures
 expect_selected "editing one plugin" onetaskgraph-linear "$selection"
@@ -201,6 +206,18 @@ for plugin in "${PLUGINS[@]}"; do
   expect_not_selected "editing one plugin" "$plugin" "$selection"
 done
 report_on_failure "editing onetaskgraph-linear" "$selection" "$before"
+reset_scratch
+
+# 4. The other hosted plugin, the other way round.
+selection="$(select_after_editing crates/onetaskgraph-github-projects/src/lib.rs)"
+before=$failures
+expect_selected "editing the other hosted plugin" onetaskgraph-github-projects "$selection"
+expect_selected "editing the other hosted plugin" onetaskgraph "$selection"
+for plugin in "${PLUGINS[@]}"; do
+  [ "$plugin" = "onetaskgraph-github-projects" ] && continue
+  expect_not_selected "editing the other hosted plugin" "$plugin" "$selection"
+done
+report_on_failure "editing onetaskgraph-github-projects" "$selection" "$before"
 reset_scratch
 
 if [ "$failures" -ne 0 ]; then
