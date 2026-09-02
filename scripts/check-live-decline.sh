@@ -42,7 +42,11 @@ case "$SEAT_FILE" in
     ;;
 esac
 
-scratch="$(mktemp -d)"
+scratch="$(mktemp -d)" || {
+  echo "check-live-decline: could not create a scratch directory for the seats and logs." >&2
+  echo "check-live-decline: free space in the temporary directory, or point TMPDIR at a writable one, then re-run." >&2
+  exit 1
+}
 trap 'rm -rf "$scratch"' EXIT
 
 failures=0
