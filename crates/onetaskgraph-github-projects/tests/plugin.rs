@@ -6842,6 +6842,14 @@ async fn the_reported_budget_figures_are_the_ones_the_responses_own_headers_carr
         graphql.remaining_last_seen(),
         Some(FIXTURE_BUDGET_LIMIT - used)
     );
+    // Two readings from two responses rather than one reading twice: this board reports the
+    // account one point poorer with every answer, so the first response this session got and
+    // the last one carried different figures and the report keeps them apart.
+    assert_eq!(
+        graphql.remaining_first_seen(),
+        Some(FIXTURE_BUDGET_LIMIT - 1)
+    );
+    assert!(graphql.remaining_first_seen() > graphql.remaining_last_seen());
     // The session's own spend is attributed per call rather than read off the account.
     assert_eq!(graphql.spent(), session.total_requests() as u64);
     assert_eq!(graphql.modelled(), graphql.spent());
