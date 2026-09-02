@@ -6662,7 +6662,7 @@ fn budget_of(session: &Session) -> BudgetReport {
     session
         .budgets()
         .into_iter()
-        .find(|report| report.budget == Budget::Graphql)
+        .find(|report| report.budget() == Budget::Graphql)
         .expect("the session drew on the GraphQL budget")
 }
 
@@ -6813,7 +6813,7 @@ async fn a_source_that_was_handed_no_ledger_still_accounts_for_itself() {
         "the earlier snapshot grew with the source after it was taken, so it is a live \
          borrow rather than a value two runs could be compared with"
     );
-    assert_eq!(budget_of(&whole).limit, Some(FIXTURE_BUDGET_LIMIT));
+    assert_eq!(budget_of(&whole).limit(), Some(FIXTURE_BUDGET_LIMIT));
     assert!(
         whole.report().contains("reading the board"),
         "{}",
@@ -6836,16 +6836,16 @@ async fn the_reported_budget_figures_are_the_ones_the_responses_own_headers_carr
     let session = ledger.snapshot();
     let graphql = budget_of(&session);
     let used = fixture.budget_used();
-    assert_eq!(graphql.limit, Some(FIXTURE_BUDGET_LIMIT));
-    assert_eq!(graphql.used_by_the_account, Some(used));
+    assert_eq!(graphql.limit(), Some(FIXTURE_BUDGET_LIMIT));
+    assert_eq!(graphql.used_by_the_account(), Some(used));
     assert_eq!(
-        graphql.remaining_last_seen,
+        graphql.remaining_last_seen(),
         Some(FIXTURE_BUDGET_LIMIT - used)
     );
     // The session's own spend is attributed per call rather than read off the account.
-    assert_eq!(graphql.spent, session.total_requests() as u64);
-    assert_eq!(graphql.modelled, graphql.spent);
-    assert_eq!(graphql.reported, 0);
+    assert_eq!(graphql.spent(), session.total_requests() as u64);
+    assert_eq!(graphql.modelled(), graphql.spent());
+    assert_eq!(graphql.reported(), 0);
 
     let report = session.report();
     assert!(
@@ -6858,7 +6858,7 @@ async fn the_reported_budget_figures_are_the_ones_the_responses_own_headers_carr
     assert!(
         report.contains(&format!(
             "spent {} points: 0 reported by GitHub",
-            graphql.spent
+            graphql.spent()
         )),
         "{report}"
     );
@@ -6893,7 +6893,8 @@ async fn a_budget_something_else_is_spending_does_not_move_this_sessions_reporte
         shared_session.total_requests()
     );
     assert_eq!(
-        shared_budget.spent, alone_budget.spent,
+        shared_budget.spent(),
+        alone_budget.spent(),
         "the session's spend moved with the account's allowance"
     );
     assert!(
@@ -6901,10 +6902,10 @@ async fn a_budget_something_else_is_spending_does_not_move_this_sessions_reporte
         "the shared board's allowance was supposed to fall faster"
     );
     assert!(
-        shared_budget.account_allowance_fall().unwrap() > shared_budget.spent,
+        shared_budget.account_allowance_fall().unwrap() > shared_budget.spent(),
         "the account's allowance fell by {:?} and this session spent {}",
         shared_budget.account_allowance_fall(),
-        shared_budget.spent
+        shared_budget.spent()
     );
     let report = shared_session.report();
     assert!(
@@ -6940,8 +6941,8 @@ async fn a_refusal_and_a_rate_limited_refusal_are_told_apart_and_only_one_of_the
         .expect("a refusal was recorded");
     assert_eq!(refused_record.name(), "updating an issue");
     assert_eq!(refused_record.mode(), Mode::Write);
-    assert_eq!(refused_record.spend().basis, Basis::Modelled);
-    assert_eq!(refused_record.spend().amount, 1);
+    assert_eq!(refused_record.spend().basis(), Basis::Modelled);
+    assert_eq!(refused_record.spend().amount(), 1);
 
     let limited = accounted_board();
     limited.refuse_every_mutation();
@@ -6961,12 +6962,43 @@ async fn a_refusal_and_a_rate_limited_refusal_are_told_apart_and_only_one_of_the
         .iter()
         .find(|request| request.outcome() == Outcome::RateLimited)
         .expect("a rate-limited refusal was recorded");
-    assert_eq!(refusal.spend().basis, Basis::NotRun);
-    assert_eq!(refusal.spend().amount, 0);
+    assert_eq!(refusal.spend().basis(), Basis::NotRun);
+    assert_eq!(refusal.spend().amount(), 0);
     assert!(
         session.report().contains("1 rate-limited"),
         "{}",
         session.report()
+    );
+
+    // A refusal for a spent primary budget is the response whose headers say most about that
+    // budget's state, so a request attributed nothing still contributes what its own response
+    // reported. Counting the refusal and reading its headers are two different things, and a
+    // report that stopped reading them here would say the allowance was never reported on the
+    // one run where it mattered.
+    let exhausted = raw_server_with_headers(
+        "403 Forbidden",
+        "{}",
+        "x-ratelimit-limit: 5000\r\nx-ratelimit-used: 5000\r\nx-ratelimit-remaining: 0\r\n",
+    );
+    let exhausted_ledger = Arc::new(Accounting::new());
+    recording(&exhausted, &exhausted_ledger)
+        .query_tasks(&TaskQuery::default(), &page(50))
+        .await
+        .expect_err("that board has nothing left of its budget");
+    let session = exhausted_ledger.snapshot();
+    let budget = budget_of(&session);
+    assert_eq!(budget.requests(), 1);
+    assert_eq!(budget.not_run(), 1);
+    assert_eq!(budget.spent(), 0, "a request that never ran spent nothing");
+    assert_eq!(budget.limit(), Some(5000));
+    assert_eq!(budget.used_by_the_account(), Some(5000));
+    assert_eq!(budget.remaining_last_seen(), Some(0));
+    assert!(
+        budget
+            .render()
+            .contains("limit 5000, 5000 used, 0 remaining"),
+        "{}",
+        budget.render()
     );
 }
 
@@ -7022,12 +7054,12 @@ async fn a_callers_own_graphql_and_rest_calls_join_the_sources_in_one_session() 
     let rest = session
         .budgets()
         .into_iter()
-        .find(|report| report.budget == Budget::Rest)
+        .find(|report| report.budget() == Budget::Rest)
         .expect("the session drew on the REST budget");
-    assert_eq!(rest.counted, 1);
-    assert_eq!(rest.limit, Some(1234));
-    assert_eq!(rest.remaining_last_seen, Some(1221));
-    assert_eq!(budget_of(&session).reported, 37);
+    assert_eq!(rest.counted(), 1);
+    assert_eq!(rest.limit(), Some(1234));
+    assert_eq!(rest.remaining_last_seen(), Some(1221));
+    assert_eq!(budget_of(&session).reported(), 37);
 
     let report = session.report();
     assert!(
@@ -7145,17 +7177,17 @@ async fn a_caller_tells_an_answer_from_a_refusal_from_a_rate_limit_the_way_this_
         }
     );
     assert_eq!(listed.node_count(), None);
-    assert_eq!(listed.spend().basis, Basis::Counted);
-    assert_eq!(listed.spend().amount, 1);
+    assert_eq!(listed.spend().basis(), Basis::Counted);
+    assert_eq!(listed.spend().amount(), 1);
     let refused = Request::rest(Method::Delete, "/repos/{owner}/{repo}/labels/{name}")
         .finished(Outcome::Refused, RateLimit::default());
     assert_eq!(refused.mode(), Mode::Write);
-    assert_eq!(refused.spend().basis, Basis::Counted);
-    assert_eq!(refused.spend().amount, 1);
+    assert_eq!(refused.spend().basis(), Basis::Counted);
+    assert_eq!(refused.spend().amount(), 1);
     let limited = Request::rest(Method::Post, "/repos/{owner}/{repo}/labels")
         .finished(Outcome::RateLimited, RateLimit::default());
-    assert_eq!(limited.spend().basis, Basis::NotRun);
-    assert_eq!(limited.spend().amount, 0);
+    assert_eq!(limited.spend().basis(), Basis::NotRun);
+    assert_eq!(limited.spend().amount(), 0);
 
     // A document the calculation cannot rule on carries no node count, which is a defect in
     // the document rather than a cost of nothing.

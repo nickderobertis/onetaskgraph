@@ -367,12 +367,60 @@ impl Basis {
 }
 
 /// What one call is attributed against its budget, and where that figure came from.
+///
+/// **The amount and the basis are one fact, so they are settled together and read apart.**
+/// Three of the four bases fix the amount outright — a call against a budget metered in
+/// requests is one request, the model's lower bound is one point, and a request a rate
+/// limiter refused never ran and is nothing — and only [`Basis::Reported`] carries a figure
+/// of its own, GitHub's. Constructing the pair field by field would let a report say a call
+/// GitHub never ran spent forty points, which is a measurement of nothing; the four
+/// constructors below are the only ways to have one, and each is the invariant for its own
+/// basis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Spend {
+    amount: u64,
+    basis: Basis,
+}
+
+impl Spend {
+    /// One request against a budget metered in requests.
+    const fn counted() -> Self {
+        Self {
+            amount: 1,
+            basis: Basis::Counted,
+        }
+    }
+    /// What GitHub itself reported this call cost.
+    const fn reported(cost: u64) -> Self {
+        Self {
+            amount: cost,
+            basis: Basis::Reported,
+        }
+    }
+    /// This repository's lower bound: one point, GitHub's documented minimum for any call.
+    const fn modelled() -> Self {
+        Self {
+            amount: 1,
+            basis: Basis::Modelled,
+        }
+    }
+    /// Nothing, because a rate limiter refused the request and it never ran.
+    const fn not_run() -> Self {
+        Self {
+            amount: 0,
+            basis: Basis::NotRun,
+        }
+    }
     /// The amount, in that budget's own unit.
-    pub amount: u64,
+    #[must_use]
+    pub const fn amount(self) -> u64 {
+        self.amount
+    }
     /// What makes it that amount.
-    pub basis: Basis,
+    #[must_use]
+    pub const fn basis(self) -> Basis {
+        self.basis
+    }
 }
 
 /// What one request asked for.
@@ -466,32 +514,20 @@ impl Sending {
     #[must_use]
     pub fn finished(self, outcome: Outcome, limits: RateLimit) -> Request {
         let spend = match (self.drawn, outcome) {
-            (_, Outcome::RateLimited) => Spend {
-                amount: 0,
-                basis: Basis::NotRun,
-            },
-            (Drawn::Rest, _) => Spend {
-                amount: 1,
-                basis: Basis::Counted,
-            },
+            (_, Outcome::RateLimited) => Spend::not_run(),
+            (Drawn::Rest, _) => Spend::counted(),
             (
                 Drawn::Graphql {
                     reported_cost: Some(cost),
                 },
                 _,
-            ) => Spend {
-                amount: cost,
-                basis: Basis::Reported,
-            },
+            ) => Spend::reported(cost),
             (
                 Drawn::Graphql {
                     reported_cost: None,
                 },
                 _,
-            ) => Spend {
-                amount: 1,
-                basis: Basis::Modelled,
-            },
+            ) => Spend::modelled(),
         };
         Request {
             call: self.call,
@@ -723,43 +759,10 @@ impl Session {
         let mut touched: BTreeMap<Budget, BudgetReport> = BTreeMap::new();
         for request in &self.requests {
             let budget = request.budget();
-            let report = touched.entry(budget).or_insert_with(|| BudgetReport {
-                budget,
-                requests: 0,
-                spent: 0,
-                reported: 0,
-                modelled: 0,
-                counted: 0,
-                not_run: 0,
-                limit: None,
-                used_by_the_account: None,
-                remaining_first_seen: None,
-                remaining_last_seen: None,
-            });
-            report.requests += 1;
-            report.spent = report.spent.saturating_add(request.spend.amount);
-            match request.spend.basis {
-                Basis::Reported => {
-                    report.reported = report.reported.saturating_add(request.spend.amount);
-                }
-                Basis::Modelled => {
-                    report.modelled = report.modelled.saturating_add(request.spend.amount);
-                }
-                Basis::Counted => {
-                    report.counted = report.counted.saturating_add(request.spend.amount);
-                }
-                Basis::NotRun => report.not_run += 1,
-            }
-            if let Some(limit) = request.limits.limit() {
-                report.limit = Some(limit);
-            }
-            if let Some(used) = request.limits.used_by_the_account() {
-                report.used_by_the_account = Some(used);
-            }
-            if let Some(remaining) = request.limits.remaining() {
-                report.remaining_first_seen.get_or_insert(remaining);
-                report.remaining_last_seen = Some(remaining);
-            }
+            touched
+                .entry(budget)
+                .or_insert_with(|| BudgetReport::of(budget))
+                .record(request);
         }
         touched.into_values().collect()
     }
@@ -837,36 +840,139 @@ impl Session {
 }
 
 /// One budget a session drew on, with its own figures kept apart from the account's.
+///
+/// **Every figure here is a total over requests that really drew on this budget, so the only
+/// way to have one is to add those requests up.** [`Session::budgets`] is that, and
+/// [`BudgetReport::record`] is where a request joins one: the request count, the spend, its
+/// three attributions and the account's own readings all move together, from the same record,
+/// so a report cannot say it summarises nine requests while its attributions add up to four,
+/// or carry a REST budget's figures under [`Budget::Graphql`]. The fields are read through
+/// the accessors below for exactly the reason [`RateLimit`]'s are: a hand-assembled set of
+/// totals would be a measurement of nothing, and this whole accounting exists because a
+/// number nobody measured was argued about instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BudgetReport {
-    /// Which budget.
-    pub budget: Budget,
-    /// How many of this session's requests drew on it.
-    pub requests: usize,
-    /// What this session itself spent against it, attributed per call.
-    pub spent: u64,
-    /// How much of that GitHub itself reported.
-    pub reported: u64,
-    /// How much of it is this repository's one-point-per-call lower bound.
-    pub modelled: u64,
-    /// How much of it is a count of requests against a budget metered in requests.
-    pub counted: u64,
-    /// How many of its requests a rate limiter refused, so they never ran and are
-    /// attributed nothing.
-    pub not_run: usize,
-    /// The whole allowance, as GitHub's own headers reported it.
-    pub limit: Option<u64>,
-    /// What the **account** had spent, as GitHub's own headers reported it. Not this
-    /// session's spend: other work draws on the same budget in the same window.
-    pub used_by_the_account: Option<u64>,
-    /// The allowance remaining when this session's first request against this budget was
-    /// answered.
-    pub remaining_first_seen: Option<u64>,
-    /// The allowance remaining when its last one was.
-    pub remaining_last_seen: Option<u64>,
+    budget: Budget,
+    requests: usize,
+    spent: u64,
+    reported: u64,
+    modelled: u64,
+    counted: u64,
+    not_run: usize,
+    limit: Option<u64>,
+    used_by_the_account: Option<u64>,
+    remaining_first_seen: Option<u64>,
+    remaining_last_seen: Option<u64>,
 }
 
 impl BudgetReport {
+    /// A report of `budget` with nothing added to it yet.
+    const fn of(budget: Budget) -> Self {
+        Self {
+            budget,
+            requests: 0,
+            spent: 0,
+            reported: 0,
+            modelled: 0,
+            counted: 0,
+            not_run: 0,
+            limit: None,
+            used_by_the_account: None,
+            remaining_first_seen: None,
+            remaining_last_seen: None,
+        }
+    }
+    /// Add one of this budget's requests, and everything its response said about it.
+    ///
+    /// The one place these totals move, which is what makes them agree with each other and
+    /// with the requests they are over.
+    fn record(&mut self, request: &Request) {
+        self.requests += 1;
+        self.spent = self.spent.saturating_add(request.spend.amount);
+        match request.spend.basis {
+            Basis::Reported => {
+                self.reported = self.reported.saturating_add(request.spend.amount);
+            }
+            Basis::Modelled => {
+                self.modelled = self.modelled.saturating_add(request.spend.amount);
+            }
+            Basis::Counted => {
+                self.counted = self.counted.saturating_add(request.spend.amount);
+            }
+            // Attributed nothing, and counted as one of the requests that ran into the
+            // limiter. Its headers are still read below — a refusal for a spent budget is
+            // the response whose figures say most about that budget's state.
+            Basis::NotRun => self.not_run += 1,
+        }
+        if let Some(limit) = request.limits.limit() {
+            self.limit = Some(limit);
+        }
+        if let Some(used) = request.limits.used_by_the_account() {
+            self.used_by_the_account = Some(used);
+        }
+        if let Some(remaining) = request.limits.remaining() {
+            self.remaining_first_seen.get_or_insert(remaining);
+            self.remaining_last_seen = Some(remaining);
+        }
+    }
+    /// Which budget.
+    #[must_use]
+    pub const fn budget(&self) -> Budget {
+        self.budget
+    }
+    /// How many of this session's requests drew on it.
+    #[must_use]
+    pub const fn requests(&self) -> usize {
+        self.requests
+    }
+    /// What this session itself spent against it, attributed per call.
+    #[must_use]
+    pub const fn spent(&self) -> u64 {
+        self.spent
+    }
+    /// How much of that GitHub itself reported.
+    #[must_use]
+    pub const fn reported(&self) -> u64 {
+        self.reported
+    }
+    /// How much of it is this repository's one-point-per-call lower bound.
+    #[must_use]
+    pub const fn modelled(&self) -> u64 {
+        self.modelled
+    }
+    /// How much of it is a count of requests against a budget metered in requests.
+    #[must_use]
+    pub const fn counted(&self) -> u64 {
+        self.counted
+    }
+    /// How many of its requests a rate limiter refused, so they never ran and are
+    /// attributed nothing.
+    #[must_use]
+    pub const fn not_run(&self) -> usize {
+        self.not_run
+    }
+    /// The whole allowance, as GitHub's own headers reported it.
+    #[must_use]
+    pub const fn limit(&self) -> Option<u64> {
+        self.limit
+    }
+    /// What the **account** had spent, as GitHub's own headers reported it. Not this
+    /// session's spend: other work draws on the same budget in the same window.
+    #[must_use]
+    pub const fn used_by_the_account(&self) -> Option<u64> {
+        self.used_by_the_account
+    }
+    /// The allowance remaining when this session's first request against this budget was
+    /// answered.
+    #[must_use]
+    pub const fn remaining_first_seen(&self) -> Option<u64> {
+        self.remaining_first_seen
+    }
+    /// The allowance remaining when its last one was.
+    #[must_use]
+    pub const fn remaining_last_seen(&self) -> Option<u64> {
+        self.remaining_last_seen
+    }
     /// How far the **account's** remaining allowance fell while this session ran.
     ///
     /// A fall rather than a movement, and the difference is not pedantry: an allowance that
