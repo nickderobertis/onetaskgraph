@@ -1567,7 +1567,7 @@ fn carried(metadata: &BTreeMap<String, Value>, origin: &Origin) -> BTreeMap<Stri
     carried.remove(DependencyEdge::RECORDED_KEY);
     carried.remove(GlobalId::ORIGIN_KEY);
     let held = match origin {
-        Origin::Records(id) => Some(Value::String(id.clone())),
+        Origin::Records(id) => Some(Value::String(id.to_string())),
         Origin::Keeps(held) => held.clone(),
     };
     if let Some(held) = held {
@@ -1578,10 +1578,17 @@ fn carried(metadata: &BTreeMap<String, Value>, origin: &Origin) -> BTreeMap<Stri
 
 /// What one landed item records at [`GlobalId::ORIGIN_KEY`].
 enum Origin {
-    /// The qualified id this item was copied from.
-    Records(String),
+    /// The qualified id this item was copied from, as the id type rather than as its
+    /// spelling: the key holds a [`GlobalId`] and nothing else may be recorded there.
+    Records(GlobalId),
     /// Whatever the destination already holds there — `None` when it holds nothing, which
     /// is written as the key being absent rather than as a null.
+    ///
+    /// A [`Value`] and not a [`GlobalId`], because this variant does not interpret what it
+    /// carries: it is the destination's own metadata entry, held for the length of one
+    /// write and put back exactly as it was read. Parsing it would turn a value a
+    /// destination holds and this engine cannot read into a value this engine deletes,
+    /// which is the opposite of what keeping it means.
     Keeps(Option<Value>),
 }
 
@@ -1606,7 +1613,7 @@ fn recorded(item: &Planned, held: Option<&Prior>) -> Origin {
             held.and_then(|held| described(&held.item).1.get(GlobalId::ORIGIN_KEY).cloned()),
         );
     }
-    Origin::Records(item.source.to_string())
+    Origin::Records(item.source.clone())
 }
 
 /// Whether the destination already reads exactly as this copy would leave it.

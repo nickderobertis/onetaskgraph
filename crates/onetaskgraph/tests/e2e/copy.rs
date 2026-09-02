@@ -463,6 +463,13 @@ fn authoring_board_and_scratch(sandbox: &Sandbox) -> std::path::PathBuf {
         "---\ntitle: Plan X\nstatus: todo\nmetadata: {caller.stage: authored}\n---\nthe plan\n",
     )
     .expect("the authored plan");
+    let documents = authoring.join("documents");
+    std::fs::create_dir_all(&documents).expect("the authoring document folder");
+    std::fs::write(
+        documents.join("brief-x.md"),
+        "---\ntitle: Brief X\nmetadata: {caller.stage: authored}\n---\nthe brief\n",
+    )
+    .expect("the authored brief");
     sandbox.project_document(&document(&json!({
         "authoring": {"plugin": "local-md", "config": {
             "root": authoring,
@@ -594,6 +601,111 @@ fn a_copy_back_leaves_the_destinations_own_origin_so_the_next_copy_still_finds_i
             .count(),
         1,
         "exactly one item where there was one before"
+    );
+}
+
+#[test]
+fn a_document_copy_back_leaves_the_destinations_own_origin_the_same_way() {
+    // A document is not work and takes part in no graph, but it is copied by the same
+    // rules and carries the same reserved key — so a settled run projecting a document
+    // back must not cost that document its correspondence either.
+    let sandbox = Sandbox::new();
+    authoring_board_and_scratch(&sandbox);
+
+    ok(
+        &sandbox,
+        &[
+            "document",
+            "copy",
+            "authoring:brief-x",
+            "--to",
+            "plans",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        recorded_origin(&sandbox, "plans", "document", "brief-x"),
+        json!("authoring:brief-x"),
+        "a forward copy records where it came from"
+    );
+
+    ok(
+        &sandbox,
+        &["document", "copy", "plans:brief-x", "--to", "run", "--json"],
+    );
+    let scratch = sandbox.project().join("run").join("documents/brief-x.md");
+    let text = std::fs::read_to_string(&scratch).expect("the scratch copy is there");
+    assert!(
+        text.contains("onetaskgraph.origin: plans:brief-x"),
+        "the scratch copy knows which document it came from:\n{text}"
+    );
+    std::fs::write(&scratch, text.replace("the brief", "the settled brief"))
+        .expect("the run settles the brief");
+
+    let back = ok(
+        &sandbox,
+        &["document", "copy", "run:brief-x", "--to", "plans", "--json"],
+    );
+    assert_eq!(
+        reported(&back),
+        vec![(
+            "run:brief-x".to_owned(),
+            json!("plans:brief-x"),
+            "updated".to_owned()
+        )]
+    );
+    assert_eq!(
+        shown(&sandbox, "document", "plans:brief-x")["content"],
+        json!("the settled brief"),
+        "the settled body landed"
+    );
+    assert_eq!(
+        recorded_origin(&sandbox, "plans", "document", "brief-x"),
+        json!("authoring:brief-x"),
+        "and the document still says where it itself came from"
+    );
+
+    // Projecting the same settled run again is not a write.
+    let repeated = ok(
+        &sandbox,
+        &["document", "copy", "run:brief-x", "--to", "plans", "--json"],
+    );
+    assert_eq!(
+        reported(&repeated),
+        vec![(
+            "run:brief-x".to_owned(),
+            json!("plans:brief-x"),
+            "unchanged".to_owned()
+        )]
+    );
+
+    // And the document is still readable back the way it was written.
+    let again = ok(
+        &sandbox,
+        &[
+            "document",
+            "copy",
+            "authoring:brief-x",
+            "--to",
+            "plans",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        reported(&again),
+        vec![(
+            "authoring:brief-x".to_owned(),
+            json!("plans:brief-x"),
+            "updated".to_owned()
+        )]
+    );
+    assert_eq!(
+        ok(&sandbox, &["document", "list", "--source", "plans"])
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        1,
+        "exactly one document where there was one before"
     );
 }
 
