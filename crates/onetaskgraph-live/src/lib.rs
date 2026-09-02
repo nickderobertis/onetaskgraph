@@ -284,6 +284,18 @@ impl Seat {
                 // An interrupted run's seat, older than any session lasts. Reclaiming it is
                 // the self-healing half: `create_new` again rather than a plain create, so
                 // two runs reclaiming at once still leave exactly one holder.
+                //
+                // llmlint: ignore-block[changed_behavior_has_e2e] Reclaiming is the branch
+                // that lets the session open, and a session that opens is a journey that
+                // reaches the real API on its next line — so driving this one through either
+                // live journey means spending a live session against a third party to prove a
+                // decision about a file's age, on every run of the required check, and cannot
+                // be arranged at all without a credential. The half that *can* be driven
+                // through the real journey binary is, in `scripts/check-live-decline.sh`: a
+                // seat a live run still holds declines, and the run that was declined leaves
+                // it where it found it. What is left here is the age comparison and the
+                // re-creation, which the crate's own tests drive against a real seat file
+                // whose modification time is really in the past.
                 let _ = fs::remove_file(&path);
                 Self::create(&path).map_err(|problem| {
                     format!(
@@ -292,6 +304,7 @@ impl Seat {
                         path.display()
                     )
                 })
+                // llmlint: ignore-end[changed_behavior_has_e2e]
             }
             Err(problem) => Err(format!(
                 "its seat {} could not be taken: {problem}. Make that directory writable, or \
