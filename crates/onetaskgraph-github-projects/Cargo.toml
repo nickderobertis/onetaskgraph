@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+github-graphql-node-count.workspace = true
 onetaskgraph-plugin-api.workspace = true
 reqwest = { version = "0.12.23", default-features = false, features = ["json", "native-tls-vendored"] }
 schemars.workspace = true

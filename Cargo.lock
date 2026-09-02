@@ -475,6 +475,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "github-graphql-node-count"
+version = "0.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e9221f0e074db97ca3d97a1e372e0a4ee8ac5e598d06555908be139937a9aff"
+dependencies = [
+ "graphql-parser",
+]
+
+[[package]]
 name = "graphql-parser"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1034,6 +1043,7 @@ version = "0.2.19"
 dependencies = [
  "async-trait",
  "chrono",
+ "github-graphql-node-count",
  "graphql-parser",
  "onetaskgraph-plugin-api",
  "reqwest",

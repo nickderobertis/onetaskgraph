@@ -46,6 +46,16 @@ wildcards = "deny"
 # duplicate. Revisit at the next dependency upgrade.
 skip = [
   { crate = "syn:2", reason = "serde, thiserror, clap and async-trait derives have not moved to syn 3 yet; schemars 1.2 has" },
+  # The second, and it adds no crate to this workspace's closure. `graphql-parser` 0.4.1
+  # has been in the lockfile all along — the pinned-schema test parses with it — and it is
+  # still on thiserror 1 while everything else here is on 2. What changed is only which
+  # graph the check walks: `github-graphql-node-count` reaches that same parser through
+  # [dependencies] rather than [dev-dependencies], so a duplicate that was already
+  # resolved became one this check can see. There is no newer `graphql-parser`, and it is
+  # the only GraphQL document parser in reach; this goes when that crate moves to
+  # thiserror 2.
+  { crate = "thiserror:1", reason = "reached only through graphql-parser 0.4.1, which was already in this lockfile as a dev-dependency; removable the day graphql-parser moves to thiserror 2, and not before" },
+  { crate = "thiserror-impl:1", reason = "the derive half of thiserror 1, reached only through the crate skipped above; removable on the same day and for the same reason" },
 ]
 
 # The engine compensates for a missing capability transiently: it holds at most one source

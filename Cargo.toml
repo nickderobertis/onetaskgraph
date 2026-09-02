@@ -26,6 +26,11 @@ clap = { version = "4.6.6", features = ["derive"] }
 # could reach the network would be a way for work data to leave the process.
 jsonschema = { version = "0.50.1", default-features = false }
 graphql-parser = "0.4.1"
+# GitHub's published node-count rules, as a pure offline calculation over a GraphQL
+# document's own text. It is depended on rather than reimplemented: the number that
+# decides whether GitHub will execute a query at all is one arithmetic, and a second
+# spelling of it here would be a second answer nobody reconciles.
+github-graphql-node-count = "0.0.0"
 schemars = { version = "1.2.2", features = ["chrono04"] }
 secrecy = "0.10.3"
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "native-tls-vendored"] }
