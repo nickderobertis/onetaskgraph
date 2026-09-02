@@ -157,6 +157,14 @@ that origin *is* the destination item and the copy updates it. Otherwise the des
 is searched for an item whose origin is the id being copied; found, it is updated, and not
 found, one is created carrying that origin.
 
+Which rule found it decides what the copy records there. A copy that got its counterpart
+from the first rule is a copy **back**: the destination is the original, and the item being
+copied is the one that came out of it — so the destination keeps the origin it already
+holds, holding none included. Stamping it with the id of its own copy would destroy the
+original's provenance, and the next ordinary copy from the store it was authored in would
+match nothing and create a second item beside it. Every other copy records the id it was
+copied from, which is what makes the next copy of it an update.
+
 | Flag | What it is for |
 | --- | --- |
 | `--dry-run` | Every read, no write, and the action each item would have got. |

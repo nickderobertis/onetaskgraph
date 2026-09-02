@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.21](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.20...v0.2.21) - 2026-09-02
+
+### Fixed
+
+- *(copy)* keep the destination's own origin when a copy comes back to it ([#252](https://github.com/nickderobertis/onetaskgraph/pull/252))
+
 ## [0.2.19](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.18...v0.2.19) - 2026-09-01
 
 ### Fixed
