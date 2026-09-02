@@ -60,6 +60,39 @@ struct Item {
     labels: Vec<(&'static str, &'static str)>,
     status: Option<String>,
     origin: Option<String>,
+    /// Whether this item's board half carries the board's built-in `Labels` field.
+    ///
+    /// GitHub derives that field from the issue's own labels — it is absent from
+    /// `ProjectV2CustomFieldType`, so no project can create one, and
+    /// `ProjectV2FieldValue` offers no way to write one — so what it holds is
+    /// `labels_seen_on` and never a set of its own.
+    board_labels_field: bool,
+    /// What that field holds, when it is deliberately not the issue's own labels.
+    ///
+    /// GitHub cannot produce this for `Issue` content — the field mirrors those labels —
+    /// but `graphql::BOARD` selects both connections because a board item's content may be
+    /// a draft with no labels of its own, so the reader unions them, and a union is only
+    /// measurable over two sets that differ.
+    board_labels: Option<Vec<(&'static str, &'static str)>>,
+    /// A label set this board answers one path with, instead of the one above.
+    ///
+    /// Nothing GitHub does. It is how the four-way equivalence check is watched failing:
+    /// a check that agrees with itself over every tree is not evidence that it would
+    /// catch a path serving another path's answer.
+    path_labels: BTreeMap<&'static str, Vec<(&'static str, &'static str)>>,
+}
+
+/// What the document that just arrived asked for, as far as rendering an item needs it.
+///
+/// Both halves are read off the document rather than assumed, so this board answers what
+/// was selected: a selection put back into the shared board-issue fragment would start
+/// being answered on those three paths again, and the equivalence check would see it.
+#[derive(Clone, Copy)]
+struct Asked<'a> {
+    /// Which of this source's reads this is, by the name `operation_name` gives it.
+    path: &'a str,
+    /// Whether it selected the board's built-in `Labels` field value.
+    board_labels: bool,
 }
 
 impl Item {
@@ -78,6 +111,9 @@ impl Item {
             labels: vec![],
             status: None,
             origin: None,
+            board_labels_field: false,
+            board_labels: None,
+            path_labels: BTreeMap::new(),
         }
     }
     fn draft(id: &str, title: &str) -> Self {
@@ -118,8 +154,37 @@ impl Item {
         self.labels = labels.to_vec();
         self
     }
+    /// Give this item's board half the board's built-in `Labels` field.
+    fn board_labels_field(mut self) -> Self {
+        self.board_labels_field = true;
+        self
+    }
+    /// The same, holding a set of its own. See [`Item::board_labels`].
+    fn board_labels_field_of(mut self, labels: &[(&'static str, &'static str)]) -> Self {
+        self.board_labels = Some(labels.to_vec());
+        self.board_labels_field()
+    }
+    /// Answer `path` with a label set of its own. See [`Item::path_labels`].
+    fn labels_on(mut self, path: &'static str, labels: &[(&'static str, &'static str)]) -> Self {
+        self.path_labels.insert(path, labels.to_vec());
+        self
+    }
+    /// The labels this board answers `path` with, which is this item's own set unless a
+    /// case has deliberately made that one path disagree.
+    fn labels_seen_on(&self, path: &str) -> &[(&'static str, &'static str)] {
+        self.path_labels
+            .get(path)
+            .map_or(self.labels.as_slice(), Vec::as_slice)
+    }
+    /// One label connection, as every one of them comes back.
+    fn label_nodes(&self, path: &str) -> Value {
+        json!({"nodes":self.labels_seen_on(path).iter()
+                   .map(|(id,name)| json!({"id":id,"name":name,"color":null}))
+                   .collect::<Vec<_>>(),
+               "pageInfo":{"hasNextPage":false}})
+    }
 
-    fn field_values(&self, options: &Value) -> Value {
+    fn field_values(&self, options: &Value, asked: Asked) -> Value {
         let mut nodes = Vec::new();
         if let Some(status) = &self.status {
             nodes.push(
@@ -129,6 +194,16 @@ impl Item {
         nodes.push(
             json!({"text":self.origin.clone().unwrap_or_default(),"field":{"id":"FIELD_origin","name":"onetaskgraph.origin"}}),
         );
+        if self.board_labels_field && asked.board_labels {
+            let held = self
+                .board_labels
+                .as_deref()
+                .unwrap_or_else(|| self.labels_seen_on(asked.path));
+            nodes.push(json!({"labels":{
+                "nodes":held.iter().map(|(id,name)| json!({"id":id,"name":name,"color":null}))
+                    .collect::<Vec<_>>(),
+                "pageInfo":{"hasNextPage":false}}}));
+        }
         json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}})
     }
 
@@ -137,20 +212,20 @@ impl Item {
     /// The same board item id and the same field values a `ProjectV2.items` read gives it,
     /// reached from the issue instead of from the board. Every fixture item here sits on
     /// the one board this suite configures, which is project number 7.
-    fn project_items(&self, options: &Value) -> Value {
+    fn project_items(&self, options: &Value, asked: Asked) -> Value {
         json!({"nodes":[{"id":self.item_id,"project":{"number":7},
-                         "fieldValues":self.field_values(options)}],
+                         "fieldValues":self.field_values(options, asked)}],
                "pageInfo":{"hasNextPage":false}})
     }
 
     /// This item as a search, a node read or a sub-issue read returns it.
-    fn as_issue(&self, options: &Value) -> Value {
-        let mut issue = self.content();
-        issue["projectItems"] = self.project_items(options);
+    fn as_issue(&self, options: &Value, asked: Asked) -> Value {
+        let mut issue = self.content(asked);
+        issue["projectItems"] = self.project_items(options, asked);
         issue
     }
 
-    fn content(&self) -> Value {
+    fn content(&self, asked: Asked) -> Value {
         match self.typename {
             "PullRequest" => json!({"__typename":"PullRequest","id":self.content_id}),
             "DraftIssue" => json!({"__typename":"DraftIssue","id":self.content_id,
@@ -163,8 +238,7 @@ impl Item {
                 "repository":self.repository.map(|r| json!({"nameWithOwner":r})),
                 "parent":self.parent.as_ref().map(|id| json!({"id":id})),
                 "subIssuesSummary":{"total":self.sub_issues},
-                "labels":{"nodes":self.labels.iter().map(|(id,name)| json!({"id":id,"name":name,"color":null})).collect::<Vec<_>>(),
-                          "pageInfo":{"hasNextPage":false}}}),
+                "labels":self.label_nodes(asked.path)}),
         }
     }
 }
@@ -575,6 +649,14 @@ fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<
 
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     let mut state = state.lock().unwrap();
+    // What this document asked for, read off the document itself. The three reads that
+    // reach an issue share one fragment and do not select the board's built-in `Labels`
+    // field; the board's own item read does. Answering what was selected is what makes the
+    // four-way equivalence check below a check on the production documents.
+    let asked = Asked {
+        path: operation_name(query),
+        board_labels: query.contains("ProjectV2ItemFieldLabelValue"),
+    };
     let input = variables.get("input").cloned().unwrap_or(Value::Null);
     if !input.is_null() {
         state
@@ -750,7 +832,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         let end = (offset + first).min(matched.len());
         let nodes = matched[offset.min(end)..end]
             .iter()
-            .map(|item| item.as_issue(&options))
+            .map(|item| item.as_issue(&options, asked))
             .collect::<Vec<_>>();
         return json!({"search":{"nodes":nodes,
             "pageInfo":{"hasNextPage":end < matched.len(),"endCursor":end.to_string()}}});
@@ -778,7 +860,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         let end = (offset + first).min(children.len());
         let nodes = children[offset.min(end)..end]
             .iter()
-            .map(|item| item.as_issue(&options))
+            .map(|item| item.as_issue(&options, asked))
             .collect::<Vec<_>>();
         return json!({"node":{"__typename":"Issue",
             "subIssues":{"nodes":nodes,
@@ -793,7 +875,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             return json!({"node":{"__typename":item.typename}});
         }
         let options = state.options();
-        return json!({ "node": item.as_issue(&options) });
+        return json!({ "node": item.as_issue(&options, asked) });
     }
     if query.contains("node(id:$id)") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
@@ -845,7 +927,8 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     let nodes = state.items[offset.min(end)..end]
         .iter()
         .map(|item| {
-            json!({"id":item.item_id,"fieldValues":item.field_values(&options),"content":item.content()})
+            json!({"id":item.item_id,"fieldValues":item.field_values(&options, asked),
+                   "content":item.content(asked)})
         })
         .collect::<Vec<_>>();
     json!({"owner":{"projectV2":{"id":"PVT_board","title":"Roadmap","fields":state.fields(),
@@ -1477,6 +1560,272 @@ async fn an_item_named_by_its_qualified_id_is_resolved_from_that_id_and_nothing_
     assert_eq!(fixture.searches(), Vec::<String>::new());
     assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
     assert_eq!(fixture.documents().len(), 3);
+}
+
+/// One reading of one board issue, as one of the four documents answered for it.
+#[derive(Debug, PartialEq)]
+struct Reading {
+    /// Which document answered, by the name `operation_name` gives it.
+    path: &'static str,
+    id: String,
+    title: String,
+    status: Status,
+    labels: Vec<String>,
+}
+
+impl Reading {
+    fn of_project(path: &'static str, project: &Project) -> Self {
+        Self {
+            path,
+            id: project.id.0.clone(),
+            title: project.title.clone(),
+            status: project.status.clone(),
+            labels: project
+                .labels
+                .iter()
+                .map(|label| label.name.clone())
+                .collect(),
+        }
+    }
+    fn of_task(path: &'static str, task: &Task) -> Self {
+        Self {
+            path,
+            id: task.id.0.clone(),
+            title: task.title.clone(),
+            status: task.status.clone(),
+            labels: task.labels.iter().map(|label| label.name.clone()).collect(),
+        }
+    }
+}
+
+/// Every way this source reaches an item, driven once each against one board.
+///
+/// One call per production document, and the verb chosen is the only one that sends it:
+/// `SEARCH_ISSUES` is what answers which projects a board holds, `SUB_ISSUES` what answers
+/// one project's own tasks, `BOARD` what answers a task read of the whole board, and
+/// `ISSUE` what answers an item named by its qualified id. Which kind of item each one can
+/// report is the source's own shape rather than this test's choice — the board-scoped
+/// search reports projects, and a project's sub-issues and the board's own items report
+/// tasks — so the node-id read is taken for both items and every other path is pinned
+/// against another reading of the very same issue.
+async fn every_way_to_reach(source: &dyn TaskSource, plan: &str, step: &str) -> Vec<Reading> {
+    let mut readings = Vec::new();
+    for project in source
+        .query_projects(&ProjectQuery::default(), &page(10))
+        .await
+        .expect("the board lists its projects")
+        .items
+    {
+        readings.push(Reading::of_project("search", &project));
+    }
+    for task in source
+        .query_tasks(
+            &TaskQuery {
+                project: ProjectFilter::Is(NativeId(plan.to_owned())),
+                ..TaskQuery::default()
+            },
+            &page(10),
+        )
+        .await
+        .expect("the project lists its own tasks")
+        .items
+    {
+        readings.push(Reading::of_task("projectTasks", &task));
+    }
+    for task in source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("the board lists its tasks")
+        .items
+    {
+        readings.push(Reading::of_task("board", &task));
+    }
+    readings.push(Reading::of_project(
+        "issue",
+        &source
+            .get_project(&NativeId(plan.to_owned()))
+            .await
+            .expect("the board answers a project read")
+            .expect("the board holds that project"),
+    ));
+    readings.push(Reading::of_task(
+        "issue",
+        &source
+            .get_task(&NativeId(step.to_owned()))
+            .await
+            .expect("the board answers a task read")
+            .expect("the board holds that task"),
+    ));
+    readings
+}
+
+/// Which reading of an item disagrees with the first reading of it, or `None`.
+///
+/// Grouped by qualified id, so the comparison is always between two readings of one issue.
+/// The message names the path that disagreed and what each of the two said, because a
+/// reader looking at it needs to know which document to go and read.
+fn disagreement(readings: &[Reading]) -> Option<String> {
+    let mut by_id: BTreeMap<&str, Vec<&Reading>> = BTreeMap::new();
+    for reading in readings {
+        by_id.entry(reading.id.as_str()).or_default().push(reading);
+    }
+    by_id.values().find_map(|group| {
+        let (first, rest) = group.split_first().expect("a group holds a reading");
+        let said = |reading: &Reading| {
+            format!(
+                "{:?} / {:?} / {:?}",
+                reading.title, reading.status, reading.labels
+            )
+        };
+        rest.iter()
+            .find(|other| {
+                (&other.title, &other.status, &other.labels)
+                    != (&first.title, &first.status, &first.labels)
+            })
+            .map(|other| {
+                format!(
+                    "{} read through {} reports {} but through {} reports {}",
+                    other.id,
+                    other.path,
+                    said(other),
+                    first.path,
+                    said(first)
+                )
+            })
+    })
+}
+
+/// A board of one project and its one task, both carrying the board's `Labels` field.
+///
+/// The field is the point: it is the connection the shared board-issue fragment stopped
+/// selecting, so this is the shape that would show the loss if anything were lost.
+fn equivalence_board(plan: Item, step: Item) -> Fixture {
+    board(vec![plan, step])
+}
+
+fn labelled_plan() -> Item {
+    Item::issue("I_plan", "Delivery plan")
+        .sub_issues(1)
+        .status("In Progress")
+        .labelled(&[("L_bug", "bug"), ("L_team", "team")])
+        .board_labels_field()
+}
+
+fn labelled_step() -> Item {
+    Item::issue("I_step", "First step")
+        .parent("I_plan")
+        .status("Todo")
+        .labelled(&[("L_bug", "bug"), ("L_team", "team")])
+        .board_labels_field()
+}
+
+#[tokio::test]
+async fn an_item_reports_the_same_labels_title_status_and_id_however_it_is_reached() {
+    // The board-issue fragment no longer selects the board's built-in `Labels` field, which
+    // is what took `search` and `subIssues` under GitHub's node limit. It is only sound
+    // because that field mirrors the issue's own labels, which the fragment does select —
+    // so the four documents have to go on agreeing, and this is where that is measured.
+    let fixture = equivalence_board(labelled_plan(), labelled_step());
+    let source = source(&fixture);
+
+    let readings = every_way_to_reach(source.as_ref(), "I_plan", "I_step").await;
+
+    assert_eq!(disagreement(&readings), None);
+    assert_eq!(
+        readings
+            .iter()
+            .map(|reading| (reading.path, reading.id.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("search", "I_plan"),
+            ("projectTasks", "I_step"),
+            ("board", "I_step"),
+            ("issue", "I_plan"),
+            ("issue", "I_step"),
+        ],
+        "every one of the four documents answered, and each for an issue another of them \
+         also answered for"
+    );
+    assert!(
+        readings
+            .iter()
+            .all(|reading| reading.labels == ["bug", "team"]),
+        "an empty label set would let this check pass while proving nothing: {readings:?}"
+    );
+
+    let selecting = fixture
+        .documents()
+        .into_iter()
+        .filter(|document| document.contains("ProjectV2ItemFieldLabelValue"))
+        .count();
+    assert_eq!(
+        selecting, 1,
+        "the board's own item read is the one document that still asks for the board \
+         `Labels` field; the three that reach an issue must not, or they are back over the \
+         node limit"
+    );
+    assert!(
+        fixture
+            .board_item_reads()
+            .iter()
+            .all(|document| document.contains("ProjectV2ItemFieldLabelValue")),
+        "and it is the board read that asks for it"
+    );
+}
+
+#[tokio::test]
+async fn the_boards_own_labels_field_is_read_and_folded_in_without_doubling_the_issues_own() {
+    // `graphql::BOARD` is the one document that still selects the board's built-in
+    // `Labels` field, and it must: a board item's content may be a draft, which has no
+    // `labels` of its own. So the reader unions the two sets and dedupes them by id, and
+    // this is where that is measured — with one label in both and one in the field alone,
+    // neither of which the answer may double or drop.
+    let fixture = board(vec![
+        Item::issue("I_loose", "Loose end")
+            .labelled(&[("L_bug", "bug"), ("L_team", "team")])
+            .board_labels_field_of(&[("L_bug", "bug"), ("L_extra", "extra")]),
+    ]);
+    let source = source(&fixture);
+
+    let tasks = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("the board lists its tasks");
+
+    assert_eq!(
+        tasks.items[0]
+            .labels
+            .iter()
+            .map(|label| label.name.as_str())
+            .collect::<Vec<_>>(),
+        ["bug", "team", "extra"],
+        "the issue's own labels first, then whatever the board field adds, each once"
+    );
+}
+
+#[tokio::test]
+async fn the_equivalence_check_names_the_path_whose_labels_disagree() {
+    // Watched failing, because a check that agrees with itself over every tree is not
+    // evidence. This board answers the read of its own items with a label set of its own,
+    // which is what a path resolving from the wrong document, or mapping the field wrongly,
+    // would look like from outside.
+    let fixture = equivalence_board(
+        labelled_plan(),
+        labelled_step().labels_on("board", &[("L_other", "other")]),
+    );
+    let source = source(&fixture);
+
+    let readings = every_way_to_reach(source.as_ref(), "I_plan", "I_step").await;
+
+    let failure = disagreement(&readings).expect("the board path disagrees with the other two");
+    assert!(
+        failure.contains("I_step") && failure.contains("board"),
+        "the failure names the item and the path that disagreed: {failure}"
+    );
+    assert!(
+        failure.contains("other") && failure.contains("bug"),
+        "and what each of the two said: {failure}"
+    );
 }
 
 #[tokio::test]
