@@ -211,6 +211,12 @@ impl Outcome {
     /// for cannot be asked about at all — and an HTTP client has already parsed one for
     /// every response it hands back, so nothing is asked of a caller that it did not have.
     #[must_use]
+    // llmlint: ignore[invalid_states_unrepresentable] `budget_exhausted` is one header read
+    // as the yes-or-no it is — whether `x-ratelimit-remaining` was exactly `0` — so both of
+    // its values are meaningful and there is no third state a type could forbid. It is also
+    // the argument [`Limiter::classify`] already takes, on the line below, and giving this
+    // one wrapper its own spelling would mean two vocabularies for one header rather than
+    // one.
     pub fn of_response(status: StatusCode, budget_exhausted: bool, body: &str) -> Self {
         if Limiter::classify(status, budget_exhausted, body).is_some() {
             return Self::RateLimited;

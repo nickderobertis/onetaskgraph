@@ -61,6 +61,13 @@ fail() {
 # Placeholders, so the journey's own nomination decision says "run" and the outcome under
 # test is the one this case is about. None of them is a credential and none is ever sent:
 # every case below stops before the journey's first request.
+#
+# llmlint: ignore[work_goes_through_command_surface] This function is called BY the command
+# surface: it is a command of each hosted plugin's own Nx `test` target, so routing it back
+# through `just test` would re-enter the target that is running it. What it needs is one
+# test binary run three times under three environments, which is a narrower thing than any
+# recipe offers — and the recipe that comes closest, `just test`, would select every
+# affected project rather than the one crate whose three outcomes are under test.
 run_journey() {
   local seats="$1" demand="$2"
   shift 2
@@ -107,6 +114,13 @@ if [ ! -f "$held/$SEAT_FILE" ]; then
   fail "a declined session removed the seat another run holds, so the next instance would race it."
 fi
 
+# llmlint: ignore-block[live_tier_compiles_and_requires_credential] Case 2 asserting a green
+# exit is this repository's decision rather than an oversight: no credential was expected
+# there, which is a contributor with no keys and a pull request from a fork, to which GitHub
+# supplies no secrets at all. Case 3 immediately below is the other half — the same absent
+# credential where one WAS expected — and it asserts the run is red and names what demanded
+# it, which is the demand this rule exists for. Removing case 2 would not add a demand; it
+# would only stop anybody proving that a fork pull request still reads honestly.
 # 2. No credential and none expected: a skip, with the reason, and nothing red.
 free="$scratch/free"
 mkdir -p "$free"
@@ -135,6 +149,7 @@ case "$demanded_output" in
   *ONETASKGRAPH_LIVE_REQUIRED*) ;;
   *) fail "a demanded run without a credential did not name what demanded it. Output: $demanded_output" ;;
 esac
+# llmlint: ignore-end[live_tier_compiles_and_requires_credential]
 
 if [ "$failures" -ne 0 ]; then
   echo "check-live-decline: $failures expectation(s) failed for $CRATE." >&2

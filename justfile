@@ -78,6 +78,15 @@ distribution-test:
     @scripts/check-fixture-discrimination.sh
 
 # Tests only, for the affected projects.
+#
+# llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] The tests that
+# reach Linear and GitHub are ordinary tests of their own plugin's `test` target, and this
+# repository reversed that rule deliberately — AGENTS.md records it under "The tests that
+# reach a real API are ordinary tests, and that reverses an earlier decision". Holding them
+# behind an edge of their own is what let a query GitHub refuses outright merge: the
+# advisory lane went red on the pull request that introduced it and auto-merge waits only on
+# required checks. `affected` is the edge that bounds the cost — change the engine or
+# another plugin and neither runs — and scripts/check-live-lane.sh asserts the whole shape.
 test:
     @{{nx}} affected -t test
 

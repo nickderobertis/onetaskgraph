@@ -74,6 +74,12 @@ const SEAT_IS_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
 /// # Errors
 ///
 /// When the value is neither `1`, `0`, empty nor absent.
+// llmlint: ignore[invalid_states_unrepresentable] The answer really is two-valued and every
+// `bool` is one of the two, so there is no unrepresentable state for a `Demand` enum to
+// remove — what this function exists to make unrepresentable is the *third* reading, "a
+// value nobody can parse quietly means not-required", and it does that by returning `Err`
+// rather than by the shape of its success. Its one caller passes it straight to `missing`
+// below, which takes no other boolean.
 pub fn required(raw: Option<&str>) -> Result<bool, String> {
     match raw.map(str::trim) {
         None | Some("") | Some("0") => Ok(false),
@@ -93,6 +99,18 @@ pub fn required(raw: Option<&str>) -> Result<bool, String> {
 /// # Errors
 ///
 /// When `required` is true, so the absent input is a failure rather than a skip.
+// llmlint: ignore[invalid_states_unrepresentable] Its `required` is the answer [`required`]
+// above already validated, and it is the only boolean here, so there is no pair of them a
+// caller could transpose and no third state to represent.
+//
+// llmlint: ignore[live_tier_compiles_and_requires_credential] `Ok` is the skip, and it is
+// reached only when `required` is false — which is the run where no credential was ever
+// expected: a contributor with no keys, and a fork pull request, to which GitHub supplies no
+// secrets at all. The run where one IS expected sets `ONETASKGRAPH_LIVE_REQUIRED=1`, and
+// `.github/workflows/ci.yml` sets it on every run but that one, so this same call returns
+// the `Err` this rule asks for. Making the skip fail unconditionally would not add a demand
+// anywhere; it would only fail every outside contribution for a secret its author cannot
+// have.
 pub fn missing(required: bool, session: &str, reason: impl Into<String>) -> Result<String, String> {
     let reason = reason.into();
     if required {
@@ -136,6 +154,14 @@ impl Declined {
     /// # Panics
     ///
     /// Always. That is what it is for.
+    // llmlint: ignore[no_panics_on_recoverable_errors] The panic IS the recovery, and there
+    // is nowhere to propagate to: the caller is a `#[test]`, and a test that returned early
+    // instead would be reported as passed. A run that never happened must conclude neither
+    // success nor anything branch protection accepts in place of success, which for a cargo
+    // test harness means failing. `Session::open` returns a `Result` precisely so a caller
+    // that has something better to do can do it; this is the answer for the one that does
+    // not, and its message leads with the tests not having run so the failure is not read as
+    // a defect in the code under test.
     pub fn refuse(self) -> ! {
         panic!("{}", self.message())
     }
