@@ -437,12 +437,253 @@ fn a_round_trip_edit_updates_the_item_it_came_from_rather_than_duplicating_it() 
             "{key} survived the round trip"
         );
     }
-    // The one thing that did change is the correspondence itself, which is the mechanism
-    // rather than a field of the user's: the remote item now records where its last copy
-    // came from, so the next edit finds it directly.
+    // Including the correspondence itself: the copy back found this item by following the
+    // edited file's own origin, so it is the original and its provenance is its own. This
+    // one was authored here and has none, and the copy back leaves it with none.
     assert_eq!(
         after["metadata"]["onetaskgraph.origin"],
-        json!("notes:ENG-1")
+        Value::Null,
+        "a copy back does not stamp the original with the id of the copy that came from it"
+    );
+}
+
+/// Three Markdown folders in the shape a settlement write-back has: the store a plan is
+/// authored in, the store it is copied onto, and a run-owned scratch store the settled run
+/// is projected back out of.
+///
+/// The middle one is the destination of both copies, and that is the whole of the
+/// arrangement: a forward copy reaches it by searching, a copy-back reaches it by
+/// following the scratch item's own origin, and only one of the two may write the origin.
+fn authoring_board_and_scratch(sandbox: &Sandbox) -> std::path::PathBuf {
+    let authoring = sandbox.subdirectory("authoring");
+    let tasks = authoring.join("tasks");
+    std::fs::create_dir_all(&tasks).expect("the authoring task folder");
+    std::fs::write(
+        tasks.join("plan-x.md"),
+        "---\ntitle: Plan X\nstatus: todo\nmetadata: {caller.stage: authored}\n---\nthe plan\n",
+    )
+    .expect("the authored plan");
+    sandbox.project_document(&document(&json!({
+        "authoring": {"plugin": "local-md", "config": {
+            "root": authoring,
+            "status_mapping": {"todo": "todo", "doing": "in-progress", "shipped": "done"},
+        }},
+        "plans": {"plugin": "local-md", "config": empty_folder(sandbox, "plans")},
+        "run": {"plugin": "local-md", "config": empty_folder(sandbox, "run")},
+    })));
+    authoring
+}
+
+/// The metadata one Markdown file records at a key, or `Value::Null` when it records none.
+fn recorded_origin(sandbox: &Sandbox, source: &str, verb: &str, id: &str) -> Value {
+    shown(sandbox, verb, &format!("{source}:{id}"))["metadata"]["onetaskgraph.origin"].clone()
+}
+
+#[test]
+fn a_copy_back_leaves_the_destinations_own_origin_so_the_next_copy_still_finds_it() {
+    // The defect this closes, driven end to end: a copy-back stamped the destination with
+    // the id of the copy that came *out* of it, and the next ordinary copy from the store
+    // the item was authored in then matched nothing and created a second item beside it.
+    let sandbox = Sandbox::new();
+    authoring_board_and_scratch(&sandbox);
+
+    let forward = ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "authoring:plan-x",
+            "--to",
+            "plans",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        reported(&forward),
+        vec![(
+            "authoring:plan-x".to_owned(),
+            json!("plans:plan-x"),
+            "created".to_owned()
+        )]
+    );
+    assert_eq!(
+        recorded_origin(&sandbox, "plans", "task", "plan-x"),
+        json!("authoring:plan-x"),
+        "a forward copy records where it came from"
+    );
+
+    // A run projects the plan out to a scratch store of its own, settles it, and copies
+    // the settled item back. The scratch item's origin names the board, so the copy-back
+    // reaches the board item by following it.
+    ok(
+        &sandbox,
+        &["task", "copy", "plans:plan-x", "--to", "run", "--json"],
+    );
+    let scratch = sandbox.project().join("run").join("tasks/plan-x.md");
+    let text = std::fs::read_to_string(&scratch).expect("the scratch copy is there");
+    assert!(
+        text.contains("onetaskgraph.origin: plans:plan-x"),
+        "the scratch copy knows which board item it came from:\n{text}"
+    );
+    std::fs::write(&scratch, text.replace("status: todo", "status: shipped"))
+        .expect("the run settles the plan");
+
+    let back = ok(
+        &sandbox,
+        &["task", "copy", "run:plan-x", "--to", "plans", "--json"],
+    );
+    assert_eq!(
+        reported(&back),
+        vec![(
+            "run:plan-x".to_owned(),
+            json!("plans:plan-x"),
+            "updated".to_owned()
+        )]
+    );
+    assert_eq!(
+        shown(&sandbox, "task", "plans:plan-x")["status"]["category"],
+        json!("done"),
+        "the settled status landed"
+    );
+    assert_eq!(
+        recorded_origin(&sandbox, "plans", "task", "plan-x"),
+        json!("authoring:plan-x"),
+        "and the board item still says where it itself came from"
+    );
+
+    // Projecting the same settled run again writes nothing: preserving the origin is not
+    // a change, so a repeat settlement is not a write.
+    let repeated = ok(
+        &sandbox,
+        &["task", "copy", "run:plan-x", "--to", "plans", "--json"],
+    );
+    assert_eq!(
+        reported(&repeated),
+        vec![(
+            "run:plan-x".to_owned(),
+            json!("plans:plan-x"),
+            "unchanged".to_owned()
+        )]
+    );
+
+    // And the plan is still readable back the way it was written: an ordinary copy from
+    // the store it was authored in updates the one item rather than creating a second.
+    let again = ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "authoring:plan-x",
+            "--to",
+            "plans",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        reported(&again),
+        vec![(
+            "authoring:plan-x".to_owned(),
+            json!("plans:plan-x"),
+            "updated".to_owned()
+        )]
+    );
+    assert_eq!(
+        ok(&sandbox, &["task", "list", "--source", "plans"])
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        1,
+        "exactly one item where there was one before"
+    );
+}
+
+#[test]
+fn a_copy_back_of_a_project_keeps_every_origin_and_orphans_nothing_the_source_holds() {
+    // The same rule where a whole project is projected and settled: each task is matched
+    // independently, so each has its own origin to lose, and a task whose origin the
+    // copy-back preserved must not then read as one the source no longer holds.
+    let sandbox = Sandbox::new();
+    let authoring = sandbox.subdirectory("authoring");
+    for (kind, id, front) in [
+        ("projects", "P-1", "title: Engine\nstatus: doing"),
+        ("tasks", "T-1", "title: Alpha\nstatus: todo\nproject: P-1"),
+        ("tasks", "T-2", "title: Beta\nstatus: todo\nproject: P-1"),
+    ] {
+        let path = authoring.join(kind).join(format!("{id}.md"));
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the folder");
+        std::fs::write(path, format!("---\n{front}\n---\nbody\n")).expect("the document");
+    }
+    sandbox.project_document(&document(&json!({
+        "authoring": {"plugin": "local-md", "config": {
+            "root": authoring,
+            "status_mapping": {"todo": "todo", "doing": "in-progress", "shipped": "done"},
+        }},
+        "plans": {"plugin": "local-md", "config": empty_folder(&sandbox, "plans")},
+        "run": {"plugin": "local-md", "config": empty_folder(&sandbox, "run")},
+    })));
+
+    ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "authoring:P-1",
+            "--to",
+            "plans",
+            "--json",
+        ],
+    );
+    ok(
+        &sandbox,
+        &["project", "copy", "plans:P-1", "--to", "run", "--json"],
+    );
+    let settled = sandbox.project().join("run").join("tasks/T-1.md");
+    let text = std::fs::read_to_string(&settled).expect("the scratch copy is there");
+    std::fs::write(&settled, text.replace("status: todo", "status: shipped"))
+        .expect("the run settles a task");
+
+    let back = reported(&ok(
+        &sandbox,
+        &["project", "copy", "run:P-1", "--to", "plans", "--json"],
+    ));
+    assert!(
+        back.iter().all(|(_, _, action)| action != "orphaned"),
+        "nothing the scratch store holds is reported as gone from it: {back:?}"
+    );
+    for (verb, id) in [("project", "P-1"), ("task", "T-1"), ("task", "T-2")] {
+        assert_eq!(
+            recorded_origin(&sandbox, "plans", verb, id),
+            json!(format!("authoring:{id}")),
+            "{verb} {id} still says where it itself came from"
+        );
+    }
+
+    // Copying the project from the store it was authored in matches every item again:
+    // nothing is created, and no task the authoring store still holds is orphaned.
+    let again = reported(&ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "authoring:P-1",
+            "--to",
+            "plans",
+            "--json",
+        ],
+    ));
+    assert!(
+        again
+            .iter()
+            .all(|(_, _, action)| action == "updated" || action == "unchanged"),
+        "every item was matched rather than created or orphaned: {again:?}"
+    );
+    assert_eq!(
+        ok(&sandbox, &["task", "list", "--source", "plans"])
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        2,
+        "the two tasks that were there, and no duplicates"
     );
 }
 

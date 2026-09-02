@@ -151,7 +151,9 @@ async fn a_rust_caller_creates_then_updates_the_same_destination_item() {
     assert_eq!(listed(&engine, "into").await, vec!["into:T-1".to_owned()]);
 
     // And a copy back the other way follows the origin the copied item carries, so the
-    // item it came from is updated rather than duplicated.
+    // item it came from is the one it lands on rather than a duplicate. Nothing was
+    // edited in between and the copy back leaves that item's own origin — none, because
+    // it was authored here — exactly as it is, so there is nothing to write.
     let back = engine
         .copy(&CopyRequest {
             destination: name("from"),
@@ -161,9 +163,119 @@ async fn a_rust_caller_creates_then_updates_the_same_destination_item() {
         .expect("the copy runs");
     assert_eq!(
         landed(&back.items[0]),
-        (Some("from:T-1".to_owned()), "updated".to_owned())
+        (Some("from:T-1".to_owned()), "unchanged".to_owned())
     );
     assert_eq!(listed(&engine, "from").await, vec!["from:T-1".to_owned()]);
+    let original = engine
+        .task(&id("from:T-1"))
+        .await
+        .expect("the show verb answers");
+    assert!(
+        !original.items[0]
+            .item
+            .metadata
+            .contains_key(GlobalId::ORIGIN_KEY),
+        "a copy back does not stamp the original with the id of the copy that came from it"
+    );
+}
+
+#[tokio::test]
+async fn a_rust_caller_copying_back_leaves_the_destination_its_own_origin() {
+    // The write-back a settled run makes, as the Rust caller that links this crate makes
+    // it: a plan authored in one store, copied onto a second, projected into a run-owned
+    // third, and copied back. The second is the original in that last copy, so its own
+    // provenance is not the run's to overwrite — and if it were, the next copy from the
+    // store the plan was authored in would match nothing and create a second plan.
+    let engine = engine_over(json!({
+        "authoring": {"plugin": "in-memory", "config": {"tasks": [task("T-1", "Alpha engine")]}},
+        "plans": {"plugin": "in-memory", "config": {}},
+        "run": {"plugin": "in-memory", "config": {"tasks": [{
+            "id": "T-1", "title": "Alpha engine, settled",
+            "content": "the engine core",
+            "status": {"category": "todo", "name": "Todo"},
+            "labels": [{"id": "L-1", "name": "bug"}],
+            "metadata": {
+                "caller.shape": {"nested": [1, true, null]},
+                GlobalId::ORIGIN_KEY: "plans:T-1",
+            },
+            "repositories": ["github.com/nickderobertis/onetaskgraph"],
+        }]}},
+    }));
+    let into = |destination: &str, item: &str| CopyRequest {
+        destination: name(destination),
+        ..one(item)
+    };
+    /// The origin one destination item records, or `Value::Null` when it records none.
+    async fn origin(engine: &Engine, item: &str) -> Value {
+        engine
+            .task(&id(item))
+            .await
+            .expect("the show verb answers")
+            .items[0]
+            .item
+            .metadata
+            .get(GlobalId::ORIGIN_KEY)
+            .cloned()
+            .unwrap_or(Value::Null)
+    }
+
+    let forward = engine
+        .copy(&into("plans", "authoring:T-1"))
+        .await
+        .expect("the copy runs");
+    assert_eq!(
+        landed(&forward.items[0]),
+        (Some("plans:T-1".to_owned()), "created".to_owned())
+    );
+    assert_eq!(origin(&engine, "plans:T-1").await, json!("authoring:T-1"));
+
+    // The run's own item names the plan it came from, so this copy reaches it by rule 1.
+    let back = engine
+        .copy(&into("plans", "run:T-1"))
+        .await
+        .expect("the copy runs");
+    assert_eq!(
+        landed(&back.items[0]),
+        (Some("plans:T-1".to_owned()), "updated".to_owned())
+    );
+    assert_eq!(
+        engine
+            .task(&id("plans:T-1"))
+            .await
+            .expect("the show verb answers")
+            .items[0]
+            .item
+            .title,
+        "Alpha engine, settled",
+        "the settled title landed"
+    );
+    assert_eq!(
+        origin(&engine, "plans:T-1").await,
+        json!("authoring:T-1"),
+        "and the plan still says where it itself came from"
+    );
+
+    // Projecting the same settled run again is not a write: preserving the origin leaves
+    // the destination reading exactly as it already did.
+    let repeated = engine
+        .copy(&into("plans", "run:T-1"))
+        .await
+        .expect("the copy runs");
+    assert_eq!(
+        landed(&repeated.items[0]),
+        (Some("plans:T-1".to_owned()), "unchanged".to_owned())
+    );
+
+    // And the plan is still readable back the way it was written.
+    let again = engine
+        .copy(&into("plans", "authoring:T-1"))
+        .await
+        .expect("the copy runs");
+    assert_eq!(
+        landed(&again.items[0]),
+        (Some("plans:T-1".to_owned()), "updated".to_owned())
+    );
+    assert_eq!(listed(&engine, "plans").await, vec!["plans:T-1".to_owned()]);
 }
 
 #[tokio::test]
