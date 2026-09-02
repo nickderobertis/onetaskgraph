@@ -220,6 +220,41 @@
 //! a process killed between its writes and its cleanup leaves artifacts the next run
 //! removes.
 //!
+//! # What a session of requests costs, and where the report is
+//!
+//! This source records **every** request it sends — at [`GitHubProjectsSource::send_once`],
+//! the one place a request leaves this crate — into [`accounting::Accounting`]. One record
+//! per request: the document it sent, named from [`graphql::DOCUMENTS`], with that
+//! document's node count under the bindings it really bound; or, for a REST call, the
+//! endpoint it addressed and no node count. Each says whether it read or wrote, whether it
+//! was answered, refused, or refused for a rate limit, and what that response's own
+//! rate-limit headers said. [`GitHubProjectsSource::accounting`] hands back a snapshot to
+//! hold and compare, and [`accounting::Session::report`] renders the session report two
+//! runs are put side by side by. It is on the ordinary code path — no environment variable,
+//! no feature, no build configuration — because an instrument nobody switches on measures
+//! nothing, and it is recordable into from outside this crate so a caller making its own
+//! calls beside this source's counts the whole session rather than this source's share.
+//!
+//! **What a session spent is attributed per call, never differenced.** The GraphQL budget
+//! is metered in points and the REST budget in requests, they are reported apart because
+//! GitHub meters them apart, and the arithmetic — including what it deliberately does not
+//! know — is set out in [`accounting`]. The credentialed lane prints the report at the end
+//! of every run, passed or failed.
+//!
+//! **GitHub is the authority on node count, and the credentialed lane goes and asks it.**
+//! Everything above computes `nodeCount` offline from a document's own text, which is what
+//! lets it run on every platform and on a pull request from a fork with no credential — and
+//! that is what actually stops a regression merging. But an offline arithmetic can only
+//! ever agree with itself: if GitHub changes its rules, this workspace goes on computing
+//! the old answer and nothing notices. So `tests/live.rs` reconciles the two. GitHub's
+//! schema exposes `rateLimit(dryRun: true)`, whose `nodeCount` is *"the maximum number of
+//! nodes this query may return"* for a document **without executing it**, and the lane asks
+//! it for every query document this source sends, under the largest bindings this source
+//! sends, and fails when GitHub's number and [`worst_case_node_count`] disagree. It records
+//! what those calls reported about the account's own allowance, because whether asking is
+//! free is a thing to observe rather than to assume. Two quantities, not one:
+//! [`NODE_COUNT_LIMIT`] bounds `nodeCount`, and the accounting above measures `cost`.
+//!
 //! **GitHub has two rate limiters and this source is refused by both, so nothing here
 //! treats them as one thing.** The primary budget is the hourly allowance `gh api
 //! rate_limit` reports; the secondary limiter is a burst limiter over content-generating
@@ -230,7 +265,7 @@
 #![deny(missing_docs)]
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -246,6 +281,10 @@ use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+pub mod accounting;
+
+use accounting::Accounting;
 
 /// The registry name for this plugin.
 pub const KIND: &str = "github-projects";
@@ -317,7 +356,22 @@ pub fn largest_page_sizes() -> Variables {
 /// no single operation, or binds a page size this source does not name — each of which is
 /// a defect in the document rather than a number.
 pub fn worst_case_node_count(document: &str) -> Result<u64, NodeCountError> {
-    github_graphql_node_count::node_count(document, &largest_page_sizes())
+    node_count(document, &largest_page_sizes())
+}
+
+/// The most nodes `document` could be asked to return under `variables`.
+///
+/// [`worst_case_node_count`] is this under [`largest_page_sizes`], and the accounting in
+/// [`accounting`] is this under the bindings one request really sent — one spelling of the
+/// calculation, so a bound checked offline and a cost recorded at run time cannot come to
+/// disagree. The rules themselves live in [`github_graphql_node_count::node_count`].
+///
+/// # Errors
+///
+/// Returns the calculation's own [`NodeCountError`] when `document` does not parse, holds
+/// no single operation, or binds a page size `variables` does not name.
+pub fn node_count(document: &str, variables: &Variables) -> Result<u64, NodeCountError> {
+    github_graphql_node_count::node_count(document, variables)
 }
 
 /// The issue-title prefix that makes a board issue a document.
@@ -712,6 +766,18 @@ impl Limited {
     }
 }
 
+/// One HTTP attempt's result, with what its response said about the rate limit.
+///
+/// The two travel together so the record and the outcome are written from the same place:
+/// what a response said about the budget is only readable while that response is in hand,
+/// and what the attempt *meant* is only decidable once its body has been read.
+struct Attempted {
+    result: Result<Value, Attempt>,
+    limits: accounting::RateLimit,
+    /// GitHub's own reported cost for this call, for a document that asked for it.
+    reported_cost: Option<u64>,
+}
+
 /// One attempt's outcome: an error to report, or a rate limit to wait out.
 enum Attempt {
     Failed(SourceError),
@@ -1015,12 +1081,36 @@ impl SourcePlugin for Plugin {
         config: &Value,
         secrets: &dyn SecretResolver,
     ) -> Result<Box<dyn TaskSource>, SourceError> {
+        self.build_recording_into(name, config, secrets, Arc::new(Accounting::new()))
+    }
+}
+
+impl Plugin {
+    /// Build a source recording every request it sends into an accounting the caller holds.
+    ///
+    /// [`SourcePlugin::build`] is this with an accounting of its own, which is what the
+    /// registry gets. This is for a caller that is also calling GitHub itself and wants one
+    /// session total rather than two — see [`accounting`] and
+    /// [`GitHubProjectsSource::recording_into`].
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`SourcePlugin::build`]'s, with the same source name in front of each:
+    /// [`SourceError::Config`] for configuration this plugin cannot use and
+    /// [`SourceError::Auth`] for a credential it cannot find.
+    pub fn build_recording_into(
+        &self,
+        name: &SourceName,
+        config: &Value,
+        secrets: &dyn SecretResolver,
+        ledger: Arc<Accounting>,
+    ) -> Result<Box<dyn TaskSource>, SourceError> {
         let config: GitHubProjectsConfig =
             serde_json::from_value(config.clone()).map_err(|e| SourceError::Config {
                 message: format!("source {name}: {e}"),
             })?;
-        let source =
-            GitHubProjectsSource::new(name, config, secrets).map_err(|error| match error {
+        let source = GitHubProjectsSource::recording_into(name, config, secrets, ledger).map_err(
+            |error| match error {
                 SourceError::Config { message } => SourceError::Config {
                     message: format!("source {name}: {message}"),
                 },
@@ -1028,7 +1118,8 @@ impl SourcePlugin for Plugin {
                     message: format!("source {name}: {message}"),
                 },
                 other => other,
-            })?;
+            },
+        )?;
         Ok(Box::new(source))
     }
 }
@@ -1276,6 +1367,15 @@ pub struct GitHubProjectsSource {
     /// A repository's node id does not change, and re-reading it for every issue of a copy
     /// spent one request per item on an answer this source already had.
     repository_cache: Mutex<Option<String>>,
+    /// What every request this source sends is recorded into.
+    ///
+    /// Ordinary code path, not a mode: [`Self::send_once`] records into it at the one place
+    /// a request leaves this crate, so nothing has to be switched on for a session to be
+    /// counted. It is shared rather than owned so a caller accounting for a whole session —
+    /// its own schema verification, board lookups, residue sweep and cleanup beside this
+    /// source's reads and writes — adds up one accounting instead of two. See
+    /// [`accounting`] for what a record carries and what a session's spend is and is not.
+    ledger: Arc<Accounting>,
 }
 
 impl GitHubProjectsSource {
@@ -1289,6 +1389,26 @@ impl GitHubProjectsSource {
         name: &SourceName,
         config: GitHubProjectsConfig,
         secrets: &dyn SecretResolver,
+    ) -> Result<Self, SourceError> {
+        Self::recording_into(name, config, secrets, Arc::new(Accounting::new()))
+    }
+
+    /// The same, recording every request it sends into an accounting the caller holds too.
+    ///
+    /// [`Self::new`] is this with an accounting of its own. A caller that is also making
+    /// its own calls to GitHub — a lane verifying a schema, sweeping residue or cleaning
+    /// up — passes the one it records those into, so the session total accounts for the
+    /// whole session rather than for this source's share of it.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`Self::new`]'s: [`SourceError::Config`] for a configuration this instance
+    /// cannot use and [`SourceError::Auth`] when the named credential is missing or empty.
+    pub fn recording_into(
+        name: &SourceName,
+        config: GitHubProjectsConfig,
+        secrets: &dyn SecretResolver,
+        ledger: Arc<Accounting>,
     ) -> Result<Self, SourceError> {
         if !valid_github_owner(&config.owner) {
             return Err(SourceError::Config {
@@ -1348,7 +1468,19 @@ impl GitHubProjectsSource {
             last_mutation: Mutex::new(None),
             board_cache: Mutex::new(None),
             repository_cache: Mutex::new(None),
+            ledger,
         })
+    }
+
+    /// A snapshot of every request this source has sent, and what each cost.
+    ///
+    /// A value to hold and compare rather than a borrow of the accounting itself, so two
+    /// of them can sit side by side. When this source was built with
+    /// [`Self::recording_into`] the snapshot is the whole shared session, which is the
+    /// point of building it that way.
+    #[must_use]
+    pub fn accounting(&self) -> accounting::Session {
+        self.ledger.snapshot()
     }
 
     /// Send one GraphQL document, pacing this source's own mutations and waiting out a
@@ -1480,8 +1612,58 @@ impl GitHubProjectsSource {
     }
 
     /// One HTTP attempt, classified into an answer, a rate limit to wait out, or a
-    /// failure that waiting cannot help.
+    /// failure that waiting cannot help — and recorded, whichever of the three it was.
+    ///
+    /// This is the one place a request leaves this crate, which is why the accounting is
+    /// here rather than at each of the callers: a read path added later is counted without
+    /// anybody remembering to count it, and `an_accounting_records_every_request_the_board_served`
+    /// fails when one is not.
     async fn send_once(&self, query: &str, variables: &Value) -> Result<Value, Attempt> {
+        let Attempted {
+            result,
+            limits,
+            reported_cost,
+        } = self.attempt(query, variables).await;
+        let sending = accounting::Request::graphql(query, variables);
+        let sending = match reported_cost {
+            Some(cost) => sending.costing(cost),
+            None => sending,
+        };
+        let outcome = match &result {
+            Ok(_) => accounting::Outcome::Answered,
+            Err(Attempt::Limited(_)) => accounting::Outcome::RateLimited,
+            Err(Attempt::Failed(_)) => accounting::Outcome::Refused,
+        };
+        self.ledger.record(sending.finished(outcome, limits));
+        result
+    }
+
+    /// The attempt itself, with what its response said about the rate limit alongside.
+    ///
+    /// The two are returned together rather than recorded here because every one of the
+    /// early exits below is a different outcome, and a record written at each of them is a
+    /// record one of them can be added without.
+    async fn attempt(&self, query: &str, variables: &Value) -> Attempted {
+        let mut limits = accounting::RateLimit::default();
+        let mut reported_cost = None;
+        let result = self
+            .attempted(query, variables, &mut limits, &mut reported_cost)
+            .await;
+        Attempted {
+            result,
+            limits,
+            reported_cost,
+        }
+    }
+
+    /// One HTTP attempt, filling in what its response said about the rate limit as it goes.
+    async fn attempted(
+        &self,
+        query: &str,
+        variables: &Value,
+        limits: &mut accounting::RateLimit,
+        reported_cost: &mut Option<u64>,
+    ) -> Result<Value, Attempt> {
         let response = self
             .client
             .post(self.endpoint.clone())
@@ -1496,6 +1678,13 @@ impl GitHubProjectsSource {
             })?;
         let status = response.status();
         let header = |name: &str| whole_seconds(response.headers().get(name));
+        *limits = accounting::RateLimit::read(|name| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        });
         // Exactly `0` is exhaustion and everything else — a count, an empty value, bytes
         // that are not text at all — is "not known to be exhausted". This never makes a
         // response a refusal on its own: it says which limiter a refusal is attributed to
@@ -1539,6 +1728,15 @@ impl GitHubProjectsSource {
                 message: format!("GitHub GraphQL returned HTTP {status}"),
             }));
         }
+        // GitHub reports what a call cost only when the document asked it to, and no
+        // document this source sends does — so this is `None` here and carries the figure
+        // for a caller whose own document selects `rateLimit { cost }`. What it must never
+        // pick up is a `dryRun` probe's cost, which is some other document's.
+        *reported_cost = serde_json::from_str::<Value>(&body)
+            .ok()
+            .as_ref()
+            .and_then(|body| body.pointer("/data/rateLimit/cost"))
+            .and_then(Value::as_u64);
         self.answer(&body).map_err(Attempt::Failed)
     }
 

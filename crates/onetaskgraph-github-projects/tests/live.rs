@@ -10,13 +10,20 @@
 //! its sub-issue, so leaving no residue means deleting the board item **and** the issue. The
 //! credential therefore needs to be able to delete an issue in `GH_PROJECTS_REPOSITORY`.
 
-use std::{collections::BTreeMap, env};
+use std::{
+    collections::BTreeMap,
+    env,
+    io::Write as _,
+    sync::{Arc, LazyLock},
+};
 
+use onetaskgraph_github_projects::accounting::{Accounting, Mode, Outcome, RateLimit, Request};
+use onetaskgraph_github_projects::{graphql, largest_page_sizes, worst_case_node_count};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
     Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter, NativeId, PageRequest, Project,
-    ProjectFilter, ProjectQuery, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
-    TaskQuery, TaskSource, TextFields, TextQuery,
+    ProjectFilter, ProjectQuery, SourceName, Status, StatusCategory, Support, Task, TaskQuery,
+    TaskSource, TextFields, TextQuery,
 };
 use serde_json::{Value, json};
 
@@ -28,6 +35,28 @@ use lane::{
     run_then_cleanup,
 };
 
+/// Everything this run costs GitHub, this lane's own calls and the source's alike.
+///
+/// A static rather than an argument threaded through the twenty helpers below: this target
+/// holds one test, so there is exactly one session to account for, and a parameter nothing
+/// could ever pass anything else to is a parameter that only obscures which calls are
+/// counted. What makes the total the *session's* rather than the source's share of it is
+/// that both halves record here — the schema verification, the board and field lookups, the
+/// residue sweep and the cleanup below, and every request
+/// [`Plugin::build_recording_into`](onetaskgraph_github_projects::Plugin) has the source
+/// send.
+static SESSION: LazyLock<Arc<Accounting>> = LazyLock::new(|| Arc::new(Accounting::new()));
+
+/// Print one line where a *passing* run can be read.
+///
+/// Straight to the process's stderr rather than through `eprintln!`, which the test harness
+/// captures and then discards for every test that passed. A session report nobody sees on a
+/// green run is an instrument nobody switched on, which is the failure this whole accounting
+/// exists to prevent.
+fn say(line: &str) {
+    let _ = writeln!(std::io::stderr(), "{line}");
+}
+
 async fn graphql(token: &str, query: &str, query_name: &str) -> Result<Value, String> {
     graphql_variables(token, query, query_name, json!({})).await
 }
@@ -38,25 +67,204 @@ async fn graphql_variables(
     query_name: &str,
     variables: Value,
 ) -> Result<Value, String> {
-    let response: Value = reqwest::Client::new()
+    let sending = || Request::graphql(query, &variables).named(query_name);
+    let response = match reqwest::Client::new()
         .post("https://api.github.com/graphql")
         .header("user-agent", "onetaskgraph-live-test")
         .bearer_auth(token)
         .json(&json!({"query":query,"variables":variables}))
         .send()
         .await
-        .map_err(|error| format!("{query_name} query could not reach GitHub: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("{query_name} query failed: {error}"))?
-        .json()
-        .await
-        .map_err(|error| format!("{query_name} query returned invalid JSON: {error}"))?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            // A request that never reached GitHub carries no headers to read, and is a
+            // refusal rather than a rate limit: nothing said it was one.
+            SESSION.record(sending().finished(Outcome::Refused, RateLimit::default()));
+            return Err(format!(
+                "{query_name} query could not reach GitHub: {error}"
+            ));
+        }
+    };
+    let status = response.status();
+    let limits = RateLimit::read(|name| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    });
+    let outcome = |outcome: Outcome| sending().finished(outcome, limits.clone());
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(error) => {
+            SESSION.record(outcome(Outcome::Refused));
+            return Err(format!(
+                "{query_name} query returned no readable body: {error}"
+            ));
+        }
+    };
+    let ended = Outcome::of_response(status.as_u16(), limits.exhausted(), &body);
+    if !status.is_success() {
+        SESSION.record(outcome(ended));
+        return Err(format!("{query_name} query failed: HTTP {status}"));
+    }
+    let response: Value = match serde_json::from_str(&body) {
+        Ok(response) => response,
+        Err(error) => {
+            SESSION.record(outcome(Outcome::Refused));
+            return Err(format!("{query_name} query returned invalid JSON: {error}"));
+        }
+    };
     if let Some(errors) = response.get("errors") {
+        SESSION.record(outcome(Outcome::Refused));
         return Err(format!(
             "{query_name} query was rejected by GitHub: {errors}"
         ));
     }
+    // GitHub reports what a call cost only when the document asked it to, and the allowance
+    // probe below does. A `dryRun` probe's `cost` is what some *other* document would spend
+    // and never what this call spent, so it is deliberately not picked up here.
+    let reported_cost = (!query.contains("dryRun"))
+        .then(|| {
+            response
+                .pointer("/data/rateLimit/cost")
+                .and_then(Value::as_u64)
+        })
+        .flatten();
+    let recorded = sending();
+    let recorded = match reported_cost {
+        Some(cost) => recorded.costing(cost),
+        None => recorded,
+    };
+    SESSION.record(recorded.finished(ended, limits));
     Ok(response)
+}
+
+/// GitHub's own node count for every document this source sends, against this workspace's.
+///
+/// **GitHub is the authority here and this workspace is not.** The offline calculation in
+/// `tests/node_count.rs` is what actually stops a regression merging — no network, no
+/// credential, so it runs on every platform and on a pull request from a fork — but an
+/// arithmetic checked only against itself goes on agreeing with itself after GitHub changes
+/// the rules. `rateLimit(dryRun: true)` answers with GitHub's own `nodeCount`, documented in
+/// its schema as *"The maximum number of nodes this query may return"*, **without executing
+/// the query**, so this converts "we implemented GitHub's rules correctly" from an
+/// assumption into an observation.
+///
+/// It reads the account's allowance either side, because whether asking is free is itself a
+/// thing to observe: driven while this was written, the remaining allowance did not move
+/// across such a call, and that is one observation rather than a guarantee. What a run
+/// reports is what that run saw.
+///
+/// `rateLimit` is a field of `Query`, so a **mutation** cannot be asked at all. Every
+/// mutation this source sends selects no connection, so there is no page size for GitHub and
+/// this workspace to disagree over, and what is checked instead is that this workspace
+/// computes exactly that.
+async fn reconcile_node_counts(token: &str) -> Result<(), String> {
+    let (limit, before) = account_allowance(token, "before").await?;
+    let mut asked = 0_usize;
+    for (document, doing) in graphql::DOCUMENTS {
+        let ours = worst_case_node_count(document)
+            .map_err(|error| format!("the document for {doing} could not be counted: {error}"))?;
+        if Mode::of_document(document) == Mode::Write {
+            if ours != 0 {
+                return Err(format!(
+                    "the mutation for {doing} computes {ours} nodes, and GitHub cannot be asked                      about a mutation — `rateLimit` is a field of Query. Either it grew a                      connection, in which case reconcile it another way, or the calculation is                      wrong"
+                ));
+            }
+            continue;
+        }
+        let response = graphql_variables(
+            token,
+            &with_node_count_probe(document)?,
+            &format!("node-count reconciliation while {doing}"),
+            dry_run_variables(document),
+        )
+        .await?;
+        let theirs = response
+            .pointer("/data/rateLimit/nodeCount")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("GitHub answered no nodeCount for the document for {doing}"))?;
+        if theirs != ours {
+            return Err(format!(
+                "GitHub says the document for {doing} may return {theirs} nodes and this                  workspace computes {ours}; GitHub is the authority, so the calculation or the                  page sizes it is driven with are what is wrong"
+            ));
+        }
+        asked += 1;
+    }
+    let (_, after) = account_allowance(token, "after").await?;
+    say(&format!(
+        "node-count reconciliation: {asked} documents agreed with GitHub's own dryRun          nodeCount; the account's GraphQL allowance read {before} of {limit} before and          {after} after, a movement of {} across the whole reconciliation (the account's,          shared with everything else this credential does)",
+        before.saturating_sub(after)
+    ));
+    Ok(())
+}
+
+/// The account's GraphQL allowance right now, and what the whole allowance is.
+///
+/// `dryRun` is deliberately absent: this call is a real one, so the `cost` it reports is its
+/// own and the accounting attributes it as GitHub's own figure rather than as this
+/// repository's lower bound.
+async fn account_allowance(token: &str, when: &str) -> Result<(u64, u64), String> {
+    let response = graphql_variables(
+        token,
+        "query{rateLimit{cost limit remaining resetAt}}",
+        &format!("account allowance {when} the node-count reconciliation"),
+        json!({}),
+    )
+    .await?;
+    let read = |field: &str| {
+        response
+            .pointer(&format!("/data/rateLimit/{field}"))
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("GitHub reported no rateLimit {field}"))
+    };
+    Ok((read("limit")?, read("remaining")?))
+}
+
+/// GitHub's own node-count probe, added to a production document as a second root field.
+///
+/// `rateLimit` returns one object of scalars and no connection, so it adds nothing to the
+/// count of the operation it joins: what GitHub answers is the production document's number
+/// rather than a number about the probe. `dryRun: true` is what keeps the rest of the
+/// document from running, which is why this is only ever done to a query.
+fn with_node_count_probe(document: &str) -> Result<String, String> {
+    let opening = document
+        .find('{')
+        .ok_or_else(|| format!("this document has no selection set to probe: {document}"))?;
+    Ok(format!(
+        "{}rateLimit(dryRun:true){{cost nodeCount limit remaining}} {}",
+        &document[..=opening],
+        &document[opening + 1..]
+    ))
+}
+
+/// A value for every variable a document declares, for a run GitHub will not execute.
+///
+/// The page sizes are [`largest_page_sizes`] — the reconciliation is about the worst case
+/// this source can drive a document to, which is what the offline bound is computed under.
+/// Every other variable takes a value of the right type and no meaning at all, because
+/// `dryRun: true` computes the count without resolving one of them.
+fn dry_run_variables(document: &str) -> Value {
+    let mut variables = serde_json::Map::new();
+    let mut bind = |name: &str, value: Value| {
+        if document.contains(&format!("${name}:")) {
+            variables.insert(name.to_owned(), value);
+        }
+    };
+    for (name, size) in largest_page_sizes() {
+        bind(&name, json!(size));
+    }
+    bind("after", Value::Null);
+    bind("id", json!("node-count-reconciliation"));
+    bind("search", json!("repo:github/docs is:issue"));
+    bind("type", json!("ISSUE"));
+    bind("duplicates", json!(true));
+    bind("owner", json!("github"));
+    bind("name", json!("docs"));
+    bind("number", json!(1));
+    Value::Object(variables)
 }
 
 /// The one board text field this source keeps a copy's origin in.
@@ -300,30 +508,57 @@ macro_rules! ensure {
 }
 
 /// One REST call to GitHub, for the label lifecycle GraphQL puts behind a schema preview.
+///
+/// `endpoint` is GitHub's own spelling of the endpoint — `GET /repos/{owner}/{repo}/labels`
+/// — rather than the URL built from it, because that is what the session report names this
+/// call by, and a report is compared between runs and carries no board content. A REST call
+/// draws on a different budget from the GraphQL ones beside it, which is why the accounting
+/// keeps the two apart.
 async fn rest(
     token: &str,
     method: reqwest::Method,
+    endpoint: &str,
     url: &str,
     body: Option<Value>,
     what: &str,
 ) -> Result<Value, String> {
+    let sending = || Request::rest(method.as_str(), endpoint);
     let mut request = reqwest::Client::new()
-        .request(method, url)
+        .request(method.clone(), url)
         .header("user-agent", "onetaskgraph-live-test")
         .header("accept", "application/vnd.github+json")
         .bearer_auth(token);
     if let Some(body) = body {
         request = request.json(&body);
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| format!("{what} could not reach GitHub: {error}"))?;
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            SESSION.record(sending().finished(Outcome::Refused, RateLimit::default()));
+            return Err(format!("{what} could not reach GitHub: {error}"));
+        }
+    };
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|error| format!("{what} returned no readable body: {error}"))?;
+    let limits = RateLimit::read(|name| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    });
+    let outcome = |outcome: Outcome| sending().finished(outcome, limits.clone());
+    let text = match response.text().await {
+        Ok(text) => text,
+        Err(error) => {
+            SESSION.record(outcome(Outcome::Refused));
+            return Err(format!("{what} returned no readable body: {error}"));
+        }
+    };
+    SESSION.record(outcome(Outcome::of_response(
+        status.as_u16(),
+        limits.exhausted(),
+        &text,
+    )));
     if !status.is_success() {
         return Err(format!("{what} failed with HTTP {status}: {text}"));
     }
@@ -342,6 +577,7 @@ async fn create_artifact_label(
     let created = rest(
         token,
         reqwest::Method::POST,
+        "/repos/{owner}/{repo}/labels",
         &format!("https://api.github.com/repos/{repository}/labels"),
         Some(json!({"name":name,"color":"ededed",
                     "description":"temporary onetaskgraph live-lane label"})),
@@ -385,6 +621,7 @@ async fn remove_artifact_labels(
         let listed = rest(
             token,
             reqwest::Method::GET,
+            "/repos/{owner}/{repo}/labels",
             &format!("https://api.github.com/repos/{repository}/labels?per_page=100&page={number}"),
             None,
             "live label lookup",
@@ -409,6 +646,7 @@ async fn remove_artifact_labels(
         rest(
             token,
             reqwest::Method::DELETE,
+            "/repos/{owner}/{repo}/labels/{name}",
             &format!("https://api.github.com/repos/{repository}/labels/{name}"),
             None,
             "live label cleanup",
@@ -1594,13 +1832,23 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     verify_mutation_schema(&token)
         .await
         .unwrap_or_else(|error| panic!("GitHub mutation schema drifted: {error}"));
+    // GitHub, not this workspace, is the authority on node count. It runs here rather than
+    // in the offline gate because it needs the credential this lane already has, and it runs
+    // unconditionally once that credential is present: behind no flag, and not skipped
+    // because the setup above went well.
+    reconcile_node_counts(&token).await.unwrap_or_else(|error| {
+        panic!("GitHub's own node count disagrees with this workspace's: {error}")
+    });
     // The production boundary validates the board this lane was pointed at — GitHub's owner
-    // grammar and the project number's range — before either reaches GitHub.
+    // grammar and the project number's range — before either reaches GitHub. It is built
+    // recording into this run's own accounting, so the session total covers the source's
+    // requests and this lane's alike rather than either one on its own.
     let source = onetaskgraph_github_projects::Plugin
-        .build(
+        .build_recording_into(
             &SourceName::new("github-live").unwrap(),
             &json!({"owner":owner,"project_number":project_number,"repository":repository}),
             &LiveSecret(token.clone().into()),
+            Arc::clone(&SESSION),
         )
         .unwrap_or_else(|error| {
             panic!("the GitHub Projects live lane cannot use this board: {error}")
@@ -1746,15 +1994,16 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     };
     let rebuild = || {
         onetaskgraph_github_projects::Plugin
-            .build(
+            .build_recording_into(
                 &SourceName::new("github-live").unwrap(),
                 &live_write_config(&owner, project_number, &repository, &status_name),
                 &LiveSecret(token.clone().into()),
+                Arc::clone(&SESSION),
             )
             .unwrap_or_else(|error| panic!("the live write configuration was refused: {error}"))
     };
     let writer = rebuild();
-    run_then_cleanup(
+    let journey = run_then_cleanup(
         || drive_every_declared_capability(&run, writer.as_ref(), &rebuild),
         || {
             remove_live_state(
@@ -1766,6 +2015,10 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
             )
         },
     )
-    .await
-    .unwrap_or_else(|error| panic!("GitHub live capability journey failed: {error}"));
+    .await;
+    // What this run cost, printed before the verdict so a failed run says it too: a run that
+    // only reports its cost when it passes cannot be compared with the run that changed
+    // something and broke.
+    say(&SESSION.snapshot().report());
+    journey.unwrap_or_else(|error| panic!("GitHub live capability journey failed: {error}"));
 }

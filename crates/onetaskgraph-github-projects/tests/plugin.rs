@@ -327,6 +327,18 @@ struct Limits {
     last_mutation: Option<Instant>,
     /// How many mutations this board refused for arriving too fast.
     too_fast: u32,
+    /// What the *account* has spent of [`FIXTURE_BUDGET_LIMIT`], reported in every answer's
+    /// own `x-ratelimit-used` and `x-ratelimit-remaining` the way GitHub reports it.
+    budget_used: u64,
+    /// What something *else* spends against the same budget between two of this session's
+    /// requests.
+    ///
+    /// The account these figures describe is shared and rate-limited, so its remaining
+    /// allowance really does fall by more than one session's own calls account for. Setting
+    /// this is what lets a test prove the session's reported spend is unmoved by the
+    /// difference — which is the whole distinction between measuring a session and
+    /// differencing a counter somebody else is also spending.
+    other_traffic_per_request: u64,
     /// When each request arrived, which operation it carried, and whether that operation
     /// creates content.
     arrivals: Vec<(Instant, String, bool)>,
@@ -486,6 +498,16 @@ impl Fixture {
     fn too_fast(&self) -> u32 {
         self.state.lock().unwrap().limits.too_fast
     }
+    /// Report the account's allowance falling by `extra` more per request than this
+    /// session's own calls account for, the way a shared account falls while other work
+    /// draws on it.
+    fn other_traffic(&self, extra: u64) {
+        self.state.lock().unwrap().limits.other_traffic_per_request = extra;
+    }
+    /// What this board last reported the account had spent.
+    fn budget_used(&self) -> u64 {
+        self.state.lock().unwrap().limits.budget_used
+    }
     /// Every GraphQL document this board received, in order.
     fn documents(&self) -> Vec<String> {
         self.state.lock().unwrap().documents.clone()
@@ -550,6 +572,12 @@ impl Fixture {
     }
 }
 
+/// The whole GraphQL allowance this board reports in its own rate-limit headers.
+///
+/// GitHub's published hourly figure for the GraphQL API, so a session report taken against
+/// this board is shaped like one taken against the real one.
+const FIXTURE_BUDGET_LIMIT: u64 = 5_000;
+
 fn board(items: Vec<Item>) -> Fixture {
     board_with(items, true, true)
 }
@@ -599,15 +627,27 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                 .limits
                 .spends_the_budget
                 .contains(operation_name(query));
+            // What this answer says about the account's budget. GitHub carries these on
+            // every response, so the source's accounting has real headers to read rather
+            // than a shape only the live lane could ever fill in — and `used` climbing
+            // faster than one per request is how a shared account behaves.
+            let used = {
+                let mut state = served.lock().unwrap();
+                state.limits.budget_used += 1 + state.limits.other_traffic_per_request;
+                state.limits.budget_used
+            };
+            let remaining = if spent {
+                0
+            } else {
+                FIXTURE_BUDGET_LIMIT.saturating_sub(used)
+            };
             let (status, headers, body) = match limited {
                 Some(refusal) => (refusal.status, refusal.headers, refusal.body),
                 None => (
                     "200 OK",
-                    if spent {
-                        "x-ratelimit-remaining: 0\r\n".to_owned()
-                    } else {
-                        String::new()
-                    },
+                    format!(
+                        "x-ratelimit-limit: {FIXTURE_BUDGET_LIMIT}\r\nx-ratelimit-used:                          {used}\r\nx-ratelimit-remaining: {remaining}\r\nx-ratelimit-resource:                          graphql\r\n"
+                    ),
                     match refused(&served, query, variables) {
                         Some(message) => json!({"errors":[{"message":message}]}).to_string(),
                         None => json!({ "data": answer(&served, query, variables) }).to_string(),
@@ -1059,7 +1099,7 @@ fn sequence_server(bodies: Vec<Value>) -> String {
 /// passing a `pacing` block of their own — so what is proven about the schedule is proven
 /// where it is the subject, and `the_shipped_pacing_defaults_are_githubs_published_limits`
 /// pins the shipped values against the ones a source built with no `pacing` block uses.
-fn configured(endpoint: &str, extra: Value) -> Box<dyn TaskSource> {
+fn fixture_config(endpoint: &str, extra: &Value) -> Value {
     let mut config = json!({"owner":"octo-org","project_number":7,"endpoint":endpoint,
                             "repository":"acme/work",
                             "pacing":{"min_mutation_interval_ms":0,"retry_budget_ms":0}});
@@ -1070,12 +1110,36 @@ fn configured(endpoint: &str, extra: Value) -> Box<dyn TaskSource> {
             config[key] = value.clone();
         }
     }
+    config
+}
+
+fn configured(endpoint: &str, extra: Value) -> Box<dyn TaskSource> {
     Plugin
-        .build(&SourceName::new("work").unwrap(), &config, &Secrets)
+        .build(
+            &SourceName::new("work").unwrap(),
+            &fixture_config(endpoint, &extra),
+            &Secrets,
+        )
         .expect("a usable configuration")
 }
 
-use onetaskgraph_github_projects::{DESIGN_TITLE_PREFIX, Plugin};
+/// The same source, recording every request it sends into an accounting this test holds
+/// too — which is how a caller accounting for a whole session builds one.
+fn recording(endpoint: &str, ledger: &Arc<Accounting>) -> Box<dyn TaskSource> {
+    Plugin
+        .build_recording_into(
+            &SourceName::new("work").unwrap(),
+            &fixture_config(endpoint, &json!({})),
+            &Secrets,
+            Arc::clone(ledger),
+        )
+        .expect("a usable configuration")
+}
+
+use onetaskgraph_github_projects::accounting::{
+    Accounting, Basis, Budget, BudgetReport, Mode, Outcome, RateLimit, Request, Session,
+};
+use onetaskgraph_github_projects::{DESIGN_TITLE_PREFIX, Plugin, graphql};
 
 fn source(fixture: &Fixture) -> Box<dyn TaskSource> {
     configured(&fixture.endpoint, json!({}))
@@ -6545,4 +6609,419 @@ async fn a_dependency_far_end_this_board_holds_as_a_document_is_refused_by_name(
         named.contains("I_design") && named.contains("document"),
         "{named}"
     );
+}
+
+/// One session's worth of reads and one write, driven the way a caller drives them.
+///
+/// Shared by the accounting tests below so each of them measures the same session and the
+/// figures they assert on are comparable between them — which is the property a report is
+/// for.
+async fn drive_a_session(source: &dyn TaskSource) {
+    source
+        .query_tasks(&TaskQuery::default(), &page(50))
+        .await
+        .expect("a task read");
+    source
+        .query_projects(&ProjectQuery::default(), &page(50))
+        .await
+        .expect("a project read");
+    source
+        .get_task(&NativeId("I_step".to_owned()))
+        .await
+        .expect("one task by id");
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_step".to_owned())),
+            item: task(
+                "I_step",
+                "step renamed",
+                status(StatusCategory::Todo, "Todo"),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .expect("a write");
+}
+
+fn accounted_board() -> Fixture {
+    board(vec![
+        Item::issue("I_plan", "plan").sub_issues(1),
+        Item::issue("I_step", "step").parent("I_plan"),
+    ])
+}
+
+fn budget_of(session: &Session) -> BudgetReport {
+    session
+        .budgets()
+        .into_iter()
+        .find(|report| report.budget == Budget::Graphql)
+        .expect("the session drew on the GraphQL budget")
+}
+
+/// Every request the board served is one the accounting recorded, and the report adds them
+/// up the way a person compares two runs.
+///
+/// The count is compared against what the *fixture* served rather than against a number
+/// written here: a request path that sent something without recording it fails this, which
+/// is the only way completeness is provable rather than asserted.
+#[tokio::test]
+async fn the_session_report_counts_every_request_the_board_served_and_what_each_cost() {
+    let fixture = accounted_board();
+    let ledger = Arc::new(Accounting::new());
+    let source = recording(&fixture.endpoint, &ledger);
+    drive_a_session(source.as_ref()).await;
+
+    let session = ledger.snapshot();
+    let served = fixture.documents().len();
+    assert_eq!(
+        session.total_requests(),
+        served,
+        "the board served {served} requests and the accounting recorded {}",
+        session.total_requests()
+    );
+
+    // Every GraphQL record is named out of the inventory rather than out of a second list,
+    // and carries the node count the same offline calculation computes.
+    let described = graphql::DOCUMENTS
+        .iter()
+        .map(|(_, doing)| *doing)
+        .collect::<Vec<_>>();
+    for request in session.requests() {
+        assert!(
+            described.contains(&request.name()),
+            "{} is not one of this source's documents",
+            request.name()
+        );
+        assert_eq!(request.budget(), Budget::Graphql);
+        assert_eq!(request.outcome(), Outcome::Answered);
+        assert!(
+            request.node_count().is_some(),
+            "{} carries no node count",
+            request.name()
+        );
+    }
+    assert!(
+        session
+            .requests()
+            .iter()
+            .any(|request| request.mode() == Mode::Write),
+        "the write was recorded as a read"
+    );
+    assert_eq!(
+        session.total_node_count(),
+        session
+            .requests()
+            .iter()
+            .filter_map(Request::node_count)
+            .sum::<u64>()
+    );
+
+    // The count is the offline calculation's own answer for the document that was sent,
+    // under the page sizes that request bound — this source walks a board at its full page
+    // size, so that is the worst case for this one.
+    let board_read = session
+        .requests()
+        .iter()
+        .find(|request| request.name() == "reading the board")
+        .expect("the board was read");
+    assert_eq!(
+        board_read.node_count(),
+        onetaskgraph_github_projects::worst_case_node_count(graphql::BOARD).ok()
+    );
+    // And it really is the bindings that decide it rather than the document alone: the same
+    // document over a tenth of the page costs a tenth of the nodes.
+    let narrower =
+        Request::graphql(graphql::BOARD, &json!({"first":10})).answered(RateLimit::default());
+    assert!(
+        narrower.node_count() < board_read.node_count(),
+        "a smaller page bound {:?} should cost fewer nodes than {:?}",
+        narrower.node_count(),
+        board_read.node_count()
+    );
+
+    let report = session.report();
+    assert!(
+        report.contains(&format!("requests {}", session.total_requests())),
+        "{report}"
+    );
+    assert!(report.contains("reading the board"), "{report}");
+    assert!(report.contains("reading one issue"), "{report}");
+    assert!(
+        report.contains(&format!("node count {}", session.total_node_count())),
+        "{report}"
+    );
+    assert!(
+        report.contains("budget graphql, metered in points"),
+        "{report}"
+    );
+    // No credential, no token, no issue body and no board content.
+    assert!(!report.contains("test-token"), "{report}");
+    assert!(!report.contains("step renamed"), "{report}");
+    assert!(!report.contains("octo-org"), "{report}");
+}
+
+/// The budget figures come out of the headers the board's own answers carried.
+///
+/// A report that could only fill these in against the real API would be an instrument
+/// nobody could check, so the fixture answers with GitHub's own rate-limit headers and this
+/// holds the report to what they said.
+#[tokio::test]
+async fn the_reported_budget_figures_are_the_ones_the_responses_own_headers_carried() {
+    let fixture = accounted_board();
+    let ledger = Arc::new(Accounting::new());
+    let source = recording(&fixture.endpoint, &ledger);
+    drive_a_session(source.as_ref()).await;
+
+    let session = ledger.snapshot();
+    let graphql = budget_of(&session);
+    let used = fixture.budget_used();
+    assert_eq!(graphql.limit, Some(FIXTURE_BUDGET_LIMIT));
+    assert_eq!(graphql.used_by_the_account, Some(used));
+    assert_eq!(
+        graphql.remaining_last_seen,
+        Some(FIXTURE_BUDGET_LIMIT - used)
+    );
+    // The session's own spend is attributed per call rather than read off the account.
+    assert_eq!(graphql.spent, session.total_requests() as u64);
+    assert_eq!(graphql.modelled, graphql.spent);
+    assert_eq!(graphql.reported, 0);
+
+    let report = session.report();
+    assert!(
+        report.contains(&format!(
+            "limit {FIXTURE_BUDGET_LIMIT}, {used} used, {} remaining",
+            FIXTURE_BUDGET_LIMIT - used
+        )),
+        "{report}"
+    );
+    assert!(
+        report.contains(&format!(
+            "spent {} points: 0 reported by GitHub",
+            graphql.spent
+        )),
+        "{report}"
+    );
+}
+
+/// A shared account falling faster than this session spends does not move what this session
+/// is reported to have spent.
+///
+/// The same drive is run twice against two boards that differ only in how fast something
+/// *else* is spending the same budget. A report built by subtracting a remaining allowance
+/// at the end from one at the start would give two different answers; one attributed per
+/// call gives the same answer twice, and says on its face that the movement it also shows
+/// is the account's.
+#[tokio::test]
+async fn a_budget_something_else_is_spending_does_not_move_this_sessions_reported_spend() {
+    let alone = accounted_board();
+    let alone_ledger = Arc::new(Accounting::new());
+    drive_a_session(recording(&alone.endpoint, &alone_ledger).as_ref()).await;
+    let alone_session = alone_ledger.snapshot();
+
+    let shared = accounted_board();
+    // Nine points of somebody else's work between each of this session's own requests.
+    shared.other_traffic(9);
+    let shared_ledger = Arc::new(Accounting::new());
+    drive_a_session(recording(&shared.endpoint, &shared_ledger).as_ref()).await;
+    let shared_session = shared_ledger.snapshot();
+
+    let alone_budget = budget_of(&alone_session);
+    let shared_budget = budget_of(&shared_session);
+    assert_eq!(
+        alone_session.total_requests(),
+        shared_session.total_requests()
+    );
+    assert_eq!(
+        shared_budget.spent, alone_budget.spent,
+        "the session's spend moved with the account's allowance"
+    );
+    assert!(
+        shared_budget.account_movement() > alone_budget.account_movement(),
+        "the shared board's allowance was supposed to fall faster"
+    );
+    assert!(
+        shared_budget.account_movement().unwrap() > shared_budget.spent,
+        "the account moved by {:?} and this session spent {}",
+        shared_budget.account_movement(),
+        shared_budget.spent
+    );
+    let report = shared_session.report();
+    assert!(
+        report.contains(
+            "that is the account's movement and not this session's spend, because other work \
+             draws on the same budget in the same window"
+        ),
+        "{report}"
+    );
+}
+
+/// An answer, a refusal and a rate-limited refusal are three outcomes, and only the third
+/// is attributed nothing.
+#[tokio::test]
+async fn a_refusal_and_a_rate_limited_refusal_are_told_apart_and_only_one_of_them_spends() {
+    let refusing = accounted_board();
+    refusing.refuse("updateIssue");
+    let refusing_ledger = Arc::new(Accounting::new());
+    let source = recording(&refusing.endpoint, &refusing_ledger);
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_step".to_owned())),
+            item: task("I_step", "refused", status(StatusCategory::Todo, "Todo")),
+            depends_on: vec![],
+        })
+        .await
+        .expect_err("this board refuses that mutation");
+    let refused = refusing_ledger.snapshot();
+    let refused_record = refused
+        .requests()
+        .iter()
+        .find(|request| request.outcome() == Outcome::Refused)
+        .expect("a refusal was recorded");
+    assert_eq!(refused_record.name(), "updating an issue");
+    assert_eq!(refused_record.mode(), Mode::Write);
+    assert_eq!(refused_record.spend().basis, Basis::Modelled);
+    assert_eq!(refused_record.spend().amount, 1);
+
+    let limited = accounted_board();
+    limited.refuse_every_mutation();
+    let limited_ledger = Arc::new(Accounting::new());
+    let source = recording(&limited.endpoint, &limited_ledger);
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_step".to_owned())),
+            item: task("I_step", "limited", status(StatusCategory::Todo, "Todo")),
+            depends_on: vec![],
+        })
+        .await
+        .expect_err("this board refuses every mutation for a rate limit");
+    let session = limited_ledger.snapshot();
+    let refusal = session
+        .requests()
+        .iter()
+        .find(|request| request.outcome() == Outcome::RateLimited)
+        .expect("a rate-limited refusal was recorded");
+    assert_eq!(refusal.spend().basis, Basis::NotRun);
+    assert_eq!(refusal.spend().amount, 0);
+    assert!(
+        session.report().contains("1 rate-limited"),
+        "{}",
+        session.report()
+    );
+}
+
+/// A caller's own calls are recorded into the same session as the source's.
+///
+/// This is what the credentialed lane does with its schema verification, its board and
+/// field lookups, its residue sweep and its cleanup — GraphQL and REST alike — so the
+/// session total accounts for the whole session. Both budgets are kept apart, because
+/// GitHub meters them apart.
+#[tokio::test]
+async fn a_callers_own_graphql_and_rest_calls_join_the_sources_in_one_session() {
+    let fixture = accounted_board();
+    let ledger = Arc::new(Accounting::new());
+    let source = recording(&fixture.endpoint, &ledger);
+    drive_a_session(source.as_ref()).await;
+    let from_the_source = ledger.snapshot().total_requests();
+
+    // A caller's REST call, named by the endpoint it addressed rather than by the URL it
+    // built, with the rate-limit headers that response carried.
+    let rest_headers = BTreeMap::from([
+        ("x-ratelimit-limit".to_owned(), "5000".to_owned()),
+        ("x-ratelimit-remaining".to_owned(), "4987".to_owned()),
+        ("x-ratelimit-used".to_owned(), "13".to_owned()),
+        ("x-ratelimit-resource".to_owned(), "core".to_owned()),
+    ]);
+    ledger.record(
+        Request::rest("get", "/repos/{owner}/{repo}/labels")
+            .answered(RateLimit::read(|name| rest_headers.get(name).cloned())),
+    );
+    // And a caller's own GraphQL document, which the inventory does not name and which was
+    // shaped so GitHub reported what it cost.
+    ledger.record(
+        Request::graphql("query MutationContract { __typename }", &json!({}))
+            .named("mutation contract introspection")
+            .costing(37)
+            .answered(RateLimit::default()),
+    );
+
+    let session = ledger.snapshot();
+    assert_eq!(session.total_requests(), from_the_source + 2);
+    assert_eq!(session.spent(Budget::Rest), 1);
+    assert_eq!(
+        session.spent(Budget::Graphql),
+        from_the_source as u64 + 37,
+        "GitHub's own reported cost is what a call that reports one is attributed"
+    );
+    let rest = session
+        .budgets()
+        .into_iter()
+        .find(|report| report.budget == Budget::Rest)
+        .expect("the session drew on the REST budget");
+    assert_eq!(rest.counted, 1);
+    assert_eq!(rest.limit, Some(5000));
+    assert_eq!(rest.remaining_last_seen, Some(4987));
+    assert_eq!(budget_of(&session).reported, 37);
+
+    let report = session.report();
+    assert!(
+        report.contains("GET /repos/{owner}/{repo}/labels"),
+        "{report}"
+    );
+    assert!(
+        report.contains("mutation contract introspection"),
+        "{report}"
+    );
+    assert!(
+        report.contains("budget rest, metered in requests"),
+        "{report}"
+    );
+    assert!(
+        report.contains("budget graphql, metered in points"),
+        "{report}"
+    );
+}
+
+/// The public helpers a caller outside this crate classifies its own responses with.
+///
+/// The credentialed lane is the caller, and it is `#[ignore]`d, so what makes these
+/// correct has to be provable without a credential: they read GitHub's refusal wordings
+/// through the same limiter this source's own requests go through, so a secondary rate
+/// limit under a forbidden status is a rate limit here exactly as it is there.
+#[tokio::test]
+async fn a_caller_tells_an_answer_from_a_refusal_from_a_rate_limit_the_way_this_source_does() {
+    assert_eq!(Outcome::of_response(200, false, "{}"), Outcome::Answered);
+    assert_eq!(
+        Outcome::of_response(404, false, r#"{"message":"Not Found"}"#),
+        Outcome::Refused
+    );
+    assert_eq!(
+        Outcome::of_response(
+            403,
+            false,
+            r#"{"message":"You have exceeded a secondary rate limit."}"#
+        ),
+        Outcome::RateLimited
+    );
+    // A spent budget explains a failing response; it never turns a good answer into one.
+    assert_eq!(
+        Outcome::of_response(403, true, r#"{"message":"Forbidden"}"#),
+        Outcome::RateLimited
+    );
+    assert_eq!(Outcome::of_response(200, true, "{}"), Outcome::Answered);
+
+    let spent = RateLimit::read(|name| (name == "x-ratelimit-remaining").then(|| "0".to_owned()));
+    assert!(spent.exhausted());
+    assert!(!RateLimit::default().exhausted());
+
+    assert_eq!(Mode::of_method("get"), Mode::Read);
+    assert_eq!(Mode::of_method("delete"), Mode::Write);
+    let listed =
+        Request::rest("get", "/repos/{owner}/{repo}/labels").answered(RateLimit::default());
+    assert_eq!(
+        listed.call(),
+        &onetaskgraph_github_projects::accounting::Call::Endpoint {
+            endpoint: "GET /repos/{owner}/{repo}/labels".to_owned()
+        }
+    );
+    assert_eq!(listed.node_count(), None);
 }
