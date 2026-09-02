@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.20](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.19...onetaskgraph-github-projects-v0.2.20) - 2026-09-02
+
+### Fixed
+
+- *(github-projects)* take the node-count calculation from the registry so the crate can be packaged ([#237](https://github.com/nickderobertis/onetaskgraph/pull/237))
+
 ## [0.2.19](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.18...onetaskgraph-github-projects-v0.2.19) - 2026-09-01
 
 ### Fixed
