@@ -26,6 +26,19 @@ clap = { version = "4.6.6", features = ["derive"] }
 # could reach the network would be a way for work data to leave the process.
 jsonschema = { version = "0.50.1", default-features = false }
 graphql-parser = "0.4.1"
+# GitHub's published node-count rules, as a pure offline calculation over a GraphQL
+# document's own text. It is depended on rather than reimplemented: the number that
+# decides whether GitHub will execute a query at all is one arithmetic, and a second
+# spelling of it here would be a second answer nobody reconciles.
+#
+# A git source, pinned to a revision, because the crate is not on a registry yet: the
+# lockfile's commit is the whole of what says which surface this workspace compiled
+# against, and `deny.toml` allows that one repository by name. The `version` is not
+# decoration — `[bans] wildcards = "deny"` refuses a dependency with no version
+# requirement, and a git dependency without one requires `*`. Both spellings go away
+# together the day the crate publishes: this becomes an ordinary registry dependency and
+# the `allow-git` entry beside it is deleted.
+github-graphql-node-count = { git = "https://github.com/nickderobertis/github-graphql-node-count", rev = "723b512025843472140c77dc46a360c62c56102e", version = "0.0.0" }
 schemars = { version = "1.2.2", features = ["chrono04"] }
 secrecy = "0.10.3"
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "native-tls-vendored"] }

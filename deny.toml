@@ -35,6 +35,15 @@ allow = [
 unknown-registry = "deny"
 unknown-git = "deny"
 
+# One named git source, and it stays one. `github-graphql-node-count` is this account's
+# own crate — the offline calculation of GitHub's published per-query node limit, which
+# `onetaskgraph-github-projects` holds every document it sends below — and it is not on a
+# registry yet, so a git source is the only spelling available for it. It is pinned to a
+# revision in [workspace.dependencies], so what this allows is one immutable commit of one
+# repository rather than whatever that repository's default branch happens to hold. The
+# entry goes away the moment the crate publishes and the dependency becomes a version.
+allow-git = ["https://github.com/nickderobertis/github-graphql-node-count"]
+
 [bans]
 multiple-versions = "deny"
 wildcards = "deny"
@@ -46,6 +55,16 @@ wildcards = "deny"
 # duplicate. Revisit at the next dependency upgrade.
 skip = [
   { crate = "syn:2", reason = "serde, thiserror, clap and async-trait derives have not moved to syn 3 yet; schemars 1.2 has" },
+  # The second, and it adds no crate to this workspace's closure. `graphql-parser` 0.4.1
+  # has been in the lockfile all along — the pinned-schema test parses with it — and it is
+  # still on thiserror 1 while everything else here is on 2. What changed is only which
+  # graph the check walks: `github-graphql-node-count` reaches that same parser through
+  # [dependencies] rather than [dev-dependencies], so a duplicate that was already
+  # resolved became one this check can see. There is no newer `graphql-parser`, and it is
+  # the only GraphQL document parser in reach; this goes when that crate moves to
+  # thiserror 2.
+  { crate = "thiserror:1", reason = "graphql-parser 0.4.1, already in this lockfile, is the only GraphQL parser in reach and has not moved to thiserror 2" },
+  { crate = "thiserror-impl:1", reason = "the derive half of thiserror 1, reached only by the crate skipped above and going with it" },
 ]
 
 # The engine compensates for a missing capability transiently: it holds at most one source

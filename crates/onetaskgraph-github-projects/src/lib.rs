@@ -124,13 +124,57 @@
 //! | which projects this board holds | [`graphql::SEARCH_ISSUES`] — an issue search scoped to the board | the board's issues, without their board items |
 //! | every task, every document, every label | [`graphql::BOARD`] — the board's own `items` | the board |
 //!
-//! The board half of an issue — its board item's id, its `Status` option, this source's
-//! origin text field, its board label field — rides along on `Issue.projectItems` in the
-//! first three, so an item reached any of those ways resolves through the same
+//! The board half of an issue — its board item's id, its `Status` option and this
+//! source's origin text field — rides along on `Issue.projectItems` in the first three, so
+//! an item reached any of those ways resolves through the same
 //! [`GitHubProjectsSource::resolve`] the board walk uses and reports the same title, the
 //! same status, the same labels and the same qualified id. An issue with no entry for
 //! *this* board is not this source's to report, which is what keeps an id naming another
 //! repository's issue from being answered as an item of this board.
+//!
+//! **The board's own `Labels` field is not selected in those three, and nothing is lost by
+//! that.** The board half they read is a fragment `on Issue`, and an issue's labels are
+//! already selected one level up, on the issue itself. A board's `Labels` field is not one
+//! anybody fills in: it is a built-in `ProjectV2FieldType`, it is absent from
+//! `ProjectV2CustomFieldType` so no project can create one, and `ProjectV2FieldValue` —
+//! the whole of what `updateProjectV2ItemFieldValue` accepts — offers no way to write one.
+//! For `Issue` content it *is* the issue's own labels, so selecting it beside them unions a
+//! set with itself. [`graphql::BOARD`] still selects it and must: a board item's content
+//! may be a `DraftIssue`, which has no `labels` of its own to select instead. The four ways
+//! an item is reached are held to reporting one label set by
+//! `an_item_reports_the_same_labels_title_status_and_id_however_it_is_reached` in
+//! `tests/plugin.rs`, which drives each of the four documents against the fixture board.
+//!
+//! # What one read may return, and what holds every document under it
+//!
+//! GitHub caps the number of nodes **one query may return** at [`NODE_COUNT_LIMIT`] and
+//! refuses a query above that before executing it: the answer is an error naming the
+//! connection the count crossed at, not a slow or a partial result. Every board this
+//! source reads is refused the same way, so this is a property of the documents rather
+//! than of anybody's board.
+//!
+//! The count is arithmetic over the document's own text: each connection contributes the
+//! `first:` it asks for, counts **multiply** down a nested path and **sum** across sibling
+//! paths. Those are [GitHub's published rules][node-limits] and this workspace does not
+//! restate them — `github-graphql-node-count` implements them, and
+//! [`worst_case_node_count`] under [`largest_page_sizes`] is where every node count here
+//! comes from. `tests/node_count.rs` recomputes every document in [`graphql::DOCUMENTS`]
+//! from that same text on every run and fails naming any that reaches the limit, so a
+//! connection added to a shared fragment is caught there rather than by GitHub.
+//!
+//! What decides those counts is the page sizes: [`MAX_PAGE_SIZE`] on the outer page,
+//! `NESTED_PAGE_SIZE` on the connections hanging off one item, and
+//! `BOARD_ITEMS_PAGE_SIZE` on an issue's board memberships. `$nestedFirst` is spent twice
+//! down one path of a board read, so that constant is effectively squared there, which is
+//! why it is the one the limit is most sensitive to.
+//!
+//! **`nodeCount` and `cost` are two numbers against two limits, and none of this is about
+//! the second.** `nodeCount` is what this section bounds: the most nodes one query may
+//! return, checked per query. `cost` is rate-limit points, metered per hour across
+//! everything one credential does; it is what the two limiters [`Limiter`] tells apart
+//! meter, and a document under [`NODE_COUNT_LIMIT`] says nothing about it.
+//!
+//! [node-limits]: https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api
 //!
 //! The last row is still the board's own item connection, and deliberately: a **draft**
 //! board item is not an issue, so no search and no node read can reach one, and the reads
@@ -207,7 +251,29 @@ use serde_json::{Value, json};
 pub const KIND: &str = "github-projects";
 /// GitHub's maximum connection page size.
 pub const MAX_PAGE_SIZE: u32 = 100;
-/// Nested connection size which keeps GitHub's worst-case query below its node limit.
+
+/// The most nodes any one document this source sends may be asked to return.
+///
+/// GitHub's own published per-query ceiling, taken from
+/// [`github_graphql_node_count::NODE_LIMIT`] rather than written out again here, so this
+/// workspace cannot hold a stale copy of somebody else's number. A query above it is
+/// **refused before it is executed**, whoever is asking and whatever board they are
+/// asking about — so this is a bound on the documents rather than a budget that runs out.
+///
+/// This is `nodeCount`, the maximum number of nodes *one query may return*. It is not
+/// `cost`, the rate-limit points a call spends against an hourly allowance shared by
+/// everything the credential does. Two numbers, two limits; nothing here is about the
+/// second. See the module section on the three ways this source reaches an item for how
+/// the count is arrived at, and for the page sizes below that decide it.
+pub const NODE_COUNT_LIMIT: u64 = github_graphql_node_count::NODE_LIMIT;
+
+/// Nested connection size for the connections that hang off one item.
+///
+/// It multiplies through every document that reaches an item under a page — the count
+/// rules multiply down a nested path — so it is the constant [`NODE_COUNT_LIMIT`] is most
+/// sensitive to. `document_node_count` in `tests/node_count.rs` is what holds the pair
+/// together: it recomputes every document under these constants and fails naming any that
+/// reaches the limit, so raising this is caught here rather than by GitHub.
 const NESTED_PAGE_SIZE: u32 = 50;
 /// How many of one issue's board memberships are read when an issue is reached directly.
 ///
@@ -218,6 +284,41 @@ const NESTED_PAGE_SIZE: u32 = 50;
 /// already well past what a person keeps track of. An issue whose entry for this board sits
 /// past it is refused naming the connection rather than reported as not on the board.
 const BOARD_ITEMS_PAGE_SIZE: u32 = 10;
+
+pub use github_graphql_node_count::{NodeCountError, Variables};
+
+/// The largest value this source can bind to each page-size variable its documents name.
+///
+/// Every `first:` in [`graphql`] reads one of these three, and each is capped at the
+/// constant above it wherever a caller's own limit could reach it — `$first` at
+/// [`MAX_PAGE_SIZE`], `$nestedFirst` at `NESTED_PAGE_SIZE`, `$boardItems` at
+/// `BOARD_ITEMS_PAGE_SIZE`. So this is the worst case a caller can drive this source to,
+/// not one configuration of it, which is what makes a bound computed under it a bound on
+/// every read.
+pub fn largest_page_sizes() -> Variables {
+    Variables::from([
+        ("first".to_owned(), MAX_PAGE_SIZE),
+        ("nestedFirst".to_owned(), NESTED_PAGE_SIZE),
+        ("boardItems".to_owned(), BOARD_ITEMS_PAGE_SIZE),
+    ])
+}
+
+/// The most nodes `document` could be asked to return, by GitHub's published rules.
+///
+/// Computed offline from the document's own text under [`largest_page_sizes`] — no
+/// network, no credential and no schema — by
+/// [`github_graphql_node_count::node_count`], which is where the rules themselves live.
+/// A document at or above [`NODE_COUNT_LIMIT`] is one GitHub refuses before executing, so
+/// this is what a check holds every document in [`graphql::DOCUMENTS`] below.
+///
+/// # Errors
+///
+/// Returns the calculation's own [`NodeCountError`] when `document` does not parse, holds
+/// no single operation, or binds a page size this source does not name — each of which is
+/// a defect in the document rather than a number.
+pub fn worst_case_node_count(document: &str) -> Result<u64, NodeCountError> {
+    github_graphql_node_count::node_count(document, &largest_page_sizes())
+}
 
 /// The issue-title prefix that makes a board issue a document.
 ///
@@ -249,10 +350,19 @@ pub mod graphql {
     /// [`GitHubProjectsSource::resolve_issue`](super::GitHubProjectsSource) relies on.
     ///
     /// `projectItems` is what carries the board half of an issue: the board item's own id
-    /// and the field values — the `Status` option, this source's origin text field, and any
-    /// board label field — that a `ProjectV2.items` read used to carry. It is asked for on
-    /// the issue rather than on the board, which is what makes the cost of a read
-    /// proportional to what was asked for instead of to the board's size.
+    /// and the field values — the `Status` option and this source's origin text field —
+    /// that a `ProjectV2.items` read used to carry. It is asked for on the issue rather
+    /// than on the board, which is what makes the cost of a read proportional to what was
+    /// asked for instead of to the board's size.
+    ///
+    /// It does **not** select the board's `Labels` field value, and that is the whole of
+    /// what keeps the three documents below under [`NODE_COUNT_LIMIT`](super::NODE_COUNT_LIMIT):
+    /// a label connection there sits under `fieldValues` under `projectItems` under a page
+    /// of issues, spending `$nestedFirst` twice down one path, and took
+    /// [`SEARCH_ISSUES`] and [`SUB_ISSUES`] to 2,556,100 nodes against a limit of 500,000.
+    /// No label is lost — this is a fragment `on Issue`, whose own `labels` are selected
+    /// above, and a board's `Labels` field is a built-in mirror of exactly those. The
+    /// module documentation records why that mirroring holds.
     macro_rules! board_issue {
         () => {
             r#" fragment BoardIssue on Issue{__typename id title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total}
@@ -263,7 +373,6 @@ pub mod graphql {
             ... on ProjectV2SingleSelectField{id name options{id name}}
           }}
           ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2Field{id name}}}
-          ... on ProjectV2ItemFieldLabelValue{labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
         }pageInfo{hasNextPage}}}pageInfo{hasNextPage}}}"#
         };
     }
