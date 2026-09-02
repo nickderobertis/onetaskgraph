@@ -63,8 +63,8 @@ skip = [
   # resolved became one this check can see. There is no newer `graphql-parser`, and it is
   # the only GraphQL document parser in reach; this goes when that crate moves to
   # thiserror 2.
-  { crate = "thiserror:1", reason = "graphql-parser 0.4.1, already in this lockfile, is the only GraphQL parser in reach and has not moved to thiserror 2" },
-  { crate = "thiserror-impl:1", reason = "the derive half of thiserror 1, reached only by the crate skipped above and going with it" },
+  { crate = "thiserror:1", reason = "reached only through graphql-parser 0.4.1, which was already in this lockfile as a dev-dependency; removable the day graphql-parser moves to thiserror 2, and not before" },
+  { crate = "thiserror-impl:1", reason = "the derive half of thiserror 1, reached only through the crate skipped above; removable on the same day and for the same reason" },
 ]
 
 # The engine compensates for a missing capability transiently: it holds at most one source
