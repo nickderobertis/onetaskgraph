@@ -234,23 +234,29 @@ impl Outcome {
 
 /// The rate-limit facts one response's own headers carried.
 ///
-/// Every field is optional because every one of them is absent from some real response: a
+/// Every figure is optional because every one of them is absent from some real response: a
 /// request that never reached GitHub has no headers at all, and a refusal from an
 /// intermediary carries whichever of them that intermediary felt like carrying. An absent
 /// figure is reported as unknown rather than guessed at.
+///
+/// **These are observations of one response, so the only ways to have one are to observe a
+/// response ([`RateLimit::read`]) or to have observed nothing ([`RateLimit::default`]).**
+/// The fields are read through the accessors below rather than assembled: a hand-built set
+/// could say the account had more remaining than its whole allowance, or name a resource
+/// GitHub would never name, and a report built on it would be a measurement of nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RateLimit {
     /// `x-ratelimit-limit`: the whole allowance for this budget's window.
-    pub limit: Option<u64>,
+    limit: Option<u64>,
     /// `x-ratelimit-remaining`: what was left of it when GitHub answered.
-    pub remaining: Option<u64>,
+    remaining: Option<u64>,
     /// `x-ratelimit-used`: what the *account* had spent, which is not what this session
     /// spent — other work shares the budget.
-    pub used: Option<u64>,
+    used: Option<u64>,
     /// `x-ratelimit-reset`: the Unix second the allowance comes back.
-    pub reset: Option<u64>,
+    reset: Option<u64>,
     /// `x-ratelimit-resource`: which budget GitHub says these figures are about.
-    pub resource: Option<String>,
+    resource: Option<String>,
 }
 
 impl RateLimit {
@@ -281,6 +287,32 @@ impl RateLimit {
                 .map(|value| value.trim().to_owned())
                 .filter(|value| is_resource_name(value)),
         }
+    }
+    /// The whole allowance for this budget's window, as this response reported it.
+    #[must_use]
+    pub const fn limit(&self) -> Option<u64> {
+        self.limit
+    }
+    /// What was left of it when GitHub answered.
+    #[must_use]
+    pub const fn remaining(&self) -> Option<u64> {
+        self.remaining
+    }
+    /// What the **account** had spent — not what this session spent, because other work
+    /// draws on the same budget in the same window.
+    #[must_use]
+    pub const fn used_by_the_account(&self) -> Option<u64> {
+        self.used
+    }
+    /// The Unix second the allowance comes back.
+    #[must_use]
+    pub const fn reset(&self) -> Option<u64> {
+        self.reset
+    }
+    /// Which budget GitHub said these figures were about, when it named one it spells.
+    #[must_use]
+    pub fn resource(&self) -> Option<&str> {
+        self.resource.as_deref()
     }
     /// Whether these headers say the budget is exactly spent, which is what
     /// [`Outcome::of_response`] reads.
@@ -718,13 +750,13 @@ impl Session {
                 }
                 Basis::NotRun => report.not_run += 1,
             }
-            if let Some(limit) = request.limits.limit {
+            if let Some(limit) = request.limits.limit() {
                 report.limit = Some(limit);
             }
-            if let Some(used) = request.limits.used {
+            if let Some(used) = request.limits.used_by_the_account() {
                 report.used_by_the_account = Some(used);
             }
-            if let Some(remaining) = request.limits.remaining {
+            if let Some(remaining) = request.limits.remaining() {
                 report.remaining_first_seen.get_or_insert(remaining);
                 report.remaining_last_seen = Some(remaining);
             }

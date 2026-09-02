@@ -222,24 +222,20 @@
 //!
 //! # What a session of requests costs, and where the report is
 //!
-//! This source records **every** request it sends — at `send_once`, the one place a request
-//! leaves this crate — into [`accounting::Accounting`]. One record
-//! per request: the document it sent, named from [`graphql::DOCUMENTS`], with that
-//! document's node count under the bindings it really bound; or, for a REST call, the
-//! endpoint it addressed and no node count. Each says whether it read or wrote, whether it
-//! was answered, refused, or refused for a rate limit, and what that response's own
-//! rate-limit headers said. [`GitHubProjectsSource::accounting`] hands back a snapshot to
-//! hold and compare, and [`accounting::Session::report`] renders the session report two
-//! runs are put side by side by. It is on the ordinary code path — no environment variable,
-//! no feature, no build configuration — because an instrument nobody switches on measures
-//! nothing, and it is recordable into from outside this crate so a caller making its own
-//! calls beside this source's counts the whole session rather than this source's share.
+//! This source records **every** request it sends into [`accounting::Accounting`], at
+//! `send_once` — the one place a request leaves this crate, which is why a read path added
+//! later is counted without anybody remembering to count it. That is the whole of what this
+//! crate adds to the arrangement; [`accounting`] is where what a record carries, how a
+//! session's spend is arrived at, and what it deliberately does not know are set out.
 //!
-//! **What a session spent is attributed per call, never differenced.** The GraphQL budget
-//! is metered in points and the REST budget in requests, they are reported apart because
-//! GitHub meters them apart, and the arithmetic — including what it deliberately does not
-//! know — is set out in [`accounting`]. The credentialed lane prints the report at the end
-//! of every run, passed or failed.
+//! [`GitHubProjectsSource::accounting`] is the read: a snapshot to hold and compare, which
+//! [`accounting::Session::report`] renders the session report from. It is on the ordinary
+//! code path — no environment variable, no feature, no build configuration — because an
+//! instrument nobody switches on measures nothing, and
+//! [`Plugin::build_recording_into`] is how a caller making its own calls beside this
+//! source's counts the whole session rather than this source's share. The credentialed lane
+//! in `tests/live.rs` does exactly that, and prints the report at the end of every run,
+//! passed or failed.
 //!
 //! **GitHub is the authority on node count, and the credentialed lane goes and asks it.**
 //! Everything above computes `nodeCount` offline from a document's own text, which is what

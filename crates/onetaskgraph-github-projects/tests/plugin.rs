@@ -572,11 +572,15 @@ impl Fixture {
     }
 }
 
-/// The whole GraphQL allowance this board reports in its own rate-limit headers.
+/// The whole allowance this board reports in its own rate-limit headers.
 ///
-/// GitHub's published hourly figure for the GraphQL API, so a session report taken against
-/// this board is shaped like one taken against the real one.
-const FIXTURE_BUDGET_LIMIT: u64 = 5_000;
+/// **Deliberately not GitHub's published hourly figure, and that is what makes the
+/// assertions below evidence.** A fixture that mirrored the real allowance would restate
+/// GitHub's contract with nothing reconciling the two, and — worse — a report that printed
+/// a number both sides already knew would pass whether or not it had read a single header.
+/// This one is the board's own, so the only way the report can carry it is by having read
+/// what this board sent.
+const FIXTURE_BUDGET_LIMIT: u64 = 4_321;
 
 fn board(items: Vec<Item>) -> Fixture {
     board_with(items, true, true)
@@ -6764,6 +6768,59 @@ async fn the_session_report_counts_every_request_the_board_served_and_what_each_
     assert!(!report.contains("octo-org"), "{report}");
 }
 
+/// A source nobody handed a ledger to still accounts for itself, and hands back a value.
+///
+/// [`GitHubProjectsSource::accounting`] is the read every caller that did **not** supply an
+/// accounting has — which is every source the registry builds, because
+/// `SourcePlugin::build` gives one an accounting of its own. So what proves it is a source
+/// built that way, driven the same way, and asked afterwards what it cost. It also proves
+/// the snapshot is a value rather than a live borrow: one taken early is compared with one
+/// taken later, and the early one has not grown.
+#[tokio::test]
+async fn a_source_that_was_handed_no_ledger_still_accounts_for_itself() {
+    let fixture = accounted_board();
+    let config = serde_json::from_value(fixture_config(&fixture.endpoint, &json!({})))
+        .expect("the fixture configuration deserializes");
+    let source = onetaskgraph_github_projects::GitHubProjectsSource::new(
+        &SourceName::new("work").unwrap(),
+        config,
+        &Secrets,
+    )
+    .expect("a usable source");
+
+    source
+        .query_tasks(&TaskQuery::default(), &page(50))
+        .await
+        .expect("a task read");
+    let early = source.accounting();
+    let early_count = early.total_requests();
+    assert_eq!(early_count, fixture.documents().len());
+    assert!(early_count > 0);
+
+    drive_a_session(&source).await;
+    let whole = source.accounting();
+    assert_eq!(
+        whole.total_requests(),
+        fixture.documents().len(),
+        "the board served {} requests and this source's own accounting recorded {}",
+        fixture.documents().len(),
+        whole.total_requests()
+    );
+    assert!(whole.total_requests() > early_count);
+    assert_eq!(
+        early.total_requests(),
+        early_count,
+        "the earlier snapshot grew with the source after it was taken, so it is a live \
+         borrow rather than a value two runs could be compared with"
+    );
+    assert_eq!(budget_of(&whole).limit, Some(FIXTURE_BUDGET_LIMIT));
+    assert!(
+        whole.report().contains("reading the board"),
+        "{}",
+        whole.report()
+    );
+}
+
 /// The budget figures come out of the headers the board's own answers carried.
 ///
 /// A report that could only fill these in against the real API would be an instrument
@@ -6930,8 +6987,11 @@ async fn a_callers_own_graphql_and_rest_calls_join_the_sources_in_one_session() 
     // A caller's REST call, named by the endpoint it addressed rather than by the URL it
     // built, with the rate-limit headers that response carried.
     let rest_headers = BTreeMap::from([
-        ("x-ratelimit-limit".to_owned(), "5000".to_owned()),
-        ("x-ratelimit-remaining".to_owned(), "4987".to_owned()),
+        // The board's own figures again rather than GitHub's published REST allowance, for
+        // the reason `FIXTURE_BUDGET_LIMIT` gives: a number the report could have known
+        // without reading a header proves nothing about whether it read one.
+        ("x-ratelimit-limit".to_owned(), "1234".to_owned()),
+        ("x-ratelimit-remaining".to_owned(), "1221".to_owned()),
         ("x-ratelimit-used".to_owned(), "13".to_owned()),
         ("x-ratelimit-resource".to_owned(), "core".to_owned()),
     ]);
@@ -6965,8 +7025,8 @@ async fn a_callers_own_graphql_and_rest_calls_join_the_sources_in_one_session() 
         .find(|report| report.budget == Budget::Rest)
         .expect("the session drew on the REST budget");
     assert_eq!(rest.counted, 1);
-    assert_eq!(rest.limit, Some(5000));
-    assert_eq!(rest.remaining_last_seen, Some(4987));
+    assert_eq!(rest.limit, Some(1234));
+    assert_eq!(rest.remaining_last_seen, Some(1221));
     assert_eq!(budget_of(&session).reported, 37);
 
     let report = session.report();
@@ -7029,15 +7089,32 @@ async fn a_caller_tells_an_answer_from_a_refusal_from_a_rate_limit_the_way_this_
     // arbitrary bytes, so a value not spelled like a resource name is dropped.
     let named = |value: &'static str| {
         RateLimit::read(move |name| (name == "x-ratelimit-resource").then(|| value.to_owned()))
-            .resource
     };
-    assert_eq!(named("  graphql  ").as_deref(), Some("graphql"));
+    assert_eq!(named("  graphql  ").resource(), Some("graphql"));
     assert_eq!(
-        named("integration_manifest").as_deref(),
+        named("integration_manifest").resource(),
         Some("integration_manifest")
     );
-    assert_eq!(named("<script>alert(1)</script>"), None);
-    assert_eq!(named(""), None);
+    assert_eq!(named("<script>alert(1)</script>").resource(), None);
+    assert_eq!(named("").resource(), None);
+    // The five figures are read back through the accessors that are the only way to have
+    // them, so a caller cannot assemble a set of headers no response ever carried.
+    let observed = RateLimit::read(|name| {
+        BTreeMap::from([
+            ("x-ratelimit-limit", "4321"),
+            ("x-ratelimit-remaining", "4300"),
+            ("x-ratelimit-used", "21"),
+            ("x-ratelimit-reset", "1788000000"),
+        ])
+        .get(name)
+        .map(|value| (*value).to_owned())
+    });
+    assert_eq!(observed.limit(), Some(4321));
+    assert_eq!(observed.remaining(), Some(4300));
+    assert_eq!(observed.used_by_the_account(), Some(21));
+    assert_eq!(observed.reset(), Some(1_788_000_000));
+    assert_eq!(observed.resource(), None);
+    assert_eq!(RateLimit::default().limit(), None);
 
     for (spelled, method, mode) in [
         ("get", Method::Get, Mode::Read),
