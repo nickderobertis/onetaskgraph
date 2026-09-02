@@ -1,29 +1,23 @@
 #!/usr/bin/env bash
+# llmlint: ignore-file[new_code_lands_in_a_project] scripts/ is deliberately outside the
+# project graph, as every other guard here is: Nx maps no project to it, which is why
+# `just script-check` runs these outside Nx. This one is nevertheless a command of each
+# hosted plugin's own `test` target, so it runs when that plugin is affected.
+#
 # Drive one plugin's live journey through all three of its outcomes, reaching no API.
 #
-# A live journey has three answers and CI has to be able to carry each of them as itself:
+# 1. **Skipped** — no credential, and none expected: exit zero with the reason printed.
+# 2. **Expected and absent** — `ONETASKGRAPH_LIVE_REQUIRED=1` turns that skip into a
+#    failure naming the variable, so the required check cannot pass green for a missing one.
+# 3. **Declined** — it could have run and a precondition refused it, so it tested nothing.
+#    The run fails, which is a conclusion branch protection accepts neither as success nor
+#    in place of it; and its first line says the tests DID NOT RUN, so it is not read as a
+#    code defect. This is the outcome this check exists for, and the precondition producing
+#    it here — a seat another instance holds — needs nothing of GitHub's. A later one
+#    declines by the same route, so what is proven is the wiring rather than one reason.
 #
-#   1. **It skipped.** No credential was given and none was expected — a contributor with
-#      no keys, and a pull request from a fork, which the host gives no secrets. Exit zero,
-#      with the reason printed, is the honest answer and nothing about it is a defect.
-#   2. **A credential was expected and absent.** `ONETASKGRAPH_LIVE_REQUIRED=1` turns that
-#      same skip into a failure naming the variable, so the required check cannot pass green
-#      merely because a credential went missing.
-#   3. **It declined.** It could have run and a precondition refused it, so it tested
-#      nothing. That is not a pass: the run fails, which is a conclusion branch protection
-#      does not accept — not success, and not any of the conclusions (`neutral`, `skipped`)
-#      it accepts in place of success. And it is not read as a code defect either, because
-#      the first thing the output says is that the tests DID NOT RUN and why.
-#
-# The third is the one this exists for. The precondition that produces it here is
-# exclusivity — another instance already holds this session's seat — which needs no
-# credential, no remote state and nothing of GitHub's to demonstrate. The retained-buffer
-# precondition lands beside it in the same gate and produces the same outcome by the same
-# route, so what is proven here is the wiring rather than any one reason for declining.
-#
-# Every run below is given a placeholder credential and a scratch seat directory, so
-# nothing here reaches a real API: the decline happens before the journey's first request,
-# and the other two never get a credential at all.
+# Every run below gets a placeholder credential and a scratch seat directory, so nothing
+# here reaches a real API.
 #
 # Usage: scripts/check-live-decline.sh <crate> <seat-file-name>
 set -euo pipefail

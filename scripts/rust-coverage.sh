@@ -30,10 +30,7 @@ readonly MIN_LINES=95
 # Clearing them makes the live tests take their own skip path here, printing why. The
 # demand is cleared with them: `ONETASKGRAPH_LIVE_REQUIRED=1` left set would turn that skip
 # into a failure and this phase would fail for a session it is deliberately not running.
-#
-# Nothing is lost by it. These tests were never measured before this change — they carried
-# `#[ignore]` and `cargo llvm-cov` does not pass `--include-ignored` — so the number below
-# is the number this crate has always reported.
+# Nothing is lost by it: `cargo llvm-cov` never measured these tests.
 #
 # The other half of "one session per run" is the platform matrix:
 # .github/workflows/ci.yml hands the credentials to exactly one of its three `check` lanes.

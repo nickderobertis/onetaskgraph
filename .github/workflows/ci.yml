@@ -4,22 +4,19 @@
 # branch sweeps every project, so nothing affected-detection or a stale cache could miss
 # goes unchecked. Both go through the same `just` recipes a contributor runs locally.
 #
-# **The tests that reach a real API run here, in the ordinary `check` job, and nowhere
-# else.** There is no live workflow, no live job and no live target: change the GitHub
-# Projects plugin and its GitHub tests run in this required check and can fail it; change
-# the Linear plugin and its Linear tests do; change the engine or another plugin and
-# neither runs, because affected selection does not select them. That reverses an earlier
-# decision and AGENTS.md records why.
+# The tests that reach a real API run here, in the ordinary `check` job, and nowhere else.
+# AGENTS.md records that decision and why it reverses an earlier one; what this file has to
+# get right is two things it alone controls.
 #
-# **One live session per run of this workflow**, which is two arrangements rather than one:
-# only the `ubuntu-latest` leg of the matrix below is given the credentials, and
+# **One live session per run**, because a test that reads and writes a shared external
+# fixture must not run concurrently with another instance of itself: only the
+# `ubuntu-latest` leg of the matrix below carries the credentials, and
 # scripts/rust-coverage.sh clears them before `cargo llvm-cov` re-runs the same integration
 # tests inside the same `just check`. Change either and read the note in that script first.
 #
-# **A fork pull request receives no secrets, and takes the skip path**: the credentials
-# arrive empty, the live tests print why they are skipping, and `ONETASKGRAPH_LIVE_REQUIRED`
-# is `0` there so that skip is not turned into a failure. Everywhere else it is `1`, so the
-# lane cannot pass green merely because a credential went missing.
+# **A fork pull request receives no secrets and takes the skip path**, so
+# `ONETASKGRAPH_LIVE_REQUIRED` is `0` there and `1` everywhere else — a lane cannot pass
+# green merely because a credential went missing where one was expected.
 
 name: ci
 
