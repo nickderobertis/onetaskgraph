@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.18...onetaskgraph-github-projects-v0.2.19) - 2026-09-01
+
+### Fixed
+
+- *(github-projects)* read a project and its tasks without walking the board ([#235](https://github.com/nickderobertis/onetaskgraph/pull/235))
+
 ## [0.2.18](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.17...onetaskgraph-github-projects-v0.2.18) - 2026-09-01
 
 ### Fixed

@@ -1,6 +1,6 @@
 {
   "name": "@onetaskgraph/sdk",
-  "version": "0.2.18",
+  "version": "0.2.19",
   "description": "The TypeScript SDK for onetaskgraph, generated from the binary's own JSON Schema bundle.",
   "license": "MIT",
   "type": "module",
@@ -27,7 +27,7 @@
     "generate:check": "bun scripts/generate.ts --check"
   },
   "optionalDependencies": {
-    "@onetaskgraph/cli": "0.2.18"
+    "@onetaskgraph/cli": "0.2.19"
   },
   "devDependencies": {
     "ajv": "8.17.1",

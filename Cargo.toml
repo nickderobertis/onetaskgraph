@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.2.18"
+version = "0.2.19"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
@@ -11,12 +11,12 @@ repository = "https://github.com/nickderobertis/onetaskgraph"
 authors = ["Nick DeRobertis"]
 
 [workspace.dependencies]
-onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "0.2.18" }
-onetaskgraph-core = { path = "crates/onetaskgraph-core", version = "0.2.18" }
-onetaskgraph-in-memory = { path = "crates/onetaskgraph-in-memory", version = "0.2.18" }
-onetaskgraph-local-md = { path = "crates/onetaskgraph-local-md", version = "0.2.18" }
-onetaskgraph-linear = { path = "crates/onetaskgraph-linear", version = "0.2.18" }
-onetaskgraph-github-projects = { path = "crates/onetaskgraph-github-projects", version = "0.2.18" }
+onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "0.2.19" }
+onetaskgraph-core = { path = "crates/onetaskgraph-core", version = "0.2.19" }
+onetaskgraph-in-memory = { path = "crates/onetaskgraph-in-memory", version = "0.2.19" }
+onetaskgraph-local-md = { path = "crates/onetaskgraph-local-md", version = "0.2.19" }
+onetaskgraph-linear = { path = "crates/onetaskgraph-linear", version = "0.2.19" }
+onetaskgraph-github-projects = { path = "crates/onetaskgraph-github-projects", version = "0.2.19" }
 
 async-trait = "0.1.92"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde", "clock"] }
