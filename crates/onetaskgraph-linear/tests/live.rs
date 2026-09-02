@@ -21,7 +21,7 @@
 
 use std::{collections::BTreeMap, env, future::Future};
 
-use onetaskgraph_live::{Session, missing, required};
+use onetaskgraph_live::{Credential, Session, missing, required};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
     Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId,
@@ -1056,10 +1056,10 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             Err(error) => panic!("the Linear live lane cannot run: {error}"),
         }
     };
-    let Some(key) = env::var("LINEAR_API_KEY")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
+    // `Credential::new` is what decides a key is usable, rather than a second reading of
+    // "empty" here: the session this lane opens takes one of those and nothing else, and a
+    // host expands a secret it does not have to the empty string rather than omitting it.
+    let Some(key) = env::var("LINEAR_API_KEY").ok().and_then(Credential::new) else {
         skip("LINEAR_API_KEY is not set");
         return;
     };
@@ -1081,7 +1081,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     // key below is the one this returns rather than the one the environment held. A session
     // that is refused did not run and did not pass, and says so.
     let session = Session::open(SESSION_NAME, key).unwrap_or_else(|declined| declined.refuse());
-    let key = session.credential().to_owned();
+    let key = session.credential().expose().to_owned();
     let source = onetaskgraph_linear::Plugin
         .build(
             &SourceName::new("live").unwrap(),

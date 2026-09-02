@@ -11,7 +11,7 @@
 use std::future::Future;
 
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
-use onetaskgraph_live::{missing, required};
+use onetaskgraph_live::{Credential, missing, required};
 use onetaskgraph_plugin_api::SecretResolver;
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -134,7 +134,7 @@ where
 #[derive(Debug, PartialEq, Eq)]
 pub enum LiveLane {
     Run {
-        token: String,
+        token: Credential,
         owner: String,
         project_number: u32,
         repository: String,
@@ -184,9 +184,11 @@ pub fn live_lane(
     let Some(token) = token else {
         return skip("GH_PROJECTS_TOKEN is not set");
     };
-    if token.trim().is_empty() {
+    // `Credential::new` is what decides a token is usable, rather than a second reading of
+    // "empty" here: the session this lane opens takes one of those and nothing else.
+    let Some(token) = Credential::new(token) else {
         return skip("GH_PROJECTS_TOKEN is empty");
-    }
+    };
     let owner = owner.map(str::trim).filter(|owner| !owner.is_empty());
     let project_number = project_number
         .map(str::trim)
@@ -235,7 +237,7 @@ pub fn live_lane(
         ));
     }
     Ok(LiveLane::Run {
-        token: token.to_owned(),
+        token,
         owner: owner.to_owned(),
         project_number: number,
         repository: repository.to_owned(),

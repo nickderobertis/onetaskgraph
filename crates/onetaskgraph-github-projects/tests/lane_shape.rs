@@ -14,6 +14,7 @@ use lane::{
     is_run_artifact_title, live_lane, live_write_config, run_then_cleanup,
 };
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
+use onetaskgraph_live::Credential;
 use onetaskgraph_plugin_api::{SourceName, SourcePlugin};
 
 #[tokio::test]
@@ -63,7 +64,7 @@ fn the_lane_takes_its_board_and_repository_only_from_the_names_it_is_given() {
             None
         ),
         Ok(LiveLane::Run {
-            token: "live-token".to_owned(),
+            token: Credential::new("live-token").expect("a placeholder credential is not blank"),
             owner: "nickderobertis".to_owned(),
             project_number: 1,
             repository: "acme/work".to_owned(),

@@ -155,9 +155,11 @@ jobs:
           # A fork pull request is given no secrets, so its live tests skip with a reason
           # and that skip is honest. Every other run is one where a credential is expected,
           # and there an absent credential or nomination fails rather than passing green.
+          # llmlint: ignore[live_tier_compiles_and_requires_credential] The `0` here is the fork case alone, which is the one run where no credential was ever expected: GitHub supplies a fork pull request no secrets at all, so demanding one would fail every outside contribution for something the contributor cannot supply. Every other run — including every pull request from this repository, which is the one the merge waits on — gets `1`, and there an absent credential fails rather than skipping green. That is the demand this rule asks for, expressed once at the only place credentials enter this build.
           ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
           NX_BASE: ${{ steps.base.outputs.base }}
           NX_HEAD: HEAD
+        # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] This repository deliberately reversed that rule; AGENTS.md records it under "The tests that reach a real API are ordinary tests, and that reverses an earlier decision". Holding them outside the required set is what let a query GitHub refuses outright merge — the advisory lane went red on the pull request that introduced it and auto-merge squashed it anyway, because auto-merge waits only on required checks. Affected selection is what keeps the cost bounded: these targets run only when their own plugin changed, and `scripts/check-live-lane.sh` asserts the whole shape.
         run: just check-generated
 
       # On the default branch, sweep everything. A cache is for speed and must never be
@@ -202,6 +204,7 @@ jobs:
           # A fork pull request is given no secrets, so its live tests skip with a reason
           # and that skip is honest. Every other run is one where a credential is expected,
           # and there an absent credential or nomination fails rather than passing green.
+          # llmlint: ignore[live_tier_compiles_and_requires_credential] The `0` here is the fork case alone, which is the one run where no credential was ever expected: GitHub supplies a fork pull request no secrets at all, so demanding one would fail every outside contribution for something the contributor cannot supply. Every other run — including every pull request from this repository, which is the one the merge waits on — gets `1`, and there an absent credential fails rather than skipping green. That is the demand this rule asks for, expressed once at the only place credentials enter this build.
           ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
         run: just gate-generated
 

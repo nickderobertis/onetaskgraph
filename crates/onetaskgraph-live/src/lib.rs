@@ -147,6 +147,46 @@ impl fmt::Display for Declined {
     }
 }
 
+/// A credential a session can actually be opened with.
+///
+/// A type rather than a `String`, because "the session is open" has to mean the lane may
+/// reach its API — and a blank credential cannot. That is the common case rather than a
+/// pathological one: a host expands a secret it does not have to the empty string, so the
+/// absent credential and the blank one arrive here spelled the same way, and a `String`
+/// field would let a session hold one and hand it to a lane that then reads GitHub's
+/// refusal as a defect in the code under test. [`Credential::new`] is the only way to make
+/// one, so a session that exists has a usable credential.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Credential(String);
+
+impl Credential {
+    /// The credential `raw` carries, or `None` when it carries none.
+    ///
+    /// Blank is none: a variable set to spaces is a variable nobody set. The value is kept
+    /// exactly as it was given rather than trimmed — what an API accepts is the API's
+    /// business, and a credential this crate had quietly edited would be a worse failure
+    /// than one it refused.
+    #[must_use]
+    pub fn new(raw: impl Into<String>) -> Option<Self> {
+        let raw = raw.into();
+        (!raw.trim().is_empty()).then_some(Self(raw))
+    }
+
+    /// The credential itself, for the call that sends it.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Credential {
+    /// Redacted, and its length instead: this type is held by [`Session`], which derives
+    /// `Debug`, and a panic message that printed a live credential would put it in a log.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "Credential(<redacted, {} bytes>)", self.0.len())
+    }
+}
+
 /// A live session in progress: the credential, and the seat that says it is the only one.
 ///
 /// Held for as long as the lane is reaching its API. Dropping it releases the seat, so a
@@ -155,7 +195,7 @@ impl fmt::Display for Declined {
 #[derive(Debug)]
 pub struct Session {
     name: String,
-    credential: String,
+    credential: Credential,
     seat: Seat,
 }
 
@@ -169,7 +209,7 @@ impl Session {
     ///
     /// When a precondition refuses. Today that is exclusivity alone: another instance of
     /// this session is already running against the same shared fixture.
-    pub fn open(name: &str, credential: String) -> Result<Self, Declined> {
+    pub fn open(name: &str, credential: Credential) -> Result<Self, Declined> {
         let directory = std::env::var_os(SEAT_DIRECTORY_VARIABLE)
             .map_or_else(std::env::temp_dir, PathBuf::from);
         Self::open_in(&directory, name, credential)
@@ -180,7 +220,7 @@ impl Session {
     /// # Errors
     ///
     /// As [`Session::open`].
-    pub fn open_in(directory: &Path, name: &str, credential: String) -> Result<Self, Declined> {
+    pub fn open_in(directory: &Path, name: &str, credential: Credential) -> Result<Self, Declined> {
         let seat = Seat::take(directory, name).map_err(|reason| Declined {
             session: name.to_owned(),
             reason,
@@ -194,7 +234,7 @@ impl Session {
 
     /// The credential this session was opened with.
     #[must_use]
-    pub fn credential(&self) -> &str {
+    pub fn credential(&self) -> &Credential {
         &self.credential
     }
 
@@ -304,6 +344,10 @@ fn slug(name: &str) -> String {
 mod tests {
     use super::*;
 
+    fn credential(raw: &str) -> Credential {
+        Credential::new(raw).expect("this test's placeholder credential is not blank")
+    }
+
     fn scratch() -> PathBuf {
         let directory = std::env::temp_dir().join(format!(
             "onetaskgraph-live-seats-{}-{:?}",
@@ -349,9 +393,9 @@ mod tests {
     #[test]
     fn one_session_holds_its_seat_and_a_second_instance_is_declined() {
         let directory = scratch();
-        let held = Session::open_in(&directory, "GitHub Projects", "live-token".to_owned())
+        let held = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
             .expect("the first instance takes the seat");
-        assert_eq!(held.credential(), "live-token");
+        assert_eq!(held.credential().expose(), "live-token");
         assert_eq!(held.name(), "GitHub Projects");
         assert!(held.seat_path().exists());
         assert!(
@@ -361,7 +405,7 @@ mod tests {
             held.seat_path().display()
         );
 
-        let declined = Session::open_in(&directory, "GitHub Projects", "live-token".to_owned())
+        let declined = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
             .expect_err("a second instance against the same fixture must be declined");
         let message = declined.message();
         assert!(message.contains("DID NOT RUN"), "{message}");
@@ -377,7 +421,7 @@ mod tests {
         let seat = held.seat_path().to_owned();
         drop(held);
         assert!(!seat.exists(), "a finished session releases its seat");
-        Session::open_in(&directory, "GitHub Projects", "live-token".to_owned())
+        Session::open_in(&directory, "GitHub Projects", credential("live-token"))
             .expect("the seat is free once the run that held it ended");
     }
 
@@ -392,7 +436,7 @@ mod tests {
             .set_modified(long_ago)
             .expect("its modification time is settable");
 
-        let reclaimed = Session::open_in(&directory, "Linear", "live-key".to_owned())
+        let reclaimed = Session::open_in(&directory, "Linear", credential("live-key"))
             .expect("a seat older than any session lasts is an interrupted run's");
         assert_eq!(reclaimed.seat_path(), path);
     }
@@ -400,7 +444,7 @@ mod tests {
     #[test]
     fn a_seat_directory_that_does_not_exist_declines_rather_than_running_unguarded() {
         let directory = scratch().join("absent");
-        let declined = Session::open_in(&directory, "Linear", "live-key".to_owned())
+        let declined = Session::open_in(&directory, "Linear", credential("live-key"))
             .expect_err("a seat that cannot be taken must decline rather than run");
         let message = declined.message();
         assert!(message.contains("DID NOT RUN"), "{message}");
@@ -412,7 +456,7 @@ mod tests {
         // SAFETY-of-the-suite note: this is the one test that reads the process
         // environment, and it only reads it.
         let named = std::env::var_os(SEAT_DIRECTORY_VARIABLE);
-        let session = Session::open("onetaskgraph default seat probe", "unused".to_owned())
+        let session = Session::open("onetaskgraph default seat probe", credential("unused"))
             .expect("nothing else holds this probe's seat");
         let expected = named.map_or_else(std::env::temp_dir, PathBuf::from);
         assert_eq!(session.seat_path().parent(), Some(expected.as_path()));
@@ -426,6 +470,35 @@ mod tests {
             reason: "the account cannot afford it".to_owned(),
         }
         .refuse()
+    }
+
+    #[test]
+    fn a_credential_a_session_could_not_use_cannot_be_made_at_all() {
+        for blank in ["", " ", "\t\n"] {
+            assert!(
+                Credential::new(blank).is_none(),
+                "a host expands a secret it does not have to {blank:?}, which no session may open on"
+            );
+        }
+        let credential = credential("  ghp_padded  ");
+        assert_eq!(
+            credential.expose(),
+            "  ghp_padded  ",
+            "the value is handed back exactly as it was given rather than edited"
+        );
+        assert_eq!(
+            format!("{credential:?}"),
+            "Credential(<redacted, 14 bytes>)",
+            "a debug rendering must not put a live credential in a log"
+        );
+        assert!(
+            !format!(
+                "{:?}",
+                Session::open_in(&scratch(), "Redaction", credential).unwrap()
+            )
+            .contains("ghp_padded"),
+            "nor may the session that holds it"
+        );
     }
 
     #[test]
