@@ -7,14 +7,13 @@
 # Drive one plugin's live journey through all three of its outcomes, reaching no API.
 #
 # 1. **Skipped** — no credential, and none expected: exit zero with the reason printed.
-# 2. **Expected and absent** — `ONETASKGRAPH_LIVE_REQUIRED=1` turns that skip into a
-#    failure naming the variable, so the required check cannot pass green for a missing one.
-# 3. **Declined** — it could have run and a precondition refused it, so it tested nothing.
-#    The run fails, which is a conclusion branch protection accepts neither as success nor
-#    in place of it; and its first line says the tests DID NOT RUN, so it is not read as a
-#    code defect. This is the outcome this check exists for, and the precondition producing
-#    it here — a seat another instance holds — needs nothing of GitHub's. A later one
-#    declines by the same route, so what is proven is the wiring rather than one reason.
+# 2. **Expected and absent** — `ONETASKGRAPH_LIVE_REQUIRED=1` makes that same skip a failure
+#    naming the variable, so the required check cannot pass green for a missing credential.
+# 3. **Declined** — a precondition refused a run that could have happened, so it tested
+#    nothing. The run fails, which branch protection accepts neither as success nor in place
+#    of it, and its first line says the tests DID NOT RUN so it is not read as a code defect.
+#    This is the outcome the check exists for; the precondition producing it here is a seat
+#    another instance holds, so what is proven is the wiring rather than one reason.
 #
 # Every run below gets a placeholder credential and a scratch seat directory, so nothing
 # here reaches a real API.

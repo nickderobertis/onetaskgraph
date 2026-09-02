@@ -17,24 +17,18 @@ readonly CRATE="${1:?usage: scripts/rust-coverage.sh <crate-name>}"
 readonly MIN_LINES=95
 
 # ONE live session per run of the gate, and this is where the second one would come from.
+# `just check` runs `test` AND `coverage`, and `cargo llvm-cov --package <crate>` below
+# re-runs those same integration tests — so credentials left set here would open a second
+# session against the shared external fixture the first may still be writing to. A test that
+# reads and writes a shared external fixture must not run concurrently with another instance
+# of itself: each sweeps residue by title before it starts and that sweep recognises ANY
+# run's artifacts, so two concurrent runs delete each other's in-flight items.
 #
-# The tests that reach a real API are ordinary tests of the `test` target now. `just check`
-# runs `test` AND `coverage`, and `cargo llvm-cov --package <crate>` below re-runs the very
-# same integration tests — so with the credentials still set this phase would open a second
-# session against the shared external fixture the first one may still be writing to, and a
-# test that reads and writes a shared external fixture must not run concurrently with
-# another instance of itself: each sweeps residue by title before it starts, and that sweep
-# recognises ANY run's artifacts, so two concurrent runs delete each other's in-flight
-# items.
-#
-# Clearing them makes the live tests take their own skip path here, printing why. The
-# demand is cleared with them: `ONETASKGRAPH_LIVE_REQUIRED=1` left set would turn that skip
-# into a failure and this phase would fail for a session it is deliberately not running.
-# Nothing is lost by it: `cargo llvm-cov` never measured these tests.
-#
-# The other half of "one session per run" is the platform matrix:
-# .github/workflows/ci.yml hands the credentials to exactly one of its three `check` lanes.
-# If you are here to change the matrix or this target, that is the pair to keep true.
+# The demand is cleared with them, or the skip that clearing produces would fail this phase
+# for a session it is deliberately not running. Nothing is lost: llvm-cov never measured
+# these tests. The other half of "one session per run" is the platform matrix, which hands
+# the credentials to one of three `check` lanes. Changing the matrix or this target means
+# keeping that pair true.
 unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
 
 case "${OS:-}${OSTYPE:-}" in

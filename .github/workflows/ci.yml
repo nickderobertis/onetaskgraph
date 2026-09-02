@@ -4,19 +4,12 @@
 # branch sweeps every project, so nothing affected-detection or a stale cache could miss
 # goes unchecked. Both go through the same `just` recipes a contributor runs locally.
 #
-# The tests that reach a real API run here, in the ordinary `check` job, and nowhere else.
-# AGENTS.md records that decision and why it reverses an earlier one; what this file has to
-# get right is two things it alone controls.
-#
-# **One live session per run**, because a test that reads and writes a shared external
-# fixture must not run concurrently with another instance of itself: only the
-# `ubuntu-latest` leg of the matrix below carries the credentials, and
-# scripts/rust-coverage.sh clears them before `cargo llvm-cov` re-runs the same integration
-# tests inside the same `just check`. Change either and read the note in that script first.
-#
-# **A fork pull request receives no secrets and takes the skip path**, so
-# `ONETASKGRAPH_LIVE_REQUIRED` is `0` there and `1` everywhere else — a lane cannot pass
-# green merely because a credential went missing where one was expected.
+# The tests that reach a real API run in the ordinary `check` job here; AGENTS.md records
+# why. Two things about that are this file's alone. One live session per run: only the
+# `ubuntu-latest` leg carries the credentials, and scripts/rust-coverage.sh clears them
+# before coverage re-runs the same tests — read the note there before changing either. And
+# `ONETASKGRAPH_LIVE_REQUIRED` is `0` on a fork pull request, which gets no secrets, and `1`
+# everywhere else, so no lane passes green for a credential that went missing.
 
 name: ci
 
@@ -120,38 +113,26 @@ jobs:
       - name: Check the affected projects and generated Python SDK
         if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
         env:
-          # The one place a live session's credentials and nominations enter this build.
-          # They are on the two ubuntu-latest steps alone: `just check` runs `test` and
-          # `coverage`, and coverage re-runs the same integration tests, so a second lane
-          # carrying these would open a second session against the same shared fixture.
+          # The one place a live session's credentials and nominations enter this build,
+          # and one of the two ubuntu-latest steps that carry them; the file header says
+          # why no other lane may.
           #
           # GH_PROJECTS_TOKEN, not GITHUB_PROJECTS_TOKEN: GitHub Actions refuses to create
-          # any secret whose name begins with GITHUB_, so the short name is the one that
-          # can exist in both CI and the local secrets file — and a single name is
-          # preferred over a translation. Do not "correct" this into a break.
+          # a secret whose name begins with GITHUB_, so the short name is the one that can
+          # exist both here and in the local secrets file. Do not "correct" it into a break.
           GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          # The board the GitHub Projects lane writes to, named here rather than discovered.
-          # It refuses to pick a board itself — "whichever project was updated most recently"
-          # once walked a credentialed write lane onto the board plans are authored on — so
-          # without every name below it skips. They are not secret: they are the fixture
-          # board this lane's own items live on, and naming them in the open is what makes
-          # the blast radius reviewable.
+          # Nominations, not secrets: each lane writes only where it is pointed and refuses
+          # to pick a target itself, because "whichever project was updated most recently"
+          # once walked a credentialed write onto the board plans are authored on. Naming
+          # them in the open is what makes the blast radius reviewable.
           # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The lane's own refusal is the drift gate: ONETASKGRAPH_LIVE_REQUIRED below is 1 on this lane, so a name spelled differently on either side fails this required check naming the variable rather than skipping green.
           GH_PROJECTS_OWNER: nickderobertis
           GH_PROJECTS_NUMBER: "1"
-          # A project is an issue and a task is its sub-issue, so this lane's artifact is a
-          # real issue and a board has no repository to create one in. Named for the same
-          # reason the board is: a credentialed write must not land somewhere nobody chose.
+          # A board has no repository, and this lane's artifact is a real issue.
           GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph
-          # The Linear lane's own nomination, the same rule one level over: a scratch team
-          # it may write its fixture to, rather than one it discovered. A repository
-          # variable rather than a secret, because a team key is a nomination and reviewing
-          # where a write lane may land needs it readable.
+          # A repository variable rather than a secret: a nomination has to stay readable.
           LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
-          # A fork pull request is given no secrets, so its live tests skip with a reason
-          # and that skip is honest. Every other run is one where a credential is expected,
-          # and there an absent credential or nomination fails rather than passing green.
           # llmlint: ignore[live_tier_compiles_and_requires_credential] The `0` here is the fork case alone, which is the one run where no credential was ever expected: GitHub supplies a fork pull request no secrets at all, so demanding one would fail every outside contribution for something the contributor cannot supply. Every other run — including every pull request from this repository, which is the one the merge waits on — gets `1`, and there an absent credential fails rather than skipping green. That is the demand this rule asks for, expressed once at the only place credentials enter this build.
           ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
           NX_BASE: ${{ steps.base.outputs.base }}

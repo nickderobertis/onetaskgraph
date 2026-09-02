@@ -1,24 +1,20 @@
 #!/usr/bin/env bash
-# The shape of the tests that reach a real API, now that there is nothing special about them.
+# The shape of the tests that reach a real API, now that nothing about them is special.
 #
-# There is no live workflow, no live job, no live target and no live recipe: a change to a
-# plugin runs that plugin's tests in the ordinary required check, and a change to anything
-# else does not select them. That is a shape rather than a sentence, and every part of it
-# can be undone by an edit nothing else would complain about — so each part is asserted here:
+# Every part of it can be undone by an edit nothing else would complain about, so each is
+# asserted here:
 #
-#   1. The separate lane is gone and stays gone: no `test-live` target, target default,
-#      recipe or workflow. Re-adding one is how these tests quietly stop being required.
-#   2. Every live test really runs where it now lives: it declares tests, and none of them
-#      carries `#[ignore]`, which is what used to keep them out of every other target.
+#   1. No `test-live` target, target default, recipe or workflow — the separate lane stays
+#      gone, since re-adding one is how these tests quietly stop being required.
+#   2. Every live test really runs where it now lives: tests are declared, and none carries
+#      `#[ignore]`.
 #   3. Each hosted plugin's journey opens its session through the one gate,
-#      `onetaskgraph_live::Session::open`. That is where a precondition governing every
-#      path to a real API is added, so a journey that reached its API without it would be a
-#      path the next precondition does not govern.
-#   4. .github/workflows/ci.yml hands each credential to exactly one lane of the platform
-#      matrix, under the one name the product reads, with the nominations that lane needs
-#      and the demand that stops a missing credential passing green.
-#   5. scripts/rust-coverage.sh clears them, because coverage re-runs the same integration
-#      tests and a second session would race the first against a shared external fixture.
+#      `onetaskgraph_live::Session::open`, so a precondition added there governs every path
+#      to a real API rather than some.
+#   4. .github/workflows/ci.yml hands each credential to exactly one lane of the matrix,
+#      under the name the product reads, with that lane's nominations and the demand that
+#      stops a missing credential passing green.
+#   5. scripts/rust-coverage.sh clears them, because coverage re-runs the same tests.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

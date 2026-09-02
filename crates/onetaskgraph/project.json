@@ -3,7 +3,7 @@
   "name": "onetaskgraph",
   "projectType": "application",
   "tags": ["lang:rust", "layer:binary"],
-  "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to the `test` target, which is what it is about: `tests/live.rs` reads the public registries from inside it, behind no edge of its own. That is the decision AGENTS.md records under \"The tests that reach a real API are ordinary tests, and that reverses an earlier decision\" \u2014 an edge of their own is what let a signal nobody waits on go red while the change it refused merged. Affected selection is the edge: this target runs only when this crate or a dependency of it changed, and scripts/check-live-lane.sh asserts the whole shape.",
+  "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `test`, which is what it is about: tests/live.rs reads the public registries from inside it, behind no edge of its own, which is the decision AGENTS.md records. Affected selection is the edge.",
   "implicitDependencies": [
     "onetaskgraph-core",
     "onetaskgraph-github-projects",

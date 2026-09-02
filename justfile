@@ -77,10 +77,7 @@ distribution-test:
     @scripts/check-npm-publish.sh
     @scripts/check-fixture-discrimination.sh
 
-# llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] The tests that
-# reach Linear and GitHub are ordinary tests of their own plugin's target, deliberately: a
-# suite of their own is what let a query GitHub refuses merge while the advisory lane sat
-# red. AGENTS.md records the decision; `affected` is the edge that bounds what it costs.
+# llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] The tests that reach Linear and GitHub are ordinary tests of their own plugin's target, deliberately: a suite of their own is what let a query GitHub refuses merge while the advisory lane sat red. AGENTS.md records the decision; `affected` is the edge that bounds what it costs.
 # Tests only, for the affected projects.
 test:
     @{{nx}} affected -t test
@@ -91,11 +88,10 @@ test:
 # instrumentation does not attribute subprocess coverage; the functional lanes still
 # gate that platform.
 #
-# `cargo llvm-cov` re-runs the very integration tests `test` above just ran, so with the
-# live credentials still in the environment this phase would open a SECOND live session
-# per lane, against the shared external fixture the first one is still writing to.
-# scripts/rust-coverage.sh clears them for exactly that reason; see the note there before
-# changing either this recipe or the platform matrix in .github/workflows/ci.yml.
+# `cargo llvm-cov` re-runs the very integration tests `test` above just ran, so live
+# credentials left set here would open a SECOND session per lane against one shared external
+# fixture. scripts/rust-coverage.sh clears them; read the note there before changing this
+# recipe or the platform matrix in .github/workflows/ci.yml.
 
 # Coverage only, for the affected projects. Fails below 95% lines.
 coverage:

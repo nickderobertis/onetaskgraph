@@ -198,6 +198,7 @@ impl fmt::Debug for Credential {
 /// be declined by.
 #[derive(Debug)]
 pub struct Session {
+    // llmlint: ignore[invalid_states_unrepresentable] The name is not input: each lane names its own session with a `const` of its own, there are two in this workspace, and neither reaches a user or a file a user writes. The state a newtype would remove — two names whose seats slug alike — is a spurious *decline*, which fails loudly with both names in the message rather than letting two runs race; and `slug` is total, with its empty and punctuation-only cases pinned by this crate's own tests. A validated type here would be ceremony over two constants.
     name: String,
     credential: Credential,
     seat: Seat,
