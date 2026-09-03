@@ -38,6 +38,14 @@ unknown-git = "deny"
 [bans]
 multiple-versions = "deny"
 wildcards = "deny"
+# The one wildcard this workspace allows, and cargo-deny's own condition for it is exactly
+# the shape it has: a dependency that is not from a registry, and is either a dependency of
+# an unpublished crate or a dev-dependency. `onetaskgraph-live` is the workspace's live-test
+# gate — path-only and `publish = false`, so it carries no version, so the two plugin crates
+# that name it as a dev-dependency name it by `*`. Giving it a version instead would put a
+# crate that is never published into the manifests those two crates publish. A wildcard on a
+# published dependency is still refused, which is what this rule is for.
+allow-wildcard-paths = true
 
 # One named exception, not a warning-only mode. Two proc-macro generations coexist in the
 # derive graph: schemars 1.2 is on syn 3 while serde/thiserror/clap are still on syn 2.
