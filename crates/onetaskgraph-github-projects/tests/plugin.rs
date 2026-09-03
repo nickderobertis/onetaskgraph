@@ -7070,8 +7070,8 @@ async fn the_reported_budget_figures_are_the_ones_the_responses_own_headers_carr
     );
     assert!(graphql.remaining_first_seen() > graphql.remaining_last_seen());
     // The session's own spend is attributed per call rather than read off the account.
-    assert_eq!(graphql.spent(), session.total_requests() as u64);
-    assert_eq!(graphql.modelled(), graphql.spent());
+    assert_eq!(graphql.attributed(), session.total_requests() as u64);
+    assert_eq!(graphql.modelled(), graphql.attributed());
     assert_eq!(graphql.reported(), 0);
 
     let report = session.report();
@@ -7084,8 +7084,8 @@ async fn the_reported_budget_figures_are_the_ones_the_responses_own_headers_carr
     );
     assert!(
         report.contains(&format!(
-            "spent {} points: 0 reported by GitHub",
-            graphql.spent()
+            "is attributed {} points — measured only where GitHub reported it: 0 reported by GitHub",
+            graphql.attributed()
         )),
         "{report}"
     );
@@ -7120,8 +7120,8 @@ async fn a_budget_something_else_is_spending_does_not_move_this_sessions_reporte
         shared_session.total_requests()
     );
     assert_eq!(
-        shared_budget.spent(),
-        alone_budget.spent(),
+        shared_budget.attributed(),
+        alone_budget.attributed(),
         "the session's spend moved with the account's allowance"
     );
     assert!(
@@ -7129,10 +7129,10 @@ async fn a_budget_something_else_is_spending_does_not_move_this_sessions_reporte
         "the shared board's allowance was supposed to fall faster"
     );
     assert!(
-        shared_budget.account_allowance_fall().unwrap() > shared_budget.spent(),
-        "the account's allowance fell by {:?} and this session spent {}",
+        shared_budget.account_allowance_fall().unwrap() > shared_budget.attributed(),
+        "the account's allowance fell by {:?} and this session is attributed {}",
         shared_budget.account_allowance_fall(),
-        shared_budget.spent()
+        shared_budget.attributed()
     );
     let report = shared_session.report();
     assert!(
@@ -7216,7 +7216,11 @@ async fn a_refusal_and_a_rate_limited_refusal_are_told_apart_and_only_one_of_the
     let budget = budget_of(&session);
     assert_eq!(budget.requests(), 1);
     assert_eq!(budget.not_run(), 1);
-    assert_eq!(budget.spent(), 0, "a request that never ran spent nothing");
+    assert_eq!(
+        budget.attributed(),
+        0,
+        "a request that never ran is attributed nothing"
+    );
     assert_eq!(budget.limit(), Some(5000));
     assert_eq!(budget.used_by_the_account(), Some(5000));
     assert_eq!(budget.remaining_last_seen(), Some(0));
@@ -7275,9 +7279,9 @@ async fn a_callers_own_graphql_and_rest_calls_join_the_sources_in_one_session() 
 
     let session = ledger.snapshot();
     assert_eq!(session.total_requests(), from_the_source + 2);
-    assert_eq!(session.spent(Budget::Rest), 1);
+    assert_eq!(session.attributed(Budget::Rest), 1);
     assert_eq!(
-        session.spent(Budget::Graphql),
+        session.attributed(Budget::Graphql),
         from_the_source as u64 + 37,
         "GitHub's own reported cost is what a call that reports one is attributed"
     );
@@ -7488,7 +7492,7 @@ async fn a_request_that_never_answered_is_recorded_as_refused_with_no_rate_limit
     let record = &session.requests()[0];
     assert_eq!(record.outcome(), Outcome::Refused);
     assert_eq!(record.rate_limit(), &RateLimit::default());
-    assert_eq!(session.spent(Budget::Graphql), 1);
+    assert_eq!(session.attributed(Budget::Graphql), 1);
 
     // And a response that promises more body than it sends, which fails while being read.
     let ledger = Arc::new(Accounting::new());

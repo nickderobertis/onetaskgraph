@@ -861,9 +861,17 @@ impl Session {
     pub fn estimated(&self, budget: Budget) -> Option<u64> {
         self.estimates.get(&budget).copied()
     }
-    /// What this session spent against `budget`, attributed per call.
+    /// What this session is **attributed** against `budget`, summed per call.
+    ///
+    /// Attributed rather than spent, and the difference is the point: only a call GitHub
+    /// itself reported a cost for is a measurement. A call against a budget metered in
+    /// requests is its own measure, and every other GraphQL call carries [`Basis::Modelled`]
+    /// — one point, GitHub's documented minimum, which is a **lower bound**. So this is what
+    /// the session can account for, never a claim about what GitHub charged; [`Self::budgets`]
+    /// is where the same total comes apart by basis, and that is what says how much of it is
+    /// measured.
     #[must_use]
-    pub fn spent(&self, budget: Budget) -> u64 {
+    pub fn attributed(&self, budget: Budget) -> u64 {
         self.requests
             .iter()
             .filter(|request| request.budget() == budget)
@@ -982,7 +990,7 @@ pub struct BudgetReport {
     budget: Budget,
     estimated: Option<u64>,
     requests: usize,
-    spent: u64,
+    attributed: u64,
     reported: u64,
     modelled: u64,
     counted: u64,
@@ -1000,7 +1008,7 @@ impl BudgetReport {
             budget,
             estimated: None,
             requests: 0,
-            spent: 0,
+            attributed: 0,
             reported: 0,
             modelled: 0,
             counted: 0,
@@ -1017,7 +1025,7 @@ impl BudgetReport {
     /// with the requests they are over.
     fn record(&mut self, request: &Request) {
         self.requests += 1;
-        self.spent = self.spent.saturating_add(request.spend.amount);
+        self.attributed = self.attributed.saturating_add(request.spend.amount);
         match request.spend.basis {
             Basis::Reported => {
                 self.reported = self.reported.saturating_add(request.spend.amount);
@@ -1064,10 +1072,15 @@ impl BudgetReport {
     pub const fn requests(&self) -> usize {
         self.requests
     }
-    /// What this session itself spent against it, attributed per call.
+    /// What this session itself is **attributed** against it, summed per call.
+    ///
+    /// Attributed rather than spent, for the reason [`Session::attributed`] gives: some of
+    /// this figure is [`Basis::Modelled`], GitHub's documented one-point minimum, which is a
+    /// lower bound and not a measurement. The four figures below are the same total split by
+    /// basis, which is what says how much of it GitHub itself reported.
     #[must_use]
-    pub const fn spent(&self) -> u64 {
-        self.spent
+    pub const fn attributed(&self) -> u64 {
+        self.attributed
     }
     /// How much of that GitHub itself reported.
     #[must_use]
@@ -1139,9 +1152,10 @@ impl BudgetReport {
         );
         let _ = writeln!(
             lines,
-            "  this session sent {} requests and spent {} {}: {} {}, {} {}, {} {}; {} {}",
+            "  this session sent {} requests and is attributed {} {} — measured only where \
+             GitHub reported it: {} {}, {} {}, {} {}; {} {}",
             self.requests,
-            self.spent,
+            self.attributed,
             self.budget.unit(),
             self.reported,
             Basis::Reported.name(),
@@ -1158,7 +1172,7 @@ impl BudgetReport {
                 "  a precondition estimated {estimated} {} before this session started, \
                  against the {} attributed above",
                 self.budget.unit(),
-                self.spent,
+                self.attributed,
             );
         }
         let _ = writeln!(
