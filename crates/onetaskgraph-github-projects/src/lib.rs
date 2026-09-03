@@ -228,6 +228,10 @@
 //! crate adds to the arrangement; [`accounting`] is where what a record carries, how a
 //! session's spend is arrived at, and what it deliberately does not know are set out.
 //!
+//! What one whole session of the live journey costs, counted that way against this crate's
+//! loopback fixture board, is written down in `session-cost.md` beside this crate — with the
+//! reduction it came out of, and with what it does and does not say about rate-limit points.
+//!
 //! [`GitHubProjectsSource::accounting`] is the read: a snapshot to hold and compare, which
 //! [`accounting::Session::report`] renders the session report from. It is on the ordinary
 //! code path — no environment variable, no feature, no build configuration — because an

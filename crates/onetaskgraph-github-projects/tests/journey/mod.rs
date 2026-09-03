@@ -117,7 +117,7 @@ fn source_config(mut config: Value) -> Value {
 /// captures and then discards for every test that passed. A session report nobody sees on a
 /// green run is an instrument nobody switched on, which is the failure this whole accounting
 /// exists to prevent.
-fn say(line: &str) {
+pub fn say(line: &str) {
     let _ = writeln!(std::io::stderr(), "{line}");
 }
 

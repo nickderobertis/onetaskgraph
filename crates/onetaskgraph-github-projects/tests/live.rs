@@ -45,7 +45,11 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
             repository,
         } => (token, owner, project_number, repository),
         LiveLane::Skip(reason) => {
-            eprintln!("skipped live GitHub Projects journey: {reason}");
+            // Straight to the process's stderr, the way the session report is: the test
+            // harness captures `eprintln!` and discards it for every test that passed, and
+            // a skip is a pass. So a reader of this target's ordinary output can see that
+            // the live session did not run, and why, without knowing to go looking.
+            journey::say(&format!("skipped live GitHub Projects journey: {reason}"));
             return;
         }
     };
