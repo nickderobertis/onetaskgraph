@@ -6,15 +6,18 @@
 #
 #   1. No `test-live` target, target default, recipe or workflow — the separate lane stays
 #      gone, since re-adding one is how these tests quietly stop being required.
-#   2. Every live test really runs where it now lives: tests are declared, and none carries
+#   2. Each hosted plugin's cacheable `test` target is keyed on its credential, its
+#      nominations and the demand, so a replay of a run that had no credential cannot stand
+#      in for a run that has one.
+#   3. Every live test really runs where it now lives: tests are declared, and none carries
 #      `#[ignore]`.
-#   3. Each hosted plugin's journey opens its session through the one gate,
+#   4. Each hosted plugin's journey opens its session through the one gate,
 #      `onetaskgraph_live::Session::open`, so a precondition added there governs every path
 #      to a real API rather than some.
-#   4. .github/workflows/ci.yml hands each credential to exactly one lane of the matrix,
+#   5. .github/workflows/ci.yml hands each credential to exactly one lane of the matrix,
 #      under the name the product reads, with that lane's nominations and the demand that
 #      stops a missing credential passing green.
-#   5. scripts/rust-coverage.sh clears them, because coverage re-runs the same tests.
+#   6. scripts/rust-coverage.sh clears them, because coverage re-runs the same tests.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -79,6 +82,7 @@ def without_comments(text):
 
 problems = []
 tagged = {}
+declared = {}
 
 # 1. The separate lane is gone, in every place it was declared.
 for project_file in sorted(
@@ -115,7 +119,9 @@ for project_file in sorted(
         )
     tags = project.get("tags", [])
     if any(isinstance(tag, str) and tag.startswith("live:") for tag in tags):
-        tagged[str(project_file.parent / "tests" / "live.rs").replace("\\", "/")] = project_file
+        relative = str(project_file.parent / "tests" / "live.rs").replace("\\", "/")
+        tagged[relative] = project_file
+        declared[relative] = targets.get("test", {})
 
 for relative, project_file in sorted(tagged.items()):
     if relative not in SESSIONS:
@@ -130,6 +136,37 @@ for relative in sorted(set(SESSIONS) - set(tagged)):
         "is how a crate says it has a session at all, and without it the two lists agree by "
         "accident"
     )
+
+# 2. A cached result cannot stand in for a run whose credential differs.
+#
+# `test` is a cacheable target keyed on files, and the live journey among those tests runs,
+# skips or declines according to the environment rather than the tree. Without the
+# environment in the key, a replay of a run that had no credential satisfies a run that has
+# one: the live tests do not run and the target reports green, which is the arrangement this
+# whole shape exists to remove, rebuilt inside the cache.
+for relative, session in sorted(SESSIONS.items()):
+    test = declared.get(relative)
+    if test is None:
+        continue
+    project_file = tagged[relative]
+    if not isinstance(test, dict):
+        problems.append(
+            f"{project_file}: has a `test` target that is not an object, so this check "
+            "cannot read what its cache is keyed on"
+        )
+        continue
+    keyed = {
+        entry["env"]
+        for entry in test.get("inputs", [])
+        if isinstance(entry, dict) and isinstance(entry.get("env"), str)
+    }
+    for variable in (session["credential"], *session["nominations"], DEMAND):
+        if variable not in keyed:
+            problems.append(
+                f"{project_file}: its `test` target does not name {variable} as an `env` "
+                "input, so a cached run that read a different value for it would be "
+                f"replayed instead of running {relative}"
+            )
 
 if "test-live" in json.loads(read(Path("nx.json"), "the Nx configuration")).get(
     "targetDefaults", {}
