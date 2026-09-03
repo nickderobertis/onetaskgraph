@@ -107,10 +107,10 @@ class SchemaBundle(TypedDict):
     roots: dict[str, JsonValue]
 
 
-# llmlint: ignore[async_typed_clients_at_boundaries] This is a build-time generator, not a
-# client: one ordered pass that drives `cargo` as a subprocess and consumes its stdout as the
-# schema bundle the next step reads. There is no concurrent work to overlap and no service on
-# the other end, and nothing in this file ships in the wheel. The async typed boundary this
+# llmlint: ignore-block[async_typed_clients_at_boundaries] This is a build-time generator, not
+# a client: one ordered pass that drives `cargo` as a subprocess and consumes its stdout as
+# the schema bundle the next step reads. There is no concurrent work to overlap and no service
+# on the other end, and nothing in this file ships in the wheel. The async typed boundary this
 # rule asks of this package is `src/onetaskgraph_sdk/client.py`, which is exactly that.
 def run_workspace_binary(*args: str) -> str:
     """Run the workspace binary, building the exact artifact under generation.
@@ -135,6 +135,9 @@ def run_workspace_binary(*args: str) -> str:
             f"--- its stdout ---\n{result.stdout}"
         )
     return result.stdout
+
+
+# llmlint: ignore-end[async_typed_clients_at_boundaries]
 
 
 def leaves(prefix: tuple[str, ...] = ()) -> list[tuple[str, ...]]:

@@ -7,9 +7,11 @@
 # Two things about the tests that reach a real API are this file's alone. One live session
 # per run: only the `ubuntu-latest` leg carries the credentials, and scripts/rust-coverage.sh
 # clears them before coverage re-runs the same tests — read the note there before changing
-# either. And `ONETASKGRAPH_LIVE_REQUIRED` is `0` on a fork pull request and `1` everywhere
-# else, so no lane passes green for a credential that went missing; the step that sets it
-# says why that one run is exempt.
+# either. And `ONETASKGRAPH_LIVE_REQUIRED` travels with them rather than with the matrix: `1`
+# on that leg, `0` there on a fork pull request alone, so the leg that was handed a credential
+# never passes green for one that went missing. The other two legs run the same tests with
+# neither and skip them, which is what one session per run costs; the leg that does run them
+# is required for the merge exactly as they are.
 
 name: ci
 
@@ -105,6 +107,7 @@ jobs:
             echo "Affected against the merge base with $BASE_REF: $merge_base"
           fi
 
+      # llmlint: ignore[live_tier_compiles_and_requires_credential] This leg carries no credential and no demand on purpose. One live session per run is a correctness requirement rather than a cost one — each hosted journey sweeps residue by title before it starts, so two concurrent runs delete each other's in-flight items — and AGENTS.md records handing the credentials to exactly one leg of this matrix as one of the three things that hold it. Demanding one here would fail every run for a secret this leg must not be given. The demand is made where the credentials are, on the ubuntu-latest step beside this one, which is required for the merge exactly as this one is.
       - name: Check the affected projects
         if: github.event_name == 'pull_request' && matrix.os != 'ubuntu-latest'
         env:
@@ -149,6 +152,7 @@ jobs:
 
       # On the default branch, sweep everything. A cache is for speed and must never be
       # what makes a broken clean build look green.
+      # llmlint: ignore[live_tier_compiles_and_requires_credential] This leg carries no credential and no demand on purpose. One live session per run is a correctness requirement rather than a cost one — each hosted journey sweeps residue by title before it starts, so two concurrent runs delete each other's in-flight items — and AGENTS.md records handing the credentials to exactly one leg of this matrix as one of the three things that hold it. Demanding one here would fail every run for a secret this leg must not be given. The demand is made where the credentials are, on the ubuntu-latest step beside this one, which is required for the merge exactly as this one is.
       - name: Sweep every project
         if: github.event_name != 'pull_request' && matrix.os != 'ubuntu-latest'
         run: just gate
