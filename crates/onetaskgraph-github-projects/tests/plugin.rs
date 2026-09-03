@@ -1144,12 +1144,27 @@ impl ProbedDocument for str {
 }
 
 /// GitHub's mutation surface, as the journey's own contract tables spell it.
+///
+/// The journey asks for the whole contract in one document, as one aliased `__type` root
+/// field per type, so this answers every alias that document carries rather than one type.
 fn introspected(query: &str) -> Value {
-    let name = query
-        .split_once("__type(name:\"")
-        .and_then(|(_, rest)| rest.split_once('"'))
-        .map(|(name, _)| name)
-        .expect("an introspected type name");
+    let mut answered = serde_json::Map::new();
+    for selected in query.split("__type(name:\"").skip(1) {
+        let name = selected
+            .split_once('"')
+            .map(|(name, _)| name)
+            .expect("an introspected type name");
+        answered.insert(name.to_owned(), introspected_type_members(name));
+    }
+    assert!(
+        !answered.is_empty(),
+        "an introspection document selecting no type: {query}"
+    );
+    Value::Object(answered)
+}
+
+/// One introspected type's members, as the selection for its kind spells them.
+fn introspected_type_members(name: &str) -> Value {
     if name == "Mutation" {
         let fields = journey::MUTATION_CONTRACT
             .iter()
@@ -1158,7 +1173,7 @@ fn introspected(query: &str) -> Value {
                        "args":[{"name":"input","type":{"name":null,"ofType":{"name":input}}}]})
             })
             .collect::<Vec<_>>();
-        return json!({"__type":{"fields":fields}});
+        return json!({ "fields": fields });
     }
     let (_, input, expected) = journey::MUTATION_TYPES
         .iter()
@@ -1175,7 +1190,7 @@ fn introspected(query: &str) -> Value {
         }
     }
     let selection = if *input { "inputFields" } else { "fields" };
-    json!({ "__type": { selection: fields } })
+    json!({ selection: fields })
 }
 
 /// One type signature, in the nesting GitHub's introspection answers it in.

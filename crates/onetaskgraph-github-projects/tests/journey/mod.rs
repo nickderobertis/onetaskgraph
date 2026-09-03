@@ -394,9 +394,19 @@ async fn writable_fields(token: &str, project_id: &str) -> Result<Vec<Value>, St
     }
 }
 
-async fn ensure_origin_field(token: &str, project_id: &str) -> Result<bool, String> {
-    if writable_fields(token, project_id)
-        .await?
+/// Creates the board's origin field if `fields` does not already hold one.
+///
+/// It takes the field list rather than reading one, because the two things this journey
+/// needs off that list — whether the origin field is there, and what the board's first
+/// `Status` option is called — were two separate walks of the same connection and one
+/// answers both. Nothing this creates can change what the other reads: the `Status` field
+/// was on the board before this ran.
+async fn ensure_origin_field(
+    token: &str,
+    project_id: &str,
+    fields: &[Value],
+) -> Result<bool, String> {
+    if fields
         .iter()
         .any(|field| field.get("name").and_then(Value::as_str) == Some(ORIGIN_FIELD))
     {
@@ -419,8 +429,7 @@ async fn ensure_origin_field(token: &str, project_id: &str) -> Result<bool, Stri
     Ok(true)
 }
 
-async fn live_write_status(token: &str, project_id: &str) -> Result<String, String> {
-    let fields = writable_fields(token, project_id).await?;
+fn live_write_status(fields: &[Value]) -> Result<String, String> {
     fields
         .iter()
         .find(|field| field.get("name").and_then(Value::as_str) == Some("Status"))
@@ -998,15 +1007,42 @@ pub const MUTATION_TYPES: [(&str, bool, &[&str]); 28] = [
     ("DeleteProjectV2FieldPayload", false, &["projectV2Field"]),
 ];
 
+/// The whole mutation contract in one document, as aliased root fields.
+///
+/// **One request rather than one per type, and the reason is what a session costs.** GitHub
+/// allows any number of aliased root fields on one query, and `__type` is not a connection,
+/// so this adds nothing to the document's node count — it collapses thirty round trips into
+/// one and asks exactly the same questions. Nothing here narrows what is verified: every
+/// name, input, payload, member and type signature the checks below hold GitHub to is still
+/// asked for, from the same two tables.
+///
+/// The alias is the type's own name, which is already a GraphQL identifier, so the answer is
+/// keyed by the thing it describes.
+fn mutation_schema_document() -> String {
+    let mut document = String::from(
+        "query MutationContract{Mutation:__type(name:\"Mutation\"){fields{name type{name \
+         ofType{name}}args{name type{name ofType{name}}}}}",
+    );
+    for (type_name, input, _) in MUTATION_TYPES {
+        let selection = if input { "inputFields" } else { "fields" };
+        document.push_str(&format!(
+            "{type_name}:__type(name:\"{type_name}\"){{{selection}{{name type{{kind name \
+             ofType{{kind name ofType{{kind name}}}}}}}}}}"
+        ));
+    }
+    document.push('}');
+    document
+}
+
 async fn verify_mutation_schema(token: &str) -> Result<(), String> {
     let response = graphql(
         token,
-        "query MutationContract { __type(name:\"Mutation\") { fields { name type { name ofType { name } } args { name type { name ofType { name } } } } } }",
-        "mutation contract introspection",
+        &mutation_schema_document(),
+        "mutation schema introspection",
     )
     .await?;
     let fields = response
-        .pointer("/data/__type/fields")
+        .pointer("/data/Mutation/fields")
         .and_then(Value::as_array)
         .ok_or_else(|| "mutation contract introspection returned no fields".to_owned())?;
     for (field_name, input_name, payload_name) in MUTATION_CONTRACT {
@@ -1037,12 +1073,8 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
     }
     for (type_name, input, expected_fields) in MUTATION_TYPES {
         let selection = if input { "inputFields" } else { "fields" };
-        let document = format!(
-            "query TypeContract {{ __type(name:\"{type_name}\") {{ {selection} {{ name type {{ kind name ofType {{ kind name ofType {{ kind name }} }} }} }} }} }}"
-        );
-        let response = graphql(token, &document, "mutation type introspection").await?;
         let fields = response
-            .pointer(&format!("/data/__type/{selection}"))
+            .pointer(&format!("/data/{type_name}/{selection}"))
             .and_then(Value::as_array)
             .ok_or_else(|| format!("GitHub mutation schema has no {type_name} {selection}"))?;
         for expected in expected_fields {
@@ -2092,14 +2124,18 @@ pub async fn run(nomination: Nomination) {
     label_ids.dedup();
     assert_eq!(label_ids.len(), labels.items.len());
 
-    let origin_field_created = match ensure_origin_field(&token, &project_id).await {
+    // One walk of the board's field connection, read by both of the two setup steps below.
+    let fields = writable_fields(&token, &project_id)
+        .await
+        .unwrap_or_else(|error| panic!("GitHub live field discovery failed: {error}"));
+    let origin_field_created = match ensure_origin_field(&token, &project_id, &fields).await {
         Ok(created) => created,
         Err(error) => {
             let cleanup = remove_live_origin_field(&token, &project_id).await;
             panic!("GitHub live origin field setup failed: {error}; cleanup result: {cleanup:?}");
         }
     };
-    let status_name = match live_write_status(&token, &project_id).await {
+    let status_name = match live_write_status(&fields) {
         Ok(status) => status,
         Err(error) => {
             let cleanup = if origin_field_created {
