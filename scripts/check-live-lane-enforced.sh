@@ -279,7 +279,7 @@ reset_fixture
 substitute "$WORKFLOW" 'ONETASKGRAPH_LIVE_REQUIRED: "1"' \
   "ONETASKGRAPH_LIVE_REQUIRED: \${{ github.event.pull_request.head.repo.fork && '0' || '1' }}"
 run_guard
-# llmlint: ignore[live_tier_compiles_and_requires_credential] This case asserts the guard ACCEPTS the fork exception, which is the repository's own decision rather than this check's: a fork pull request receives no secrets, so a demand there would fail every outside contribution for a credential its author cannot have. Without it a guard that refused every arrangement would satisfy all twelve refusal cases above and prove none of them. The demand itself is what the twelve above hold every other run to.
+# llmlint: ignore[live_tier_compiles_and_requires_credential] The one case here that asserts a PASS, for the exemption the repository decided on; the twelve above are what hold every other run to the demand.
 expect_passed "the fork exception, spelled whole"
 reset_fixture
 
