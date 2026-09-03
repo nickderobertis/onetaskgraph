@@ -87,6 +87,15 @@ const SEAT_IS_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
 /// unique to the file, so this is counted rather than derived.
 static SEATS_TAKEN: AtomicU64 = AtomicU64::new(0);
 
+/// What that variable has to be set to for a live session to be expected.
+///
+/// A `const` rather than a literal in the match below because it is read from outside this
+/// crate: `.github/workflows/ci.yml` sets the variable, and `scripts/check-live-lane.sh`
+/// refuses a credential-carrying step that sets it to anything else — reading this constant
+/// out of this file rather than restating the value, so the workflow and the parser that
+/// reads it cannot come to disagree about which spelling is the demand.
+pub const DEMANDED: &str = "1";
+
 /// Whether a live session is expected here, from `ONETASKGRAPH_LIVE_REQUIRED`.
 ///
 /// `1` demands one; `0`, the empty string and an absent variable all leave the lane free
@@ -101,9 +110,9 @@ static SEATS_TAKEN: AtomicU64 = AtomicU64::new(0);
 pub fn required(raw: Option<&str>) -> Result<bool, String> {
     match raw.map(str::trim) {
         None | Some("") | Some("0") => Ok(false),
-        Some("1") => Ok(true),
+        Some(DEMANDED) => Ok(true),
         Some(other) => Err(format!(
-            "{REQUIRED_VARIABLE} must be 1, 0 or unset, not {other:?}"
+            "{REQUIRED_VARIABLE} must be {DEMANDED}, 0 or unset, not {other:?}"
         )),
     }
 }
