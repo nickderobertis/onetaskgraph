@@ -202,6 +202,43 @@ impl fmt::Display for Fraction {
 /// not run.
 pub const RETAINED_BUFFER: Fraction = Fraction::new(20, 100);
 
+/// A budget, and what it is metered in — one fact rather than two fields.
+///
+/// **Paired once, by the one place that knows both.** A budget's name and its unit are not
+/// independent: GitHub's GraphQL budget is metered in points and its REST one in requests,
+/// and a value that carried them separately would let a refusal say the GraphQL budget was
+/// short of requests, three types away from where the pair was decided. So they travel
+/// together, from [`Demand`] into [`Unaffordable`], and nothing downstream can transpose or
+/// re-spell either.
+///
+/// `&'static str` rather than `String` for the same reason: a budget's name is a constant
+/// of the lane that draws on it — GitHub's are `Budget::name` and `Budget::unit` on a closed
+/// enum — and never a value read off a response, so nothing a third party sends can become
+/// one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Metered {
+    budget: &'static str,
+    unit: &'static str,
+}
+
+impl Metered {
+    /// The budget `budget`, metered in `unit`.
+    #[must_use]
+    pub const fn new(budget: &'static str, unit: &'static str) -> Self {
+        Self { budget, unit }
+    }
+    /// Which budget.
+    #[must_use]
+    pub const fn budget(self) -> &'static str {
+        self.budget
+    }
+    /// What it is metered in.
+    #[must_use]
+    pub const fn unit(self) -> &'static str {
+        self.unit
+    }
+}
+
 /// One budget's primary allowance, as the account itself reported it.
 ///
 /// **Read rather than assembled**, for the reason the accounting's own `RateLimit` is: a
@@ -261,53 +298,45 @@ impl Allowance {
 /// constructors rather than an `Option` a caller could forget to check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Demand {
-    budget: String,
-    unit: String,
+    metered: Metered,
     estimated_cost: u64,
     allowance: Result<Allowance, String>,
 }
 
 impl Demand {
-    /// A budget whose allowance was read: `budget` is metered in `unit`, this session is
-    /// estimated to spend `estimated_cost` of it, and `allowance` is what the account has.
+    /// A budget whose allowance was read: this session is estimated to spend
+    /// `estimated_cost` of `metered`, and `allowance` is what the account has left of it.
     #[must_use]
-    pub fn read(
-        budget: impl Into<String>,
-        unit: impl Into<String>,
-        estimated_cost: u64,
-        allowance: Allowance,
-    ) -> Self {
+    pub const fn read(metered: Metered, estimated_cost: u64, allowance: Allowance) -> Self {
         Self {
-            budget: budget.into(),
-            unit: unit.into(),
+            metered,
             estimated_cost,
             allowance: Ok(allowance),
         }
     }
     /// A budget whose allowance the API did not answer, and why.
     #[must_use]
-    pub fn unread(
-        budget: impl Into<String>,
-        unit: impl Into<String>,
-        estimated_cost: u64,
-        why: impl Into<String>,
-    ) -> Self {
+    pub fn unread(metered: Metered, estimated_cost: u64, why: impl Into<String>) -> Self {
         Self {
-            budget: budget.into(),
-            unit: unit.into(),
+            metered,
             estimated_cost,
             allowance: Err(why.into()),
         }
     }
+    /// Which budget, and what it is metered in.
+    #[must_use]
+    pub const fn metered(&self) -> Metered {
+        self.metered
+    }
     /// Which budget.
     #[must_use]
-    pub fn budget(&self) -> &str {
-        &self.budget
+    pub const fn budget(&self) -> &'static str {
+        self.metered.budget()
     }
     /// What that budget is metered in.
     #[must_use]
-    pub fn unit(&self) -> &str {
-        &self.unit
+    pub const fn unit(&self) -> &'static str {
+        self.metered.unit()
     }
     /// What this session is estimated to spend against it.
     #[must_use]
@@ -338,17 +367,15 @@ impl Demand {
 pub enum Unaffordable {
     /// The API did not answer this budget's allowance, so it is not one to assume.
     Unread {
-        /// Which budget went unread.
-        budget: String,
+        /// Which budget went unread, and what it is metered in.
+        metered: Metered,
         /// The read that was not answered, as the lane that made it describes it.
         why: String,
     },
     /// Starting would leave less of this budget than the retained buffer.
     Short {
-        /// Which budget is short.
-        budget: String,
-        /// What it is metered in.
-        unit: String,
+        /// Which budget is short, and what it is metered in.
+        metered: Metered,
         /// Its whole allowance.
         limit: u64,
         /// What was left of it when the allowance was read.
@@ -363,37 +390,44 @@ pub enum Unaffordable {
 }
 
 impl Unaffordable {
+    /// Which budget refused the session, and what it is metered in.
+    #[must_use]
+    pub const fn metered(&self) -> Metered {
+        match self {
+            Self::Unread { metered, .. } | Self::Short { metered, .. } => *metered,
+        }
+    }
     /// Which budget refused the session.
     #[must_use]
-    pub fn budget(&self) -> &str {
-        match self {
-            Self::Unread { budget, .. } | Self::Short { budget, .. } => budget,
-        }
+    pub const fn budget(&self) -> &'static str {
+        self.metered().budget()
     }
     /// The reason, spelled out with every figure the decision was made on.
     #[must_use]
     pub fn reason(&self) -> String {
         match self {
-            Self::Unread { budget, why } => format!(
-                "the {budget} budget's allowance could not be read, and an allowance this \
+            Self::Unread { metered, why } => format!(
+                "the {} budget's allowance could not be read, and an allowance this \
                  session could not read is not one it may assume: {why}. Re-run once that \
-                 read is answered"
+                 read is answered",
+                metered.budget(),
             ),
             Self::Short {
-                budget,
-                unit,
+                metered,
                 limit,
                 remaining,
                 estimated_cost,
                 retained_buffer,
                 reset,
             } => format!(
-                "the account cannot afford it against the {budget} budget and still keep the \
-                 retained buffer. That budget's limit is {limit} {unit}, {remaining} remained, \
+                "the account cannot afford it against the {} budget and still keep the \
+                 retained buffer. That budget's limit is {limit} {}, {remaining} remained, \
                  this session is estimated to spend {estimated_cost}, and the retained buffer \
                  is {retained_buffer} ({RETAINED_BUFFER} of the allowance) — which leaves {} \
                  where {retained_buffer} is owed. That budget resets at {reset} (UTC epoch \
                  seconds); nothing here waits for it, so re-run after that",
+                metered.budget(),
+                metered.unit(),
                 remaining.saturating_sub(*estimated_cost),
             ),
         }
@@ -420,7 +454,7 @@ pub fn affordable(demands: &[Demand]) -> Result<(), Unaffordable> {
             Ok(allowance) => allowance,
             Err(why) => {
                 return Err(Unaffordable::Unread {
-                    budget: demand.budget.clone(),
+                    metered: demand.metered,
                     why: why.to_owned(),
                 });
             }
@@ -431,8 +465,7 @@ pub fn affordable(demands: &[Demand]) -> Result<(), Unaffordable> {
         let left = allowance.remaining().saturating_sub(demand.estimated_cost);
         if left < retained_buffer {
             return Err(Unaffordable::Short {
-                budget: demand.budget.clone(),
-                unit: demand.unit.clone(),
+                metered: demand.metered,
                 limit: allowance.limit(),
                 remaining: allowance.remaining(),
                 estimated_cost: demand.estimated_cost,
