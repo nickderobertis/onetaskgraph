@@ -283,6 +283,19 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   expected; `.github/workflows/ci.yml` sets it everywhere but a fork pull request.
   `scripts/check-live-decline.sh`, a command in each hosted plugin's own `test` target,
   drives all three outcomes without a credential and without reaching the API.
+- **A live session that the account cannot afford declines, and that is the second producer
+  of the third outcome.** The share it may never touch is `RETAINED_BUFFER` in
+  `onetaskgraph-live` — twenty per cent of each budget's **whole allowance**, one constant
+  for every lane, and nothing lowers it — and `affordable` there is the arithmetic. What
+  belongs to a lane is the *read*: the GitHub Projects journey makes exactly one,
+  `GET /rate_limit`, which GitHub documents as not counting against the REST rate limit and
+  which answers both of its budgets, before it does anything else. The estimate it decides
+  on is derived offline from that plugin's own per-call record of the session and a cost
+  model stated once in `tests/journey/budget.rs`, so it needs no credential and moves with
+  the session rather than with an edit; node count is **not** that estimate and cannot stand
+  in for it. `scripts/check-budget-decline.sh`, a command in that plugin's `test` target,
+  follows such a decline through to the conclusion the required check reads, because a test
+  that asserts a panic passes and the half worth proving is that the check goes red.
 - **A test that reads and writes a shared external fixture must not run concurrently with
   another instance of itself.** That is a general property of this repository rather than an
   exemption for two plugins, and the reason is the self-healing half of these journeys: each

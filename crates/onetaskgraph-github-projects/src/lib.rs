@@ -241,6 +241,21 @@
 //! in `tests/live.rs` does exactly that, and prints the report at the end of every run,
 //! passed or failed.
 //!
+//! **A live session refuses to start unless the account can afford it.** Before it does any
+//! of the work it exists to do, the journey makes one request — `GET /rate_limit`, which
+//! GitHub documents as not counting against the REST rate limit and which answers both of
+//! its budgets at once — and starts only if, for each of them, what remains minus this
+//! session's estimated cost is still at least
+//! `onetaskgraph_live::RETAINED_BUFFER` — twenty per cent — of that budget's whole
+//! allowance. A session that cannot **declines**: it did not run, so it is
+//! neither a pass nor a failing assertion, and it says which budget was short, that budget's
+//! limit, what remained, the estimate, the buffer and when it resets — then stops, without
+//! waiting for the budget to come back. The estimate is derived offline from
+//! `tests/fixtures/session-cost.txt` and a cost model stated in `tests/journey/budget.rs`,
+//! which is also where the published rule that model rests on is cited; the accounting
+//! above records the gate's own read like any other request, and
+//! [`accounting::Session::report`] prints the estimate beside what the session really spent.
+//!
 //! **GitHub is the authority on node count, and the credentialed lane goes and asks it.**
 //! Everything above computes `nodeCount` offline from a document's own text, which is what
 //! lets it run on every platform and on a pull request from a fork with no credential — and

@@ -90,6 +90,33 @@ Per call, before:
 
 After: `tests/fixtures/session-cost.txt`, which the test above holds the session to.
 
+## What the budget precondition added afterwards
+
+The reduction's two figures above are a comparison of the reduction, and they stand. What
+`tests/fixtures/session-cost.txt` records **now** is one request more — **92 requests, node
+count 1757301** — because the budget precondition that landed after it makes one:
+`GET /rate_limit`, the account's allowance, before the session does any of the work it
+exists to do. That read is deliberately in the record rather than outside it, so what the
+gate itself costs is measured beside everything else instead of assumed; the node count is
+untouched, because a REST call sends no document.
+
+Nothing about the reduction moved. The rows are the reduction's rows plus one, and every
+figure in the table above is still what those two changes were worth.
+
+## The estimate the gate is sized from, and what it is not
+
+`tests/journey/budget.rs` derives what this session will cost each of GitHub's two budgets
+from the record above and a cost model it states in one place: **1941 points** against the
+GraphQL budget and **5 requests** against the REST one. That is an *estimate*, deliberately
+high — it is what refuses a run rather than what a run spends, and an estimate that is too
+low is the thing that exhausts a shared budget.
+
+**It is still not a measurement of points, and neither is anything else in this file.** What
+observes points is the accounting, from the `x-ratelimit-*` headers a credentialed
+session's own responses carry. What the gate adds is that the session report now prints the
+estimate beside those figures, so a run says how far the model was from GitHub's own numbers
+rather than asking anybody to trust it.
+
 ## What was kept, and what each change measured
 
 Both changes landed in one commit, so read each summary's arithmetic off the per-call rows
