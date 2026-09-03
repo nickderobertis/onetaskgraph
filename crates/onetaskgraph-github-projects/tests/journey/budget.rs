@@ -118,7 +118,19 @@ pub const ALLOWANCE_METHOD: Method = Method::Get;
 /// It names the endpoint, because what a declined run owes a reader is *which read failed*
 /// — and the session report already names the call by its own endpoint template, so this is
 /// the one place the two would otherwise disagree.
-pub const ALLOWANCE_READ: &str = "the allowance read GET /rate_limit";
+///
+/// Composed from [`ALLOWANCE_METHOD`] and [`ALLOWANCE_ENDPOINT`] rather than spelled a
+/// second time. Those two are what `the_allowance_read_matches_its_pinned_artifact`
+/// reconciles against the pinned artifact, and a third spelling of the same call would be
+/// the one the pin does not reach: a run declining over `GET /rate_limit` while the read it
+/// actually made went somewhere else is a message that misdirects the reader it exists for.
+#[must_use]
+pub fn allowance_read() -> String {
+    format!(
+        "the allowance read {} {ALLOWANCE_ENDPOINT}",
+        ALLOWANCE_METHOD.name()
+    )
+}
 
 /// The branch's own per-call record of the reduced session.
 ///
@@ -317,7 +329,7 @@ async fn read_allowance(token: &str, rest_host: &str, into: &Accounting) -> Resu
         .bearer_auth(token)
         .send()
         .await;
-    super::record_rest_response(into, &endpoint, sent, ALLOWANCE_READ).await
+    super::record_rest_response(into, &endpoint, sent, &allowance_read()).await
 }
 
 /// One budget's allowance out of that answer, or why it is not there to read.
@@ -376,8 +388,9 @@ pub fn observation(answered: &Result<Value, String>, carried: &RateLimit) -> Str
         }
         _ => "none of the rate-limit headers this accounting reads".to_owned(),
     };
+    let read = allowance_read();
     format!(
-        "the allowance read GET {ALLOWANCE_ENDPOINT} reported {}, {}; the same response's \
+        "{read} reported {}, {}; the same response's \
          own headers carried {headers}. GitHub's documentation of that endpoint says \
          \"Accessing this endpoint does not count against your REST API rate limit\"; \
          this is what the read reported when it ran, and not a verdict on that.",
