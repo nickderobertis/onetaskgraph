@@ -62,10 +62,6 @@
       "executor": "nx:noop",
       "//": "Declared and empty. The 95% line floor is measured by instrumenting a compiled crate or an interpreted SDK; there is no line coverage for a shell script, and what stands in its place is scripts/check-bash4-array-builtins-enforced.sh and scripts/check-line-reads.sh driving these guards until they refuse."
     },
-    "test-live": {
-      "executor": "nx:noop",
-      "//": "Declared and empty, which is what makes `just test-live` a sweep: no script here reaches a third-party service, and the credentialed journeys belong to the two hosted plugin crates."
-    },
     "distribution-check": {
       "executor": "nx:run-commands",
       "options": {
