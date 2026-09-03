@@ -35,7 +35,7 @@ mod lane;
 use lane::{
     ARTIFACT_PREFIX, LABEL_PREFIX, LiveLane, LiveSecret, SESSION_NAME, artifact_label,
     artifact_title, is_artifact_label, is_artifact_title, is_run_artifact_title, live_lane,
-    live_write_config, run_then_cleanup,
+    live_write_config, rest_outcome, run_then_cleanup,
 };
 
 /// Everything this run costs GitHub, this lane's own calls and the source's alike.
@@ -617,18 +617,23 @@ async fn rest(
             return Err(format!("{what} returned no readable body: {error}"));
         }
     };
-    SESSION.record(outcome(Outcome::of_response(
+    // Decoded first, so what is recorded is what this call really produced: a `2xx` whose
+    // body could not be read did not answer, and `rest_outcome` is where that is decided.
+    let decoded = if text.trim().is_empty() {
+        Ok(Value::Null)
+    } else {
+        serde_json::from_str(&text)
+    };
+    SESSION.record(outcome(rest_outcome(
         status,
         limits.exhausted(),
         &text,
+        decoded.is_ok(),
     )));
     if !status.is_success() {
         return Err(format!("{what} failed with HTTP {status}: {text}"));
     }
-    if text.trim().is_empty() {
-        return Ok(Value::Null);
-    }
-    serde_json::from_str(&text).map_err(|error| format!("{what} returned invalid JSON: {error}"))
+    decoded.map_err(|error| format!("{what} returned invalid JSON: {error}"))
 }
 
 /// The `{owner}` and `{repo}` every endpoint here names, out of one `owner/name`.

@@ -11,6 +11,7 @@
 use std::future::Future;
 
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
+use onetaskgraph_github_projects::accounting::{Outcome, StatusCode};
 use onetaskgraph_live::{Credential, missing, required};
 use onetaskgraph_plugin_api::SecretResolver;
 use secrecy::SecretString;
@@ -21,6 +22,21 @@ pub struct LiveSecret(pub SecretString);
 impl SecretResolver for LiveSecret {
     fn get(&self, variable: &str) -> Option<SecretString> {
         (variable == "GH_PROJECTS_TOKEN").then(|| self.0.clone())
+    }
+}
+
+/// What this lane records for one REST response, once it knows whether it could read it.
+///
+/// [`Outcome::of_response`] rules on the status and the rate-limit headers and leaves the
+/// rest to the caller, because a success whose body the caller cannot use is a refusal only
+/// the caller can see. This is that narrowing for a REST call: a `2xx` carrying something
+/// this lane could not decode did not answer what was asked for, however cleanly it
+/// arrived, and recording it as `Answered` would make the session report say a call
+/// succeeded that produced nothing.
+pub fn rest_outcome(status: StatusCode, exhausted: bool, body: &str, decoded: bool) -> Outcome {
+    match Outcome::of_response(status, exhausted, body) {
+        Outcome::Answered if !decoded => Outcome::Refused,
+        settled => settled,
     }
 }
 

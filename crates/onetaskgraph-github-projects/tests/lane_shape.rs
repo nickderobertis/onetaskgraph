@@ -11,9 +11,10 @@ mod lane;
 
 use lane::{
     LiveLane, LiveSecret, artifact_label, artifact_title, is_artifact_label, is_artifact_title,
-    is_run_artifact_title, live_lane, live_write_config, run_then_cleanup,
+    is_run_artifact_title, live_lane, live_write_config, rest_outcome, run_then_cleanup,
 };
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
+use onetaskgraph_github_projects::accounting::{Outcome, StatusCode};
 use onetaskgraph_live::Credential;
 use onetaskgraph_plugin_api::{SourceName, SourcePlugin};
 
@@ -51,6 +52,35 @@ async fn cleanup_runs_after_a_failed_live_journey() {
         Err("injected mutation failure".to_owned())
     );
     assert!(cleaned.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
+fn a_response_this_lane_could_not_read_is_not_reported_as_one_github_answered() {
+    // The session report is what says a run's calls were worth what they cost, so a `2xx`
+    // carrying a body this lane could not decode has to be recorded as the refusal it was
+    // — otherwise the report names a call that succeeded and produced nothing.
+    let ok = StatusCode::OK;
+    assert_eq!(
+        rest_outcome(ok, false, "{\"id\":\"L_1\"}", true),
+        Outcome::Answered,
+        "a 2xx this lane read is what it says it is"
+    );
+    assert_eq!(
+        rest_outcome(ok, false, "<html>a proxy said hello</html>", false),
+        Outcome::Refused,
+        "a 2xx this lane could not read answered nothing"
+    );
+    // The two the status alone settles are still the status's to settle: a refusal stays a
+    // refusal whether or not its body parsed, and a rate-limited call still did not run.
+    assert_eq!(
+        rest_outcome(StatusCode::NOT_FOUND, false, "{}", true),
+        Outcome::Refused
+    );
+    assert_eq!(
+        rest_outcome(StatusCode::FORBIDDEN, true, "rate limit exceeded", false),
+        Outcome::RateLimited,
+        "a body that did not parse must not turn a rate-limited call into an ordinary refusal"
+    );
 }
 
 #[test]
