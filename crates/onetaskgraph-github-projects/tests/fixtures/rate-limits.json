@@ -1,11 +1,22 @@
 {
   "_": [
-    "Authoritative pin of GitHub's rate-limit vocabulary and its published limits on",
-    "content-creating requests. Recorded from GitHub's own documentation on 2026-09-01;",
-    "see README.md for the pages each value came off and why this artifact exists.",
-    "rate_limits_drift_gate in tests/schema.rs reconciles it against the production",
-    "constants both ways, so neither side may move without the other."
+    "Authoritative pin of GitHub's rate-limit vocabulary, its published limits on",
+    "content-creating requests, and the allowance read the live lane's budget",
+    "precondition makes. Recorded from GitHub's own documentation on 2026-09-01, and the",
+    "allowance block on 2026-09-03; see README.md for the pages each value came off and",
+    "why this artifact exists.",
+    "the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact in",
+    "tests/schema.rs reconciles the first two against the production constants both ways,",
+    "and the_allowance_read_matches_its_pinned_artifact in tests/budget_gate.rs does the",
+    "same for the allowance block — so neither side may move without the other."
   ],
+  "allowance": {
+    "method": "GET",
+    "endpoint": "/rate_limit",
+    "unmetered": "Accessing this endpoint does not count against your REST API rate limit.",
+    "resources": { "rest": "core", "graphql": "graphql" },
+    "fields": ["limit", "remaining", "reset"]
+  },
   "secondary": {
     "wordings": [
       "secondary rate limit",

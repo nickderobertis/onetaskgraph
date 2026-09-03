@@ -19,7 +19,7 @@ use std::thread;
 
 use onetaskgraph_github_projects::accounting::{Accounting, Budget, Method};
 use onetaskgraph_live::{RETAINED_BUFFER, Unaffordable};
-use serde_json::json;
+use serde_json::{Value, json};
 
 // The credentialed lane's own halves again: `journey` for the precondition under test, and
 // `lane` for the session name a refusal is reported under. Most of each is for the target
@@ -76,8 +76,8 @@ impl Standin {
                 } else {
                     (
                         "404 Not Found",
-                        json!({"message":"this stand-in answers the allowance read alone"})
-                            .to_string(),
+                        r#"{"message":"this stand-in answers the allowance read alone"}"#
+                            .to_owned(),
                     )
                 };
                 let response = format!(
@@ -93,16 +93,16 @@ impl Standin {
         Self { host, asked }
     }
     /// A stand-in reporting `graphql` points and `rest` requests left of `LIMIT` each.
+    ///
+    /// The answer is built by the same `documented_answer` the pin gates, rather than
+    /// spelled out again here: a stand-in that restated GitHub's shape independently would
+    /// prove the parser against a second guess at that contract instead of against the one
+    /// `fixtures/rate-limits.json` records.
     fn with(graphql_remaining: u64, rest_remaining: u64) -> Self {
-        let resource = |remaining: u64| {
-            json!({"limit":LIMIT,"used":LIMIT - remaining,"remaining":remaining,
-                   "reset":RESETS_AT})
-        };
         Self::serving((
             "200 OK",
-            json!({"resources":{"core":resource(rest_remaining),
-                                "graphql":resource(graphql_remaining)}})
-            .to_string(),
+            budget::documented_answer(LIMIT, graphql_remaining, rest_remaining, RESETS_AT)
+                .to_string(),
         ))
     }
     fn asked(&self) -> Vec<String> {
@@ -279,6 +279,127 @@ async fn an_allowance_read_that_reaches_nothing_at_all_does_not_start() {
         Some(Unaffordable::Unread { .. })
     ));
     assert!(declined.message().contains("DID NOT RUN"));
+}
+
+#[tokio::test]
+async fn the_allowance_read_matches_its_pinned_artifact() {
+    // The endpoint, the method, the two resource objects and the three fields this
+    // precondition reads are **GitHub's contract and not this repository's decisions**, and
+    // this source restates every one of them. Restating an external contract without a gate
+    // is how the restatement quietly stops being true, so
+    // `fixtures/rate-limits.json` is the pin — recorded with its date and page in the README
+    // beside it — and this reconciles the two **both ways**: a name the precondition reads
+    // that nothing pinned, and a pinned name it no longer reads, each fail here.
+    let pinned: Value =
+        serde_json::from_str(include_str!("fixtures/rate-limits.json")).expect("the pin parses");
+    let allowance = &pinned["allowance"];
+
+    assert_eq!(
+        allowance["endpoint"].as_str(),
+        Some(budget::ALLOWANCE_ENDPOINT),
+        "the precondition calls an endpoint fixtures/rate-limits.json does not pin"
+    );
+    assert_eq!(
+        allowance["method"].as_str().and_then(Method::parse),
+        Some(budget::ALLOWANCE_METHOD),
+        "the precondition addresses that endpoint with a method the pin does not record"
+    );
+
+    // Both ways over the two budgets this session draws on: `resources.rest` in the pin is
+    // GitHub's `core`, and pretending the two names agree would read the wrong figures.
+    let pinned_resources = allowance["resources"]
+        .as_object()
+        .expect("the pin records one resource name per budget");
+    for budget in [Budget::Graphql, Budget::Rest] {
+        assert_eq!(
+            pinned_resources.get(budget.name()).and_then(Value::as_str),
+            Some(budget::resource_of(budget)),
+            "the {} budget is read out of a resources object the pin does not record",
+            budget.name()
+        );
+    }
+    assert_eq!(
+        pinned_resources.len(),
+        2,
+        "the pin records a resource this precondition does not read a budget out of"
+    );
+
+    let pinned_fields: Vec<&str> = allowance["fields"]
+        .as_array()
+        .expect("the pin records the fields of a budget's object")
+        .iter()
+        .map(|field| field.as_str().expect("each pinned field is a string"))
+        .collect();
+    assert_eq!(
+        pinned_fields,
+        budget::ALLOWANCE_FIELDS,
+        "the fields this precondition reads and the fields the pin records have parted"
+    );
+
+    // And the pin has teeth rather than being a second list nobody consults: the read is
+    // driven against an answer missing each pinned field in turn, and every one of them
+    // leaves the budget UNREAD rather than assumed. A field the parser stopped needing
+    // would start affording a session on an allowance it never read.
+    for absent in budget::ALLOWANCE_FIELDS {
+        let mut answer = budget::documented_answer(LIMIT, LIMIT, LIMIT, RESETS_AT);
+        answer["resources"][budget::GRAPHQL_RESOURCE]
+            .as_object_mut()
+            .expect("the answer carries the graphql budget")
+            .remove(absent);
+        let standin = Standin::serving(("200 OK", answer.to_string()));
+        let (_, decided) = decide(&standin).await;
+        let declined = decided.expect_err(&format!(
+            "an allowance missing {absent} must not be assumed"
+        ));
+        let cause = declined.unaffordable_because().expect("a budget refusal");
+        let Unaffordable::Unread { budget, why } = cause else {
+            panic!("an allowance missing {absent} is unread rather than short: {cause:?}");
+        };
+        assert_eq!(budget, "graphql");
+        assert!(why.contains(absent), "{absent} is not named in {why}");
+    }
+}
+
+#[tokio::test]
+async fn an_allowance_reporting_more_left_than_it_holds_is_not_one_to_decide_on() {
+    // A third party answering `remaining` above `limit` is answering something that cannot
+    // be true, and a gate that took it would compute a buffer from one figure and compare
+    // it against a remainder from another. Unread rather than short: this session has no
+    // allowance for that budget.
+    let standin = Standin::serving((
+        "200 OK",
+        budget::documented_answer(LIMIT, LIMIT + 1, LIMIT, RESETS_AT).to_string(),
+    ));
+    let (_, decided) = decide(&standin).await;
+    let declined = decided.expect_err("an impossible allowance is not an affordable one");
+    let cause = declined.unaffordable_because().expect("a budget refusal");
+    let Unaffordable::Unread { budget, why } = cause else {
+        panic!("an impossible allowance is unread rather than short: {cause:?}");
+    };
+    assert_eq!(budget, "graphql");
+    assert!(why.contains("cannot both be true"), "{why}");
+}
+
+#[tokio::test]
+async fn a_rest_budget_the_answer_omits_declines_although_the_graphql_one_read() {
+    // The REST budget is decided after the GraphQL one, so an answer that carries a whole
+    // GraphQL allowance and no `core` object is the only way to reach that branch — and
+    // without it a session would start on a budget it never read.
+    let mut answer = budget::documented_answer(LIMIT, LIMIT, LIMIT, RESETS_AT);
+    answer["resources"]
+        .as_object_mut()
+        .expect("the answer carries a resources object")
+        .remove(budget::REST_RESOURCE);
+    let standin = Standin::serving(("200 OK", answer.to_string()));
+    let (_, decided) = decide(&standin).await;
+    let declined = decided.expect_err("a budget with no object is one this session did not read");
+    let cause = declined.unaffordable_because().expect("a budget refusal");
+    assert_eq!(cause.budget(), "rest");
+    assert!(
+        cause.reason().contains(budget::REST_RESOURCE),
+        "{}",
+        cause.reason()
+    );
 }
 
 #[tokio::test]

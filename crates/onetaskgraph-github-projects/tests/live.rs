@@ -11,6 +11,11 @@ use std::env;
 
 use onetaskgraph_live::Session;
 
+// The stand-ins that prove the budget precondition build their answers from `journey`'s
+// own pinned names, and this target reaches none of them: it points the journey at GitHub,
+// which needs no stand-in. So what it does not use is the other drives' rather than dead
+// code — the same reason `tests/plugin.rs` carries this.
+#[allow(dead_code)]
 mod journey;
 mod lane;
 

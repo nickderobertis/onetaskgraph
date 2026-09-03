@@ -7560,26 +7560,18 @@ fn label_endpoints(state: &Arc<Mutex<State>>) -> String {
 
 /// What GitHub's rate-limit endpoint answers for an account with room to spare.
 ///
-/// The shape is GitHub's own — `resources.core` for the REST budget and `resources.graphql`
-/// for the GraphQL one, each with `limit`, `used`, `remaining` and `reset` — and the figures
-/// are this board's rather than GitHub's published ones, for the reason
-/// [`FIXTURE_BUDGET_LIMIT`] is: a fixture that restated the real allowance would let a gate
-/// pass without ever having read what it was sent.
+/// The shape is built by `journey::budget::documented_answer` from the names pinned in
+/// `fixtures/rate-limits.json`, so this board cannot come to answer a shape the precondition
+/// no longer reads. The figures are this board's rather than GitHub's published ones, for
+/// the reason [`FIXTURE_BUDGET_LIMIT`] is: a fixture that restated the real allowance would
+/// let a gate pass without ever having read what it was sent.
 fn ample_allowance() -> Value {
-    allowance(FIXTURE_BUDGET_LIMIT, FIXTURE_BUDGET_LIMIT)
-}
-
-/// That answer with a named remainder against both budgets.
-fn allowance(graphql_remaining: u64, rest_remaining: u64) -> Value {
-    let resource = |remaining: u64, reset: u64| {
-        json!({"limit":FIXTURE_BUDGET_LIMIT,"used":FIXTURE_BUDGET_LIMIT - remaining,
-               "remaining":remaining,"reset":reset})
-    };
-    json!({"resources":{
-        "core": resource(rest_remaining, ALLOWANCE_RESETS_AT),
-        "graphql": resource(graphql_remaining, ALLOWANCE_RESETS_AT + 60),
-        "search": resource(30, ALLOWANCE_RESETS_AT),
-    }})
+    journey::budget::documented_answer(
+        FIXTURE_BUDGET_LIMIT,
+        FIXTURE_BUDGET_LIMIT,
+        FIXTURE_BUDGET_LIMIT,
+        ALLOWANCE_RESETS_AT,
+    )
 }
 
 /// The UTC epoch second this board says its budgets come back.

@@ -134,13 +134,19 @@ pub struct Fraction {
 impl Fraction {
     /// The fraction `numerator`/`denominator`.
     ///
+    /// **Private, and that is the whole answer to a zero denominator.** The only fraction
+    /// this workspace has is [`RETAINED_BUFFER`] below, declared in this file, so there is
+    /// no caller to report an error to and nothing outside can ask for a fraction that is
+    /// not one: the `assert!` runs when this crate is compiled rather than when a session
+    /// consults it, and a second constant spelled `Fraction::new(20, 0)` would fail to
+    /// build. A public constructor returning `Result` would move that from build time to
+    /// run time and buy nothing, because the buffer must not be constructible at run time
+    /// at all — see [`RETAINED_BUFFER`] on why nothing lowers it.
+    ///
     /// # Panics
     ///
-    /// When `denominator` is zero, which is not a fraction. It is a `const fn`, so the one
-    /// declaration below is checked when this crate is compiled rather than when a session
-    /// consults it.
-    #[must_use]
-    pub const fn new(numerator: u64, denominator: u64) -> Self {
+    /// When `denominator` is zero, which is not a fraction.
+    const fn new(numerator: u64, denominator: u64) -> Self {
         assert!(denominator != 0, "a fraction has a non-zero denominator");
         Self {
             numerator,
@@ -212,13 +218,23 @@ pub struct Allowance {
 impl Allowance {
     /// The allowance an API just reported: its whole size, what is left, and the UTC epoch
     /// second the window resets.
+    ///
+    /// `None` when more is reported remaining than the whole allowance, which is not an
+    /// allowance any API could truthfully report. That state is refused here rather than
+    /// carried, because [`affordable`] would answer it by comparing a buffer computed from
+    /// one figure against a remainder from another — a decision made on numbers that cannot
+    /// both be true, which is worse than no decision. A caller that meets it has a budget
+    /// it did not read, and [`Demand::unread`] is what that is.
     #[must_use]
-    pub const fn read(limit: u64, remaining: u64, reset: u64) -> Self {
-        Self {
+    pub const fn read(limit: u64, remaining: u64, reset: u64) -> Option<Self> {
+        if remaining > limit {
+            return None;
+        }
+        Some(Self {
             limit,
             remaining,
             reset,
-        }
+        })
     }
     /// The whole allowance for this budget's window.
     #[must_use]
@@ -1180,7 +1196,8 @@ mod tests {
             "graphql",
             "points",
             estimated_cost,
-            Allowance::read(limit, remaining, 1_775_000_000),
+            Allowance::read(limit, remaining, 1_775_000_000)
+                .expect("this test's allowance leaves no more than the whole of it"),
         )
     }
 
@@ -1273,12 +1290,23 @@ mod tests {
             "rest",
             "requests",
             5,
-            Allowance::read(5_000, 4_999, 1_775_000_060),
+            Allowance::read(5_000, 4_999, 1_775_000_060).expect("4,999 is under 5,000"),
         );
         let short = affordable(&[graphql(1_932, 5_000, 2_000), rest.clone()])
             .expect_err("the graphql budget cannot afford this session");
         assert_eq!(short.budget(), "graphql");
         assert_eq!(affordable(&[rest]), Ok(()));
+    }
+
+    #[test]
+    fn an_allowance_reporting_more_left_than_it_holds_cannot_be_made_at_all() {
+        assert_eq!(Allowance::read(5_000, 5_001, 1), None);
+        assert_eq!(
+            Allowance::read(5_000, 5_000, 1).map(Allowance::remaining),
+            Some(5_000),
+            "an untouched allowance is not an impossible one"
+        );
+        assert_eq!(Allowance::read(0, 0, 1).map(Allowance::limit), Some(0));
     }
 
     #[test]

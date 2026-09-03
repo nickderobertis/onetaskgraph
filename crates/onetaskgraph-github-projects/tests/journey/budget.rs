@@ -93,12 +93,23 @@ use std::collections::BTreeMap;
 use onetaskgraph_github_projects::accounting::{Accounting, Budget, Endpoint, Method};
 use onetaskgraph_github_projects::largest_page_sizes;
 use onetaskgraph_live::{Allowance, Declined, Demand, Unaffordable, affordable};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::lane::SESSION_NAME;
 
 /// The one endpoint this precondition calls, as GitHub's documentation spells it.
+///
+/// This and the four names below are **restatements of GitHub's contract**, not decisions of
+/// this repository, so they are pinned in `tests/fixtures/rate-limits.json` with the date
+/// and page they were read from, and `the_allowance_read_matches_its_pinned_artifact` in
+/// `tests/budget_gate.rs` reconciles the two both ways. The stand-ins the precondition is
+/// proven against build their answers from these same names rather than restating them a
+/// third time, so what a test proves is the parser against the pin instead of the parser
+/// against a copy of itself.
 pub const ALLOWANCE_ENDPOINT: &str = "/rate_limit";
+
+/// The method that endpoint is addressed with.
+pub const ALLOWANCE_METHOD: Method = Method::Get;
 
 /// How that call is named in the reason a budget went unread.
 ///
@@ -124,10 +135,33 @@ const PER_CALL: &str = "requests per call";
 /// taken from [`Budget::name`] because the two names are GitHub's own and are different:
 /// the `x-ratelimit-resource` header the accounting reads and this endpoint's object key
 /// do not have to agree, and pretending they do would read the wrong budget's figures.
-const REST_RESOURCE: &str = "core";
+pub const REST_RESOURCE: &str = "core";
 
 /// The budget that answer reports GraphQL points under.
-const GRAPHQL_RESOURCE: &str = "graphql";
+pub const GRAPHQL_RESOURCE: &str = "graphql";
+
+/// The field of a budget's object that carries its whole allowance.
+pub const LIMIT_FIELD: &str = "limit";
+/// The field that carries what is left of it.
+pub const REMAINING_FIELD: &str = "remaining";
+/// The field that carries the UTC epoch second the window resets.
+pub const RESET_FIELD: &str = "reset";
+
+/// Every field of a budget's object this precondition reads, and no other.
+///
+/// A field this reads that the pin does not record, or one the pin records that this no
+/// longer reads, fails the drift gate naming it: an allowance parsed out of a key GitHub
+/// stopped sending would be an allowance nobody read.
+pub const ALLOWANCE_FIELDS: [&str; 3] = [LIMIT_FIELD, REMAINING_FIELD, RESET_FIELD];
+
+/// Which of GitHub's `resources` objects reports each budget this session draws on.
+#[must_use]
+pub const fn resource_of(budget: Budget) -> &'static str {
+    match budget {
+        Budget::Graphql => GRAPHQL_RESOURCE,
+        Budget::Rest => REST_RESOURCE,
+    }
+}
 
 /// One row of the record: how many calls, and their worst-case nodes between them.
 struct Row {
@@ -228,12 +262,40 @@ pub fn estimate() -> BTreeMap<Budget, u64> {
     estimated
 }
 
+/// What GitHub's rate-limit endpoint answers, in the shape its documentation records.
+///
+/// Built from the pinned names above rather than spelled out again, so the stand-ins that
+/// prove the precondition and the parser that reads a real answer move together — and the
+/// drift gate holds those names to `tests/fixtures/rate-limits.json`, which is where the
+/// shape came from. A fixture that restated the shape independently would prove the parser
+/// against a second guess at GitHub's contract rather than against GitHub's.
+#[must_use]
+pub fn documented_answer(
+    limit: u64,
+    graphql_remaining: u64,
+    rest_remaining: u64,
+    reset: u64,
+) -> Value {
+    let resource = |remaining: u64| {
+        json!({LIMIT_FIELD: limit, REMAINING_FIELD: remaining, RESET_FIELD: reset,
+               "used": limit.saturating_sub(remaining)})
+    };
+    json!({"resources": {
+        REST_RESOURCE: resource(rest_remaining),
+        GRAPHQL_RESOURCE: resource(graphql_remaining),
+        // One resource beyond the two this session draws on, because GitHub's own answer
+        // carries several and a parser that only worked against exactly two would be
+        // proven by a fixture narrower than the world.
+        "search": json!({LIMIT_FIELD: 30, REMAINING_FIELD: 30, RESET_FIELD: reset}),
+    }})
+}
+
 /// The account's allowance for every budget, from GitHub's own rate-limit endpoint.
 ///
 /// Recorded into `into` like any other request, which is what makes the gate's own cost
 /// visible in the session report rather than assumed.
 async fn read_allowance(token: &str, rest_host: &str, into: &Accounting) -> Result<Value, String> {
-    let endpoint = Endpoint::parse(Method::Get, ALLOWANCE_ENDPOINT)
+    let endpoint = Endpoint::parse(ALLOWANCE_METHOD, ALLOWANCE_ENDPOINT)
         .expect("GitHub's rate-limit endpoint is spelled like an endpoint template");
     let sent = reqwest::Client::new()
         .get(format!("{rest_host}{ALLOWANCE_ENDPOINT}"))
@@ -262,11 +324,16 @@ fn allowance_of(answered: &Result<Value, String>, resource: &str) -> Result<Allo
             .and_then(Value::as_u64)
             .ok_or_else(|| format!("GET {ALLOWANCE_ENDPOINT} reported no {resource} {name}"))
     };
-    Ok(Allowance::read(
-        field("limit")?,
-        field("remaining")?,
-        field("reset")?,
-    ))
+    let (limit, remaining) = (field(LIMIT_FIELD)?, field(REMAINING_FIELD)?);
+    // An allowance reporting more left than the whole of itself is one no API could
+    // truthfully report, so it is a budget this session did not read rather than one it
+    // decides on. `Allowance::read` is where that is refused; this names it.
+    Allowance::read(limit, remaining, field(RESET_FIELD)?).ok_or_else(|| {
+        format!(
+            "GET {ALLOWANCE_ENDPOINT} reported {remaining} {resource} remaining of a whole \
+             allowance of {limit}, which cannot both be true"
+        )
+    })
 }
 
 /// Ask GitHub what the account has left, and decide whether this session may start.
@@ -299,8 +366,8 @@ pub async fn precondition(token: &str, rest_host: &str, into: &Accounting) -> Re
         }
     };
     affordable(&[
-        demand(Budget::Graphql, GRAPHQL_RESOURCE),
-        demand(Budget::Rest, REST_RESOURCE),
+        demand(Budget::Graphql, resource_of(Budget::Graphql)),
+        demand(Budget::Rest, resource_of(Budget::Rest)),
     ])
     .map_err(|cause: Unaffordable| Declined::unaffordable(SESSION_NAME, cause))
 }
