@@ -275,10 +275,29 @@ impl RateLimit {
                 .map(str::trim)
                 .and_then(|value| value.parse::<u64>().ok())
         };
+        // The three allowance figures are one fact and are read as one. A response saying
+        // more was left of a budget than the whole of it, or more of it used than it holds,
+        // cannot be true of any account — and a report built on it would be a measurement of
+        // nothing, which is what the type documentation above refuses. So a set that cannot
+        // all be true is a budget state this response did not carry: dropped **together**,
+        // because which of the three is the wrong one is not knowable from here, and
+        // reported as unknown rather than repaired into a figure nothing observed. `reset`
+        // and `resource` are independent of them and survive. `Allowance::read` in
+        // `onetaskgraph-live` refuses the same impossibility where the gate reads it.
+        let (limit, remaining, used) = (
+            number("x-ratelimit-limit"),
+            number("x-ratelimit-remaining"),
+            number("x-ratelimit-used"),
+        );
+        let over_the_whole = |figure: Option<u64>| match (figure, limit) {
+            (Some(figure), Some(limit)) => figure > limit,
+            _ => false,
+        };
+        let readable = !over_the_whole(remaining) && !over_the_whole(used);
         Self {
-            limit: number("x-ratelimit-limit"),
-            remaining: number("x-ratelimit-remaining"),
-            used: number("x-ratelimit-used"),
+            limit: limit.filter(|_| readable),
+            remaining: remaining.filter(|_| readable),
+            used: used.filter(|_| readable),
             reset: number("x-ratelimit-reset"),
             // The one field here that is not a number, so the one that could carry a third
             // party's arbitrary bytes into a value this crate hands back. GitHub names these
@@ -676,6 +695,7 @@ impl Request {
                     (UNNAMED_DOCUMENT, Some(otherwise)) => otherwise.to_owned(),
                     (name, _) => name.to_owned(),
                 },
+                // llmlint: ignore[invalid_states_unrepresentable] `None` here is not a missing invariant, it is the honest reading of a document this calculation could not rule on — and the state is reachable, because this constructor is public and `otherwise` exists for a caller's OWN documents (a schema introspection, a residue sweep) which no test of this source's inventory sweeps. Refusing to build the record would lose the request from the accounting entirely, which is strictly worse than recording a call whose node count is unknown. It is never totalled as zero: `Session::total_node_count` filter-maps it out, the report prints the total "over N GraphQL requests that have one", and the by-document section lists only those. Every document this source itself sends is held countable by `tests/node_count.rs`.
                 node_count: node_count(document, &bindings(variables)).ok(),
             },
             mode: Mode::of_document(document),

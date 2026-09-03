@@ -7382,6 +7382,45 @@ async fn a_caller_tells_an_answer_from_a_refusal_from_a_rate_limit_the_way_this_
     assert_eq!(observed.resource(), None);
     assert_eq!(RateLimit::default().limit(), None);
 
+    // The three allowance figures are one fact, so a response whose figures cannot all be
+    // true carries no budget state at all: more left of a budget than the whole of it, or
+    // more of it used than it holds, is not something to report as an observation. They go
+    // together — which of the three is the wrong one is not knowable from a response — while
+    // `reset` and `resource`, which are independent of them, survive.
+    let impossible = |remaining: &'static str, used: &'static str| {
+        RateLimit::read(move |name| {
+            BTreeMap::from([
+                ("x-ratelimit-limit", "4321"),
+                ("x-ratelimit-remaining", remaining),
+                ("x-ratelimit-used", used),
+                ("x-ratelimit-reset", "1788000000"),
+                ("x-ratelimit-resource", "graphql"),
+            ])
+            .get(name)
+            .map(|value| (*value).to_owned())
+        })
+    };
+    for (remaining, used) in [("4322", "21"), ("4300", "4322")] {
+        let unreadable = impossible(remaining, used);
+        assert_eq!(
+            (
+                unreadable.limit(),
+                unreadable.remaining(),
+                unreadable.used_by_the_account()
+            ),
+            (None, None, None),
+            "remaining {remaining}, used {used} of a whole 4321 cannot all be true"
+        );
+        assert_eq!(unreadable.reset(), Some(1_788_000_000));
+        assert_eq!(unreadable.resource(), Some("graphql"));
+        // And nothing downstream reads a budget as exhausted off figures nobody observed.
+        assert!(!unreadable.exhausted());
+    }
+    // The boundary itself is possible: an untouched allowance leaves the whole of it.
+    let whole = impossible("4321", "0");
+    assert_eq!(whole.remaining(), Some(4321));
+    assert_eq!(whole.limit(), Some(4321));
+
     for (spelled, method, mode) in [
         ("get", Method::Get, Mode::Read),
         ("HEAD", Method::Head, Mode::Read),

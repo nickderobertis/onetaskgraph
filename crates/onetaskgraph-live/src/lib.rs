@@ -222,7 +222,13 @@ pub struct Metered {
 }
 
 impl Metered {
+    // llmlint: ignore[invalid_states_unrepresentable] This crate is the gate every lane opens, and the set of budgets is the LANE's, not this crate's: a closed enum here would have to name GitHub's `graphql` and `core` and Linear's next one, which is the dependency this crate exists not to have. So the pairing is made unrepresentable where both halves are known — `journey::budget::metered` in `onetaskgraph-github-projects`, total over that crate's own closed `Budget` enum and the only production call of this constructor — and what travels from there is the settled pair rather than two strings a `Demand` could transpose. That transposition was the state this type was introduced to remove, and it is removed.
     /// The budget `budget`, metered in `unit`.
+    ///
+    /// **The pair is decided by the lane, because the budgets are the lane's.** The one
+    /// production caller is `journey::budget::metered` in `onetaskgraph-github-projects`,
+    /// which derives both halves from that crate's own closed `Budget` enum, so no pairing
+    /// this workspace makes can be transposed or re-spelled.
     #[must_use]
     pub const fn new(budget: &'static str, unit: &'static str) -> Self {
         Self { budget, unit }
