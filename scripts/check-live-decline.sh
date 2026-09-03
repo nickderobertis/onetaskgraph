@@ -28,7 +28,16 @@ readonly CRATE="${1:?usage: scripts/check-live-decline.sh <crate> <seat-file-nam
 readonly SEAT_FILE="${2:?usage: scripts/check-live-decline.sh <crate> <seat-file-name>}"
 
 # The argument names a crate of this workspace with a live journey in it; it is not a path
-# the caller chooses. Matched against the real tree before it reaches Cargo.
+# the caller chooses. Held to Cargo's own package-name grammar first, so nothing that is not
+# a package name can be spliced into a path or a `-p` selector, and then matched against the
+# real tree.
+case "$CRATE" in
+  *[!a-z0-9_-]* | "" | -*)
+    echo "check-live-decline: $CRATE is not a cargo package name (lowercase, digits, hyphens and underscores)." >&2
+    echo "check-live-decline: pass the name of a crate of this workspace that has a live journey." >&2
+    exit 1
+    ;;
+esac
 if [ ! -f "crates/$CRATE/tests/live.rs" ]; then
   echo "check-live-decline: $CRATE has no crates/$CRATE/tests/live.rs, so it has no live journey." >&2
   echo "check-live-decline: pass the name of a crate that does." >&2
@@ -58,16 +67,16 @@ fail() {
 # Placeholders, so the journey's own nomination decision says "run" and the outcome under
 # test is the one this case is about. None of them is a credential and none is ever sent:
 # every case below stops before the journey's first request.
-#
-# llmlint: ignore[work_goes_through_command_surface] This function is called BY the command surface: it is a command of each hosted plugin's own Nx `test` target, so routing it back through `just test` would re-enter the target that is running it. What it needs is one test binary run three times under three environments, which is narrower than any recipe offers — and the closest, `just test`, would select every affected project rather than the one crate whose three outcomes are under test.
 run_journey() {
   local seats="$1" demand="$2"
   shift 2
+  # llmlint: ignore-block[work_goes_through_command_surface] This runs as a command OF the command surface — each hosted plugin's Nx `test` target — so `just test` here would re-enter the target running it. It needs one test binary under three environments, which no recipe offers.
   env \
     ONETASKGRAPH_LIVE_SEAT_DIR="$seats" \
     ONETASKGRAPH_LIVE_REQUIRED="$demand" \
     "$@" \
     cargo test -p "$CRATE" --test live --all-features --locked -- --nocapture 2>&1
+  # llmlint: ignore-end[work_goes_through_command_surface]
 }
 
 # --nocapture: a skip is reported by the journey printing why, and the harness discards

@@ -77,7 +77,7 @@ distribution-test:
     @scripts/check-npm-publish.sh
     @scripts/check-fixture-discrimination.sh
 
-# llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] The tests that reach Linear and GitHub are ordinary tests of their own plugin's target, deliberately: a suite of their own is what let a query GitHub refuses merge while the advisory lane sat red. AGENTS.md records the decision; `affected` is the edge that bounds what it costs.
+# llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] `affected` is the edge these suites sit behind; AGENTS.md records why they have no other.
 # Tests only, for the affected projects.
 test:
     @{{nx}} affected -t test

@@ -3,7 +3,7 @@
   "name": "onetaskgraph-github-projects",
   "projectType": "library",
   "tags": ["lang:rust", "layer:plugin", "live:github-projects"],
-  "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree. llmlint: ignore-file[external_service_suite_stays_out_of_the_affected_tier] JSON has no comment to scope this to `test`, which is what it is about: this repository reversed that rule deliberately, and AGENTS.md records why under \"The tests that reach a real API are ordinary tests\". Affected selection bounds the cost, and scripts/check-live-lane.sh asserts the shape.",
+  "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree. llmlint: ignore-file[external_service_suite_stays_out_of_the_affected_tier] JSON has no comment to scope this to `test`; affected selection is the edge these suites sit behind, and AGENTS.md records why they have no other.",
   "implicitDependencies": ["onetaskgraph-live", "onetaskgraph-plugin-api"],
   "targets": {
     "bootstrap": {

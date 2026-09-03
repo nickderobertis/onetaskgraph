@@ -137,7 +137,7 @@ jobs:
           ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
           NX_BASE: ${{ steps.base.outputs.base }}
           NX_HEAD: HEAD
-        # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] This repository deliberately reversed that rule; AGENTS.md records it under "The tests that reach a real API are ordinary tests, and that reverses an earlier decision". Holding them outside the required set is what let a query GitHub refuses outright merge — the advisory lane went red on the pull request that introduced it and auto-merge squashed it anyway, because auto-merge waits only on required checks. Affected selection is what keeps the cost bounded: these targets run only when their own plugin changed, and `scripts/check-live-lane.sh` asserts the whole shape.
+        # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] These targets run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just check-generated
 
       # On the default branch, sweep everything. A cache is for speed and must never be
