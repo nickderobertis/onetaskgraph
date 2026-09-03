@@ -44,6 +44,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::thread;
 use std::time::{Duration, SystemTime};
 
 /// The directory the session seats live in, when the default is not wanted.
@@ -298,13 +299,30 @@ impl Seat {
     /// A file that is not there is not stale — it is absent, which is a different answer and
     /// belongs to whoever asked.
     fn is_stale(path: &Path) -> bool {
-        fs::metadata(path)
+        Self::stale_at(path).is_some()
+    }
+
+    /// When the file at `path` was last touched, if it is there and stale.
+    ///
+    /// The number is nanoseconds since the epoch, and it is what tells one stale file from
+    /// the next one at the same path: creating a file moves its modification time, so a
+    /// reading of a file that has since been replaced no longer matches what is there. That
+    /// is what [`Seat::hold`] elects on, so a run acting on an out-of-date reading is
+    /// refused rather than removing a file another run has just created.
+    fn stale_at(path: &Path) -> Option<u128> {
+        let modified = fs::metadata(path)
             .and_then(|metadata| metadata.modified())
-            .is_ok_and(|modified| {
-                SystemTime::now()
-                    .duration_since(modified)
-                    .is_ok_and(|age| age > SEAT_IS_STALE_AFTER)
-            })
+            .ok()?;
+        let age = SystemTime::now().duration_since(modified).ok()?;
+        if age <= SEAT_IS_STALE_AFTER {
+            return None;
+        }
+        Some(
+            modified
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .ok()?
+                .as_nanos(),
+        )
     }
 
     /// Take over an interrupted run's seat, with at most one run reclaiming at a time.
@@ -351,24 +369,78 @@ impl Seat {
     ///
     /// A claim a killed run left behind goes stale on the same clock the seat does, so a
     /// reclaim interrupted between its two halves does not decline every later run for ever.
+    ///
+    /// **Recovering that stale claim is elected, and the election is named for the reading
+    /// it was made on.** Delete-then-create loses here the same way it loses one level up,
+    /// and not narrowly: two runs that read one stale claim each remove what the other has
+    /// just created and each believe they hold it, which puts two runs into `reclaim` at
+    /// once and undoes the whole of what the claim is for.
+    ///
+    /// So a run may only remove the claim while holding [`Seat::elect`]'s file for that
+    /// claim's own modification time, and only while the claim still carries it. Creating a
+    /// file moves that time, so a run whose reading has gone out of date competes for a
+    /// path nobody else wants, finds the claim is no longer the one it read, and is refused
+    /// — rather than removing a claim the run that owns it has just created. Nothing here
+    /// ever empties the claim's path for another run to walk into.
     fn hold(claim: &Path) -> std::io::Result<()> {
         // Not a `Seat`: that type releases its file on drop, and this one has to outlive the
         // reclaim it guards. `reclaim` removes it on every path out of itself instead.
-        let create = || {
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(claim)
-                .map(drop)
-        };
+        let create = || Self::create_only(claim);
         match create() {
             Ok(()) => Ok(()),
-            Err(taken) if taken.kind() == ErrorKind::AlreadyExists && Self::is_stale(claim) => {
-                let _ = fs::remove_file(claim);
-                create()
+            Err(taken) if taken.kind() == ErrorKind::AlreadyExists => {
+                let Some(stale_at) = Self::stale_at(claim) else {
+                    return Err(taken);
+                };
+                let election = claim.with_extension(format!("recover-{stale_at}"));
+                Self::elect(&election)?;
+                let held = if Self::stale_at(claim) == Some(stale_at) {
+                    let _ = fs::remove_file(claim);
+                    create()
+                } else {
+                    // The claim was replaced while this run was deciding, so what is there
+                    // is somebody else's and removing it is the one thing this must not do.
+                    Err(taken)
+                };
+                let _ = fs::remove_file(&election);
+                held
             }
             Err(problem) => Err(problem),
         }
+    }
+
+    /// Win the election at `path`, or fail because another run holds it.
+    ///
+    /// An election a killed run left behind goes stale on the same clock everything else
+    /// here does, so one process dying inside a recovery does not stop every later run
+    /// recovering that claim. It is carried away rather than deleted, because a move cannot
+    /// be made twice — a rename whose source is already gone fails — so of any number of
+    /// runs finding it stale exactly one gets to stand again, where a delete would let them
+    /// all.
+    fn elect(path: &Path) -> std::io::Result<()> {
+        match Self::create_only(path) {
+            Ok(()) => Ok(()),
+            Err(taken) if taken.kind() == ErrorKind::AlreadyExists && Self::is_stale(path) => {
+                let aside = path.with_extension(format!(
+                    "abandoned-{}-{:?}",
+                    process::id(),
+                    thread::current().id()
+                ));
+                fs::rename(path, &aside)?;
+                let _ = fs::remove_file(&aside);
+                Self::create_only(path)
+            }
+            Err(problem) => Err(problem),
+        }
+    }
+
+    /// Create `path`, failing when something is already there.
+    fn create_only(path: &Path) -> std::io::Result<()> {
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map(drop)
     }
 
     /// Create the seat file, failing when one is already there.
@@ -593,6 +665,65 @@ mod tests {
             held[0].seat_path().exists(),
             "the winner really holds a seat"
         );
+    }
+
+    #[test]
+    fn two_runs_recovering_one_interrupted_reclaims_claim_leave_exactly_one_holder() {
+        // The race one level down from the test above, and the one a delete-then-create
+        // recovery loses every time rather than narrowly: a run killed midway through a
+        // reclaim leaves BOTH a stale seat and a stale claim, and every run that then reads
+        // that claim as stale would remove it and create its own — so each removes the
+        // other's, each takes the claim, and each goes on to reclaim the seat. Two sessions
+        // against one shared external fixture is exactly what the claim exists to prevent,
+        // so the claim's own recovery has to be as exclusive as the claim is.
+        //
+        // Rounds, rather than one, because the two halves of a delete-then-create recovery
+        // are microseconds apart, so a round of this only sometimes lands the interleaving:
+        // against a delete-then-create recovery one round in forty or so ends with two
+        // holders, and a test of one round would pass while the defect was there. Election
+        // is exclusive by the filesystem rather than by timing, so it holds every round and
+        // costs a fifth of a second; two hundred rounds is what makes the failing direction
+        // a witness rather than a coin toss.
+        let directory = scratch();
+        let path = directory.join("onetaskgraph-live-github-projects.seat");
+        let claim = path.with_extension("reclaim");
+        for round in 1..=200 {
+            interrupted_runs_file(&path);
+            interrupted_runs_file(&claim);
+
+            let start = Arc::new(Barrier::new(32));
+            let holders: Vec<_> = (0..32)
+                .map(|_| {
+                    let directory = directory.clone();
+                    let start = Arc::clone(&start);
+                    std::thread::spawn(move || {
+                        start.wait();
+                        Session::open_in(&directory, "GitHub Projects", credential("live-token"))
+                            .ok()
+                    })
+                })
+                .collect();
+            let held: Vec<_> = holders
+                .into_iter()
+                .filter_map(|thread| thread.join().expect("no recovering thread panicked"))
+                .collect();
+            assert_eq!(
+                held.len(),
+                1,
+                "round {round}: {} runs recovered one interrupted reclaim's claim at once, \
+                 so that many sessions would have written to the same shared fixture",
+                held.len()
+            );
+            assert!(
+                held[0].seat_path().exists(),
+                "round {round}: the winner really holds a seat"
+            );
+            assert!(
+                !claim.exists(),
+                "round {round}: a finished reclaim leaves no claim for the next run to wait \
+                 behind"
+            );
+        }
     }
 
     #[test]
