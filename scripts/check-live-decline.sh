@@ -38,9 +38,14 @@ if [ ! -f "crates/$CRATE/tests/live.rs" ]; then
   echo "check-live-decline: pass the name of a crate that does." >&2
   exit 1
 fi
+# The second argument names the seat file inside that scratch directory, so a name that is
+# not a file name would be spliced into a path this script then writes to. A leading dot is
+# refused along with the rest: `.` and `..` are the scratch directory itself, and the
+# redirection below would abort on one with the shell's own "Is a directory" and no next
+# action, which is the diagnostic a caller cannot act on.
 case "$SEAT_FILE" in
-  *[!a-z0-9.-]* | "" | *..*)
-    echo "check-live-decline: $SEAT_FILE is not a seat file name (lowercase, digits, dots and hyphens)." >&2
+  *[!a-z0-9.-]* | "" | .*)
+    echo "check-live-decline: $SEAT_FILE is not a seat file name (lowercase, digits, dots and hyphens, not beginning with a dot)." >&2
     echo "check-live-decline: pass the name onetaskgraph_live::Session uses for this session's seat." >&2
     exit 1
     ;;
