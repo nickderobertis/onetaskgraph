@@ -30,7 +30,7 @@ problems = []
 project_files = sorted(
     list(Path("crates").glob("*/project.json"))
     + list(Path("sdks").glob("*/project.json"))
-    + [Path("workspace/project.json")]
+    + [Path("workspace/project.json"), Path("scripts/project.json")]
 )
 if not project_files:
     problems.append("no project.json files found — Nx has nothing to orchestrate")

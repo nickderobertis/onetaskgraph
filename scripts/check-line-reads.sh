@@ -310,9 +310,10 @@ fi
 #
 #    It needs a git repository to clone from and a node_modules to copy, so the fixture is
 #    a scratch clone with the working tree's files committed on top of it.
-# A fresh checkout must pass script-check before its dependencies exist; this named skip
-# is the accepted degraded contract, and the branch preserves the complete assertion
-# whenever bootstrap has supplied node_modules.
+# `just script-check` reaches this through Nx, and scripts/nx.sh runs the locked install
+# first, so on that path node_modules is always there. Running this script directly in a
+# fresh checkout is the case that remains: this named skip is the accepted degraded
+# contract, and the branch preserves the complete assertion whenever it is present.
 if [ ! -d "$ROOT/node_modules" ]; then
   echo "check-line-reads: warning: case 4 skipped because $ROOT/node_modules is absent, so the affected-selection plugin read was not checked; next: run 'just bootstrap', then rerun 'just script-check' for the full check" >&2
 else

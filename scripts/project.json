@@ -1,0 +1,103 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "scripts",
+  "projectType": "library",
+  "tags": ["lang:bash", "layer:workspace"],
+  "//": "The guards and the release plumbing are a project like everything else, so a change to one is selected by the graph rather than escaping it, and the two targets whose inputs this tree can enumerate — `lint` and `format-check` — are cached with it. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to the two distribution targets below, which is what it is about: what they read is the whole publishable surface, and several of them clone this repository and drive the real release tool over its git history, so there is no input glob and no narrower project to put them behind. They ran unconditionally from the justfile before this project existed, and selecting them instead would silently stop checking a release. It depends on no other project ON PURPOSE: nothing here is reachable from a crate, so a crate change must never drag these targets in — the edge that exists runs the other way, from `workspace`, which invokes a dozen of these scripts and so has to re-run when one of them changes.",
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:noop",
+      "//": "Nothing to provision: every script here runs on the bash, python3 and git that scripts/provision-gate.sh already requires of the machine."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format --write scripts"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place. Only this project's own JSON is formatted — biome has no formatter for a shell script, and the scripts' own shape is what the lint target below reads."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format scripts"
+      },
+      "inputs": ["{workspaceRoot}/biome.json", "{workspaceRoot}/scripts/project.json"]
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash scripts/check-bash4-array-builtins.sh"
+      },
+      "//": "The bash 3.2 scan, which reads only this project's own files — so `default` describes it exactly and a cache hit is sound. It is the cheap half of the pair: the checks that watch it refuse are tests, and live in the target below."
+    },
+    "typecheck": {
+      "executor": "nx:noop",
+      "//": "Declared and empty. Target names are uniform because `nx affected` fans out by name, and a shell script has no type-checking step between reading it and running it — what would be static analysis here is the lint target's scan and the tests that drive the real scripts."
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "bash scripts/check-bash4-array-builtins-enforced.sh",
+          "bash scripts/check-guard-path-spelling.sh",
+          "bash scripts/check-line-reads.sh"
+        ],
+        "parallel": false
+      },
+      "cache": false,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/crates/*/tests/fixtures/*.json",
+        "{workspaceRoot}/crates/*/project.json",
+        "{workspaceRoot}/sdks/*/project.json",
+        "{workspaceRoot}/workspace/project.json"
+      ],
+      "//": "Uncached for the reason the workspace project's own test target is: these drive the real guards inside scratch clones of this repository and read git history there, which no input glob in this tree describes. The workspaceRoot inputs above are what SELECTS this project rather than what hashes it — the path-spelling check drives check-store-fixtures.sh over the crate fixtures, and the line-read check drives check-affected-selection.sh and check-plugin-isolation.sh over the project graph, so a change to either has to re-run these. Serial because each clones a tree and one nests a whole Nx invocation inside it."
+    },
+    "coverage": {
+      "executor": "nx:noop",
+      "//": "Declared and empty. The 95% line floor is measured by instrumenting a compiled crate or an interpreted SDK; there is no line coverage for a shell script, and what stands in its place is scripts/check-bash4-array-builtins-enforced.sh and scripts/check-line-reads.sh driving these guards until they refuse."
+    },
+    "test-live": {
+      "executor": "nx:noop",
+      "//": "Declared and empty, which is what makes `just test-live` a sweep: no script here reaches a third-party service, and the credentialed journeys belong to the two hosted plugin crates."
+    },
+    "distribution-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "bash scripts/set-version.sh --check",
+          "bash scripts/check-distribution-contract.sh",
+          "bash scripts/check-distribution-contract-enforced.sh",
+          "bash scripts/check-release-targets.sh",
+          "bash scripts/check-release-probe.sh",
+          "bash scripts/check-store-fixtures.sh",
+          "bash scripts/check-store-fixtures-enforced.sh",
+          "bash scripts/check-release-pr-sync.sh",
+          "bash scripts/check-release-tooling-selection.sh",
+          "bash scripts/check-real-release-preparation.sh"
+        ],
+        "parallel": false
+      },
+      "cache": false,
+      "//": "Outside the `check` fan-out and invoked by name from `just distribution-check`, for the same reason `workspace:deny` is: what these read is the whole publishable surface — every manifest, the release workflows, release-targets.toml, config/registry-interfaces.toml, the crate fixtures — and several of them clone this repository and drive the real release tool over its git history. No input glob describes that, so a cache hit would be a claim about a tree that has since changed and an affected-selection miss would silently stop checking a release. It runs on every gate, exactly as it did before it was a target."
+    },
+    "distribution-test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "bash scripts/test-distribution.sh",
+          "bash scripts/check-npm-publish.sh",
+          "bash scripts/check-fixture-discrimination.sh"
+        ],
+        "parallel": false
+      },
+      "cache": false,
+      "//": "Uncached and unconditional for the same reason as distribution-check above, and one more of its own: check-npm-publish stands a registry up and publishes into it, and check-fixture-discrimination mutates a crate in a scratch copy and re-runs its real tests — neither is a function of files this tree can enumerate."
+    }
+  }
+}
