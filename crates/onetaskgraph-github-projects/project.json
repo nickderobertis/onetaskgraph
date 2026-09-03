@@ -3,7 +3,7 @@
   "name": "onetaskgraph-github-projects",
   "projectType": "library",
   "tags": ["lang:rust", "layer:plugin", "live:github-projects"],
-  "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree. llmlint: ignore-file[external_service_suite_stays_out_of_the_affected_tier] JSON has no comment to scope this to `test`; affected selection is the edge these suites sit behind, and AGENTS.md records why they have no other.",
+  "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[external_service_suite_stays_out_of_the_affected_tier] JSON has no comment to scope this to `test`, whose live tests reach a real API; affected selection is the edge they sit behind, so they run only when this crate changed.",
   "implicitDependencies": ["onetaskgraph-live", "onetaskgraph-plugin-api"],
   "targets": {
     "bootstrap": {

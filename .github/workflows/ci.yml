@@ -4,20 +4,12 @@
 # branch sweeps every project, so nothing affected-detection or a stale cache could miss
 # goes unchecked. Both go through the same `just` recipes a contributor runs locally.
 #
-# The tests that reach a real API run in the ordinary `check` job here; AGENTS.md records
-# why. Two things about that are this file's alone. One live session per run: only the
-# `ubuntu-latest` leg carries the credentials, and scripts/rust-coverage.sh clears them
-# before coverage re-runs the same tests — read the note there before changing either. And
-# `ONETASKGRAPH_LIVE_REQUIRED` is `0` on a fork pull request, which gets no secrets, and `1`
-# everywhere else, so no lane passes green for a credential that went missing.
-#
-# That `0` is the one run where these tests can go green without having run, and it is
-# deliberate rather than a gap left open: GitHub supplies a fork pull request no secrets, so
-# demanding one would fail every outside contribution for something the contributor cannot
-# supply. What it costs is that a fork's plugin change merges unproven against the real API,
-# and what recovers it is the push sweep below — the default branch runs the same tests with
-# the credentials and with `1`, so the proof is late rather than absent. A pull request from
-# this repository, which is the one the merge normally waits on, is proven before it merges.
+# Two things about the tests that reach a real API are this file's alone. One live session
+# per run: only the `ubuntu-latest` leg carries the credentials, and scripts/rust-coverage.sh
+# clears them before coverage re-runs the same tests — read the note there before changing
+# either. And `ONETASKGRAPH_LIVE_REQUIRED` is `0` on a fork pull request and `1` everywhere
+# else, so no lane passes green for a credential that went missing; the step that sets it
+# says why that one run is exempt.
 
 name: ci
 

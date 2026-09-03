@@ -60,7 +60,7 @@ distribution-check:
 distribution-test:
     @{{nx}} run scripts:distribution-test
 
-# llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] `affected` is the edge these suites sit behind; AGENTS.md records why they have no other.
+# llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] `affected` is the edge these suites sit behind: a plugin's live tests run only when that plugin's own diff selects it.
 # Tests only, for the affected projects.
 test:
     @{{nx}} affected -t test
