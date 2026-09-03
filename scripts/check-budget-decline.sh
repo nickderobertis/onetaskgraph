@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# llmlint: ignore-file[new_code_lands_in_a_project] scripts/ is deliberately outside the
-# project graph, as every other guard here is: Nx maps no project to it, which is why
-# `just script-check` runs these outside Nx. This one is nevertheless a command of the
-# GitHub Projects plugin's own `test` target, so it runs when that plugin is affected.
-#
 # Follow a budget decline through to the conclusion the required check reads.
 #
 # `tests/budget_gate.rs` asserts the *outcome* on every ordinary run: a journey whose

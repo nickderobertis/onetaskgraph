@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# llmlint: ignore-file[new_code_lands_in_a_project] scripts/ is deliberately outside the
-# project graph, as every other guard here is: Nx maps no project to it, which is why
-# `just script-check` runs these outside Nx. This one is nevertheless a command of each
-# hosted plugin's own `test` target, so it runs when that plugin is affected.
-#
 # Drive one plugin's live journey through all three of its outcomes, reaching no API.
 #
 # 1. **Skipped** — no credential, and none expected: exit zero with the reason printed.
