@@ -293,7 +293,18 @@ impl RateLimit {
             (Some(figure), Some(limit)) => figure > limit,
             _ => false,
         };
-        let readable = !over_the_whole(remaining) && !over_the_whole(used);
+        // And the same impossibility one step on, which neither figure shows on its own:
+        // `used` and `remaining` **partition** an allowance — what the window has spent and
+        // what is left of it — so their sum is the whole of it and cannot exceed it. A
+        // response saying 4,000 used and 4,000 left of 5,000 has each figure inside the
+        // limit and still cannot be true of any account.
+        let more_than_the_whole_between_them = match (used, remaining, limit) {
+            (Some(used), Some(remaining), Some(limit)) => used.saturating_add(remaining) > limit,
+            _ => false,
+        };
+        let readable = !over_the_whole(remaining)
+            && !over_the_whole(used)
+            && !more_than_the_whole_between_them;
         Self {
             limit: limit.filter(|_| readable),
             remaining: remaining.filter(|_| readable),

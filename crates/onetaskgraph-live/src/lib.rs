@@ -56,6 +56,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -77,6 +78,14 @@ pub const REQUIRED_VARIABLE: &str = "ONETASKGRAPH_LIVE_REQUIRED";
 /// seat exists to prevent — CI gets a fresh runner each time and would never notice, and
 /// the contributor whose run was interrupted would.
 const SEAT_IS_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
+
+/// How many seats this process has taken, which is the last part of a seat's own token.
+///
+/// The process and the thread do not tell two seats apart on their own: one thread that
+/// takes a seat, has it reclaimed while it still holds it, and then takes another at the
+/// same path would write the same two halves twice. What [`Seat::drop`] compares has to be
+/// unique to the file, so this is counted rather than derived.
+static SEATS_TAKEN: AtomicU64 = AtomicU64::new(0);
 
 /// Whether a live session is expected here, from `ONETASKGRAPH_LIVE_REQUIRED`.
 ///
@@ -677,6 +686,17 @@ impl Session {
 #[derive(Debug)]
 struct Seat {
     path: PathBuf,
+    /// What this run wrote into the file it created, which is what tells that file from the
+    /// next one at the same path.
+    ///
+    /// [`Seat::drop`] is the one reader and why it needs one is written there. A whole
+    /// number of the process, the thread and this process's own count of seats taken,
+    /// rather than a modification time: two files created either side of a reclaim can share
+    /// a timestamp on a filesystem whose resolution is coarse, and cannot share this.
+    ///
+    /// `None` when the write did not land — the one case the drop falls back to removing
+    /// unconditionally, for the reason given there.
+    token: Option<String>,
 }
 
 impl Seat {
@@ -862,21 +882,47 @@ impl Seat {
     /// Create the seat file, failing when one is already there.
     fn create(path: &Path) -> std::io::Result<Self> {
         let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-        // Who holds it, for the reader of a refusal that names this file. Best effort: the
-        // seat is the file's existence, not its contents, so a failed write must not hand
-        // the seat to a second run.
-        let _ = writeln!(file, "held by process {}", process::id());
+        // Who holds it, for the reader of a refusal that names this file — and, in the same
+        // line, which run holds it, for [`Seat::drop`]. Best effort: the seat is the file's
+        // existence, not its contents, so a failed write must not hand the seat to a second
+        // run.
+        let token = format!(
+            "held by process {} thread {:?} seat {}",
+            process::id(),
+            thread::current().id(),
+            SEATS_TAKEN.fetch_add(1, Ordering::Relaxed)
+        );
         Ok(Self {
             path: path.to_owned(),
+            token: writeln!(file, "{token}").ok().map(|()| token),
         })
     }
 }
 
 impl Drop for Seat {
     fn drop(&mut self) {
+        // **Only the file this run took.** A session that outlives `SEAT_IS_STALE_AFTER` has
+        // its seat reclaimed by a later run, which removes this one's file and creates its
+        // own at the same path — and an unconditional remove here would then delete *that*
+        // run's seat and let a third run in beside it, which is the two concurrent sessions
+        // against one shared fixture the seat exists to prevent. So the file there is this
+        // run's only while it still carries what this run wrote into it, which is the same
+        // identity test `hold` makes of a claim one level down.
+        let ours = match &self.token {
+            // Nothing was written, so this cannot tell the two apart. It removes, because
+            // the failure that leaves is the worse one: a seat nobody releases declines
+            // every run on this machine until it goes stale an hour later, where the case
+            // above needs a session to have already run for that long.
+            None => true,
+            Some(token) => {
+                fs::read_to_string(&self.path).is_ok_and(|held| held.trim_end() == token)
+            }
+        };
         // Best effort by construction: a seat nobody could remove is reclaimed by the next
         // run as an interrupted one's, which is the case this ignores in favour of.
-        let _ = fs::remove_file(&self.path);
+        if ours {
+            let _ = fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -907,6 +953,16 @@ mod tests {
     /// Plant a seat file that was last touched longer ago than any session lasts.
     fn interrupted_runs_file(path: &Path) {
         fs::write(path, "held by an interrupted run\n").expect("the file is writable");
+        age_out_of_the_window(path);
+    }
+
+    /// Move a file's modification time outside the window any session lasts.
+    ///
+    /// What moves in a real run that outlives the window is the clock, not the file; moving
+    /// the file's own time back is how a test reaches the same comparison without waiting an
+    /// hour. It leaves the contents alone, so a seat aged this way still says which run
+    /// wrote it.
+    fn age_out_of_the_window(path: &Path) {
         let long_ago = SystemTime::now() - SEAT_IS_STALE_AFTER - Duration::from_secs(60);
         fs::File::open(path)
             .expect("the file opens")
@@ -1004,6 +1060,49 @@ mod tests {
         let reclaimed = Session::open_in(&directory, "Linear", credential("live-key"))
             .expect("a seat older than any session lasts is an interrupted run's");
         assert_eq!(reclaimed.seat_path(), path);
+    }
+
+    #[test]
+    fn a_displaced_holder_does_not_release_the_seat_the_run_that_replaced_it_holds() {
+        // A session that outlives the stale window has its seat reclaimed by a later run,
+        // and then finishes. What it must not do on the way out is take the replacement's
+        // seat with it: that would let a third run open beside a live one, which is the two
+        // concurrent sessions against one shared fixture the seat exists to prevent.
+        let directory = scratch();
+        let displaced = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
+            .expect("the first instance takes the seat");
+        let seat = displaced.seat_path().to_owned();
+        age_out_of_the_window(&seat);
+
+        let replacement = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
+            .expect("a seat older than any session lasts is reclaimed");
+        assert_eq!(replacement.seat_path(), seat);
+        let taken_by_the_replacement =
+            fs::read_to_string(&seat).expect("the reclaimed seat is readable");
+
+        drop(displaced);
+
+        assert!(
+            seat.exists(),
+            "the displaced run released a seat that was no longer its own"
+        );
+        assert_eq!(
+            fs::read_to_string(&seat).expect("the reclaimed seat is still readable"),
+            taken_by_the_replacement,
+            "the seat there is the replacement's, and nothing this run did replaced it"
+        );
+        let declined = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
+            .expect_err("a third instance must be declined while the replacement runs");
+        assert!(
+            declined.message().contains("already running"),
+            "{}",
+            declined.message()
+        );
+
+        // And the replacement's own release is untouched by any of it: it wrote what is
+        // there, so it is the run that takes it away.
+        drop(replacement);
+        assert!(!seat.exists(), "the run that took the seat releases it");
     }
 
     #[test]

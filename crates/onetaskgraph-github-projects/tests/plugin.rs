@@ -7400,7 +7400,10 @@ async fn a_caller_tells_an_answer_from_a_refusal_from_a_rate_limit_the_way_this_
             .map(|value| (*value).to_owned())
         })
     };
-    for (remaining, used) in [("4322", "21"), ("4300", "4322")] {
+    // The third of them is the one neither figure shows on its own: `used` and `remaining`
+    // partition the allowance, so 4,000 spent and 4,000 left of 4,321 is impossible although
+    // each figure is inside the limit.
+    for (remaining, used) in [("4322", "21"), ("4300", "4322"), ("4000", "4000")] {
         let unreadable = impossible(remaining, used);
         assert_eq!(
             (
@@ -7416,10 +7419,14 @@ async fn a_caller_tells_an_answer_from_a_refusal_from_a_rate_limit_the_way_this_
         // And nothing downstream reads a budget as exhausted off figures nobody observed.
         assert!(!unreadable.exhausted());
     }
-    // The boundary itself is possible: an untouched allowance leaves the whole of it.
+    // The boundary itself is possible: an untouched allowance leaves the whole of it, and a
+    // partly spent one has the two figures summing to exactly the whole.
     let whole = impossible("4321", "0");
     assert_eq!(whole.remaining(), Some(4321));
     assert_eq!(whole.limit(), Some(4321));
+    let partly_spent = impossible("300", "4021");
+    assert_eq!(partly_spent.remaining(), Some(300));
+    assert_eq!(partly_spent.used_by_the_account(), Some(4021));
 
     for (spelled, method, mode) in [
         ("get", Method::Get, Mode::Read),
