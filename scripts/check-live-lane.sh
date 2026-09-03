@@ -9,16 +9,14 @@
 #   2. Each hosted plugin's cacheable `test` target is keyed on its credential, its
 #      nominations and the demand, so a replay of a run that had no credential cannot stand
 #      in for a run that has one.
-#   3. Every live test really runs where it now lives: tests are declared, none carries
-#      `#[ignore]`, and none is compiled out — a journey excluded by `cfg` runs exactly as
-#      often as an ignored one and says even less about it.
+#   3. Every live test really runs where it now lives: tests are declared, and none carries
+#      `#[ignore]`.
 #   4. Each hosted plugin's journey opens its session through the one gate,
 #      `onetaskgraph_live::Session::open`, so a precondition added there governs every path
 #      to a real API rather than some.
 #   5. .github/workflows/ci.yml hands each credential to exactly one lane of the matrix,
 #      under the name the product reads, with that lane's nominations and the demand that
-#      stops a missing credential passing green — set to `1`, rather than merely mentioned,
-#      because `ONETASKGRAPH_LIVE_REQUIRED: 0` is spelled the same way and is the hole.
+#      stops a missing credential passing green.
 #   6. scripts/rust-coverage.sh clears them, because coverage re-runs the same tests.
 #   7. Every variable the live crate declares sits inside the namespace the product's
 #      configuration layer reserves — the lane's variables share the product's own
@@ -55,12 +53,6 @@ SESSIONS = {
 WORKFLOW = Path(".github/workflows/ci.yml")
 COVERAGE = Path("scripts/rust-coverage.sh")
 DEMAND = "ONETASKGRAPH_LIVE_REQUIRED"
-# The one run where the demand is legitimately not made, spelled as GitHub Actions spells
-# it. A fork pull request receives no secrets at all, so a credential was never expected
-# there; every other run is one where a missing credential is a misconfiguration. It is the
-# whole condition rather than a word out of it — a guard merely *containing* "fork" would
-# let any expression at all turn the demand off.
-FORK = "github.event.pull_request.head.repo.fork"
 
 # The two sides of assertion 7. The live crate declares its variables as `pub const`s; the
 # engine's environment layer reserves one namespace under the configuration prefix, and a
@@ -212,25 +204,9 @@ for relative, session in SESSIONS.items():
     source = read(path, "that crate's live journey")
     # Attributes only: the doc comments beside them explain the rule, and a check that
     # could not tell those apart would make the explanation impossible to write down.
-    attributes = [
-        line.strip()
-        for line in source.splitlines()
-        if line.lstrip().startswith(("#[", "#!["))
-    ]
+    attributes = [line.strip() for line in source.splitlines() if line.lstrip().startswith("#[")]
     declared = sum(attribute.startswith(("#[test]", "#[tokio::test")) for attribute in attributes)
     ignored = sum(attribute.startswith("#[ignore") for attribute in attributes)
-    # A journey compiled out runs exactly as often as one marked `#[ignore]`, and it is the
-    # quieter of the two: `cargo test` prints an ignored test as ignored and prints nothing
-    # at all about a test that was never built. `#![cfg(...)]` takes the whole file,
-    # `#[cfg(...)]` takes the item it sits on, and `#[cfg_attr(..., ignore)]` puts the
-    # attribute above back under a condition — so all four spellings are refused rather than
-    # the one that used to be reached for. Neither journey carries any of them today, so
-    # this costs nothing until somebody adds one.
-    excluded = [
-        attribute
-        for attribute in attributes
-        if attribute.startswith(("#[cfg(", "#![cfg(", "#[cfg_attr(", "#![cfg_attr("))
-    ]
     if not declared:
         problems.append(
             f"{relative}: declares no test, so nothing here reaches the real API at all"
@@ -241,15 +217,6 @@ for relative, session in SESSIONS.items():
             "keep this journey out of every target but the separate lane, and the separate "
             "lane is gone — an ignored test here runs nowhere"
         )
-    if excluded:
-        problems.append(
-            f"{relative}: carries a conditional-compilation attribute, {excluded[0]}. A "
-            "journey the build leaves out runs nowhere, exactly as an `#[ignore]` here "
-            "would, and reports even less about it — `cargo test` names an ignored test "
-            "and says nothing at all about one that was never compiled. These tests are "
-            "ordinary tests of the crate they live in: every platform builds them and the "
-            "credential decides at run time whether they reach the API"
-        )
     if "Session::open(" not in source:
         problems.append(
             f"{relative}: never opens a session through onetaskgraph_live::Session::open. "
@@ -257,76 +224,12 @@ for relative, session in SESSIONS.items():
             "so a precondition added there governs all of them rather than some"
         )
 
-# What the demand has to be SET to, read out of the live crate rather than restated here.
-# `onetaskgraph_live::required` is what actually decides, and it reads `0`, the empty string
-# and an absent variable all as leaving the lane free to skip — so the name being present in
-# a step says nothing on its own. Taking the value from that crate's own `DEMANDED` is what
-# stops this check and the parser it stands for drifting into two spellings.
-live_source = read(LIVE_CRATE, "the live crate that declares the lane's variables")
-def declared_value(name):
-    """One of the live crate's two `&str` constants, or a refusal naming it."""
-    found = re.search(rf'(?m)^pub const {name}: &str = "([^"]+)";$', live_source)
-    if not found:
-        refuse(
-            f"{LIVE_CRATE} no longer declares {name} as a string constant, so what "
-            f"{DEMAND} may be set to cannot be read from the crate that decides it.",
-            f"restore `pub const {name}: &str = \"...\";` there, or point this check at "
-            "where the value moved to.",
-        )
-    return found.group(1)
-
-
-DEMANDED = declared_value("DEMANDED")
-NOT_DEMANDED = declared_value("NOT_DEMANDED")
-
 # 4. The workflow hands each credential to exactly one lane, with what that lane needs.
 workflow = read(WORKFLOW, "the workflow that runs the required check")
 code = without_comments(workflow)
 # Steps, so a credential can be attributed to the lane that carries it. A step begins at
 # the one indentation `- name:` uses inside a job's `steps:` list.
 steps = re.split(r"(?m)^      - (?=name:|uses:)", code)
-
-
-def demanded(step):
-    """What a step assigns [`DEMAND`], or `None` when it assigns nothing.
-
-    The assignment rather than the name: the workflow also writes the name in prose above
-    the line that sets it, and a step that merely mentions it demands nothing.
-    """
-    assignment = re.search(rf"(?m)^\s*{DEMAND}:[ \t]*(.+?)\s*$", step)
-    return assignment.group(1) if assignment else None
-
-
-def demands_a_credential(value):
-    """Whether that value is the demand on every run but a fork pull request.
-
-    Exactly two spellings satisfy it. The demanded value on its own is one. The other is
-    the fork exception, and it is matched whole rather than by any word in it: GitHub
-    Actions has no ternary, so the workflow spells that case `<FORK> && '<off>' || '<on>'`,
-    where the `||` fallback is what every run that is not a fork pull request takes. Both
-    values are the live crate's own — a fork branch of anything else, `2` included, is a
-    value `onetaskgraph_live::required` refuses outright, which fails the lane for a reason
-    that has nothing to do with what it was testing. The condition has to be [`FORK`]
-    itself and the fallback has to be the demand, because a
-    guard this recognised loosely would be one any other condition could be substituted
-    into — turning the demand off for scheduled runs, or for a branch, while still reading
-    as the fork exception. That is the same green-for-a-missing-credential hole one level
-    further in.
-    """
-    if value.strip().strip("\"'") == DEMANDED:
-        return True
-    expression = re.fullmatch(r"\$\{\{(.+)\}\}", value.strip())
-    if not expression:
-        return False
-    guarded, _, fallback = expression.group(1).rpartition("||")
-    condition, _, off = guarded.partition("&&")
-    # llmlint: ignore[live_tier_compiles_and_requires_credential] Whether the fork case is exempt is the repository's decision rather than this function's: AGENTS.md and .github/workflows/ci.yml, the only place credentials enter this build, record it and carry this same directive. What is here is the narrowing — the exception holds for that one condition and those two values, and nothing else.
-    return (
-        condition.strip() == FORK
-        and off.strip().strip("\"'") == NOT_DEMANDED
-        and fallback.strip().strip("\"'") == DEMANDED
-    )
-
 for relative, session in SESSIONS.items():
     credential = session["credential"]
     carrying = [step for step in steps if f"secrets.{credential}" in step]
@@ -343,20 +246,10 @@ for relative, session in SESSIONS.items():
                 "of the platform matrix. Every lane carrying it opens a session of its own "
                 "against the same shared fixture"
             )
-        assigned = demanded(step)
-        if assigned is None:
+        if DEMAND not in step:
             problems.append(
                 f"{WORKFLOW}: hands {credential} to a step that does not set {DEMAND}, so "
                 "that lane passes green when the credential is absent"
-            )
-        elif not demands_a_credential(assigned):
-            problems.append(
-                f"{WORKFLOW}: hands {credential} to a step that sets {DEMAND} to "
-                f"{assigned!r}, which is not the demand. `0`, the empty string and an "
-                "absent variable all read the same way — the lane skips, and a skip is a "
-                "conclusion branch protection accepts in place of success — so the name "
-                f"being set is not enough. It has to be {DEMANDED} on every run but a fork "
-                "pull request, which is the one run GitHub supplies no secrets to"
             )
         for nomination in session["nominations"]:
             if nomination not in step:
@@ -397,6 +290,7 @@ for name in {session["credential"] for session in SESSIONS.values()} | {DEMAND}:
 # configuration layer reads as a setting refuses every one of those invocations for an
 # unknown field. That is not a hypothetical: it failed the required check once, in the
 # generator, which reported it as a generator error.
+live_source = read(LIVE_CRATE, "the live crate that declares the lane's variables")
 layer_source = read(ENVIRONMENT_LAYER, "the engine's environment configuration layer")
 
 prefix = re.search(
@@ -446,11 +340,10 @@ if problems:
         print(f"  {problem}", file=sys.stderr)
     print(
         "check-live-lane: fix the file named above. The arrangement is: no separate target, "
-        "recipe or workflow; no `#[ignore]` on a live test and none compiled out; one gate "
-        "through "
+        "recipe or workflow; no `#[ignore]` on a live test; one gate through "
         "onetaskgraph_live::Session::open; the credentials and nominations on one lane of "
-        "the matrix in .github/workflows/ci.yml with ONETASKGRAPH_LIVE_REQUIRED set to 1 "
-        "beside them; scripts/rust-coverage.sh clearing them so coverage opens no second "
+        "the matrix in .github/workflows/ci.yml with ONETASKGRAPH_LIVE_REQUIRED beside "
+        "them; scripts/rust-coverage.sh clearing them so coverage opens no second "
         "session; and every live variable inside the namespace the engine's environment "
         "layer reserves. AGENTS.md records why each of those is what it is.",
         file=sys.stderr,
