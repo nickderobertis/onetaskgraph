@@ -278,7 +278,12 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   and its GitHub tests run in the required check and can fail it, change the Linear plugin
   and its Linear tests do, change the engine or another plugin and neither runs, because
   affected selection does not select them. `scripts/check-live-lane.sh`, a target in
-  `check`, asserts the whole of that shape so no part of it can be quietly undone.
+  `check`, asserts the whole of that shape so no part of it can be quietly undone — and it
+  is watched failing rather than trusted, by `scripts/check-live-lane-enforced.sh` under
+  `scripts:test`, because two of its assertions were passing while covering less than they
+  said. It refused a journey marked `#[ignore]` but not one the build leaves out with
+  `cfg`, and it accepted a credentialed step that merely *named* the demand, which
+  `ONETASKGRAPH_LIVE_REQUIRED: 0` does. Keep its cases; extend them when the rule grows.
   **A third party being down now blocks a merge, and that is the accepted cost** — the
   answer is to re-run once it answers, never to bypass the check, and never to reinstate a
   signal the merge does not wait on. It is a different outcome from a session that
