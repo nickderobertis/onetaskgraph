@@ -161,6 +161,35 @@ pub enum LiveLane {
 /// The session this lane opens against GitHub, by the name its seat and its refusals use.
 pub const SESSION_NAME: &str = "GitHub Projects";
 
+/// Whether `login` is spelled the way GitHub spells an account name.
+///
+/// Letters, digits and hyphens, no hyphen at either end and none doubled, at most the 39
+/// characters GitHub accepts.
+fn is_login(login: &str) -> bool {
+    !login.is_empty()
+        && login.len() <= 39
+        && !login.starts_with('-')
+        && !login.ends_with('-')
+        && !login.contains("--")
+        && login
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+}
+
+/// Whether `name` is spelled the way GitHub spells a repository name.
+///
+/// Letters, digits, hyphens, underscores and dots, at most the 100 characters GitHub
+/// accepts, and neither of the two path segments a filesystem reserves.
+fn is_repository_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 100
+        && name != "."
+        && name != ".."
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+}
+
 /// Decides whether this lane may run, and against which board.
 ///
 /// The board comes from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, and the repository this
@@ -168,7 +197,20 @@ pub const SESSION_NAME: &str = "GitHub Projects";
 /// Nothing here asks GitHub which project was updated most recently, for the viewer or for any
 /// organization: a credentialed lane that writes and deletes must reach only a board somebody
 /// nominated by name, and that requirement — rather than any cleanup — is what keeps it off a
-/// board nobody nominated. `ONETASKGRAPH_LIVE_REQUIRED=1` turns a skip into
+/// board nobody nominated.
+///
+/// **A nomination that reaches a URL is held to the grammar of what it names.** The two
+/// halves of `GH_PROJECTS_REPOSITORY` are filled into the `{owner}` and `{repo}` of this
+/// lane's own REST endpoint templates, so a value carrying `?`, `#`, a space or a second
+/// path segment would not point at the repository it appears to name — it would address
+/// something else, with a credential, and the endpoint the session report named would not
+/// be the one that was called. Both halves are therefore refused here unless GitHub itself
+/// would spell them that way, which is before anything is sent rather than after. The board
+/// is not checked here because it reaches no URL: `GH_PROJECTS_OWNER` and
+/// `GH_PROJECTS_NUMBER` are bound as GraphQL variables, and the production boundary this
+/// lane drives validates them.
+///
+/// `ONETASKGRAPH_LIVE_REQUIRED=1` turns a skip into
 /// a failure, the same pairing an absent credential already has. `Err` is a misconfiguration,
 /// which fails whether or not the lane is required.
 ///
@@ -246,10 +288,12 @@ pub fn live_lane(
     };
     if repository
         .split_once('/')
-        .is_none_or(|(owner, name)| owner.is_empty() || name.is_empty() || name.contains('/'))
+        .is_none_or(|(owner, name)| !is_login(owner) || !is_repository_name(name))
     {
         return Err(format!(
-            "GH_PROJECTS_REPOSITORY must be spelled owner/name, not {repository:?}"
+            "GH_PROJECTS_REPOSITORY must be spelled owner/name, in GitHub's own spelling of \
+             each — an owner of letters, digits and single inner hyphens, and a name of \
+             letters, digits, hyphens, underscores and dots — not {repository:?}"
         ));
     }
     Ok(LiveLane::Run {

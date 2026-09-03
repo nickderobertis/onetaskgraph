@@ -233,6 +233,56 @@ fn an_unnamed_repository_skips_the_lane_and_a_malformed_one_is_a_misconfiguratio
 }
 
 #[test]
+fn a_repository_nomination_that_would_address_something_else_is_refused_before_anything_is_sent() {
+    // Both halves are filled into this lane's REST endpoint templates, so a character that
+    // is significant in a URL does not name a repository — it redirects a credentialed
+    // call, and the endpoint the session report names is then not the one that was made.
+    // Each of these splits on a slash and would have passed the owner/name check alone.
+    for redirecting in [
+        "acme/work?per_page=1",
+        "acme/work#fragment",
+        "acme/work%2f..",
+        "acme/..",
+        "acme/.",
+        "acme/wo rk",
+        "acme/{repo}",
+        "-acme/work",
+        "acme-/work",
+        "ac--me/work",
+        "ac me/work",
+        "acme./work",
+    ] {
+        let refusal = live_lane(
+            Some("live-token"),
+            Some("nickderobertis"),
+            Some("1"),
+            Some(redirecting),
+            None,
+        )
+        .expect_err(&format!(
+            "GH_PROJECTS_REPOSITORY={redirecting:?} reaches a URL, so it must be refused rather \
+             than sent"
+        ));
+        assert!(
+            refusal.contains("GH_PROJECTS_REPOSITORY") && refusal.contains(redirecting),
+            "the refusal names the variable and the value given: {refusal}"
+        );
+    }
+    // The nomination CI actually sets still passes, so the grammar refuses a redirect
+    // rather than the real board's own repository.
+    assert!(matches!(
+        live_lane(
+            Some("live-token"),
+            Some("nickderobertis"),
+            Some("1"),
+            Some("nickderobertis/onetaskgraph"),
+            None,
+        ),
+        Ok(LiveLane::Run { .. })
+    ));
+}
+
+#[test]
 fn residue_recovery_matches_this_lanes_own_artifacts_and_nothing_else() {
     // The stale item this lane's recovery exists for: another run's process id and timestamp.
     assert!(is_artifact_title(
