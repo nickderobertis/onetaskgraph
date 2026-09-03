@@ -92,18 +92,29 @@ After: `tests/fixtures/session-cost.txt`, which the test above holds the session
 
 ## What was kept, and what each change measured
 
-**One introspection instead of thirty.** The schema verification asked GitHub for the
-`Mutation` type and then for each of twenty-eight input and payload types, one request each.
-GitHub allows any number of aliased root fields on one query and `__type` is not a
-connection, so the whole contract fits in one document that adds nothing to the node count.
-Every name, input, payload, member and type signature the checks held GitHub to is still
-asked for, from the same two tables.
+Both changes landed in one commit, so read each summary's arithmetic off the per-call rows
+rather than off the totals: subtracting the two totals gives their sum, not either one. The
+intermediate figures below are measured rather than derived — the same session, driven with
+only the first change applied, costs 92 requests and 1757401 nodes.
+
+**One introspection instead of twenty-nine.** The schema verification asked GitHub for the
+`Mutation` type and then for each of twenty-eight input and payload types, one request
+each — the `mutation contract introspection` (1) and `mutation type introspection` (28) rows
+of the before record, twenty-nine requests in all. GitHub allows any number of aliased root
+fields on one query and `__type` is not a connection, so the whole contract fits in one
+document that adds nothing to the node count. Every name, input, payload, member and type
+signature the checks held GitHub to is still asked for, from the same two tables. Those
+twenty-nine requests become the single `mutation schema introspection` row of the after
+record: **29 replaced by 1, a net reduction of 28**, which is why the total falls by 28 and
+not by 29.
 **120 → 92 requests; node count unchanged at 1757401.**
 
 **One walk of the board's field connection instead of two.** `ensure_origin_field` and
 `live_write_status` each read the project's fields for themselves, and one read answers
 both — nothing the first creates can change what the second reads, because the `Status`
-field was on the board before either ran.
+field was on the board before either ran. It is the `writable field discovery` row, which
+falls from 4 requests and 400 nodes to 3 and 300: the last of the 29 requests the two
+changes remove between them, and the whole of the node-count move.
 **92 → 91 requests; 1757401 → 1757301 nodes.**
 
 ## The three places this step was told to look
