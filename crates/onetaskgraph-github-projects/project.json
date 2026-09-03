@@ -47,15 +47,17 @@
       "options": {
         "commands": [
           "cargo test --quiet -p onetaskgraph-github-projects --all-features --locked",
-          "bash scripts/check-live-decline.sh onetaskgraph-github-projects onetaskgraph-live-github-projects.seat"
+          "bash scripts/check-live-decline.sh onetaskgraph-github-projects onetaskgraph-live-github-projects.seat",
+          "bash scripts/check-budget-decline.sh"
         ],
         "parallel": false
       },
-      "//": "The live journey is one of the tests the first command runs. The second drives it through all three of its outcomes without a credential and without reaching the API — it skipped, a credential was expected and absent, and it declined — because a run that declined tested nothing and must not read as a pass, and one that skipped must not read as a defect. Serial: the second re-runs the same test binary the first builds. This target's result is not a function of the files alone: the live journey among those tests runs, skips or declines according to the credential and the nominations in the environment, so those names are inputs of the cache key. Without them a replay of a run that had no credential would stand in for a run that has one, and the live tests would not run while the target reported green — which is the arrangement this branch exists to remove, rebuilt inside the cache. Nx hashes an env input's value rather than recording it. `coverage` takes none of them on purpose: scripts/rust-coverage.sh clears the credentials before re-running these same tests, so its result really is credential-independent, and that clearing is what keeps one run to one live session.",
+      "//": "The live journey is one of the tests the first command runs. The third follows a budget decline through to its conclusion: tests/budget_gate.rs asserts on every run that a journey the account cannot afford does not run, and a test that asserts a panic passes, so the half an assertion cannot show — that such a run leaves the check red rather than green — is driven there instead. The second drives it through all three of its outcomes without a credential and without reaching the API — it skipped, a credential was expected and absent, and it declined — because a run that declined tested nothing and must not read as a pass, and one that skipped must not read as a defect. Serial: the second re-runs the same test binary the first builds. This target's result is not a function of the files alone: the live journey among those tests runs, skips or declines according to the credential and the nominations in the environment, so those names are inputs of the cache key. Without them a replay of a run that had no credential would stand in for a run that has one, and the live tests would not run while the target reported green — which is the arrangement this branch exists to remove, rebuilt inside the cache. Nx hashes an env input's value rather than recording it. `coverage` takes none of them on purpose: scripts/rust-coverage.sh clears the credentials before re-running these same tests, so its result really is credential-independent, and that clearing is what keeps one run to one live session.",
       "inputs": [
         "default",
         "^default",
         "{workspaceRoot}/scripts/check-live-decline.sh",
+        "{workspaceRoot}/scripts/check-budget-decline.sh",
         {
           "env": "GH_PROJECTS_TOKEN"
         },

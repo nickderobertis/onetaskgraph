@@ -7558,6 +7558,35 @@ fn label_endpoints(state: &Arc<Mutex<State>>) -> String {
     host
 }
 
+/// What GitHub's rate-limit endpoint answers for an account with room to spare.
+///
+/// The shape is GitHub's own — `resources.core` for the REST budget and `resources.graphql`
+/// for the GraphQL one, each with `limit`, `used`, `remaining` and `reset` — and the figures
+/// are this board's rather than GitHub's published ones, for the reason
+/// [`FIXTURE_BUDGET_LIMIT`] is: a fixture that restated the real allowance would let a gate
+/// pass without ever having read what it was sent.
+fn ample_allowance() -> Value {
+    allowance(FIXTURE_BUDGET_LIMIT, FIXTURE_BUDGET_LIMIT)
+}
+
+/// That answer with a named remainder against both budgets.
+fn allowance(graphql_remaining: u64, rest_remaining: u64) -> Value {
+    let resource = |remaining: u64, reset: u64| {
+        json!({"limit":FIXTURE_BUDGET_LIMIT,"used":FIXTURE_BUDGET_LIMIT - remaining,
+               "remaining":remaining,"reset":reset})
+    };
+    json!({"resources":{
+        "core": resource(rest_remaining, ALLOWANCE_RESETS_AT),
+        "graphql": resource(graphql_remaining, ALLOWANCE_RESETS_AT + 60),
+        "search": resource(30, ALLOWANCE_RESETS_AT),
+    }})
+}
+
+/// The UTC epoch second this board says its budgets come back.
+///
+/// One fixed number, so a refusal naming it can be asserted on rather than approximated.
+const ALLOWANCE_RESETS_AT: u64 = 1_775_000_000;
+
 /// One REST request: its method, its path with any query string, and its body if it sent one.
 fn read_http_request(stream: &mut impl Read) -> (String, String, Option<Value>) {
     let mut bytes = Vec::new();
@@ -7602,6 +7631,12 @@ fn answer_a_label_call(
     body: Option<&Value>,
 ) -> (&'static str, String) {
     let (path, query) = path.split_once('?').unwrap_or((path, ""));
+    // The allowance read the budget precondition makes before anything else: GitHub answers
+    // it off this same host, one object per budget, and this board reports an account with
+    // room so the journey below is the thing under test rather than the gate.
+    if (method, path) == ("GET", "/rate_limit") {
+        return ("200 OK", ample_allowance().to_string());
+    }
     let rest = path
         .strip_prefix("/repos/acme/work/labels")
         .unwrap_or_else(|| panic!("the fixture repository received an unknown path: {path}"));

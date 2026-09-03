@@ -778,6 +778,7 @@ fn bindings(variables: &Value) -> Variables {
 #[derive(Debug, Default)]
 pub struct Accounting {
     requests: Mutex<Vec<Request>>,
+    estimates: Mutex<BTreeMap<Budget, u64>>,
 }
 
 impl Accounting {
@@ -785,6 +786,20 @@ impl Accounting {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+    /// Record what a caller estimated this session would spend against `budget`, before
+    /// it started.
+    ///
+    /// An estimate is not an observation and is kept apart from one everywhere below: it is
+    /// what a precondition decided on, and the point of carrying it here is that a report
+    /// can put it beside what the session really spent, so a reader sees how far the model
+    /// was from GitHub's own figures rather than being told to trust it. The last estimate
+    /// recorded for a budget is the one reported, because a precondition decides once.
+    pub fn estimate(&self, budget: Budget, cost: u64) {
+        self.estimates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(budget, cost);
     }
     /// Record one request.
     pub fn record(&self, request: Request) {
@@ -805,6 +820,11 @@ impl Accounting {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone(),
+            estimates: self
+                .estimates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
         }
     }
 }
@@ -813,6 +833,7 @@ impl Accounting {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Session {
     requests: Vec<Request>,
+    estimates: BTreeMap<Budget, u64>,
 }
 
 impl Session {
@@ -834,6 +855,12 @@ impl Session {
             .filter_map(Request::node_count)
             .fold(0, u64::saturating_add)
     }
+    /// What a precondition estimated this session would spend against `budget`, before it
+    /// started, when one estimated anything at all.
+    #[must_use]
+    pub fn estimated(&self, budget: Budget) -> Option<u64> {
+        self.estimates.get(&budget).copied()
+    }
     /// What this session spent against `budget`, attributed per call.
     #[must_use]
     pub fn spent(&self, budget: Budget) -> u64 {
@@ -848,6 +875,15 @@ impl Session {
     #[must_use]
     pub fn budgets(&self) -> Vec<BudgetReport> {
         let mut touched: BTreeMap<Budget, BudgetReport> = BTreeMap::new();
+        // Seeded from the estimates first: a budget a precondition sized this session
+        // against and the session then never reached is worth reporting as exactly that,
+        // rather than vanishing from the report that is supposed to compare the two.
+        for (budget, estimated) in &self.estimates {
+            touched
+                .entry(*budget)
+                .or_insert_with(|| BudgetReport::of(*budget))
+                .estimated = Some(*estimated);
+        }
         for request in &self.requests {
             let budget = request.budget();
             touched
@@ -944,6 +980,7 @@ impl Session {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BudgetReport {
     budget: Budget,
+    estimated: Option<u64>,
     requests: usize,
     spent: u64,
     reported: u64,
@@ -961,6 +998,7 @@ impl BudgetReport {
     const fn of(budget: Budget) -> Self {
         Self {
             budget,
+            estimated: None,
             requests: 0,
             spent: 0,
             reported: 0,
@@ -1010,6 +1048,16 @@ impl BudgetReport {
     #[must_use]
     pub const fn budget(&self) -> Budget {
         self.budget
+    }
+    /// What a precondition estimated this session would spend against it before it
+    /// started, when one estimated anything at all.
+    ///
+    /// It is an estimate rather than a measurement, and the report says so where it prints
+    /// it: what makes it worth carrying is that a reader can see how far the model was from
+    /// what the session really spent.
+    #[must_use]
+    pub const fn estimated(&self) -> Option<u64> {
+        self.estimated
     }
     /// How many of this session's requests drew on it.
     #[must_use]
@@ -1104,6 +1152,15 @@ impl BudgetReport {
             self.not_run,
             Basis::NotRun.name(),
         );
+        if let Some(estimated) = self.estimated {
+            let _ = writeln!(
+                lines,
+                "  a precondition estimated {estimated} {} before this session started, \
+                 against the {} attributed above",
+                self.budget.unit(),
+                self.spent,
+            );
+        }
         let _ = writeln!(
             lines,
             "  the account: limit {}, {} used, {} remaining when this session finished",

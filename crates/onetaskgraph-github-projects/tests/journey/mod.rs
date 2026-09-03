@@ -16,6 +16,8 @@
 //! its sub-issue, so leaving no residue means deleting the board item **and** the issue. The
 //! credential therefore needs to be able to delete an issue in `GH_PROJECTS_REPOSITORY`.
 
+pub mod budget;
+
 use std::{
     collections::BTreeMap,
     io::Write as _,
@@ -641,7 +643,6 @@ async fn rest(
     let named = Endpoint::parse(method, endpoint).ok_or_else(|| {
         format!("{what} names {endpoint}, which is not spelled like a GitHub endpoint template")
     })?;
-    let sending = || Request::rest(named.clone());
     let mut path = endpoint.to_owned();
     for (name, value) in parameters {
         path = path.replace(&format!("{{{name}}}"), value);
@@ -661,10 +662,29 @@ async fn rest(
     if let Some(body) = body {
         request = request.json(&body);
     }
-    let response = match request.send().await {
+    record_rest_response(&SESSION, &named, request.send().await, what).await
+}
+
+/// Record what one REST call produced, and hand its body back.
+///
+/// Separate from the request above because the allowance read in [`budget`] is the one REST
+/// call this lane makes that cannot go through it — it is made before the journey has been
+/// pointed at an API, against a host and an accounting it is handed, so that the four
+/// branches of the precondition can be driven against four stand-ins inside one test
+/// binary. What must not be duplicated is *this*: which outcome a response is recorded
+/// under, and the rate-limit facts read off it. Two spellings of that would let a session
+/// report describe one call the way it describes none of the others.
+pub async fn record_rest_response(
+    into: &Accounting,
+    endpoint: &Endpoint,
+    sent: reqwest::Result<reqwest::Response>,
+    what: &str,
+) -> Result<Value, String> {
+    let sending = || Request::rest(endpoint.clone());
+    let response = match sent {
         Ok(response) => response,
         Err(error) => {
-            SESSION.record(sending().finished(Outcome::Refused, RateLimit::default()));
+            into.record(sending().finished(Outcome::Refused, RateLimit::default()));
             return Err(format!("{what} could not reach GitHub: {error}"));
         }
     };
@@ -680,7 +700,7 @@ async fn rest(
     let text = match response.text().await {
         Ok(text) => text,
         Err(error) => {
-            SESSION.record(outcome(Outcome::Refused));
+            into.record(outcome(Outcome::Refused));
             return Err(format!("{what} returned no readable body: {error}"));
         }
     };
@@ -691,7 +711,7 @@ async fn rest(
     } else {
         serde_json::from_str(&text)
     };
-    SESSION.record(outcome(rest_outcome(
+    into.record(outcome(rest_outcome(
         status,
         limits.exhausted(),
         &text,
@@ -1987,6 +2007,13 @@ pub async fn run(nomination: Nomination) {
         repository,
     } = nomination;
     let _report = ReportWhateverHappens;
+    // The session's first request, and its only one before this decides: whether the
+    // account can pay for this session and still keep the share it may never touch. A
+    // session that cannot is DECLINED — it did not run, so it is neither a pass nor a
+    // failing assertion — and nothing below has reached GitHub by the time it is.
+    budget::precondition(&token, &endpoints().rest_host, &SESSION)
+        .await
+        .unwrap_or_else(|declined| declined.refuse());
     verify_mutation_schema(&token)
         .await
         .unwrap_or_else(|error| panic!("GitHub mutation schema drifted: {error}"));

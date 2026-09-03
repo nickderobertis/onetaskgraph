@@ -1,8 +1,9 @@
-requests 91
+requests 92
 node count 1757301
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
+    1       0  GET /rate_limit
     2       0  GET /repos/{owner}/{repo}/labels
     1       0  POST /repos/{owner}/{repo}/labels
     1       0  account allowance after the node-count reconciliation
