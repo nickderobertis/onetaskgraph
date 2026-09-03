@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prove the three selections the project graph exists to produce, against real Nx.
+# Prove the four selections the project graph exists to produce, against real Nx.
 #
 # Splitting `onetaskgraph-plugin-api` out of `onetaskgraph-core` buys exactly one thing,
 # and it is a build-graph thing:
@@ -10,6 +10,13 @@
 #      entry, or a namedInputs glob reaching past its own crate, makes every engine commit
 #      run every plugin's tests and nothing complains.
 #   3. Editing one plugin marks that plugin and its dependents — never a sibling plugin.
+#
+# The fourth is the scripts project's own, and it fails the same silent way:
+#
+#   4. Editing a script marks `scripts` — and `workspace`, which invokes a dozen of them —
+#      and NO crate. Before scripts/ was a project, Nx mapped none to it and a script-only
+#      change selected nothing at all, so the guards it changed never ran; an edge added
+#      the other way would swing it past that into re-testing every crate.
 #
 # A project graph that looks right and selects wrong is the expensive failure here, so
 # this makes real edits in a scratch clone, commits them, and runs the real affected
@@ -32,7 +39,7 @@ readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 #
 # So it is skipped there with a notice, as scripts/rust-coverage.sh skips measurement on
 # Windows for its own platform reason. The Linux and macOS lanes run it on every pull
-# request, so the three selections AGENTS.md owes stay gated on every change.
+# request, so the four selections AGENTS.md owes stay gated on every change.
 case "${OS:-}${OSTYPE:-}" in
   *Windows_NT* | *msys* | *cygwin* | *win32*)
     echo "check-affected-selection: skipped on Windows (bun's node_modules is a symlink tree the runner cannot copy); the Linux and macOS lanes gate the project graph" >&2
@@ -201,6 +208,23 @@ for plugin in "${PLUGINS[@]}"; do
   expect_not_selected "editing one plugin" "$plugin" "$selection"
 done
 report_on_failure "editing onetaskgraph-linear" "$selection" "$before"
+reset_scratch
+
+# 4. A script changed, and the graph owns it. scripts/read-lines.sh is deliberately one no
+#    other project names in its own inputs, so what this reads is the project root mapping
+#    rather than an input glob that happens to mention it.
+selection="$(select_after_editing scripts/read-lines.sh)"
+before=$failures
+expect_selected "editing a script" scripts "$selection"
+expect_selected "editing a script" workspace "$selection"
+for plugin in "${PLUGINS[@]}"; do
+  expect_not_selected "editing a script" "$plugin" "$selection"
+done
+expect_not_selected "editing a script" onetaskgraph-core "$selection"
+expect_not_selected "editing a script" onetaskgraph "$selection"
+expect_not_selected "editing a script" sdk-python "$selection"
+expect_not_selected "editing a script" sdk-typescript "$selection"
+report_on_failure "editing scripts/read-lines.sh" "$selection" "$before"
 reset_scratch
 
 if [ "$failures" -ne 0 ]; then

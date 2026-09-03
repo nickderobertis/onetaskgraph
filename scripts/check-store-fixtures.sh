@@ -21,12 +21,6 @@
 # filters on. A fixture with no entry is not silently skipped: every JSON file under a
 # `tests/fixtures` directory must be named here or recorded as not standing in for a store,
 # so a new one cannot arrive unchecked.
-# llmlint: ignore-file[new_code_lands_in_a_project] scripts/ is deliberately outside the
-# Nx project graph (AGENTS.md, Conventions): Nx maps no project to it, which is why the
-# justfile invokes these from recipes of its own. Nothing here escapes the gate — it
-# runs unconditionally from `just distribution-check` rather than by affected selection
-# — so the graph's absence costs an optimisation rather than the coverage this rule
-# protects.
 set -euo pipefail
 
 fatal() {

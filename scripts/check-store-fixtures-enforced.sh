@@ -8,12 +8,6 @@
 #
 # So each case below puts one of those fixtures back the way it was and asserts the check
 # refuses, naming the fixture and which of the two properties it lacks.
-# llmlint: ignore-file[new_code_lands_in_a_project] scripts/ is deliberately outside the
-# Nx project graph (AGENTS.md, Conventions): Nx maps no project to it, which is why the
-# justfile invokes these from recipes of its own. Nothing here escapes the gate — it
-# runs unconditionally from `just distribution-check` rather than by affected selection
-# — so the graph's absence costs an optimisation rather than the coverage this rule
-# protects.
 set -euo pipefail
 
 fatal() {

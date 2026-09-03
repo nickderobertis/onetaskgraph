@@ -195,7 +195,7 @@ was wrong in exactly those ways. Keep its cases; extend them when the rule grows
 and git exports `GIT_DIR` to hooks, where it overrides `git -C`. Both clone through
 `scripts/scratch-clone.sh` for that reason.
 
-## The three selections the project graph owes
+## The four selections the project graph owes
 
 The split buys exactly one thing and it is a build-graph thing, so the graph is not
 correct until it *selects* this way. `scripts/check-affected-selection.sh` proves it
@@ -207,11 +207,30 @@ against real Nx; reasoning about the configuration does not count.
    entry or a too-wide `namedInputs` glob makes every engine commit run every plugin's
    tests, and nothing complains.
 3. Editing one plugin selects that crate and its dependents — never a sibling plugin.
+4. Editing a script selects `scripts` and `workspace`, and **no** crate. `scripts/` is a
+   project like any other; before it was, Nx mapped none to it and a script-only change
+   selected nothing at all, so the checks that change could break ran only because a
+   recipe ran them unconditionally.
 
 Nx cannot read a Cargo manifest, so each Rust `project.json` mirrors its crate's Cargo
 dependencies as `implicitDependencies`; `scripts/check-nx-graph.sh` fails when the two
 disagree either way, because a missing edge under-runs the gate and an extra one over-runs
 it.
+
+**The `scripts` project depends on nothing, and the edge that exists runs the other way.**
+`workspace` depends on it, because a dozen of the checks that project owns are scripts, so
+editing one has to re-run them. Nothing in `scripts/` is reachable from a crate, and adding
+an edge that way round would put the release journeys and the shell guards behind every
+crate's change — which is selection 4 failing in the direction the other three fail in.
+
+**Its `distribution-check` and `distribution-test` targets sit outside the `check` fan-out
+on purpose**, and `just distribution-check` / `just distribution-test` invoke them by name
+so they run on every gate, exactly as they did as plain recipes. What they read is the
+whole publishable surface — every manifest, both release workflows, `release-targets.toml`,
+`config/registry-interfaces.toml` — and several of them clone this repository and drive the
+real release tool over its git history. No input glob describes that, so affected selection
+would silently stop checking a release and a cache hit would be a claim about a tree that
+has since changed. `workspace:deny` is outside the fan-out for the same kind of reason.
 
 ## Tests
 
@@ -477,8 +496,11 @@ them do; this is the inventory of what is owed, not a status board.
   what to restore. Test the file, then source it. `scripts/check-line-reads.sh` drives every
   such load twice, the second under `set -o posix` — 3.2's behaviour in a bash the Linux and
   Windows lanes have, so a defect only macOS could otherwise report fails all three.
-  `just script-check` runs them outside Nx, because Nx maps no project to `scripts/` and so
-  selects nothing for a change that only edits one.
+  `scripts/` is an Nx project, so `just check`'s own `lint` and `test` phases run these
+  four whenever the diff reaches them: the scan is `scripts:lint`, and the three checks
+  that watch it refuse are `scripts:test`. `just script-check` runs both by hand — it is
+  the entry point their diagnostics name — and is not a phase of `check`, because the
+  phases already cover it.
 - **Suppress narrowly.** A diagnostic is an error or a suppression at that one site with a
   stated reason. `notignored` posts every suppression a PR adds, so they are read.
 - **`gh-secrets.json` is tracked and load-bearing.** It declares the repository secrets
