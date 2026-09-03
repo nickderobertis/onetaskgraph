@@ -32,9 +32,11 @@
 //! done instead is what the criterion above asks: the published statement is cited, and the
 //! gate's own read is recorded in the accounting like every other request — so what the
 //! gate itself cost appears in every session report, and a read that began costing would
-//! show there. `reconcile_node_counts` in the module beside this one carries the
-//! credentialed observation alongside: it records what the account's allowance read before
-//! and after a stretch of the run, which is an observation rather than a verdict.
+//! show there. Beside the statement, [`observation`] prints what this very read reported
+//! about the account when it ran — both budgets out of its body, and the same response's
+//! own `x-ratelimit-*` headers — so a reader of a credentialed run can hold GitHub's
+//! sentence up against GitHub's own figures. It is one read rather than two compared, and
+//! it draws no conclusion: what a run prints is what that run saw.
 //!
 //! # The cost model, and the rule it rests on
 //!
@@ -90,7 +92,7 @@
 
 use std::collections::BTreeMap;
 
-use onetaskgraph_github_projects::accounting::{Accounting, Budget, Endpoint, Method};
+use onetaskgraph_github_projects::accounting::{Accounting, Budget, Endpoint, Method, RateLimit};
 use onetaskgraph_github_projects::largest_page_sizes;
 use onetaskgraph_live::{Allowance, Declined, Demand, Metered, Unaffordable, affordable};
 use serde_json::{Value, json};
@@ -347,6 +349,43 @@ fn allowance_of(answered: &Result<Value, String>, resource: &str) -> Result<Allo
     })
 }
 
+/// What the allowance read reported about the account, for the run's own output.
+///
+/// **An observation rather than a verdict**, and the credentialed half of the freeness
+/// question the module documentation above cites GitHub's statement for. It reads one
+/// response: the two budgets out of that answer's body, and the `x-ratelimit-*` headers the
+/// same response carried. Not two reads compared — this account is shared, so another
+/// consumer moving the allowance between two reads would say nothing either way — and no
+/// conclusion is drawn here. A reader compares these figures with GitHub's sentence.
+#[must_use]
+pub fn observation(answered: &Result<Value, String>, carried: &RateLimit) -> String {
+    let reported = |budget: Budget| {
+        let resource = resource_of(budget);
+        match allowance_of(answered, resource) {
+            Ok(allowance) => format!(
+                "resources.{resource} {} of {} remaining",
+                allowance.remaining(),
+                allowance.limit()
+            ),
+            Err(why) => format!("no resources.{resource} allowance ({why})"),
+        }
+    };
+    let headers = match (carried.resource(), carried.remaining(), carried.limit()) {
+        (Some(resource), Some(remaining), Some(limit)) => {
+            format!("{remaining} of {limit} on the {resource} budget")
+        }
+        _ => "none of the rate-limit headers this accounting reads".to_owned(),
+    };
+    format!(
+        "the allowance read GET {ALLOWANCE_ENDPOINT} reported {}, {}; the same response's \
+         own headers carried {headers}. GitHub's documentation of that endpoint says \
+         \"Accessing this endpoint does not count against your REST API rate limit\"; \
+         this is what the read reported when it ran, and not a verdict on that.",
+        reported(Budget::Graphql),
+        reported(Budget::Rest),
+    )
+}
+
 /// Ask GitHub what the account has left, and decide whether this session may start.
 ///
 /// **This is a session's first request and its only one before the decision**: one
@@ -369,6 +408,15 @@ pub async fn precondition(token: &str, rest_host: &str, into: &Accounting) -> Re
         into.estimate(*budget, *cost);
     }
     let answered = read_allowance(token, rest_host, into).await;
+    // Printed whichever way the decision goes, because a run that declined is the run whose
+    // allowance a reader most wants to see. The read is the last request recorded, since
+    // nothing else has been sent yet.
+    let carried = into
+        .snapshot()
+        .requests()
+        .last()
+        .map_or_else(RateLimit::default, |read| read.rate_limit().clone());
+    super::say(&observation(&answered, &carried));
     let demand = |budget: Budget, resource: &str| {
         let cost = estimated.get(&budget).copied().unwrap_or_default();
         match allowance_of(&answered, resource) {

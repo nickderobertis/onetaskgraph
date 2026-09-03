@@ -17,7 +17,7 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use onetaskgraph_github_projects::accounting::{Accounting, Budget, Method};
+use onetaskgraph_github_projects::accounting::{Accounting, Budget, Method, RateLimit};
 use onetaskgraph_live::{RETAINED_BUFFER, Unaffordable};
 use serde_json::{Value, json};
 
@@ -335,6 +335,22 @@ async fn the_allowance_read_matches_its_pinned_artifact() {
         "the fields this precondition reads and the fields the pin records have parted"
     );
 
+    // The published basis the observation quotes is the pinned sentence and not a second
+    // copy of it: an observation citing something GitHub no longer says would be a citation
+    // no reader could check against the page the README names.
+    let unmetered = allowance["unmetered"]
+        .as_str()
+        .expect("the pin records GitHub's own sentence about that endpoint")
+        .trim_end_matches('.');
+    let observed = budget::observation(
+        &Ok(budget::documented_answer(LIMIT, LIMIT, LIMIT, RESETS_AT)),
+        &RateLimit::default(),
+    );
+    assert!(
+        observed.contains(unmetered),
+        "the observation quotes a sentence the pin does not record: {observed}"
+    );
+
     // And the pin has teeth rather than being a second list nobody consults: the read is
     // driven against an answer missing each pinned field in turn, and every one of them
     // leaves the budget UNREAD rather than assumed. A field the parser stopped needing
@@ -455,6 +471,63 @@ async fn the_estimate_is_derived_from_the_branchs_own_record_of_the_session() {
         graphql > calls - rest_calls,
         "{graphql} points against {} GraphQL calls",
         calls - rest_calls
+    );
+}
+
+#[tokio::test]
+async fn the_credentialed_lane_records_what_the_allowance_read_reported() {
+    // Beside the published statement the module documentation cites, the observation a
+    // credentialed run prints: what this read said about the account, and what its own
+    // headers carried. An observation rather than a verdict, so it draws no conclusion —
+    // and it is one read, not two compared.
+    let standin = Standin::with(LIMIT - 7, LIMIT - 3);
+    let (into, decided) = decide(&standin).await;
+    decided.expect("an allowance this large affords the session and its buffer");
+    let session = into.snapshot();
+    let read = &session.requests()[0];
+    let answered = json!(budget::documented_answer(
+        LIMIT,
+        LIMIT - 7,
+        LIMIT - 3,
+        RESETS_AT
+    ));
+    let observed = budget::observation(&Ok(answered), read.rate_limit());
+
+    for figure in [
+        format!(
+            "resources.{} {} of {LIMIT}",
+            budget::GRAPHQL_RESOURCE,
+            LIMIT - 7
+        ),
+        format!(
+            "resources.{} {} of {LIMIT}",
+            budget::REST_RESOURCE,
+            LIMIT - 3
+        ),
+        // The same response's own headers, which the stand-in serves as GitHub does.
+        format!("{LIMIT} of {LIMIT} on the core budget"),
+        // It draws no conclusion; the sentence it quotes is reconciled against the pin in
+        // `the_allowance_read_matches_its_pinned_artifact` rather than spelled twice.
+        "not a verdict".to_owned(),
+    ] {
+        assert!(
+            observed.contains(&figure),
+            "{figure} is missing from {observed}"
+        );
+    }
+
+    // A budget the answer did not carry is reported as unread rather than as a figure, so
+    // an observation never invents one.
+    let unread = budget::observation(
+        &Err("GET /rate_limit answered 503".to_owned()),
+        read.rate_limit(),
+    );
+    assert!(
+        unread.contains(&format!(
+            "no resources.{} allowance",
+            budget::GRAPHQL_RESOURCE
+        )),
+        "{unread}"
     );
 }
 
