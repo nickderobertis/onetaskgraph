@@ -1,0 +1,38 @@
+requests 120
+node count 1757401
+
+requests per call
+    1       0  DELETE /repos/{owner}/{repo}/labels/{name}
+    2       0  GET /repos/{owner}/{repo}/labels
+    1       0  POST /repos/{owner}/{repo}/labels
+    1       0  account allowance after the node-count reconciliation
+    1       0  account allowance before the node-count reconciliation
+    6       0  adding an issue to the board
+    2     100  board page size probe
+    6       0  creating an issue
+    6       0  deleting an issue
+    3       0  filing an issue under its project
+    6       0  live artifact cleanup
+    3     300  live artifact lookup
+    1       0  live label attachment
+    1       0  live origin field cleanup
+    1       0  live origin field creation
+    1       0  mutation contract introspection
+   28       0  mutation type introspection
+    1   56100  node-count reconciliation while reading a project's tasks
+    1     200  node-count reconciliation while reading an issue's dependencies
+    1     560  node-count reconciliation while reading one issue
+    1  260150  node-count reconciliation while reading the board
+    1       0  node-count reconciliation while reading the destination repository
+    1   56100  node-count reconciliation while searching this board's issues
+    1       0  nominated board lookup
+    2  112200  reading a project's tasks
+    9    1400  reading an issue's dependencies
+    4    2240  reading one issue
+    5  1043251  reading the board
+    2       0  reading the destination repository
+    2       0  recording a dependency
+    4  224400  searching this board's issues
+    1       0  updating an issue
+    4     400  writable field discovery
+   10       0  writing a board field

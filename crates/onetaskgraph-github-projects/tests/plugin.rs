@@ -23,6 +23,16 @@ use onetaskgraph_plugin_api::{
 use secrecy::SecretString;
 use serde_json::{Value, json};
 
+// The credentialed lane's own halves, driven here without a credential: `journey` is the
+// whole session this board is asked to cost, and it reaches `lane` for the decisions that
+// bound where a run may write. Most of what each holds is for the target that runs it
+// against GitHub, so the parts this one does not reach are not dead code — they are the
+// other drive's.
+#[allow(dead_code)]
+mod journey;
+#[allow(dead_code)]
+mod lane;
+
 struct Secrets;
 impl SecretResolver for Secrets {
     fn get(&self, var: &str) -> Option<SecretString> {
@@ -270,6 +280,12 @@ struct State {
     documents: Vec<String>,
     /// The search string of every board-scoped search this board answered, in order.
     searches: Vec<String>,
+    /// The repository's own labels, as `(name, node id)`.
+    ///
+    /// A repository label is created and deleted over REST and attached over GraphQL, so
+    /// the two halves of this fixture share one registry: a name the REST side created is
+    /// the name the GraphQL side attaches, exactly as it is on GitHub.
+    labels: Vec<(String, String)>,
     next: usize,
     /// GitHub's two rate limiters, as far as a board fixture can spell them.
     limits: Limits,
@@ -604,6 +620,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         seen: Vec::new(),
         documents: Vec::new(),
         searches: Vec::new(),
+        labels: Vec::new(),
         next: 0,
         limits: Limits::default(),
     }));
@@ -682,6 +699,18 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
 /// A refused call is still recorded as seen and still changes nothing: that is what GitHub
 /// failing one mutation of a write looks like from here.
 fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<String> {
+    // A connection asked for more rows than GitHub's own maximum is refused before it runs,
+    // which is what `max_page_size` claims to describe and what the journey's page-size
+    // probe asks this board to prove one row either side of.
+    if query.contains("items(first:$first){nodes{id}}")
+        && variables["first"].as_u64()
+            > Some(u64::from(onetaskgraph_github_projects::MAX_PAGE_SIZE))
+    {
+        return Some(format!(
+            "Argument 'first' on Field 'items' has an invalid value ({}). Expected type 'Int'.",
+            variables["first"]
+        ));
+    }
     let mut state = state.lock().unwrap();
     let operation = operation_name(query);
     if !state.refuses.contains(operation) {
@@ -709,6 +738,9 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         state
             .seen
             .push(json!([operation_name(query), input.clone()]));
+    }
+    if let Some(answered) = answer_a_session_call(&mut state, query, variables, &input) {
+        return answered;
     }
     if query.contains("repository(owner:$owner,name:$name)") {
         return if variables["name"] == "missing" {
@@ -980,6 +1012,178 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         .collect::<Vec<_>>();
     json!({"owner":{"projectV2":{"id":"PVT_board","title":"Roadmap","fields":state.fields(),
         "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < visible,"endCursor":end.to_string()}}}}})
+}
+
+/// The calls a *session* makes that the source itself never does, answered by this board.
+///
+/// One whole session of the live journey is the source's own reads and writes plus the
+/// journey's — a schema verification, a node-count reconciliation, the board and field
+/// lookups, the residue sweep and the cleanup. Counting what a session costs means driving
+/// all of it, so this board answers all of it. `None` means the document is one of the
+/// source's own and [`answer`] goes on to it.
+///
+/// **What this stands in for, and what it therefore cannot prove.** The schema
+/// introspection is answered *from the journey's own contract tables*, and the
+/// `rateLimit(dryRun: true)` probe from this workspace's own `worst_case_node_count`, so a
+/// drive against this board agrees with itself by construction. That is the point: GitHub
+/// is the authority on both, and the credentialed drive is where they are really
+/// reconciled. What a drive against this board measures is how many requests a session
+/// makes and what each one carries, which is a property of the journey rather than of
+/// GitHub.
+fn answer_a_session_call(
+    state: &mut State,
+    query: &str,
+    variables: &Value,
+    input: &Value,
+) -> Option<Value> {
+    // The node-count probe, which asks about a document without running it. Checked first:
+    // the production document it was joined to is still in the text, and answering that
+    // would run a query GitHub would not have.
+    if let Some(production) = query.strip_probe() {
+        return Some(json!({"rateLimit":{"cost":1,
+            "nodeCount":onetaskgraph_github_projects::worst_case_node_count(&production)
+                .expect("a countable production document"),
+            "limit":FIXTURE_BUDGET_LIMIT,"remaining":FIXTURE_BUDGET_LIMIT}}));
+    }
+    if query.contains("__type(name:") {
+        return Some(introspected(query));
+    }
+    if query.contains("rateLimit{") {
+        return Some(json!({"rateLimit":{"cost":1,"limit":FIXTURE_BUDGET_LIMIT,
+            "remaining":FIXTURE_BUDGET_LIMIT,"resetAt":"2026-01-01T00:00:00Z"}}));
+    }
+    // Narrowed to the lane's own board lookup, which selects the id and nothing else:
+    // `graphql::BOARD` reaches `repositoryOwner` too, and answering it here would hand the
+    // source a board with no items.
+    if query.contains("projectV2(number:$number){id}}") {
+        assert_eq!(variables["owner"], json!("octo-org"));
+        assert_eq!(variables["number"], json!(7));
+        return Some(json!({"repositoryOwner":{"projectV2":{"id":"PVT_board"}}}));
+    }
+    if query.contains("on ProjectV2{fields(first:100") {
+        return Some(json!({"node":{"fields":state.fields()}}));
+    }
+    if query.contains("createProjectV2Field(input:$input)") {
+        let name = input["name"].as_str().expect("a field name").to_owned();
+        state.origin_field = true;
+        return Some(json!({"createProjectV2Field":{"projectV2Field":
+            {"id":"FIELD_origin","name":name}}}));
+    }
+    if query.contains("deleteProjectV2Field(input:$input)") {
+        state.origin_field = false;
+        return Some(json!({"deleteProjectV2Field":{"projectV2Field":{"id":input["fieldId"]}}}));
+    }
+    if query.contains("on ProjectV2{items(first:") {
+        // The artifact sweep selects each item's content; the page-size probe selects only
+        // its id. Both are answered off the one connection, in board order.
+        let nodes = state
+            .items
+            .iter()
+            .map(|item| match item.typename {
+                "Issue" => json!({"id":item.item_id,
+                    "content":{"__typename":"Issue","id":item.content_id,"title":item.title}}),
+                "DraftIssue" => json!({"id":item.item_id,"content":{"title":item.title}}),
+                _ => json!({"id":item.item_id,"content":{}}),
+            })
+            .collect::<Vec<_>>();
+        return Some(json!({"node":{"items":{"nodes":nodes,
+            "pageInfo":{"hasNextPage":false,"endCursor":null}}}}));
+    }
+    if query.contains("deleteProjectV2Item(input:$input)") {
+        let item_id = input["itemId"]
+            .as_str()
+            .expect("a board item id")
+            .to_owned();
+        state.items.retain(|item| item.item_id != item_id);
+        return Some(json!({"deleteProjectV2Item":{"deletedItemId":item_id}}));
+    }
+    if query.contains("addLabelsToLabelable(input:$input)") {
+        let labelable = input["labelableId"]
+            .as_str()
+            .expect("a labelable id")
+            .to_owned();
+        for label in input["labelIds"].as_array().expect("label ids") {
+            let node_id = label.as_str().expect("a label node id");
+            let (name, id) = state
+                .labels
+                .iter()
+                .find(|(_, held)| held == node_id)
+                .map(|(name, id)| (leaked(name), leaked(id)))
+                .expect("a label this repository holds");
+            let item = state
+                .items
+                .iter_mut()
+                .find(|item| item.content_id == labelable)
+                .expect("an issue this board holds");
+            item.labels.push((id, name));
+        }
+        return Some(json!({"addLabelsToLabelable":{"labelable":{"id":labelable}}}));
+    }
+    None
+}
+
+/// A name this board has to hand back with a `'static` lifetime it did not have.
+///
+/// The fixture's label sets are `&'static str` because every other test in this file spells
+/// its labels as literals. A session creates one at run time, so this is where the two meet;
+/// one leak per label of one test run.
+fn leaked(value: &str) -> &'static str {
+    Box::leak(value.to_owned().into_boxed_str())
+}
+
+/// The production half of a node-count probe, or `None` when this is not one.
+trait ProbedDocument {
+    fn strip_probe(&self) -> Option<String>;
+}
+
+impl ProbedDocument for str {
+    fn strip_probe(&self) -> Option<String> {
+        const PROBE: &str = "rateLimit(dryRun:true){cost nodeCount limit remaining} ";
+        self.contains(PROBE).then(|| self.replace(PROBE, ""))
+    }
+}
+
+/// GitHub's mutation surface, as the journey's own contract tables spell it.
+fn introspected(query: &str) -> Value {
+    let name = query
+        .split_once("__type(name:\"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(name, _)| name)
+        .expect("an introspected type name");
+    if name == "Mutation" {
+        let fields = journey::MUTATION_CONTRACT
+            .iter()
+            .map(|(field, input, payload)| {
+                json!({"name":field,"type":{"name":null,"ofType":{"name":payload}},
+                       "args":[{"name":"input","type":{"name":null,"ofType":{"name":input}}}]})
+            })
+            .collect::<Vec<_>>();
+        return json!({"__type":{"fields":fields}});
+    }
+    let (_, input, expected) = journey::MUTATION_TYPES
+        .iter()
+        .find(|(held, _, _)| *held == name)
+        .unwrap_or_else(|| panic!("the journey asked about a type it does not name: {name}"));
+    let declared = journey::mutation_field_types(name);
+    let mut fields = declared
+        .iter()
+        .map(|(field, signature)| json!({"name":field,"type":introspected_type(signature)}))
+        .collect::<Vec<_>>();
+    for field in *expected {
+        if !declared.iter().any(|(held, _)| held == field) {
+            fields.push(json!({"name":field,"type":introspected_type("String")}));
+        }
+    }
+    let selection = if *input { "inputFields" } else { "fields" };
+    json!({ "__type": { selection: fields } })
+}
+
+/// One type signature, in the nesting GitHub's introspection answers it in.
+fn introspected_type(signature: &str) -> Value {
+    match signature.strip_suffix('!') {
+        Some(inner) => json!({"kind":"NON_NULL","name":null,"ofType":introspected_type(inner)}),
+        None => json!({"kind":"SCALAR","name":signature,"ofType":null}),
+    }
 }
 
 fn is_mutation(query: &str) -> bool {
@@ -7306,4 +7510,191 @@ fn truncating_server() -> String {
         }
     });
     format!("http://{address}/graphql")
+}
+
+/// The repository half of this fixture board, over REST.
+///
+/// The label lifecycle is the one thing the journey does over REST rather than GraphQL, and
+/// a session's cost is metered against a different budget for it — so a board that answered
+/// only GraphQL would leave a whole budget of the session report empty. It shares the board's
+/// own state, so a label created here is a label the GraphQL side can attach.
+fn label_endpoints(state: &Arc<Mutex<State>>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+    let host = format!("http://{}", listener.local_addr().unwrap());
+    let served = Arc::clone(state);
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.expect("fixture connection");
+            let (method, path, body) = read_http_request(&mut stream);
+            let (status, payload) = answer_a_label_call(&served, &method, &path, body.as_ref());
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                 x-ratelimit-limit: {FIXTURE_BUDGET_LIMIT}\r\n\
+                 x-ratelimit-used: 1\r\n\
+                 x-ratelimit-remaining: {}\r\n\
+                 x-ratelimit-resource: core\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                FIXTURE_BUDGET_LIMIT - 1,
+                payload.len()
+            );
+            stream.write_all(response.as_bytes()).expect("a response");
+        }
+    });
+    host
+}
+
+/// One REST request: its method, its path with any query string, and its body if it sent one.
+fn read_http_request(stream: &mut impl Read) -> (String, String, Option<Value>) {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let header_end = loop {
+        let count = stream.read(&mut chunk).expect("a fixture request");
+        assert!(count > 0, "the request ended before its headers");
+        bytes.extend_from_slice(&chunk[..count]);
+        if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+            break end + 4;
+        }
+    };
+    let headers = String::from_utf8_lossy(&bytes[..header_end]).into_owned();
+    assert!(headers.contains("authorization: Bearer test-token"));
+    let mut request_line = headers.lines().next().expect("a request line").split(' ');
+    let method = request_line.next().expect("a method").to_owned();
+    let path = request_line.next().expect("a path").to_owned();
+    let length = headers
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("content-length: ")
+                .and_then(|value| value.parse::<usize>().ok())
+        })
+        .unwrap_or_default();
+    while bytes.len() - header_end < length {
+        let count = stream.read(&mut chunk).expect("a request body");
+        assert!(count > 0, "the request ended before its declared body");
+        bytes.extend_from_slice(&chunk[..count]);
+    }
+    let body = (length > 0).then(|| {
+        serde_json::from_slice(&bytes[header_end..header_end + length]).expect("body JSON")
+    });
+    (method, path, body)
+}
+
+/// GitHub's three label endpoints, as far as one repository of this board needs them.
+fn answer_a_label_call(
+    state: &Arc<Mutex<State>>,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+) -> (&'static str, String) {
+    let (path, query) = path.split_once('?').unwrap_or((path, ""));
+    let rest = path
+        .strip_prefix("/repos/acme/work/labels")
+        .unwrap_or_else(|| panic!("the fixture repository received an unknown path: {path}"));
+    let mut state = state.lock().unwrap();
+    match (method, rest) {
+        ("POST", "") => {
+            let name = body.expect("a label body")["name"]
+                .as_str()
+                .expect("a label name")
+                .to_owned();
+            let node_id = format!("LA_{}", state.labels.len() + 1);
+            state.labels.push((name.clone(), node_id.clone()));
+            (
+                "201 Created",
+                json!({"name":name,"node_id":node_id}).to_string(),
+            )
+        }
+        ("GET", "") => {
+            // Everything this repository holds is on the first page; a later page is empty,
+            // which is how GitHub's own pagination ends.
+            let held = if query.contains("page=1") {
+                state
+                    .labels
+                    .iter()
+                    .map(|(name, node_id)| json!({"name":name,"node_id":node_id}))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            ("200 OK", Value::Array(held).to_string())
+        }
+        ("DELETE", named) => {
+            let name = named.trim_start_matches('/').to_owned();
+            state.labels.retain(|(held, _)| *held != name);
+            ("204 No Content", String::new())
+        }
+        _ => panic!("the fixture repository received an unknown call: {method} {path}"),
+    }
+}
+
+/// What one whole session of the live journey costs, against this board rather than GitHub.
+///
+/// The credentialed target drives this same journey against GitHub with a credential; this
+/// drives it against the fixture board above with none, and counts what it cost. Two numbers
+/// come out of it and they are the two this crate can know offline: **how many requests the
+/// session makes**, and **the worst-case node count** of the documents it sends. Neither is
+/// rate-limit points. Points are metered by GitHub per call and nothing offline can observe
+/// them; what observes them is the accounting's own per-budget figures, filled from the
+/// rate-limit headers a credentialed session's responses carry, which the required check's
+/// live run prints.
+///
+/// The record beside it is a golden: a change to the journey or to what the source asks for
+/// moves these numbers, and this fails naming both so the move is a decision rather than a
+/// drift. `crates/onetaskgraph-github-projects/session-cost.md` is where the before and after
+/// of the reduction this record came out of are written down.
+#[tokio::test]
+async fn a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says() {
+    let fixture = board_with(vec![], true, false);
+    let labels = label_endpoints(&fixture.state);
+    journey::against(journey::Endpoints {
+        graphql: fixture.endpoint.clone(),
+        rest_host: labels,
+        // Pacing off: it spaces this source's own content-creating mutations in time and
+        // changes no count, so paying for it here would only make the measurement slower.
+        source: Some(json!({"endpoint":fixture.endpoint,
+            "pacing":{"min_mutation_interval_ms":0,"retry_budget_ms":0}})),
+    });
+    journey::run(journey::Nomination {
+        token: "test-token".to_owned(),
+        owner: "octo-org".to_owned(),
+        project_number: 7,
+        repository: "acme/work".to_owned(),
+    })
+    .await;
+    let measured = session_cost(&journey::SESSION.snapshot());
+    let recorded = include_str!("fixtures/session-cost.txt");
+    assert_eq!(
+        measured.trim(),
+        recorded.trim(),
+        "this session no longer costs what tests/fixtures/session-cost.txt records; if the \
+         change is deliberate, put the measurement above into that file and say in \
+         session-cost.md what moved it"
+    );
+}
+
+/// The session's cost in the two quantities this crate can count without a credential.
+///
+/// Per call, so a reader can see *where* a session spends rather than only how much: the
+/// name is the document's own or the endpoint's template, never anything a board held.
+fn session_cost(session: &Session) -> String {
+    let mut calls: BTreeMap<&str, (usize, u64)> = BTreeMap::new();
+    for request in session.requests() {
+        let entry = calls.entry(request.name()).or_default();
+        entry.0 += 1;
+        entry.1 += match request.call() {
+            onetaskgraph_github_projects::accounting::Call::Document { node_count, .. } => {
+                node_count.unwrap_or_default()
+            }
+            onetaskgraph_github_projects::accounting::Call::Endpoint { .. } => 0,
+        };
+    }
+    let mut rendered = format!(
+        "requests {}\nnode count {}\n\nrequests per call\n",
+        session.total_requests(),
+        session.total_node_count()
+    );
+    for (name, (requests, nodes)) in calls {
+        rendered.push_str(&format!("  {requests:>3}  {nodes:>6}  {name}\n"));
+    }
+    rendered
 }

@@ -35,9 +35,8 @@ use onetaskgraph_plugin_api::{
 use serde_json::{Value, json};
 
 use crate::lane::{
-    ARTIFACT_PREFIX, LABEL_PREFIX, LiveSecret, artifact_label, artifact_title,
-    is_artifact_label, is_artifact_title, is_run_artifact_title, live_write_config, rest_outcome,
-    run_then_cleanup,
+    ARTIFACT_PREFIX, LABEL_PREFIX, LiveSecret, artifact_label, artifact_title, is_artifact_label,
+    is_artifact_title, is_run_artifact_title, live_write_config, rest_outcome, run_then_cleanup,
 };
 
 /// Everything this run costs GitHub, this lane's own calls and the source's alike.
@@ -878,6 +877,127 @@ fn type_signature(value: &Value) -> Option<String> {
     }
 }
 
+/// Every mutation this source sends, with the input and payload type GitHub gives it.
+///
+/// A `const` rather than a literal inside the check, because it is the whole of what this
+/// journey believes GitHub's mutation surface to be: the credentialed drive holds GitHub to
+/// it, and the fixture drive answers introspection *from* it, so the stand-in cannot answer
+/// a contract the real check is not making.
+pub const MUTATION_CONTRACT: [(&str, &str, &str); 13] = [
+    ("createIssue", "CreateIssueInput", "CreateIssuePayload"),
+    (
+        "addProjectV2ItemById",
+        "AddProjectV2ItemByIdInput",
+        "AddProjectV2ItemByIdPayload",
+    ),
+    ("addSubIssue", "AddSubIssueInput", "AddSubIssuePayload"),
+    (
+        "removeSubIssue",
+        "RemoveSubIssueInput",
+        "RemoveSubIssuePayload",
+    ),
+    ("addBlockedBy", "AddBlockedByInput", "AddBlockedByPayload"),
+    (
+        "removeBlockedBy",
+        "RemoveBlockedByInput",
+        "RemoveBlockedByPayload",
+    ),
+    (
+        "deleteProjectV2Item",
+        "DeleteProjectV2ItemInput",
+        "DeleteProjectV2ItemPayload",
+    ),
+    ("deleteIssue", "DeleteIssueInput", "DeleteIssuePayload"),
+    (
+        "createProjectV2Field",
+        "CreateProjectV2FieldInput",
+        "CreateProjectV2FieldPayload",
+    ),
+    (
+        "deleteProjectV2Field",
+        "DeleteProjectV2FieldInput",
+        "DeleteProjectV2FieldPayload",
+    ),
+    ("updateIssue", "UpdateIssueInput", "UpdateIssuePayload"),
+    (
+        "updateProjectV2DraftIssue",
+        "UpdateProjectV2DraftIssueInput",
+        "UpdateProjectV2DraftIssuePayload",
+    ),
+    (
+        "updateProjectV2ItemFieldValue",
+        "UpdateProjectV2ItemFieldValueInput",
+        "UpdateProjectV2ItemFieldValuePayload",
+    ),
+];
+
+/// Every input and payload type those mutations reach, and the fields each must carry.
+///
+/// The `bool` is whether the type is an input — GitHub spells an input type's members
+/// `inputFields` and an output type's `fields`, and asking for the wrong one answers null.
+pub const MUTATION_TYPES: [(&str, bool, &[&str]); 28] = [
+    ("CreateIssueInput", true, &["repositoryId", "title", "body"]),
+    (
+        "AddProjectV2ItemByIdInput",
+        true,
+        &["projectId", "contentId"],
+    ),
+    ("AddSubIssueInput", true, &["issueId", "subIssueId"]),
+    ("RemoveSubIssueInput", true, &["issueId", "subIssueId"]),
+    (
+        "UpdateProjectV2DraftIssueInput",
+        true,
+        &["draftIssueId", "title", "body"],
+    ),
+    (
+        "UpdateIssueInput",
+        true,
+        &["id", "title", "body", "stateInput"],
+    ),
+    ("IssueStateUpdateInput", true, &["value", "stateReason"]),
+    (
+        "UpdateProjectV2ItemFieldValueInput",
+        true,
+        &["projectId", "itemId", "fieldId", "value"],
+    ),
+    (
+        "ProjectV2FieldValue",
+        true,
+        &["text", "singleSelectOptionId"],
+    ),
+    ("AddBlockedByInput", true, &["issueId", "blockingIssueId"]),
+    (
+        "RemoveBlockedByInput",
+        true,
+        &["issueId", "blockingIssueId"],
+    ),
+    ("DeleteProjectV2ItemInput", true, &["projectId", "itemId"]),
+    ("DeleteIssueInput", true, &["issueId"]),
+    (
+        "CreateProjectV2FieldInput",
+        true,
+        &["projectId", "dataType", "name"],
+    ),
+    ("DeleteProjectV2FieldInput", true, &["fieldId"]),
+    ("CreateIssuePayload", false, &["issue"]),
+    ("AddProjectV2ItemByIdPayload", false, &["item"]),
+    ("AddSubIssuePayload", false, &["issue", "subIssue"]),
+    ("RemoveSubIssuePayload", false, &["issue", "subIssue"]),
+    ("UpdateProjectV2DraftIssuePayload", false, &["draftIssue"]),
+    ("UpdateIssuePayload", false, &["issue"]),
+    (
+        "UpdateProjectV2ItemFieldValuePayload",
+        false,
+        &["projectV2Item"],
+    ),
+    ("AddBlockedByPayload", false, &["issue", "blockingIssue"]),
+    ("RemoveBlockedByPayload", false, &["issue", "blockingIssue"]),
+    ("DeleteProjectV2ItemPayload", false, &["deletedItemId"]),
+    ("DeleteIssuePayload", false, &["repository"]),
+    ("CreateProjectV2FieldPayload", false, &["projectV2Field"]),
+    ("DeleteProjectV2FieldPayload", false, &["projectV2Field"]),
+];
+
 async fn verify_mutation_schema(token: &str) -> Result<(), String> {
     let response = graphql(
         token,
@@ -889,53 +1009,7 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
         .pointer("/data/__type/fields")
         .and_then(Value::as_array)
         .ok_or_else(|| "mutation contract introspection returned no fields".to_owned())?;
-    for (field_name, input_name, payload_name) in [
-        ("createIssue", "CreateIssueInput", "CreateIssuePayload"),
-        (
-            "addProjectV2ItemById",
-            "AddProjectV2ItemByIdInput",
-            "AddProjectV2ItemByIdPayload",
-        ),
-        ("addSubIssue", "AddSubIssueInput", "AddSubIssuePayload"),
-        (
-            "removeSubIssue",
-            "RemoveSubIssueInput",
-            "RemoveSubIssuePayload",
-        ),
-        ("addBlockedBy", "AddBlockedByInput", "AddBlockedByPayload"),
-        (
-            "removeBlockedBy",
-            "RemoveBlockedByInput",
-            "RemoveBlockedByPayload",
-        ),
-        (
-            "deleteProjectV2Item",
-            "DeleteProjectV2ItemInput",
-            "DeleteProjectV2ItemPayload",
-        ),
-        ("deleteIssue", "DeleteIssueInput", "DeleteIssuePayload"),
-        (
-            "createProjectV2Field",
-            "CreateProjectV2FieldInput",
-            "CreateProjectV2FieldPayload",
-        ),
-        (
-            "deleteProjectV2Field",
-            "DeleteProjectV2FieldInput",
-            "DeleteProjectV2FieldPayload",
-        ),
-        ("updateIssue", "UpdateIssueInput", "UpdateIssuePayload"),
-        (
-            "updateProjectV2DraftIssue",
-            "UpdateProjectV2DraftIssueInput",
-            "UpdateProjectV2DraftIssuePayload",
-        ),
-        (
-            "updateProjectV2ItemFieldValue",
-            "UpdateProjectV2ItemFieldValueInput",
-            "UpdateProjectV2ItemFieldValuePayload",
-        ),
-    ] {
+    for (field_name, input_name, payload_name) in MUTATION_CONTRACT {
         let field = fields
             .iter()
             .find(|field| field.get("name").and_then(Value::as_str) == Some(field_name))
@@ -961,100 +1035,7 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
             ));
         }
     }
-    for (type_name, input, expected_fields) in [
-        (
-            "CreateIssueInput",
-            true,
-            &["repositoryId", "title", "body"][..],
-        ),
-        (
-            "AddProjectV2ItemByIdInput",
-            true,
-            &["projectId", "contentId"][..],
-        ),
-        ("AddSubIssueInput", true, &["issueId", "subIssueId"][..]),
-        ("RemoveSubIssueInput", true, &["issueId", "subIssueId"][..]),
-        (
-            "UpdateProjectV2DraftIssueInput",
-            true,
-            &["draftIssueId", "title", "body"][..],
-        ),
-        (
-            "UpdateIssueInput",
-            true,
-            &["id", "title", "body", "stateInput"][..],
-        ),
-        ("IssueStateUpdateInput", true, &["value", "stateReason"][..]),
-        (
-            "UpdateProjectV2ItemFieldValueInput",
-            true,
-            &["projectId", "itemId", "fieldId", "value"][..],
-        ),
-        (
-            "ProjectV2FieldValue",
-            true,
-            &["text", "singleSelectOptionId"][..],
-        ),
-        (
-            "AddBlockedByInput",
-            true,
-            &["issueId", "blockingIssueId"][..],
-        ),
-        (
-            "RemoveBlockedByInput",
-            true,
-            &["issueId", "blockingIssueId"][..],
-        ),
-        (
-            "DeleteProjectV2ItemInput",
-            true,
-            &["projectId", "itemId"][..],
-        ),
-        ("DeleteIssueInput", true, &["issueId"][..]),
-        (
-            "CreateProjectV2FieldInput",
-            true,
-            &["projectId", "dataType", "name"][..],
-        ),
-        ("DeleteProjectV2FieldInput", true, &["fieldId"][..]),
-        ("CreateIssuePayload", false, &["issue"][..]),
-        ("AddProjectV2ItemByIdPayload", false, &["item"][..]),
-        ("AddSubIssuePayload", false, &["issue", "subIssue"][..]),
-        ("RemoveSubIssuePayload", false, &["issue", "subIssue"][..]),
-        (
-            "UpdateProjectV2DraftIssuePayload",
-            false,
-            &["draftIssue"][..],
-        ),
-        ("UpdateIssuePayload", false, &["issue"][..]),
-        (
-            "UpdateProjectV2ItemFieldValuePayload",
-            false,
-            &["projectV2Item"][..],
-        ),
-        (
-            "AddBlockedByPayload",
-            false,
-            &["issue", "blockingIssue"][..],
-        ),
-        (
-            "RemoveBlockedByPayload",
-            false,
-            &["issue", "blockingIssue"][..],
-        ),
-        ("DeleteProjectV2ItemPayload", false, &["deletedItemId"][..]),
-        ("DeleteIssuePayload", false, &["repository"][..]),
-        (
-            "CreateProjectV2FieldPayload",
-            false,
-            &["projectV2Field"][..],
-        ),
-        (
-            "DeleteProjectV2FieldPayload",
-            false,
-            &["projectV2Field"][..],
-        ),
-    ] {
+    for (type_name, input, expected_fields) in MUTATION_TYPES {
         let selection = if input { "inputFields" } else { "fields" };
         let document = format!(
             "query TypeContract {{ __type(name:\"{type_name}\") {{ {selection} {{ name type {{ kind name ofType {{ kind name ofType {{ kind name }} }} }} }} }} }}"
@@ -1092,7 +1073,7 @@ async fn verify_mutation_schema(token: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn mutation_field_types(type_name: &str) -> &'static [(&'static str, &'static str)] {
+pub fn mutation_field_types(type_name: &str) -> &'static [(&'static str, &'static str)] {
     match type_name {
         "CreateIssueInput" => &[
             ("repositoryId", "ID!"),
@@ -1991,7 +1972,9 @@ pub async fn run(nomination: Nomination) {
     let source = onetaskgraph_github_projects::Plugin
         .build_recording_into(
             &SourceName::new("github-live").unwrap(),
-            &source_config(json!({"owner":owner,"project_number":project_number,"repository":repository})),
+            &source_config(
+                json!({"owner":owner,"project_number":project_number,"repository":repository}),
+            ),
             &LiveSecret(token.clone().into()),
             Arc::clone(&SESSION),
         )
@@ -2141,7 +2124,12 @@ pub async fn run(nomination: Nomination) {
         onetaskgraph_github_projects::Plugin
             .build_recording_into(
                 &SourceName::new("github-live").unwrap(),
-                &source_config(live_write_config(&owner, project_number, &repository, &status_name)),
+                &source_config(live_write_config(
+                    &owner,
+                    project_number,
+                    &repository,
+                    &status_name,
+                )),
                 &LiveSecret(token.clone().into()),
                 Arc::clone(&SESSION),
             )
