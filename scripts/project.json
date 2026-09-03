@@ -3,7 +3,7 @@
   "name": "scripts",
   "projectType": "library",
   "tags": ["lang:bash", "layer:workspace"],
-  "//": "The guards and the release plumbing are a project like everything else, so a change to one is selected and cached rather than escaping the graph. It depends on no other project ON PURPOSE: nothing here is reachable from a crate, so a crate change must never drag these targets in — the edge that exists runs the other way, from `workspace`, which invokes a dozen of these scripts and so has to re-run when one of them changes.",
+  "//": "The guards and the release plumbing are a project like everything else, so a change to one is selected by the graph rather than escaping it, and the two targets whose inputs this tree can enumerate — `lint` and `format-check` — are cached with it. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to the two distribution targets below, which is what it is about: what they read is the whole publishable surface, and several of them clone this repository and drive the real release tool over its git history, so there is no input glob and no narrower project to put them behind. They ran unconditionally from the justfile before this project existed, and selecting them instead would silently stop checking a release. It depends on no other project ON PURPOSE: nothing here is reachable from a crate, so a crate change must never drag these targets in — the edge that exists runs the other way, from `workspace`, which invokes a dozen of these scripts and so has to re-run when one of them changes.",
   "targets": {
     "bootstrap": {
       "executor": "nx:noop",
