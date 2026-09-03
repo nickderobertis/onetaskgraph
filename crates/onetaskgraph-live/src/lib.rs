@@ -629,6 +629,32 @@ mod tests {
     }
 
     #[test]
+    fn an_election_an_interrupted_recovery_left_does_not_decline_every_later_run_for_ever() {
+        // One level further down than the test above: a run killed inside the recovery of a
+        // stale claim leaves the election behind too. That must not become the file nobody
+        // can ever get past — the claim under it would then be unrecoverable for ever, which
+        // is the failure staleness exists to prevent, one level in.
+        let directory = scratch();
+        let path = directory.join("onetaskgraph-live-linear.seat");
+        let claim = path.with_extension("reclaim");
+        interrupted_runs_file(&path);
+        interrupted_runs_file(&claim);
+        let election = claim.with_extension(format!(
+            "recover-{}",
+            Seat::stale_at(&claim).expect("the planted claim really is stale")
+        ));
+        interrupted_runs_file(&election);
+
+        let reclaimed = Session::open_in(&directory, "Linear", credential("live-key"))
+            .expect("an election older than any session lasts is an interrupted recovery's");
+        assert_eq!(reclaimed.seat_path(), path);
+        assert!(
+            !election.exists(),
+            "a finished recovery leaves no election for the next run to stand against"
+        );
+    }
+
+    #[test]
     fn two_runs_reclaiming_one_interrupted_seat_leave_exactly_one_holder() {
         // The race a delete-then-create reclaim loses: both runs find the seat stale, each
         // removes what the other just wrote, and both believe they hold it — which is two
