@@ -27,7 +27,7 @@
 //! required lane from passing green merely because a credential went missing where one was
 //! expected. See [`required`] and [`missing`].
 //!
-//! # The precondition this crate ships
+//! # The preconditions this crate ships
 //!
 //! **Exclusivity**: a test that reads and writes a shared external fixture must not run
 //! concurrently with another instance of itself. Both live journeys sweep residue by
@@ -36,6 +36,18 @@
 //! in-flight items. So concurrency is a correctness problem here rather than a cost one,
 //! and [`Session::open`] holds a seat for the session's name for as long as the session
 //! lasts. A second instance is declined rather than allowed to race.
+//!
+//! **Affordability**: a live session must never be the thing that exhausts a budget the
+//! work outside this repository depends on. [`affordable`] is that decision, and
+//! [`RETAINED_BUFFER`] is the share of each budget's whole allowance a session may never
+//! touch. The *reads* that learn an allowance belong to the lane — an allowance is a fact
+//! only the API holds, and each API answers it in its own terms — but the arithmetic and
+//! the buffer are here, once, so two lanes cannot come to protect two different shares.
+//!
+//! A session that cannot afford itself is **declined**, not failed and not passed: it is
+//! the third answer above, carried by [`Declined::unaffordable`], whose cause is readable
+//! as a value through [`Declined::unaffordable_because`] rather than out of its prose.
+//! Nothing here waits for a budget to come back — see [`Unaffordable`].
 
 #![deny(missing_docs)]
 
@@ -107,14 +119,362 @@ pub fn missing(required: bool, session: &str, reason: impl Into<String>) -> Resu
     Ok(reason)
 }
 
+/// A part of a whole, as two whole numbers rather than as a floating-point share.
+///
+/// Two integers because a budget's retained buffer is compared against integer points and
+/// integer requests, and because `0.2` is not `1/5` in binary: a share written as a float
+/// would make the buffer a fraction of a point wider or narrower than the number this
+/// repository says it is, differently on each budget's own scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fraction {
+    numerator: u64,
+    denominator: u64,
+}
+
+impl Fraction {
+    /// The fraction `numerator`/`denominator`.
+    ///
+    /// # Panics
+    ///
+    /// When `denominator` is zero, which is not a fraction. It is a `const fn`, so the one
+    /// declaration below is checked when this crate is compiled rather than when a session
+    /// consults it.
+    #[must_use]
+    pub const fn new(numerator: u64, denominator: u64) -> Self {
+        assert!(denominator != 0, "a fraction has a non-zero denominator");
+        Self {
+            numerator,
+            denominator,
+        }
+    }
+    /// This fraction of `whole`, rounded **up**.
+    ///
+    /// Up rather than to nearest: this is what a session may not touch, and a buffer
+    /// rounded down would be a share smaller than the one stated. The arithmetic is done
+    /// in `u128` so a whole near `u64::MAX` cannot overflow into a buffer of nearly
+    /// nothing.
+    #[must_use]
+    pub const fn of(self, whole: u64) -> u64 {
+        let numerator = whole as u128 * self.numerator as u128;
+        let denominator = self.denominator as u128;
+        let rounded_up = numerator.div_ceil(denominator);
+        if rounded_up > u64::MAX as u128 {
+            u64::MAX
+        } else {
+            rounded_up as u64
+        }
+    }
+    /// The numerator, for a message that says what share the buffer is.
+    #[must_use]
+    pub const fn numerator(self) -> u64 {
+        self.numerator
+    }
+    /// The denominator.
+    #[must_use]
+    pub const fn denominator(self) -> u64 {
+        self.denominator
+    }
+}
+
+impl fmt::Display for Fraction {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}/{}", self.numerator, self.denominator)
+    }
+}
+
+/// The share of a budget's **whole allowance** a live session may never touch.
+///
+/// Twenty per cent, declared once for every budget and every lane. Of the *allowance*
+/// rather than of what happens to be left: a share of the remainder shrinks precisely when
+/// protection matters most, and what this exists to guarantee is that a fixed amount is
+/// always there for the work outside this repository. It is a [`Fraction`] rather than a
+/// count of points or requests so that it means the same thing on a budget metered in
+/// points and on one metered in requests, and so that it cannot drift into two numbers.
+///
+/// Nothing lowers it: it is a constant, and no environment variable, command-line option
+/// or configuration file reads it or replaces it. A session that cannot fit under it does
+/// not run.
+pub const RETAINED_BUFFER: Fraction = Fraction::new(20, 100);
+
+/// One budget's primary allowance, as the account itself reported it.
+///
+/// **Read rather than assembled**, for the reason the accounting's own `RateLimit` is: a
+/// hand-built allowance could say more remained than the whole allowance, and a gate that
+/// decided on one would be protecting nothing. [`Allowance::read`] is the only way to have
+/// one, and its caller is whichever lane made the read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Allowance {
+    limit: u64,
+    remaining: u64,
+    reset: u64,
+}
+
+impl Allowance {
+    /// The allowance an API just reported: its whole size, what is left, and the UTC epoch
+    /// second the window resets.
+    #[must_use]
+    pub const fn read(limit: u64, remaining: u64, reset: u64) -> Self {
+        Self {
+            limit,
+            remaining,
+            reset,
+        }
+    }
+    /// The whole allowance for this budget's window.
+    #[must_use]
+    pub const fn limit(self) -> u64 {
+        self.limit
+    }
+    /// What is left of it.
+    #[must_use]
+    pub const fn remaining(self) -> u64 {
+        self.remaining
+    }
+    /// The UTC epoch second the window resets.
+    #[must_use]
+    pub const fn reset(self) -> u64 {
+        self.reset
+    }
+}
+
+/// One budget a session will draw on: what it will cost, and what the account has left.
+///
+/// The allowance is a `Result` because **an allowance the session could not read is not an
+/// allowance it may assume**. A budget whose read the API did not answer is unknown, and an
+/// unknown budget is not an affordable one — so the two cases are one field with two
+/// constructors rather than an `Option` a caller could forget to check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Demand {
+    budget: String,
+    unit: String,
+    estimated_cost: u64,
+    allowance: Result<Allowance, String>,
+}
+
+impl Demand {
+    /// A budget whose allowance was read: `budget` is metered in `unit`, this session is
+    /// estimated to spend `estimated_cost` of it, and `allowance` is what the account has.
+    #[must_use]
+    pub fn read(
+        budget: impl Into<String>,
+        unit: impl Into<String>,
+        estimated_cost: u64,
+        allowance: Allowance,
+    ) -> Self {
+        Self {
+            budget: budget.into(),
+            unit: unit.into(),
+            estimated_cost,
+            allowance: Ok(allowance),
+        }
+    }
+    /// A budget whose allowance the API did not answer, and why.
+    #[must_use]
+    pub fn unread(
+        budget: impl Into<String>,
+        unit: impl Into<String>,
+        estimated_cost: u64,
+        why: impl Into<String>,
+    ) -> Self {
+        Self {
+            budget: budget.into(),
+            unit: unit.into(),
+            estimated_cost,
+            allowance: Err(why.into()),
+        }
+    }
+    /// Which budget.
+    #[must_use]
+    pub fn budget(&self) -> &str {
+        &self.budget
+    }
+    /// What that budget is metered in.
+    #[must_use]
+    pub fn unit(&self) -> &str {
+        &self.unit
+    }
+    /// What this session is estimated to spend against it.
+    #[must_use]
+    pub const fn estimated_cost(&self) -> u64 {
+        self.estimated_cost
+    }
+    /// What the account has left of it, or why that could not be read.
+    ///
+    /// # Errors
+    ///
+    /// Carries the lane's own description of the read that was not answered.
+    pub fn allowance(&self) -> Result<Allowance, &str> {
+        self.allowance.as_ref().copied().map_err(String::as_str)
+    }
+}
+
+/// Why a session that could have run did not: the account cannot afford it.
+///
+/// It is an enum of two named cases rather than a message, because a run that declined has
+/// to be told from a run that failed by something reading the outcome rather than by
+/// reading prose. Every figure the decision was made on is on it.
+///
+/// **Neither case waits.** There is no sleep, no poll and no retry here or in anything that
+/// consults it: a refusal naming a rate limit while the account's own reported budget still
+/// shows room is GitHub's secondary limiter, which nothing reports and every further attempt
+/// extends. What a declined run does is say when the budget resets and stop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unaffordable {
+    /// The API did not answer this budget's allowance, so it is not one to assume.
+    Unread {
+        /// Which budget went unread.
+        budget: String,
+        /// The read that was not answered, as the lane that made it describes it.
+        why: String,
+    },
+    /// Starting would leave less of this budget than the retained buffer.
+    Short {
+        /// Which budget is short.
+        budget: String,
+        /// What it is metered in.
+        unit: String,
+        /// Its whole allowance.
+        limit: u64,
+        /// What was left of it when the allowance was read.
+        remaining: u64,
+        /// What this session is estimated to spend against it.
+        estimated_cost: u64,
+        /// What [`RETAINED_BUFFER`] of `limit` comes to.
+        retained_buffer: u64,
+        /// The UTC epoch second that budget's window resets.
+        reset: u64,
+    },
+}
+
+impl Unaffordable {
+    /// Which budget refused the session.
+    #[must_use]
+    pub fn budget(&self) -> &str {
+        match self {
+            Self::Unread { budget, .. } | Self::Short { budget, .. } => budget,
+        }
+    }
+    /// The reason, spelled out with every figure the decision was made on.
+    #[must_use]
+    pub fn reason(&self) -> String {
+        match self {
+            Self::Unread { budget, why } => format!(
+                "the {budget} budget's allowance could not be read, and an allowance this \
+                 session could not read is not one it may assume: {why}. Re-run once that \
+                 read is answered"
+            ),
+            Self::Short {
+                budget,
+                unit,
+                limit,
+                remaining,
+                estimated_cost,
+                retained_buffer,
+                reset,
+            } => format!(
+                "the account cannot afford it against the {budget} budget and still keep the \
+                 retained buffer. That budget's limit is {limit} {unit}, {remaining} remained, \
+                 this session is estimated to spend {estimated_cost}, and the retained buffer \
+                 is {retained_buffer} ({RETAINED_BUFFER} of the allowance) — which leaves {} \
+                 where {retained_buffer} is owed. That budget resets at {reset} (UTC epoch \
+                 seconds); nothing here waits for it, so re-run after that",
+                remaining.saturating_sub(*estimated_cost),
+            ),
+        }
+    }
+}
+
+/// Whether every budget can afford this session and still keep its retained buffer.
+///
+/// A session starts only when, for **every** demand, the remaining allowance minus that
+/// session's estimated cost is at least [`RETAINED_BUFFER`] of that budget's **whole**
+/// allowance. A budget whose allowance was not read never affords anything.
+///
+/// The demands are decided in the order given and the first that refuses is the one
+/// reported, so a session drawing on two budgets where one is short declines naming that
+/// one rather than both.
+///
+/// # Errors
+///
+/// When a budget's allowance could not be read, or when starting would dip into its
+/// retained buffer.
+pub fn affordable(demands: &[Demand]) -> Result<(), Unaffordable> {
+    for demand in demands {
+        let allowance = match demand.allowance() {
+            Ok(allowance) => allowance,
+            Err(why) => {
+                return Err(Unaffordable::Unread {
+                    budget: demand.budget.clone(),
+                    why: why.to_owned(),
+                });
+            }
+        };
+        let retained_buffer = RETAINED_BUFFER.of(allowance.limit());
+        // Saturating rather than checked: a session estimated to cost more than the whole
+        // remainder leaves nothing, which is under any buffer, and that is the answer.
+        let left = allowance.remaining().saturating_sub(demand.estimated_cost);
+        if left < retained_buffer {
+            return Err(Unaffordable::Short {
+                budget: demand.budget.clone(),
+                unit: demand.unit.clone(),
+                limit: allowance.limit(),
+                remaining: allowance.remaining(),
+                estimated_cost: demand.estimated_cost,
+                retained_buffer,
+                reset: allowance.reset(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// A session that could have run and did not, and the reason no test result covers it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Declined {
     session: String,
     reason: String,
+    // llmlint: ignore[invalid_states_unrepresentable] `None` is not a missing cause: it is
+    // every decline this crate makes for a reason that is not a budget — the seat another
+    // instance holds, and a seat directory nothing can write to — and those carry their
+    // whole reason in the line above. A cause enum with a variant per precondition would
+    // put the seat's prose into a shape nothing reads structurally, to remove a state that
+    // is meaningful. Boxed because `Declined` is the `Err` of `Session::open`, and an
+    // enum carrying seven figures inline would make every ordinary `Ok` that size too.
+    cause: Option<Box<Unaffordable>>,
 }
 
 impl Declined {
+    /// A session refused because the account cannot afford it.
+    ///
+    /// The one way to build one from outside this crate, and it takes the decision rather
+    /// than a sentence: what makes a declined run tellable from a failed one is that the
+    /// budget, its limit, what remained, the estimate, the buffer and the reset are on the
+    /// value, and [`Declined::unaffordable_because`] hands them back without anybody
+    /// parsing the message.
+    #[must_use]
+    pub fn unaffordable(session: &str, cause: Unaffordable) -> Self {
+        Self {
+            session: session.to_owned(),
+            reason: cause.reason(),
+            cause: Some(Box::new(cause)),
+        }
+    }
+
+    /// What this session is called.
+    #[must_use]
+    pub fn session(&self) -> &str {
+        &self.session
+    }
+
+    /// The budget decision that refused it, when a budget is what refused it.
+    ///
+    /// `None` for every other precondition — a seat another instance holds, a seat
+    /// directory nothing can write to — whose whole reason is in [`Declined::message`].
+    #[must_use]
+    pub fn unaffordable_because(&self) -> Option<&Unaffordable> {
+        self.cause.as_deref()
+    }
+
     /// The line a reader sees, which says the tests did not run before it says why.
     ///
     /// The wording leads with the outcome rather than with the cause on purpose: a quota
@@ -230,6 +590,7 @@ impl Session {
         let seat = Seat::take(directory, name).map_err(|reason| Declined {
             session: name.to_owned(),
             reason,
+            cause: None,
         })?;
         Ok(Self {
             name: name.to_owned(),
@@ -779,6 +1140,7 @@ mod tests {
         Declined {
             session: "GitHub Projects".to_owned(),
             reason: "the account cannot afford it".to_owned(),
+            cause: None,
         }
         .refuse()
     }
@@ -810,6 +1172,159 @@ mod tests {
             .contains("ghp_padded"),
             "nor may the session that holds it"
         );
+    }
+
+    /// The budget the two lanes' own units are spelled after, for the tests below.
+    fn graphql(estimated_cost: u64, limit: u64, remaining: u64) -> Demand {
+        Demand::read(
+            "graphql",
+            "points",
+            estimated_cost,
+            Allowance::read(limit, remaining, 1_775_000_000),
+        )
+    }
+
+    #[test]
+    fn the_retained_buffer_is_one_share_of_the_allowance_for_every_budget() {
+        assert_eq!(RETAINED_BUFFER.numerator(), 20);
+        assert_eq!(RETAINED_BUFFER.denominator(), 100);
+        assert_eq!(RETAINED_BUFFER.to_string(), "20/100");
+        // Of the allowance, on each budget's own scale, and rounded up so the share held
+        // back is never narrower than the one this repository states.
+        assert_eq!(RETAINED_BUFFER.of(5_000), 1_000);
+        assert_eq!(RETAINED_BUFFER.of(30), 6);
+        assert_eq!(RETAINED_BUFFER.of(1), 1);
+        assert_eq!(RETAINED_BUFFER.of(0), 0);
+        // A whole near the top of the range must not overflow into a buffer of nearly
+        // nothing, which is the arithmetic failure a gate would never notice.
+        assert_eq!(RETAINED_BUFFER.of(u64::MAX), u64::MAX / 5);
+    }
+
+    #[test]
+    fn a_budget_with_room_for_the_session_and_the_buffer_starts() {
+        // 5,000 allowance, 1,000 buffer, 1,932 estimated: 3,000 remaining leaves 1,068.
+        assert_eq!(affordable(&[graphql(1_932, 5_000, 3_000)]), Ok(()));
+        // Exactly the buffer is still affordable: what is retained is what may not be
+        // *dipped into*, and landing on it does not.
+        assert_eq!(affordable(&[graphql(1_932, 5_000, 2_932)]), Ok(()));
+        assert_eq!(affordable(&[]), Ok(()));
+    }
+
+    #[test]
+    fn a_budget_whose_remainder_would_dip_into_the_buffer_does_not_start() {
+        let short = affordable(&[graphql(1_932, 5_000, 2_931)])
+            .expect_err("one point under the buffer is under the buffer");
+        assert_eq!(short.budget(), "graphql");
+        let Unaffordable::Short {
+            unit,
+            limit,
+            remaining,
+            estimated_cost,
+            retained_buffer,
+            reset,
+            ..
+        } = &short
+        else {
+            panic!("a budget with a read allowance is short rather than unread: {short:?}");
+        };
+        assert_eq!(
+            (
+                unit.as_str(),
+                *limit,
+                *remaining,
+                *estimated_cost,
+                *retained_buffer,
+                *reset
+            ),
+            ("points", 5_000, 2_931, 1_932, 1_000, 1_775_000_000)
+        );
+        // Twenty per cent of the ALLOWANCE and not of what is left: on what remains, the
+        // buffer would be 587 and this session would fit.
+        assert!(RETAINED_BUFFER.of(*remaining) < *retained_buffer);
+        let reason = short.reason();
+        for figure in [
+            "graphql",
+            "points",
+            "5000",
+            "2931",
+            "1932",
+            "1000",
+            "1775000000",
+        ] {
+            assert!(reason.contains(figure), "{figure} is missing from {reason}");
+        }
+        assert!(!reason.contains("wait for"), "{reason}");
+    }
+
+    #[test]
+    fn an_estimate_larger_than_the_whole_remainder_does_not_start_rather_than_wrapping() {
+        let short = affordable(&[graphql(9_999, 5_000, 10)])
+            .expect_err("a session costing more than is left leaves nothing");
+        assert!(
+            short.reason().contains("which leaves 0"),
+            "{}",
+            short.reason()
+        );
+    }
+
+    #[test]
+    fn two_budgets_where_one_is_short_decline_naming_that_one() {
+        let rest = Demand::read(
+            "rest",
+            "requests",
+            5,
+            Allowance::read(5_000, 4_999, 1_775_000_060),
+        );
+        let short = affordable(&[graphql(1_932, 5_000, 2_000), rest.clone()])
+            .expect_err("the graphql budget cannot afford this session");
+        assert_eq!(short.budget(), "graphql");
+        assert_eq!(affordable(&[rest]), Ok(()));
+    }
+
+    #[test]
+    fn an_allowance_the_session_could_not_read_is_not_one_it_may_assume() {
+        let unread = affordable(&[Demand::unread(
+            "rest",
+            "requests",
+            5,
+            "GET /rate_limit failed with HTTP 503",
+        )])
+        .expect_err("an unknown budget is not an affordable one");
+        assert_eq!(
+            unread,
+            Unaffordable::Unread {
+                budget: "rest".to_owned(),
+                why: "GET /rate_limit failed with HTTP 503".to_owned(),
+            }
+        );
+        assert!(unread.reason().contains("GET /rate_limit"), "{unread:?}");
+    }
+
+    #[test]
+    fn a_session_the_account_cannot_afford_declines_rather_than_failing_or_passing() {
+        let short = affordable(&[graphql(1_932, 5_000, 2_000)]).expect_err("2,000 is short");
+        let declined = Declined::unaffordable("GitHub Projects", short.clone());
+        assert_eq!(declined.session(), "GitHub Projects");
+        // Read as a value rather than out of the prose: that is what tells a run that did
+        // not happen from a run that failed, for something reading the outcome.
+        assert_eq!(declined.unaffordable_because(), Some(&short));
+        let message = declined.message();
+        assert!(message.contains("DID NOT RUN"), "{message}");
+        assert!(
+            message.contains("not a test failure in the code under test"),
+            "{message}"
+        );
+        assert!(message.contains(&short.reason()), "{message}");
+    }
+
+    #[test]
+    fn a_decline_for_any_other_reason_carries_no_budget_to_read() {
+        let directory = scratch();
+        let _held = Session::open_in(&directory, "Linear", credential("live-key"))
+            .expect("the first instance takes the seat");
+        let declined = Session::open_in(&directory, "Linear", credential("live-key"))
+            .expect_err("a second instance is declined");
+        assert_eq!(declined.unaffordable_because(), None);
     }
 
     #[test]
