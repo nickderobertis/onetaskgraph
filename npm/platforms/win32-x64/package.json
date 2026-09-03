@@ -1,6 +1,6 @@
 {
   "name": "@onetaskgraph/cli-win32-x64",
-  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] This is a publication carrier, not a development package: .github/workflows/release.yml assembles one at release time by copying a freshly built native binary in and running `npm pack ./carrier`, so the directory in this tree holds this manifest and nothing to run. As a workspace member it would resolve the launcher's optionalDependency to an empty local directory and link a launcher that cannot launch. The version is a literal for the same reason `workspace:*` cannot be one: it is the number an end user's `npm install` resolves from the registry to select the one carrier matching their platform. scripts/set-version.sh writes it and `--check` refuses any other, under distribution-check, so it cannot drift from the launcher. JSON has no comment to scope this more narrowly than the file.",
+  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] This is a publication carrier, not a development package: release.yml copies a freshly built binary in and `npm pack`s it at release time, so this directory holds a manifest and nothing to run. As a workspace member it would resolve the launcher's optionalDependency to an empty local directory. The version is a literal because it is what an end user's npm resolves from the registry; scripts/set-version.sh --check refuses any other. JSON has no comment to scope this more narrowly than the file.",
   "version": "0.2.21",
   "os": [
     "win32"

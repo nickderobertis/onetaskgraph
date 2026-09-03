@@ -1,6 +1,6 @@
 {
   "name": "@onetaskgraph/cli",
-  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] The launcher and the five carriers it names are published packages an end user installs, not development packages: .github/workflows/release.yml builds each carrier at release time and `npm pack`s it, so nothing under npm/ carries a binary here. In the JS workspace the optionalDependencies below would link five empty local directories, and `workspace:*` names no version the end user's npm can resolve — the literal is what selects the one carrier for their platform. scripts/set-version.sh writes all six numbers and `--check` refuses any other, and scripts/check-distribution-contract.sh reconciles this list against npm/platforms both ways, both under distribution-check. JSON has no comment to scope this to the optionalDependencies block.",
+  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] The launcher and the five carriers it names are published packages, not development ones: release.yml builds and `npm pack`s each carrier at release time, so nothing under npm/ holds a binary here. As workspace members the optionalDependencies below would link five empty local directories, and `workspace:*` names no version an end user's npm can resolve. scripts/set-version.sh and scripts/check-distribution-contract.sh hold the six numbers and this list together. JSON has no comment to scope this to one block.",
   "version": "0.2.21",
   "description": "Platform-selecting launcher for onetaskgraph",
   "x-exit-codes": {
