@@ -36,9 +36,11 @@ every declared capability, and the cleanup, beside every request the source itse
 `tests/fixtures/session-cost.txt` is the checked-in record of the figures below, and that
 test fails when a session stops costing them.
 
-The one difference between the two drives is pacing: the fixture drive turns off the
-interval this source spaces its own content-creating mutations by, which changes how long a
-session takes and none of what it sends.
+Two things differ between the two drives, and neither changes what is sent. One is where
+the calls go — the fixture board rather than `api.github.com`, which is what makes the
+measurement free. The other is pacing: the fixture drive turns off the interval this source
+spaces its own content-creating mutations by, which changes how long a session takes and
+nothing about how many requests it makes or what each carries.
 
 ## Before and after
 
