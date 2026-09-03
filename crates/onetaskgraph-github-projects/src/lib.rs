@@ -202,9 +202,9 @@
 //! crate's own capabilities test, which pins every field of it against a fully spelled-out
 //! `Capabilities` literal — a struct with no `Default`, so a field added to the contract
 //! fails to compile there rather than going unasserted. -->
-//! Required checks use only the local fixture server; the ignored credentialed lane
-//! verifies the current schema, then drives every field of the table above against the
-//! real board. It builds its own fixture there — two projects, one task filed under each,
+//! The fixture-server tests above run wherever this crate is selected; the credentialed
+//! lane runs in the same required check, beside them, and can fail it — it verifies the
+//! current schema, then drives every field of the table above against the real board. It builds its own fixture there — two projects, one task filed under each,
 //! one filed under neither, a label on one of the three and a closed status on another —
 //! because that shape is what tells an honoured predicate from an ignored one: a board
 //! holding a single project answers a project filter the same way whether or not this
