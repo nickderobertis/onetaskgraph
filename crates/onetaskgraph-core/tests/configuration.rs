@@ -658,6 +658,36 @@ fn a_snapshot_sorts_what_this_build_can_read_from_what_it_cannot() {
 }
 
 /// Unix only, for the same reason as the snapshot test above.
+///
+/// A reserved variable is not a setting, so a value this build cannot read is not a
+/// setting it cannot read: refusing here would refuse the whole invocation over a
+/// variable whose value this layer never looks at. `ONETASKGRAPH_LIVE_SEAT_DIR` holds a
+/// path, which is where bytes that are not UTF-8 actually turn up.
+#[cfg(unix)]
+#[test]
+fn a_reserved_variable_whose_value_is_not_unicode_is_not_a_setting_either() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let not_utf8 = OsString::from_vec(vec![0x66, 0xff, 0x6f]);
+    let environment = Environment::from_os_pairs([
+        (OsString::from("ONETASKGRAPH_LIVE_SEAT_DIR"), not_utf8),
+        (
+            OsString::from("ONETASKGRAPH_PAGE_SIZE"),
+            OsString::from("70"),
+        ),
+    ]);
+
+    let config = config::load(Path::new("/nowhere"), &environment, &Layer::default())
+        .expect("a reserved variable is not a setting this build must be able to read");
+    assert_eq!(
+        config.config.page_size().get(),
+        70,
+        "the settings beside it are still read"
+    );
+}
+
+/// Unix only, for the same reason as the snapshot test above.
 #[cfg(unix)]
 #[test]
 fn a_setting_variable_whose_value_is_not_unicode_is_refused_by_name() {

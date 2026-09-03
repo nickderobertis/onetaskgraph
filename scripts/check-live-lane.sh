@@ -18,6 +18,10 @@
 #      under the name the product reads, with that lane's nominations and the demand that
 #      stops a missing credential passing green.
 #   6. scripts/rust-coverage.sh clears them, because coverage re-runs the same tests.
+#   7. Every variable the live crate declares sits inside the namespace the product's
+#      configuration layer reserves — the lane's variables share the product's own
+#      `ONETASKGRAPH_` prefix, and one outside that namespace decodes to an unknown
+#      setting and refuses every invocation of the binary on the lane that exports it.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,6 +53,12 @@ SESSIONS = {
 WORKFLOW = Path(".github/workflows/ci.yml")
 COVERAGE = Path("scripts/rust-coverage.sh")
 DEMAND = "ONETASKGRAPH_LIVE_REQUIRED"
+
+# The two sides of assertion 7. The live crate declares its variables as `pub const`s; the
+# engine's environment layer reserves one namespace under the configuration prefix, and a
+# live variable outside it is read as a setting nobody declared.
+LIVE_CRATE = Path("crates/onetaskgraph-live/src/lib.rs")
+ENVIRONMENT_LAYER = Path("crates/onetaskgraph-core/src/config/environment_layer.rs")
 
 
 def refuse(problem, next_action):
@@ -273,6 +283,57 @@ for name in {session["credential"] for session in SESSIONS.values()} | {DEMAND}:
             "first one is still writing to"
         )
 
+# 7. No live variable collides with the product's configuration prefix.
+#
+# `ONETASKGRAPH_LIVE_REQUIRED` is exported on the very step that generates the Python SDK
+# and runs the journeys, and both of those drive the binary — so a live variable the
+# configuration layer reads as a setting refuses every one of those invocations for an
+# unknown field. That is not a hypothetical: it failed the required check once, in the
+# generator, which reported it as a generator error.
+live_source = read(LIVE_CRATE, "the live crate that declares the lane's variables")
+layer_source = read(ENVIRONMENT_LAYER, "the engine's environment configuration layer")
+
+prefix = re.search(
+    r'(?m)^pub const ENVIRONMENT_PREFIX: &str = "([^"]+)";$', layer_source
+)
+namespace = re.search(
+    r'(?m)^const RESERVED_NAMESPACE: &str = "([^"]+)";$', layer_source
+)
+if not prefix or not namespace:
+    refuse(
+        f"{ENVIRONMENT_LAYER} no longer declares both ENVIRONMENT_PREFIX and "
+        "RESERVED_NAMESPACE as string constants, so what the configuration layer reads "
+        "and what it leaves alone cannot be told apart here.",
+        "restore both constants, or point this check at where the reservation moved to.",
+    )
+
+declared = dict(
+    re.findall(r'(?m)^pub const (\w+): &str = "([^"]+)";$', live_source)
+)
+live_variables = {
+    name: value
+    for name, value in declared.items()
+    if value.startswith(prefix.group(1))
+}
+if not live_variables:
+    refuse(
+        f"{LIVE_CRATE} declares no variable under {prefix.group(1)}, so this check is "
+        "watching nothing.",
+        "restore the lane's variables as `pub const NAME: &str = \"...\";`, or point "
+        "this check at where they moved to.",
+    )
+for name, value in sorted(live_variables.items()):
+    if not value.startswith(namespace.group(1)):
+        problems.append(
+            f"{LIVE_CRATE}: {name} is {value!r}, which is under the configuration prefix "
+            f"{prefix.group(1)!r} but outside the namespace "
+            f"{ENVIRONMENT_LAYER} reserves, {namespace.group(1)!r}. The configuration "
+            "layer would read it as a setting called "
+            f"{value[len(prefix.group(1)):].lower()!r} and refuse every invocation of the "
+            "binary on the lane that exports it — the SDK generator and every journey "
+            "included"
+        )
+
 if problems:
     print("check-live-lane: these tests are no longer ordinary.", file=sys.stderr)
     for problem in problems:
@@ -282,8 +343,9 @@ if problems:
         "recipe or workflow; no `#[ignore]` on a live test; one gate through "
         "onetaskgraph_live::Session::open; the credentials and nominations on one lane of "
         "the matrix in .github/workflows/ci.yml with ONETASKGRAPH_LIVE_REQUIRED beside "
-        "them; and scripts/rust-coverage.sh clearing them so coverage opens no second "
-        "session. AGENTS.md records why each of those is what it is.",
+        "them; scripts/rust-coverage.sh clearing them so coverage opens no second "
+        "session; and every live variable inside the namespace the engine's environment "
+        "layer reserves. AGENTS.md records why each of those is what it is.",
         file=sys.stderr,
     )
     sys.exit(1)

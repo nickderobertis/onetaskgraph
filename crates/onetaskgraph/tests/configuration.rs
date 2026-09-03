@@ -489,6 +489,59 @@ fn a_well_formed_configuration_flag_leaves_the_bundle_this_verb_emits_alone() {
     );
 }
 
+/// The live lane's own variables share this product's prefix and are not settings.
+///
+/// `.github/workflows/ci.yml` exports `ONETASKGRAPH_LIVE_REQUIRED` on the one step that
+/// carries a credential, and that step also generates the Python SDK and runs the
+/// journeys — both of which drive this binary. Read as a setting the variable decodes to
+/// an unknown field called `live_required` and refuses every one of those invocations,
+/// which is how the generator failed the required check rather than the generator being
+/// wrong. So the environment this test hands the binary is the one that step hands it,
+/// and the assertion below is that a verb still answers.
+#[test]
+fn a_live_lane_variable_is_not_read_as_a_setting() {
+    let sandbox = Sandbox::new();
+
+    for variable in [
+        "ONETASKGRAPH_LIVE_REQUIRED",
+        "ONETASKGRAPH_LIVE_SEAT_DIR",
+        // Not a variable the live crate has: the reservation is the namespace, so the
+        // next one that lane adds must not need this test edited to keep working.
+        "ONETASKGRAPH_LIVE_SOMETHING_LATER",
+    ] {
+        let output = sandbox
+            .command()
+            .env(variable, "1")
+            .args(["schema"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let bundle: Value = serde_json::from_str(&stdout(&output))
+            .unwrap_or_else(|_| panic!("{variable} left the bundle unreadable"));
+        assert!(
+            bundle["roots"]["EffectiveConfig"].is_object(),
+            "{variable} is not a setting, so the bundle is the same one"
+        );
+    }
+
+    // And the reservation is that namespace rather than the prefix: a variable outside it
+    // that names nothing is still the refusal the test below asserts.
+    let outside = sandbox
+        .command()
+        .env("ONETASKGRAPH_LIVELY", "1")
+        .args(["schema"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(
+        stderr(&outside).contains("lively"),
+        "a prefixed variable outside the reserved namespace is still a setting: {}",
+        stderr(&outside)
+    );
+}
+
 /// Every layer is validated on every verb, including the verbs that do not use it.
 ///
 /// `schema` renders a static bundle, so nothing it emits depends on the configuration —
