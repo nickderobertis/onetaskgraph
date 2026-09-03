@@ -10,12 +10,6 @@
 # So this reintroduces exactly that substitution, in a scratch copy, and asserts the crate's
 # real tests go red on it — after running them unmutated, without which a suite that could
 # not compile at all would look like the strictest suite in the repository.
-# llmlint: ignore-file[new_code_lands_in_a_project] scripts/ is deliberately outside the
-# Nx project graph (AGENTS.md, Conventions): Nx maps no project to it, which is why the
-# justfile invokes these from recipes of its own. Nothing here escapes the gate — it
-# runs unconditionally from `just distribution-test` rather than by affected selection —
-# so the graph's absence costs an optimisation rather than the coverage this rule
-# protects.
 set -euo pipefail
 
 fatal() {

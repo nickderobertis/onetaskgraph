@@ -88,7 +88,7 @@ declared = {}
 for project_file in sorted(
     list(Path("crates").glob("*/project.json"))
     + list(Path("sdks").glob("*/project.json"))
-    + [Path("workspace/project.json")]
+    + [Path("workspace/project.json"), Path("scripts/project.json")]
 ):
     text = read(project_file, "that project's configuration")
     try:

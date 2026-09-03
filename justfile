@@ -30,52 +30,35 @@ bootstrap:
 # exports it; locally, `NX_BASE=<ref> just check` does the same.
 
 # Everyday gate: format, lint, types, tests and coverage over the affected projects.
-check: script-check format-check lint typecheck test coverage distribution-check distribution-test
+check: format-check lint typecheck test coverage distribution-check distribution-test
 
 # This is what .githooks/pre-push runs and what the default branch sweeps on every
 # push, so nothing affected-detection could miss goes unchecked.
 
 # Full quality gate over EVERY project, plus the supply chain. Fails on any issue.
-gate: script-check deny distribution-check distribution-test
+gate: deny distribution-check distribution-test
     @{{nx}} run-many -t check --all
 
-# Nx maps no project to scripts/, so `nx affected` selects nothing at all for a change that
-# only edits one — exactly the change these checks exist to catch. Hence a recipe rather than
-# an Nx target.
+# scripts/ is a project, so the phases above already reach these: `lint` runs the bash 3.2
+# scan and `test` runs the checks that watch it refuse, over the affected projects. This is
+# the by-hand entry point the guards' own diagnostics name, and it runs both regardless of
+# what the diff touched.
 
-# Prove the scripts still run on the bash 3.2 macos-latest ships. Seconds, so it goes first.
+# Prove the scripts still run on the bash 3.2 macos-latest ships.
 script-check:
-    @scripts/check-bash4-array-builtins.sh
-    @scripts/check-bash4-array-builtins-enforced.sh
-    @scripts/check-guard-path-spelling.sh
-    @scripts/check-line-reads.sh
+    @{{nx}} run scripts:lint
+    @{{nx}} run scripts:test
+
+# Both stages are targets of the scripts project but sit outside its `check` fan-out, so
+# they run on every gate rather than by affected selection. What they read is the whole
+# publishable surface and several of them clone this repository, which no input glob
+# describes — see scripts/project.json.
 
 distribution-check:
-    @task_log="$$(mktemp)" || { echo "distribution check could not create its log; next: inspect temporary-directory permissions and free space" >&2; exit 1; }; trap 'rm -f "$$task_log"' EXIT; \
-        if ! scripts/set-version.sh --check >"$$task_log" 2>&1; then \
-            cat "$$task_log" >&2; \
-            echo "version manifests disagree; next: run 'scripts/set-version.sh <VERSION>' and commit every changed manifest and lockfile" >&2; \
-            exit 1; \
-        fi
-    @scripts/check-distribution-contract.sh
-    @scripts/check-distribution-contract-enforced.sh
-    @scripts/check-release-targets.sh
-    @scripts/check-release-probe.sh
-    @scripts/check-store-fixtures.sh
-    @scripts/check-store-fixtures-enforced.sh
-    @scripts/check-release-pr-sync.sh
-    @scripts/check-release-tooling-selection.sh
-    @scripts/check-real-release-preparation.sh
+    @{{nx}} run scripts:distribution-check
 
 distribution-test:
-    @task_log="$$(mktemp)" || { echo "distribution journey could not create its log; next: inspect temporary-directory permissions and free space" >&2; exit 1; }; trap 'rm -f "$$task_log"' EXIT; \
-        if ! scripts/test-distribution.sh >"$$task_log" 2>&1; then \
-            cat "$$task_log" >&2; \
-            echo "distribution journey failed; next: run 'scripts/test-distribution.sh' and fix the named installer or launcher assertion" >&2; \
-            exit 1; \
-        fi
-    @scripts/check-npm-publish.sh
-    @scripts/check-fixture-discrimination.sh
+    @{{nx}} run scripts:distribution-test
 
 # llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] `affected` is the edge these suites sit behind; AGENTS.md records why they have no other.
 # Tests only, for the affected projects.

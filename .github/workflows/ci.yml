@@ -46,6 +46,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: extractions/setup-just@v4
+      # `just distribution-test` now delegates to the scripts project's Nx target of that
+      # name, and scripts/nx.sh runs the locked install when a checkout has never had one —
+      # which needs bun. Without this step the recipe stops at "bun is not installed"
+      # before the journey it drives.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
       - uses: astral-sh/setup-uv@v7
       - name: Prove the recommended installer and launcher
         shell: bash
