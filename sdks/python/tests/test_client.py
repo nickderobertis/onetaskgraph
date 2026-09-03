@@ -472,6 +472,25 @@ def test_generator_rejects_drift_and_unmapped_commands(tmp_path: Path) -> None:
     assert "future" in unmapped.stderr
 
 
+def test_generator_reports_what_a_failing_binary_said() -> None:
+    """Carry the binary's own diagnosis out of a generation that could not run it.
+
+    The generator captures the binary's output because stdout is the schema bundle it
+    consumes, so a failure whose reason went to stderr is a failure with no reason in the
+    log — which is what one CI run of this target reported and nobody could act on.
+    """
+    failed = subprocess.run(
+        [sys.executable, "-c", "import generate; generate.run_workspace_binary('not-a-command')"],
+        cwd=WORKSPACE / "sdks" / "python",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert failed.returncode == 1
+    assert "exited 2" in failed.stderr
+    assert "unrecognized subcommand 'not-a-command'" in failed.stderr
+
+
 def test_generator_write_mode_uses_real_binary(tmp_path: Path) -> None:
     """Regenerate into a fresh destination from the real schema and command surface."""
     destination = tmp_path / "generated"

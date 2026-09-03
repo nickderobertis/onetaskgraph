@@ -108,14 +108,27 @@ class SchemaBundle(TypedDict):
 
 
 def run_workspace_binary(*args: str) -> str:
-    """Run the workspace binary, building the exact artifact under generation."""
+    """Run the workspace binary, building the exact artifact under generation.
+
+    A failure reports what the subprocess said. `check=True` raises with the command line
+    alone, and the output this captures — stdout because it IS the answer, stderr with it —
+    goes into that exception rather than to the terminal, so the whole diagnosis is lost.
+    A run of this generator on CI failed exactly that way: the log recorded that `cargo run
+    ... -- schema` exited 1 and nothing about why, which is not something a reader can act
+    on.
+    """
+    command = ["cargo", "run", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph", "--"]
+    command.extend(args)
     result = subprocess.run(
-        ["cargo", "run", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph", "--", *args],
-        cwd=ROOT.parent.parent,
-        check=True,
-        text=True,
-        capture_output=True,
+        command, cwd=ROOT.parent.parent, check=False, text=True, capture_output=True
     )
+    if result.returncode != 0:
+        rendered = " ".join(command)
+        raise SystemExit(
+            f"`{rendered}` exited {result.returncode}\n"
+            f"--- its stderr ---\n{result.stderr}"
+            f"--- its stdout ---\n{result.stdout}"
+        )
     return result.stdout
 
 
