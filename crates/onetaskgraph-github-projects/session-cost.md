@@ -136,17 +136,21 @@ save six requests a session. It is not kept, because this instrument cannot sett
 fixture board modelling that behaviour would only be answering back the assumption that was
 put into it, and the property is GitHub's to demonstrate.
 
-**The source resolving the same board and repository repeatedly.** Measured directly, by
-adding one more source instance to the journey and reading through it: **one more command
-costs one more request and 56100 more worst-case nodes**, because a source holds its board
-and its destination repository for its own lifetime and shares neither with the next one. So
-what this session pays really does scale with the number of commands the journey stands in
-for rather than with how much it reads. **No change is kept.** Every source this journey
-builds is load-bearing: the read-configured one proves that a source configured with no
-`status_mapping` reads the board, each rebuild inside `await_on_board` is what makes GitHub's
-own view visible rather than the writing source's record of itself, and the rebuild after the
-label is attached out of band is what makes a change nothing here wrote visible at all.
-Collapsing any of them would buy one request by deleting a proof.
+**The source resolving the same board and repository repeatedly.** Measured directly, as a
+pair. Adding one more source instance to the journey and listing tasks through it costs
+**one more request and 260150 more worst-case nodes** — 92 requests and 2017451 nodes for
+the session — and the whole of that lands in one row, `reading the board`, which goes from
+5 requests and 1043251 nodes to 6 and 1303401. Making that same extra read through a source
+the journey already has costs **nothing at all**: the session still comes to 91 requests and
+1757301 nodes, because a source holds its board and its destination repository for its own
+lifetime and shares neither with the next one. So what this session pays really does scale
+with the number of commands the journey stands in for rather than with how much it reads.
+**No change is kept.** Every source this journey builds is load-bearing: the read-configured
+one proves that a source configured with no `status_mapping` reads the board, each rebuild
+inside `await_on_board` is what makes GitHub's own view visible rather than the writing
+source's record of itself, and the rebuild after the label is attached out of band is what
+makes a change nothing here wrote visible at all. Collapsing any of them would buy one
+request by deleting a proof.
 
 **The page sizes the source asks for.** Measured by driving the journey with its page limit
 at 100 and at 5, against 50 as it stands:
@@ -159,8 +163,11 @@ at 100 and at 5, against 50 as it stands:
 
 The finding is that **a caller's limit reaches the wire in exactly one document** — the
 dependency read — and nowhere else: this source filters before it pages, so every other read
-binds `MAX_PAGE_SIZE` whatever the caller asked for, and the whole ±400-node spread above is
-that one document. **No change is kept.** Raising the limit costs nodes for nothing, and
+binds `MAX_PAGE_SIZE` whatever the caller asked for, and the other two sessions above differ
+from the kept one in that row alone. `reading an issue's dependencies` carries 1800 nodes at
+100, 1400 at 50 and 1040 at 5, over 9 requests in all three, which is both the whole 760-node
+spread in the table — 400 nodes above the kept limit and 360 below it — and why every row of
+it reads 91 requests. **No change is kept.** Raising the limit costs nodes for nothing, and
 lowering it looks free here only because this fixture board holds fewer rows than a page:
 the round trip a smaller page buys appears on a board with more rows than the limit, which
 is the half of the trade this instrument cannot see. `MAX_PAGE_SIZE` itself is out of
