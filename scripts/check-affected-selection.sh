@@ -128,7 +128,7 @@ select_after_editing() {
     echo "check-affected-selection: fix the project graph so 'nx show projects' runs, then re-run." >&2
     exit 1
   fi
-  # tr: the caller compares these names with `grep -qx`, which a trailing CR defeats.
+  # tr: the caller compares these names line for line, which a trailing CR defeats.
   if ! printf '%s' "$raw" \
     | python3 -c '
 import json, sys
@@ -150,9 +150,27 @@ reset_scratch() {
   git -C "$scratch/repo" reset --quiet --hard HEAD~1
 }
 
+# Line-exact membership, decided in this shell rather than by `printf | grep -q`. Under
+# `pipefail` that pipeline reports its writer's status as well as the matcher's, so a quiet
+# grep's early exit — or any transient failure of the matcher itself — reads as "the
+# project was not selected" and refuses a project graph that is correct. An exact-line
+# match needs no subprocess, so the verdict below is a function of the selection alone.
+# NL is what lets one `case` pattern anchor both ends: the selection has no trailing
+# newline, so a first or last name would otherwise need a case of its own.
+readonly NL='
+'
+
+selection_contains() {
+  local selected="$1" project="$2"
+  case "$NL$selected$NL" in
+    *"$NL$project$NL"*) return 0 ;;
+  esac
+  return 1
+}
+
 expect_selected() {
   local case_name="$1" project="$2" selected="$3"
-  if ! printf '%s\n' "$selected" | grep -qx "$project"; then
+  if ! selection_contains "$selected" "$project"; then
     echo "check-affected-selection: $case_name — expected $project to be selected, but it was not." >&2
     failures=$((failures + 1))
   fi
@@ -160,7 +178,7 @@ expect_selected() {
 
 expect_not_selected() {
   local case_name="$1" project="$2" selected="$3"
-  if printf '%s\n' "$selected" | grep -qx "$project"; then
+  if selection_contains "$selected" "$project"; then
     echo "check-affected-selection: $case_name — $project was selected but must not be." >&2
     failures=$((failures + 1))
   fi
