@@ -1224,10 +1224,13 @@ mod tests {
     }
 
     /// The budget the two lanes' own units are spelled after, for the tests below.
+    const GRAPHQL: Metered = Metered::new("graphql", "points");
+    /// The other one a session drawing on both meters separately.
+    const REST: Metered = Metered::new("rest", "requests");
+
     fn graphql(estimated_cost: u64, limit: u64, remaining: u64) -> Demand {
         Demand::read(
-            "graphql",
-            "points",
+            GRAPHQL,
             estimated_cost,
             Allowance::read(limit, remaining, 1_775_000_000)
                 .expect("this test's allowance leaves no more than the whole of it"),
@@ -1266,7 +1269,7 @@ mod tests {
             .expect_err("one point under the buffer is under the buffer");
         assert_eq!(short.budget(), "graphql");
         let Unaffordable::Short {
-            unit,
+            metered,
             limit,
             remaining,
             estimated_cost,
@@ -1279,7 +1282,7 @@ mod tests {
         };
         assert_eq!(
             (
-                unit.as_str(),
+                metered.unit(),
                 *limit,
                 *remaining,
                 *estimated_cost,
@@ -1320,8 +1323,7 @@ mod tests {
     #[test]
     fn two_budgets_where_one_is_short_decline_naming_that_one() {
         let rest = Demand::read(
-            "rest",
-            "requests",
+            REST,
             5,
             Allowance::read(5_000, 4_999, 1_775_000_060).expect("4,999 is under 5,000"),
         );
@@ -1345,8 +1347,7 @@ mod tests {
     #[test]
     fn an_allowance_the_session_could_not_read_is_not_one_it_may_assume() {
         let unread = affordable(&[Demand::unread(
-            "rest",
-            "requests",
+            REST,
             5,
             "GET /rate_limit failed with HTTP 503",
         )])
@@ -1354,7 +1355,7 @@ mod tests {
         assert_eq!(
             unread,
             Unaffordable::Unread {
-                budget: "rest".to_owned(),
+                metered: REST,
                 why: "GET /rate_limit failed with HTTP 503".to_owned(),
             }
         );

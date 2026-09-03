@@ -188,8 +188,7 @@ async fn a_remainder_that_would_dip_into_the_retained_buffer_does_not_start() {
     assert_eq!(
         cause,
         &Unaffordable::Short {
-            budget: "graphql".to_owned(),
-            unit: "points".to_owned(),
+            metered: budget::metered(Budget::Graphql),
             limit: LIMIT,
             remaining,
             estimated_cost: estimated(Budget::Graphql),
@@ -252,10 +251,10 @@ async fn an_allowance_read_the_stand_in_refuses_does_not_start_and_says_which_re
         let cause = declined
             .unaffordable_because()
             .expect("an unread budget carries the read that was not answered");
-        let Unaffordable::Unread { budget, why } = cause else {
+        let Unaffordable::Unread { metered, why } = cause else {
             panic!("an unanswered read is unread rather than short: {cause:?}");
         };
-        assert_eq!(budget, "graphql");
+        assert_eq!(metered, &budget::metered(Budget::Graphql));
         assert!(why.contains("/rate_limit"), "{why}");
         assert!(declined.message().contains("DID NOT RUN"), "{status}");
         // The read that failed is still recorded, so a session report says the gate asked.
@@ -352,10 +351,10 @@ async fn the_allowance_read_matches_its_pinned_artifact() {
             "an allowance missing {absent} must not be assumed"
         ));
         let cause = declined.unaffordable_because().expect("a budget refusal");
-        let Unaffordable::Unread { budget, why } = cause else {
+        let Unaffordable::Unread { metered, why } = cause else {
             panic!("an allowance missing {absent} is unread rather than short: {cause:?}");
         };
-        assert_eq!(budget, "graphql");
+        assert_eq!(metered, &budget::metered(Budget::Graphql));
         assert!(why.contains(absent), "{absent} is not named in {why}");
     }
 }
@@ -373,10 +372,10 @@ async fn an_allowance_reporting_more_left_than_it_holds_is_not_one_to_decide_on(
     let (_, decided) = decide(&standin).await;
     let declined = decided.expect_err("an impossible allowance is not an affordable one");
     let cause = declined.unaffordable_because().expect("a budget refusal");
-    let Unaffordable::Unread { budget, why } = cause else {
+    let Unaffordable::Unread { metered, why } = cause else {
         panic!("an impossible allowance is unread rather than short: {cause:?}");
     };
-    assert_eq!(budget, "graphql");
+    assert_eq!(metered, &budget::metered(Budget::Graphql));
     assert!(why.contains("cannot both be true"), "{why}");
 }
 

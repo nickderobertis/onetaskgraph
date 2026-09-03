@@ -92,7 +92,7 @@ use std::collections::BTreeMap;
 
 use onetaskgraph_github_projects::accounting::{Accounting, Budget, Endpoint, Method};
 use onetaskgraph_github_projects::largest_page_sizes;
-use onetaskgraph_live::{Allowance, Declined, Demand, Unaffordable, affordable};
+use onetaskgraph_live::{Allowance, Declined, Demand, Metered, Unaffordable, affordable};
 use serde_json::{Value, json};
 
 use crate::lane::SESSION_NAME;
@@ -153,6 +153,17 @@ pub const RESET_FIELD: &str = "reset";
 /// longer reads, fails the drift gate naming it: an allowance parsed out of a key GitHub
 /// stopped sending would be an allowance nobody read.
 pub const ALLOWANCE_FIELDS: [&str; 3] = [LIMIT_FIELD, REMAINING_FIELD, RESET_FIELD];
+
+/// A budget as the gate crate takes it: its name paired with what GitHub meters it in.
+///
+/// Built here rather than on [`Budget`] itself because [`Metered`] is the gate crate's type
+/// and this crate depends on that crate as a dev-dependency alone — a plugin build must not
+/// carry the live gate. The pair still comes from [`Budget`]'s own two accessors, so the
+/// name and the unit a refusal reports are the accounting's rather than a second spelling.
+#[must_use]
+pub const fn metered(budget: Budget) -> Metered {
+    Metered::new(budget.name(), budget.unit())
+}
 
 /// Which of GitHub's `resources` objects reports each budget this session draws on.
 #[must_use]
@@ -361,8 +372,8 @@ pub async fn precondition(token: &str, rest_host: &str, into: &Accounting) -> Re
     let demand = |budget: Budget, resource: &str| {
         let cost = estimated.get(&budget).copied().unwrap_or_default();
         match allowance_of(&answered, resource) {
-            Ok(allowance) => Demand::read(budget.name(), budget.unit(), cost, allowance),
-            Err(why) => Demand::unread(budget.name(), budget.unit(), cost, why),
+            Ok(allowance) => Demand::read(metered(budget), cost, allowance),
+            Err(why) => Demand::unread(metered(budget), cost, why),
         }
     };
     affordable(&[
