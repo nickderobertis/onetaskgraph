@@ -27,7 +27,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
   "run the check from a checkout of this repository, as 'just script-check' does"
 readonly ROOT
 
-# The three files the cases below mutate, named once.
 readonly JOURNEY="crates/onetaskgraph-github-projects/tests/live.rs"
 readonly WORKFLOW=".github/workflows/ci.yml"
 readonly LIVE_CRATE="crates/onetaskgraph-live/src/lib.rs"
@@ -225,7 +224,19 @@ expect_refused "a guard that merely contains the word fork" \
   "$WORKFLOW" "refs/heads/fork-lane" "which is not the demand"
 reset_fixture
 
-# 8. The demand dropped from a credentialed step entirely, which is the older half of the
+# 8. The fork exception with a value nothing reads. `onetaskgraph_live::required` refuses
+#    anything but the two constants and unset, so a lane spelled this way fails on a fork
+#    pull request for a reason that has nothing to do with what it was testing — and it is
+#    the shape a guard checking only "not the demand" would wave through.
+substitute "$WORKFLOW" \
+  "ONETASKGRAPH_LIVE_REQUIRED: \${{ github.event.pull_request.head.repo.fork && '0' || '1' }}" \
+  "ONETASKGRAPH_LIVE_REQUIRED: \${{ github.event.pull_request.head.repo.fork && '2' || '1' }}"
+run_guard
+expect_refused "the fork exception yielding a value the parser refuses" \
+  "$WORKFLOW" "which is not the demand"
+reset_fixture
+
+# 9. The demand dropped from a credentialed step entirely, which is the older half of the
 #    same assertion and has never been watched fail either.
 substitute "$WORKFLOW" '          ONETASKGRAPH_LIVE_REQUIRED: "1"
 ' ''
@@ -234,7 +245,7 @@ expect_refused "the demand dropped from a credentialed step" \
   "$WORKFLOW" "does not set ONETASKGRAPH_LIVE_REQUIRED"
 reset_fixture
 
-# 9. The value renamed out of the live crate. The guard reads what the demand has to BE
+# 10. The value renamed out of the live crate. The guard reads what the demand has to BE
 #    from `onetaskgraph_live::DEMANDED` rather than restating it, so it has to say so
 #    rather than fall back on a value of its own.
 substitute "$LIVE_CRATE" 'pub const DEMANDED: &str' 'pub const REQUIRED_VALUE: &str'
@@ -243,7 +254,16 @@ expect_refused "the demanded value renamed out of the crate that decides it" \
   "$LIVE_CRATE" "no longer declares DEMANDED"
 reset_fixture
 
-# 10. The other half of that: the two really are tied. A crate demanding a different value
+# 11. Its pair, the off value, which the same read gets from the same crate. Two constants
+#     through one helper, so this is the case that says the helper is reached for both
+#     rather than for the one that happened to be written first.
+substitute "$LIVE_CRATE" 'pub const NOT_DEMANDED: &str' 'pub const UNDEMANDED: &str'
+run_guard
+expect_refused "the off value renamed out of the crate that decides it" \
+  "$LIVE_CRATE" "no longer declares NOT_DEMANDED"
+reset_fixture
+
+# 12. The other half of that: the two really are tied. A crate demanding a different value
 #     makes the workflow's `1` wrong, which is what a single source with a drift gate means
 #     and what a restated constant could never do.
 substitute "$LIVE_CRATE" 'pub const DEMANDED: &str = "1";' 'pub const DEMANDED: &str = "yes";'
@@ -252,10 +272,10 @@ expect_refused "the crate and the workflow disagreeing about the demand" \
   "$WORKFLOW" "which is not the demand" "It has to be yes"
 reset_fixture
 
-# 11. The fork exception itself, which the guard must ACCEPT. GitHub hands a fork pull
+# 13. The fork exception itself, which the guard must ACCEPT. GitHub hands a fork pull
 #     request no secrets at all, so demanding a credential there would fail every outside
 #     contribution for something its author cannot supply — and without this case, a guard
-#     that refused every arrangement would have satisfied all ten cases above.
+#     that refused every arrangement would have satisfied all twelve cases above.
 substitute "$WORKFLOW" 'ONETASKGRAPH_LIVE_REQUIRED: "1"' \
   "ONETASKGRAPH_LIVE_REQUIRED: \${{ github.event.pull_request.head.repo.fork && '0' || '1' }}"
 run_guard

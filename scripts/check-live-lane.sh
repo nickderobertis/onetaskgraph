@@ -263,15 +263,21 @@ for relative, session in SESSIONS.items():
 # a step says nothing on its own. Taking the value from that crate's own `DEMANDED` is what
 # stops this check and the parser it stands for drifting into two spellings.
 live_source = read(LIVE_CRATE, "the live crate that declares the lane's variables")
-demanded_value = re.search(r'(?m)^pub const DEMANDED: &str = "([^"]+)";$', live_source)
-if not demanded_value:
-    refuse(
-        f"{LIVE_CRATE} no longer declares DEMANDED as a string constant, so what "
-        f"{DEMAND} has to be set to cannot be read from the crate that decides it.",
-        "restore `pub const DEMANDED: &str = \"...\";` there, or point this check at "
-        "where the value moved to.",
-    )
-DEMANDED = demanded_value.group(1)
+def declared_value(name):
+    """One of the live crate's two `&str` constants, or a refusal naming it."""
+    found = re.search(rf'(?m)^pub const {name}: &str = "([^"]+)";$', live_source)
+    if not found:
+        refuse(
+            f"{LIVE_CRATE} no longer declares {name} as a string constant, so what "
+            f"{DEMAND} may be set to cannot be read from the crate that decides it.",
+            f"restore `pub const {name}: &str = \"...\";` there, or point this check at "
+            "where the value moved to.",
+        )
+    return found.group(1)
+
+
+DEMANDED = declared_value("DEMANDED")
+NOT_DEMANDED = declared_value("NOT_DEMANDED")
 
 # 4. The workflow hands each credential to exactly one lane, with what that lane needs.
 workflow = read(WORKFLOW, "the workflow that runs the required check")
@@ -297,8 +303,11 @@ def demands_a_credential(value):
     Exactly two spellings satisfy it. The demanded value on its own is one. The other is
     the fork exception, and it is matched whole rather than by any word in it: GitHub
     Actions has no ternary, so the workflow spells that case `<FORK> && '<off>' || '<on>'`,
-    where the `||` fallback is what every run that is not a fork pull request takes. The
-    condition has to be [`FORK`] itself and the fallback has to be the demand, because a
+    where the `||` fallback is what every run that is not a fork pull request takes. Both
+    values are the live crate's own — a fork branch of anything else, `2` included, is a
+    value `onetaskgraph_live::required` refuses outright, which fails the lane for a reason
+    that has nothing to do with what it was testing. The condition has to be [`FORK`]
+    itself and the fallback has to be the demand, because a
     guard this recognised loosely would be one any other condition could be substituted
     into — turning the demand off for scheduled runs, or for a branch, while still reading
     as the fork exception. That is the same green-for-a-missing-credential hole one level
@@ -313,8 +322,7 @@ def demands_a_credential(value):
     condition, _, off = guarded.partition("&&")
     return (
         condition.strip() == FORK
-        and off.strip().strip("\"'").isdigit()
-        and off.strip().strip("\"'") != DEMANDED
+        and off.strip().strip("\"'") == NOT_DEMANDED
         and fallback.strip().strip("\"'") == DEMANDED
     )
 
