@@ -1770,12 +1770,17 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                             .all(|key| values.get(*key).is_some_and(|value| !value.is_empty()))
                 })
         }
-        graphql::PROJECT_STATUS | graphql::ISSUE_LABEL | graphql::PROJECT_LABEL => {
+        graphql::ISSUE_LABEL | graphql::PROJECT_LABEL => {
             serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
                 .is_ok_and(|values| {
                     values.len() == 1 && values.get("name").is_some_and(|value| !value.is_empty())
                 })
         }
+        // Linear's `projectStatuses` takes no arguments this plugin can send, so a request
+        // naming one is a request the real API would refuse.
+        graphql::PROJECT_STATUS => variables
+            .as_object()
+            .is_some_and(|values| values.is_empty()),
         graphql::ISSUE_CREATE => {
             exact_linear_variable_keys(variables, &["input"])
                 && valid_linear_write_input(
@@ -1915,6 +1920,28 @@ fn valid_linear_filter(value: &Value) -> bool {
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
+/// Every project status this workspace holds, as Linear's own `projectStatuses` answers.
+///
+/// The whole connection, unfiltered, because Linear takes no filter on it — so the plugin
+/// gets the same shape here that it gets from the real API and does its own matching. Each
+/// id is its own name, which is what lets a write's `statusId` read back as the status it
+/// named; the names are the shared dataset's, so a status a journey copies with is one this
+/// answers to.
+fn project_statuses() -> Vec<Value> {
+    let dataset = dataset();
+    let mut names = ["tasks", "projects"]
+        .iter()
+        .flat_map(|kind| dataset[kind].as_array().cloned().unwrap_or_default())
+        .filter_map(|item| item["status"]["name"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|name| json!({"id": name, "name": name}))
+        .collect()
+}
+
 fn linear_response(
     request: &Value,
     recorded: Option<&Value>,
@@ -1967,7 +1994,7 @@ fn linear_response(
         return Ok(json!({"workflowStates":{"nodes":[{"id":vars["name"]}]}}));
     }
     if operation == graphql::PROJECT_STATUS {
-        return Ok(json!({"projectStatuses":{"nodes":[{"id":vars["name"]}]}}));
+        return Ok(json!({"projectStatuses":{"nodes":project_statuses()}}));
     }
     if operation == graphql::ISSUE_LABEL {
         return Ok(json!({"issueLabels":{"nodes":[{"id":vars["name"]}]}}));
