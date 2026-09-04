@@ -123,10 +123,6 @@ jobs:
       - name: Check the affected projects and generated Python SDK
         if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
         env:
-          # The one place a live session's credentials and nominations enter this build,
-          # and one of the two ubuntu-latest steps that carry them; the file header says
-          # why no other lane may.
-          #
           # GH_PROJECTS_TOKEN, not GITHUB_PROJECTS_TOKEN: GitHub Actions refuses to create
           # a secret whose name begins with GITHUB_, so the short name is the one that can
           # exist both here and in the local secrets file. Do not "correct" it into a break.
@@ -161,10 +157,7 @@ jobs:
       - name: Sweep every project and check generated Python SDK
         if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
         env:
-          # The default-branch half of the pull-request step above, and everything about
-          # why is written there rather than twice: why each name is spelled as it is, why
-          # the board and the scratch team are nominated rather than discovered, and why
-          # these are on one lane of the matrix alone.
+          # The default-branch half of the pull-request step above; why is written there.
           GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As on that step: the lane's own refusal is the drift gate, because ONETASKGRAPH_LIVE_REQUIRED is 1 here too, so a name spelled differently on either side fails this run naming the variable rather than skipping green.
