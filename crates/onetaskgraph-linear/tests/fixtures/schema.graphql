@@ -4,13 +4,6 @@
 # the whole document contract below — `document`, `documents`, `Document`,
 # `DocumentConnection`, `DocumentFilter`, the two document inputs, both document payloads
 # and the three document mutations — re-observed and pinned 2026-09-01 from it.
-#
-# `Query.projectStatuses` is corrected on 2026-09-04 from the real API's own answer, which
-# is the only authority this file ever gets that outranks the published documentation: the
-# live journey sent it a `filter` argument and Linear refused the whole document with
-# `Unknown argument "filter" on field "Query.projectStatuses". Did you mean "after"?`. So
-# that connection is not filterable and `ProjectStatusFilter`, which nothing now sends, is
-# gone with it; the plugin matches the status name locally instead.
 # Only the read/write contract exercised by this plugin is retained.
 type Query {
   viewer: User!
@@ -24,7 +17,7 @@ type Query {
   projectLabels(filter: ProjectLabelFilter): ProjectLabelConnection!
   teams(filter: TeamFilter): TeamConnection!
   workflowStates(filter: WorkflowStateFilter): WorkflowStateConnection!
-  projectStatuses(after: String): ProjectStatusConnection!
+  projectStatuses(filter: ProjectStatusFilter): ProjectStatusConnection!
 }
 type Mutation {
   issueCreate(input: IssueCreateInput!): IssuePayload!
@@ -208,6 +201,9 @@ input TeamFilter {
 input WorkflowStateFilter {
   name: StringComparator
   team: IdComparator
+}
+input ProjectStatusFilter {
+  name: StringComparator
 }
 input ProjectLabelFilter {
   name: StringComparator
