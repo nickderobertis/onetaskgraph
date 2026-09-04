@@ -1,7 +1,7 @@
 {
   "name": "@onetaskgraph/sdk",
   "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] This package IS the JS workspace's one member; what the rule reads as a second is the optionalDependency below, which is the published launcher an end user installs beside the SDK and resolves from the registry at their own install. `workspace:*` names nothing there, and npm/cli is not a workspace member for the reason its own manifest records. scripts/set-version.sh writes this number and `--check` refuses any other, under distribution-check. JSON has no comment to scope this to the one line.",
-  "version": "0.2.21",
+  "version": "0.2.22",
   "description": "The TypeScript SDK for onetaskgraph, generated from the binary's own JSON Schema bundle.",
   "license": "MIT",
   "type": "module",
@@ -28,7 +28,7 @@
     "generate:check": "bun scripts/generate.ts --check"
   },
   "optionalDependencies": {
-    "@onetaskgraph/cli": "0.2.21"
+    "@onetaskgraph/cli": "0.2.22"
   },
   "devDependencies": {
     "ajv": "8.17.1",
