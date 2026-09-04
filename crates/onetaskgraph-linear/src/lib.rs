@@ -139,6 +139,21 @@ pub mod graphql {
     /// with `Unknown argument "filter" on field "Query.projectStatuses"`. The display name
     /// is therefore matched locally over the whole connection, which a workspace holds few
     /// enough of to answer in one page.
+    // llmlint: ignore[changed_behavior_has_e2e] The uncovered case the rule names — a status
+    // on a later page — is not a test that is missing but a document this repository has no
+    // evidence Linear would accept: `tests/fixtures/schema.graphql` pins `after` alone,
+    // because Linear's own refusal is where that correction came from, and its
+    // `ProjectStatusConnection` declares `nodes` and no `pageInfo`. Selecting a cursor field
+    // to page on would fail `pinned_schema_checks_selected_fields_arguments_and_fixture_keys`
+    // here and risk, against Linear, the same `GRAPHQL_VALIDATION_FAILED` this document was
+    // changed to stop sending. Reading one page is not what changed either: `teams`,
+    // `workflowStates` and `projectLabels` resolve a display name through the same `one_id`
+    // over the same unpaged connections, and did before this change. What did change is
+    // driven end to end — the CLI journey
+    // `linear_project_and_task_copies_write_native_relations_and_record_only_cross_source_edges`
+    // copies a project whose status is resolved this way, and
+    // `a_project_status_is_matched_locally_because_linear_narrows_that_connection_for_nobody`
+    // holds the match, the ambiguity and the absence against a real HTTP server.
     pub const PROJECT_STATUS: &str = "query{ projectStatuses{nodes{id name}} }";
     /// Resolve an issue-label display name.
     pub const ISSUE_LABEL: &str =
