@@ -982,12 +982,36 @@ mod tests {
     /// the file's own time back is how a test reaches the same comparison without waiting an
     /// hour. It leaves the contents alone, so a seat aged this way still says which run
     /// wrote it.
+    ///
+    /// **The handle is opened for writing, and on Windows that is what makes this work at
+    /// all.** `SetFileTime` needs `FILE_WRITE_ATTRIBUTES`, which a read-only handle does not
+    /// carry, so `File::open` — read access alone — makes `set_modified` fail there with
+    /// `Access is denied.` (os error 5) while succeeding on Linux and macOS, whose
+    /// `futimens` accepts any descriptor the caller may write through. That is a
+    /// platform difference in the *helper*, not in the seat logic, and it failed all seven
+    /// seat-lease tests on `check (windows-latest)` while every one of them passed on the
+    /// other two. `write(true)` alone is the fix: it adds no `create` and no `truncate`, so
+    /// the seat's contents — the run id a reclaim reads — are exactly what they were.
     fn age_out_of_the_window(path: &Path) {
         let long_ago = SystemTime::now() - SEAT_IS_STALE_AFTER - Duration::from_secs(60);
-        fs::File::open(path)
-            .expect("the file opens")
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("the file opens for writing")
             .set_modified(long_ago)
             .expect("its modification time is settable");
+        // Read the time back rather than trusting the call: a platform that accepted the
+        // request and moved nothing would leave every test below asserting a reclaim
+        // against a seat still inside the window, which reads as the seat logic being
+        // wrong rather than as this helper having done nothing.
+        let aged = fs::metadata(path)
+            .expect("the aged file is readable")
+            .modified()
+            .expect("its modification time is readable");
+        assert!(
+            aged.elapsed().expect("the aged time is in the past") > SEAT_IS_STALE_AFTER,
+            "ageing left the seat inside the stale window, so nothing below tests a reclaim"
+        );
     }
 
     fn credential(raw: &str) -> Credential {
