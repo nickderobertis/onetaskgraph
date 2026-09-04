@@ -1027,40 +1027,92 @@ pub const MUTATION_TYPES: [(&str, bool, &[&str]); 28] = [
     ("DeleteProjectV2FieldPayload", false, &["projectV2Field"]),
 ];
 
-/// The whole mutation contract in one document, as aliased root fields.
+/// How many times one document may select a given introspection field.
 ///
-/// **One request rather than one per type, and the reason is what a session costs.** GitHub
-/// allows any number of aliased root fields on one query, and `__type` is not a connection,
-/// so this adds nothing to the document's node count — it collapses thirty round trips into
-/// one and asks exactly the same questions. Nothing here narrows what is verified: every
-/// name, input, payload, member and type signature the checks below hold GitHub to is still
-/// asked for, from the same two tables.
+/// GitHub caps it, and states the cap in the refusal itself. A first fold of this contract
+/// put the whole of it in one document, and GitHub answered that document with no data at
+/// all:
+///
+/// ```text
+/// Introspection fields may only be used 2 times, but some fields were used more than
+/// that: __Type.fields (14), __Type.inputFields (15)
+/// ```
+///
+/// carrying `INTROSPECTION_LIMIT_EXCEEDED`. The cap reaches the *member* selections and not
+/// the roots: that same refusal counted twenty-nine `__type` roots and fifty-eight
+/// `ofType`s without objecting to either, and named only the two that return a type's
+/// whole member list. So the fold stands and what is batched is the members — at
+/// most this many `fields` and this many `inputFields` per document.
+const INTROSPECTION_FIELD_LIMIT: usize = 2;
+
+/// The whole mutation contract, in as few documents as that cap allows.
+///
+/// **Batched rather than one request per type, and the reason is what a session costs.**
+/// GitHub allows any number of aliased root fields on one query, and `__type` is not a
+/// connection, so a document here adds nothing to the node count. Twenty-eight types and
+/// the `Mutation` root — fifteen `inputFields` selections and fourteen `fields` ones —
+/// become eight documents instead of twenty-nine requests. Nothing is narrowed: every name,
+/// input, payload, member and type signature the checks below hold GitHub to is still asked
+/// for, from the same two tables, and [`verify_mutation_schema`] answers from all eight as
+/// though they were one.
 ///
 /// The alias is the type's own name, which is already a GraphQL identifier, so the answer is
-/// keyed by the thing it describes.
-fn mutation_schema_document() -> String {
-    let mut document = String::from(
-        "query MutationContract{Mutation:__type(name:\"Mutation\"){fields{name type{name \
-         ofType{name}}args{name type{name ofType{name}}}}}",
-    );
+/// keyed by the thing it describes — and each document carries its own aliases alone, which
+/// is what lets the answers merge without colliding.
+#[must_use]
+pub fn mutation_schema_documents() -> Vec<String> {
+    let mut selected_fields = vec![String::from(
+        "Mutation:__type(name:\"Mutation\"){fields{name type{name ofType{name}}args{name \
+         type{name ofType{name}}}}}",
+    )];
+    let mut selected_input_fields = Vec::new();
     for (type_name, input, _) in MUTATION_TYPES {
         let selection = if input { "inputFields" } else { "fields" };
-        document.push_str(&format!(
+        let selected = format!(
             "{type_name}:__type(name:\"{type_name}\"){{{selection}{{name type{{kind name \
              ofType{{kind name ofType{{kind name}}}}}}}}}}"
-        ));
+        );
+        if input {
+            selected_input_fields.push(selected);
+        } else {
+            selected_fields.push(selected);
+        }
     }
-    document.push('}');
-    document
+    let mut selected_fields = selected_fields.into_iter();
+    let mut selected_input_fields = selected_input_fields.into_iter();
+    let mut documents = Vec::new();
+    loop {
+        let roots = selected_input_fields
+            .by_ref()
+            .take(INTROSPECTION_FIELD_LIMIT)
+            .chain(selected_fields.by_ref().take(INTROSPECTION_FIELD_LIMIT))
+            .collect::<Vec<_>>();
+        if roots.is_empty() {
+            return documents;
+        }
+        documents.push(format!("query MutationContract{{{}}}", roots.concat()));
+    }
 }
 
 async fn verify_mutation_schema(token: &str) -> Result<(), String> {
-    let response = graphql(
-        token,
-        &mutation_schema_document(),
-        "mutation schema introspection",
-    )
-    .await?;
+    // The eight documents answer one contract, so their answers are read as one: each
+    // carries its own aliases and no other's, and the checks below address the merged
+    // object by the alias they already used when this was a single request.
+    let mut answered = serde_json::Map::new();
+    for document in mutation_schema_documents() {
+        let response = graphql(token, &document, "mutation schema introspection").await?;
+        let data = response
+            .pointer("/data")
+            .and_then(Value::as_object)
+            .ok_or_else(|| "mutation schema introspection returned no data".to_owned())?;
+        for (alias, members) in data {
+            answered.insert(alias.clone(), members.clone());
+        }
+    }
+    let response = Value::Object(serde_json::Map::from_iter([(
+        "data".to_owned(),
+        Value::Object(answered),
+    )]));
     let fields = response
         .pointer("/data/Mutation/fields")
         .and_then(Value::as_array)

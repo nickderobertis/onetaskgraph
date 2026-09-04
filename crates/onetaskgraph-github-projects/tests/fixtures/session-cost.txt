@@ -1,4 +1,4 @@
-requests 92
+requests 99
 node count 1757301
 
 requests per call
@@ -18,7 +18,7 @@ requests per call
     1       0  live label attachment
     1       0  live origin field cleanup
     1       0  live origin field creation
-    1       0  mutation schema introspection
+    8       0  mutation schema introspection
     1   56100  node-count reconciliation while reading a project's tasks
     1     200  node-count reconciliation while reading an issue's dependencies
     1     560  node-count reconciliation while reading one issue

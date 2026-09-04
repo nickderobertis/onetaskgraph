@@ -7730,6 +7730,48 @@ fn answer_a_label_call(
 /// rate-limit headers a credentialed session's responses carry, which the required check's
 /// live run prints.
 ///
+/// GitHub refuses a document that selects one introspection field too many times.
+///
+/// It is the one limit a fold of this contract runs into, it costs the whole request rather
+/// than part of the answer, and only a credentialed run meets it — the loopback board
+/// answers whatever it is asked. So the shape is held here instead, against GitHub's own
+/// stated number: a document over it merged once and failed the required check on the first
+/// run that had a token.
+///
+/// Both halves matter. Under the cap, and *complete* — a batching that stayed under it by
+/// dropping a type would verify less while looking cheaper.
+#[test]
+fn no_introspection_document_selects_a_capped_field_more_often_than_github_allows() {
+    let documents = journey::mutation_schema_documents();
+    for (index, document) in documents.iter().enumerate() {
+        for capped in ["fields{", "inputFields{"] {
+            let used = document.matches(capped).count();
+            assert!(
+                used <= 2,
+                "introspection document {index} selects `{capped}` {used} times; GitHub                  refuses the whole request above 2:\n{document}"
+            );
+        }
+    }
+
+    let selected = documents.concat();
+    for (type_name, input, _) in journey::MUTATION_TYPES {
+        let selection = if input { "inputFields" } else { "fields" };
+        let root = format!("{type_name}:__type(name:\"{type_name}\"){{{selection}");
+        assert_eq!(
+            selected.matches(&root).count(),
+            1,
+            "{type_name} must be asked about exactly once across the batch"
+        );
+    }
+    assert_eq!(
+        selected
+            .matches("Mutation:__type(name:\"Mutation\"){fields")
+            .count(),
+        1,
+        "and the Mutation root exactly once too"
+    );
+}
+
 /// The record beside it is a golden: a change to the journey or to what the source asks for
 /// moves these numbers, and this fails naming both so the move is a decision rather than a
 /// drift. `crates/onetaskgraph-github-projects/session-cost.md` is where the before and after
