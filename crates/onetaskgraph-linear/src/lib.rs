@@ -426,13 +426,35 @@ struct Envelope {
 #[derive(Deserialize)]
 struct GqlError {
     message: String,
-    extensions: Option<GqlExtensions>,
+    // Held raw rather than typed, for two reasons. Linear puts the whole of *why* it
+    // refused in here — `message` is a category name like `Argument Validation Error`,
+    // which named neither the field nor the value when the live project-relation write
+    // was refused by it — so a refusal carries this verbatim and a reader diagnoses from
+    // it. And a typed shape with a required `code` fails the whole envelope's
+    // deserialization when Linear sends extensions without one, turning a refusal this
+    // source could explain into an unexplained malformed response.
+    extensions: Option<Value>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GqlExtensions {
     code: GqlErrorCode,
     retry_after: Option<u64>,
+}
+impl GqlError {
+    /// The rate-limit shape of [`Self::extensions`], when it has one.
+    fn coded(&self) -> Option<GqlExtensions> {
+        self.extensions
+            .as_ref()
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+    }
+    /// Everything Linear said about this refusal, on one line and cut to [`SAID_LIMIT`].
+    fn said(&self) -> String {
+        match &self.extensions {
+            Some(extensions) => elided(&format!("{}: {extensions}", self.message)),
+            None => elided(&self.message),
+        }
+    }
 }
 #[derive(Deserialize)]
 enum GqlErrorCode {
@@ -530,22 +552,17 @@ impl LinearSource {
             message: e.to_string(),
         })?;
         if let Some(error) = body.errors.first() {
-            if error
-                .extensions
-                .as_ref()
-                .is_some_and(|extensions| matches!(extensions.code, GqlErrorCode::RateLimited))
+            if let Some(extensions) = error
+                .coded()
+                .filter(|extensions| matches!(extensions.code, GqlErrorCode::RateLimited))
             {
-                let hint = error
-                    .extensions
-                    .as_ref()
-                    .and_then(|value| value.retry_after);
                 return Err(SourceError::RateLimited {
-                    retry_after_seconds: hint.or(retry),
+                    retry_after_seconds: extensions.retry_after.or(retry),
                     message: None,
                 });
             }
             return Err(SourceError::Refused {
-                message: error.message.clone(),
+                message: error.said(),
             });
         }
         body.data.ok_or_else(|| SourceError::Malformed {
@@ -786,13 +803,16 @@ impl LinearSource {
         //
         // Finish-to-start is the blocker's `end` onto the blocked project's `start`, and
         // `near` is the item that depends, so the near end takes `start` and the far end
-        // it waits on takes `end`. Anchoring by role rather than by position is
-        // deliberate: this source puts the depending item in `projectId`, where Linear's
-        // own callers put the blocker, and a pair copied across positions rather than
-        // roles states the dependency backwards — which Linear accepts as readily as the
-        // right way round, so it would be wrong in the workspace rather than refused
-        // here. A `Related` edge carries no ordering and Linear offers no anchor that says
-        // so, so it sends the same pair.
+        // it waits on takes `end`. That pair *is* the end -> start line Linear documents,
+        // read the only way an anchor pair can be read — each anchor names a point on the
+        // project it sits beside, and the line runs from the far end's `end` to the near
+        // end's `start`. Anchoring by role rather than by position is what carries the
+        // direction here, and it is deliberate: this source puts the depending item in
+        // `projectId`, where Linear's own callers put the blocker, so a pair copied across
+        // by position rather than by role would state the dependency backwards — which
+        // Linear accepts as readily as the right way round, so it would be wrong in the
+        // workspace rather than refused here. A `Related` edge carries no ordering and
+        // Linear offers no anchor that says so, so it sends the same pair.
         const NEAR_ANCHOR: &str = "start";
         const FAR_ANCHOR: &str = "end";
         for edge in edges {
@@ -809,9 +829,40 @@ impl LinearSource {
                 Some(_) => continue,
                 None => edge.to.id(),
             };
-            let relation_type = match edge.kind {
-                DependencyKind::Blocks => "blocks",
-                DependencyKind::Related => "related",
+            // A project relation is not spelled the way an issue relation is, and this is
+            // the whole of what a project's `type` may say.
+            //
+            // `blocks` there is what the live journey's project write was refused for
+            // once the two anchors above stopped being missing: Linear answered
+            // `Argument Validation Error`, the message class its input validator raises
+            // for a value outside an accepted set, having already accepted every field of
+            // the same input by name. `tests/fixtures/README.md` records the observation
+            // that decides which field: a live read-back found `blocks`, `dependsOn` and
+            // `related` refused on a project relation in favour of `dependency`, the one
+            // type Linear's project dependencies have. The anchors above are not that
+            // failure — each of `start` and `end` is in the documented anchor vocabulary,
+            // and Linear had already coerced both as `String!` before validation ran.
+            //
+            // What is *not* settled is whether Linear also constrains the anchor pair by
+            // position, requiring `anchorType` itself to be `end`. Nothing offline can
+            // decide it: the pair this source sends is the documented end -> start line
+            // written with the depending project in `projectId`, and Linear enumerates
+            // neither anchor anywhere introspection reaches. If the live lane is refused
+            // again, the refusal now carries Linear's own `extensions` — see `GqlError` —
+            // which names the field and the value, and settles it in one run. Swapping the
+            // ids to satisfy such a constraint would also have to swap `relation_page`'s
+            // reading of `relations`/`inverseRelations`, or the source would stop reading
+            // back what it wrote.
+            //
+            // `Related` keeps `related` rather than being refused here. The read-back
+            // above is second-hand and covers a relation Linear was asked to *create*; a
+            // project edge carrying no ordering is a capability this source has, and
+            // removing it on that evidence would be a wider claim than the evidence
+            // supports. If Linear refuses it, it now says so in the message.
+            let relation_type = match (kind, edge.kind) {
+                (WriteKind::Project, DependencyKind::Blocks) => "dependency",
+                (WriteKind::Task, DependencyKind::Blocks) => "blocks",
+                (_, DependencyKind::Related) => "related",
             };
             let (query, input) = if matches!(kind, WriteKind::Project) {
                 (
@@ -1640,23 +1691,31 @@ fn relation_page(
         } else {
             (NativeId(other.into()), id.clone())
         };
-        // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear publishes relation type as a string in the accepted 2026-08-24 schema; this boundary enum deliberately rejects every undocumented value, and real-HTTP tests prove both accepted values and rejection.
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        enum RelationKind {
-            Blocks,
-            Related,
-        }
-        let kind = match serde_json::from_value::<RelationKind>(n.get("type").cloned().ok_or_else(
-            || SourceError::Malformed {
-                message: "missing relation type".into(),
-            },
-        )?)
-        .map_err(|e| SourceError::Malformed {
-            message: format!("invalid relation type: {e}"),
-        })? {
-            RelationKind::Blocks => DependencyKind::Blocks,
-            RelationKind::Related => DependencyKind::Related,
+        // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear publishes relation type as a string in the accepted 2026-08-24 schema; this boundary deliberately rejects every undocumented value, and real-HTTP tests prove both accepted values and rejection.
+        let relation_type =
+            n.get("type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing relation type".into(),
+                })?;
+        // An issue relation and a project relation do not share a vocabulary. Linear
+        // spells a project dependency `dependency`, where an issue's is `blocks`; the
+        // write side sends exactly that pair and says why. So each root reads only its
+        // own, and a value the other root would have accepted is refused here rather than
+        // read as an edge this source could not have written.
+        let kind = match (root, relation_type) {
+            (DependencyRoot::Issue, "blocks") | (DependencyRoot::Project, "dependency") => {
+                DependencyKind::Blocks
+            }
+            (_, "related") => DependencyKind::Related,
+            _ => {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "invalid relation type: {relation_type} on a {} relation",
+                        root.as_str()
+                    ),
+                });
+            }
         };
         // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
         let item_kind = root.item_kind();

@@ -2273,13 +2273,19 @@ fn linear_write_relation(
     } else {
         "relatedIssueId"
     };
-    let kind = input
+    let wire = input
         .get("type")
         .and_then(Value::as_str)
         .ok_or("relation type must be a string")?;
-    if !matches!(kind, "blocks" | "related") {
-        return Err("undocumented relation type");
-    }
+    // Linear does not spell a project dependency the way it spells an issue's: a project
+    // relation's ordering type is `dependency`, an issue relation's is `blocks`. This
+    // responder refuses the other root's word for exactly that reason, so a write that
+    // sent one would fail here rather than round-trip through a fixture that took it.
+    let kind = match (project, wire) {
+        (true, "dependency") | (false, "blocks") => "blocks",
+        (_, "related") => "related",
+        _ => return Err("undocumented relation type"),
+    };
     // Linear anchors a project relation at both ends and requires both, so this responder
     // refuses an anchor it has no documented value for exactly as the real API refuses a
     // missing one.
@@ -2580,17 +2586,26 @@ fn linear_relations(
     // A Linear relation names a Linear item, so only the edges whose ends are both plain
     // native ids are here. The rest are in the item's own description slot, which this
     // operation selects for exactly that reason.
+    // The workspace holds one ordering kind and Linear has two words for it, so a
+    // project's relations say `dependency` where an issue's say `blocks`.
+    let wire = |kind: &Value| -> Value {
+        if suffix == "Project" && kind == "blocks" {
+            json!("dependency")
+        } else {
+            kind.clone()
+        }
+    };
     let forward = edges
         .iter()
         .enumerate()
         .filter(|(_,e)| e["from"] == id && e["to"].is_string())
-        .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":e["kind"],(format!("related{suffix}")):{"id":e["to"]}}))
+        .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":wire(&e["kind"]),(format!("related{suffix}")):{"id":e["to"]}}))
         .collect::<Vec<_>>();
     let inverse = edges
         .iter()
         .enumerate()
         .filter(|(_,e)| e["to"] == id && e["from"].is_string())
-        .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":e["kind"],(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
+        .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":wire(&e["kind"]),(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
         .collect::<Vec<_>>();
     let items = if suffix == "Issue" {
         "tasks"

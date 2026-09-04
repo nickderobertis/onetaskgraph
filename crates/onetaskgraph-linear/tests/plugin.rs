@@ -563,7 +563,7 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         serde_json::json!({"projectStatuses":{"nodes":[{"id":"STATUS","name":"Todo"}]}}),
         id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-NEW"}}}),
-        serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P","type":"blocks","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P","type":"dependency","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationDelete":{"success":true}}),
         serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P2","type":"related","relatedProject":{"id":"P-OTHER"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationDelete":{"success":true}}),
@@ -648,12 +648,19 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
             .0,
         "P-NEW"
     );
+    // The second write carries the *ordering* kind, which Linear spells differently at
+    // the project level than at the issue level, so both project relation types are
+    // written here and both are asserted below.
+    let ordering_edge = DependencyEdge {
+        kind: DependencyKind::Blocks,
+        ..project_edge
+    };
     assert_eq!(
         writable
             .write_project(&ItemWrite {
                 target: Some("P-NEW".into()),
                 item: project,
-                depends_on: vec![project_edge]
+                depends_on: vec![ordering_edge]
             })
             .await
             .unwrap()
@@ -683,10 +690,13 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
     );
     // Linear declares both anchors required on `ProjectRelationCreateInput`, so the whole
     // input object is asserted rather than the far id alone: dropping either anchor is
-    // what the live lane failed on, and a substring assertion would not have seen it.
-    let relation_input = requests
+    // what the live lane failed on, and a substring assertion would not have seen it. The
+    // `type` is asserted for the same reason and by the same evidence — `blocks` there is
+    // what the live lane was refused for next, with `Argument Validation Error`, and a
+    // project dependency is typed `dependency`.
+    let relation_inputs = requests
         .iter()
-        .find(|request| request.contains(onetaskgraph_linear::graphql::PROJECT_RELATION_CREATE))
+        .filter(|request| request.contains(onetaskgraph_linear::graphql::PROJECT_RELATION_CREATE))
         .map(|request| {
             let body = request
                 .split_once("\r\n\r\n")
@@ -696,16 +706,25 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
                 ["input"]
                 .clone()
         })
-        .expect("a project edge is written through projectRelationCreate");
+        .collect::<Vec<_>>();
     assert_eq!(
-        relation_input,
-        serde_json::json!({
-            "projectId": "P-NEW",
-            "relatedProjectId": "P-FAR",
-            "type": "related",
-            "anchorType": "start",
-            "relatedAnchorType": "end",
-        }),
+        relation_inputs,
+        vec![
+            serde_json::json!({
+                "projectId": "P-NEW",
+                "relatedProjectId": "P-FAR",
+                "type": "related",
+                "anchorType": "start",
+                "relatedAnchorType": "end",
+            }),
+            serde_json::json!({
+                "projectId": "P-NEW",
+                "relatedProjectId": "P-FAR",
+                "type": "dependency",
+                "anchorType": "start",
+                "relatedAnchorType": "end",
+            }),
+        ],
         "the project relation input drifted from what Linear requires"
     );
     let create = requests
@@ -1668,13 +1687,29 @@ async fn graphql_rate_limit_uses_http_hint_and_viewer_id_is_validated() {
             SourceError::Malformed { .. }
         ));
     }
+    // A refusal carries Linear's `extensions` as well as its `message`, because the
+    // message alone is a category name: the live project-relation write was refused with
+    // the bare phrase `Argument Validation Error`, which names neither the field nor the
+    // value, while `extensions` says which. So the whole message is asserted rather than
+    // its first clause.
     let (endpoint, _) = server(
         "200 OK",
         "",
         r#"{"errors":[{"message":"ordinary refusal","extensions":{"code":"BAD"}}]}"#,
     );
     assert!(
-        matches!(source(&endpoint).health().await.unwrap_err(), SourceError::Refused { ref message } if message == "ordinary refusal")
+        matches!(source(&endpoint).health().await.unwrap_err(), SourceError::Refused { ref message } if message == r#"ordinary refusal: {"code":"BAD"}"#)
+    );
+    // Extensions Linear sends without a `code` are still carried, and are still a refusal:
+    // typing them would fail the whole envelope's deserialization and report a refusal
+    // this source could have explained as an unexplained malformed response instead.
+    let (endpoint, _) = server(
+        "200 OK",
+        "",
+        r#"{"errors":[{"message":"Argument Validation Error","extensions":{"exception":{"validationErrors":[{"property":"type"}]}}}]}"#,
+    );
+    assert!(
+        matches!(source(&endpoint).health().await.unwrap_err(), SourceError::Refused { ref message } if message.contains("Argument Validation Error") && message.contains("\"property\":\"type\""))
     );
 }
 
@@ -2016,8 +2051,11 @@ async fn dependency_cursors_are_sent_on_second_task_and_project_requests() {
         } else {
             "relatedIssue"
         };
+        // Linear's two roots do not share a relation vocabulary: a project dependency is
+        // typed `dependency` and an issue's is `blocks`.
+        let ordering = if projects { "dependency" } else { "blocks" };
         let body = format!(
-            r#"{{"data":{{"{root}":{{"description":null,"relations":{{"nodes":[{{"type":"blocks","{related}":{{"id":"other"}}}}],"pageInfo":{{"hasNextPage":true,"endCursor":"next-edge"}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
+            r#"{{"data":{{"{root}":{{"description":null,"relations":{{"nodes":[{{"type":"{ordering}","{related}":{{"id":"other"}}}}],"pageInfo":{{"hasNextPage":true,"endCursor":"next-edge"}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
         );
         let (endpoint, _) = server("200 OK", "", body);
         let first = if projects {

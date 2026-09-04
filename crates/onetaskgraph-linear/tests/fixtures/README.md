@@ -66,6 +66,41 @@ Two published callers do send `project`, and both look derived from the field de
 rather than from a call: one of them also lists the relation types as `blocks`, `dependsOn`
 and `related`, a set the live read-back above found refused in favour of `dependency`.
 
+**A project relation is typed `dependency`, and that is what the live lane was refused for
+next.** With both anchors present the same write was refused again on **2026-09-04**, this
+time with `Argument Validation Error` and an HTTP 200 — the class of message Linear's input
+validator raises for a value outside an accepted set, *after* GraphQL has coerced every
+field of the input by name, which is what tells this refusal apart from the missing-field
+one before it. The field it names is `type`. `blocks` is the issue vocabulary:
+`IssueRelationCreateInput` takes `blocks`, `duplicate`, `related` and `similar`, and a
+project relation is a different relation with a different set. The live read-back recorded
+above is the observation that decides it — the caller that listed `blocks`, `dependsOn` and
+`related` had all three refused in favour of `dependency`, which is also the only kind of
+project relation Linear's own product has: a timeline dependency, which is why the input
+carries anchors at all. So `DependencyKind::Blocks` is written as `dependency` at the
+project level and `blocks` at the issue level, and each level's read accepts only its own
+word.
+
+Two things about that are **not** settled, and both are written down beside the code rather
+than left to be rediscovered:
+
+- **Whether Linear also constrains the anchor pair by position.** Nothing offline can
+  decide whether the validator requires `anchorType` itself to be `end`, or only that the
+  pair describe an end -> start line. This source sends the second reading. If the pair is
+  constrained by position, the ids have to swap with it — and `relation_page`'s reading of
+  `relations` against `inverseRelations` has to swap too, or the source stops reading back
+  what it wrote.
+- **Whether a project relation may be typed `related` at all.** `DependencyKind::Related`
+  still sends `related` rather than being refused locally: the read-back above is
+  second-hand and records what Linear refused on a relation it was asked to *create* as a
+  dependency, and withdrawing a capability this source has on that evidence would claim
+  more than the evidence carries.
+
+Both are now one live run from being settled, because a Linear refusal carries Linear's own
+`extensions` alongside its `message`. The message is a category name — `Argument Validation
+Error` named neither the field nor the value — and `extensions` is where the validator says
+which property it rejected.
+
 **This source anchors by role, not by position.** Linear's callers put the blocking project
 in `projectId`; this source puts the item that depends there, so it sends the mirror —
 `start` on the near end, `end` on the far end it waits on. Copying the measured pair across
