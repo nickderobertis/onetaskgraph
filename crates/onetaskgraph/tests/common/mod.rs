@@ -72,6 +72,27 @@ impl SourceBoundary {
     }
 }
 
+/// The credential variables a sandboxed run must never inherit from its host.
+///
+/// These are the names this product reads by default — the `api_key_env` a `linear`
+/// source falls back to and the `token_env` a `github-projects` one does — so a journey
+/// that configures either plugin with an empty block reaches the *ambient* one when the
+/// host has it set. The journeys that turn on that fact are the ones proving a source
+/// which cannot be built is reported as unavailable, and that a verb against a source
+/// which cannot answer costs exit 4: with a real key in the environment those sources
+/// build and answer, and the journey asserts the opposite of what happened.
+///
+/// The host that has them set is this repository's own required check, which hands the
+/// live lanes their credentials on one leg of its matrix — and so to every process that
+/// leg starts, this suite included. Removing them here is what keeps these journeys
+/// about the layer under test, and it also keeps a suite that reaches no third party
+/// from quietly sending reads to a real Linear workspace on every run.
+///
+/// A journey that wants one of these set says so itself with `.env`, which lands after
+/// this removal and wins. `tests/ambient_credentials.rs` drives the whole of it with the
+/// variables really set in the parent.
+pub const AMBIENT_CREDENTIALS: [&str; 2] = ["LINEAR_API_KEY", "GH_PROJECTS_TOKEN"];
+
 /// A temporary host: a project tree to run in, and a configuration home over it.
 pub struct Sandbox {
     /// Held for its drop, which removes the tree. Every path comes from `root` below.
@@ -135,12 +156,16 @@ impl Sandbox {
     /// The ambient `ONETASKGRAPH_` variables are removed rather than the whole
     /// environment cleared: a coverage run hands the child `LLVM_PROFILE_FILE`, and
     /// clearing it would silently stop attributing this binary's lines to its crate.
+    /// [`AMBIENT_CREDENTIALS`] goes with them, for the reason recorded there.
     pub fn command_in(&self, directory: &Path) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
         for (name, _) in std::env::vars() {
             if name.starts_with("ONETASKGRAPH_") {
                 command.env_remove(name);
             }
+        }
+        for name in AMBIENT_CREDENTIALS {
+            command.env_remove(name);
         }
         command
             .current_dir(directory)
