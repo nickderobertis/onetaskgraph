@@ -363,6 +363,16 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
             _ => None,
         })
         .collect::<std::collections::HashMap<_, _>>();
+    let inputs = schema
+        .definitions
+        .iter()
+        .filter_map(|definition| match definition {
+            schema::Definition::TypeDefinition(schema::TypeDefinition::InputObject(input)) => {
+                Some((input.name.as_str(), input))
+            }
+            _ => None,
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     fn named<'a>(kind: &'a schema::Type<'a, String>) -> &'a str {
         match kind {
             schema::Type::NamedType(name) => name,
@@ -377,6 +387,62 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
                 same_type(left, right)
             }
             _ => false,
+        }
+    }
+    /// Whether a variable declared `variable` may stand at a location typed `location`.
+    ///
+    /// GraphQL admits it when the two are the same type, or when the variable is the
+    /// location type's non-null form — never when only the value would coerce. `String!`
+    /// at an `ID` is the second case failing, and it is what Linear refused the state
+    /// lookup for; `String!` at a `String` is the non-null case passing, which the sibling
+    /// `eqIgnoreCase` in the very same filter relies on.
+    fn usable_at(location: &schema::Type<'_, String>, variable: &query::Type<'_, String>) -> bool {
+        same_type(location, variable)
+            || matches!(variable, query::Type::NonNullType(inner) if same_type(location, inner))
+    }
+    /// Check every variable an inline input-object literal puts inside an argument.
+    ///
+    /// A filter written out in the document rather than passed whole is where `$team`
+    /// hid: it is not a root argument, so the root-argument check above never saw it, and
+    /// nothing else here descended into the literal. Linear did, and refused the document.
+    fn literal_variables<'a>(
+        inputs: &std::collections::HashMap<&str, &'a schema::InputObjectType<'a, String>>,
+        variables: &[query::VariableDefinition<'_, String>],
+        input_name: &str,
+        value: &query::Value<'_, String>,
+        path: &str,
+    ) {
+        let query::Value::Object(fields) = value else {
+            return;
+        };
+        let input = inputs
+            .get(input_name)
+            .unwrap_or_else(|| panic!("pinned schema lacks input {input_name}"));
+        for (key, value) in fields {
+            let field = input
+                .fields
+                .iter()
+                .find(|field| field.name == *key)
+                .unwrap_or_else(|| panic!("{input_name} lacks field {key}"));
+            let path = format!("{path}.{key}");
+            match value {
+                query::Value::Variable(name) => {
+                    let variable = variables
+                        .iter()
+                        .find(|variable| variable.name == *name)
+                        .unwrap_or_else(|| panic!("no ${name} is declared for {path}"));
+                    assert!(
+                        usable_at(&field.value_type, &variable.var_type),
+                        "${name} is declared {:?} and {path} is {:?}: Linear refuses a \
+                         variable that is neither the location's type nor its non-null form",
+                        variable.var_type,
+                        field.value_type,
+                    );
+                }
+                value => {
+                    literal_variables(inputs, variables, named(&field.value_type), value, &path)
+                }
+            }
         }
     }
     fn validate<'a>(
@@ -457,6 +523,18 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
             .unwrap();
         for (argument_name, value) in &root.arguments {
             let query::Value::Variable(variable_name) = value else {
+                let argument = schema_root
+                    .arguments
+                    .iter()
+                    .find(|argument| argument.name == *argument_name)
+                    .unwrap();
+                literal_variables(
+                    &inputs,
+                    variables,
+                    named(&argument.value_type),
+                    value,
+                    &format!("{}({argument_name}:)", root.name),
+                );
                 continue;
             };
             let variable = variables

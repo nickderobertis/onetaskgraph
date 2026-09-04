@@ -131,7 +131,25 @@ pub mod graphql {
     pub const TEAM: &str =
         "query($key:String!){ teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id}} }";
     /// Resolve an issue workflow-state display name.
-    pub const ISSUE_STATE: &str = "query($name:String!,$team:String!){ workflowStates(filter:{name:{eqIgnoreCase:$name},team:{id:{eq:$team}}}){nodes{id}} }";
+    ///
+    /// `$team` is an `ID!` and `$name` a `String!` because that is what each one's
+    /// *location* declares, not because of what this source passes: both carry a Linear
+    /// identifier string. `WorkflowStateFilter.team` is a `NullableTeamFilter`, whose `id`
+    /// is an `IDComparator`, whose `eq` is an `ID`; the sibling `name` reaches a
+    /// `StringComparator.eqIgnoreCase`, which is a `String`.
+    ///
+    /// That distinction is what the live lane was refused for on 2026-09-04, with HTTP 400
+    /// and `Variable "$team" of type "String!" used in position expecting type "ID".`
+    /// GraphQL admits a variable at a location only when the variable's type is the
+    /// location's type or that type's non-null form, and `String` is not `ID` however the
+    /// value is spelled — so `String!` there fails validation before any field is read,
+    /// while `ID!` is the non-null form of the location's own type and is accepted.
+    ///
+    /// It reached Linear because a variable inside an inline filter literal is not a root
+    /// argument, and the pinned-schema checks only compared root arguments. They now walk
+    /// into these literals too, so this class of drift fails here rather than in the live
+    /// lane.
+    pub const ISSUE_STATE: &str = "query($name:String!,$team:ID!){ workflowStates(filter:{name:{eqIgnoreCase:$name},team:{id:{eq:$team}}}){nodes{id}} }";
     /// List the workspace's project statuses, so one can be resolved by display name.
     ///
     /// Unlike `teams`, `workflowStates` and the two label connections, Linear's

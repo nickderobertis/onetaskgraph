@@ -101,6 +101,38 @@ Both are now one live run from being settled, because a Linear refusal carries L
 Error` named neither the field nor the value — and `extensions` is where the validator says
 which property it rejected.
 
+**That live run happened, and the project relation was accepted.** On **2026-09-04** the
+required check reached the live journey again with `dependency` and both anchors, and it no
+longer failed at a project write: it got past `write_project`'s relation — the only write in
+the journey that sends `projectRelationCreate` — and failed two writes later, at the first
+`write_task`, for an unrelated reason recorded below. So `dependency` is the type Linear
+accepts for a project relation, and `start`/`end` are values it accepts for the two anchors.
+What that run does **not** settle is the first bullet above: an accepted anchor pair is not
+a correctly *oriented* one, because Linear takes a backwards dependency as readily as the
+right one. The orientation still rests on the reasoning under "This source anchors by role,
+not by position" below, and on nothing observed.
+
+**A filter's `team` is an `ID`, not a `String`, and that is what the same run failed on
+next.** The live journey's first task write was refused with HTTP 400 and
+`Variable "$team" of type "String!" used in position expecting type "ID".` This file had
+carried `WorkflowStateFilter.team` as an invented `IdComparator { id: IdEquality { eq:
+String } }`, derived rather than observed, and the plugin's `ISSUE_STATE` declared
+`$team: String!` to match. Linear's real shape is `NullableTeamFilter`, whose `id` is an
+`IDComparator`, whose `eq` is an `ID`, and both are now pinned from that refusal — the third
+place in this file where the real API outranks the documentation it was derived from.
+GraphQL admits a variable at a location only when the variable's type is the location's type
+or that type's non-null form, so `String!` cannot stand at an `ID` however the value is
+spelled, while `ID!` can. The sibling `name` in the very same filter reaches a
+`StringComparator.eqIgnoreCase`, which really is a `String`, so `$name: String!` was right
+all along: the two variables differ because their locations do, not because their values do.
+
+It reached Linear at all because a variable written inside an inline filter literal is not a
+root argument, and the pinned-schema checks compared only root arguments — the one document
+in this plugin whose variables sit inside a literal was the one document whose variable
+types nothing checked. `pinned_schema_names_every_write_operation_the_plugin_sends` now
+walks those literals against the pinned input types, and refuses exactly the pair Linear
+refused, naming the variable and the location.
+
 **This source anchors by role, not by position.** Linear's callers put the blocking project
 in `projectId`; this source puts the item that depends there, so it sends the mirror —
 `start` on the near end, `end` on the far end it waits on. Copying the measured pair across
