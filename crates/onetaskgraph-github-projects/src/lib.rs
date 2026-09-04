@@ -1631,8 +1631,9 @@ impl GitHubProjectsSource {
     ///
     /// This is the one place a request leaves this crate, which is why the accounting is
     /// here rather than at each of the callers: a read path added later is counted without
-    /// anybody remembering to count it, and `an_accounting_records_every_request_the_board_served`
-    /// fails when one is not.
+    /// anybody remembering to count it, and
+    /// `the_session_report_counts_every_request_the_board_served_and_what_each_cost` fails
+    /// when one is not.
     async fn send_once(&self, query: &str, variables: &Value) -> Result<Value, Attempt> {
         let Attempted {
             result,
