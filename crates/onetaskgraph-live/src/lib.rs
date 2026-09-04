@@ -1126,6 +1126,53 @@ mod tests {
     }
 
     #[test]
+    fn a_holder_that_could_not_write_its_token_still_releases_the_seat_it_took() {
+        // `Seat::create` takes the seat by creating the file and then writes what tells this
+        // run's file from the next one at that path. The write is best effort — the seat is
+        // the file's existence, not its contents — so a run whose write did not land holds a
+        // seat it cannot identify, which is the `None` token this drives.
+        //
+        // The choice made there is that such a run removes anyway, and this is the reason:
+        // a seat nobody releases declines every run on the machine until it goes stale an
+        // hour later. So the whole of the tokenless drop is here — what it buys, and what it
+        // costs — rather than only the half that reads well.
+        let directory = scratch();
+        let path = directory.join("onetaskgraph-live-github-projects.seat");
+        Seat::create_only(&path).expect("the seat file is creatable");
+        let tokenless = Seat {
+            path: path.clone(),
+            token: None,
+        };
+        drop(tokenless);
+        assert!(
+            !path.exists(),
+            "a run that could not write its token left a seat nobody releases"
+        );
+
+        // What it buys: the next run opens instead of being declined for an hour.
+        let next = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
+            .expect("the seat a tokenless holder released is free");
+        assert_eq!(next.seat_path(), path);
+
+        // And what it costs, stated rather than assumed: a tokenless holder cannot tell this
+        // run's file from a replacement's, so a second one dropping now takes the live
+        // session's seat with it. That is the trade the comment there makes — the worse
+        // failure is the seat nobody releases — and it is pinned here so changing the trade
+        // means changing this test rather than discovering it later.
+        drop(Seat {
+            path: path.clone(),
+            token: None,
+        });
+        assert!(
+            !path.exists(),
+            "a tokenless holder is documented as removing whatever is at its path"
+        );
+        // The session itself is unharmed and its own drop is still best effort.
+        assert_eq!(next.credential().expose(), "live-token");
+        drop(next);
+    }
+
+    #[test]
     fn a_run_already_reclaiming_the_seat_declines_the_next_one_rather_than_racing_it() {
         // The interleaving the thread test can only sometimes produce, produced on purpose:
         // one run is between reading the seat as stale and writing its own, and a second run
