@@ -584,15 +584,19 @@ impl LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {connection}.nodes"),
             })?;
+        // A node this comparison cannot read is malformed rather than a nonmatch: dropping
+        // it would turn Linear having answered nonsense into this source reporting no such
+        // status, which is a different thing and reads as the caller's mistake.
         let matched = match lookup.local_name() {
-            Some(name) => nodes
-                .iter()
-                .filter(|node| {
-                    node.get("name")
-                        .and_then(Value::as_str)
-                        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(name))
-                })
-                .collect::<Vec<_>>(),
+            Some(name) => {
+                let mut matched = Vec::new();
+                for node in nodes {
+                    if str_at(node, "name")?.eq_ignore_ascii_case(name) {
+                        matched.push(node);
+                    }
+                }
+                matched
+            }
             None => nodes.iter().collect::<Vec<_>>(),
         };
         if matched.len() != 1 {
