@@ -87,6 +87,17 @@ report_guard_output() {
   printf '%s\n' "$GUARD_OUTPUT" | sed 's/^/    /' >&2
 }
 
+# The head of the journey file as the guard just read it, printed when a case does not go
+# the way it must. Every fixture here goes in at or near the top of that file, so this says
+# whether the case even landed -- which is the question a refusal case that PASSED leaves
+# open, and the one the Windows lane could not answer while its payload was being rewritten
+# under it. A guard that saw no fixture and a guard that saw one and missed it are different
+# defects with different repairs, and they read identically without this.
+report_fixture() {
+  echo "check-live-lane-enforced: the first lines of $JOURNEY, as the guard read them:" >&2
+  head -n 4 "$scratch/repo/$JOURNEY" | sed 's/^/    /' >&2
+}
+
 # Replace one literal substring of a file in the scratch tree. python3 rather than `sed -i`,
 # whose in-place spelling differs between GNU and BSD and so would fail on the macOS runner.
 #
@@ -164,6 +175,7 @@ expect_refused() {
     echo "check-live-lane-enforced: where these tests can conclude without having run, and a" >&2
     echo "check-live-lane-enforced: conclusion branch protection accepts in place of success is" >&2
     echo "check-live-lane-enforced: how the credentialed lane stops being a check at all." >&2
+    report_fixture
     failures=$((failures + 1))
     return
   fi
