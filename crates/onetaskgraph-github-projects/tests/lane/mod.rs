@@ -161,10 +161,18 @@ pub enum LiveLane {
 /// The session this lane opens against GitHub, by the name its seat and its refusals use.
 pub const SESSION_NAME: &str = "GitHub Projects";
 
-/// Whether `login` is spelled the way GitHub spells an account name.
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] GitHub publishes this grammar as prose in its own UI rather than as an artifact anything here could read, so there is nothing offline to derive these two from or reconcile them against. What stands in for the gate is stated on each function and holds in both directions: this filter may only ever be NARROWER than GitHub's spelling, being a floor on what reaches a URL rather than a mirror of what GitHub accepts, and a divergence either way fails the credentialed lane in the required check — a name GitHub would spell but this refuses fails here, naming the variable and the value, before a credential is spent, and a name this keeps that GitHub does not spell is answered by GitHub with a 404. Neither drift is silent, which is the failure this rule exists to prevent.
+
+/// Whether `login` may be filled into the `{owner}` of this lane's REST endpoint templates.
 ///
 /// Letters, digits and hyphens, no hyphen at either end and none doubled, at most the 39
-/// characters GitHub accepts.
+/// characters GitHub accepted when this was written on 2026-09-03.
+///
+/// **This is a floor, not a mirror of GitHub's grammar.** What it must never do is keep a
+/// value that would address something other than the account it names; being narrower than
+/// GitHub costs a refusal that names the variable and the value, which is loud and cheap.
+/// So GitHub loosening its spelling cannot make this wrong, only strict — and GitHub is
+/// still the authority on whether such an account exists, which it answers with a 404.
 fn is_login(login: &str) -> bool {
     !login.is_empty()
         && login.len() <= 39
@@ -176,10 +184,11 @@ fn is_login(login: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric() || character == '-')
 }
 
-/// Whether `name` is spelled the way GitHub spells a repository name.
+/// Whether `name` may be filled into the `{repo}` of this lane's REST endpoint templates.
 ///
 /// Letters, digits, hyphens, underscores and dots, at most the 100 characters GitHub
-/// accepts, and neither of the two path segments a filesystem reserves.
+/// accepted when this was written on 2026-09-03, and neither of the two relative path
+/// segments. The same floor as [`is_login`], and the same reason.
 fn is_repository_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 100
@@ -189,6 +198,7 @@ fn is_repository_name(name: &str) -> bool {
             character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
         })
 }
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 /// Decides whether this lane may run, and against which board.
 ///
