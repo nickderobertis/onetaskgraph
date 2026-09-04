@@ -1907,7 +1907,13 @@ fn valid_linear_write_input(value: Option<&Value>, required: &[&str], optional: 
 fn valid_linear_filter(value: &Value) -> bool {
     match value {
         Value::Object(fields) => fields.iter().all(|(key, value)| match key.as_str() {
-            "and" => value.as_array().is_some_and(|values| {
+            // `or` is here and `inIgnoreCase` is gone for the same reason: this server
+            // once accepted `labels:{some:{name:{inIgnoreCase:[…]}}}`, which real Linear
+            // refuses outright — `StringComparator` has no such member — so the source
+            // spells "at least one of these labels" as an `or` of `eqIgnoreCase` now. A
+            // fake that keeps taking what the real API refuses is how that reached a
+            // credentialed run in the first place.
+            "and" | "or" => value.as_array().is_some_and(|values| {
                 values
                     .iter()
                     .all(|value| value.is_object() && valid_linear_filter(value))
@@ -1915,7 +1921,7 @@ fn valid_linear_filter(value: &Value) -> bool {
             "team" | "key" | "labels" | "some" | "name" | "every" | "state" | "type"
             | "project" | "id" => value.is_object() && valid_linear_filter(value),
             "eqIgnoreCase" | "neqIgnoreCase" | "eq" => value.is_string(),
-            "inIgnoreCase" | "in" => value
+            "in" => value
                 .as_array()
                 .is_some_and(|values| values.iter().all(Value::is_string)),
             "null" => value.is_boolean(),

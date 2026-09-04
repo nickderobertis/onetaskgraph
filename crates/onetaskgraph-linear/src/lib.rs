@@ -28,7 +28,7 @@
 //! | `projects` | **Supported and proven.** `issues(filter:{project:{id:{eq:…}}})`. |
 //! | `documents` | **Supported and proven.** Linear's own first-class `Document`, read through `documents(first:,after:,filter:)` and `document(id:)`, written through `documentCreate`/`documentUpdate` and taken back by `documentDelete`. See the ruling below on what a Linear document cannot hold. |
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
-//! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{inIgnoreCase:…}}}` and `{eqIgnoreCase:…}` for what an item must carry, `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. |
+//! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{eqIgnoreCase:…}}}` for what an item must carry — one per label, gathered under `or:` where any one of them will do — and `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. Linear's `StringComparator` has no case-insensitive list operator; see the note beside `filter`. |
 //! | `filter_by_status` | **Supported and proven.** `state:{type:{in:[…]}}`, over the `WorkflowState.type` vocabulary the category maps to. |
 //! | `search_title` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
 //! | `search_content` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
@@ -599,8 +599,32 @@ impl LinearSource {
         if let Some(team) = &self.team {
             parts.push(json!({"team": {"key": {"eqIgnoreCase": team.0}}}));
         }
+        // "At least one of these" is a disjunction of `eqIgnoreCase` rather than one
+        // case-insensitive list operator, because Linear has no such operator. This source
+        // sent `labels:{some:{name:{inIgnoreCase:[…]}}}` until Linear refused it outright,
+        // HTTP 400, on the first read of the live lane that ever reached a label filter:
+        //
+        //     Variable "$filter" got invalid value { inIgnoreCase: […] } at
+        //     "filter.and[1].labels.some.name"; Field "inIgnoreCase" is not defined by
+        //     type "StringComparator". Did you mean "eqIgnoreCase" or "neqIgnoreCase"?
+        //
+        // That refusal is also the evidence for the replacement: Linear named the two
+        // members of `StringComparator` closest to what it was sent, and `eqIgnoreCase` is
+        // one of them — the same operator `all_of` below has always sent and the live lane
+        // has always exercised. `in` exists there too and would need no `or`, but it is
+        // case-sensitive, so `any_of` would stop agreeing with `all_of` and `none_of` and
+        // with what the table at the top of this file says this source does.
+        //
+        // Nothing offline could have caught this: the pinned schema carries `StringComparator`
+        // as the one member the operations it pins use, and the e2e fixture server accepted
+        // `inIgnoreCase` because this source was what it was written against. Both now say
+        // what Linear says instead.
         if !labels.any_of.is_empty() {
-            parts.push(json!({"labels": {"some": {"name": {"inIgnoreCase": labels.any_of}}}}));
+            parts.push(json!({"or": labels
+                .any_of
+                .iter()
+                .map(|name| json!({"labels": {"some": {"name": {"eqIgnoreCase": name}}}}))
+                .collect::<Vec<_>>()}));
         }
         for name in &labels.all_of {
             parts.push(json!({"labels": {"some": {"name": {"eqIgnoreCase": name}}}}));

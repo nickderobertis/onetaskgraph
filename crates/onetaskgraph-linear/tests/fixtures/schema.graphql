@@ -211,11 +211,16 @@ type PageInfo {
   hasNextPage: Boolean!
   endCursor: String
 }
+# `and` and `or` are members of every one of Linear's filter inputs, and this source uses
+# `or` to spell "carries at least one of these labels" — see `StringComparator` below for
+# why that cannot be one list operator.
 input IssueFilter {
   and: [IssueFilter!]
+  or: [IssueFilter!]
 }
 input ProjectFilter {
   and: [ProjectFilter!]
+  or: [ProjectFilter!]
 }
 # `DocumentFilter.project` is a `ProjectFilter` rather than the `NullableProjectFilter`
 # `IssueFilter.project` is, so it carries no `null:` member and Linear cannot be asked for
@@ -238,8 +243,14 @@ input ProjectLabelFilter {
 input IssueLabelFilter {
   name: StringComparator
 }
+# Every member here is one this source sends. What is recorded rather than sent is the
+# absence: `StringComparator` has no case-insensitive *list* operator. Linear said so
+# itself, refusing `inIgnoreCase` with HTTP 400 — `Field "inIgnoreCase" is not defined by
+# type "StringComparator". Did you mean "eqIgnoreCase" or "neqIgnoreCase"?` — which is
+# where both of the members below come from.
 input StringComparator {
   eqIgnoreCase: String
+  neqIgnoreCase: String
 }
 input NullableTeamFilter {
   id: IDComparator

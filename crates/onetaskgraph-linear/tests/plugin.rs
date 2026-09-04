@@ -1440,9 +1440,65 @@ async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
     assert_eq!(page.next.unwrap().0, "next-1");
     let wire = request.recv().unwrap();
     assert!(wire.contains("issues(first:$first"));
-    assert!(wire.contains("inIgnoreCase"), "{wire}");
+    assert!(
+        wire.contains(r#"{"or":[{"labels":{"some":{"name":{"eqIgnoreCase":"Bug"}}}}]}"#),
+        "{wire}"
+    );
     assert!(wire.contains("started"));
     assert!(wire.contains("fixture-key"));
+}
+
+/// The label predicate goes on the wire in the shape Linear's `StringComparator` has.
+///
+/// It is asserted over the whole `filter` variable rather than by substring, because the
+/// defect this covers was a member of that comparator that does not exist: this source sent
+/// `inIgnoreCase` and Linear refused the read with HTTP 400 the first time a credentialed
+/// run reached a label filter. A substring assertion for `eqIgnoreCase` would have passed
+/// on the broken spelling too, since `all_of` sends that operator anyway.
+#[tokio::test]
+async fn a_label_predicate_uses_only_operators_linears_string_comparator_has() {
+    let (endpoint, request) = server("200 OK", "", include_str!("fixtures/issues.json"));
+    source(&endpoint)
+        .query_tasks(
+            &TaskQuery {
+                labels: LabelFilter {
+                    any_of: vec!["Bug".into(), "Chore".into()],
+                    all_of: vec!["Core".into()],
+                    none_of: vec!["Spike".into()],
+                },
+                ..Default::default()
+            },
+            &PageRequest {
+                cursor: None,
+                limit: 1,
+            },
+        )
+        .await
+        .expect("a read narrowed by every kind of label predicate");
+    let wire = request.recv().unwrap();
+    let body = wire
+        .split_once("\r\n\r\n")
+        .expect("the request has a body")
+        .1;
+    let sent: serde_json::Value = serde_json::from_str(body).expect("the body is JSON");
+    assert_eq!(
+        sent["variables"]["filter"],
+        serde_json::json!({"and": [
+            // "at least one of these" is a disjunction, because no member of
+            // `StringComparator` takes a list case-insensitively.
+            {"or": [
+                {"labels": {"some": {"name": {"eqIgnoreCase": "Bug"}}}},
+                {"labels": {"some": {"name": {"eqIgnoreCase": "Chore"}}}},
+            ]},
+            {"labels": {"some": {"name": {"eqIgnoreCase": "Core"}}}},
+            {"labels": {"every": {"name": {"neqIgnoreCase": "Spike"}}}},
+        ]}),
+        "{wire}"
+    );
+    assert!(
+        !wire.contains("inIgnoreCase"),
+        "Linear defines no such member of StringComparator: {wire}"
+    );
 }
 
 #[tokio::test]
