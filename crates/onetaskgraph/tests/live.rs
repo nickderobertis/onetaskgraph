@@ -28,6 +28,57 @@ fn repository_root() -> PathBuf {
         .expect("the repository root is two directories above this crate")
 }
 
+/// The `bash` this repository's scripts really run under, found on PATH rather than
+/// left to the platform's own resolution of a bare program name.
+///
+/// Windows resolves a bare name through the 32-bit system directory *before* PATH, and
+/// `C:\Windows\System32\bash.exe` on a GitHub runner is the Windows Subsystem for Linux
+/// launcher rather than a shell. With no distribution installed it answers
+/// `Windows Subsystem for Linux has no installed distributions`, on stdout, and exits 1
+/// without ever opening the script it was handed — which is exactly what this lane
+/// reported for all five declared targets on `check (windows-latest)`, once the report
+/// below started carrying stdout and the refusal became readable at all. Naming a
+/// relative path for the script does not reach it: the script is not what was resolved
+/// wrong, the interpreter is.
+///
+/// So PATH is searched here, in its own order, and any candidate under the Windows
+/// directory is passed over — that one is never the bash the rest of this repository runs
+/// on, and it is the only entry this has to rule out. PATH really does carry another one
+/// on that lane: `just` runs every recipe through `bash -uc`, so a run that got as far as
+/// this test at all was already driven by a bash that is not the WSL launcher.
+///
+/// The bare name is still the fallback, for a host with no `bash` on PATH at all, and the
+/// report below names whichever was used — so a lane that lands on the fallback says so
+/// rather than repeating the failure this resolution exists to end.
+fn bash() -> PathBuf {
+    // Compared as lowercased text rather than as paths: `%SystemRoot%` is spelled
+    // `C:\Windows` and the PATH entry under it is spelled `C:\Windows\system32`, and a
+    // component-wise `starts_with` is case-sensitive about everything after the drive.
+    let windows_directory = std::env::var_os("SystemRoot")
+        .map(|root| root.to_string_lossy().to_lowercase())
+        .filter(|root| !root.is_empty());
+    let Some(path) = std::env::var_os("PATH") else {
+        return PathBuf::from("bash");
+    };
+    for directory in std::env::split_paths(&path) {
+        if let Some(windows_directory) = &windows_directory
+            && directory
+                .to_string_lossy()
+                .to_lowercase()
+                .starts_with(windows_directory.as_str())
+        {
+            continue;
+        }
+        for name in ["bash", "bash.exe"] {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    PathBuf::from("bash")
+}
+
 /// Whether an id is the `<registry>:<name>` the probe can act on.
 ///
 /// The registry is lowercase and hyphenated; the name is everything after the one
@@ -154,10 +205,11 @@ fn every_declared_target_answers_from_its_real_registry() {
     // directory *above* this repository. A relative path spelled this way is what every
     // platform's `dirname` splits the same.
     const PROBE: &str = "scripts/release-probe.sh";
+    let bash = bash();
     let mut failures = Vec::new();
 
     for identifier in declared_target_ids(&root) {
-        let answer = Command::new("bash")
+        let answer = Command::new(&bash)
             .arg(PROBE)
             .arg(&identifier)
             .current_dir(&root)
@@ -174,18 +226,21 @@ fn every_declared_target_answers_from_its_real_registry() {
             // script, which is a different thing to go and fix and used to be reported as
             // a bare exit code with an empty phrase after it.
             let said = match (stdout.as_str(), stderr.as_str()) {
-                ("", "") => "nothing on either stream, so it did not reach the probe's own \
-                             refusal — every one of those writes a reason to stderr. Look at \
-                             whether `bash` here is the one that runs this repository's other \
-                             scripts, and whether it could open the script at all"
-                    .to_owned(),
+                ("", "") => format!(
+                    "nothing on either stream, so it did not reach the probe's own refusal \
+                     — every one of those writes a reason to stderr. It was run under \
+                     {}, so look at whether that is the bash that runs this repository's \
+                     other scripts, and whether it could open the script at all",
+                    bash.display()
+                ),
                 ("", stderr) => format!("on stderr: {stderr}"),
                 (stdout, "") => format!("on stdout, and nothing on stderr: {stdout}"),
                 (stdout, stderr) => format!("on stderr: {stderr}; and on stdout: {stdout}"),
             };
             failures.push(format!(
-                "{identifier}: not answered ({}). The probe said {said}",
-                answer.status
+                "{identifier}: not answered ({}) under {}. The probe said {said}",
+                answer.status,
+                bash.display()
             ));
             continue;
         }
