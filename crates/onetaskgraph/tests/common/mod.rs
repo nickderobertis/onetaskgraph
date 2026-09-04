@@ -74,30 +74,19 @@ impl SourceBoundary {
 
 /// The credential variables a sandboxed run must never inherit from its host.
 ///
-/// Several journeys turn on a configured source *not* being buildable: a `linear` block
-/// with no `api_key_env` falls back to `LINEAR_API_KEY`, and the journey asserts the
-/// source is reported unavailable, or that a verb against it costs exit 4. With that
-/// variable really set in the environment those sources build and answer, and the
-/// journey asserts the opposite of what happened — and two of them send reads to a real
-/// Linear workspace on the way.
+/// Several journeys turn on a configured source *not* being buildable — a `linear` block
+/// with no `api_key_env` falls back to `LINEAR_API_KEY` — and with that variable really
+/// set those sources build, answer, and reach a real workspace.
 ///
-/// **The host these come from is `.github/workflows/ci.yml`, and that is what this list
-/// is a list of.** It hands the live lanes their credentials on one leg of its matrix,
-/// and so to every process that leg starts, this suite included; before it did, no host
-/// this suite ran on had them and none of this was needed. So this is not a second
-/// spelling of what the plugins read — a plugin renaming its own default would not put a
-/// variable in a runner's environment, and only what that workflow exports can be
-/// inherited here.
+/// **This is a list of what `.github/workflows/ci.yml` exports into this suite's own
+/// process, not of what the plugins read.** Only what that workflow sets can be inherited
+/// here, and a credential no journey turns on needs no entry — so a credential exported
+/// there and missing here fails the journeys that depend on its absence, which is the
+/// whole of the harm and the whole of the gate.
 ///
-/// **What catches the list going stale is the required check itself**, exactly as it
-/// caught the list being absent: a credential exported there and not removed here fails
-/// the journeys that depend on its absence, which is the only harm not removing one can
-/// do. A credential no journey turns on needs no entry.
-///
-/// A journey that wants one of these set says so itself with `.env`, which lands after
-/// this removal and wins. `tests/ambient_credentials.rs` drives the whole of it with the
-/// variables really set in the parent.
-// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] These two names are not a copy of the plugins' defaults but of what one leg of `.github/workflows/ci.yml` exports into this suite's own process, and there is no artifact to derive them from: the config schema `onetaskgraph schema` emits carries no default for `api_key_env` or `token_env`, and a `github-projects` source with an empty block is refused over `owner` before it ever names its token, so reading them back out of the binary would cost more restatement than it removes. The gate is the one stated above and it is the one that fired: the four journeys this list exists for went red in the required check on the first run that exported a credential.
+/// A journey that wants one set says so with `.env`, which lands after this removal and
+/// wins. `tests/ambient_credentials.rs` drives it with the variables set in the parent.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] These names are what one leg of the CI workflow exports, not a copy of the plugins' defaults, and there is nothing to derive them from: the schema `onetaskgraph schema` emits carries no default for `api_key_env` or `token_env`, and a `github-projects` source with an empty block is refused over `owner` before it names its token. The gate is the one stated above, and it is the one that fired.
 pub const AMBIENT_CREDENTIALS: [&str; 2] = ["LINEAR_API_KEY", "GH_PROJECTS_TOKEN"];
 
 /// A temporary host: a project tree to run in, and a configuration home over it.

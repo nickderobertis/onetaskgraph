@@ -1029,30 +1029,17 @@ pub const MUTATION_TYPES: [(&str, bool, &[&str]); 28] = [
 
 /// How many times one document may select a given introspection field.
 ///
-/// GitHub caps it, and states the cap in the refusal itself. A first fold of this contract
-/// put the whole of it in one document, and GitHub answered that document with no data at
-/// all:
+/// GitHub's own number, stated in its refusal of a document that went over — `__Type.fields
+/// (14), __Type.inputFields (15)`, `INTROSPECTION_LIMIT_EXCEEDED`, and no data at all. The
+/// cap reaches the member selections and not the roots: that refusal counted twenty-nine
+/// `__type` roots without objecting to them.
 ///
-/// ```text
-/// Introspection fields may only be used 2 times, but some fields were used more than
-/// that: __Type.fields (14), __Type.inputFields (15)
-/// ```
-///
-/// carrying `INTROSPECTION_LIMIT_EXCEEDED`. The cap reaches the *member* selections and not
-/// the roots: that same refusal counted twenty-nine `__type` roots and fifty-eight
-/// `ofType`s without objecting to either, and named only the two that return a type's
-/// whole member list. So the fold stands and what is batched is the members — at
-/// most this many `fields` and this many `inputFields` per document.
-///
-/// **GitHub owns this number and the drift gate is GitHub's own refusal, in the required
-/// check.** Nothing offline can observe the cap — the loopback board answers whatever it
-/// is asked — so there is no artifact to pin it against. What there is instead is that
-/// [`verify_mutation_schema`] runs against the real API on every credentialed run of this
-/// lane, and a cap GitHub lowers refuses those documents outright and states the new
-/// number in the refusal, exactly as it stated this one. Drift in the direction that
-/// matters therefore fails a required check naming its own figure; drift the other way
-/// costs a few requests that were never wrong. This is the repository's one spelling of
-/// it: the offline guard in `tests/plugin.rs` reads this constant rather than the number.
+/// **GitHub owns it and GitHub's own refusal is the drift gate.** Nothing offline can
+/// observe the cap, so there is no artifact to pin it against; what there is instead is
+/// [`verify_mutation_schema`] running against the real API on every credentialed run, where
+/// a cap GitHub lowers refuses these documents and states the new number. Drift the other
+/// way costs a few requests that were never wrong. This is the one spelling of it — the
+/// offline guard in `tests/plugin.rs` reads this constant rather than the number.
 pub const INTROSPECTION_FIELD_LIMIT: usize = 2;
 
 /// The whole mutation contract, in as few documents as that cap allows.

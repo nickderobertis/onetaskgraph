@@ -467,14 +467,10 @@ impl LinearSource {
             });
         }
         if !status.is_success() {
-            // Linear answers a document it will not run with 400 and a GraphQL error
-            // envelope in the *body*: the status alone says a request failed and nothing
-            // about which part of it Linear objected to. Reporting the status by itself
-            // left a credentialed run's only refusal unreadable — the message named the
-            // whole call and could not say what was wrong with it — so what Linear said
-            // is carried out with it. The body is Linear's answer to this request, so it
-            // holds no credential; it is truncated because an error page from a proxy in
-            // front of Linear can be a page rather than a sentence.
+            // Linear puts its GraphQL error envelope in the *body* of a 400, so the status
+            // alone names the whole call and nothing about what Linear objected to. The
+            // body is Linear's answer to this request and holds no credential; it is cut
+            // because a proxy in front of Linear can answer with a page.
             let said = response.text().await.unwrap_or_default();
             let said = said.trim();
             return Err(SourceError::Unavailable {

@@ -1380,10 +1380,8 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
 /// A status Linear will not run a document under says which part of it Linear refused.
 ///
 /// Linear answers a rejected document with 400 and its error envelope in the body, so a
-/// refusal reported as the status alone names the whole call and nothing about what was
-/// wrong with it. That is how a credentialed run's one failure reached this repository:
-/// `Linear returned HTTP 400 Bad Request`, over a mutation whose document is unchanged,
-/// with nothing to act on. A long body is cut rather than carried whole.
+/// refusal reported as the status alone leaves nothing to act on. A long body is cut
+/// rather than carried whole.
 #[tokio::test]
 async fn a_status_linear_refuses_under_carries_what_linear_said() {
     let (endpoint, _) = server(
