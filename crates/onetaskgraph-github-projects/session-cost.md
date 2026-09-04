@@ -122,7 +122,11 @@ rather than asking anybody to trust it.
 Both changes landed in one commit, so read each summary's arithmetic off the per-call rows
 rather than off the totals: subtracting the two totals gives their sum, not either one. The
 intermediate figures below are measured rather than derived — the same session, driven with
-only the first change applied, costs 99 requests and 1757401 nodes.
+only the first change applied, costs 100 requests and 1757401 nodes, which is 99 in the
+table's frame. Every request figure in this section is in that frame, the reduction's own:
+it sets the budget precondition's one `GET /rate_limit` aside, because that read landed
+after the reduction and is no part of what either change was worth. The node counts need no
+such reading — a REST call sends no document.
 
 **Eight introspections instead of twenty-nine.** The schema verification asked GitHub for
 the `Mutation` type and then for each of twenty-eight input and payload types, one request
