@@ -223,11 +223,39 @@ type PageInfo {
 # `and` and `or` are members of every one of Linear's filter inputs, and this source uses
 # `or` to spell "carries at least one of these labels" — see `StringComparator` below for
 # why that cannot be one list operator.
+# The two read filters below carried nothing but `and`/`or` until 2026-09-04, and that
+# emptiness is what let two wrong members reach `projects(filter:)` for months: a filter is
+# built at runtime and passed whole as `$filter`, so it appears nowhere in a document and
+# the two checks that read documents could not see it. They are pinned member by member
+# now, from Linear's real schema, and `every_variables_object_this_source_sends_conforms_to_the_pinned_schema`
+# walks the objects this source really builds against them.
+#
+# **`IssueFilter` and `ProjectFilter` are different types, and the members they do not
+# share are the point.** A project has no `team` — Linear refused one with
+# `Field "team" is not defined by type "ProjectFilter". Did you mean "lead"?` — it has the
+# teams it is accessible from, under `accessibleTeams`. And a project's status is not an
+# issue's state: `ProjectFilter.state` exists and is a bare `StringComparator` over
+# something else, while the counterpart of `IssueFilter.state` is `ProjectFilter.status`.
 input IssueFilter {
+  team: TeamFilter
+  labels: IssueLabelCollectionFilter
+  state: WorkflowStateFilter
+  project: NullableProjectFilter
   and: [IssueFilter!]
   or: [IssueFilter!]
 }
+# `state` is the one member here this source does not send, and it is pinned because it is
+# the trap: it exists, it is spelled exactly like the member of `IssueFilter` that carries
+# an issue's status, and it is a bare `StringComparator` over something else entirely. With
+# it absent, sending the issue's `{state:{type:{in:[…]}}}` here would be reported as a
+# member Linear does not have, which is untrue; with it present the report is what is
+# actually wrong — a `StringComparator` has no `type`.
 input ProjectFilter {
+  id: EntityIdentifierIDComparator
+  accessibleTeams: TeamCollectionFilter
+  labels: ProjectLabelCollectionFilter
+  state: StringComparator
+  status: ProjectStatusFilter
   and: [ProjectFilter!]
   or: [ProjectFilter!]
 }
@@ -239,12 +267,46 @@ input DocumentFilter {
   project: ProjectFilter
   and: [DocumentFilter!]
 }
+# `null:` is the whole reason `IssueFilter.project` reaches this rather than `ProjectFilter`:
+# it is what asks for the issues belonging to no project at all.
+input NullableProjectFilter {
+  id: EntityIdentifierIDComparator
+  null: Boolean
+  and: [NullableProjectFilter!]
+  or: [NullableProjectFilter!]
+}
+input TeamCollectionFilter {
+  some: TeamFilter
+  every: TeamFilter
+}
 input TeamFilter {
   key: StringComparator
 }
+input IssueLabelCollectionFilter {
+  some: IssueLabelFilter
+  every: IssueLabelFilter
+}
+# Not a mirror of the collection above, and the difference is Linear's: `some` here takes
+# the *collection* filter again where the issue side takes the plain one. Both carry the
+# `name` this source sends, so one spelling satisfies each, which is why it is written once
+# and pinned twice.
+input ProjectLabelCollectionFilter {
+  name: StringComparator
+  some: ProjectLabelCollectionFilter
+  every: ProjectLabelFilter
+}
 input WorkflowStateFilter {
   name: StringComparator
+  type: StringComparator
   team: NullableTeamFilter
+}
+# The project counterpart of `WorkflowStateFilter`, and its `type` is a `StringComparator`
+# although the `ProjectStatus.type` field it filters is the `ProjectStatusType` enum —
+# `backlog`, `planned`, `started`, `paused`, `completed`, `canceled`. Neither `planned` nor
+# `paused` is a workflow-state type and neither `unstarted` nor `triage` is a project-status
+# one, so the two vocabularies are not interchangeable however alike the two filters look.
+input ProjectStatusFilter {
+  type: StringComparator
 }
 input ProjectLabelFilter {
   name: StringComparator
@@ -256,15 +318,23 @@ input IssueLabelFilter {
 # absence: `StringComparator` has no case-insensitive *list* operator. Linear said so
 # itself, refusing `inIgnoreCase` with HTTP 400 — `Field "inIgnoreCase" is not defined by
 # type "StringComparator". Did you mean "eqIgnoreCase" or "neqIgnoreCase"?` — which is
-# where both of the members below come from.
+# where the two case-insensitive members below come from. `in` is the case-*sensitive* list
+# operator, which is why the two status narrowings use it over a fixed vocabulary and the
+# label predicates, over names a user typed, do not.
 input StringComparator {
   eqIgnoreCase: String
   neqIgnoreCase: String
+  in: [String!]
 }
 input NullableTeamFilter {
   id: IDComparator
 }
 input IDComparator {
+  eq: ID
+}
+# A project id is compared with this rather than with `IDComparator`; the member this
+# source sends is spelled the same in both, and the types are not.
+input EntityIdentifierIDComparator {
   eq: ID
 }
 input IssueCreateInput {

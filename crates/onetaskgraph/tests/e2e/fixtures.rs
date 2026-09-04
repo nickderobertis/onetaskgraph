@@ -1918,8 +1918,15 @@ fn valid_linear_filter(value: &Value) -> bool {
                     .iter()
                     .all(|value| value.is_object() && valid_linear_filter(value))
             }),
-            "team" | "key" | "labels" | "some" | "name" | "every" | "state" | "type"
-            | "project" | "id" => value.is_object() && valid_linear_filter(value),
+            // `accessibleTeams` and `status` are here and `team` and the issue's `state`
+            // shape are gone from the project side for the same reason `or` replaced
+            // `inIgnoreCase` above: `ProjectFilter` is not `IssueFilter`, has no `team` at
+            // all, and reaches a project's status through `status` — Linear refused the
+            // other spelling with `Field "team" is not defined by type "ProjectFilter"`.
+            "team" | "accessibleTeams" | "key" | "labels" | "some" | "name" | "every" | "state"
+            | "status" | "type" | "project" | "id" => {
+                value.is_object() && valid_linear_filter(value)
+            }
             "eqIgnoreCase" | "neqIgnoreCase" | "eq" => value.is_string(),
             "in" => value
                 .as_array()
@@ -2442,11 +2449,20 @@ fn linear_state(v: &Value) -> Value {
     let category = v["category"].as_str().unwrap_or("");
     json!({"name":v["name"],"type":match category{"todo"=>"unstarted","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
 }
+/// A project's status, whose `type` is the `ProjectStatusType` enum and **not** the
+/// workflow-state vocabulary above: `planned` is where an issue says `unstarted`, and
+/// `paused` has no issue counterpart. A fake that answered a project with `unstarted`
+/// would let a filter spelled in the wrong vocabulary pass here and fail against Linear,
+/// which is exactly how `inIgnoreCase` reached a credentialed run.
+fn linear_project_status(v: &Value) -> Value {
+    let category = v["category"].as_str().unwrap_or("");
+    json!({"name":v["name"],"type":match category{"todo"=>"planned","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
+}
 fn linear_task(v: &Value, data: &Value) -> Value {
     json!({"id":v["id"],"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null})
 }
 fn linear_project(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null})
 }
 
 /// One Linear document. It has no `labels` field and no `state`, because Linear's own
@@ -2556,10 +2572,16 @@ fn linear_matches_fixture_subset(v: &Value, vars: &Value) -> bool {
         }
     }
     let mut allowed = Vec::new();
+    // Two vocabularies, because Linear has two: an issue's `WorkflowState.type` is
+    // `unstarted`/`started`, a project's `ProjectStatus.type` is `planned`/`started`, and
+    // `paused` is a project state with no issue counterpart at all. Only one of them ever
+    // appears in a given filter, so one scan reads both.
     for (linear, category) in [
         ("completed", "done"),
         ("unstarted", "todo"),
+        ("planned", "todo"),
         ("\"started\"", "in-progress"),
+        ("paused", "in-progress"),
         ("backlog", "backlog"),
         ("canceled", "cancelled"),
     ] {

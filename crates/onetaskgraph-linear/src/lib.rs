@@ -29,7 +29,7 @@
 //! | `documents` | **Supported and proven.** Linear's own first-class `Document`, read through `documents(first:,after:,filter:)` and `document(id:)`, written through `documentCreate`/`documentUpdate` and taken back by `documentDelete`. See the ruling below on what a Linear document cannot hold. |
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
 //! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{eqIgnoreCase:…}}}` for what an item must carry — one per label, gathered under `or:` where any one of them will do — and `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. Linear's `StringComparator` has no case-insensitive list operator; see the note beside `filter`. |
-//! | `filter_by_status` | **Supported and proven.** `state:{type:{in:[…]}}`, over the `WorkflowState.type` vocabulary the category maps to. |
+//! | `filter_by_status` | **Supported and proven,** and spelled twice. An issue narrows with `state:{type:{in:[…]}}` over `WorkflowState.type`; a project narrows with `status:{type:{in:[…]}}` over `ProjectStatusType`, a different member of a different filter over a different vocabulary. See the ruling below. |
 //! | `search_title` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
 //! | `search_content` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
 //! | `task_dependencies` | **Supported and proven,** in both directions: `relations` and `inverseRelations`. |
@@ -69,6 +69,33 @@
 //! asked for the documents belonging to no project. The page-by-page walk asks for only
 //! what is still owed, so neither predicate can make a read return more than the caller
 //! asked for, and neither can drop a document the walk already fetched.
+//!
+//! ## Ruling: a project's filter is not an issue's, and neither is its status
+//!
+//! Linear's `IssueFilter` and `ProjectFilter` read as one filter over two kinds of row.
+//! They are two input types, and this source built one object for both until 2026-09-04,
+//! which put two members into `projects(filter:)` that Linear does not have there. It
+//! refused the first outright — `Field "team" is not defined by type "ProjectFilter". Did
+//! you mean "lead"?` — and would have refused the second next.
+//!
+//! A project has no team; it has the teams it is accessible from, so the configured team
+//! reaches `accessibleTeams:{some:{key:{eqIgnoreCase:…}}}`. And a project's status is not
+//! an issue's state: the counterpart of `IssueFilter.state` is `ProjectFilter.status`,
+//! while `ProjectFilter.state` exists and is a bare `StringComparator` over something else.
+//! The two do not even share a vocabulary — `ProjectStatus.type` is the `ProjectStatusType`
+//! enum, `backlog`, `planned`, `started`, `paused`, `completed`, `canceled`, where a
+//! workflow state is `backlog`, `unstarted`, `started`, `completed`, `canceled`, `triage`.
+//! So `planned` is where `unstarted` would be, `paused` reads as in progress and has no
+//! issue counterpart, and a filter spelled in the other level's words matches nothing while
+//! being refused by nothing.
+//!
+//! **Neither of those could be caught by reading a document, and that is the general
+//! lesson.** A filter is built at runtime and handed over as `$filter`, so it appears in no
+//! operation this crate declares, and the two pinned-schema checks that parse those
+//! operations could not see it — Linear was the only reader, one refusal per round trip.
+//! `every_variables_object_this_source_sends_conforms_to_the_pinned_schema` closes that:
+//! it drives this source's whole surface, records what really went out, and walks every
+//! variables object against the pinned type of the argument it stands at.
 //!
 //! ## Ruling: a Linear project relation is always an ordering
 //!
@@ -632,36 +659,33 @@ impl LinearSource {
     }
 
     // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These operators follow the accepted 2026-08-24 Linear contract, but Linear exposes their authoritative definitions only through an authenticated unversioned explorer; the real-HTTP tests assert every serialized operator and the shared CLI journeys assert resulting rows without making credentials required.
-    fn filter(
-        &self,
-        labels: &onetaskgraph_plugin_api::LabelFilter,
-        statuses: &[StatusCategory],
-        project: Option<&ProjectFilter>,
-    ) -> Value {
+    /// The label predicates, which really are spelled the same at both levels.
+    ///
+    /// `IssueFilter.labels` is an `IssueLabelCollectionFilter` and `ProjectFilter.labels`
+    /// is a `ProjectLabelCollectionFilter` — two types — but `some`, `every` and a `name`
+    /// of `StringComparator` are members of both, so one spelling satisfies each. That is
+    /// the whole of what the two filters have in common, and everything else about them is
+    /// built separately for the reason recorded on the two builders below.
+    ///
+    /// "At least one of these" is a disjunction of `eqIgnoreCase` rather than one
+    /// case-insensitive list operator, because Linear has no such operator. This source
+    /// sent `labels:{some:{name:{inIgnoreCase:[…]}}}` until Linear refused it outright,
+    /// HTTP 400, on the first read of the live lane that ever reached a label filter:
+    ///
+    /// ```text
+    /// Variable "$filter" got invalid value { inIgnoreCase: […] } at
+    /// "filter.and[1].labels.some.name"; Field "inIgnoreCase" is not defined by
+    /// type "StringComparator". Did you mean "eqIgnoreCase" or "neqIgnoreCase"?
+    /// ```
+    ///
+    /// That refusal is also the evidence for the replacement: Linear named the two members
+    /// of `StringComparator` closest to what it was sent, and `eqIgnoreCase` is one of
+    /// them — the same operator `all_of` below has always sent and the live lane has always
+    /// exercised. `in` exists there too and would need no `or`, but it is case-sensitive,
+    /// so `any_of` would stop agreeing with `all_of` and `none_of` and with what the table
+    /// at the top of this file says this source does.
+    fn label_parts(labels: &onetaskgraph_plugin_api::LabelFilter) -> Vec<Value> {
         let mut parts = Vec::new();
-        if let Some(team) = &self.team {
-            parts.push(json!({"team": {"key": {"eqIgnoreCase": team.0}}}));
-        }
-        // "At least one of these" is a disjunction of `eqIgnoreCase` rather than one
-        // case-insensitive list operator, because Linear has no such operator. This source
-        // sent `labels:{some:{name:{inIgnoreCase:[…]}}}` until Linear refused it outright,
-        // HTTP 400, on the first read of the live lane that ever reached a label filter:
-        //
-        //     Variable "$filter" got invalid value { inIgnoreCase: […] } at
-        //     "filter.and[1].labels.some.name"; Field "inIgnoreCase" is not defined by
-        //     type "StringComparator". Did you mean "eqIgnoreCase" or "neqIgnoreCase"?
-        //
-        // That refusal is also the evidence for the replacement: Linear named the two
-        // members of `StringComparator` closest to what it was sent, and `eqIgnoreCase` is
-        // one of them — the same operator `all_of` below has always sent and the live lane
-        // has always exercised. `in` exists there too and would need no `or`, but it is
-        // case-sensitive, so `any_of` would stop agreeing with `all_of` and `none_of` and
-        // with what the table at the top of this file says this source does.
-        //
-        // Nothing offline could have caught this: the pinned schema carries `StringComparator`
-        // as the one member the operations it pins use, and the e2e fixture server accepted
-        // `inIgnoreCase` because this source was what it was written against. Both now say
-        // what Linear says instead.
         if !labels.any_of.is_empty() {
             parts.push(json!({"or": labels
                 .any_of
@@ -675,19 +699,90 @@ impl LinearSource {
         for name in &labels.none_of {
             parts.push(json!({"labels": {"every": {"name": {"neqIgnoreCase": name}}}}));
         }
-        if !statuses.is_empty() {
-            parts.push(json!({"state": {"type": {"in": statuses.iter().flat_map(linear_statuses).collect::<Vec<_>>()}}}));
-        }
-        match project {
-            Some(ProjectFilter::Orphans) => parts.push(json!({"project": {"null": true}})),
-            Some(ProjectFilter::Is(id)) => parts.push(json!({"project": {"id": {"eq": id.0}}})),
-            _ => {}
-        }
+        parts
+    }
+    /// One predicate, or the conjunction of several.
+    fn narrowed(mut parts: Vec<Value>) -> Value {
         if parts.len() == 1 {
             parts.pop().unwrap()
         } else {
             json!({"and": parts})
         }
+    }
+    /// The filter this source sends to `issues(filter:)`.
+    ///
+    /// **`IssueFilter` and `ProjectFilter` are different input types, and one builder for
+    /// both is what put two wrong fields on the wire.** They read as though they were the
+    /// same filter over different rows — the label member really is spelled alike, and the
+    /// `and`/`or` are identical — and a single builder producing one object for both
+    /// connections had shipped `team` and the issue's `state` shape into `projects(filter:)`
+    /// since long before this branch. Linear refused the first outright:
+    ///
+    /// ```text
+    /// Variable "$filter" got invalid value { team: { key: [Object] } };
+    /// Field "team" is not defined by type "ProjectFilter". Did you mean "lead"?
+    /// ```
+    ///
+    /// So there are two builders, and each names its own type's members. Adding a predicate
+    /// means deciding twice, on purpose, rather than once by accident.
+    fn issue_filter(
+        &self,
+        labels: &onetaskgraph_plugin_api::LabelFilter,
+        statuses: &[StatusCategory],
+        project: &ProjectFilter,
+    ) -> Value {
+        let mut parts = Vec::new();
+        if let Some(team) = &self.team {
+            parts.push(json!({"team": {"key": {"eqIgnoreCase": team.0}}}));
+        }
+        parts.extend(Self::label_parts(labels));
+        if !statuses.is_empty() {
+            parts.push(json!({"state": {"type": {"in": statuses.iter().flat_map(workflow_state_types).collect::<Vec<_>>()}}}));
+        }
+        match project {
+            ProjectFilter::Orphans => parts.push(json!({"project": {"null": true}})),
+            ProjectFilter::Is(id) => parts.push(json!({"project": {"id": {"eq": id.0}}})),
+            _ => {}
+        }
+        Self::narrowed(parts)
+    }
+    /// The filter this source sends to `projects(filter:)`.
+    ///
+    /// Two members differ from [`Self::issue_filter`] and both are Linear's doing; see that
+    /// builder for why they are written out twice rather than shared.
+    ///
+    /// **A project has no `team`.** It has the teams it is accessible from, and
+    /// `ProjectFilter.accessibleTeams` is a `TeamCollectionFilter`, so the same team key
+    /// reaches it under `some:`. `leadTeam` is the other team-shaped member and is a
+    /// different set — one designated team rather than every team the project is in — so
+    /// narrowing by it would drop projects the configured team really does hold.
+    ///
+    /// **A project's status is not an issue's state, and they do not even share a
+    /// vocabulary.** An issue's is `WorkflowState`, reached through `IssueFilter.state`,
+    /// and its `type` is `backlog`, `unstarted`, `started`, `completed`, `canceled` or
+    /// `triage`. A project's is `ProjectStatus`, reached through `ProjectFilter.status` —
+    /// `ProjectFilter.state` exists and is *not* it: that member is a bare
+    /// `StringComparator` over a different thing — and its `type` is the `ProjectStatusType`
+    /// enum, `backlog`, `planned`, `started`, `paused`, `completed`, `canceled`. So the
+    /// nearest thing to an issue's `unstarted` is a project's `planned`, and `paused` has no
+    /// issue counterpart at all. [`project_status_types`] is that vocabulary and
+    /// [`workflow_state_types`] is the other; sending either one's words to the other's
+    /// connection matches nothing while refusing nothing, which is the worst way to be
+    /// wrong.
+    fn project_filter(
+        &self,
+        labels: &onetaskgraph_plugin_api::LabelFilter,
+        statuses: &[StatusCategory],
+    ) -> Value {
+        let mut parts = Vec::new();
+        if let Some(team) = &self.team {
+            parts.push(json!({"accessibleTeams": {"some": {"key": {"eqIgnoreCase": team.0}}}}));
+        }
+        parts.extend(Self::label_parts(labels));
+        if !statuses.is_empty() {
+            parts.push(json!({"status": {"type": {"in": statuses.iter().flat_map(project_status_types).collect::<Vec<_>>()}}}));
+        }
+        Self::narrowed(parts)
     }
     // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
@@ -1138,7 +1233,7 @@ impl TaskSource for LinearSource {
         query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
-        let d=self.send(ISSUES,json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.filter(&query.labels,&query.statuses,Some(&query.project))})).await?;
+        let d=self.send(ISSUES,json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(&query.labels,&query.statuses,&query.project)})).await?;
         connection(&d, "issues", map_task)
     }
     async fn query_projects(
@@ -1147,7 +1242,7 @@ impl TaskSource for LinearSource {
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         // llmlint: ignore[changed_behavior_has_e2e] The shared CLI journey `every_complete_dataset_source_filters_projects_by_label_status_and_text` asserts that Linear status filtering returns only P-2 and reports native pushdown; this lower-level HTTP test separately asserts the serialized `started` predicate.
-        let d=self.send(PROJECTS,json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.filter(&query.labels,&query.statuses,None)})).await?;
+        let d=self.send(PROJECTS,json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.project_filter(&query.labels,&query.statuses)})).await?;
         connection(&d, "projects", map_project)
     }
     async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
@@ -1548,11 +1643,13 @@ fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Pag
 }
 
 // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear's workflow-state strings follow the accepted 2026-08-24 contract; its authoritative enum is exposed only through an authenticated unversioned explorer, while real-HTTP tests cover every serialized and parsed value.
-fn linear_statuses(s: &StatusCategory) -> Vec<&'static str> {
+/// A category as `WorkflowState.type` spells it — the vocabulary an **issue**'s state has.
+///
+/// Linear's workflow states are triage, backlog, unstarted, started, completed and
+/// canceled. None of them is a draft, so `Draft` narrows to nothing exactly as `Unknown`
+/// does rather than filtering on a state Linear does not have.
+fn workflow_state_types(s: &StatusCategory) -> Vec<&'static str> {
     match s {
-        // Linear's workflow states are triage, backlog, unstarted, started, completed and
-        // canceled; none of them is a draft, so this narrows to nothing exactly as
-        // `Unknown` does rather than filtering on a state Linear does not have.
         StatusCategory::Draft => vec![],
         StatusCategory::Backlog => vec!["backlog"],
         StatusCategory::Todo => vec!["unstarted"],
@@ -1562,12 +1659,40 @@ fn linear_statuses(s: &StatusCategory) -> Vec<&'static str> {
         StatusCategory::Unknown => vec![],
     }
 }
+/// A category as `ProjectStatus.type` spells it — a **different** vocabulary, and a
+/// different enum: Linear declares that field `ProjectStatusType!`, whose members are
+/// backlog, planned, started, paused, completed and canceled.
+///
+/// Two of them have no issue counterpart and are why this cannot be the function above.
+/// `planned` is where `unstarted` would be, so it is what `Todo` narrows to; a project
+/// filtered with `unstarted` matches nothing and is refused by nothing, which is how this
+/// went unnoticed. And `paused` is a project that has started and is neither finished nor
+/// cancelled, so it reads as in progress — the same reading [`status`] gives it, which is
+/// what keeps this narrowing and that mapping the same claim rather than two.
+fn project_status_types(s: &StatusCategory) -> Vec<&'static str> {
+    match s {
+        StatusCategory::Draft => vec![],
+        StatusCategory::Backlog => vec!["backlog"],
+        StatusCategory::Todo => vec!["planned"],
+        StatusCategory::InProgress => vec!["started", "paused"],
+        StatusCategory::Done => vec!["completed"],
+        StatusCategory::Cancelled => vec!["canceled"],
+        StatusCategory::Unknown => vec![],
+    }
+}
+/// The category a Linear status name and type normalise to, at either level.
+///
+/// One mapper for both vocabularies, because the two are disjoint where they differ: no
+/// issue is ever `planned` or `paused`, and no project is ever `unstarted` or `triage`. It
+/// is the inverse of [`workflow_state_types`] and [`project_status_types`] together, and
+/// has to stay so: a category this reports and that filter cannot ask for is capability
+/// rule 1 broken, and the row would go missing rather than be refused.
 fn status(v: &Value) -> Result<Status, SourceError> {
     let name = str_at(v, "name")?.into();
     let category = match str_at(v, "type")? {
         "backlog" => StatusCategory::Backlog,
-        "unstarted" => StatusCategory::Todo,
-        "started" => StatusCategory::InProgress,
+        "unstarted" | "planned" => StatusCategory::Todo,
+        "started" | "paused" => StatusCategory::InProgress,
         "completed" => StatusCategory::Done,
         "canceled" => StatusCategory::Cancelled,
         _ => StatusCategory::Unknown,

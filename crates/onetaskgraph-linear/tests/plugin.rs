@@ -1,10 +1,10 @@
 //! Public factory and real-HTTP fixture journeys.
 
 use onetaskgraph_plugin_api::{
-    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Label, LabelFilter, Location, PageRequest, Project, ProjectFilter,
-    ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, StatusCategory, Task,
-    TaskQuery, TaskSource,
+    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
+    ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId, PageRequest, Project,
+    ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin,
+    StatusCategory, Task, TaskQuery, TaskSource,
 };
 use secrecy::SecretString;
 use std::{
@@ -559,6 +559,431 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
             selection_set,
         );
     }
+}
+
+/// Answer every request with the same superset, and record what was asked.
+///
+/// One response object carrying every root this source can select, because the source
+/// reads the one key it asked for and ignores the rest — so a single constant stands in
+/// for the whole API, and driving the surface needs no scripted queue that would have to
+/// be kept in step with the order of the calls.
+fn superset_server() -> (String, mpsc::Receiver<String>) {
+    let page = |nodes: serde_json::Value| serde_json::json!({"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    // One relation at each end of each root, so the write path's "delete what is there
+    // before writing what was asked for" reaches the two relation deletes: an operation
+    // this never provokes is an operation this never checks. Each root carries its own
+    // vocabulary, because a project relation is typed `dependency` where an issue's is
+    // `blocks` and each read accepts only its own.
+    let relations = |kind: &str, far: &str, near: &str, id: &str| {
+        serde_json::json!({"nodes":[{"id":id,"type":kind,(far):{"id":"OTHER"},(near):{"id":"OTHER"}}],
+                           "pageInfo":{"hasNextPage":false,"endCursor":null}})
+    };
+    let body = serde_json::json!({"data":{
+        "viewer": {"id":"U"},
+        "issue": {"id":"I","title":"issue","description":null,"url":null,"createdAt":null,
+                  "updatedAt":null,"state":{"name":"Todo","type":"unstarted"},
+                  "labels":{"nodes":[]},"project":null,
+                  "relations":relations("blocks","relatedIssue","issue","IR"),
+                  "inverseRelations":relations("blocks","relatedIssue","issue","IR2")},
+        "project": {"id":"P","name":"project","description":null,"url":null,"createdAt":null,
+                    "updatedAt":null,"status":{"name":"Todo","type":"planned"},
+                    "labels":{"nodes":[]},
+                    "relations":relations("dependency","relatedProject","project","PR"),
+                    "inverseRelations":relations("dependency","relatedProject","project","PR2")},
+        "document": {"id":"D","title":"document","content":null,"url":null,"createdAt":null,
+                     "updatedAt":null,"project":null},
+        "issues": page(serde_json::json!([])),
+        "projects": page(serde_json::json!([])),
+        "documents": page(serde_json::json!([])),
+        "issueLabels": page(serde_json::json!([{"id":"L","name":"bug","color":null}])),
+        "projectLabels": {"nodes":[{"id":"PL","name":"roadmap","color":null}]},
+        "teams": {"nodes":[{"id":"TEAM"}]},
+        "workflowStates": {"nodes":[{"id":"STATE"}]},
+        "projectStatuses": {"nodes":[{"id":"STATUS","name":"Todo"}]},
+        "issueCreate": {"success":true,"issue":{"id":"I"}},
+        "issueUpdate": {"success":true,"issue":{"id":"I"}},
+        "projectCreate": {"success":true,"project":{"id":"P"}},
+        "projectUpdate": {"success":true,"project":{"id":"P"}},
+        "documentCreate": {"success":true,"document":{"id":"D"}},
+        "documentUpdate": {"success":true,"document":{"id":"D"}},
+        "issueRelationCreate": {"success":true,"issueRelation":{"id":"R"}},
+        "projectRelationCreate": {"success":true,"projectRelation":{"id":"R"}},
+        "issueRelationDelete": {"success":true},
+        "projectRelationDelete": {"success":true},
+        "issueDelete": {"success":true},
+        "projectDelete": {"success":true},
+        "documentDelete": {"success":true},
+    }})
+    .to_string();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut bytes = vec![0; 65536];
+            let Ok(n) = stream.read(&mut bytes) else {
+                break;
+            };
+            bytes.truncate(n);
+            if tx
+                .send(String::from_utf8_lossy(&bytes).into_owned())
+                .is_err()
+            {
+                break;
+            }
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (format!("http://{addr}/graphql"), rx)
+}
+
+/// Every variables object this source builds at runtime, against the pinned schema.
+///
+/// **This is the check the two above could not be.** They parse the production documents,
+/// and a filter is not in a document: it is built field by field at runtime and handed over
+/// whole as `$filter`. So `IssueFilter` and `ProjectFilter` sat in the pinned schema
+/// carrying nothing but `and`/`or` while this source sent a `team` and an issue-shaped
+/// `state` into `projects(filter:)`, and Linear was the only thing that ever read them —
+/// one refusal per round trip, one round trip per release. Every write input is built the
+/// same way and had the same hole.
+///
+/// So this drives the whole surface against a server that answers everything, records what
+/// really went out, and walks each variables object against the pinned type of the argument
+/// it stands at: every key against that input type's members, every list against its
+/// element type, every enum value against its members, every scalar against its kind. A
+/// member Linear does not have fails here, offline, in the pass that introduces it.
+#[tokio::test]
+async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema() {
+    use graphql_parser::{query, schema};
+    let (endpoint, wire) = superset_server();
+    let source = writable_source(&endpoint);
+    let request = PageRequest {
+        cursor: Some(Cursor("cursor".into())),
+        limit: 5,
+    };
+    let labels = LabelFilter {
+        any_of: vec!["bug".into(), "chore".into()],
+        all_of: vec!["core".into()],
+        none_of: vec!["wontfix".into()],
+    };
+    let statuses = vec![
+        StatusCategory::Backlog,
+        StatusCategory::Todo,
+        StatusCategory::InProgress,
+        StatusCategory::Done,
+        StatusCategory::Cancelled,
+    ];
+    source.health().await.unwrap();
+    source.get_task(&"I".into()).await.unwrap();
+    source.get_project(&"P".into()).await.unwrap();
+    source.get_document(&"D".into()).await.unwrap();
+    source.labels(&request).await.unwrap();
+    for project in [
+        ProjectFilter::Any,
+        ProjectFilter::Orphans,
+        ProjectFilter::Is("P-1".into()),
+    ] {
+        source
+            .query_tasks(
+                &TaskQuery {
+                    labels: labels.clone(),
+                    statuses: statuses.clone(),
+                    project: project.clone(),
+                    ..TaskQuery::default()
+                },
+                &request,
+            )
+            .await
+            .unwrap();
+        source
+            .query_documents(
+                &DocumentQuery {
+                    labels: labels.clone(),
+                    project,
+                    ..DocumentQuery::default()
+                },
+                &request,
+            )
+            .await
+            .unwrap();
+    }
+    source
+        .query_projects(
+            &ProjectQuery {
+                labels: labels.clone(),
+                statuses: statuses.clone(),
+                ..ProjectQuery::default()
+            },
+            &request,
+        )
+        .await
+        .unwrap();
+    for direction in [Direction::DependsOn, Direction::DependedOnBy] {
+        source
+            .task_dependencies(&"I".into(), direction, &request)
+            .await
+            .unwrap();
+        source
+            .project_dependencies(&"P".into(), direction, &request)
+            .await
+            .unwrap();
+    }
+    let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:T","title":"task","content":"body","status":{"category":"todo","name":"Todo"},"labels":[{"id":"old","name":"bug","color":null}],"project":"P","repositories":["github.com/acme/work"],"metadata":{"n":1}})).unwrap();
+    let project: Project = serde_json::from_value(serde_json::json!({"id":"authored:P","title":"project","content":"body","status":{"category":"todo","name":"Todo"},"labels":[{"id":"old","name":"roadmap","color":null}],"repositories":[],"metadata":{}})).unwrap();
+    let document: Document = serde_json::from_value(serde_json::json!({"id":"authored:D","title":"document","content":"body","project":"P","labels":[],"repositories":[],"metadata":{}})).unwrap();
+    let task_edge = DependencyEdge {
+        from: DependencyEndpoint::new("authored:T".into(), ItemKind::Task).unwrap(),
+        to: DependencyEndpoint::new("work:I-FAR".into(), ItemKind::Task).unwrap(),
+        kind: DependencyKind::Blocks,
+    };
+    let project_edge = DependencyEdge {
+        from: DependencyEndpoint::new("authored:P".into(), ItemKind::Project).unwrap(),
+        to: DependencyEndpoint::new("work:P-FAR".into(), ItemKind::Project).unwrap(),
+        kind: DependencyKind::Blocks,
+    };
+    for target in [None, Some(NativeId::from("I"))] {
+        source
+            .write_task(&ItemWrite {
+                target,
+                item: task.clone(),
+                depends_on: vec![task_edge.clone()],
+            })
+            .await
+            .unwrap();
+    }
+    for target in [None, Some(NativeId::from("P"))] {
+        source
+            .write_project(&ItemWrite {
+                target,
+                item: project.clone(),
+                depends_on: vec![project_edge.clone()],
+            })
+            .await
+            .unwrap();
+    }
+    for target in [None, Some(NativeId::from("D"))] {
+        source
+            .write_document(&ItemWrite {
+                target,
+                item: document.clone(),
+                depends_on: vec![],
+            })
+            .await
+            .unwrap();
+    }
+    source.delete_task(&"I".into()).await.unwrap();
+    source.delete_project(&"P".into()).await.unwrap();
+    source.delete_document(&"D".into()).await.unwrap();
+
+    let pinned = schema::parse_schema::<String>(include_str!("fixtures/schema.graphql")).unwrap();
+    let mut inputs = std::collections::HashMap::new();
+    let mut enums = std::collections::HashMap::new();
+    let mut roots = std::collections::HashMap::new();
+    for definition in &pinned.definitions {
+        match definition {
+            schema::Definition::TypeDefinition(schema::TypeDefinition::InputObject(input)) => {
+                inputs.insert(input.name.as_str(), input);
+            }
+            schema::Definition::TypeDefinition(schema::TypeDefinition::Enum(kind)) => {
+                enums.insert(
+                    kind.name.as_str(),
+                    kind.values
+                        .iter()
+                        .map(|value| value.name.as_str())
+                        .collect::<Vec<_>>(),
+                );
+            }
+            schema::Definition::TypeDefinition(schema::TypeDefinition::Object(object))
+                if object.name == "Query" || object.name == "Mutation" =>
+            {
+                roots.insert(object.name.as_str(), object);
+            }
+            _ => {}
+        }
+    }
+    /// Whether `value` is admissible where the pinned schema declares `expected`.
+    fn conforms(
+        inputs: &std::collections::HashMap<&str, &schema::InputObjectType<'_, String>>,
+        enums: &std::collections::HashMap<&str, Vec<&str>>,
+        expected: &schema::Type<'_, String>,
+        value: &serde_json::Value,
+        path: &str,
+    ) {
+        match expected {
+            schema::Type::NonNullType(inner) => {
+                assert!(
+                    !value.is_null(),
+                    "{path} is null where the schema requires a value"
+                );
+                conforms(inputs, enums, inner, value, path);
+            }
+            _ if value.is_null() => {}
+            schema::Type::ListType(inner) => {
+                let items = value
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{path} is {value} where the schema wants a list"));
+                for (index, item) in items.iter().enumerate() {
+                    conforms(inputs, enums, inner, item, &format!("{path}[{index}]"));
+                }
+            }
+            schema::Type::NamedType(name) => {
+                if let Some(input) = inputs.get(name.as_str()) {
+                    let fields = value.as_object().unwrap_or_else(|| {
+                        panic!("{path} is {value} where the schema wants a {name}")
+                    });
+                    for (key, value) in fields {
+                        let field = input
+                            .fields
+                            .iter()
+                            .find(|field| field.name == *key)
+                            .unwrap_or_else(|| {
+                                panic!("{path}.{key}: the pinned {name} has no member {key}")
+                            });
+                        conforms(
+                            inputs,
+                            enums,
+                            &field.value_type,
+                            value,
+                            &format!("{path}.{key}"),
+                        );
+                    }
+                    return;
+                }
+                if let Some(members) = enums.get(name.as_str()) {
+                    let member = value
+                        .as_str()
+                        .unwrap_or_else(|| panic!("{path} is {value} where {name} wants a member"));
+                    assert!(
+                        members.contains(&member),
+                        "{path} is {member:?}, and {name} has only {members:?}"
+                    );
+                    return;
+                }
+                let ok = match name.as_str() {
+                    "String" | "ID" | "DateTime" => value.is_string(),
+                    "Boolean" => value.is_boolean(),
+                    "Int" | "Float" => value.is_number(),
+                    // A type this pin does not carry is one nothing can be checked against,
+                    // which is the state this whole check exists to end.
+                    _ => panic!("{path}: the pinned schema has no type {name}"),
+                };
+                assert!(ok, "{path} is {value} where the schema wants a {name}");
+            }
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    // Drained rather than iterated: the server answers forever, so its sender never hangs
+    // up and `iter` would block on a request that is never coming. Every response was read
+    // before the last call above returned, so everything sent is already in the channel.
+    let requests = wire.try_iter().collect::<Vec<_>>();
+    assert!(!requests.is_empty(), "the surface was driven");
+    for request in &requests {
+        let body = request
+            .split_once("\r\n\r\n")
+            .expect("the recorded request carries a body")
+            .1;
+        let body = serde_json::from_str::<serde_json::Value>(body).expect("the body is JSON");
+        let document = query::parse_query::<String>(body["query"].as_str().unwrap()).unwrap();
+        let (root_name, selection, declared) = match &document.definitions[0] {
+            query::Definition::Operation(query::OperationDefinition::Query(operation)) => (
+                "Query",
+                &operation.selection_set,
+                &operation.variable_definitions,
+            ),
+            query::Definition::Operation(query::OperationDefinition::Mutation(operation)) => (
+                "Mutation",
+                &operation.selection_set,
+                &operation.variable_definitions,
+            ),
+            _ => panic!("a production document is an explicit query or mutation"),
+        };
+        let query::Selection::Field(root) = &selection.items[0] else {
+            panic!("an operation has a root field")
+        };
+        seen.insert(root.name.clone());
+        let root_field = roots[root_name]
+            .fields
+            .iter()
+            .find(|field| field.name == root.name)
+            .unwrap_or_else(|| panic!("the pinned schema lacks {root_name}.{}", root.name));
+        for (argument_name, value) in &root.arguments {
+            let query::Value::Variable(variable) = value else {
+                // A literal argument is in the document, so the two checks above read it.
+                continue;
+            };
+            let location = format!("{}({argument_name}:)", root.name);
+            assert!(
+                declared.iter().any(|candidate| candidate.name == *variable),
+                "{location} stands on ${variable}, which nothing declares"
+            );
+            let argument = root_field
+                .arguments
+                .iter()
+                .find(|argument| argument.name == *argument_name)
+                .unwrap_or_else(|| panic!("{root_name}.{} takes no {argument_name}", root.name));
+            let sent = body["variables"]
+                .get(variable.as_str())
+                .unwrap_or_else(|| panic!("{location} was declared and never sent"));
+            conforms(&inputs, &enums, &argument.value_type, sent, &location);
+        }
+    }
+    // The surface, not a sample of it: every operation this source can send has to have
+    // been driven, because a variables object nothing sent is one nothing checked.
+    let mut expected = std::collections::BTreeSet::new();
+    for document in [
+        onetaskgraph_linear::graphql::VIEWER,
+        onetaskgraph_linear::graphql::ISSUE,
+        onetaskgraph_linear::graphql::PROJECT,
+        onetaskgraph_linear::graphql::DOCUMENT,
+        onetaskgraph_linear::graphql::ISSUES,
+        onetaskgraph_linear::graphql::PROJECTS,
+        onetaskgraph_linear::graphql::DOCUMENTS,
+        onetaskgraph_linear::graphql::LABELS,
+        onetaskgraph_linear::graphql::ISSUE_RELATIONS,
+        onetaskgraph_linear::graphql::PROJECT_RELATIONS,
+        onetaskgraph_linear::graphql::TEAM,
+        onetaskgraph_linear::graphql::ISSUE_STATE,
+        onetaskgraph_linear::graphql::PROJECT_STATUS,
+        onetaskgraph_linear::graphql::ISSUE_LABEL,
+        onetaskgraph_linear::graphql::PROJECT_LABEL,
+        onetaskgraph_linear::graphql::ISSUE_CREATE,
+        onetaskgraph_linear::graphql::ISSUE_UPDATE,
+        onetaskgraph_linear::graphql::PROJECT_CREATE,
+        onetaskgraph_linear::graphql::PROJECT_UPDATE,
+        onetaskgraph_linear::graphql::ISSUE_RELATION_CREATE,
+        onetaskgraph_linear::graphql::PROJECT_RELATION_CREATE,
+        onetaskgraph_linear::graphql::ISSUE_RELATION_DELETE,
+        onetaskgraph_linear::graphql::PROJECT_RELATION_DELETE,
+        onetaskgraph_linear::graphql::ISSUE_DELETE,
+        onetaskgraph_linear::graphql::PROJECT_DELETE,
+        onetaskgraph_linear::graphql::DOCUMENT_CREATE,
+        onetaskgraph_linear::graphql::DOCUMENT_UPDATE,
+        onetaskgraph_linear::graphql::DOCUMENT_DELETE,
+    ] {
+        let parsed = query::parse_query::<String>(document).unwrap();
+        let selection = match &parsed.definitions[0] {
+            query::Definition::Operation(query::OperationDefinition::Query(operation)) => {
+                &operation.selection_set
+            }
+            query::Definition::Operation(query::OperationDefinition::Mutation(operation)) => {
+                &operation.selection_set
+            }
+            _ => panic!("a production document is an explicit query or mutation"),
+        };
+        let query::Selection::Field(root) = &selection.items[0] else {
+            panic!("an operation has a root field")
+        };
+        expected.insert(root.name.clone());
+    }
+    assert_eq!(
+        seen, expected,
+        "every operation this source can send has to reach this check"
+    );
 }
 
 #[tokio::test]
