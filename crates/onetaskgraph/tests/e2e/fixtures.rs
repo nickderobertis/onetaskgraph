@@ -2287,9 +2287,15 @@ fn linear_write_relation(
     // relation's ordering type is `dependency`, an issue relation's is `blocks`. This
     // responder refuses the other root's word for exactly that reason, so a write that
     // sent one would fail here rather than round-trip through a fixture that took it.
+    //
+    // And `related` is the issue vocabulary alone. Asked for a project relation typed
+    // `related` on 2026-09-04 the real API refused it with `Argument Validation Error` and
+    // `type must be one of the following values: dependency`, so this responder refuses it
+    // too — the plugin now says so itself before the write, and a fixture that took the
+    // value anyway would be the one place that never noticed if it stopped.
     let kind = match (project, wire) {
         (true, "dependency") | (false, "blocks") => "blocks",
-        (_, "related") => "related",
+        (false, "related") => "related",
         _ => return Err("undocumented relation type"),
     };
     // Linear anchors a project relation at both ends and requires both, so this responder

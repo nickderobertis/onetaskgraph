@@ -81,36 +81,63 @@ carries anchors at all. So `DependencyKind::Blocks` is written as `dependency` a
 project level and `blocks` at the issue level, and each level's read accepts only its own
 word.
 
-Two things about that are **not** settled, and both are written down beside the code rather
-than left to be rediscovered:
-
-- **Whether Linear also constrains the anchor pair by position.** Nothing offline can
-  decide whether the validator requires `anchorType` itself to be `end`, or only that the
-  pair describe an end -> start line. This source sends the second reading. If the pair is
-  constrained by position, the ids have to swap with it — and `relation_page`'s reading of
-  `relations` against `inverseRelations` has to swap too, or the source stops reading back
-  what it wrote.
-- **Whether a project relation may be typed `related` at all.** `DependencyKind::Related`
-  still sends `related` rather than being refused locally: the read-back above is
-  second-hand and records what Linear refused on a relation it was asked to *create* as a
-  dependency, and withdrawing a capability this source has on that evidence would claim
-  more than the evidence carries.
-
-Both are now one live run from being settled, because a Linear refusal carries Linear's own
-`extensions` alongside its `message`. The message is a category name — `Argument Validation
-Error` named neither the field nor the value — and `extensions` is where the validator says
-which property it rejected.
-
 **That live run happened, and the project relation was accepted.** On **2026-09-04** the
 required check reached the live journey again with `dependency` and both anchors, and it no
 longer failed at a project write: it got past `write_project`'s relation — the only write in
 the journey that sends `projectRelationCreate` — and failed two writes later, at the first
 `write_task`, for an unrelated reason recorded below. So `dependency` is the type Linear
 accepts for a project relation, and `start`/`end` are values it accepts for the two anchors.
-What that run does **not** settle is the first bullet above: an accepted anchor pair is not
-a correctly *oriented* one, because Linear takes a backwards dependency as readily as the
-right one. The orientation still rests on the reasoning under "This source anchors by role,
-not by position" below, and on nothing observed.
+
+**Two things that run left open were then settled against the real API on the same day**, by
+a probe that created and deleted relations between two scratch projects on the team
+`LINEAR_WRITE_TEAM` names. It is written down here because reproducing it costs a credential
+and a workspace, and because acceptance alone could not have answered either question.
+
+- **Linear's `type` for a project relation has exactly one member, and this is Linear's own
+  enumeration of it.** `blocks`, `dependsOn`, `related` and `DEPENDENCY` were each refused
+  with `Argument Validation Error` and `extensions.validationErrors[0]` reading
+  `property: "type"`, `constraints: {"isEnum": "type must be one of the following values:
+  dependency"}`; `dependency` was accepted. The same probe settles the anchors from the same
+  place: `project` in both anchors was refused with `anchorType must be one of the following
+  values: start, end, milestone`, which is the vocabulary this file had derived from
+  documentation and published callers, now stated by the validator itself. `milestone`
+  without a milestone id was refused separately with `A milestone is required for a
+  dependency with a milestone anchor.` — the one anchor value this source will not send,
+  because it sends no milestone id.
+
+  So **a project relation may not be typed `related`**, and `DependencyKind::Related` is now
+  refused by this source at the project level, before the write, naming both ends and what
+  Linear does accept. That withdraws nothing at the issue level, where
+  `IssueRelationCreateInput` really does take `related`. It also settles the read: a project
+  relation typed `related` is a shape Linear cannot hold, so `relation_page` refuses one
+  rather than reading it as an edge this source could never have written.
+
+- **The anchors carry the direction, and the two id slots do not.** Linear stores whatever
+  pair it is given and reads a backwards dependency as readily as the right one, so
+  acceptance says nothing and only Linear's own reading of a stored relation does. Linear
+  publishes that reading as server-side filters — `ProjectFilter.hasBlockingRelations`
+  ("projects which are blocking") and `hasBlockedByRelations` ("projects which are blocked"),
+  which the workspace computes rather than echoes. Three relations between the same two
+  scratch projects, each written and then read back through those filters:
+
+  | `projectId` | `anchorType` | `relatedProjectId` | `relatedAnchorType` | blocked | blocking |
+  | ----------- | ------------ | ------------------ | ------------------- | ------- | -------- |
+  | A           | `start`      | B                  | `end`               | A       | B        |
+  | A           | `end`        | B                  | `start`             | B       | A        |
+  | B           | `end`        | A                  | `start`             | A       | B        |
+
+  Rows one and three are the same relation with the ids exchanged and the anchors exchanged
+  with them, and Linear reads both the same way; rows one and two hold the ids still and
+  exchange only the anchors, and Linear's reading flips. The project whose anchor is `start`
+  is the one that waits, whichever slot it sits in. Row one is what this source sends —
+  `near`, the item that depends, in `projectId` with `start` — so the pair it was already
+  sending is the correctly oriented one, and the reasoning under "This source anchors by
+  role, not by position" below is now measured rather than argued. The deprecated
+  `hasDependsOnRelations` and `hasDependedOnByRelations`, named in this product's own
+  vocabulary, agreed with the blocked and blocking columns in every row.
+
+  Nothing about `relations` against `inverseRelations` had to move with it: the ids stayed
+  where they were, so this source still reads back what it writes.
 
 **A filter's `team` is an `ID`, not a `String`, and that is what the same run failed on
 next.** The live journey's first task write was refused with HTTP 400 and
@@ -138,7 +165,9 @@ in `projectId`; this source puts the item that depends there, so it sends the mi
 `start` on the near end, `end` on the far end it waits on. Copying the measured pair across
 by position instead would state the dependency backwards, and Linear takes a backwards
 dependency as readily as the right one, so that error would land in the workspace rather
-than be refused at the write.
+than be refused at the write. The table above is what establishes that, and it is the only
+kind of evidence that could: a write refused proves a spelling, and only Linear's own
+`hasBlockedByRelations` proves a direction.
 
 The contract test parses every production operation against the pinned
 field and argument types and recursively validates each selected response-fixture shape.

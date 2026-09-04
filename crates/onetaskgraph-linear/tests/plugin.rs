@@ -712,7 +712,7 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
     let project_edge = DependencyEdge {
         from: DependencyEndpoint::new("authored:P".into(), ItemKind::Project).unwrap(),
         to: DependencyEndpoint::new("authored:PFAR".into(), ItemKind::Project).unwrap(),
-        kind: DependencyKind::Related,
+        kind: DependencyKind::Blocks,
     };
     assert_eq!(
         writable
@@ -726,19 +726,12 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
             .0,
         "P-NEW"
     );
-    // The second write carries the *ordering* kind, which Linear spells differently at
-    // the project level than at the issue level, so both project relation types are
-    // written here and both are asserted below.
-    let ordering_edge = DependencyEdge {
-        kind: DependencyKind::Blocks,
-        ..project_edge
-    };
     assert_eq!(
         writable
             .write_project(&ItemWrite {
                 target: Some("P-NEW".into()),
                 item: project,
-                depends_on: vec![ordering_edge]
+                depends_on: vec![project_edge]
             })
             .await
             .unwrap()
@@ -772,6 +765,13 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
     // `type` is asserted for the same reason and by the same evidence — `blocks` there is
     // what the live lane was refused for next, with `Argument Validation Error`, and a
     // project dependency is typed `dependency`.
+    //
+    // The anchor *pair* is asserted with the ids because that pair is what carries the
+    // direction: measured against the real API on 2026-09-04, the project whose anchor is
+    // `start` is the one Linear reports as blocked, whichever id slot it sits in. This
+    // source puts the item that depends in `projectId`, so `start` belongs there and
+    // exchanging the two anchors would state every dependency backwards in the workspace
+    // without Linear refusing a thing. `src/lib.rs` records the measurement.
     let relation_inputs = requests
         .iter()
         .filter(|request| request.contains(onetaskgraph_linear::graphql::PROJECT_RELATION_CREATE))
@@ -791,7 +791,7 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
             serde_json::json!({
                 "projectId": "P-NEW",
                 "relatedProjectId": "P-FAR",
-                "type": "related",
+                "type": "dependency",
                 "anchorType": "start",
                 "relatedAnchorType": "end",
             }),
@@ -822,6 +822,83 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         })
         .expect("an unresolved same-source origin remains in recorded dependency metadata");
     assert!(unresolved_update.contains("onetaskgraph.depends_on"));
+}
+
+/// Linear types every project relation `dependency`, and that is an ordering.
+///
+/// Asked for one typed `related` on 2026-09-04 the real API answered
+/// `Argument Validation Error` with
+/// `constraints: {"isEnum": "type must be one of the following values: dependency"}`, so
+/// this source says so itself rather than sending a value that cannot land. It says so
+/// *before* the write, which is what this asserts alongside the message: the server here
+/// answers nothing at all, so a refusal that had let the project be created first would
+/// hang on the create instead of returning.
+#[tokio::test]
+async fn an_unordered_project_edge_is_refused_before_anything_is_written_over_real_http() {
+    let (endpoint, wire) = response_server(Vec::new());
+    let project: Project = serde_json::from_value(serde_json::json!({"id":"authored:P","title":"visible project","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"repositories":[],"metadata":{}})).unwrap();
+    let refusal = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project,
+            depends_on: vec![DependencyEdge {
+                from: DependencyEndpoint::new("authored:P".into(), ItemKind::Project).unwrap(),
+                to: DependencyEndpoint::new("work:P-FAR".into(), ItemKind::Project).unwrap(),
+                kind: DependencyKind::Related,
+            }],
+        })
+        .await
+        .expect_err("Linear has no unordered project relation to write this into");
+    assert!(
+        matches!(&refusal, SourceError::Refused { message }
+            if message.contains("unordered dependency between projects")
+                && message.contains("`dependency`")
+                && message.contains("authored:P")
+                && message.contains("work:P-FAR")),
+        "the refusal names both ends and what Linear does accept: {refusal:?}"
+    );
+    assert!(
+        wire.try_iter().next().is_none(),
+        "the refusal reaches Linear with no request at all"
+    );
+}
+
+/// An issue relation keeps `related`, because that vocabulary really does have it.
+#[tokio::test]
+async fn an_unordered_task_edge_is_still_written_as_related_over_real_http() {
+    let page = |root: &str, nodes: serde_json::Value| serde_json::json!({(root):{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}});
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
+        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
+    ]);
+    let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:T","title":"task","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"repositories":[],"metadata":{}})).unwrap();
+    writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task,
+            depends_on: vec![DependencyEdge {
+                from: DependencyEndpoint::new("authored:T".into(), ItemKind::Task).unwrap(),
+                to: DependencyEndpoint::new("work:I-FAR".into(), ItemKind::Task).unwrap(),
+                kind: DependencyKind::Related,
+            }],
+        })
+        .await
+        .expect("an issue relation may be unordered");
+    let relation = wire
+        .iter()
+        .find(|request| request.contains(onetaskgraph_linear::graphql::ISSUE_RELATION_CREATE))
+        .expect("the issue relation was written");
+    let body = relation
+        .split_once("\r\n\r\n")
+        .expect("the recorded request carries a body")
+        .1;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(body).expect("the body is JSON")["variables"]["input"],
+        serde_json::json!({"issueId":"I-NEW","relatedIssueId":"I-FAR","type":"related"})
+    );
 }
 
 #[tokio::test]
@@ -1751,6 +1828,48 @@ async fn a_status_linear_refuses_under_carries_what_linear_said() {
     );
 }
 
+/// A validation refusal leads with Linear's own sentence, because that is what gets cut.
+///
+/// The envelope replayed here is the shape the real API answered a `projectRelationCreate`
+/// with on 2026-09-04, identifiers replaced by invented ones of the same length: HTTP 200,
+/// a `message` that is only the category name, and — after a `validationErrors` echoing
+/// the whole rejected input back — the sentence naming the field and the values it would
+/// have taken. That envelope is longer than the cut, which is asserted here too, so the
+/// question is which part of it survives. The assertion is therefore not that the message
+/// carries the sentence but that it carries it *first*: rendered raw the sentence lands
+/// ahead of the echo only because this build sorts object keys and
+/// `userPresentableMessage` sorts before `validationErrors`, which is a fact about
+/// spelling rather than a decision anyone made.
+#[tokio::test]
+async fn a_validation_refusal_leads_with_the_sentence_that_names_the_field() {
+    let (endpoint, _) = server(
+        "200 OK",
+        "",
+        r#"{"errors":[{"message":"Argument Validation Error","path":["projectRelationCreate"],"extensions":{"code":"INVALID_INPUT","validationErrors":[{"target":{"type":"blocks","projectId":"11111111-2222-4333-8444-555555555555","anchorType":"start","relatedProjectId":"66666666-7777-4888-8999-aaaaaaaaaaaa","relatedAnchorType":"end"},"value":"blocks","property":"type","children":[],"constraints":{"isEnum":"type must be one of the following values: dependency"}}],"type":"invalid input","userError":true,"userPresentableMessage":"type must be one of the following values: dependency."}}]}"#,
+    );
+    let refused = source(&endpoint).health().await.unwrap_err();
+    let SourceError::Refused { message } = refused else {
+        panic!("a GraphQL error envelope is a refusal: {refused:?}");
+    };
+    let sentence = "type must be one of the following values: dependency.";
+    let at = message
+        .find(sentence)
+        .unwrap_or_else(|| panic!("Linear's own sentence reaches the caller: {message}"));
+    assert!(
+        at < "Argument Validation Error: ".len() + 1,
+        "and reaches it first, ahead of the echoed input: {message}"
+    );
+    assert!(
+        message.starts_with("Argument Validation Error"),
+        "the category name Linear led with is still named: {message}"
+    );
+    assert!(
+        message.ends_with('\u{2026}'),
+        "the envelope is long enough to be cut, which is why leading with the sentence \
+         is what carries it: {message}"
+    );
+}
+
 #[tokio::test]
 async fn rate_limit_carries_retry_hint() {
     let (endpoint, _) = server("429 Too Many Requests", "Retry-After: 17\r\n", r#"{}"#);
@@ -2566,6 +2685,23 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
             .await
             .unwrap_err(),
         SourceError::Malformed { ref message } if message.contains("relation type")
+    ));
+    // `related` is the issue vocabulary and only the issue vocabulary: Linear's validator
+    // enumerates a project relation's type as `dependency` alone, so a project relation
+    // typed `related` is a shape this workspace cannot hold and is refused rather than
+    // read as an edge this source could never have written.
+    let (endpoint, _) = server(
+        "200 OK",
+        "",
+        r#"{"data":{"project":{"relations":{"nodes":[{"type":"related","relatedProject":{"id":"other"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}"#,
+    );
+    assert!(matches!(
+        source(&endpoint)
+            .project_dependencies(&"p".into(), Direction::DependsOn, &request)
+            .await
+            .unwrap_err(),
+        SourceError::Malformed { ref message }
+            if message.contains("related") && message.contains("project")
     ));
     assert!(matches!(
         source("http://127.0.0.1:1").health().await.unwrap_err(),

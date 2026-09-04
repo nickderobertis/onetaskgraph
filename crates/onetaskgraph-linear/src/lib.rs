@@ -33,7 +33,7 @@
 //! | `search_title` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
 //! | `search_content` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
 //! | `task_dependencies` | **Supported and proven,** in both directions: `relations` and `inverseRelations`. |
-//! | `project_dependencies` | **Supported and proven,** in both directions, by the project relations of the same shape. |
+//! | `project_dependencies` | **Supported and proven,** in both directions, by the project relations of the same shape. Linear types every one of them `dependency`; see the ruling below on the edge that has no spelling here. |
 //! | `max_page_size` | **Supported and proven.** 250, Linear's own connection maximum; every read pages with Relay `first`/`after`. |
 //!
 //! ## Ruling: the two searches are unimplemented, not unsupportable
@@ -69,6 +69,27 @@
 //! asked for the documents belonging to no project. The page-by-page walk asks for only
 //! what is still owed, so neither predicate can make a read return more than the caller
 //! asked for, and neither can drop a document the walk already fetched.
+//!
+//! ## Ruling: a Linear project relation is always an ordering
+//!
+//! This one is Linear's too, and the validator says so in as many words. Asked on
+//! 2026-09-04 for a project relation typed `related` — and separately `blocks` and
+//! `dependsOn` — the real API refused each with `Argument Validation Error` and
+//! `constraints: {"isEnum": "type must be one of the following values: dependency"}`. That
+//! enumeration has one member and it is a timeline dependency, which is why the input
+//! carries an anchor at each end at all.
+//!
+//! So a project edge carrying no ordering has nowhere here to land, and this source
+//! **refuses it by name** before the write rather than sending a value Linear will reject
+//! or quietly promoting it to a dependency it does not mean. `DependencyKind::Related`
+//! keeps its issue-level spelling, `related`, because `IssueRelationCreateInput` really
+//! does take it: the two relations are different relations with different vocabularies,
+//! and each level's read accepts only its own.
+//!
+//! Which end of a project relation waits is carried by the two anchors and not by the two
+//! id slots — measured, not reasoned, from Linear's own `ProjectFilter.hasBlockedByRelations`
+//! against relations written both ways round. `tests/fixtures/README.md` records the whole
+//! probe, and `write_relations` records why the pair this source sends is the oriented one.
 //!
 //! Caller metadata is canonical JSON in a trailing
 //! `<!-- onetaskgraph.metadata ... -->` Markdown comment in the item's description. The
@@ -467,10 +488,32 @@ impl GqlError {
             .and_then(|value| serde_json::from_value(value.clone()).ok())
     }
     /// Everything Linear said about this refusal, on one line and cut to [`SAID_LIMIT`].
+    ///
+    /// Linear's own sentence comes first, then the raw envelope, because only the first
+    /// of those two is short enough to survive [`SAID_LIMIT`] on its merits. `message` is
+    /// a category name — `Argument Validation Error` — and the sentence naming the field
+    /// and the values it would have taken is `extensions.userPresentableMessage`, one of
+    /// several keys in an envelope whose `validationErrors` echoes the whole rejected
+    /// input back. Observed against the real API on 2026-09-04, a `projectRelationCreate`
+    /// refusal rendered past the cut, and the echo is what got cut.
+    ///
+    /// That the sentence itself did not was luck: this build of `serde_json` renders an
+    /// object's keys sorted, and `userPresentableMessage` happens to sort ahead of
+    /// `validationErrors`. Nobody chose that — Linear sends the echo first — and any key
+    /// Linear adds sorting between the two would move the sentence behind an echo longer
+    /// than the whole limit, as would turning `preserve_order` on. Leading with it makes
+    /// what a reader diagnoses from independent of both.
     fn said(&self) -> String {
-        match &self.extensions {
-            Some(extensions) => elided(&format!("{}: {extensions}", self.message)),
-            None => elided(&self.message),
+        let Some(extensions) = &self.extensions else {
+            return elided(&self.message);
+        };
+        match extensions
+            .get("userPresentableMessage")
+            .and_then(Value::as_str)
+            .filter(|sentence| !sentence.is_empty())
+        {
+            Some(sentence) => elided(&format!("{}: {sentence} {extensions}", self.message)),
+            None => elided(&format!("{}: {extensions}", self.message)),
         }
     }
 }
@@ -773,6 +816,33 @@ impl LinearSource {
             format!("{visible}\n\n{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
         }))
     }
+    /// What this source says when asked for a project edge carrying no ordering.
+    ///
+    /// Linear's project relations have exactly one type and it is an ordering. Asked on
+    /// 2026-09-04 to create one typed `related` — and separately `blocks` and `dependsOn`
+    /// — the real API refused each with `Argument Validation Error` and
+    /// `constraints: {"isEnum": "type must be one of the following values: dependency"}`.
+    /// That is Linear's own enumeration of the field, from the validator behind GraphQL
+    /// where introspection cannot reach it, and it has one member. An issue relation is a
+    /// different relation with a different set, which does include `related`, so this
+    /// reaches projects alone.
+    fn unordered_project_relation(&self, near: &NativeId, far: &str) -> SourceError {
+        SourceError::Refused {
+            message: format!(
+                "source {} cannot carry an unordered dependency between projects, because \
+                 Linear types every project relation `dependency` and that is an ordering; \
+                 record {near} to {far} as a dependency, or between tasks",
+                self.name,
+                near = near.0,
+            ),
+        }
+    }
+    /// The one edge [`Self::unordered_project_relation`] refuses, if there is one here.
+    fn unordered_project_edge(edges: &[DependencyEdge]) -> Option<&DependencyEdge> {
+        edges
+            .iter()
+            .find(|edge| edge.to.kind == ItemKind::Project && edge.kind == DependencyKind::Related)
+    }
     async fn write_relations(
         &self,
         near: &NativeId,
@@ -841,20 +911,41 @@ impl LinearSource {
         // start dependency" — while `milestone` is what pairs with the two milestone ids
         // this source never sends. The terse field description reads as though the choice
         // were the project versus a milestone, but there is no value naming the project
-        // alone: `project` is refused.
+        // alone: `project` is refused, and Linear's refusal enumerates the three above.
         //
         // Finish-to-start is the blocker's `end` onto the blocked project's `start`, and
         // `near` is the item that depends, so the near end takes `start` and the far end
-        // it waits on takes `end`. That pair *is* the end -> start line Linear documents,
-        // read the only way an anchor pair can be read — each anchor names a point on the
-        // project it sits beside, and the line runs from the far end's `end` to the near
-        // end's `start`. Anchoring by role rather than by position is what carries the
-        // direction here, and it is deliberate: this source puts the depending item in
-        // `projectId`, where Linear's own callers put the blocker, so a pair copied across
-        // by position rather than by role would state the dependency backwards — which
-        // Linear accepts as readily as the right way round, so it would be wrong in the
-        // workspace rather than refused here. A `Related` edge carries no ordering and
-        // Linear offers no anchor that says so, so it sends the same pair.
+        // it waits on takes `end`.
+        //
+        // **The anchors carry the direction, and the two id slots do not.** That was
+        // reasoned to and then measured, because Linear stores whatever pair it is given
+        // and takes a backwards dependency as readily as the right one — so acceptance
+        // says nothing, and only Linear's own reading of a stored relation does. Linear
+        // publishes that reading as server-side filters: `ProjectFilter` carries
+        // `hasBlockingRelations` ("projects which are blocking") and
+        // `hasBlockedByRelations` ("projects which are blocked"), which the workspace
+        // computes rather than echoes. Three relations written between two scratch
+        // projects on 2026-09-04, each read back through those filters, settle it:
+        //
+        // | `projectId` | `anchorType` | `relatedProjectId` | `relatedAnchorType` | blocked | blocking |
+        // | ----------- | ------------ | ------------------ | ------------------- | ------- | -------- |
+        // | A           | `start`      | B                  | `end`               | A       | B        |
+        // | A           | `end`        | B                  | `start`             | B       | A        |
+        // | B           | `end`        | A                  | `start`             | A       | B        |
+        //
+        // Rows one and three are the same relation with the ids exchanged and the anchors
+        // exchanged with them, and Linear reads both the same way; rows one and two hold
+        // the ids still and exchange only the anchors, and Linear's reading flips. So the
+        // project whose anchor is `start` is the one that waits, whichever slot it sits
+        // in, and row one is what this source sends: `near`, the item that depends, in
+        // `projectId` with `start`. `hasDependsOnRelations` and `hasDependedOnByRelations`
+        // — deprecated, and named in this product's own vocabulary — agreed with the
+        // blocked and blocking columns in every row.
+        //
+        // This matters because this source puts the depending item in `projectId`, where
+        // Linear's own callers put the blocker. Copying their measured `end`/`start` pair
+        // across by position would state every dependency backwards in the workspace, and
+        // nothing would refuse it.
         const NEAR_ANCHOR: &str = "start";
         const FAR_ANCHOR: &str = "end";
         for edge in edges {
@@ -875,36 +966,39 @@ impl LinearSource {
             // the whole of what a project's `type` may say.
             //
             // `blocks` there is what the live journey's project write was refused for
-            // once the two anchors above stopped being missing: Linear answered
-            // `Argument Validation Error`, the message class its input validator raises
-            // for a value outside an accepted set, having already accepted every field of
-            // the same input by name. `tests/fixtures/README.md` records the observation
-            // that decides which field: a live read-back found `blocks`, `dependsOn` and
-            // `related` refused on a project relation in favour of `dependency`, the one
-            // type Linear's project dependencies have. The anchors above are not that
-            // failure — each of `start` and `end` is in the documented anchor vocabulary,
-            // and Linear had already coerced both as `String!` before validation ran.
+            // once the two anchors above stopped being missing: Linear answered HTTP 200
+            // with `Argument Validation Error`, the message class its input validator
+            // raises for a value outside an accepted set, having already accepted every
+            // field of the same input by name — which is what tells that refusal apart
+            // from the missing-field one before it, and what says the anchors were not the
+            // cause.
             //
-            // What is *not* settled is whether Linear also constrains the anchor pair by
-            // position, requiring `anchorType` itself to be `end`. Nothing offline can
-            // decide it: the pair this source sends is the documented end -> start line
-            // written with the depending project in `projectId`, and Linear enumerates
-            // neither anchor anywhere introspection reaches. If the live lane is refused
-            // again, the refusal now carries Linear's own `extensions` — see `GqlError` —
-            // which names the field and the value, and settles it in one run. Swapping the
-            // ids to satisfy such a constraint would also have to swap `relation_page`'s
-            // reading of `relations`/`inverseRelations`, or the source would stop reading
-            // back what it wrote.
+            // Which field, and what it takes, was measured against the real API on
+            // 2026-09-04 rather than inferred. Each of `blocks`, `dependsOn`, `related`
+            // and `DEPENDENCY` was refused with `property: "type"` and
+            // `constraints: {"isEnum": "type must be one of the following values:
+            // dependency"}`; `dependency` was accepted. The same probe put `project` in
+            // both anchors and was refused with `anchorType must be one of the following
+            // values: start, end, milestone` — Linear's own enumeration of a field
+            // GraphQL declares as a bare `String!` — while `milestone` without a milestone
+            // id was refused with `A milestone is required for a dependency with a
+            // milestone anchor.` So the vocabulary above is Linear's, not a reading of its
+            // documentation, and the whole of it reaches this source through the
+            // validator's `extensions`; see `GqlError::said`.
             //
-            // `Related` keeps `related` rather than being refused here. The read-back
-            // above is second-hand and covers a relation Linear was asked to *create*; a
-            // project edge carrying no ordering is a capability this source has, and
-            // removing it on that evidence would be a wider claim than the evidence
-            // supports. If Linear refuses it, it now says so in the message.
+            // A `Related` project edge is refused at the top of this function by that same
+            // enumeration: it has one member and it is an ordering. An issue relation is a
+            // different relation with a different set, which does include `related`.
             let relation_type = match (kind, edge.kind) {
                 (WriteKind::Project, DependencyKind::Blocks) => "dependency",
                 (WriteKind::Task, DependencyKind::Blocks) => "blocks",
-                (_, DependencyKind::Related) => "related",
+                (WriteKind::Task, DependencyKind::Related) => "related",
+                // Unreachable past `write_project`'s guard, and an error rather than a
+                // skip so it stays that way: an edge dropped here would be a copy
+                // reporting success for a dependency the destination does not hold.
+                (WriteKind::Project, DependencyKind::Related) => {
+                    return Err(self.unordered_project_relation(near, edge.to.id()));
+                }
             };
             let (query, input) = if matches!(kind, WriteKind::Project) {
                 (
@@ -1137,6 +1231,13 @@ impl TaskSource for LinearSource {
         Ok(id)
     }
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        // Before anything is read or written, and before the item's own description
+        // records these edges: an edge Linear will never accept has to refuse the whole
+        // write, or a copy would create the project and then fail relating it, leaving the
+        // undo to clean up a write that could have been refused without a call at all.
+        if let Some(edge) = Self::unordered_project_edge(&write.depends_on) {
+            return Err(self.unordered_project_relation(&write.item.id, edge.to.id()));
+        }
         let edges = self
             .prepare_edges(&write.depends_on, WriteKind::Project)
             .await?;
@@ -1745,11 +1846,16 @@ fn relation_page(
         // write side sends exactly that pair and says why. So each root reads only its
         // own, and a value the other root would have accepted is refused here rather than
         // read as an edge this source could not have written.
+        //
+        // `related` is one of those values, and only an issue relation has it. Linear's
+        // validator enumerates a project relation's `type` as `dependency` alone — see
+        // the write side, which had `related` refused by the real API on 2026-09-04 — so
+        // a project relation typed `related` is not a relation this workspace can hold.
         let kind = match (root, relation_type) {
             (DependencyRoot::Issue, "blocks") | (DependencyRoot::Project, "dependency") => {
                 DependencyKind::Blocks
             }
-            (_, "related") => DependencyKind::Related,
+            (DependencyRoot::Issue, "related") => DependencyKind::Related,
             _ => {
                 return Err(SourceError::Malformed {
                     message: format!(

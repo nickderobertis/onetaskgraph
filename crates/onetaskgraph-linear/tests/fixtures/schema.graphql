@@ -22,6 +22,15 @@
 # anchors. The optional `id`, `projectMilestoneId` and `relatedProjectMilestoneId` that
 # input also declares stay out, as every unsent field does.
 #
+# Those three values, and the one value `type` takes, were confirmed on 2026-09-04 from
+# Linear's validator rather than derived: refusing an undocumented value it answers
+# `anchorType must be one of the following values: start, end, milestone` and `type must be
+# one of the following values: dependency`. Neither enumeration can be pinned as a GraphQL
+# enum here, because Linear does not declare one — the fields really are `String!`, and the
+# check that validates this file against the plugin's documents can only hold them to that.
+# What holds the values is the plugin's own tests; `README.md` records the whole probe,
+# including which pair of anchors means which direction.
+#
 # The team side of `WorkflowStateFilter` is corrected on 2026-09-04 from the real API's own
 # answer, which is the second time that authority has outranked the documentation this file
 # is otherwise derived from. This file carried the filter as an invented `IdComparator {
