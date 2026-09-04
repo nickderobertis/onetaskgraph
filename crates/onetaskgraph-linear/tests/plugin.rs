@@ -547,14 +547,14 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         serde_json::json!({"issueRelationDelete":{"success":true}}),
         serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("teams", "TEAM"),
-        id_page("projectStatuses", "STATUS"),
+        serde_json::json!({"projectStatuses":{"nodes":[{"id":"STATUS","name":"Todo"}]}}),
         id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
         serde_json::json!({"project":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P"}}}),
         serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("teams", "TEAM"),
-        id_page("projectStatuses", "STATUS"),
+        serde_json::json!({"projectStatuses":{"nodes":[{"id":"STATUS","name":"Todo"}]}}),
         id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-NEW"}}}),
         serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P","type":"blocks","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
@@ -788,7 +788,10 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     drop(wire);
     let (endpoint, wire) = response_server(vec![
         page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        page(
+            "projectStatuses",
+            serde_json::json!([{"id":"STATUS","name":"Todo"}]),
+        ),
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":""}}}),
     ]);
     assert!(
@@ -919,7 +922,10 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     };
     let (endpoint, wire) = response_server(vec![
         page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        page(
+            "projectStatuses",
+            serde_json::json!([{"id":"STATUS","name":"Todo"}]),
+        ),
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":"NEW"}}}),
         serde_json::json!({"project":{"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":""}}}),
@@ -936,7 +942,10 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     drop(wire);
     let (endpoint, wire) = response_server(vec![
         page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        page(
+            "projectStatuses",
+            serde_json::json!([{"id":"STATUS","name":"Todo"}]),
+        ),
         serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P"}}}),
         serde_json::json!({"project":{"relations":{"nodes":[{"id":"R"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationDelete":{"success":false}}),
@@ -985,7 +994,10 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     }
     let (endpoint, wire) = response_server(vec![
         page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        page(
+            "projectStatuses",
+            serde_json::json!([{"id":"STATUS","name":"Todo"}]),
+        ),
         serde_json::json!({"projectCreate":{"success":true}}),
     ]);
     let error = writable_source(&endpoint)
@@ -1025,7 +1037,10 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     ] {
         let (endpoint, wire) = response_server(vec![
             page("teams", serde_json::json!([{"id":"TEAM"}])),
-            page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+            page(
+                "projectStatuses",
+                serde_json::json!([{"id":"STATUS","name":"Todo"}]),
+            ),
             response,
         ]);
         assert!(
@@ -1056,6 +1071,93 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
             })
             .await
             .is_err()
+    );
+    drop(wire);
+}
+
+/// Linear's `projectStatuses` accepts no `filter`, so the plugin asks for the whole
+/// connection and matches the display name itself.
+///
+/// This is the one lookup of the five that works that way. It is here because sending the
+/// filter Linear does not take is a `GRAPHQL_VALIDATION_FAILED` refusal of the entire
+/// document, which no amount of correct handling further down recovers from.
+#[tokio::test]
+async fn a_project_status_is_matched_locally_because_linear_narrows_that_connection_for_nobody() {
+    let project = || {
+        serde_json::from_value::<Project>(serde_json::json!({"id":"authored:P","title":"a project","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"repositories":[],"metadata":{}})).unwrap()
+    };
+    let teams = serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}});
+    let statuses =
+        |nodes: serde_json::Value| serde_json::json!({"projectStatuses":{"nodes":nodes}});
+
+    let (endpoint, wire) = response_server(vec![
+        teams.clone(),
+        statuses(serde_json::json!([
+            {"id":"S-BACKLOG","name":"Backlog"},
+            {"id":"S-TODO","name":"todo"},
+            {"id":"S-DONE","name":"Done"}
+        ])),
+        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
+        serde_json::json!({"project":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+    ]);
+    writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("the one status answering to the name resolves it");
+    let _team = wire.recv().unwrap();
+    let asked = wire.recv().unwrap();
+    assert!(
+        !asked.contains("filter"),
+        "the request Linear refuses outright is one naming a filter: {asked}"
+    );
+    let created = wire.recv().unwrap();
+    assert!(
+        created.contains("S-TODO"),
+        "the write carries the matched status's own id, not its name: {created}"
+    );
+    drop(wire);
+
+    let (endpoint, wire) = response_server(vec![
+        teams.clone(),
+        statuses(serde_json::json!([
+            {"id":"S-ONE","name":"Todo"},
+            {"id":"S-TWO","name":"TODO"}
+        ])),
+    ]);
+    let ambiguous = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{ambiguous}").contains("project status \"Todo\""),
+        "a name two statuses answer to under the same case-insensitive comparison Linear \
+         applied server-side is refused by name: {ambiguous}"
+    );
+    drop(wire);
+
+    let (endpoint, wire) = response_server(vec![
+        teams,
+        statuses(serde_json::json!([{"id":"S-DONE","name":"Done"}])),
+    ]);
+    let absent = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{absent}").contains("project status \"Todo\""),
+        "a connection holding no such name is refused by name too: {absent}"
     );
     drop(wire);
 }

@@ -132,9 +132,14 @@ pub mod graphql {
         "query($key:String!){ teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id}} }";
     /// Resolve an issue workflow-state display name.
     pub const ISSUE_STATE: &str = "query($name:String!,$team:String!){ workflowStates(filter:{name:{eqIgnoreCase:$name},team:{id:{eq:$team}}}){nodes{id}} }";
-    /// Resolve a project status display name.
-    pub const PROJECT_STATUS: &str =
-        "query($name:String!){ projectStatuses(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
+    /// List the workspace's project statuses, so one can be resolved by display name.
+    ///
+    /// Unlike `teams`, `workflowStates` and the two label connections, Linear's
+    /// `projectStatuses` accepts no `filter` argument: asking for one is refused outright
+    /// with `Unknown argument "filter" on field "Query.projectStatuses"`. The display name
+    /// is therefore matched locally over the whole connection, which a workspace holds few
+    /// enough of to answer in one page.
+    pub const PROJECT_STATUS: &str = "query{ projectStatuses{nodes{id name}} }";
     /// Resolve an issue-label display name.
     pub const ISSUE_LABEL: &str =
         "query($name:String!){ issueLabels(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
@@ -346,9 +351,17 @@ impl Lookup<'_> {
         match self {
             Self::Team(key) => json!({"key":key}),
             Self::IssueState { name, team } => json!({"name":name,"team":team.0}),
-            Self::ProjectStatus(name) | Self::IssueLabel(name) | Self::ProjectLabel(name) => {
-                json!({"name":name})
-            }
+            Self::IssueLabel(name) | Self::ProjectLabel(name) => json!({"name":name}),
+            // `PROJECT_STATUS` names nothing, for the reason recorded on that document.
+            Self::ProjectStatus(_) => json!({}),
+        }
+    }
+    /// The display name `one_id` matches locally, for the one lookup whose connection
+    /// Linear will not narrow server-side.
+    fn local_name(&self) -> Option<&str> {
+        match self {
+            Self::ProjectStatus(name) => Some(name),
+            _ => None,
         }
     }
 }
@@ -571,7 +584,18 @@ impl LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {connection}.nodes"),
             })?;
-        if nodes.len() != 1 {
+        let matched = match lookup.local_name() {
+            Some(name) => nodes
+                .iter()
+                .filter(|node| {
+                    node.get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(name))
+                })
+                .collect::<Vec<_>>(),
+            None => nodes.iter().collect::<Vec<_>>(),
+        };
+        if matched.len() != 1 {
             return Err(SourceError::Refused {
                 message: format!(
                     "source {} cannot resolve {} uniquely",
@@ -580,7 +604,7 @@ impl LinearSource {
                 ),
             });
         }
-        Ok(NativeId(backend_id(&nodes[0], "id")?.to_owned()))
+        Ok(NativeId(backend_id(matched[0], "id")?.to_owned()))
     }
     async fn team_id(&self) -> Result<NativeId, SourceError> {
         let team = self.team.as_ref().ok_or_else(|| SourceError::Refused {
