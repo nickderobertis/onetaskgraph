@@ -169,6 +169,83 @@ than be refused at the write. The table above is what establishes that, and it i
 kind of evidence that could: a write refused proves a spelling, and only Linear's own
 `hasBlockedByRelations` proves a direction.
 
+## The 2026-09-04 audit, and why it was not five more round trips
+
+Five contract drifts had been found here one at a time, each by pushing and waiting for
+the live lane to be refused: the two anchors `ProjectRelationCreateInput` requires, the
+`dependency` a project relation is typed, `$team` declared `String!` at an `ID` location,
+and `StringComparator`'s missing `inIgnoreCase`. On **2026-09-04** the rest of what this
+source sends was audited in one pass instead, against Linear's real schema and its real
+API, and everything below came out of that pass. The instrument is
+`every_variables_object_this_source_sends_conforms_to_the_pinned_schema`.
+
+**What the two older checks could not see.** They parse the production documents in
+`graphql`, and a filter is in no document: it is built field by field at runtime and handed
+over whole as `$filter`. So `IssueFilter` and `ProjectFilter` sat in this file carrying
+nothing but `and`/`or`, and nothing but Linear ever read what went into them. Every write
+input had the same hole. The new check drives this source's whole surface against a server
+that answers everything, records what really went out, and walks each variables object
+against the pinned type of the argument it stands at — every key against that input type's
+members, every list against its element type, every enum value against its members, every
+scalar against its kind. It asserts that it provoked every operation this source can send,
+so an unexercised one is a failure rather than a gap. The filters and everything they reach
+are pinned member by member for it to read.
+
+- **`ProjectFilter` is not `IssueFilter`, and one builder produced both.** That line is
+  byte-identical on `main`, so it long predates the branch this was found on. Linear refused
+  the first of its two wrong members outright: `Field "team" is not defined by type
+  "ProjectFilter". Did you mean "lead"?` A project has no team; it has the teams it is
+  accessible from, so the configured key reaches
+  `accessibleTeams:{some:{key:{eqIgnoreCase:…}}}` — not `leadTeam`, which is one designated
+  team rather than every team a project is in. The second member was next in line:
+  `ProjectFilter.status` is the counterpart of `IssueFilter.state`, while
+  `ProjectFilter.state` exists and is a bare `StringComparator` over something else. It is
+  pinned here although nothing sends it, because its existence is the trap — with it absent
+  the check would report the issue's spelling as a member Linear does not have, which is
+  untrue, and with it present the report is what is actually wrong.
+- **A project's status vocabulary is not an issue's.** `ProjectStatus.type` is the
+  `ProjectStatusType` enum — `backlog`, `planned`, `started`, `paused`, `completed`,
+  `canceled` — where a workflow state is `backlog`, `unstarted`, `started`, `completed`,
+  `canceled`, `triage`. Read back from the real workspace on 2026-09-04, its statuses carry
+  `planned`, which this source had been reporting as an unknown category, and a filter
+  spelled `unstarted` would have matched no project while being refused by nothing. So
+  `planned` is where `unstarted` is, and `paused` — a project started and neither finished
+  nor cancelled — reads as in progress at both ends, because a category reported and not
+  askable for is capability rule 1 broken.
+
+**Three drifts of the same pass are not in any schema, and the check cannot reach them.**
+Each was found by running the live journey, and what holds each now is named beside it.
+
+- **A connection maximum is not the only bound on a page.** Linear scores every document
+  for complexity and refuses one over 10000: `The query is too complex. Complexity: 17475.
+  Maximum allowed complexity: 10000.` The `projects` document is charged for its nested
+  `labels` connection at Linear's default of 50 per node, so `first: 250` scores 17475 and
+  the largest `first` it is accepted at is **143**, exactly; the filter it carries adds
+  nothing, and the `issues` document is accepted at 250. `MAX_PAGE_SIZE` is 100 — the
+  tighter of the two connections, with 30% of the budget spare, because 143 is a cliff a
+  single added field would move.
+- **`documentCreate` counts a key that is present, not a value that is set.** It refuses an
+  input naming more than one home — `Exactly one of initiativeId, teamId, issueId,
+  releaseId, cycleId or projectId must be defined.` — and `{projectId: null, teamId: …}` is
+  refused where `{teamId: …}` is accepted. So a document filed under no project carries no
+  `projectId` at all. `documentUpdate` keeps its explicit null, and that is the opposite
+  rule for the opposite reason: there the null is the instruction, and Linear answered
+  `project: null` to exactly that update.
+- **None of Linear's three `delete` verbs removes anything.** `issueDelete`,
+  `projectDelete` and `documentDelete` each answered `success: true` and the item still read
+  back by id, carrying `archivedAt` and `trashed: true`. Its separate archive verb is a
+  third state — `archivedAt` set, `trashed` null — and Linear excludes both from every
+  connection, so a listing had already stopped returning such an item while a read by id
+  still did. The three by-id reads now select `archivedAt` and answer with nothing when it
+  is set: it is the marker both states share, so a read by id answers what a listing
+  answers, and a delete means what a copy's undo needs it to mean.
+
+**What that pass did not settle.** Complexity, the one-home rule and the trash are Linear
+runtime behaviour and appear nowhere in its schema, so no offline check can reach them; the
+live journey is what found all three and what guards them. And the pinned filters carry the
+members this source sends plus the one recorded absence above — a member Linear adds, or one
+it removes that nothing here sends, is invisible until this file is re-observed.
+
 The contract test parses every production operation against the pinned
 field and argument types and recursively validates each selected response-fixture shape.
 `issues.json` covers `Issue`, `WorkflowState`, `IssueLabel`, and `PageInfo`;
