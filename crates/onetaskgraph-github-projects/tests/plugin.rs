@@ -7427,6 +7427,15 @@ async fn a_caller_tells_an_answer_from_a_refusal_from_a_rate_limit_the_way_this_
     let partly_spent = impossible("300", "4021");
     assert_eq!(partly_spent.remaining(), Some(300));
     assert_eq!(partly_spent.used_by_the_account(), Some(4021));
+    // A pair falling short of the whole is kept rather than dropped, which is the deliberate
+    // half of that rule: it accounts for less of the budget than exists rather than for more
+    // than could, and reporting the budget as unknown would be the worse answer. The stand-in
+    // board answers exactly this way where it stands in for an allowance somebody else spent.
+    let short_of_the_whole = impossible("0", "21");
+    assert_eq!(short_of_the_whole.limit(), Some(4321));
+    assert_eq!(short_of_the_whole.remaining(), Some(0));
+    assert_eq!(short_of_the_whole.used_by_the_account(), Some(21));
+    assert!(short_of_the_whole.exhausted());
 
     for (spelled, method, mode) in [
         ("get", Method::Get, Mode::Read),

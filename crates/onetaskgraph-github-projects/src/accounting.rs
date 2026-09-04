@@ -294,10 +294,20 @@ impl RateLimit {
             _ => false,
         };
         // And the same impossibility one step on, which neither figure shows on its own:
-        // `used` and `remaining` **partition** an allowance — what the window has spent and
-        // what is left of it — so their sum is the whole of it and cannot exceed it. A
-        // response saying 4,000 used and 4,000 left of 5,000 has each figure inside the
-        // limit and still cannot be true of any account.
+        // `used` and `remaining` are two views of one allowance — what the window has spent
+        // and what is left of it — so between them they cannot exceed the whole. A response
+        // saying 4,000 used and 4,000 left of 5,000 has each figure inside the limit and
+        // still cannot be true of any account.
+        //
+        // **Only that direction is refused, and a sum falling short of the whole is kept
+        // deliberately.** It accounts for less of the budget than exists rather than for
+        // more of it than could, which no arithmetic forbids and which a response really
+        // carries: the loopback board this crate is tested against answers `remaining: 0`
+        // beside a `used` naming what that session itself spent, wherever it stands in for a
+        // budget somebody else exhausted. Dropping those three would report the budget as
+        // unknown, which is a worse answer than a short one — and it could not reach what
+        // the report says this SESSION spent in any case, because that figure is attributed
+        // per call and is never differenced out of these.
         let more_than_the_whole_between_them = match (used, remaining, limit) {
             (Some(used), Some(remaining), Some(limit)) => used.saturating_add(remaining) > limit,
             _ => false,
