@@ -16,9 +16,11 @@
 # schema, which now declares `anchorType: String!` and `relatedAnchorType: String!`
 # alongside the three fields this file carried before. Linear added them under both `main`
 # and this branch, and the live journey's project-relation write failed on the first with
-# `Field "anchorType" of required type "String!" was not provided.` The two milestone
-# anchors and the optional `id` that input also declares stay out, as every unsent field
-# does.
+# `Field "anchorType" of required type "String!" was not provided.` Both are bare `String!`
+# there and Linear enumerates their values nowhere introspection reaches; `start`, `end`
+# and `milestone` are the values, and the two this source sends are the whole-project
+# anchors. The optional `id`, `projectMilestoneId` and `relatedProjectMilestoneId` that
+# input also declares stay out, as every unsent field does.
 # Only the read/write contract exercised by this plugin is retained.
 type Query {
   viewer: User!

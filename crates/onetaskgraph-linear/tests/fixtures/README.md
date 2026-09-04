@@ -33,12 +33,45 @@ than left to be rediscovered:
 — `anchorType: String!` and `relatedAnchorType: String!` — and the live journey's project
 write began failing with `Field "anchorType" of required type "String!" was not provided.`
 on `main` and on the branch alike. Both were re-observed in the published schema on
-**2026-09-04** and pinned then. That schema types them as bare `String!` and enumerates no
-values, so what this source sends is the pair every published caller of that mutation
-sends: `start` and `end`, a point in time at each end rather than project-versus-milestone,
-finish-to-start from the blocker's `end` onto the blocked project's `start`. The optional
-`id`, `projectMilestoneId` and `relatedProjectMilestoneId` that input also declares stay
-out of this subset, as every field this plugin does not send does.
+**2026-09-04** and pinned then. The optional `id`, `projectMilestoneId` and
+`relatedProjectMilestoneId` that input also declares stay out of this subset, as every
+field this plugin does not send does.
+
+**What the two anchors accept is not in that schema, and the field descriptions mislead.**
+Both are bare `String!` enumerating nothing, and Linear validates them as an enum a layer
+behind GraphQL, where introspection cannot see it. The create input describes each only as
+"the type of the anchor", and the `ProjectRelation` output type says each indicates
+"whether it is anchored to the project itself or a specific milestone" — which reads as a
+choice between a value meaning the project and one meaning a milestone. It is not. The
+values are `start`, `end` and `milestone`: `start` and `end` are the whole-project
+anchors, naming which of a project's own two ends the dependency line touches, and
+`milestone` is the one that pairs with the milestone ids above. Four things establish it,
+and the first is Linear's own:
+
+- Linear's **project-dependency documentation** states "Currently we only support a end ->
+  start dependency", and describes the line as running from the blocking project's end
+  date to the blocked project's start date — the vocabulary is `start` and `end`, over
+  whole projects, with milestones mentioned nowhere on that page.
+- Linear's own **`linear/linear-solutions`** import script sends `anchorType: "end"` and
+  `relatedAnchorType: "start"` for a whole-project dependency, passing no milestone id.
+- A **live read-back** published by `formtrieb/flotilla`, dated 2026-08-16, records
+  `anchorType: "project"` being refused, and the corrected write creating a relation that
+  read back as `{"anchorType":"end","relatedAnchorType":"start"}` with `projectMilestone:
+  null` — the whole-project anchor, spelled `end`/`start`.
+- **`linearis-oss/linearis`** and **`smorinlabs/agent2linear`** both type the field as
+  `"start" | "end"`, the first noting the values were observed live and that they describe
+  a point on the project rather than project-versus-milestone.
+
+Two published callers do send `project`, and both look derived from the field description
+rather than from a call: one of them also lists the relation types as `blocks`, `dependsOn`
+and `related`, a set the live read-back above found refused in favour of `dependency`.
+
+**This source anchors by role, not by position.** Linear's callers put the blocking project
+in `projectId`; this source puts the item that depends there, so it sends the mirror —
+`start` on the near end, `end` on the far end it waits on. Copying the measured pair across
+by position instead would state the dependency backwards, and Linear takes a backwards
+dependency as readily as the right one, so that error would land in the workspace rather
+than be refused at the write.
 
 The contract test parses every production operation against the pinned
 field and argument types and recursively validates each selected response-fixture shape.

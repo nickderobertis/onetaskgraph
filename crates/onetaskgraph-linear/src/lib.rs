@@ -773,13 +773,26 @@ impl LinearSource {
             };
             cursor = Some(next);
         }
-        // Linear anchors a project relation to a point in time at each end, and both ends
-        // are required: `ProjectRelationCreateInput` declares `anchorType` and
-        // `relatedAnchorType` as `String!` in the published schema. The pair is
-        // finish-to-start — the blocker's `end` onto the blocked project's `start` — and
-        // `near` is the item that depends, so the near end anchors at its start and the
-        // far end at its end. A `Related` edge carries no ordering and Linear offers no
-        // anchor that says so, so it sends the same pair.
+        // Linear requires an anchor at each end of a project relation and validates both
+        // against an enum GraphQL introspection cannot see: `ProjectRelationCreateInput`
+        // declares them `String!` and enumerates nothing. The values are `start`, `end`
+        // and `milestone`. `start` and `end` are the anchors for a relation on the project
+        // as a whole — they name which of its own two ends the dependency line touches,
+        // and Linear's project-dependency documentation says it "only support[s] a end ->
+        // start dependency" — while `milestone` is what pairs with the two milestone ids
+        // this source never sends. The terse field description reads as though the choice
+        // were the project versus a milestone, but there is no value naming the project
+        // alone: `project` is refused.
+        //
+        // Finish-to-start is the blocker's `end` onto the blocked project's `start`, and
+        // `near` is the item that depends, so the near end takes `start` and the far end
+        // it waits on takes `end`. Anchoring by role rather than by position is
+        // deliberate: this source puts the depending item in `projectId`, where Linear's
+        // own callers put the blocker, and a pair copied across positions rather than
+        // roles states the dependency backwards — which Linear accepts as readily as the
+        // right way round, so it would be wrong in the workspace rather than refused
+        // here. A `Related` edge carries no ordering and Linear offers no anchor that says
+        // so, so it sends the same pair.
         const NEAR_ANCHOR: &str = "start";
         const FAR_ANCHOR: &str = "end";
         for edge in edges {
