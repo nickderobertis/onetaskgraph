@@ -184,9 +184,9 @@ pub mod graphql {
     /// Check the authenticated viewer.
     pub const VIEWER: &str = "query { viewer { id } }";
     /// Fetch one issue.
-    pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id} } }";
+    pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id title description url createdAt updatedAt archivedAt state{name type} labels{nodes{id name color}} project{id} } }";
     /// Fetch one project.
-    pub const PROJECT: &str = "query($id:String!){ project(id:$id){ id name description url createdAt updatedAt status{name type} labels{nodes{id name color}} } }";
+    pub const PROJECT: &str = "query($id:String!){ project(id:$id){ id name description url createdAt updatedAt archivedAt status{name type} labels{nodes{id name color}} } }";
     /// List issues.
     pub const ISSUES: &str = "query($first:Int!,$after:String,$filter:IssueFilter){ issues(first:$first,after:$after,filter:$filter){ nodes{id title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } }";
     /// List projects.
@@ -274,7 +274,7 @@ pub mod graphql {
     /// Delete a project, for the same reason and on the same terms.
     pub const PROJECT_DELETE: &str = "mutation($id:String!){ projectDelete(id:$id){success} }";
     /// Fetch one document.
-    pub const DOCUMENT: &str = "query($id:String!){ document(id:$id){ id title content url createdAt updatedAt project{id} } }";
+    pub const DOCUMENT: &str = "query($id:String!){ document(id:$id){ id title content url createdAt updatedAt archivedAt project{id} } }";
     /// List documents.
     ///
     /// `first` is an `Int` rather than an `Int!` because that is what Linear's `documents`
@@ -1902,6 +1902,21 @@ fn optional<T>(
             message: format!("missing {k}"),
         }),
         Some(Value::Null) => Ok(None),
+        // An item Linear no longer shows is not an item this source holds, and Linear says
+        // so with `archivedAt` rather than by answering null.
+        //
+        // **None of Linear's three `delete` verbs removes anything.** `issueDelete`,
+        // `projectDelete` and `documentDelete` move the item to the trash: observed on
+        // 2026-09-04, each answered `success: true` and the item still read back by id,
+        // carrying `archivedAt` and `trashed: true`. Its separate *archive* verb is a third
+        // state — `archivedAt` set, `trashed` null — and Linear excludes both from every
+        // connection, so `issues`, `projects` and `documents` had already stopped returning
+        // them while a read by id still did.
+        //
+        // `archivedAt` rather than `trashed` for exactly that reason: it is the marker both
+        // states share, so a read by id answers what a listing answers, and a delete means
+        // what a copy's undo needs it to mean — the item this run created is gone.
+        Some(value) if !matches!(value.get("archivedAt"), None | Some(Value::Null)) => Ok(None),
         Some(value) => f(value).map(Some),
     }
 }

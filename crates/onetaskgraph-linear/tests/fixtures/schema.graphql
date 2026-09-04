@@ -84,6 +84,7 @@ type Issue {
   url: String
   createdAt: DateTime
   updatedAt: DateTime
+  archivedAt: DateTime
   state: WorkflowState!
   labels: IssueLabelConnection!
   project: Project
@@ -97,6 +98,7 @@ type Project {
   url: String
   createdAt: DateTime
   updatedAt: DateTime
+  archivedAt: DateTime
   status: ProjectStatus!
   labels: ProjectLabelConnection!
   relations(first: Int!, after: String): ProjectRelationConnection!
@@ -113,6 +115,7 @@ type Document {
   url: String!
   createdAt: DateTime!
   updatedAt: DateTime!
+  archivedAt: DateTime
   project: Project
 }
 type WorkflowState {

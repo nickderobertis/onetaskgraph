@@ -2475,17 +2475,17 @@ fn linear_project_status(v: &Value) -> Value {
     json!({"name":v["name"],"type":match category{"todo"=>"planned","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
 }
 fn linear_task(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null,"archivedAt":null})
 }
 fn linear_project(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null,"archivedAt":null})
 }
 
 /// One Linear document. It has no `labels` field and no `state`, because Linear's own
 /// published `Document` has neither — which is what the `linear` row of the table above
 /// declares and what the shared document journeys drive.
 fn linear_document(v: &Value) -> Value {
-    json!({"id":v["id"],"title":v["title"],"content":linear_long_form(v,Vec::new()),"project":v.get("project").filter(|project|project.is_string()).map(|id|json!({"id":id})),"url":linear_web_address(v,"document"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"title":v["title"],"content":linear_long_form(v,Vec::new()),"project":v.get("project").filter(|project|project.is_string()).map(|id|json!({"id":id})),"url":linear_web_address(v,"document"),"createdAt":null,"updatedAt":null,"archivedAt":null})
 }
 
 /// The Linear web address this workspace holds one item at.

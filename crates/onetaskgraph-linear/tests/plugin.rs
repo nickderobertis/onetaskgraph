@@ -986,6 +986,66 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
     );
 }
 
+/// An item Linear has trashed or archived is one this source does not hold.
+///
+/// None of Linear's three `delete` verbs removes anything: observed on 2026-09-04,
+/// `issueDelete`, `projectDelete` and `documentDelete` each answered `success: true` and
+/// the item still read back by id, carrying `archivedAt` and `trashed: true`. Its separate
+/// archive verb is a third state — `archivedAt` set, `trashed` null — and Linear excludes
+/// both from every connection, so a listing had already stopped returning them while a read
+/// by id still did. `archivedAt` is the marker they share, which is why it is the one read.
+///
+/// That is what the live journey failed on with `a document this run removed is still
+/// readable`, and it is what a copy's undo depends on: an item this run created has to be
+/// gone once it is taken back.
+#[tokio::test]
+async fn an_archived_or_trashed_item_is_not_held_by_this_source_over_real_http() {
+    for (root, body) in [
+        (
+            "issue",
+            serde_json::json!({"issue":{"id":"I","title":"gone","description":null,"url":null,
+                "createdAt":null,"updatedAt":null,"archivedAt":"2026-09-04T18:55:13.746Z",
+                "state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}}),
+        ),
+        (
+            "project",
+            serde_json::json!({"project":{"id":"P","name":"gone","description":null,"url":null,
+                "createdAt":null,"updatedAt":null,"archivedAt":"2026-09-04T18:55:13.746Z",
+                "status":{"name":"Todo","type":"planned"},"labels":{"nodes":[]}}}),
+        ),
+        (
+            "document",
+            serde_json::json!({"document":{"id":"D","title":"gone","content":null,"url":null,
+                "createdAt":null,"updatedAt":null,"archivedAt":"2026-09-04T18:55:13.746Z",
+                "project":null}}),
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![body.clone()]);
+        let source = source(&endpoint);
+        let held = match root {
+            "issue" => source.get_task(&"I".into()).await.unwrap().is_some(),
+            "project" => source.get_project(&"P".into()).await.unwrap().is_some(),
+            _ => source.get_document(&"D".into()).await.unwrap().is_some(),
+        };
+        assert!(!held, "an archived {root} is not held: {body}");
+    }
+    // And a delete over one is the state the caller asked for, with no mutation sent: the
+    // read is what says there is nothing left to remove.
+    let (endpoint, wire) = response_server(vec![serde_json::json!({"document":{"id":"D",
+        "title":"gone","content":null,"url":null,"createdAt":null,"updatedAt":null,
+        "archivedAt":"2026-09-04T18:55:13.746Z","project":null}})]);
+    source(&endpoint)
+        .delete_document(&"D".into())
+        .await
+        .expect("an item already in the trash is the state this asks for");
+    assert!(wire.recv().unwrap().contains("document(id:$id)"));
+    assert!(
+        wire.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "nothing is deleted when Linear no longer holds it"
+    );
+}
+
 #[tokio::test]
 async fn a_project_this_source_created_is_removed_again_over_real_http() {
     // What makes a copy into Linear atomic: the engine undoes a failed copy's own writes,
