@@ -992,6 +992,13 @@ mod tests {
     /// seat-lease tests on `check (windows-latest)` while every one of them passed on the
     /// other two. `write(true)` alone is the fix: it adds no `create` and no `truncate`, so
     /// the seat's contents — the run id a reclaim reads — are exactly what they were.
+    ///
+    /// What makes a write handle safe to ask for here is that nothing holds one: `Seat`
+    /// stores a path and a token, and [`Seat::create`] drops the handle it wrote through
+    /// before returning. A Windows open for writing against a file some other handle has
+    /// open without `FILE_SHARE_WRITE` is refused as a sharing violation, so a `Seat` that
+    /// kept its file open would trade this platform's `Access is denied.` for that one —
+    /// and this helper, not the seat logic, is where that would surface.
     fn age_out_of_the_window(path: &Path) {
         let long_ago = SystemTime::now() - SEAT_IS_STALE_AFTER - Duration::from_secs(60);
         fs::OpenOptions::new()
