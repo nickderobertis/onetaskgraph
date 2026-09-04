@@ -3,7 +3,7 @@
   "name": "onetaskgraph",
   "projectType": "application",
   "tags": ["lang:rust", "layer:binary"],
-  "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `test`, where tests/live.rs reads the public registries; affected selection is the edge, and AGENTS.md records why.",
+  "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge,external_service_suite_stays_out_of_the_affected_tier] JSON has no comment to scope either to `test`, where tests/live.rs reads the public registries; affected selection is the edge, and AGENTS.md records why. The second name is here on the same terms the two plugin crates carry it on, and for the same reason stated one level up: a registry read is a check the merge waits on or it is not a check at all. This repository had the arrangement that rule describes -- the suite outside the required tier, advisory -- and a query GitHub refuses outright reached the default branch through it, because auto-merge waits only on required checks and nobody read the red advisory one. So tests/live.rs is an ordinary test of this crate, and affected selection is what keeps it off every other change.",
   "implicitDependencies": [
     "onetaskgraph-core",
     "onetaskgraph-github-projects",
