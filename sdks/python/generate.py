@@ -118,9 +118,6 @@ def run_workspace_binary(*args: str) -> str:
     A failure reports what the subprocess said. `check=True` raises with the command line
     alone, and the output this captures — stdout because it IS the answer, stderr with it —
     goes into that exception rather than to the terminal, so the whole diagnosis is lost.
-    A run of this generator on CI failed exactly that way: the log recorded that `cargo run
-    ... -- schema` exited 1 and nothing about why, which is not something a reader can act
-    on.
     """
     command = ["cargo", "run", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph", "--"]
     command.extend(args)

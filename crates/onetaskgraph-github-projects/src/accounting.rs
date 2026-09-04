@@ -1,9 +1,8 @@
 //! What a session of requests to GitHub cost, counted rather than argued about.
 //!
-//! Nothing here decides anything: it records what left this crate and adds it up. The
-//! reason it exists is that a query strategy cannot be chosen between without measuring
-//! what each one costs, and the change that was supposed to make reads cheaper was
-//! reasoned about instead of counted — and made them ten times more expensive.
+//! Nothing here decides anything: it records what left this crate and adds it up. It
+//! exists because a query strategy cannot be chosen between without measuring what each
+//! one costs.
 //!
 //! # What one record carries
 //!
