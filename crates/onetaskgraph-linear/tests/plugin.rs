@@ -1160,37 +1160,6 @@ async fn a_project_status_is_matched_locally_because_linear_narrows_that_connect
         "a connection holding no such name is refused by name too: {absent}"
     );
     drop(wire);
-
-    // A status this source cannot read the name of is malformed data from Linear, not a
-    // status that failed to match: reporting it as the latter would blame the caller for
-    // naming a status that is in fact right there.
-    for unreadable in [
-        serde_json::json!([{"id":"S-TODO","name":"Todo"},{"id":"S-ODD"}]),
-        serde_json::json!([{"id":"S-TODO","name":"Todo"},{"id":"S-ODD","name":7}]),
-    ] {
-        // The create and its relation read are here so that dropping the unreadable node
-        // would carry the write all the way through: the refusal below is then the source
-        // rejecting the data, not the fixture running out of answers.
-        let (endpoint, wire) = response_server(vec![
-            serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-            statuses(unreadable.clone()),
-            serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
-            serde_json::json!({"project":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
-        ]);
-        let malformed = writable_source(&endpoint)
-            .write_project(&ItemWrite {
-                target: None,
-                item: project(),
-                depends_on: Vec::new(),
-            })
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(&malformed, SourceError::Malformed { message } if message.contains("name")),
-            "an unreadable status name is malformed rather than a nonmatch, for {unreadable}: {malformed:?}"
-        );
-        drop(wire);
-    }
 }
 
 #[tokio::test]

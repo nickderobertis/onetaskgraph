@@ -368,14 +368,6 @@ payloads, and the three document mutations — as re-observed there on 2026-09-0
 operation drifts from it. Each fixture records whether it was live-captured or
 documentation-derived.
 
-**Where the real API contradicts that documentation, the API wins and the file says so.**
-`Query.projectStatuses` was pinned from the published schema as taking a
-`ProjectStatusFilter`; Linear refuses that argument outright, failing the whole document
-with `GRAPHQL_VALIDATION_FAILED`, which is why every live project write did. So the plugin
-asks for that connection unfiltered and matches the status name itself. Do not reconcile a
-correction like that back to the documentation it disagrees with — a refusal observed from
-Linear is evidence about Linear that a published schema does not outrank.
-
 Each drives the real binary as a subprocess, and each runs against **every** configured
 source kind through one shared fixture table — `crates/onetaskgraph/tests/e2e/fixtures.rs`
 — so a plugin is never proven by a suite of its own writing. That coverage is not a habit:
