@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.22](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.21...onetaskgraph-plugin-api-v0.2.22) - 2026-09-04
+
+### Added
+
+- *(github-projects)* account for what the live tests spend, reduce it, and refuse a run the account cannot afford ([#280](https://github.com/nickderobertis/onetaskgraph/pull/280))
+
 ## [0.2.18](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.17...onetaskgraph-plugin-api-v0.2.18) - 2026-09-01
 
 ### Fixed
