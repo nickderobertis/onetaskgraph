@@ -723,7 +723,6 @@ impl LinearSource {
         }
         parts
     }
-    /// One predicate, or the conjunction of several.
     fn narrowed(mut parts: Vec<Value>) -> Value {
         if parts.len() == 1 {
             parts.pop().unwrap()
