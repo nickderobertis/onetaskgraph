@@ -90,37 +90,50 @@ report_guard_output() {
 # Replace one literal substring of a file in the scratch tree. python3 rather than `sed -i`,
 # whose in-place spelling differs between GNU and BSD and so would fail on the macOS runner.
 #
-# **The two payloads travel in the environment rather than in argv, and on Windows that is
-# what makes case 2 a real case.** The bash there is MSYS2, which rewrites arguments that
-# look like POSIX paths before the native python3 sees them, and a leading `//` is its
-# documented escape for one literal slash -- so the `//!` that case searches for arrived as
-# `/!`. That still occurs in the file, one character in, so nothing refused: the rewrite
-# landed a character late, the inner attribute went in as part of the line rather than at
-# the start of it, the guard rightly saw no attribute there, and the case reported the
-# guard as having PASSED an arrangement it would in fact refuse. It was the only
-# `substitute` here whose search text begins with a slash, and the only one that failed on
-# the Windows lane. The environment is not path-converted, so a payload arrives as written.
+# **The two payloads travel as FILE CONTENTS -- not in argv, and not in the environment
+# either -- and on Windows that is what makes case 2 a real case.** The bash there is
+# MSYS2, which rewrites values that look like POSIX paths before a native python3 sees
+# them, and a leading `//` is its documented escape for one literal slash -- so the `//!`
+# that case searches for arrived as `/!`. That still occurs in the file, one character in,
+# so nothing refused: the rewrite landed a character late, the inner attribute went in as
+# part of the line rather than at the start of it, the guard rightly saw no attribute
+# there, and the case reported the guard as having PASSED an arrangement it would in fact
+# refuse. It is the only `substitute` here whose search text begins with a slash, and the
+# only one that has ever failed on the Windows lane.
+#
+# **Moving the payloads out of argv and into the environment did not fix it, and that is
+# recorded here because it reads like it should have.** MSYS2 converts environment values
+# by the same heuristics it converts arguments by -- `MSYS2_ENV_CONV_EXCL` exists precisely
+# to opt a variable out -- so `//!` arrived as `/!` there too and the Windows lane failed
+# again, identically, with the fix in place. Only a file's contents cross that boundary
+# untouched: MSYS2 rewrites what a process is *started with*, never what it reads. So the
+# payloads are written here with `printf`, a bash builtin that spawns nothing and therefore
+# converts nothing, and python3 is handed three PATHS -- which are the one thing that
+# conversion is for and gets right.
 #
 # The read-back after the write does NOT catch that one, and saying so is the point: the
 # mangled `/!` still occurred in the file and the fixture still landed, one character late,
-# so a check that the fixture is present would have passed too. Only the payloads not
-# travelling through argv prevents it. The read-back is for the other failure -- a payload
-# that did not arrive intact at all, on any platform -- where a case would otherwise put
-# the guard a tree nobody wrote and report whatever came back.
+# so a check that the fixture is present would have passed too. Only the transport above
+# prevents it. The read-back is for the other failure -- a payload that did not arrive
+# intact at all, on any platform -- where a case would otherwise put the guard a tree
+# nobody wrote and report whatever came back.
 #
-# There is no coverage of the argv mangling itself off Windows; that lane is what confirms
-# it. `scripts/check-guard-path-spelling.sh` is the pattern for making such a defect
-# observable on the other two, and none exists for this one.
+# There is no coverage of the conversion itself off Windows; that lane is what confirms it.
+# `scripts/check-guard-path-spelling.sh` is the pattern for making such a defect observable
+# on the other two, and none exists for this one.
 substitute() {
-  SUBSTITUTE_BEFORE="$2" SUBSTITUTE_AFTER="$3" python3 - "$scratch/repo/$1" <<'PY' || fatal \
+  printf '%s' "$2" >"$scratch/substitute-before" && printf '%s' "$3" >"$scratch/substitute-after" || fatal \
+    "could not write this case's payloads into $scratch, so it was never put to the guard" \
+    "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+  python3 - "$scratch/repo/$1" "$scratch/substitute-before" "$scratch/substitute-after" <<'PY' || fatal \
     "the helper that rewrites a file in the scratch tree did not finish, so that case was never put to the guard" \
     "read the diagnostic above; if it names text this repository no longer contains, update the case to the text that replaced it"
-import os
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
-before, after = os.environ["SUBSTITUTE_BEFORE"], os.environ["SUBSTITUTE_AFTER"]
+before = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+after = pathlib.Path(sys.argv[3]).read_text(encoding="utf-8")
 text = path.read_text(encoding="utf-8")
 if before not in text:
     print(
