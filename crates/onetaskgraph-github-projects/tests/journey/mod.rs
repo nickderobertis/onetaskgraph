@@ -1040,6 +1040,7 @@ pub const MUTATION_TYPES: [(&str, bool, &[&str]); 28] = [
 /// a cap GitHub lowers refuses these documents and states the new number. Drift the other
 /// way costs a few requests that were never wrong. This is the one spelling of it — the
 /// offline guard in `tests/plugin.rs` reads this constant rather than the number.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The rule asks for a gate on drift in both directions and GitHub publishes no readable form of this cap — no schema field, no header, no documented figure — only the refusal it answers a document over the cap with. So a lowered cap is caught, by that refusal, in the required check; a raised one is unobservable except by deliberately sending a document over the current cap to see whether it is now accepted, which spends a request of a shared budget every run to learn something that changes nothing, because being under a raised cap is conservative rather than wrong.
 pub const INTROSPECTION_FIELD_LIMIT: usize = 2;
 
 /// The whole mutation contract, in as few documents as that cap allows.

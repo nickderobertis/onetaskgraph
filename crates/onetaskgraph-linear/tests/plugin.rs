@@ -1402,7 +1402,28 @@ async fn a_status_linear_refuses_under_carries_what_linear_said() {
         "and Linear's own words come with it: {message}"
     );
 
-    // Whatever a proxy in front of Linear answers with, the message stays a message.
+    // An answering proxy chooses the body, and this message is written to a terminal, so a
+    // body cannot carry an escape sequence or a newline into it.
+    let (endpoint, _) = server(
+        "502 Bad Gateway",
+        "",
+        "<html>\r\n\u{1b}[2J\u{1b}[HTaken over\n\tby a proxy</html>",
+    );
+    let refused = source(&endpoint).health().await.unwrap_err();
+    let SourceError::Unavailable { message } = refused else {
+        panic!("a refused status is an unavailable source: {refused:?}");
+    };
+    assert!(
+        !message.chars().any(char::is_control),
+        "no control character reaches the message: {message:?}"
+    );
+    assert!(
+        message.ends_with("<html> [2J [HTaken over by a proxy</html>"),
+        "what the proxy said stays readable, with the escapes' introducer gone rather \
+         than their text guessed at: {message}"
+    );
+
+    // And whatever it answers with, the message stays a message.
     let page = "x".repeat(5000);
     let (endpoint, _) = server("502 Bad Gateway", "", page);
     let refused = source(&endpoint).health().await.unwrap_err();

@@ -1,4 +1,5 @@
-//! [`common::AMBIENT_CREDENTIALS`] removed for real, rather than described.
+//! The sandbox's removal of [`common::AMBIENT_CREDENTIALS`], driven against a host that
+//! really has them set.
 //!
 //! **A binary of its own, holding one test.** `std::env::set_var` is unsafe because
 //! another thread may be reading the environment as it is written, and a test binary with

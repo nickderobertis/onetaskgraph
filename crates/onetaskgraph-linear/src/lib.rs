@@ -421,15 +421,33 @@ enum GqlErrorCode {
 /// not become the whole message.
 const SAID_LIMIT: usize = 400;
 
-/// `said`, cut to [`SAID_LIMIT`] characters on a character boundary and marked when cut.
+/// `said` made safe to put in a message: one line of printable text, cut to [`SAID_LIMIT`].
 ///
-/// Characters rather than bytes: a body is arbitrary text, and slicing one mid-codepoint
-/// would panic inside the error path that exists to explain a failure.
+/// A failed response's body is whatever answered — Linear's error envelope, or an HTML
+/// page from a proxy in front of it — and this message is written to a terminal. So every
+/// control character goes, escape sequences with them, and each run of whitespace becomes
+/// one space: a body cannot move the cursor, repaint the line or hide the rest of the
+/// diagnostic behind itself. Cut by characters rather than bytes, because slicing UTF-8
+/// mid-codepoint would panic inside the path that exists to explain a failure.
 fn elided(said: &str) -> String {
-    if said.chars().count() <= SAID_LIMIT {
-        return said.to_owned();
+    let mut printable = String::new();
+    let mut spaced = true;
+    for character in said.chars() {
+        if character.is_control() || character.is_whitespace() {
+            if !spaced {
+                printable.push(' ');
+                spaced = true;
+            }
+            continue;
+        }
+        printable.push(character);
+        spaced = false;
     }
-    let kept: String = said.chars().take(SAID_LIMIT).collect();
+    let printable = printable.trim_end();
+    if printable.chars().count() <= SAID_LIMIT {
+        return printable.to_owned();
+    }
+    let kept: String = printable.chars().take(SAID_LIMIT).collect();
     format!("{kept}…")
 }
 
@@ -471,13 +489,12 @@ impl LinearSource {
             // alone names the whole call and nothing about what Linear objected to. The
             // body is Linear's answer to this request and holds no credential; it is cut
             // because a proxy in front of Linear can answer with a page.
-            let said = response.text().await.unwrap_or_default();
-            let said = said.trim();
+            let said = elided(&response.text().await.unwrap_or_default());
             return Err(SourceError::Unavailable {
                 message: if said.is_empty() {
                     format!("Linear returned HTTP {status}")
                 } else {
-                    format!("Linear returned HTTP {status}: {}", elided(said))
+                    format!("Linear returned HTTP {status}: {said}")
                 },
             });
         }
