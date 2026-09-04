@@ -7740,6 +7740,9 @@ fn answer_a_label_call(
 ///
 /// Both halves matter. Under the cap, and *complete* — a batching that stayed under it by
 /// dropping a type would verify less while looking cheaper.
+///
+/// The cap comes from [`journey::INTROSPECTION_FIELD_LIMIT`], which is where GitHub's own
+/// number is written down once and where what catches it moving is recorded.
 #[test]
 fn no_introspection_document_selects_a_capped_field_more_often_than_github_allows() {
     let documents = journey::mutation_schema_documents();
@@ -7747,8 +7750,9 @@ fn no_introspection_document_selects_a_capped_field_more_often_than_github_allow
         for capped in ["fields{", "inputFields{"] {
             let used = document.matches(capped).count();
             assert!(
-                used <= 2,
-                "introspection document {index} selects `{capped}` {used} times; GitHub                  refuses the whole request above 2:\n{document}"
+                used <= journey::INTROSPECTION_FIELD_LIMIT,
+                "introspection document {index} selects `{capped}` {used} times; GitHub refuses the whole request above {}:\n{document}",
+                journey::INTROSPECTION_FIELD_LIMIT
             );
         }
     }

@@ -1043,7 +1043,17 @@ pub const MUTATION_TYPES: [(&str, bool, &[&str]); 28] = [
 /// `ofType`s without objecting to either, and named only the two that return a type's
 /// whole member list. So the fold stands and what is batched is the members — at
 /// most this many `fields` and this many `inputFields` per document.
-const INTROSPECTION_FIELD_LIMIT: usize = 2;
+///
+/// **GitHub owns this number and the drift gate is GitHub's own refusal, in the required
+/// check.** Nothing offline can observe the cap — the loopback board answers whatever it
+/// is asked — so there is no artifact to pin it against. What there is instead is that
+/// [`verify_mutation_schema`] runs against the real API on every credentialed run of this
+/// lane, and a cap GitHub lowers refuses those documents outright and states the new
+/// number in the refusal, exactly as it stated this one. Drift in the direction that
+/// matters therefore fails a required check naming its own figure; drift the other way
+/// costs a few requests that were never wrong. This is the repository's one spelling of
+/// it: the offline guard in `tests/plugin.rs` reads this constant rather than the number.
+pub const INTROSPECTION_FIELD_LIMIT: usize = 2;
 
 /// The whole mutation contract, in as few documents as that cap allows.
 ///
@@ -1095,9 +1105,6 @@ pub fn mutation_schema_documents() -> Vec<String> {
 }
 
 async fn verify_mutation_schema(token: &str) -> Result<(), String> {
-    // The eight documents answer one contract, so their answers are read as one: each
-    // carries its own aliases and no other's, and the checks below address the merged
-    // object by the alias they already used when this was a single request.
     let mut answered = serde_json::Map::new();
     for document in mutation_schema_documents() {
         let response = graphql(token, &document, "mutation schema introspection").await?;
