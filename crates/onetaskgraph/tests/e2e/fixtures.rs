@@ -460,7 +460,7 @@ pub const ROWS: &[Row] = &[
                 documents: Support::Native,
                 search_title: Support::Unsupported,
                 search_content: Support::Unsupported,
-                max_page_size: 250,
+                max_page_size: onetaskgraph_linear::MAX_PAGE_SIZE,
                 ..EVERY_PREDICATE_NATIVE
             },
         },

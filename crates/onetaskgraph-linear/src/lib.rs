@@ -34,7 +34,7 @@
 //! | `search_content` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
 //! | `task_dependencies` | **Supported and proven,** in both directions: `relations` and `inverseRelations`. |
 //! | `project_dependencies` | **Supported and proven,** in both directions, by the project relations of the same shape. Linear types every one of them `dependency`; see the ruling below on the edge that has no spelling here. |
-//! | `max_page_size` | **Supported and proven.** 250, Linear's own connection maximum; every read pages with Relay `first`/`after`. |
+//! | `max_page_size` | **Supported and proven.** 100; every read pages with Relay `first`/`after`. Linear's connection maximum is 250 and its complexity budget is the tighter bound — see [`MAX_PAGE_SIZE`]. |
 //!
 //! ## Ruling: the two searches are unimplemented, not unsupportable
 //!
@@ -152,6 +152,28 @@ use serde_json::{Value, json};
 
 /// The plugin kind a `linear` source's `plugin:` field names.
 pub const KIND: &str = "linear";
+
+/// The largest page this source will ask Linear for, and the capability it declares.
+///
+/// **Not Linear's connection maximum, which is 250, because a connection maximum is not
+/// the only thing bounding a page.** Linear also scores each document for complexity and
+/// refuses one over 10000 with HTTP 400 and `The query is too complex.` — and the
+/// `projects` document this source sends scores 17475 at `first: 250`, because its nested
+/// `labels` connection, which names no `first` of its own, is charged Linear's default of
+/// 50 per node. Measured against the real API on 2026-09-04: the largest `first` that
+/// document is accepted at is **143**, exactly, and the filter it carries adds nothing.
+/// The `issues` document is accepted at 250, so this is the tighter of the two and a
+/// single declared maximum has to be the tighter one.
+///
+/// 100 rather than 143 because 143 is the cliff. A field added to either selection moves
+/// it, and a page size chosen at the edge of a budget nobody here controls fails in the
+/// live lane rather than in a check. This leaves 30% of the budget spare.
+///
+/// Nothing offline can hold this: complexity is scored by Linear's own runtime and appears
+/// in no schema, so `every_variables_object_this_source_sends_conforms_to_the_pinned_schema`
+/// cannot see it. What guards it is the live journey, which walks a real `projects` page at
+/// exactly this size.
+pub const MAX_PAGE_SIZE: u32 = 100;
 const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 
 /// Exact GraphQL query documents issued by this plugin.
@@ -953,7 +975,7 @@ impl LinearSource {
                     } else {
                         ISSUE_RELATIONS
                     },
-                    json!({"id":near.0,"first":250,"after":cursor.as_ref().map(|cursor|&cursor.0)}),
+                    json!({"id":near.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor|&cursor.0)}),
                 )
                 .await?;
             let root = data
@@ -1148,7 +1170,7 @@ impl LinearSource {
             {
                 let mut cursor: Option<Cursor> = None;
                 loop {
-                    let data = self.send(if matches!(kind, WriteKind::Project) { PROJECTS } else { ISSUES }, json!({"first":250,"after":cursor.as_ref().map(|cursor|&cursor.0),"filter":{}})).await?;
+                    let data = self.send(if matches!(kind, WriteKind::Project) { PROJECTS } else { ISSUES }, json!({"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor|&cursor.0),"filter":{}})).await?;
                     let (items, next) = if matches!(kind, WriteKind::Project) {
                         let page = connection(&data, "projects", map_project)?;
                         (
@@ -1201,7 +1223,7 @@ impl TaskSource for LinearSource {
             search_content: Support::Unsupported,
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
-            max_page_size: 250,
+            max_page_size: MAX_PAGE_SIZE,
         }
     }
     fn writes(&self) -> WriteSupport {
@@ -1233,7 +1255,7 @@ impl TaskSource for LinearSource {
         query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
-        let d=self.send(ISSUES,json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(&query.labels,&query.statuses,&query.project)})).await?;
+        let d=self.send(ISSUES,json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(&query.labels,&query.statuses,&query.project)})).await?;
         connection(&d, "issues", map_task)
     }
     async fn query_projects(
@@ -1242,14 +1264,14 @@ impl TaskSource for LinearSource {
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         // llmlint: ignore[changed_behavior_has_e2e] The shared CLI journey `every_complete_dataset_source_filters_projects_by_label_status_and_text` asserts that Linear status filtering returns only P-2 and reports native pushdown; this lower-level HTTP test separately asserts the serialized `started` predicate.
-        let d=self.send(PROJECTS,json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.project_filter(&query.labels,&query.statuses)})).await?;
+        let d=self.send(PROJECTS,json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.project_filter(&query.labels,&query.statuses)})).await?;
         connection(&d, "projects", map_project)
     }
     async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
         let d = self
             .send(
                 LABELS,
-                json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0)}),
+                json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0)}),
             )
             .await?;
         connection(&d, "issueLabels", map_label)
@@ -1417,7 +1439,7 @@ impl TaskSource for LinearSource {
         // `query.text` is read by nothing here on purpose. Both searches are declared
         // `Unsupported`, and capability rule 2 says an ignored predicate returns the
         // *wider* set for the engine to narrow — half-applying one is what would drop rows.
-        let want = page.limit.min(250) as usize;
+        let want = page.limit.min(MAX_PAGE_SIZE) as usize;
         let mut filter = serde_json::Map::new();
         if let ProjectFilter::Is(id) = &query.project {
             filter.insert("project".into(), json!({"id": {"eq": id.0}}));
@@ -1565,7 +1587,7 @@ impl LinearSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        let limit = page.limit.min(250);
+        let limit = page.limit.min(MAX_PAGE_SIZE);
         let cursor = page.cursor.as_ref().map(|c| c.0.as_str());
         if let Some(offset) = cursor.and_then(|c| c.strip_prefix(RECORDED_CURSOR)) {
             // This cursor resumes the *forward* tail and only a forward walk ever issues

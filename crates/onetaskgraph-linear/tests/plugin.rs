@@ -2938,7 +2938,11 @@ async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
         .unwrap();
     assert_eq!(page.items.len(), 4);
     let wire = wire.recv().unwrap();
-    assert!(wire.contains("every") && wire.contains("null") && wire.contains("250"));
+    assert!(
+        wire.contains("every")
+            && wire.contains("null")
+            && wire.contains(&onetaskgraph_linear::MAX_PAGE_SIZE.to_string())
+    );
     let (endpoint, _) = server(
         "200 OK",
         "",
@@ -2974,7 +2978,7 @@ async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
         .unwrap();
     assert!(wire.recv().unwrap().contains("started"));
     let caps = source("http://127.0.0.1:1").capabilities();
-    assert_eq!(caps.max_page_size, 250);
+    assert_eq!(caps.max_page_size, onetaskgraph_linear::MAX_PAGE_SIZE);
     assert!(matches!(
         caps.search_title,
         onetaskgraph_plugin_api::Support::Unsupported

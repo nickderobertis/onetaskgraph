@@ -130,7 +130,7 @@ async fn walk(
     let mut after = Value::Null;
     let mut found = Vec::new();
     for _ in 0..50 {
-        let mut variables = json!({"first":250,"after":after});
+        let mut variables = json!({"first":onetaskgraph_linear::MAX_PAGE_SIZE,"after":after});
         if let Some(prefix) = prefix {
             variables["prefix"] = Value::String(prefix.to_owned());
         }
@@ -595,7 +595,10 @@ async fn drive_every_declared_capability(
         let step = source
             .query_projects(
                 &ProjectQuery::default(),
-                &PageRequest { cursor, limit: 250 },
+                &PageRequest {
+                    cursor,
+                    limit: onetaskgraph_linear::MAX_PAGE_SIZE,
+                },
             )
             .await
             .map_err(|error| format!("live project listing failed: {error}"))?;
@@ -973,7 +976,7 @@ async fn drive_documents(
     // predicate the other, and a label demanded of a document keeps neither.
     let titles = |query: DocumentQuery| async move {
         let mut found = source
-            .query_documents(&query, &page(250))
+            .query_documents(&query, &page(onetaskgraph_linear::MAX_PAGE_SIZE))
             .await
             .map_err(|error| format!("live document read failed: {error}"))?
             .items
@@ -1105,7 +1108,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             search_content: Support::Unsupported,
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
-            max_page_size: 250,
+            max_page_size: onetaskgraph_linear::MAX_PAGE_SIZE,
         }
     );
 
