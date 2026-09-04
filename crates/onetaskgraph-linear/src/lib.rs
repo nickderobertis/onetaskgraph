@@ -773,6 +773,15 @@ impl LinearSource {
             };
             cursor = Some(next);
         }
+        // Linear anchors a project relation to a point in time at each end, and both ends
+        // are required: `ProjectRelationCreateInput` declares `anchorType` and
+        // `relatedAnchorType` as `String!` in the published schema. The pair is
+        // finish-to-start — the blocker's `end` onto the blocked project's `start` — and
+        // `near` is the item that depends, so the near end anchors at its start and the
+        // far end at its end. A `Related` edge carries no ordering and Linear offers no
+        // anchor that says so, so it sends the same pair.
+        const NEAR_ANCHOR: &str = "start";
+        const FAR_ANCHOR: &str = "end";
         for edge in edges {
             if edge.to.kind
                 != match kind {
@@ -794,7 +803,7 @@ impl LinearSource {
             let (query, input) = if matches!(kind, WriteKind::Project) {
                 (
                     graphql::PROJECT_RELATION_CREATE,
-                    json!({"projectId":near.0,"relatedProjectId":far,"type":relation_type}),
+                    json!({"projectId":near.0,"relatedProjectId":far,"type":relation_type,"anchorType":NEAR_ANCHOR,"relatedAnchorType":FAR_ANCHOR}),
                 )
             } else {
                 (

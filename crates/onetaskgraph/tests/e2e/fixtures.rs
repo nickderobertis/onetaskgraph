@@ -1809,7 +1809,13 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
             exact_linear_variable_keys(variables, &["input"])
                 && valid_linear_write_input(
                     variables.get("input"),
-                    &["projectId", "relatedProjectId", "type"],
+                    &[
+                        "projectId",
+                        "relatedProjectId",
+                        "type",
+                        "anchorType",
+                        "relatedAnchorType",
+                    ],
                     &[],
                 )
         }
@@ -2273,6 +2279,20 @@ fn linear_write_relation(
         .ok_or("relation type must be a string")?;
     if !matches!(kind, "blocks" | "related") {
         return Err("undocumented relation type");
+    }
+    // Linear anchors a project relation at both ends and requires both, so this responder
+    // refuses an anchor it has no documented value for exactly as the real API refuses a
+    // missing one.
+    if project {
+        for key in ["anchorType", "relatedAnchorType"] {
+            let anchor = input
+                .get(key)
+                .and_then(Value::as_str)
+                .ok_or("relation anchor must be a string")?;
+            if !matches!(anchor, "start" | "end") {
+                return Err("undocumented relation anchor");
+            }
+        }
     }
     let edge = json!({"from":input.get(near_key).ok_or("missing near id")?,"to":input.get(far_key).ok_or("missing far id")?,"kind":kind});
     data[if project {

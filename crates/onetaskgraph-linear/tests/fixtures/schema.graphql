@@ -11,6 +11,14 @@
 # `Unknown argument "filter" on field "Query.projectStatuses". Did you mean "after"?`. So
 # that connection is not filterable and `ProjectStatusFilter`, which nothing now sends, is
 # gone with it; the plugin matches the status name locally instead.
+#
+# `ProjectRelationCreateInput` is re-observed and pinned 2026-09-04 from the published
+# schema, which now declares `anchorType: String!` and `relatedAnchorType: String!`
+# alongside the three fields this file carried before. Linear added them under both `main`
+# and this branch, and the live journey's project-relation write failed on the first with
+# `Field "anchorType" of required type "String!" was not provided.` The two milestone
+# anchors and the optional `id` that input also declares stay out, as every unsent field
+# does.
 # Only the read/write contract exercised by this plugin is retained.
 type Query {
   viewer: User!
@@ -274,5 +282,7 @@ input ProjectRelationCreateInput {
   projectId: String!
   relatedProjectId: String!
   type: String!
+  anchorType: String!
+  relatedAnchorType: String!
 }
 scalar DateTime

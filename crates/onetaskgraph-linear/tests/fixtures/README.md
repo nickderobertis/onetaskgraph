@@ -29,6 +29,17 @@ than left to be rediscovered:
   asked for the documents belonging to no project, and this source applies that one
   predicate to a fetched page itself.
 
+`ProjectRelationCreateInput` carries a fourth date. Linear added two required fields to it
+— `anchorType: String!` and `relatedAnchorType: String!` — and the live journey's project
+write began failing with `Field "anchorType" of required type "String!" was not provided.`
+on `main` and on the branch alike. Both were re-observed in the published schema on
+**2026-09-04** and pinned then. That schema types them as bare `String!` and enumerates no
+values, so what this source sends is the pair every published caller of that mutation
+sends: `start` and `end`, a point in time at each end rather than project-versus-milestone,
+finish-to-start from the blocker's `end` onto the blocked project's `start`. The optional
+`id`, `projectMilestoneId` and `relatedProjectMilestoneId` that input also declares stay
+out of this subset, as every field this plugin does not send does.
+
 The contract test parses every production operation against the pinned
 field and argument types and recursively validates each selected response-fixture shape.
 `issues.json` covers `Issue`, `WorkflowState`, `IssueLabel`, and `PageInfo`;

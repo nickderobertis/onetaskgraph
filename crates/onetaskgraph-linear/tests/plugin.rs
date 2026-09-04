@@ -175,7 +175,13 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         ),
         (
             "ProjectRelationCreateInput",
-            &["projectId", "relatedProjectId", "type"][..],
+            &[
+                "projectId",
+                "relatedProjectId",
+                "type",
+                "anchorType",
+                "relatedAnchorType",
+            ][..],
         ),
         (
             "DocumentCreateInput",
@@ -675,10 +681,32 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
             .iter()
             .any(|request| request.contains(onetaskgraph_linear::graphql::PROJECT_CREATE))
     );
-    assert!(
-        requests
-            .iter()
-            .any(|request| request.contains("relatedProjectId") && request.contains("P-FAR"))
+    // Linear declares both anchors required on `ProjectRelationCreateInput`, so the whole
+    // input object is asserted rather than the far id alone: dropping either anchor is
+    // what the live lane failed on, and a substring assertion would not have seen it.
+    let relation_input = requests
+        .iter()
+        .find(|request| request.contains(onetaskgraph_linear::graphql::PROJECT_RELATION_CREATE))
+        .map(|request| {
+            let body = request
+                .split_once("\r\n\r\n")
+                .expect("the recorded request carries a body")
+                .1;
+            serde_json::from_str::<serde_json::Value>(body).expect("the body is JSON")["variables"]
+                ["input"]
+                .clone()
+        })
+        .expect("a project edge is written through projectRelationCreate");
+    assert_eq!(
+        relation_input,
+        serde_json::json!({
+            "projectId": "P-NEW",
+            "relatedProjectId": "P-FAR",
+            "type": "related",
+            "anchorType": "start",
+            "relatedAnchorType": "end",
+        }),
+        "the project relation input drifted from what Linear requires"
     );
     let create = requests
         .iter()
