@@ -146,45 +146,22 @@ fn declared_target_ids(root: &Path) -> Vec<String> {
 #[test]
 fn every_declared_target_answers_from_its_real_registry() {
     let root = repository_root();
-    // Named relative to the working directory just set, with forward slashes, rather than
-    // as the absolute path this platform spells. The probe resolves the repository it
-    // answers about from `BASH_SOURCE[0]` — `dirname` of it, then `..` — and `dirname` has
-    // no idea a backslash separates anything, so an absolute Windows path arrives as one
-    // segment, `dirname` answers `.`, and the probe reads `release-targets.toml` from the
-    // directory *above* this repository. A relative path spelled this way is what every
-    // platform's `dirname` splits the same.
-    const PROBE: &str = "scripts/release-probe.sh";
+    let probe = root.join("scripts").join("release-probe.sh");
     let mut failures = Vec::new();
 
     for identifier in declared_target_ids(&root) {
         let answer = Command::new("bash")
-            .arg(PROBE)
+            .arg(&probe)
             .arg(&identifier)
             .current_dir(&root)
             .output()
-            .unwrap_or_else(|error| panic!("could not run {PROBE}: {error}"));
+            .unwrap_or_else(|error| panic!("could not run {}: {error}", probe.display()));
         let stdout = String::from_utf8_lossy(&answer.stdout).trim().to_string();
         let stderr = String::from_utf8_lossy(&answer.stderr).trim().to_string();
 
         if !answer.status.success() {
-            // Everything the run said, both streams, and an explicit word when it said
-            // nothing at all. The probe refuses through one helper that always writes a
-            // reason and a next action to stderr, so a non-zero exit with both streams
-            // empty is not the probe refusing: it is the interpreter never reaching the
-            // script, which is a different thing to go and fix and used to be reported as
-            // a bare exit code with an empty phrase after it.
-            let said = match (stdout.as_str(), stderr.as_str()) {
-                ("", "") => "nothing on either stream, so it did not reach the probe's own \
-                             refusal — every one of those writes a reason to stderr. Look at \
-                             whether `bash` here is the one that runs this repository's other \
-                             scripts, and whether it could open the script at all"
-                    .to_owned(),
-                ("", stderr) => format!("on stderr: {stderr}"),
-                (stdout, "") => format!("on stdout, and nothing on stderr: {stdout}"),
-                (stdout, stderr) => format!("on stderr: {stderr}; and on stdout: {stdout}"),
-            };
             failures.push(format!(
-                "{identifier}: not answered ({}). The probe said {said}",
+                "{identifier}: not answered ({}). The probe said: {stderr}",
                 answer.status
             ));
             continue;
