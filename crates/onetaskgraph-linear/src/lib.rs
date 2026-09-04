@@ -1019,29 +1019,21 @@ impl LinearSource {
             cursor = Some(next);
         }
         // Linear requires an anchor at each end of a project relation and validates both
-        // against an enum GraphQL introspection cannot see: `ProjectRelationCreateInput`
-        // declares them `String!` and enumerates nothing. The values are `start`, `end`
-        // and `milestone`. `start` and `end` are the anchors for a relation on the project
-        // as a whole — they name which of its own two ends the dependency line touches,
-        // and Linear's project-dependency documentation says it "only support[s] a end ->
-        // start dependency" — while `milestone` is what pairs with the two milestone ids
-        // this source never sends. The terse field description reads as though the choice
-        // were the project versus a milestone, but there is no value naming the project
-        // alone: `project` is refused, and Linear's refusal enumerates the three above.
+        // against an enum GraphQL cannot see: `ProjectRelationCreateInput` declares them
+        // `String!` and enumerates nothing, and the field descriptions read as a choice
+        // between the project and a milestone, which is not what they are. Linear's own
+        // refusal enumerates them — sent `project` in both, it answered `anchorType must
+        // be one of the following values: start, end, milestone` — and `milestone` needs
+        // an id this source never sends, so the two whole-project anchors are the whole of
+        // what it can send.
         //
-        // Finish-to-start is the blocker's `end` onto the blocked project's `start`, and
-        // `near` is the item that depends, so the near end takes `start` and the far end
-        // it waits on takes `end`.
-        //
-        // **The anchors carry the direction, and the two id slots do not.** That was
-        // reasoned to and then measured, because Linear stores whatever pair it is given
-        // and takes a backwards dependency as readily as the right one — so acceptance
-        // says nothing, and only Linear's own reading of a stored relation does. Linear
-        // publishes that reading as server-side filters: `ProjectFilter` carries
-        // `hasBlockingRelations` ("projects which are blocking") and
-        // `hasBlockedByRelations` ("projects which are blocked"), which the workspace
-        // computes rather than echoes. Three relations written between two scratch
-        // projects on 2026-09-04, each read back through those filters, settle it:
+        // **Which of them goes where carries the direction, and the two id slots do not.**
+        // Linear stores whatever pair it is given and reads a backwards dependency as
+        // readily as the right one, so acceptance settles nothing; what does is Linear's
+        // own reading of a stored relation, published as the computed `ProjectFilter`
+        // members `hasBlockingRelations` ("projects which are blocking") and
+        // `hasBlockedByRelations` ("projects which are blocked"). Three relations between
+        // two scratch projects, read back through them on 2026-09-04:
         //
         // | `projectId` | `anchorType` | `relatedProjectId` | `relatedAnchorType` | blocked | blocking |
         // | ----------- | ------------ | ------------------ | ------------------- | ------- | -------- |
@@ -1049,17 +1041,11 @@ impl LinearSource {
         // | A           | `end`        | B                  | `start`             | B       | A        |
         // | B           | `end`        | A                  | `start`             | A       | B        |
         //
-        // Rows one and three are the same relation with the ids exchanged and the anchors
-        // exchanged with them, and Linear reads both the same way; rows one and two hold
-        // the ids still and exchange only the anchors, and Linear's reading flips. So the
-        // project whose anchor is `start` is the one that waits, whichever slot it sits
-        // in, and row one is what this source sends: `near`, the item that depends, in
-        // `projectId` with `start`. `hasDependsOnRelations` and `hasDependedOnByRelations`
-        // — deprecated, and named in this product's own vocabulary — agreed with the
-        // blocked and blocking columns in every row.
-        //
-        // This matters because this source puts the depending item in `projectId`, where
-        // Linear's own callers put the blocker. Copying their measured `end`/`start` pair
+        // Rows one and three exchange the ids and the anchors together and read alike;
+        // rows one and two exchange only the anchors and the reading flips. So the project
+        // anchored `start` is the one that waits, whichever slot it sits in, and row one is
+        // what this source sends — `near`, the item that depends, in `projectId`. Linear's
+        // own callers put the blocker there instead, so copying their `end`/`start` pair
         // across by position would state every dependency backwards in the workspace, and
         // nothing would refuse it.
         const NEAR_ANCHOR: &str = "start";
@@ -1093,14 +1079,9 @@ impl LinearSource {
             // 2026-09-04 rather than inferred. Each of `blocks`, `dependsOn`, `related`
             // and `DEPENDENCY` was refused with `property: "type"` and
             // `constraints: {"isEnum": "type must be one of the following values:
-            // dependency"}`; `dependency` was accepted. The same probe put `project` in
-            // both anchors and was refused with `anchorType must be one of the following
-            // values: start, end, milestone` — Linear's own enumeration of a field
-            // GraphQL declares as a bare `String!` — while `milestone` without a milestone
-            // id was refused with `A milestone is required for a dependency with a
-            // milestone anchor.` So the vocabulary above is Linear's, not a reading of its
-            // documentation, and the whole of it reaches this source through the
-            // validator's `extensions`; see `GqlError::said`.
+            // dependency"}`; `dependency` was accepted. That enumeration, like the
+            // anchors' above, reaches this source through the validator's `extensions`;
+            // see `GqlError::said`.
             //
             // A `Related` project edge is refused at the top of this function by that same
             // enumeration: it has one member and it is an ordering. An issue relation is a
