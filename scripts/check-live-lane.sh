@@ -68,6 +68,15 @@ FORK = "github.event.pull_request.head.repo.fork"
 LIVE_CRATE = Path("crates/onetaskgraph-live/src/lib.rs")
 ENVIRONMENT_LAYER = Path("crates/onetaskgraph-core/src/config/environment_layer.rs")
 
+# Every message below spells a path with `as_posix()` rather than `str()`, because python
+# renders a path with the running platform's separator: on the Windows runner this check
+# named `crates\onetaskgraph-live\src\lib.rs`, and
+# `scripts/check-live-lane-enforced.sh` — which watches this guard refuse, and asserts the
+# refusal says what to go and fix — looks for the forward-slash spelling every other file
+# here uses. Two of its cases failed on that lane alone while passing on the other two,
+# which is the guard's diagnostic being unreadable on one platform rather than the guard
+# being wrong.
+
 
 def refuse(problem, next_action):
     """Stop with the exact problem and one concrete thing to do about it."""
@@ -82,7 +91,7 @@ def read(path, what):
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as problem:
         refuse(
-            f"could not read {path}: {problem}.",
+            f"could not read {path.as_posix()}: {problem}.",
             f"restore {what} as readable UTF-8 text, or point this check at where it "
             "moved to.",
         )
@@ -113,25 +122,25 @@ for project_file in sorted(
         project = json.loads(text)
     except json.JSONDecodeError as problem:
         refuse(
-            f"{project_file} is not valid JSON: {problem}.",
+            f"{project_file.as_posix()} is not valid JSON: {problem}.",
             "fix that file — every other check that reads the project graph reads it too.",
         )
     if not isinstance(project, dict):
         refuse(
-            f"{project_file} is valid JSON but not an object.",
+            f"{project_file.as_posix()} is valid JSON but not an object.",
             "make it the project configuration Nx reads — every other check that reads "
             "the project graph reads it too.",
         )
     targets = project.get("targets", {})
     if not isinstance(targets, dict):
         refuse(
-            f"{project_file} has a `targets` that is not an object.",
+            f"{project_file.as_posix()} has a `targets` that is not an object.",
             "make it the map of target names Nx reads, so this check can see which "
             "targets it declares.",
         )
     if "test-live" in targets:
         problems.append(
-            f"{project_file}: declares a `test-live` target again. The tests that reach a "
+            f"{project_file.as_posix()}: declares a `test-live` target again. The tests that reach a "
             "real API are ordinary tests of `test`; a target beside it is a lane the "
             "required check does not run"
         )
@@ -144,7 +153,7 @@ for project_file in sorted(
 for relative, project_file in sorted(tagged.items()):
     if relative not in SESSIONS:
         problems.append(
-            f"{project_file}: is tagged as having a live session, but this check knows of "
+            f"{project_file.as_posix()}: is tagged as having a live session, but this check knows of "
             f"no {relative} — add its credential and its nominations to the SESSIONS map in "
             "this script, or the session it runs is one nothing here watches"
         )
@@ -169,7 +178,7 @@ for relative, session in sorted(SESSIONS.items()):
     project_file = tagged[relative]
     if not isinstance(test, dict):
         problems.append(
-            f"{project_file}: has a `test` target that is not an object, so this check "
+            f"{project_file.as_posix()}: has a `test` target that is not an object, so this check "
             "cannot read what its cache is keyed on"
         )
         continue
@@ -181,7 +190,7 @@ for relative, session in sorted(SESSIONS.items()):
     for variable in (session["credential"], *session["nominations"], DEMAND):
         if variable not in keyed:
             problems.append(
-                f"{project_file}: its `test` target does not name {variable} as an `env` "
+                f"{project_file.as_posix()}: its `test` target does not name {variable} as an `env` "
                 "input, so a cached run that read a different value for it would be "
                 f"replayed instead of running {relative}"
             )
@@ -268,7 +277,7 @@ def declared_value(name):
     found = re.search(rf'(?m)^pub const {name}: &str = "([^"]+)";$', live_source)
     if not found:
         refuse(
-            f"{LIVE_CRATE} no longer declares {name} as a string constant, so what "
+            f"{LIVE_CRATE.as_posix()} no longer declares {name} as a string constant, so what "
             f"{DEMAND} may be set to cannot be read from the crate that decides it.",
             f"restore `pub const {name}: &str = \"...\";` there, or point this check at "
             "where the value moved to.",
@@ -332,26 +341,26 @@ for relative, session in SESSIONS.items():
     carrying = [step for step in steps if f"secrets.{credential}" in step]
     if not carrying:
         problems.append(
-            f"{WORKFLOW}: never passes {credential}, so {relative} skips everywhere and "
+            f"{WORKFLOW.as_posix()}: never passes {credential}, so {relative} skips everywhere and "
             "proves nothing. There is one name per credential and nothing translates "
             "between spellings"
         )
     for step in carrying:
         if "matrix.os == 'ubuntu-latest'" not in step:
             problems.append(
-                f"{WORKFLOW}: hands {credential} to a step that is not scoped to one lane "
+                f"{WORKFLOW.as_posix()}: hands {credential} to a step that is not scoped to one lane "
                 "of the platform matrix. Every lane carrying it opens a session of its own "
                 "against the same shared fixture"
             )
         assigned = demanded(step)
         if assigned is None:
             problems.append(
-                f"{WORKFLOW}: hands {credential} to a step that does not set {DEMAND}, so "
+                f"{WORKFLOW.as_posix()}: hands {credential} to a step that does not set {DEMAND}, so "
                 "that lane passes green when the credential is absent"
             )
         elif not demands_a_credential(assigned):
             problems.append(
-                f"{WORKFLOW}: hands {credential} to a step that sets {DEMAND} to "
+                f"{WORKFLOW.as_posix()}: hands {credential} to a step that sets {DEMAND} to "
                 f"{assigned!r}, which is not the demand. `0`, the empty string and an "
                 "absent variable all read the same way — the lane skips, and a skip is a "
                 "conclusion branch protection accepts in place of success — so the name "
@@ -361,7 +370,7 @@ for relative, session in SESSIONS.items():
         for nomination in session["nominations"]:
             if nomination not in step:
                 problems.append(
-                    f"{WORKFLOW}: hands {credential} to a step that does not name "
+                    f"{WORKFLOW.as_posix()}: hands {credential} to a step that does not name "
                     f"{nomination}, so that session skips — or, with {DEMAND}=1, fails — "
                     "for want of a nomination the lane refuses to discover for itself"
                 )
@@ -371,7 +380,7 @@ for relative, session in SESSIONS.items():
 for wrong in ("GITHUB_PROJECTS_TOKEN:", "secrets.GITHUB_PROJECTS_TOKEN"):
     if wrong in code:
         problems.append(
-            f"{WORKFLOW}: uses GITHUB_PROJECTS_TOKEN. GitHub Actions refuses to create any "
+            f"{WORKFLOW.as_posix()}: uses GITHUB_PROJECTS_TOKEN. GitHub Actions refuses to create any "
             "secret whose name begins with GITHUB_, which is why the short name "
             "GH_PROJECTS_TOKEN is the one that can exist in both CI and the local secrets "
             "file."
@@ -384,7 +393,7 @@ cleared_names = set(cleared.group(1).split()) if cleared else set()
 for name in {session["credential"] for session in SESSIONS.values()} | {DEMAND}:
     if name not in cleared_names:
         problems.append(
-            f"{COVERAGE}: does not clear {name}. `just check` runs `test` and then "
+            f"{COVERAGE.as_posix()}: does not clear {name}. `just check` runs `test` and then "
             "`coverage`, and `cargo llvm-cov` re-runs the same integration tests — so this "
             "phase would open a second session against the shared external fixture the "
             "first one is still writing to"
@@ -407,7 +416,7 @@ namespace = re.search(
 )
 if not prefix or not namespace:
     refuse(
-        f"{ENVIRONMENT_LAYER} no longer declares both ENVIRONMENT_PREFIX and "
+        f"{ENVIRONMENT_LAYER.as_posix()} no longer declares both ENVIRONMENT_PREFIX and "
         "RESERVED_NAMESPACE as string constants, so what the configuration layer reads "
         "and what it leaves alone cannot be told apart here.",
         "restore both constants, or point this check at where the reservation moved to.",
@@ -423,7 +432,7 @@ live_variables = {
 }
 if not live_variables:
     refuse(
-        f"{LIVE_CRATE} declares no variable under {prefix.group(1)}, so this check is "
+        f"{LIVE_CRATE.as_posix()} declares no variable under {prefix.group(1)}, so this check is "
         "watching nothing.",
         "restore the lane's variables as `pub const NAME: &str = \"...\";`, or point "
         "this check at where they moved to.",
@@ -431,9 +440,9 @@ if not live_variables:
 for name, value in sorted(live_variables.items()):
     if not value.startswith(namespace.group(1)):
         problems.append(
-            f"{LIVE_CRATE}: {name} is {value!r}, which is under the configuration prefix "
+            f"{LIVE_CRATE.as_posix()}: {name} is {value!r}, which is under the configuration prefix "
             f"{prefix.group(1)!r} but outside the namespace "
-            f"{ENVIRONMENT_LAYER} reserves, {namespace.group(1)!r}. The configuration "
+            f"{ENVIRONMENT_LAYER.as_posix()} reserves, {namespace.group(1)!r}. The configuration "
             "layer would read it as a setting called "
             f"{value[len(prefix.group(1)):].lower()!r} and refuse every invocation of the "
             "binary on the lane that exports it — the SDK generator and every journey "
