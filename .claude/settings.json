@@ -20,7 +20,6 @@
       "Bash(just check)",
       "Bash(just gate)",
       "Bash(just test)",
-      "Bash(just test-live)",
       "Bash(just lint)",
       "Bash(just typecheck)",
       "Bash(just format)",

@@ -1,5 +1,6 @@
 {
   "name": "@onetaskgraph/cli-darwin-arm64",
+  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] This is a publication carrier, not a development package: release.yml copies a freshly built binary in and `npm pack`s it at release time, so this directory holds a manifest and nothing to run. As a workspace member it would resolve the launcher's optionalDependency to an empty local directory. The version is a literal because it is what an end user's npm resolves from the registry; scripts/set-version.sh --check refuses any other. JSON has no comment to scope this more narrowly than the file.",
   "version": "0.2.21",
   "os": [
     "darwin"

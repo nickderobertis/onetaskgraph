@@ -107,16 +107,34 @@ class SchemaBundle(TypedDict):
     roots: dict[str, JsonValue]
 
 
+# llmlint: ignore-block[async_typed_clients_at_boundaries] This is a build-time generator, not
+# a client: one ordered pass that drives `cargo` as a subprocess and consumes its stdout as
+# the schema bundle the next step reads. There is no concurrent work to overlap and no service
+# on the other end, and nothing in this file ships in the wheel. The async typed boundary this
+# rule asks of this package is `src/onetaskgraph_sdk/client.py`, which is exactly that.
 def run_workspace_binary(*args: str) -> str:
-    """Run the workspace binary, building the exact artifact under generation."""
+    """Run the workspace binary, building the exact artifact under generation.
+
+    A failure reports what the subprocess said. `check=True` raises with the command line
+    alone, and the output this captures — stdout because it IS the answer, stderr with it —
+    goes into that exception rather than to the terminal, so the whole diagnosis is lost.
+    """
+    command = ["cargo", "run", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph", "--"]
+    command.extend(args)
     result = subprocess.run(
-        ["cargo", "run", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph", "--", *args],
-        cwd=ROOT.parent.parent,
-        check=True,
-        text=True,
-        capture_output=True,
+        command, cwd=ROOT.parent.parent, check=False, text=True, capture_output=True
     )
+    if result.returncode != 0:
+        rendered = " ".join(command)
+        raise SystemExit(
+            f"`{rendered}` exited {result.returncode}\n"
+            f"--- its stderr ---\n{result.stderr}"
+            f"--- its stdout ---\n{result.stdout}"
+        )
     return result.stdout
+
+
+# llmlint: ignore-end[async_typed_clients_at_boundaries]
 
 
 def leaves(prefix: tuple[str, ...] = ()) -> list[tuple[str, ...]]:

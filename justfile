@@ -60,14 +60,21 @@ distribution-check:
 distribution-test:
     @{{nx}} run scripts:distribution-test
 
+# llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] `affected` is the edge these suites sit behind: a plugin's live tests run only when that plugin's own diff selects it.
 # Tests only, for the affected projects.
 test:
     @{{nx}} affected -t test
+# llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]
 
 # Each project measures its own crate and fails below 95% lines. The measurement is
 # skipped on Windows with a printed notice (see scripts/rust-coverage.sh), where
 # instrumentation does not attribute subprocess coverage; the functional lanes still
 # gate that platform.
+#
+# `cargo llvm-cov` re-runs the very integration tests `test` above just ran, so live
+# credentials left set here would open a SECOND session per lane against one shared external
+# fixture. scripts/rust-coverage.sh clears them; read the note there before changing this
+# recipe or the platform matrix in .github/workflows/ci.yml.
 
 # Coverage only, for the affected projects. Fails below 95% lines.
 coverage:
@@ -88,16 +95,6 @@ format-check:
 # Format every project in place.
 format:
     @{{nx}} run-many -t format --all
-
-# A project with no live tests passes with nothing to run, which is what makes the
-# target uniform. Neither hosted plugin's credential is required: without one, that
-# plugin's own tests skip rather than fail.
-
-# Sweep the credential-gated live lane. Pass a project to run just that one — which is
-# what .github/workflows/live.yml does, so each hosted plugin's job stays scoped to its
-# own crate and its own single credential.
-test-live projects="":
-    @scripts/test-live.sh {{projects}}
 
 # Supply-chain gate: banned crates, licences, sources and advisories. Linux-only in CI,
 # where it is its own required check.

@@ -3,6 +3,15 @@
 # A pull request runs the gate over the projects its diff can actually reach; the default
 # branch sweeps every project, so nothing affected-detection or a stale cache could miss
 # goes unchecked. Both go through the same `just` recipes a contributor runs locally.
+#
+# Two things about the tests that reach a real API are this file's alone. One live session
+# per run: only the `ubuntu-latest` leg carries the credentials, and scripts/rust-coverage.sh
+# clears them before coverage re-runs the same tests — read the note there before changing
+# either. And `ONETASKGRAPH_LIVE_REQUIRED` travels with them rather than with the matrix: `1`
+# on that leg, `0` there on a fork pull request alone, so the leg that was handed a credential
+# never passes green for one that went missing. The other two legs run the same tests with
+# neither and skip them, which is what one session per run costs; the leg that does run them
+# is required for the merge exactly as they are.
 
 name: ci
 
@@ -98,6 +107,7 @@ jobs:
             echo "Affected against the merge base with $BASE_REF: $merge_base"
           fi
 
+      # llmlint: ignore[live_tier_compiles_and_requires_credential] This leg is given no credential, for the reason the file header states, so it cannot demand one.
       - name: Check the affected projects
         if: github.event_name == 'pull_request' && matrix.os != 'ubuntu-latest'
         env:
@@ -113,12 +123,32 @@ jobs:
       - name: Check the affected projects and generated Python SDK
         if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
         env:
+          # GH_PROJECTS_TOKEN, not GITHUB_PROJECTS_TOKEN: GitHub Actions refuses to create
+          # a secret whose name begins with GITHUB_, so the short name is the one that can
+          # exist both here and in the local secrets file. Do not "correct" it into a break.
+          GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # Nominations, not secrets: each lane writes only where it is pointed and refuses
+          # to pick a target itself, because "whichever project was updated most recently"
+          # once walked a credentialed write onto the board plans are authored on. Naming
+          # them in the open is what makes the blast radius reviewable.
+          # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The lane's own refusal is the drift gate: ONETASKGRAPH_LIVE_REQUIRED below is 1 on this lane, so a name spelled differently on either side fails this required check naming the variable rather than skipping green.
+          GH_PROJECTS_OWNER: nickderobertis
+          GH_PROJECTS_NUMBER: "1"
+          # A board has no repository, and this lane's artifact is a real issue.
+          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph
+          # A repository variable rather than a secret: a nomination has to stay readable.
+          LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
+          # llmlint: ignore[live_tier_compiles_and_requires_credential] The `0` here is the fork case alone, which is the one run where no credential was ever expected: GitHub supplies a fork pull request no secrets at all, so demanding one would fail every outside contribution for something the contributor cannot supply. Every other run — including every pull request from this repository, which is the one the merge waits on — gets `1`, and there an absent credential fails rather than skipping green. That is the demand this rule asks for, expressed once at the only place credentials enter this build.
+          ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
           NX_BASE: ${{ steps.base.outputs.base }}
           NX_HEAD: HEAD
+        # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] These targets run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just check-generated
 
       # On the default branch, sweep everything. A cache is for speed and must never be
       # what makes a broken clean build look green.
+      # llmlint: ignore[live_tier_compiles_and_requires_credential] This leg is given no credential, for the reason the file header states, so it cannot demand one.
       - name: Sweep every project
         if: github.event_name != 'pull_request' && matrix.os != 'ubuntu-latest'
         run: just gate
@@ -126,6 +156,19 @@ jobs:
 
       - name: Sweep every project and check generated Python SDK
         if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
+        env:
+          # The default-branch half of the pull-request step above; why is written there.
+          GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As on that step: the lane's own refusal is the drift gate, because ONETASKGRAPH_LIVE_REQUIRED is 1 here too, so a name spelled differently on either side fails this run naming the variable rather than skipping green.
+          GH_PROJECTS_OWNER: nickderobertis
+          GH_PROJECTS_NUMBER: "1"
+          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph
+          LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
+          # Demanded unconditionally, which the step above cannot be: this one runs on a
+          # push to the default branch, and a push is never a fork pull request, so there is
+          # no run here where a credential was not expected.
+          ONETASKGRAPH_LIVE_REQUIRED: "1"
         run: just gate-generated
 
   # Supply chain, Linux-only: the graph is the same on every platform, so running it three

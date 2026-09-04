@@ -163,4 +163,17 @@ grep -q 'npm pack ./carrier' .github/workflows/release.yml || fail "release work
 grep -q 'cp "$bin"' .github/workflows/release.yml || fail "release workflow does not put native binaries in npm carriers"
 grep -q 'pattern: "carrier-\*"' .github/workflows/release.yml || fail "npm publish does not download built carrier tarballs"
 read_lines crates < <(for manifest in crates/*/Cargo.toml; do basename "$(dirname "$manifest")"; done | sort)
-for crate in "${crates[@]}"; do grep -q "name = \"$crate\"" release-plz.toml || [[ $crate == onetaskgraph ]] || fail "$crate missing from release-plz package inventory"; grep -q "for crate in .*$crate" .github/workflows/release.yml || fail "$crate missing from publish order"; done
+# Both ways. A crate this workspace publishes has to be in release-plz's inventory and in
+# the publish order, or a release ships without it; a crate marked `publish = false` — the
+# workspace's own test-support crates, which nothing installs — has to be in NEITHER, or a
+# release job would try to push a crate crates.io was never told about and fail the whole
+# publish. The manifest is what says which a crate is, so nothing here transcribes it.
+for crate in "${crates[@]}"; do
+  if grep -Fxq 'publish = false' "crates/$crate/Cargo.toml"; then
+    if grep -q "name = \"$crate\"" release-plz.toml; then fail "$crate is publish = false but is in the release-plz package inventory"; fi
+    if grep -q "for crate in .*$crate" .github/workflows/release.yml; then fail "$crate is publish = false but is in the publish order"; fi
+    continue
+  fi
+  grep -q "name = \"$crate\"" release-plz.toml || [[ $crate == onetaskgraph ]] || fail "$crate missing from release-plz package inventory"
+  grep -q "for crate in .*$crate" .github/workflows/release.yml || fail "$crate missing from publish order"
+done

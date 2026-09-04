@@ -44,7 +44,8 @@
         "commands": [
           "bash scripts/check-bash4-array-builtins-enforced.sh",
           "bash scripts/check-guard-path-spelling.sh",
-          "bash scripts/check-line-reads.sh"
+          "bash scripts/check-line-reads.sh",
+          "bash scripts/check-live-lane-enforced.sh"
         ],
         "parallel": false
       },
@@ -56,15 +57,11 @@
         "{workspaceRoot}/sdks/*/project.json",
         "{workspaceRoot}/workspace/project.json"
       ],
-      "//": "Uncached for the reason the workspace project's own test target is: these drive the real guards inside scratch clones of this repository and read git history there, which no input glob in this tree describes. The workspaceRoot inputs above are what SELECTS this project rather than what hashes it — the path-spelling check drives check-store-fixtures.sh over the crate fixtures, and the line-read check drives check-affected-selection.sh and check-plugin-isolation.sh over the project graph, so a change to either has to re-run these. Serial because each clones a tree and one nests a whole Nx invocation inside it."
+      "//": "Uncached for the reason the workspace project's own test target is: these drive the real guards inside scratch clones of this repository and read git history there, which no input glob in this tree describes. The workspaceRoot inputs above are what SELECTS this project rather than what hashes it — the path-spelling check drives check-store-fixtures.sh over the crate fixtures, and the line-read check drives check-affected-selection.sh and check-plugin-isolation.sh over the project graph, so a change to either has to re-run these. The live-lane check is here rather than beside a crate for the same reason as the rest: what it drives is a script, and the workflow and the journey it breaks in its scratch clone are fixtures of the case rather than inputs of this project — an edge from a crate to these targets is what this project's own note refuses. Serial because each clones a tree and one nests a whole Nx invocation inside it."
     },
     "coverage": {
       "executor": "nx:noop",
       "//": "Declared and empty. The 95% line floor is measured by instrumenting a compiled crate or an interpreted SDK; there is no line coverage for a shell script, and what stands in its place is scripts/check-bash4-array-builtins-enforced.sh and scripts/check-line-reads.sh driving these guards until they refuse."
-    },
-    "test-live": {
-      "executor": "nx:noop",
-      "//": "Declared and empty, which is what makes `just test-live` a sweep: no script here reaches a third-party service, and the credentialed journeys belong to the two hosted plugin crates."
     },
     "distribution-check": {
       "executor": "nx:run-commands",

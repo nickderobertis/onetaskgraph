@@ -3,8 +3,8 @@
   "name": "onetaskgraph-linear",
   "projectType": "library",
   "tags": ["lang:rust", "layer:plugin", "live:linear"],
-  "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree.",
-  "implicitDependencies": ["onetaskgraph-plugin-api"],
+  "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[external_service_suite_stays_out_of_the_affected_tier] JSON has no comment to scope this to `test`, whose live tests reach a real API; affected selection is the edge they sit behind, so they run only when this crate changed.",
+  "implicitDependencies": ["onetaskgraph-live", "onetaskgraph-plugin-api"],
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",
@@ -45,21 +45,33 @@
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo test --quiet -p onetaskgraph-linear --all-features --locked"
-      }
+        "commands": [
+          "cargo test --quiet -p onetaskgraph-linear --all-features --locked",
+          "bash scripts/check-live-decline.sh onetaskgraph-linear onetaskgraph-live-linear.seat"
+        ],
+        "parallel": false
+      },
+      "//": "The live journey is one of the tests the first command runs; the second drives it through skipped, declined and expected-but-absent without a credential. Serial: it re-runs the binary the first builds. The env inputs are the cache key's, because this target's result is not a function of the files — a replay of an uncredentialed run would otherwise stand in for a credentialed one and the live tests would not run while the target reported green. `coverage` takes none of them: scripts/rust-coverage.sh clears the credentials first, which is what keeps one run to one live session.",
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/scripts/check-live-decline.sh",
+        {
+          "env": "LINEAR_API_KEY"
+        },
+        {
+          "env": "LINEAR_WRITE_TEAM"
+        },
+        {
+          "env": "ONETASKGRAPH_LIVE_REQUIRED"
+        }
+      ]
     },
     "coverage": {
       "executor": "nx:run-commands",
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-linear"
       }
-    },
-    "test-live": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "cargo test --quiet -p onetaskgraph-linear --test live --all-features --locked -- --include-ignored"
-      },
-      "//": "Uncached: a live test reaches a third-party API and reads a credential from the environment, neither of which is an input in this tree \u2014 a cache hit would report yesterday's verdict as today's. `--include-ignored` because the live test is `#[ignore]`d for exactly that reason: this lane is the only one that may run it, so the cached `test` target cannot sweep it in."
     }
   }
 }

@@ -17,6 +17,10 @@ onetaskgraph-in-memory = { path = "crates/onetaskgraph-in-memory", version = "0.
 onetaskgraph-local-md = { path = "crates/onetaskgraph-local-md", version = "0.2.21" }
 onetaskgraph-linear = { path = "crates/onetaskgraph-linear", version = "0.2.21" }
 onetaskgraph-github-projects = { path = "crates/onetaskgraph-github-projects", version = "0.2.21" }
+# The workspace's own test-support crate: the gate every live session opens. Path-only
+# and unpublished on purpose — cargo strips a path-only dev-dependency when it packages
+# the crates that name it, so nothing a consumer installs can reach it.
+onetaskgraph-live = { path = "crates/onetaskgraph-live" }
 
 async-trait = "0.1.92"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde", "clock"] }

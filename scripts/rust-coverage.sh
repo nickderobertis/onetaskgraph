@@ -16,6 +16,21 @@ set -euo pipefail
 readonly CRATE="${1:?usage: scripts/rust-coverage.sh <crate-name>}"
 readonly MIN_LINES=95
 
+# ONE live session per run of the gate, and this is where the second one would come from.
+# `just check` runs `test` AND `coverage`, and `cargo llvm-cov --package <crate>` below
+# re-runs those same integration tests — so credentials left set here would open a second
+# session against the shared external fixture the first may still be writing to. A test that
+# reads and writes a shared external fixture must not run concurrently with another instance
+# of itself: each sweeps residue by title before it starts and that sweep recognises ANY
+# run's artifacts, so two concurrent runs delete each other's in-flight items.
+#
+# The demand is cleared with them, or the skip that clearing produces would fail this phase
+# for a session it is deliberately not running. Nothing is lost: llvm-cov never measured
+# these tests. The other half of "one session per run" is the platform matrix, which hands
+# the credentials to one of three `check` lanes. Changing the matrix or this target means
+# keeping that pair true.
+unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
+
 case "${OS:-}${OSTYPE:-}" in
   *Windows_NT* | *msys* | *cygwin* | *win32*)
     echo "rust-coverage: $CRATE measurement skipped on Windows (instrumentation there does not attribute subprocess coverage); the functional lanes still gate this platform" >&2

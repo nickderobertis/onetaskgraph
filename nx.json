@@ -26,7 +26,6 @@
     "typecheck": { "inputs": ["default", "^default"], "cache": true },
     "test": { "inputs": ["default", "^default"], "cache": true },
     "coverage": { "inputs": ["default", "^default"], "cache": true },
-    "bootstrap": { "cache": false },
-    "test-live": { "cache": false }
+    "bootstrap": { "cache": false }
   }
 }

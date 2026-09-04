@@ -23,7 +23,7 @@ from product_versions import read_reconciled_versions, unregistered_product_vers
 # The uniform set. Every project declares all of these, spelled identically, or one root
 # command silently stops covering it.
 UNIFORM = {"bootstrap", "check", "format", "format-check", "lint", "typecheck", "test",
-           "coverage", "test-live"}
+           "coverage"}
 
 problems = []
 

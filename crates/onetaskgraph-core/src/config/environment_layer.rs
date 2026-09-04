@@ -20,8 +20,29 @@ pub const ENVIRONMENT_PREFIX: &str = "ONETASKGRAPH_";
 /// unknown field — turning a documented variable into an error.
 const RESERVED: &[&str] = &[SECRETS_FILE_VARIABLE];
 
+/// A whole namespace under [`ENVIRONMENT_PREFIX`] that holds no settings at all.
+///
+/// `onetaskgraph-live` spells this repository's own live-test variables here:
+/// `ONETASKGRAPH_LIVE_REQUIRED` says a live session is expected rather than optional,
+/// and `ONETASKGRAPH_LIVE_SEAT_DIR` says where that session's seat goes. Neither is a
+/// setting, and `.github/workflows/ci.yml` exports the first of them on the very step
+/// that runs the SDK generator and the journeys — so without this reservation every
+/// invocation of the binary on that step is refused for an unknown field called
+/// `live_required`. That is the failure [`RESERVED`] exists to prevent, one namespace
+/// wider.
+///
+/// A namespace rather than those two names, because the reservation has to hold for the
+/// next variable that lane adds; `scripts/check-live-lane.sh` fails when a live variable
+/// falls outside it, so the two cannot drift apart.
+const RESERVED_NAMESPACE: &str = "ONETASKGRAPH_LIVE_";
+
 /// The separator between path segments in a variable name.
 const SEGMENT_SEPARATOR: &str = "__";
+
+/// Whether a prefixed variable names something this layer must leave alone.
+fn reserved(variable: &str) -> bool {
+    RESERVED.contains(&variable) || variable.starts_with(RESERVED_NAMESPACE)
+}
 
 /// Every `ONETASKGRAPH_`-prefixed variable, as one configuration layer.
 ///
@@ -39,10 +60,12 @@ const SEGMENT_SEPARATOR: &str = "__";
 /// Returns [`ConfigError::Setting`] when a variable's name decodes to no path at all,
 /// as `ONETASKGRAPH_` and `ONETASKGRAPH_SOURCES__` do, and when one of these variables
 /// holds a value that is not valid Unicode — a setting this build cannot read is
-/// refused by name rather than quietly left unset.
+/// refused by name rather than quietly left unset. A variable in [`RESERVED`] or under
+/// [`RESERVED_NAMESPACE`] is neither, on either count: it is not a setting, so this
+/// layer does not decode it and does not refuse it for a value it never reads.
 pub fn layer(environment: &Environment) -> Result<Layer, ConfigError> {
     for variable in environment.unusable() {
-        if variable.starts_with(ENVIRONMENT_PREFIX) {
+        if variable.starts_with(ENVIRONMENT_PREFIX) && !reserved(variable) {
             return Err(ConfigError::setting(
                 variable,
                 "this variable's value is not valid Unicode, so it cannot be read as a \
@@ -58,7 +81,7 @@ pub fn layer(environment: &Environment) -> Result<Layer, ConfigError> {
         let Some(encoded) = variable.strip_prefix(ENVIRONMENT_PREFIX) else {
             continue;
         };
-        if RESERVED.contains(&variable) {
+        if reserved(variable) {
             continue;
         }
         settings.push(Setting {

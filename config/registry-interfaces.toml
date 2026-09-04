@@ -18,12 +18,13 @@
 # case that somehow reached the real registry answers 0.2.13 and fails rather than
 # passing on the wrong evidence.
 #
-# **Re-observing is the live lane's job.** `just test-live` runs
-# crates/onetaskgraph/tests/live.rs, which asks the real registries for every
-# declared target through this same probe. Those tests carry `#[ignore]`, so no
-# required check ever waits on a registry being up; when one of these interfaces
-# changes, that lane is what says so, and the fix is to re-observe the interface
-# here and bring the probe with it.
+# **Re-observing is crates/onetaskgraph/tests/live.rs's job.** It asks the real
+# registries for every declared target through this same probe, and it is an
+# ordinary test of the binary crate's own `test` target — so the required check
+# does wait on a registry being up, which is the accepted cost of the decision
+# AGENTS.md records for every test here that reaches something real. When one of
+# these interfaces changes, that test is what says so, and the fix is to re-observe
+# the interface here and bring the probe with it.
 
 # crates.io. Its `max_stable_version` is what `cargo add` resolves: the greatest
 # version the registry serves with yanked versions and prereleases already

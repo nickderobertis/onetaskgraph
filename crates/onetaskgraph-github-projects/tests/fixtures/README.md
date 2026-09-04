@@ -91,6 +91,29 @@ recording what they say now. `MIN_MUTATION_INTERVAL_MS` is derived from the per-
 ceiling rather than written out beside it, so the pacing this source runs at is gated by
 the same pin.
 
+### The `allowance` block
+
+It pins the third thing this source restates from GitHub rather than decides: **the read the
+live lane's budget precondition makes before a session spends anything**. `GET /rate_limit`,
+its two resource objects — `core` for the REST budget and `graphql` for the GraphQL one —
+and the three fields each carries, `limit`, `remaining` and `reset`. `unmetered` is GitHub's
+own sentence about that endpoint, quoted, which is the published basis for a gate that must
+not cost what it is guarding.
+
+All of it was read on 2026-09-03 from
+<https://docs.github.com/en/rest/rate-limit/rate-limit?apiVersion=2022-11-28>, which
+documents the endpoint, the note that *"Accessing this endpoint does not count against your
+REST API rate limit"*, what each `resources` object is for, and an example response carrying
+those field names. It is documentation-derived; it carries no captured response, no account
+figure and no identifier.
+
+`the_allowance_read_matches_its_pinned_artifact` in `../budget_gate.rs` reconciles it
+against `journey::budget`'s own names **both ways**, and then drives the read against an
+answer missing each pinned field in turn — so a field the parser quietly stopped needing
+fails there rather than affording a session on an allowance nobody read. The two stand-ins
+that prove the precondition build their answers from those same names through
+`journey::budget::documented_answer`, so neither fixture is a second guess at GitHub's shape.
+
 GitHub's own wording changes are why this is a list rather than one phrase: `abuse
 detection` is what the limiter was called before it was renamed and is still what some
 endpoints return, and a refusal carrying it has to keep classifying as a secondary limit.

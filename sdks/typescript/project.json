@@ -80,14 +80,6 @@
         "cwd": "sdks/typescript"
       }
     },
-    "test-live": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "bun test tests/live",
-        "cwd": "sdks/typescript"
-      },
-      "//": "Uncached: a live test reaches a third-party API and reads a credential from the environment, neither of which is an input in this tree."
-    },
     "pack": {
       "executor": "nx:run-commands",
       "dependsOn": ["build", "generate-check"],

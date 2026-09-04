@@ -460,7 +460,7 @@ pub const ROWS: &[Row] = &[
                 documents: Support::Native,
                 search_title: Support::Unsupported,
                 search_content: Support::Unsupported,
-                max_page_size: 250,
+                max_page_size: onetaskgraph_linear::MAX_PAGE_SIZE,
                 ..EVERY_PREDICATE_NATIVE
             },
         },
@@ -1770,12 +1770,17 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                             .all(|key| values.get(*key).is_some_and(|value| !value.is_empty()))
                 })
         }
-        graphql::PROJECT_STATUS | graphql::ISSUE_LABEL | graphql::PROJECT_LABEL => {
+        graphql::ISSUE_LABEL | graphql::PROJECT_LABEL => {
             serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
                 .is_ok_and(|values| {
                     values.len() == 1 && values.get("name").is_some_and(|value| !value.is_empty())
                 })
         }
+        // Linear's `projectStatuses` takes no arguments this plugin can send, so a request
+        // naming one is a request the real API would refuse.
+        graphql::PROJECT_STATUS => variables
+            .as_object()
+            .is_some_and(|values| values.is_empty()),
         graphql::ISSUE_CREATE => {
             exact_linear_variable_keys(variables, &["input"])
                 && valid_linear_write_input(
@@ -1804,7 +1809,13 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
             exact_linear_variable_keys(variables, &["input"])
                 && valid_linear_write_input(
                     variables.get("input"),
-                    &["projectId", "relatedProjectId", "type"],
+                    &[
+                        "projectId",
+                        "relatedProjectId",
+                        "type",
+                        "anchorType",
+                        "relatedAnchorType",
+                    ],
                     &[],
                 )
         }
@@ -1815,6 +1826,22 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     &["title"],
                     &["content", "projectId", "teamId"],
                 )
+                // Exactly one home, counted by the key being *present*. Linear refuses this
+                // input with `Exactly one of initiativeId, teamId, issueId, releaseId,
+                // cycleId or projectId must be defined.` and a `projectId: null` beside a
+                // `teamId` is two as far as that validator is concerned — observed
+                // 2026-09-04, and it is what the live document write failed on. A fake that
+                // took the null would put this straight back on a credentialed run.
+                && variables
+                    .get("input")
+                    .and_then(Value::as_object)
+                    .is_some_and(|input| {
+                        ["projectId", "teamId"]
+                            .iter()
+                            .filter(|key| input.contains_key(**key))
+                            .count()
+                            == 1
+                    })
         }
         graphql::DOCUMENT_UPDATE => {
             exact_linear_variable_keys(variables, &["id", "input"])
@@ -1896,15 +1923,28 @@ fn valid_linear_write_input(value: Option<&Value>, required: &[&str], optional: 
 fn valid_linear_filter(value: &Value) -> bool {
     match value {
         Value::Object(fields) => fields.iter().all(|(key, value)| match key.as_str() {
-            "and" => value.as_array().is_some_and(|values| {
+            // `or` is here and `inIgnoreCase` is gone for the same reason: this server
+            // once accepted `labels:{some:{name:{inIgnoreCase:[…]}}}`, which real Linear
+            // refuses outright — `StringComparator` has no such member — so the source
+            // spells "at least one of these labels" as an `or` of `eqIgnoreCase` now. A
+            // fake that keeps taking what the real API refuses is how that reached a
+            // credentialed run in the first place.
+            "and" | "or" => value.as_array().is_some_and(|values| {
                 values
                     .iter()
                     .all(|value| value.is_object() && valid_linear_filter(value))
             }),
-            "team" | "key" | "labels" | "some" | "name" | "every" | "state" | "type"
-            | "project" | "id" => value.is_object() && valid_linear_filter(value),
+            // `accessibleTeams` and `status` are here and `team` and the issue's `state`
+            // shape are gone from the project side for the same reason `or` replaced
+            // `inIgnoreCase` above: `ProjectFilter` is not `IssueFilter`, has no `team` at
+            // all, and reaches a project's status through `status` — Linear refused the
+            // other spelling with `Field "team" is not defined by type "ProjectFilter"`.
+            "team" | "accessibleTeams" | "key" | "labels" | "some" | "name" | "every" | "state"
+            | "status" | "type" | "project" | "id" => {
+                value.is_object() && valid_linear_filter(value)
+            }
             "eqIgnoreCase" | "neqIgnoreCase" | "eq" => value.is_string(),
-            "inIgnoreCase" | "in" => value
+            "in" => value
                 .as_array()
                 .is_some_and(|values| values.iter().all(Value::is_string)),
             "null" => value.is_boolean(),
@@ -1914,6 +1954,28 @@ fn valid_linear_filter(value: &Value) -> bool {
     }
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+/// Every project status this workspace holds, as Linear's own `projectStatuses` answers.
+///
+/// The whole connection, unfiltered, because Linear takes no filter on it — so the plugin
+/// gets the same shape here that it gets from the real API and does its own matching. Each
+/// id is its own name, which is what lets a write's `statusId` read back as the status it
+/// named; the names are the shared dataset's, so a status a journey copies with is one this
+/// answers to.
+fn project_statuses() -> Vec<Value> {
+    let dataset = dataset();
+    let mut names = ["tasks", "projects"]
+        .iter()
+        .flat_map(|kind| dataset[kind].as_array().cloned().unwrap_or_default())
+        .filter_map(|item| item["status"]["name"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|name| json!({"id": name, "name": name}))
+        .collect()
+}
 
 fn linear_response(
     request: &Value,
@@ -1967,7 +2029,7 @@ fn linear_response(
         return Ok(json!({"workflowStates":{"nodes":[{"id":vars["name"]}]}}));
     }
     if operation == graphql::PROJECT_STATUS {
-        return Ok(json!({"projectStatuses":{"nodes":[{"id":vars["name"]}]}}));
+        return Ok(json!({"projectStatuses":{"nodes":project_statuses()}}));
     }
     if operation == graphql::ISSUE_LABEL {
         return Ok(json!({"issueLabels":{"nodes":[{"id":vars["name"]}]}}));
@@ -2240,12 +2302,38 @@ fn linear_write_relation(
     } else {
         "relatedIssueId"
     };
-    let kind = input
+    let wire = input
         .get("type")
         .and_then(Value::as_str)
         .ok_or("relation type must be a string")?;
-    if !matches!(kind, "blocks" | "related") {
-        return Err("undocumented relation type");
+    // Linear does not spell a project dependency the way it spells an issue's: a project
+    // relation's ordering type is `dependency`, an issue relation's is `blocks`. This
+    // responder refuses the other root's word for exactly that reason, so a write that
+    // sent one would fail here rather than round-trip through a fixture that took it.
+    //
+    // And `related` is the issue vocabulary alone. Asked for a project relation typed
+    // `related` on 2026-09-04 the real API refused it with `Argument Validation Error` and
+    // `type must be one of the following values: dependency`, so this responder refuses it
+    // too — the plugin now says so itself before the write, and a fixture that took the
+    // value anyway would be the one place that never noticed if it stopped.
+    let kind = match (project, wire) {
+        (true, "dependency") | (false, "blocks") => "blocks",
+        (false, "related") => "related",
+        _ => return Err("undocumented relation type"),
+    };
+    // Linear anchors a project relation at both ends and requires both, so this responder
+    // refuses an anchor it has no documented value for exactly as the real API refuses a
+    // missing one.
+    if project {
+        for key in ["anchorType", "relatedAnchorType"] {
+            let anchor = input
+                .get(key)
+                .and_then(Value::as_str)
+                .ok_or("relation anchor must be a string")?;
+            if !matches!(anchor, "start" | "end") {
+                return Err("undocumented relation anchor");
+            }
+        }
     }
     let edge = json!({"from":input.get(near_key).ok_or("missing near id")?,"to":input.get(far_key).ok_or("missing far id")?,"kind":kind});
     data[if project {
@@ -2377,18 +2465,27 @@ fn linear_state(v: &Value) -> Value {
     let category = v["category"].as_str().unwrap_or("");
     json!({"name":v["name"],"type":match category{"todo"=>"unstarted","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
 }
+/// A project's status, whose `type` is the `ProjectStatusType` enum and **not** the
+/// workflow-state vocabulary above: `planned` is where an issue says `unstarted`, and
+/// `paused` has no issue counterpart. A fake that answered a project with `unstarted`
+/// would let a filter spelled in the wrong vocabulary pass here and fail against Linear,
+/// which is exactly how `inIgnoreCase` reached a credentialed run.
+fn linear_project_status(v: &Value) -> Value {
+    let category = v["category"].as_str().unwrap_or("");
+    json!({"name":v["name"],"type":match category{"todo"=>"planned","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
+}
 fn linear_task(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null,"archivedAt":null})
 }
 fn linear_project(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null,"archivedAt":null})
 }
 
 /// One Linear document. It has no `labels` field and no `state`, because Linear's own
 /// published `Document` has neither — which is what the `linear` row of the table above
 /// declares and what the shared document journeys drive.
 fn linear_document(v: &Value) -> Value {
-    json!({"id":v["id"],"title":v["title"],"content":linear_long_form(v,Vec::new()),"project":v.get("project").filter(|project|project.is_string()).map(|id|json!({"id":id})),"url":linear_web_address(v,"document"),"createdAt":null,"updatedAt":null})
+    json!({"id":v["id"],"title":v["title"],"content":linear_long_form(v,Vec::new()),"project":v.get("project").filter(|project|project.is_string()).map(|id|json!({"id":id})),"url":linear_web_address(v,"document"),"createdAt":null,"updatedAt":null,"archivedAt":null})
 }
 
 /// The Linear web address this workspace holds one item at.
@@ -2491,10 +2588,16 @@ fn linear_matches_fixture_subset(v: &Value, vars: &Value) -> bool {
         }
     }
     let mut allowed = Vec::new();
+    // Two vocabularies, because Linear has two: an issue's `WorkflowState.type` is
+    // `unstarted`/`started`, a project's `ProjectStatus.type` is `planned`/`started`, and
+    // `paused` is a project state with no issue counterpart at all. Only one of them ever
+    // appears in a given filter, so one scan reads both.
     for (linear, category) in [
         ("completed", "done"),
         ("unstarted", "todo"),
+        ("planned", "todo"),
         ("\"started\"", "in-progress"),
+        ("paused", "in-progress"),
         ("backlog", "backlog"),
         ("canceled", "cancelled"),
     ] {
@@ -2533,17 +2636,26 @@ fn linear_relations(
     // A Linear relation names a Linear item, so only the edges whose ends are both plain
     // native ids are here. The rest are in the item's own description slot, which this
     // operation selects for exactly that reason.
+    // The workspace holds one ordering kind and Linear has two words for it, so a
+    // project's relations say `dependency` where an issue's say `blocks`.
+    let wire = |kind: &Value| -> Value {
+        if suffix == "Project" && kind == "blocks" {
+            json!("dependency")
+        } else {
+            kind.clone()
+        }
+    };
     let forward = edges
         .iter()
         .enumerate()
         .filter(|(_,e)| e["from"] == id && e["to"].is_string())
-        .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":e["kind"],(format!("related{suffix}")):{"id":e["to"]}}))
+        .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":wire(&e["kind"]),(format!("related{suffix}")):{"id":e["to"]}}))
         .collect::<Vec<_>>();
     let inverse = edges
         .iter()
         .enumerate()
         .filter(|(_,e)| e["to"] == id && e["from"].is_string())
-        .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":e["kind"],(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
+        .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":wire(&e["kind"]),(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
         .collect::<Vec<_>>();
     let items = if suffix == "Issue" {
         "tasks"

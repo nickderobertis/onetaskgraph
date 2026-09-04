@@ -28,13 +28,13 @@
 //! | `projects` | **Supported and proven.** `issues(filter:{project:{id:{eq:…}}})`. |
 //! | `documents` | **Supported and proven.** Linear's own first-class `Document`, read through `documents(first:,after:,filter:)` and `document(id:)`, written through `documentCreate`/`documentUpdate` and taken back by `documentDelete`. See the ruling below on what a Linear document cannot hold. |
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
-//! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{inIgnoreCase:…}}}` and `{eqIgnoreCase:…}` for what an item must carry, `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. |
-//! | `filter_by_status` | **Supported and proven.** `state:{type:{in:[…]}}`, over the `WorkflowState.type` vocabulary the category maps to. |
+//! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{eqIgnoreCase:…}}}` for what an item must carry — one per label, gathered under `or:` where any one of them will do — and `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. Linear's `StringComparator` has no case-insensitive list operator; see the note beside `filter`. |
+//! | `filter_by_status` | **Supported and proven,** and spelled twice. An issue narrows with `state:{type:{in:[…]}}` over `WorkflowState.type`; a project narrows with `status:{type:{in:[…]}}` over `ProjectStatusType`, a different member of a different filter over a different vocabulary. See the ruling below. |
 //! | `search_title` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
 //! | `search_content` | **Unsupported, and unimplemented** rather than a limit of the API. See the ruling below. |
 //! | `task_dependencies` | **Supported and proven,** in both directions: `relations` and `inverseRelations`. |
-//! | `project_dependencies` | **Supported and proven,** in both directions, by the project relations of the same shape. |
-//! | `max_page_size` | **Supported and proven.** 250, Linear's own connection maximum; every read pages with Relay `first`/`after`. |
+//! | `project_dependencies` | **Supported and proven,** in both directions, by the project relations of the same shape. Linear types every one of them `dependency`; see the ruling below on the edge that has no spelling here. |
+//! | `max_page_size` | **Supported and proven.** 100; every read pages with Relay `first`/`after`. Linear's connection maximum is 250 and its complexity budget is the tighter bound — see [`MAX_PAGE_SIZE`]. |
 //!
 //! ## Ruling: the two searches are unimplemented, not unsupportable
 //!
@@ -70,6 +70,54 @@
 //! what is still owed, so neither predicate can make a read return more than the caller
 //! asked for, and neither can drop a document the walk already fetched.
 //!
+//! ## Ruling: a project's filter is not an issue's, and neither is its status
+//!
+//! Linear's `IssueFilter` and `ProjectFilter` read as one filter over two kinds of row.
+//! They are two input types, and this source built one object for both until 2026-09-04,
+//! which put two members into `projects(filter:)` that Linear does not have there. It
+//! refused the first outright — `Field "team" is not defined by type "ProjectFilter". Did
+//! you mean "lead"?` — and would have refused the second next.
+//!
+//! A project has no team; it has the teams it is accessible from, so the configured team
+//! reaches `accessibleTeams:{some:{key:{eqIgnoreCase:…}}}`. And a project's status is not
+//! an issue's state: the counterpart of `IssueFilter.state` is `ProjectFilter.status`,
+//! while `ProjectFilter.state` exists and is a bare `StringComparator` over something else.
+//! The two do not even share a vocabulary — `ProjectStatus.type` is the `ProjectStatusType`
+//! enum, `backlog`, `planned`, `started`, `paused`, `completed`, `canceled`, where a
+//! workflow state is `backlog`, `unstarted`, `started`, `completed`, `canceled`, `triage`.
+//! So `planned` is where `unstarted` would be, `paused` reads as in progress and has no
+//! issue counterpart, and a filter spelled in the other level's words matches nothing while
+//! being refused by nothing.
+//!
+//! **Neither of those could be caught by reading a document, and that is the general
+//! lesson.** A filter is built at runtime and handed over as `$filter`, so it appears in no
+//! operation this crate declares, and the two pinned-schema checks that parse those
+//! operations could not see it — Linear was the only reader, one refusal per round trip.
+//! `every_variables_object_this_source_sends_conforms_to_the_pinned_schema` closes that:
+//! it drives this source's whole surface, records what really went out, and walks every
+//! variables object against the pinned type of the argument it stands at.
+//!
+//! ## Ruling: a Linear project relation is always an ordering
+//!
+//! This one is Linear's too, and the validator says so in as many words. Asked on
+//! 2026-09-04 for a project relation typed `related` — and separately `blocks` and
+//! `dependsOn` — the real API refused each with `Argument Validation Error` and
+//! `constraints: {"isEnum": "type must be one of the following values: dependency"}`. That
+//! enumeration has one member and it is a timeline dependency, which is why the input
+//! carries an anchor at each end at all.
+//!
+//! So a project edge carrying no ordering has nowhere here to land, and this source
+//! **refuses it by name** before the write rather than sending a value Linear will reject
+//! or quietly promoting it to a dependency it does not mean. `DependencyKind::Related`
+//! keeps its issue-level spelling, `related`, because `IssueRelationCreateInput` really
+//! does take it: the two relations are different relations with different vocabularies,
+//! and each level's read accepts only its own.
+//!
+//! Which end of a project relation waits is carried by the two anchors and not by the two
+//! id slots — measured, not reasoned, from Linear's own `ProjectFilter.hasBlockedByRelations`
+//! against relations written both ways round. `tests/fixtures/README.md` records the whole
+//! probe, and `write_relations` records why the pair this source sends is the oriented one.
+//!
 //! Caller metadata is canonical JSON in a trailing
 //! `<!-- onetaskgraph.metadata ... -->` Markdown comment in the item's description. The
 //! visible description is returned unchanged without that slot. Writes put the same
@@ -77,8 +125,8 @@
 //! relations for same-source dependencies. Only cross-source far ends use the reserved
 //! `onetaskgraph.depends_on` metadata key.
 //!
-//! Fixture provenance is recorded in `tests/fixtures/README.md`. The ignored live lane
-//! drives every field of the table above against Linear itself: it builds its own fixture
+//! Fixture provenance is recorded in `tests/fixtures/README.md`. The live journey in
+//! `tests/live.rs` drives every field of the table above against Linear itself: it builds its own fixture
 //! on the scratch team `LINEAR_WRITE_TEAM` names — two projects, one issue filed under
 //! each, one filed under neither, two labels and two workflow states — because that shape
 //! is what tells an honoured predicate from an ignored one, and a workspace where every
@@ -104,6 +152,28 @@ use serde_json::{Value, json};
 
 /// The plugin kind a `linear` source's `plugin:` field names.
 pub const KIND: &str = "linear";
+
+/// The largest page this source will ask Linear for, and the capability it declares.
+///
+/// **Not Linear's connection maximum, which is 250, because a connection maximum is not
+/// the only thing bounding a page.** Linear also scores each document for complexity and
+/// refuses one over 10000 with HTTP 400 and `The query is too complex.` — and the
+/// `projects` document this source sends scores 17475 at `first: 250`, because its nested
+/// `labels` connection, which names no `first` of its own, is charged Linear's default of
+/// 50 per node. Measured against the real API on 2026-09-04: the largest `first` that
+/// document is accepted at is **143**, exactly, and the filter it carries adds nothing.
+/// The `issues` document is accepted at 250, so this is the tighter of the two and a
+/// single declared maximum has to be the tighter one.
+///
+/// 100 rather than 143 because 143 is the cliff. A field added to either selection moves
+/// it, and a page size chosen at the edge of a budget nobody here controls fails in the
+/// live lane rather than in a check. This leaves 30% of the budget spare.
+///
+/// Nothing offline can hold this: complexity is scored by Linear's own runtime and appears
+/// in no schema, so `every_variables_object_this_source_sends_conforms_to_the_pinned_schema`
+/// cannot see it. What guards it is the live journey, which walks a real `projects` page at
+/// exactly this size.
+pub const MAX_PAGE_SIZE: u32 = 100;
 const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 
 /// Exact GraphQL query documents issued by this plugin.
@@ -114,9 +184,9 @@ pub mod graphql {
     /// Check the authenticated viewer.
     pub const VIEWER: &str = "query { viewer { id } }";
     /// Fetch one issue.
-    pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id} } }";
+    pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id title description url createdAt updatedAt archivedAt state{name type} labels{nodes{id name color}} project{id} } }";
     /// Fetch one project.
-    pub const PROJECT: &str = "query($id:String!){ project(id:$id){ id name description url createdAt updatedAt status{name type} labels{nodes{id name color}} } }";
+    pub const PROJECT: &str = "query($id:String!){ project(id:$id){ id name description url createdAt updatedAt archivedAt status{name type} labels{nodes{id name color}} } }";
     /// List issues.
     pub const ISSUES: &str = "query($first:Int!,$after:String,$filter:IssueFilter){ issues(first:$first,after:$after,filter:$filter){ nodes{id title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } }";
     /// List projects.
@@ -131,10 +201,48 @@ pub mod graphql {
     pub const TEAM: &str =
         "query($key:String!){ teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id}} }";
     /// Resolve an issue workflow-state display name.
-    pub const ISSUE_STATE: &str = "query($name:String!,$team:String!){ workflowStates(filter:{name:{eqIgnoreCase:$name},team:{id:{eq:$team}}}){nodes{id}} }";
-    /// Resolve a project status display name.
-    pub const PROJECT_STATUS: &str =
-        "query($name:String!){ projectStatuses(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
+    ///
+    /// `$team` is an `ID!` and `$name` a `String!` because that is what each one's
+    /// *location* declares, not because of what this source passes: both carry a Linear
+    /// identifier string. `WorkflowStateFilter.team` is a `NullableTeamFilter`, whose `id`
+    /// is an `IDComparator`, whose `eq` is an `ID`; the sibling `name` reaches a
+    /// `StringComparator.eqIgnoreCase`, which is a `String`.
+    ///
+    /// That distinction is what the live lane was refused for on 2026-09-04, with HTTP 400
+    /// and `Variable "$team" of type "String!" used in position expecting type "ID".`
+    /// GraphQL admits a variable at a location only when the variable's type is the
+    /// location's type or that type's non-null form, and `String` is not `ID` however the
+    /// value is spelled — so `String!` there fails validation before any field is read,
+    /// while `ID!` is the non-null form of the location's own type and is accepted.
+    ///
+    /// It reached Linear because a variable inside an inline filter literal is not a root
+    /// argument, and the pinned-schema checks only compared root arguments. They now walk
+    /// into these literals too, so this class of drift fails here rather than in the live
+    /// lane.
+    pub const ISSUE_STATE: &str = "query($name:String!,$team:ID!){ workflowStates(filter:{name:{eqIgnoreCase:$name},team:{id:{eq:$team}}}){nodes{id}} }";
+    /// List the workspace's project statuses, so one can be resolved by display name.
+    ///
+    /// Unlike `teams`, `workflowStates` and the two label connections, Linear's
+    /// `projectStatuses` accepts no `filter` argument: asking for one is refused outright
+    /// with `Unknown argument "filter" on field "Query.projectStatuses"`. The display name
+    /// is therefore matched locally over the whole connection, which a workspace holds few
+    /// enough of to answer in one page.
+    // llmlint: ignore[changed_behavior_has_e2e] The uncovered case the rule names — a status
+    // on a later page — is not a test that is missing but a document this repository has no
+    // evidence Linear would accept: `tests/fixtures/schema.graphql` pins `after` alone,
+    // because Linear's own refusal is where that correction came from, and its
+    // `ProjectStatusConnection` declares `nodes` and no `pageInfo`. Selecting a cursor field
+    // to page on would fail `pinned_schema_checks_selected_fields_arguments_and_fixture_keys`
+    // here and risk, against Linear, the same `GRAPHQL_VALIDATION_FAILED` this document was
+    // changed to stop sending. Reading one page is not what changed either: `teams`,
+    // `workflowStates` and `projectLabels` resolve a display name through the same `one_id`
+    // over the same unpaged connections, and did before this change. What did change is
+    // driven end to end — the CLI journey
+    // `linear_project_and_task_copies_write_native_relations_and_record_only_cross_source_edges`
+    // copies a project whose status is resolved this way, and
+    // `a_project_status_is_matched_locally_because_linear_narrows_that_connection_for_nobody`
+    // holds the match, the ambiguity and the absence against a real HTTP server.
+    pub const PROJECT_STATUS: &str = "query{ projectStatuses{nodes{id name}} }";
     /// Resolve an issue-label display name.
     pub const ISSUE_LABEL: &str =
         "query($name:String!){ issueLabels(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
@@ -166,7 +274,7 @@ pub mod graphql {
     /// Delete a project, for the same reason and on the same terms.
     pub const PROJECT_DELETE: &str = "mutation($id:String!){ projectDelete(id:$id){success} }";
     /// Fetch one document.
-    pub const DOCUMENT: &str = "query($id:String!){ document(id:$id){ id title content url createdAt updatedAt project{id} } }";
+    pub const DOCUMENT: &str = "query($id:String!){ document(id:$id){ id title content url createdAt updatedAt archivedAt project{id} } }";
     /// List documents.
     ///
     /// `first` is an `Int` rather than an `Int!` because that is what Linear's `documents`
@@ -346,9 +454,17 @@ impl Lookup<'_> {
         match self {
             Self::Team(key) => json!({"key":key}),
             Self::IssueState { name, team } => json!({"name":name,"team":team.0}),
-            Self::ProjectStatus(name) | Self::IssueLabel(name) | Self::ProjectLabel(name) => {
-                json!({"name":name})
-            }
+            Self::IssueLabel(name) | Self::ProjectLabel(name) => json!({"name":name}),
+            // `PROJECT_STATUS` names nothing, for the reason recorded on that document.
+            Self::ProjectStatus(_) => json!({}),
+        }
+    }
+    /// The display name `one_id` matches locally, for the one lookup whose connection
+    /// Linear will not narrow server-side.
+    fn local_name(&self) -> Option<&str> {
+        match self {
+            Self::ProjectStatus(name) => Some(name),
+            _ => None,
         }
     }
 }
@@ -398,7 +514,14 @@ struct Envelope {
 #[derive(Deserialize)]
 struct GqlError {
     message: String,
-    extensions: Option<GqlExtensions>,
+    // Held raw rather than typed, for two reasons. Linear puts the whole of *why* it
+    // refused in here — `message` is a category name like `Argument Validation Error`,
+    // which named neither the field nor the value when the live project-relation write
+    // was refused by it — so a refusal carries this verbatim and a reader diagnoses from
+    // it. And a typed shape with a required `code` fails the whole envelope's
+    // deserialization when Linear sends extensions without one, turning a refusal this
+    // source could explain into an unexplained malformed response.
+    extensions: Option<Value>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -406,12 +529,86 @@ struct GqlExtensions {
     code: GqlErrorCode,
     retry_after: Option<u64>,
 }
+impl GqlError {
+    /// The rate-limit shape of [`Self::extensions`], when it has one.
+    fn coded(&self) -> Option<GqlExtensions> {
+        self.extensions
+            .as_ref()
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+    }
+    /// Everything Linear said about this refusal, on one line and cut to [`SAID_LIMIT`].
+    ///
+    /// Linear's own sentence comes first, then the raw envelope, because only the first
+    /// of those two is short enough to survive [`SAID_LIMIT`] on its merits. `message` is
+    /// a category name — `Argument Validation Error` — and the sentence naming the field
+    /// and the values it would have taken is `extensions.userPresentableMessage`, one of
+    /// several keys in an envelope whose `validationErrors` echoes the whole rejected
+    /// input back. Observed against the real API on 2026-09-04, a `projectRelationCreate`
+    /// refusal rendered past the cut, and the echo is what got cut.
+    ///
+    /// That the sentence itself did not was luck: this build of `serde_json` renders an
+    /// object's keys sorted, and `userPresentableMessage` happens to sort ahead of
+    /// `validationErrors`. Nobody chose that — Linear sends the echo first — and any key
+    /// Linear adds sorting between the two would move the sentence behind an echo longer
+    /// than the whole limit, as would turning `preserve_order` on. Leading with it makes
+    /// what a reader diagnoses from independent of both.
+    fn said(&self) -> String {
+        let Some(extensions) = &self.extensions else {
+            return elided(&self.message);
+        };
+        match extensions
+            .get("userPresentableMessage")
+            .and_then(Value::as_str)
+            .filter(|sentence| !sentence.is_empty())
+        {
+            Some(sentence) => elided(&format!("{}: {sentence} {extensions}", self.message)),
+            None => elided(&format!("{}: {extensions}", self.message)),
+        }
+    }
+}
 #[derive(Deserialize)]
 enum GqlErrorCode {
     #[serde(rename = "RATELIMITED", alias = "RATE_LIMITED")]
     RateLimited,
     #[serde(other)]
     Other,
+}
+
+/// How much of a failed response's body a refusal carries.
+///
+/// Enough for Linear's own error envelope, which is one or two sentences naming the field
+/// or argument it would not accept, and short enough that a proxy's HTML error page does
+/// not become the whole message.
+const SAID_LIMIT: usize = 400;
+
+/// `said` made safe to put in a message: one line of printable text, cut to [`SAID_LIMIT`].
+///
+/// A failed response's body is whatever answered — Linear's error envelope, or an HTML
+/// page from a proxy in front of it — and this message is written to a terminal. So every
+/// control character goes, escape sequences with them, and each run of whitespace becomes
+/// one space: a body cannot move the cursor, repaint the line or hide the rest of the
+/// diagnostic behind itself. Cut by characters rather than bytes, because slicing UTF-8
+/// mid-codepoint would panic inside the path that exists to explain a failure.
+fn elided(said: &str) -> String {
+    let mut printable = String::new();
+    let mut spaced = true;
+    for character in said.chars() {
+        if character.is_control() || character.is_whitespace() {
+            if !spaced {
+                printable.push(' ');
+                spaced = true;
+            }
+            continue;
+        }
+        printable.push(character);
+        spaced = false;
+    }
+    let printable = printable.trim_end();
+    if printable.chars().count() <= SAID_LIMIT {
+        return printable.to_owned();
+    }
+    let kept: String = printable.chars().take(SAID_LIMIT).collect();
+    format!("{kept}…")
 }
 
 impl LinearSource {
@@ -448,30 +645,34 @@ impl LinearSource {
             });
         }
         if !status.is_success() {
+            // Linear puts its GraphQL error envelope in the *body* of a 400, so the status
+            // alone names the whole call and nothing about what Linear objected to. The
+            // body is Linear's answer to this request and holds no credential; it is cut
+            // because a proxy in front of Linear can answer with a page.
+            let said = elided(&response.text().await.unwrap_or_default());
             return Err(SourceError::Unavailable {
-                message: format!("Linear returned HTTP {status}"),
+                message: if said.is_empty() {
+                    format!("Linear returned HTTP {status}")
+                } else {
+                    format!("Linear returned HTTP {status}: {said}")
+                },
             });
         }
         let body: Envelope = response.json().await.map_err(|e| SourceError::Malformed {
             message: e.to_string(),
         })?;
         if let Some(error) = body.errors.first() {
-            if error
-                .extensions
-                .as_ref()
-                .is_some_and(|extensions| matches!(extensions.code, GqlErrorCode::RateLimited))
+            if let Some(extensions) = error
+                .coded()
+                .filter(|extensions| matches!(extensions.code, GqlErrorCode::RateLimited))
             {
-                let hint = error
-                    .extensions
-                    .as_ref()
-                    .and_then(|value| value.retry_after);
                 return Err(SourceError::RateLimited {
-                    retry_after_seconds: hint.or(retry),
+                    retry_after_seconds: extensions.retry_after.or(retry),
                     message: None,
                 });
             }
             return Err(SourceError::Refused {
-                message: error.message.clone(),
+                message: error.said(),
             });
         }
         body.data.ok_or_else(|| SourceError::Malformed {
@@ -480,18 +681,39 @@ impl LinearSource {
     }
 
     // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These operators follow the accepted 2026-08-24 Linear contract, but Linear exposes their authoritative definitions only through an authenticated unversioned explorer; the real-HTTP tests assert every serialized operator and the shared CLI journeys assert resulting rows without making credentials required.
-    fn filter(
-        &self,
-        labels: &onetaskgraph_plugin_api::LabelFilter,
-        statuses: &[StatusCategory],
-        project: Option<&ProjectFilter>,
-    ) -> Value {
+    /// The label predicates, which really are spelled the same at both levels.
+    ///
+    /// `IssueFilter.labels` is an `IssueLabelCollectionFilter` and `ProjectFilter.labels`
+    /// is a `ProjectLabelCollectionFilter` — two types — but `some`, `every` and a `name`
+    /// of `StringComparator` are members of both, so one spelling satisfies each. That is
+    /// the whole of what the two filters have in common, and everything else about them is
+    /// built separately for the reason recorded on the two builders below.
+    ///
+    /// "At least one of these" is a disjunction of `eqIgnoreCase` rather than one
+    /// case-insensitive list operator, because Linear has no such operator. This source
+    /// sent `labels:{some:{name:{inIgnoreCase:[…]}}}` until Linear refused it outright,
+    /// HTTP 400, on the first read of the live lane that ever reached a label filter:
+    ///
+    /// ```text
+    /// Variable "$filter" got invalid value { inIgnoreCase: […] } at
+    /// "filter.and[1].labels.some.name"; Field "inIgnoreCase" is not defined by
+    /// type "StringComparator". Did you mean "eqIgnoreCase" or "neqIgnoreCase"?
+    /// ```
+    ///
+    /// That refusal is also the evidence for the replacement: Linear named the two members
+    /// of `StringComparator` closest to what it was sent, and `eqIgnoreCase` is one of
+    /// them — the same operator `all_of` below has always sent and the live lane has always
+    /// exercised. `in` exists there too and would need no `or`, but it is case-sensitive,
+    /// so `any_of` would stop agreeing with `all_of` and `none_of` and with what the table
+    /// at the top of this file says this source does.
+    fn label_parts(labels: &onetaskgraph_plugin_api::LabelFilter) -> Vec<Value> {
         let mut parts = Vec::new();
-        if let Some(team) = &self.team {
-            parts.push(json!({"team": {"key": {"eqIgnoreCase": team.0}}}));
-        }
         if !labels.any_of.is_empty() {
-            parts.push(json!({"labels": {"some": {"name": {"inIgnoreCase": labels.any_of}}}}));
+            parts.push(json!({"or": labels
+                .any_of
+                .iter()
+                .map(|name| json!({"labels": {"some": {"name": {"eqIgnoreCase": name}}}}))
+                .collect::<Vec<_>>()}));
         }
         for name in &labels.all_of {
             parts.push(json!({"labels": {"some": {"name": {"eqIgnoreCase": name}}}}));
@@ -499,19 +721,89 @@ impl LinearSource {
         for name in &labels.none_of {
             parts.push(json!({"labels": {"every": {"name": {"neqIgnoreCase": name}}}}));
         }
-        if !statuses.is_empty() {
-            parts.push(json!({"state": {"type": {"in": statuses.iter().flat_map(linear_statuses).collect::<Vec<_>>()}}}));
-        }
-        match project {
-            Some(ProjectFilter::Orphans) => parts.push(json!({"project": {"null": true}})),
-            Some(ProjectFilter::Is(id)) => parts.push(json!({"project": {"id": {"eq": id.0}}})),
-            _ => {}
-        }
+        parts
+    }
+    fn narrowed(mut parts: Vec<Value>) -> Value {
         if parts.len() == 1 {
             parts.pop().unwrap()
         } else {
             json!({"and": parts})
         }
+    }
+    /// The filter this source sends to `issues(filter:)`.
+    ///
+    /// **`IssueFilter` and `ProjectFilter` are different input types, and one builder for
+    /// both is what put two wrong fields on the wire.** They read as though they were the
+    /// same filter over different rows — the label member really is spelled alike, and the
+    /// `and`/`or` are identical — and a single builder producing one object for both
+    /// connections had shipped `team` and the issue's `state` shape into `projects(filter:)`
+    /// since long before this branch. Linear refused the first outright:
+    ///
+    /// ```text
+    /// Variable "$filter" got invalid value { team: { key: [Object] } };
+    /// Field "team" is not defined by type "ProjectFilter". Did you mean "lead"?
+    /// ```
+    ///
+    /// So there are two builders, and each names its own type's members. Adding a predicate
+    /// means deciding twice, on purpose, rather than once by accident.
+    fn issue_filter(
+        &self,
+        labels: &onetaskgraph_plugin_api::LabelFilter,
+        statuses: &[StatusCategory],
+        project: &ProjectFilter,
+    ) -> Value {
+        let mut parts = Vec::new();
+        if let Some(team) = &self.team {
+            parts.push(json!({"team": {"key": {"eqIgnoreCase": team.0}}}));
+        }
+        parts.extend(Self::label_parts(labels));
+        if !statuses.is_empty() {
+            parts.push(json!({"state": {"type": {"in": statuses.iter().flat_map(workflow_state_types).collect::<Vec<_>>()}}}));
+        }
+        match project {
+            ProjectFilter::Orphans => parts.push(json!({"project": {"null": true}})),
+            ProjectFilter::Is(id) => parts.push(json!({"project": {"id": {"eq": id.0}}})),
+            _ => {}
+        }
+        Self::narrowed(parts)
+    }
+    /// The filter this source sends to `projects(filter:)`.
+    ///
+    /// Two members differ from [`Self::issue_filter`] and both are Linear's doing; see that
+    /// builder for why they are written out twice rather than shared.
+    ///
+    /// **A project has no `team`.** It has the teams it is accessible from, and
+    /// `ProjectFilter.accessibleTeams` is a `TeamCollectionFilter`, so the same team key
+    /// reaches it under `some:`. `leadTeam` is the other team-shaped member and is a
+    /// different set — one designated team rather than every team the project is in — so
+    /// narrowing by it would drop projects the configured team really does hold.
+    ///
+    /// **A project's status is not an issue's state, and they do not even share a
+    /// vocabulary.** An issue's is `WorkflowState`, reached through `IssueFilter.state`,
+    /// and its `type` is `backlog`, `unstarted`, `started`, `completed`, `canceled` or
+    /// `triage`. A project's is `ProjectStatus`, reached through `ProjectFilter.status` —
+    /// `ProjectFilter.state` exists and is *not* it: that member is a bare
+    /// `StringComparator` over a different thing — and its `type` is the `ProjectStatusType`
+    /// enum, `backlog`, `planned`, `started`, `paused`, `completed`, `canceled`. So the
+    /// nearest thing to an issue's `unstarted` is a project's `planned`, and `paused` has no
+    /// issue counterpart at all. [`project_status_types`] is that vocabulary and
+    /// [`workflow_state_types`] is the other; sending either one's words to the other's
+    /// connection matches nothing while refusing nothing, which is the worst way to be
+    /// wrong.
+    fn project_filter(
+        &self,
+        labels: &onetaskgraph_plugin_api::LabelFilter,
+        statuses: &[StatusCategory],
+    ) -> Value {
+        let mut parts = Vec::new();
+        if let Some(team) = &self.team {
+            parts.push(json!({"accessibleTeams": {"some": {"key": {"eqIgnoreCase": team.0}}}}));
+        }
+        parts.extend(Self::label_parts(labels));
+        if !statuses.is_empty() {
+            parts.push(json!({"status": {"type": {"in": statuses.iter().flat_map(project_status_types).collect::<Vec<_>>()}}}));
+        }
+        Self::narrowed(parts)
     }
     // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
@@ -525,7 +817,22 @@ impl LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {connection}.nodes"),
             })?;
-        if nodes.len() != 1 {
+        // A node this comparison cannot read is malformed rather than a nonmatch: dropping
+        // it would turn Linear having answered nonsense into this source reporting no such
+        // status, which is a different thing and reads as the caller's mistake.
+        let matched = match lookup.local_name() {
+            Some(name) => {
+                let mut matched = Vec::new();
+                for node in nodes {
+                    if str_at(node, "name")?.eq_ignore_ascii_case(name) {
+                        matched.push(node);
+                    }
+                }
+                matched
+            }
+            None => nodes.iter().collect::<Vec<_>>(),
+        };
+        if matched.len() != 1 {
             return Err(SourceError::Refused {
                 message: format!(
                     "source {} cannot resolve {} uniquely",
@@ -534,7 +841,7 @@ impl LinearSource {
                 ),
             });
         }
-        Ok(NativeId(backend_id(&nodes[0], "id")?.to_owned()))
+        Ok(NativeId(backend_id(matched[0], "id")?.to_owned()))
     }
     async fn team_id(&self) -> Result<NativeId, SourceError> {
         let team = self.team.as_ref().ok_or_else(|| SourceError::Refused {
@@ -625,6 +932,33 @@ impl LinearSource {
             format!("{visible}\n\n{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
         }))
     }
+    /// What this source says when asked for a project edge carrying no ordering.
+    ///
+    /// Linear's project relations have exactly one type and it is an ordering. Asked on
+    /// 2026-09-04 to create one typed `related` — and separately `blocks` and `dependsOn`
+    /// — the real API refused each with `Argument Validation Error` and
+    /// `constraints: {"isEnum": "type must be one of the following values: dependency"}`.
+    /// That is Linear's own enumeration of the field, from the validator behind GraphQL
+    /// where introspection cannot reach it, and it has one member. An issue relation is a
+    /// different relation with a different set, which does include `related`, so this
+    /// reaches projects alone.
+    fn unordered_project_relation(&self, near: &NativeId, far: &str) -> SourceError {
+        SourceError::Refused {
+            message: format!(
+                "source {} cannot carry an unordered dependency between projects, because \
+                 Linear types every project relation `dependency` and that is an ordering; \
+                 record {near} to {far} as a dependency, or between tasks",
+                self.name,
+                near = near.0,
+            ),
+        }
+    }
+    /// The one edge [`Self::unordered_project_relation`] refuses, if there is one here.
+    fn unordered_project_edge(edges: &[DependencyEdge]) -> Option<&DependencyEdge> {
+        edges
+            .iter()
+            .find(|edge| edge.to.kind == ItemKind::Project && edge.kind == DependencyKind::Related)
+    }
     async fn write_relations(
         &self,
         near: &NativeId,
@@ -640,7 +974,7 @@ impl LinearSource {
                     } else {
                         ISSUE_RELATIONS
                     },
-                    json!({"id":near.0,"first":250,"after":cursor.as_ref().map(|cursor|&cursor.0)}),
+                    json!({"id":near.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor|&cursor.0)}),
                 )
                 .await?;
             let root = data
@@ -684,6 +1018,38 @@ impl LinearSource {
             };
             cursor = Some(next);
         }
+        // Linear requires an anchor at each end of a project relation and validates both
+        // against an enum GraphQL cannot see: `ProjectRelationCreateInput` declares them
+        // `String!` and enumerates nothing, and the field descriptions read as a choice
+        // between the project and a milestone, which is not what they are. Linear's own
+        // refusal enumerates them — sent `project` in both, it answered `anchorType must
+        // be one of the following values: start, end, milestone` — and `milestone` needs
+        // an id this source never sends, so the two whole-project anchors are the whole of
+        // what it can send.
+        //
+        // **Which of them goes where carries the direction, and the two id slots do not.**
+        // Linear stores whatever pair it is given and reads a backwards dependency as
+        // readily as the right one, so acceptance settles nothing; what does is Linear's
+        // own reading of a stored relation, published as the computed `ProjectFilter`
+        // members `hasBlockingRelations` ("projects which are blocking") and
+        // `hasBlockedByRelations` ("projects which are blocked"). Three relations between
+        // two scratch projects, read back through them on 2026-09-04:
+        //
+        // | `projectId` | `anchorType` | `relatedProjectId` | `relatedAnchorType` | blocked | blocking |
+        // | ----------- | ------------ | ------------------ | ------------------- | ------- | -------- |
+        // | A           | `start`      | B                  | `end`               | A       | B        |
+        // | A           | `end`        | B                  | `start`             | B       | A        |
+        // | B           | `end`        | A                  | `start`             | A       | B        |
+        //
+        // Rows one and three exchange the ids and the anchors together and read alike;
+        // rows one and two exchange only the anchors and the reading flips. So the project
+        // anchored `start` is the one that waits, whichever slot it sits in, and row one is
+        // what this source sends — `near`, the item that depends, in `projectId`. Linear's
+        // own callers put the blocker there instead, so copying their `end`/`start` pair
+        // across by position would state every dependency backwards in the workspace, and
+        // nothing would refuse it.
+        const NEAR_ANCHOR: &str = "start";
+        const FAR_ANCHOR: &str = "end";
         for edge in edges {
             if edge.to.kind
                 != match kind {
@@ -698,14 +1064,43 @@ impl LinearSource {
                 Some(_) => continue,
                 None => edge.to.id(),
             };
-            let relation_type = match edge.kind {
-                DependencyKind::Blocks => "blocks",
-                DependencyKind::Related => "related",
+            // A project relation is not spelled the way an issue relation is, and this is
+            // the whole of what a project's `type` may say.
+            //
+            // `blocks` there is what the live journey's project write was refused for
+            // once the two anchors above stopped being missing: Linear answered HTTP 200
+            // with `Argument Validation Error`, the message class its input validator
+            // raises for a value outside an accepted set, having already accepted every
+            // field of the same input by name — which is what tells that refusal apart
+            // from the missing-field one before it, and what says the anchors were not the
+            // cause.
+            //
+            // Which field, and what it takes, was measured against the real API on
+            // 2026-09-04 rather than inferred. Each of `blocks`, `dependsOn`, `related`
+            // and `DEPENDENCY` was refused with `property: "type"` and
+            // `constraints: {"isEnum": "type must be one of the following values:
+            // dependency"}`; `dependency` was accepted. That enumeration, like the
+            // anchors' above, reaches this source through the validator's `extensions`;
+            // see `GqlError::said`.
+            //
+            // A `Related` project edge is refused at the top of this function by that same
+            // enumeration: it has one member and it is an ordering. An issue relation is a
+            // different relation with a different set, which does include `related`.
+            let relation_type = match (kind, edge.kind) {
+                (WriteKind::Project, DependencyKind::Blocks) => "dependency",
+                (WriteKind::Task, DependencyKind::Blocks) => "blocks",
+                (WriteKind::Task, DependencyKind::Related) => "related",
+                // Unreachable past `write_project`'s guard, and an error rather than a
+                // skip so it stays that way: an edge dropped here would be a copy
+                // reporting success for a dependency the destination does not hold.
+                (WriteKind::Project, DependencyKind::Related) => {
+                    return Err(self.unordered_project_relation(near, edge.to.id()));
+                }
             };
             let (query, input) = if matches!(kind, WriteKind::Project) {
                 (
                     graphql::PROJECT_RELATION_CREATE,
-                    json!({"projectId":near.0,"relatedProjectId":far,"type":relation_type}),
+                    json!({"projectId":near.0,"relatedProjectId":far,"type":relation_type,"anchorType":NEAR_ANCHOR,"relatedAnchorType":FAR_ANCHOR}),
                 )
             } else {
                 (
@@ -755,7 +1150,7 @@ impl LinearSource {
             {
                 let mut cursor: Option<Cursor> = None;
                 loop {
-                    let data = self.send(if matches!(kind, WriteKind::Project) { PROJECTS } else { ISSUES }, json!({"first":250,"after":cursor.as_ref().map(|cursor|&cursor.0),"filter":{}})).await?;
+                    let data = self.send(if matches!(kind, WriteKind::Project) { PROJECTS } else { ISSUES }, json!({"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor|&cursor.0),"filter":{}})).await?;
                     let (items, next) = if matches!(kind, WriteKind::Project) {
                         let page = connection(&data, "projects", map_project)?;
                         (
@@ -808,7 +1203,7 @@ impl TaskSource for LinearSource {
             search_content: Support::Unsupported,
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
-            max_page_size: 250,
+            max_page_size: MAX_PAGE_SIZE,
         }
     }
     fn writes(&self) -> WriteSupport {
@@ -840,7 +1235,7 @@ impl TaskSource for LinearSource {
         query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
-        let d=self.send(ISSUES,json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.filter(&query.labels,&query.statuses,Some(&query.project))})).await?;
+        let d=self.send(ISSUES,json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(&query.labels,&query.statuses,&query.project)})).await?;
         connection(&d, "issues", map_task)
     }
     async fn query_projects(
@@ -848,15 +1243,15 @@ impl TaskSource for LinearSource {
         query: &ProjectQuery,
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
-        // llmlint: ignore[changed_behavior_has_e2e] The shared CLI journey `every_source_filters_its_projects_by_label_by_status_and_by_text` asserts that Linear status filtering returns only P-2 and reports native pushdown; this lower-level HTTP test separately asserts the serialized `started` predicate.
-        let d=self.send(PROJECTS,json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.filter(&query.labels,&query.statuses,None)})).await?;
+        // llmlint: ignore[changed_behavior_has_e2e] The shared CLI journey `every_complete_dataset_source_filters_projects_by_label_status_and_text` asserts that Linear status filtering returns only P-2 and reports native pushdown; this lower-level HTTP test separately asserts the serialized `started` predicate.
+        let d=self.send(PROJECTS,json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.project_filter(&query.labels,&query.statuses)})).await?;
         connection(&d, "projects", map_project)
     }
     async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
         let d = self
             .send(
                 LABELS,
-                json!({"first":page.limit.min(250),"after":page.cursor.as_ref().map(|c|&c.0)}),
+                json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0)}),
             )
             .await?;
         connection(&d, "issueLabels", map_label)
@@ -933,6 +1328,13 @@ impl TaskSource for LinearSource {
         Ok(id)
     }
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        // Before anything is read or written, and before the item's own description
+        // records these edges: an edge Linear will never accept has to refuse the whole
+        // write, or a copy would create the project and then fail relating it, leaving the
+        // undo to clean up a write that could have been refused without a call at all.
+        if let Some(edge) = Self::unordered_project_edge(&write.depends_on) {
+            return Err(self.unordered_project_relation(&write.item.id, edge.to.id()));
+        }
         let edges = self
             .prepare_edges(&write.depends_on, WriteKind::Project)
             .await?;
@@ -1017,7 +1419,7 @@ impl TaskSource for LinearSource {
         // `query.text` is read by nothing here on purpose. Both searches are declared
         // `Unsupported`, and capability rule 2 says an ignored predicate returns the
         // *wider* set for the engine to narrow — half-applying one is what would drop rows.
-        let want = page.limit.min(250) as usize;
+        let want = page.limit.min(MAX_PAGE_SIZE) as usize;
         let mut filter = serde_json::Map::new();
         if let ProjectFilter::Is(id) = &query.project {
             filter.insert("project".into(), json!({"id": {"eq": id.0}}));
@@ -1111,14 +1513,25 @@ impl TaskSource for LinearSource {
                 )
             }
             None => {
-                let mut input =
-                    json!({"title":write.item.title,"content":content,"projectId":project});
+                let mut input = json!({"title":write.item.title,"content":content});
                 // A Linear document lives in a project, an initiative, an issue or a team.
                 // One filed under no project needs the configured team to be its home, and
                 // one filed under a project already has one — so the team is asked for
                 // only where it is the answer, rather than made a condition of every write.
-                if project.is_none() {
-                    input["teamId"] = Value::String(self.team_id().await?.0);
+                //
+                // **`projectId` is left out rather than sent as null, and that is Linear's
+                // rule rather than tidiness.** `documentCreate` refuses an input that names
+                // more than one home — `Exactly one of initiativeId, teamId, issueId,
+                // releaseId, cycleId or projectId must be defined.` — and it counts a
+                // *present* key, observed on 2026-09-04: `{projectId: null, teamId: …}` is
+                // refused where `{teamId: …}` is accepted. So a document filed under no
+                // project must carry no `projectId` at all. `documentUpdate` is the
+                // opposite and keeps its explicit null, because there the null is the
+                // instruction — it is how a document is moved out of a project, and
+                // omitting the key would leave it where it was.
+                match &project {
+                    Some(project) => input["projectId"] = Value::String(project.clone()),
+                    None => input["teamId"] = Value::String(self.team_id().await?.0),
                 }
                 (
                     graphql::DOCUMENT_CREATE,
@@ -1165,7 +1578,7 @@ impl LinearSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        let limit = page.limit.min(250);
+        let limit = page.limit.min(MAX_PAGE_SIZE);
         let cursor = page.cursor.as_ref().map(|c| c.0.as_str());
         if let Some(offset) = cursor.and_then(|c| c.strip_prefix(RECORDED_CURSOR)) {
             // This cursor resumes the *forward* tail and only a forward walk ever issues
@@ -1243,11 +1656,13 @@ fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Pag
 }
 
 // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear's workflow-state strings follow the accepted 2026-08-24 contract; its authoritative enum is exposed only through an authenticated unversioned explorer, while real-HTTP tests cover every serialized and parsed value.
-fn linear_statuses(s: &StatusCategory) -> Vec<&'static str> {
+/// A category as `WorkflowState.type` spells it — the vocabulary an **issue**'s state has.
+///
+/// Linear's workflow states are triage, backlog, unstarted, started, completed and
+/// canceled. None of them is a draft, so `Draft` narrows to nothing exactly as `Unknown`
+/// does rather than filtering on a state Linear does not have.
+fn workflow_state_types(s: &StatusCategory) -> Vec<&'static str> {
     match s {
-        // Linear's workflow states are triage, backlog, unstarted, started, completed and
-        // canceled; none of them is a draft, so this narrows to nothing exactly as
-        // `Unknown` does rather than filtering on a state Linear does not have.
         StatusCategory::Draft => vec![],
         StatusCategory::Backlog => vec!["backlog"],
         StatusCategory::Todo => vec!["unstarted"],
@@ -1257,12 +1672,40 @@ fn linear_statuses(s: &StatusCategory) -> Vec<&'static str> {
         StatusCategory::Unknown => vec![],
     }
 }
+/// A category as `ProjectStatus.type` spells it — a **different** vocabulary, and a
+/// different enum: Linear declares that field `ProjectStatusType!`, whose members are
+/// backlog, planned, started, paused, completed and canceled.
+///
+/// Two of them have no issue counterpart and are why this cannot be the function above.
+/// `planned` is where `unstarted` would be, so it is what `Todo` narrows to; a project
+/// filtered with `unstarted` matches nothing and is refused by nothing, which is how this
+/// went unnoticed. And `paused` is a project that has started and is neither finished nor
+/// cancelled, so it reads as in progress — the same reading [`status`] gives it, which is
+/// what keeps this narrowing and that mapping the same claim rather than two.
+fn project_status_types(s: &StatusCategory) -> Vec<&'static str> {
+    match s {
+        StatusCategory::Draft => vec![],
+        StatusCategory::Backlog => vec!["backlog"],
+        StatusCategory::Todo => vec!["planned"],
+        StatusCategory::InProgress => vec!["started", "paused"],
+        StatusCategory::Done => vec!["completed"],
+        StatusCategory::Cancelled => vec!["canceled"],
+        StatusCategory::Unknown => vec![],
+    }
+}
+/// The category a Linear status name and type normalise to, at either level.
+///
+/// One mapper for both vocabularies, because the two are disjoint where they differ: no
+/// issue is ever `planned` or `paused`, and no project is ever `unstarted` or `triage`. It
+/// is the inverse of [`workflow_state_types`] and [`project_status_types`] together, and
+/// has to stay so: a category this reports and that filter cannot ask for is capability
+/// rule 1 broken, and the row would go missing rather than be refused.
 fn status(v: &Value) -> Result<Status, SourceError> {
     let name = str_at(v, "name")?.into();
     let category = match str_at(v, "type")? {
         "backlog" => StatusCategory::Backlog,
-        "unstarted" => StatusCategory::Todo,
-        "started" => StatusCategory::InProgress,
+        "unstarted" | "planned" => StatusCategory::Todo,
+        "started" | "paused" => StatusCategory::InProgress,
         "completed" => StatusCategory::Done,
         "canceled" => StatusCategory::Cancelled,
         _ => StatusCategory::Unknown,
@@ -1439,6 +1882,21 @@ fn optional<T>(
             message: format!("missing {k}"),
         }),
         Some(Value::Null) => Ok(None),
+        // An item Linear no longer shows is not an item this source holds, and Linear says
+        // so with `archivedAt` rather than by answering null.
+        //
+        // **None of Linear's three `delete` verbs removes anything.** `issueDelete`,
+        // `projectDelete` and `documentDelete` move the item to the trash: observed on
+        // 2026-09-04, each answered `success: true` and the item still read back by id,
+        // carrying `archivedAt` and `trashed: true`. Its separate *archive* verb is a third
+        // state — `archivedAt` set, `trashed` null — and Linear excludes both from every
+        // connection, so `issues`, `projects` and `documents` had already stopped returning
+        // them while a read by id still did.
+        //
+        // `archivedAt` rather than `trashed` for exactly that reason: it is the marker both
+        // states share, so a read by id answers what a listing answers, and a delete means
+        // what a copy's undo needs it to mean — the item this run created is gone.
+        Some(value) if !matches!(value.get("archivedAt"), None | Some(Value::Null)) => Ok(None),
         Some(value) => f(value).map(Some),
     }
 }
@@ -1529,23 +1987,36 @@ fn relation_page(
         } else {
             (NativeId(other.into()), id.clone())
         };
-        // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear publishes relation type as a string in the accepted 2026-08-24 schema; this boundary enum deliberately rejects every undocumented value, and real-HTTP tests prove both accepted values and rejection.
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        enum RelationKind {
-            Blocks,
-            Related,
-        }
-        let kind = match serde_json::from_value::<RelationKind>(n.get("type").cloned().ok_or_else(
-            || SourceError::Malformed {
-                message: "missing relation type".into(),
-            },
-        )?)
-        .map_err(|e| SourceError::Malformed {
-            message: format!("invalid relation type: {e}"),
-        })? {
-            RelationKind::Blocks => DependencyKind::Blocks,
-            RelationKind::Related => DependencyKind::Related,
+        // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear publishes relation type as a string in the accepted 2026-08-24 schema; this boundary deliberately rejects every undocumented value, and real-HTTP tests prove both accepted values and rejection.
+        let relation_type =
+            n.get("type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing relation type".into(),
+                })?;
+        // An issue relation and a project relation do not share a vocabulary. Linear
+        // spells a project dependency `dependency`, where an issue's is `blocks`; the
+        // write side sends exactly that pair and says why. So each root reads only its
+        // own, and a value the other root would have accepted is refused here rather than
+        // read as an edge this source could not have written.
+        //
+        // `related` is one of those values, and only an issue relation has it. Linear's
+        // validator enumerates a project relation's `type` as `dependency` alone — see
+        // the write side, which had `related` refused by the real API on 2026-09-04 — so
+        // a project relation typed `related` is not a relation this workspace can hold.
+        let kind = match (root, relation_type) {
+            (DependencyRoot::Issue, "blocks") | (DependencyRoot::Project, "dependency") => {
+                DependencyKind::Blocks
+            }
+            (DependencyRoot::Issue, "related") => DependencyKind::Related,
+            _ => {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "invalid relation type: {relation_type} on a {} relation",
+                        root.as_str()
+                    ),
+                });
+            }
         };
         // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
         let item_kind = root.item_kind();

@@ -47,8 +47,8 @@ RESTATEMENTS = {
     "README.md": "the credentials section a user reads",
     "docs/plugin-protocol.md": "the protocol document an out-of-tree plugin is written from",
     "gh-secrets.json": "the declaration of the repository secrets this build needs",
-    ".github/workflows/live.yml": "the workflow that hands each live job its credential",
-    "scripts/check-live-lane.sh": "the live lane's own job-to-credential map",
+    ".github/workflows/ci.yml": "the workflow that hands the required check its credentials",
+    "scripts/check-live-lane.sh": "the live tests' own session-to-credential map",
 }
 
 # A file whose own job is to forbid a spelling has to be able to write it down: these are

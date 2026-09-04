@@ -472,6 +472,33 @@ def test_generator_rejects_drift_and_unmapped_commands(tmp_path: Path) -> None:
     assert "future" in unmapped.stderr
 
 
+# llmlint: ignore-block[async_typed_clients_at_boundaries] The subprocess boundary is what is
+# under test: this asserts that a generation which could not run the binary puts the binary's
+# own words on stderr and exits non-zero, which is what a CI log shows and what an in-process
+# call could not observe. Every case in this file drives the real generator the same way, and
+# the async typed client this rule asks for is the package's own `Client`, not this test.
+def test_generator_reports_what_a_failing_binary_said() -> None:
+    """Carry the binary's own diagnosis out of a generation that could not run it.
+
+    The generator captures the binary's output because stdout is the schema bundle it
+    consumes, so a failure whose reason went to stderr is a failure with no reason in the
+    log — which is what one CI run of this target reported and nobody could act on.
+    """
+    failed = subprocess.run(
+        [sys.executable, "-c", "import generate; generate.run_workspace_binary('not-a-command')"],
+        cwd=WORKSPACE / "sdks" / "python",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert failed.returncode == 1
+    assert "exited 2" in failed.stderr
+    assert "unrecognized subcommand 'not-a-command'" in failed.stderr
+
+
+# llmlint: ignore-end[async_typed_clients_at_boundaries]
+
+
 def test_generator_write_mode_uses_real_binary(tmp_path: Path) -> None:
     """Regenerate into a fresh destination from the real schema and command surface."""
     destination = tmp_path / "generated"

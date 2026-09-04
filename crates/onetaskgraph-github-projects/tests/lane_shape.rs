@@ -2,17 +2,20 @@
 //!
 //! Which board and repository the credentialed lane may write to, which artifacts a run
 //! recognises as its own and as an interrupted earlier run's, and that cleanup runs whether the
-//! journey passed or failed. None of it touches the network or reads a credential, so it runs in
-//! the everyday gate rather than in `test-live` — which is why it lives here and not in
-//! `tests/live.rs`, where `scripts/check-live-lane.sh` requires every test to carry `#[ignore]`.
+//! journey passed or failed. None of it touches the network or reads a credential, so these
+//! assertions hold on every machine — including the ones the journey beside them skips on for
+//! want of a credential, which is where the decisions asserted here would otherwise go
+//! unproven.
 
 mod lane;
 
 use lane::{
     LiveLane, LiveSecret, artifact_label, artifact_title, is_artifact_label, is_artifact_title,
-    is_run_artifact_title, live_lane, live_write_config, run_then_cleanup,
+    is_run_artifact_title, live_lane, live_write_config, rest_outcome, run_then_cleanup,
 };
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
+use onetaskgraph_github_projects::accounting::{Outcome, StatusCode};
+use onetaskgraph_live::Credential;
 use onetaskgraph_plugin_api::{SourceName, SourcePlugin};
 
 #[tokio::test]
@@ -52,6 +55,35 @@ async fn cleanup_runs_after_a_failed_live_journey() {
 }
 
 #[test]
+fn a_response_this_lane_could_not_read_is_not_reported_as_one_github_answered() {
+    // The session report is what says a run's calls were worth what they cost, so a `2xx`
+    // carrying a body this lane could not decode has to be recorded as the refusal it was
+    // — otherwise the report names a call that succeeded and produced nothing.
+    let ok = StatusCode::OK;
+    assert_eq!(
+        rest_outcome(ok, false, "{\"id\":\"L_1\"}", true),
+        Outcome::Answered,
+        "a 2xx this lane read is what it says it is"
+    );
+    assert_eq!(
+        rest_outcome(ok, false, "<html>a proxy said hello</html>", false),
+        Outcome::Refused,
+        "a 2xx this lane could not read answered nothing"
+    );
+    // The two the status alone settles are still the status's to settle: a refusal stays a
+    // refusal whether or not its body parsed, and a rate-limited call still did not run.
+    assert_eq!(
+        rest_outcome(StatusCode::NOT_FOUND, false, "{}", true),
+        Outcome::Refused
+    );
+    assert_eq!(
+        rest_outcome(StatusCode::FORBIDDEN, true, "rate limit exceeded", false),
+        Outcome::RateLimited,
+        "a body that did not parse must not turn a rate-limited call into an ordinary refusal"
+    );
+}
+
+#[test]
 fn the_lane_takes_its_board_and_repository_only_from_the_names_it_is_given() {
     assert_eq!(
         live_lane(
@@ -62,7 +94,7 @@ fn the_lane_takes_its_board_and_repository_only_from_the_names_it_is_given() {
             None
         ),
         Ok(LiveLane::Run {
-            token: "live-token".to_owned(),
+            token: Credential::new("live-token").expect("a placeholder credential is not blank"),
             owner: "nickderobertis".to_owned(),
             project_number: 1,
             repository: "acme/work".to_owned(),
@@ -198,6 +230,56 @@ fn an_unnamed_repository_skips_the_lane_and_a_malformed_one_is_a_misconfiguratio
         )
         .expect_err(&format!("GH_PROJECTS_REPOSITORY={malformed:?} must fail"));
     }
+}
+
+#[test]
+fn a_repository_nomination_that_would_address_something_else_is_refused_before_anything_is_sent() {
+    // Both halves are filled into this lane's REST endpoint templates, so a character that
+    // is significant in a URL does not name a repository — it redirects a credentialed
+    // call, and the endpoint the session report names is then not the one that was made.
+    // Each of these splits on a slash and would have passed the owner/name check alone.
+    for redirecting in [
+        "acme/work?per_page=1",
+        "acme/work#fragment",
+        "acme/work%2f..",
+        "acme/..",
+        "acme/.",
+        "acme/wo rk",
+        "acme/{repo}",
+        "-acme/work",
+        "acme-/work",
+        "ac--me/work",
+        "ac me/work",
+        "acme./work",
+    ] {
+        let refusal = live_lane(
+            Some("live-token"),
+            Some("nickderobertis"),
+            Some("1"),
+            Some(redirecting),
+            None,
+        )
+        .expect_err(&format!(
+            "GH_PROJECTS_REPOSITORY={redirecting:?} reaches a URL, so it must be refused rather \
+             than sent"
+        ));
+        assert!(
+            refusal.contains("GH_PROJECTS_REPOSITORY") && refusal.contains(redirecting),
+            "the refusal names the variable and the value given: {refusal}"
+        );
+    }
+    // The nomination CI actually sets still passes, so the grammar refuses a redirect
+    // rather than the real board's own repository.
+    assert!(matches!(
+        live_lane(
+            Some("live-token"),
+            Some("nickderobertis"),
+            Some("1"),
+            Some("nickderobertis/onetaskgraph"),
+            None,
+        ),
+        Ok(LiveLane::Run { .. })
+    ));
 }
 
 #[test]

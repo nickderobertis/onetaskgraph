@@ -1,10 +1,10 @@
 //! Public factory and real-HTTP fixture journeys.
 
 use onetaskgraph_plugin_api::{
-    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Label, LabelFilter, Location, PageRequest, Project, ProjectFilter,
-    ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, StatusCategory, Task,
-    TaskQuery, TaskSource,
+    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
+    ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId, PageRequest, Project,
+    ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin,
+    StatusCategory, Task, TaskQuery, TaskSource,
 };
 use secrecy::SecretString;
 use std::{
@@ -175,7 +175,13 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         ),
         (
             "ProjectRelationCreateInput",
-            &["projectId", "relatedProjectId", "type"][..],
+            &[
+                "projectId",
+                "relatedProjectId",
+                "type",
+                "anchorType",
+                "relatedAnchorType",
+            ][..],
         ),
         (
             "DocumentCreateInput",
@@ -357,6 +363,16 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
             _ => None,
         })
         .collect::<std::collections::HashMap<_, _>>();
+    let inputs = schema
+        .definitions
+        .iter()
+        .filter_map(|definition| match definition {
+            schema::Definition::TypeDefinition(schema::TypeDefinition::InputObject(input)) => {
+                Some((input.name.as_str(), input))
+            }
+            _ => None,
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     fn named<'a>(kind: &'a schema::Type<'a, String>) -> &'a str {
         match kind {
             schema::Type::NamedType(name) => name,
@@ -371,6 +387,62 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
                 same_type(left, right)
             }
             _ => false,
+        }
+    }
+    /// Whether a variable declared `variable` may stand at a location typed `location`.
+    ///
+    /// GraphQL admits it when the two are the same type, or when the variable is the
+    /// location type's non-null form — never when only the value would coerce. `String!`
+    /// at an `ID` is the second case failing, and it is what Linear refused the state
+    /// lookup for; `String!` at a `String` is the non-null case passing, which the sibling
+    /// `eqIgnoreCase` in the very same filter relies on.
+    fn usable_at(location: &schema::Type<'_, String>, variable: &query::Type<'_, String>) -> bool {
+        same_type(location, variable)
+            || matches!(variable, query::Type::NonNullType(inner) if same_type(location, inner))
+    }
+    /// Check every variable an inline input-object literal puts inside an argument.
+    ///
+    /// A filter written out in the document rather than passed whole is where `$team`
+    /// hid: it is not a root argument, so the root-argument check above never saw it, and
+    /// nothing else here descended into the literal. Linear did, and refused the document.
+    fn literal_variables<'a>(
+        inputs: &std::collections::HashMap<&str, &'a schema::InputObjectType<'a, String>>,
+        variables: &[query::VariableDefinition<'_, String>],
+        input_name: &str,
+        value: &query::Value<'_, String>,
+        path: &str,
+    ) {
+        let query::Value::Object(fields) = value else {
+            return;
+        };
+        let input = inputs
+            .get(input_name)
+            .unwrap_or_else(|| panic!("pinned schema lacks input {input_name}"));
+        for (key, value) in fields {
+            let field = input
+                .fields
+                .iter()
+                .find(|field| field.name == *key)
+                .unwrap_or_else(|| panic!("{input_name} lacks field {key}"));
+            let path = format!("{path}.{key}");
+            match value {
+                query::Value::Variable(name) => {
+                    let variable = variables
+                        .iter()
+                        .find(|variable| variable.name == *name)
+                        .unwrap_or_else(|| panic!("no ${name} is declared for {path}"));
+                    assert!(
+                        usable_at(&field.value_type, &variable.var_type),
+                        "${name} is declared {:?} and {path} is {:?}: Linear refuses a \
+                         variable that is neither the location's type nor its non-null form",
+                        variable.var_type,
+                        field.value_type,
+                    );
+                }
+                value => {
+                    literal_variables(inputs, variables, named(&field.value_type), value, &path)
+                }
+            }
         }
     }
     fn validate<'a>(
@@ -451,6 +523,18 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
             .unwrap();
         for (argument_name, value) in &root.arguments {
             let query::Value::Variable(variable_name) = value else {
+                let argument = schema_root
+                    .arguments
+                    .iter()
+                    .find(|argument| argument.name == *argument_name)
+                    .unwrap();
+                literal_variables(
+                    &inputs,
+                    variables,
+                    named(&argument.value_type),
+                    value,
+                    &format!("{}({argument_name}:)", root.name),
+                );
                 continue;
             };
             let variable = variables
@@ -475,6 +559,491 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
             selection_set,
         );
     }
+}
+
+/// Answer every request with the same superset, and record what was asked.
+///
+/// One response object carrying every root this source can select, because the source
+/// reads the one key it asked for and ignores the rest — so a single constant stands in
+/// for the whole API, and driving the surface needs no scripted queue that would have to
+/// be kept in step with the order of the calls.
+fn superset_server() -> (String, mpsc::Receiver<String>) {
+    let page = |nodes: serde_json::Value| serde_json::json!({"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    // One relation at each end of each root, so the write path's "delete what is there
+    // before writing what was asked for" reaches the two relation deletes: an operation
+    // this never provokes is an operation this never checks. Each root carries its own
+    // vocabulary, because a project relation is typed `dependency` where an issue's is
+    // `blocks` and each read accepts only its own.
+    let relations = |kind: &str, far: &str, near: &str, id: &str| {
+        serde_json::json!({"nodes":[{"id":id,"type":kind,(far):{"id":"OTHER"},(near):{"id":"OTHER"}}],
+                           "pageInfo":{"hasNextPage":false,"endCursor":null}})
+    };
+    let body = serde_json::json!({"data":{
+        "viewer": {"id":"U"},
+        "issue": {"id":"I","title":"issue","description":null,"url":null,"createdAt":null,
+                  "updatedAt":null,"state":{"name":"Todo","type":"unstarted"},
+                  "labels":{"nodes":[]},"project":null,
+                  "relations":relations("blocks","relatedIssue","issue","IR"),
+                  "inverseRelations":relations("blocks","relatedIssue","issue","IR2")},
+        "project": {"id":"P","name":"project","description":null,"url":null,"createdAt":null,
+                    "updatedAt":null,"status":{"name":"Todo","type":"planned"},
+                    "labels":{"nodes":[]},
+                    "relations":relations("dependency","relatedProject","project","PR"),
+                    "inverseRelations":relations("dependency","relatedProject","project","PR2")},
+        "document": {"id":"D","title":"document","content":null,"url":null,"createdAt":null,
+                     "updatedAt":null,"project":null},
+        "issues": page(serde_json::json!([])),
+        "projects": page(serde_json::json!([])),
+        "documents": page(serde_json::json!([])),
+        "issueLabels": page(serde_json::json!([{"id":"L","name":"bug","color":null}])),
+        "projectLabels": {"nodes":[{"id":"PL","name":"roadmap","color":null}]},
+        "teams": {"nodes":[{"id":"TEAM"}]},
+        "workflowStates": {"nodes":[{"id":"STATE"}]},
+        "projectStatuses": {"nodes":[{"id":"STATUS","name":"Todo"}]},
+        "issueCreate": {"success":true,"issue":{"id":"I"}},
+        "issueUpdate": {"success":true,"issue":{"id":"I"}},
+        "projectCreate": {"success":true,"project":{"id":"P"}},
+        "projectUpdate": {"success":true,"project":{"id":"P"}},
+        "documentCreate": {"success":true,"document":{"id":"D"}},
+        "documentUpdate": {"success":true,"document":{"id":"D"}},
+        "issueRelationCreate": {"success":true,"issueRelation":{"id":"R"}},
+        "projectRelationCreate": {"success":true,"projectRelation":{"id":"R"}},
+        "issueRelationDelete": {"success":true},
+        "projectRelationDelete": {"success":true},
+        "issueDelete": {"success":true},
+        "projectDelete": {"success":true},
+        "documentDelete": {"success":true},
+    }})
+    .to_string();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut bytes = vec![0; 65536];
+            let Ok(n) = stream.read(&mut bytes) else {
+                break;
+            };
+            bytes.truncate(n);
+            if tx
+                .send(String::from_utf8_lossy(&bytes).into_owned())
+                .is_err()
+            {
+                break;
+            }
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (format!("http://{addr}/graphql"), rx)
+}
+
+/// Every variables object this source builds at runtime, against the pinned schema.
+///
+/// **This is the check the two above could not be.** They parse the production documents,
+/// and a filter is not in a document: it is built field by field at runtime and handed over
+/// whole as `$filter`. So `IssueFilter` and `ProjectFilter` sat in the pinned schema
+/// carrying nothing but `and`/`or` while this source sent a `team` and an issue-shaped
+/// `state` into `projects(filter:)`, and Linear was the only thing that ever read them —
+/// one refusal per round trip, one round trip per release. Every write input is built the
+/// same way and had the same hole.
+///
+/// So this drives the whole surface against a server that answers everything, records what
+/// really went out, and walks each variables object against the pinned type of the argument
+/// it stands at: every key against that input type's members, every list against its
+/// element type, every enum value against its members, every scalar against its kind. A
+/// member Linear does not have fails here, offline, in the pass that introduces it.
+#[tokio::test]
+async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema() {
+    use graphql_parser::{query, schema};
+    let (endpoint, wire) = superset_server();
+    let source = writable_source(&endpoint);
+    let request = PageRequest {
+        cursor: Some(Cursor("cursor".into())),
+        limit: 5,
+    };
+    let labels = LabelFilter {
+        any_of: vec!["bug".into(), "chore".into()],
+        all_of: vec!["core".into()],
+        none_of: vec!["wontfix".into()],
+    };
+    let statuses = vec![
+        StatusCategory::Backlog,
+        StatusCategory::Todo,
+        StatusCategory::InProgress,
+        StatusCategory::Done,
+        StatusCategory::Cancelled,
+    ];
+    source.health().await.unwrap();
+    source.get_task(&"I".into()).await.unwrap();
+    source.get_project(&"P".into()).await.unwrap();
+    source.get_document(&"D".into()).await.unwrap();
+    source.labels(&request).await.unwrap();
+    for project in [
+        ProjectFilter::Any,
+        ProjectFilter::Orphans,
+        ProjectFilter::Is("P-1".into()),
+    ] {
+        source
+            .query_tasks(
+                &TaskQuery {
+                    labels: labels.clone(),
+                    statuses: statuses.clone(),
+                    project: project.clone(),
+                    ..TaskQuery::default()
+                },
+                &request,
+            )
+            .await
+            .unwrap();
+        source
+            .query_documents(
+                &DocumentQuery {
+                    labels: labels.clone(),
+                    project,
+                    ..DocumentQuery::default()
+                },
+                &request,
+            )
+            .await
+            .unwrap();
+    }
+    source
+        .query_projects(
+            &ProjectQuery {
+                labels: labels.clone(),
+                statuses: statuses.clone(),
+                ..ProjectQuery::default()
+            },
+            &request,
+        )
+        .await
+        .unwrap();
+    for direction in [Direction::DependsOn, Direction::DependedOnBy] {
+        source
+            .task_dependencies(&"I".into(), direction, &request)
+            .await
+            .unwrap();
+        source
+            .project_dependencies(&"P".into(), direction, &request)
+            .await
+            .unwrap();
+    }
+    let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:T","title":"task","content":"body","status":{"category":"todo","name":"Todo"},"labels":[{"id":"old","name":"bug","color":null}],"project":"P","repositories":["github.com/acme/work"],"metadata":{"n":1}})).unwrap();
+    let project: Project = serde_json::from_value(serde_json::json!({"id":"authored:P","title":"project","content":"body","status":{"category":"todo","name":"Todo"},"labels":[{"id":"old","name":"roadmap","color":null}],"repositories":[],"metadata":{}})).unwrap();
+    let document: Document = serde_json::from_value(serde_json::json!({"id":"authored:D","title":"document","content":"body","project":"P","labels":[],"repositories":[],"metadata":{}})).unwrap();
+    let task_edge = DependencyEdge {
+        from: DependencyEndpoint::new("authored:T".into(), ItemKind::Task).unwrap(),
+        to: DependencyEndpoint::new("work:I-FAR".into(), ItemKind::Task).unwrap(),
+        kind: DependencyKind::Blocks,
+    };
+    let project_edge = DependencyEdge {
+        from: DependencyEndpoint::new("authored:P".into(), ItemKind::Project).unwrap(),
+        to: DependencyEndpoint::new("work:P-FAR".into(), ItemKind::Project).unwrap(),
+        kind: DependencyKind::Blocks,
+    };
+    for target in [None, Some(NativeId::from("I"))] {
+        source
+            .write_task(&ItemWrite {
+                target,
+                item: task.clone(),
+                depends_on: vec![task_edge.clone()],
+            })
+            .await
+            .unwrap();
+    }
+    for target in [None, Some(NativeId::from("P"))] {
+        source
+            .write_project(&ItemWrite {
+                target,
+                item: project.clone(),
+                depends_on: vec![project_edge.clone()],
+            })
+            .await
+            .unwrap();
+    }
+    for target in [None, Some(NativeId::from("D"))] {
+        source
+            .write_document(&ItemWrite {
+                target,
+                item: document.clone(),
+                depends_on: vec![],
+            })
+            .await
+            .unwrap();
+    }
+    source.delete_task(&"I".into()).await.unwrap();
+    source.delete_project(&"P".into()).await.unwrap();
+    source.delete_document(&"D".into()).await.unwrap();
+
+    let pinned = schema::parse_schema::<String>(include_str!("fixtures/schema.graphql")).unwrap();
+    let mut inputs = std::collections::HashMap::new();
+    let mut enums = std::collections::HashMap::new();
+    let mut roots = std::collections::HashMap::new();
+    for definition in &pinned.definitions {
+        match definition {
+            schema::Definition::TypeDefinition(schema::TypeDefinition::InputObject(input)) => {
+                inputs.insert(input.name.as_str(), input);
+            }
+            schema::Definition::TypeDefinition(schema::TypeDefinition::Enum(kind)) => {
+                enums.insert(
+                    kind.name.as_str(),
+                    kind.values
+                        .iter()
+                        .map(|value| value.name.as_str())
+                        .collect::<Vec<_>>(),
+                );
+            }
+            schema::Definition::TypeDefinition(schema::TypeDefinition::Object(object))
+                if object.name == "Query" || object.name == "Mutation" =>
+            {
+                roots.insert(object.name.as_str(), object);
+            }
+            _ => {}
+        }
+    }
+    /// Whether `value` is admissible where the pinned schema declares `expected`.
+    fn conforms(
+        inputs: &std::collections::HashMap<&str, &schema::InputObjectType<'_, String>>,
+        enums: &std::collections::HashMap<&str, Vec<&str>>,
+        expected: &schema::Type<'_, String>,
+        value: &serde_json::Value,
+        path: &str,
+    ) {
+        match expected {
+            schema::Type::NonNullType(inner) => {
+                assert!(
+                    !value.is_null(),
+                    "{path} is null where the schema requires a value"
+                );
+                conforms(inputs, enums, inner, value, path);
+            }
+            _ if value.is_null() => {}
+            schema::Type::ListType(inner) => {
+                let items = value
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{path} is {value} where the schema wants a list"));
+                for (index, item) in items.iter().enumerate() {
+                    conforms(inputs, enums, inner, item, &format!("{path}[{index}]"));
+                }
+            }
+            schema::Type::NamedType(name) => {
+                if let Some(input) = inputs.get(name.as_str()) {
+                    let fields = value.as_object().unwrap_or_else(|| {
+                        panic!("{path} is {value} where the schema wants a {name}")
+                    });
+                    for (key, value) in fields {
+                        let field = input
+                            .fields
+                            .iter()
+                            .find(|field| field.name == *key)
+                            .unwrap_or_else(|| {
+                                panic!("{path}.{key}: the pinned {name} has no member {key}")
+                            });
+                        conforms(
+                            inputs,
+                            enums,
+                            &field.value_type,
+                            value,
+                            &format!("{path}.{key}"),
+                        );
+                    }
+                    return;
+                }
+                if let Some(members) = enums.get(name.as_str()) {
+                    let member = value
+                        .as_str()
+                        .unwrap_or_else(|| panic!("{path} is {value} where {name} wants a member"));
+                    assert!(
+                        members.contains(&member),
+                        "{path} is {member:?}, and {name} has only {members:?}"
+                    );
+                    return;
+                }
+                let ok = match name.as_str() {
+                    "String" | "ID" | "DateTime" => value.is_string(),
+                    "Boolean" => value.is_boolean(),
+                    "Int" | "Float" => value.is_number(),
+                    // A type this pin does not carry is one nothing can be checked against,
+                    // which is the state this whole check exists to end.
+                    _ => panic!("{path}: the pinned schema has no type {name}"),
+                };
+                assert!(ok, "{path} is {value} where the schema wants a {name}");
+            }
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    // Drained rather than iterated: the server answers forever, so its sender never hangs
+    // up and `iter` would block on a request that is never coming. Every response was read
+    // before the last call above returned, so everything sent is already in the channel.
+    let requests = wire.try_iter().collect::<Vec<_>>();
+    assert!(!requests.is_empty(), "the surface was driven");
+    for request in &requests {
+        let body = request
+            .split_once("\r\n\r\n")
+            .expect("the recorded request carries a body")
+            .1;
+        let body = serde_json::from_str::<serde_json::Value>(body).expect("the body is JSON");
+        let document = query::parse_query::<String>(body["query"].as_str().unwrap()).unwrap();
+        let (root_name, selection, declared) = match &document.definitions[0] {
+            query::Definition::Operation(query::OperationDefinition::Query(operation)) => (
+                "Query",
+                &operation.selection_set,
+                &operation.variable_definitions,
+            ),
+            query::Definition::Operation(query::OperationDefinition::Mutation(operation)) => (
+                "Mutation",
+                &operation.selection_set,
+                &operation.variable_definitions,
+            ),
+            _ => panic!("a production document is an explicit query or mutation"),
+        };
+        let query::Selection::Field(root) = &selection.items[0] else {
+            panic!("an operation has a root field")
+        };
+        seen.insert(root.name.clone());
+        let root_field = roots[root_name]
+            .fields
+            .iter()
+            .find(|field| field.name == root.name)
+            .unwrap_or_else(|| panic!("the pinned schema lacks {root_name}.{}", root.name));
+        for (argument_name, value) in &root.arguments {
+            let query::Value::Variable(variable) = value else {
+                // A literal argument is in the document, so the two checks above read it.
+                continue;
+            };
+            let location = format!("{}({argument_name}:)", root.name);
+            assert!(
+                declared.iter().any(|candidate| candidate.name == *variable),
+                "{location} stands on ${variable}, which nothing declares"
+            );
+            let argument = root_field
+                .arguments
+                .iter()
+                .find(|argument| argument.name == *argument_name)
+                .unwrap_or_else(|| panic!("{root_name}.{} takes no {argument_name}", root.name));
+            let sent = body["variables"]
+                .get(variable.as_str())
+                .unwrap_or_else(|| panic!("{location} was declared and never sent"));
+            conforms(&inputs, &enums, &argument.value_type, sent, &location);
+        }
+    }
+    // The surface, not a sample of it: every operation this source can send has to have
+    // been driven, because a variables object nothing sent is one nothing checked.
+    let mut expected = std::collections::BTreeSet::new();
+    for document in [
+        onetaskgraph_linear::graphql::VIEWER,
+        onetaskgraph_linear::graphql::ISSUE,
+        onetaskgraph_linear::graphql::PROJECT,
+        onetaskgraph_linear::graphql::DOCUMENT,
+        onetaskgraph_linear::graphql::ISSUES,
+        onetaskgraph_linear::graphql::PROJECTS,
+        onetaskgraph_linear::graphql::DOCUMENTS,
+        onetaskgraph_linear::graphql::LABELS,
+        onetaskgraph_linear::graphql::ISSUE_RELATIONS,
+        onetaskgraph_linear::graphql::PROJECT_RELATIONS,
+        onetaskgraph_linear::graphql::TEAM,
+        onetaskgraph_linear::graphql::ISSUE_STATE,
+        onetaskgraph_linear::graphql::PROJECT_STATUS,
+        onetaskgraph_linear::graphql::ISSUE_LABEL,
+        onetaskgraph_linear::graphql::PROJECT_LABEL,
+        onetaskgraph_linear::graphql::ISSUE_CREATE,
+        onetaskgraph_linear::graphql::ISSUE_UPDATE,
+        onetaskgraph_linear::graphql::PROJECT_CREATE,
+        onetaskgraph_linear::graphql::PROJECT_UPDATE,
+        onetaskgraph_linear::graphql::ISSUE_RELATION_CREATE,
+        onetaskgraph_linear::graphql::PROJECT_RELATION_CREATE,
+        onetaskgraph_linear::graphql::ISSUE_RELATION_DELETE,
+        onetaskgraph_linear::graphql::PROJECT_RELATION_DELETE,
+        onetaskgraph_linear::graphql::ISSUE_DELETE,
+        onetaskgraph_linear::graphql::PROJECT_DELETE,
+        onetaskgraph_linear::graphql::DOCUMENT_CREATE,
+        onetaskgraph_linear::graphql::DOCUMENT_UPDATE,
+        onetaskgraph_linear::graphql::DOCUMENT_DELETE,
+    ] {
+        let parsed = query::parse_query::<String>(document).unwrap();
+        let selection = match &parsed.definitions[0] {
+            query::Definition::Operation(query::OperationDefinition::Query(operation)) => {
+                &operation.selection_set
+            }
+            query::Definition::Operation(query::OperationDefinition::Mutation(operation)) => {
+                &operation.selection_set
+            }
+            _ => panic!("a production document is an explicit query or mutation"),
+        };
+        let query::Selection::Field(root) = &selection.items[0] else {
+            panic!("an operation has a root field")
+        };
+        expected.insert(root.name.clone());
+    }
+    assert_eq!(
+        seen, expected,
+        "every operation this source can send has to reach this check"
+    );
+}
+
+/// An item Linear has trashed or archived is one this source does not hold.
+///
+/// None of Linear's three `delete` verbs removes anything: observed on 2026-09-04,
+/// `issueDelete`, `projectDelete` and `documentDelete` each answered `success: true` and
+/// the item still read back by id, carrying `archivedAt` and `trashed: true`. Its separate
+/// archive verb is a third state — `archivedAt` set, `trashed` null — and Linear excludes
+/// both from every connection, so a listing had already stopped returning them while a read
+/// by id still did. `archivedAt` is the marker they share, which is why it is the one read.
+///
+/// That is what the live journey failed on with `a document this run removed is still
+/// readable`, and it is what a copy's undo depends on: an item this run created has to be
+/// gone once it is taken back.
+#[tokio::test]
+async fn an_archived_or_trashed_item_is_not_held_by_this_source_over_real_http() {
+    for (root, body) in [
+        (
+            "issue",
+            serde_json::json!({"issue":{"id":"I","title":"gone","description":null,"url":null,
+                "createdAt":null,"updatedAt":null,"archivedAt":"2026-09-04T18:55:13.746Z",
+                "state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}}),
+        ),
+        (
+            "project",
+            serde_json::json!({"project":{"id":"P","name":"gone","description":null,"url":null,
+                "createdAt":null,"updatedAt":null,"archivedAt":"2026-09-04T18:55:13.746Z",
+                "status":{"name":"Todo","type":"planned"},"labels":{"nodes":[]}}}),
+        ),
+        (
+            "document",
+            serde_json::json!({"document":{"id":"D","title":"gone","content":null,"url":null,
+                "createdAt":null,"updatedAt":null,"archivedAt":"2026-09-04T18:55:13.746Z",
+                "project":null}}),
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![body.clone()]);
+        let source = source(&endpoint);
+        let held = match root {
+            "issue" => source.get_task(&"I".into()).await.unwrap().is_some(),
+            "project" => source.get_project(&"P".into()).await.unwrap().is_some(),
+            _ => source.get_document(&"D".into()).await.unwrap().is_some(),
+        };
+        assert!(!held, "an archived {root} is not held: {body}");
+    }
+    // And a delete over one is the state the caller asked for, with no mutation sent: the
+    // read is what says there is nothing left to remove.
+    let (endpoint, wire) = response_server(vec![serde_json::json!({"document":{"id":"D",
+        "title":"gone","content":null,"url":null,"createdAt":null,"updatedAt":null,
+        "archivedAt":"2026-09-04T18:55:13.746Z","project":null}})]);
+    source(&endpoint)
+        .delete_document(&"D".into())
+        .await
+        .expect("an item already in the trash is the state this asks for");
+    assert!(wire.recv().unwrap().contains("document(id:$id)"));
+    assert!(
+        wire.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "nothing is deleted when Linear no longer holds it"
+    );
 }
 
 #[tokio::test]
@@ -547,17 +1116,17 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         serde_json::json!({"issueRelationDelete":{"success":true}}),
         serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("teams", "TEAM"),
-        id_page("projectStatuses", "STATUS"),
+        serde_json::json!({"projectStatuses":{"nodes":[{"id":"STATUS","name":"Todo"}]}}),
         id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
         serde_json::json!({"project":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P"}}}),
         serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("teams", "TEAM"),
-        id_page("projectStatuses", "STATUS"),
+        serde_json::json!({"projectStatuses":{"nodes":[{"id":"STATUS","name":"Todo"}]}}),
         id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-NEW"}}}),
-        serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P","type":"blocks","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P","type":"dependency","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationDelete":{"success":true}}),
         serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P2","type":"related","relatedProject":{"id":"P-OTHER"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationDelete":{"success":true}}),
@@ -628,7 +1197,7 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
     let project_edge = DependencyEdge {
         from: DependencyEndpoint::new("authored:P".into(), ItemKind::Project).unwrap(),
         to: DependencyEndpoint::new("authored:PFAR".into(), ItemKind::Project).unwrap(),
-        kind: DependencyKind::Related,
+        kind: DependencyKind::Blocks,
     };
     assert_eq!(
         writable
@@ -675,10 +1244,51 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
             .iter()
             .any(|request| request.contains(onetaskgraph_linear::graphql::PROJECT_CREATE))
     );
-    assert!(
-        requests
-            .iter()
-            .any(|request| request.contains("relatedProjectId") && request.contains("P-FAR"))
+    // Linear declares both anchors required on `ProjectRelationCreateInput`, so the whole
+    // input object is asserted rather than the far id alone: dropping either anchor is
+    // what the live lane failed on, and a substring assertion would not have seen it. The
+    // `type` is asserted for the same reason and by the same evidence — `blocks` there is
+    // what the live lane was refused for next, with `Argument Validation Error`, and a
+    // project dependency is typed `dependency`.
+    //
+    // The anchor *pair* is asserted with the ids because that pair is what carries the
+    // direction: measured against the real API on 2026-09-04, the project whose anchor is
+    // `start` is the one Linear reports as blocked, whichever id slot it sits in. This
+    // source puts the item that depends in `projectId`, so `start` belongs there and
+    // exchanging the two anchors would state every dependency backwards in the workspace
+    // without Linear refusing a thing. `src/lib.rs` records the measurement.
+    let relation_inputs = requests
+        .iter()
+        .filter(|request| request.contains(onetaskgraph_linear::graphql::PROJECT_RELATION_CREATE))
+        .map(|request| {
+            let body = request
+                .split_once("\r\n\r\n")
+                .expect("the recorded request carries a body")
+                .1;
+            serde_json::from_str::<serde_json::Value>(body).expect("the body is JSON")["variables"]
+                ["input"]
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        relation_inputs,
+        vec![
+            serde_json::json!({
+                "projectId": "P-NEW",
+                "relatedProjectId": "P-FAR",
+                "type": "dependency",
+                "anchorType": "start",
+                "relatedAnchorType": "end",
+            }),
+            serde_json::json!({
+                "projectId": "P-NEW",
+                "relatedProjectId": "P-FAR",
+                "type": "dependency",
+                "anchorType": "start",
+                "relatedAnchorType": "end",
+            }),
+        ],
+        "the project relation input drifted from what Linear requires"
     );
     let create = requests
         .iter()
@@ -697,6 +1307,83 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         })
         .expect("an unresolved same-source origin remains in recorded dependency metadata");
     assert!(unresolved_update.contains("onetaskgraph.depends_on"));
+}
+
+/// Linear types every project relation `dependency`, and that is an ordering.
+///
+/// Asked for one typed `related` on 2026-09-04 the real API answered
+/// `Argument Validation Error` with
+/// `constraints: {"isEnum": "type must be one of the following values: dependency"}`, so
+/// this source says so itself rather than sending a value that cannot land. It says so
+/// *before* the write, which is what this asserts alongside the message: the server here
+/// answers nothing at all, so a refusal that had let the project be created first would
+/// hang on the create instead of returning.
+#[tokio::test]
+async fn an_unordered_project_edge_is_refused_before_anything_is_written_over_real_http() {
+    let (endpoint, wire) = response_server(Vec::new());
+    let project: Project = serde_json::from_value(serde_json::json!({"id":"authored:P","title":"visible project","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"repositories":[],"metadata":{}})).unwrap();
+    let refusal = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project,
+            depends_on: vec![DependencyEdge {
+                from: DependencyEndpoint::new("authored:P".into(), ItemKind::Project).unwrap(),
+                to: DependencyEndpoint::new("work:P-FAR".into(), ItemKind::Project).unwrap(),
+                kind: DependencyKind::Related,
+            }],
+        })
+        .await
+        .expect_err("Linear has no unordered project relation to write this into");
+    assert!(
+        matches!(&refusal, SourceError::Refused { message }
+            if message.contains("unordered dependency between projects")
+                && message.contains("`dependency`")
+                && message.contains("authored:P")
+                && message.contains("work:P-FAR")),
+        "the refusal names both ends and what Linear does accept: {refusal:?}"
+    );
+    assert!(
+        wire.try_iter().next().is_none(),
+        "the refusal reaches Linear with no request at all"
+    );
+}
+
+/// An issue relation keeps `related`, because that vocabulary really does have it.
+#[tokio::test]
+async fn an_unordered_task_edge_is_still_written_as_related_over_real_http() {
+    let page = |root: &str, nodes: serde_json::Value| serde_json::json!({(root):{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}});
+    let (endpoint, wire) = response_server(vec![
+        page("teams", serde_json::json!([{"id":"TEAM"}])),
+        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
+        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
+    ]);
+    let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:T","title":"task","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"repositories":[],"metadata":{}})).unwrap();
+    writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task,
+            depends_on: vec![DependencyEdge {
+                from: DependencyEndpoint::new("authored:T".into(), ItemKind::Task).unwrap(),
+                to: DependencyEndpoint::new("work:I-FAR".into(), ItemKind::Task).unwrap(),
+                kind: DependencyKind::Related,
+            }],
+        })
+        .await
+        .expect("an issue relation may be unordered");
+    let relation = wire
+        .iter()
+        .find(|request| request.contains(onetaskgraph_linear::graphql::ISSUE_RELATION_CREATE))
+        .expect("the issue relation was written");
+    let body = relation
+        .split_once("\r\n\r\n")
+        .expect("the recorded request carries a body")
+        .1;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(body).expect("the body is JSON")["variables"]["input"],
+        serde_json::json!({"issueId":"I-NEW","relatedIssueId":"I-FAR","type":"related"})
+    );
 }
 
 #[tokio::test]
@@ -788,7 +1475,10 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     drop(wire);
     let (endpoint, wire) = response_server(vec![
         page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        page(
+            "projectStatuses",
+            serde_json::json!([{"id":"STATUS","name":"Todo"}]),
+        ),
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":""}}}),
     ]);
     assert!(
@@ -919,7 +1609,10 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     };
     let (endpoint, wire) = response_server(vec![
         page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        page(
+            "projectStatuses",
+            serde_json::json!([{"id":"STATUS","name":"Todo"}]),
+        ),
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":"NEW"}}}),
         serde_json::json!({"project":{"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":""}}}),
@@ -936,7 +1629,10 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     drop(wire);
     let (endpoint, wire) = response_server(vec![
         page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        page(
+            "projectStatuses",
+            serde_json::json!([{"id":"STATUS","name":"Todo"}]),
+        ),
         serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P"}}}),
         serde_json::json!({"project":{"relations":{"nodes":[{"id":"R"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationDelete":{"success":false}}),
@@ -985,7 +1681,10 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     }
     let (endpoint, wire) = response_server(vec![
         page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+        page(
+            "projectStatuses",
+            serde_json::json!([{"id":"STATUS","name":"Todo"}]),
+        ),
         serde_json::json!({"projectCreate":{"success":true}}),
     ]);
     let error = writable_source(&endpoint)
@@ -1025,7 +1724,10 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     ] {
         let (endpoint, wire) = response_server(vec![
             page("teams", serde_json::json!([{"id":"TEAM"}])),
-            page("projectStatuses", serde_json::json!([{"id":"STATUS"}])),
+            page(
+                "projectStatuses",
+                serde_json::json!([{"id":"STATUS","name":"Todo"}]),
+            ),
             response,
         ]);
         assert!(
@@ -1058,6 +1760,124 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
             .is_err()
     );
     drop(wire);
+}
+
+/// Linear's `projectStatuses` accepts no `filter`, so the plugin asks for the whole
+/// connection and matches the display name itself.
+///
+/// This is the one lookup of the five that works that way. It is here because sending the
+/// filter Linear does not take is a `GRAPHQL_VALIDATION_FAILED` refusal of the entire
+/// document, which no amount of correct handling further down recovers from.
+#[tokio::test]
+async fn a_project_status_is_matched_locally_because_linear_narrows_that_connection_for_nobody() {
+    let project = || {
+        serde_json::from_value::<Project>(serde_json::json!({"id":"authored:P","title":"a project","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"repositories":[],"metadata":{}})).unwrap()
+    };
+    let teams = serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}});
+    let statuses =
+        |nodes: serde_json::Value| serde_json::json!({"projectStatuses":{"nodes":nodes}});
+
+    let (endpoint, wire) = response_server(vec![
+        teams.clone(),
+        statuses(serde_json::json!([
+            {"id":"S-BACKLOG","name":"Backlog"},
+            {"id":"S-TODO","name":"todo"},
+            {"id":"S-DONE","name":"Done"}
+        ])),
+        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
+        serde_json::json!({"project":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+    ]);
+    writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("the one status answering to the name resolves it");
+    let _team = wire.recv().unwrap();
+    let asked = wire.recv().unwrap();
+    assert!(
+        !asked.contains("filter"),
+        "the request Linear refuses outright is one naming a filter: {asked}"
+    );
+    let created = wire.recv().unwrap();
+    assert!(
+        created.contains("S-TODO"),
+        "the write carries the matched status's own id, not its name: {created}"
+    );
+    drop(wire);
+
+    let (endpoint, wire) = response_server(vec![
+        teams.clone(),
+        statuses(serde_json::json!([
+            {"id":"S-ONE","name":"Todo"},
+            {"id":"S-TWO","name":"TODO"}
+        ])),
+    ]);
+    let ambiguous = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{ambiguous}").contains("project status \"Todo\""),
+        "a name two statuses answer to under the same case-insensitive comparison Linear \
+         applied server-side is refused by name: {ambiguous}"
+    );
+    drop(wire);
+
+    let (endpoint, wire) = response_server(vec![
+        teams,
+        statuses(serde_json::json!([{"id":"S-DONE","name":"Done"}])),
+    ]);
+    let absent = writable_source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{absent}").contains("project status \"Todo\""),
+        "a connection holding no such name is refused by name too: {absent}"
+    );
+    drop(wire);
+
+    // A status this source cannot read the name of is malformed data from Linear, not a
+    // status that failed to match: reporting it as the latter would blame the caller for
+    // naming a status that is in fact right there.
+    for unreadable in [
+        serde_json::json!([{"id":"S-TODO","name":"Todo"},{"id":"S-ODD"}]),
+        serde_json::json!([{"id":"S-TODO","name":"Todo"},{"id":"S-ODD","name":7}]),
+    ] {
+        // The create and its relation read are here so that dropping the unreadable node
+        // would carry the write all the way through: the refusal below is then the source
+        // rejecting the data, not the fixture running out of answers.
+        let (endpoint, wire) = response_server(vec![
+            serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
+            statuses(unreadable.clone()),
+            serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
+            serde_json::json!({"project":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        ]);
+        let malformed = writable_source(&endpoint)
+            .write_project(&ItemWrite {
+                target: None,
+                item: project(),
+                depends_on: Vec::new(),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&malformed, SourceError::Malformed { message } if message.contains("name")),
+            "an unreadable status name is malformed rather than a nonmatch, for {unreadable}: {malformed:?}"
+        );
+        drop(wire);
+    }
 }
 
 #[tokio::test]
@@ -1182,9 +2002,65 @@ async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
     assert_eq!(page.next.unwrap().0, "next-1");
     let wire = request.recv().unwrap();
     assert!(wire.contains("issues(first:$first"));
-    assert!(wire.contains("inIgnoreCase"), "{wire}");
+    assert!(
+        wire.contains(r#"{"or":[{"labels":{"some":{"name":{"eqIgnoreCase":"Bug"}}}}]}"#),
+        "{wire}"
+    );
     assert!(wire.contains("started"));
     assert!(wire.contains("fixture-key"));
+}
+
+/// The label predicate goes on the wire in the shape Linear's `StringComparator` has.
+///
+/// It is asserted over the whole `filter` variable rather than by substring, because the
+/// defect this covers was a member of that comparator that does not exist: this source sent
+/// `inIgnoreCase` and Linear refused the read with HTTP 400 the first time a credentialed
+/// run reached a label filter. A substring assertion for `eqIgnoreCase` would have passed
+/// on the broken spelling too, since `all_of` sends that operator anyway.
+#[tokio::test]
+async fn a_label_predicate_uses_only_operators_linears_string_comparator_has() {
+    let (endpoint, request) = server("200 OK", "", include_str!("fixtures/issues.json"));
+    source(&endpoint)
+        .query_tasks(
+            &TaskQuery {
+                labels: LabelFilter {
+                    any_of: vec!["Bug".into(), "Chore".into()],
+                    all_of: vec!["Core".into()],
+                    none_of: vec!["Spike".into()],
+                },
+                ..Default::default()
+            },
+            &PageRequest {
+                cursor: None,
+                limit: 1,
+            },
+        )
+        .await
+        .expect("a read narrowed by every kind of label predicate");
+    let wire = request.recv().unwrap();
+    let body = wire
+        .split_once("\r\n\r\n")
+        .expect("the request has a body")
+        .1;
+    let sent: serde_json::Value = serde_json::from_str(body).expect("the body is JSON");
+    assert_eq!(
+        sent["variables"]["filter"],
+        serde_json::json!({"and": [
+            // "at least one of these" is a disjunction, because no member of
+            // `StringComparator` takes a list case-insensitively.
+            {"or": [
+                {"labels": {"some": {"name": {"eqIgnoreCase": "Bug"}}}},
+                {"labels": {"some": {"name": {"eqIgnoreCase": "Chore"}}}},
+            ]},
+            {"labels": {"some": {"name": {"eqIgnoreCase": "Core"}}}},
+            {"labels": {"every": {"name": {"neqIgnoreCase": "Spike"}}}},
+        ]}),
+        "{wire}"
+    );
+    assert!(
+        !wire.contains("inIgnoreCase"),
+        "Linear defines no such member of StringComparator: {wire}"
+    );
 }
 
 #[tokio::test]
@@ -1377,6 +2253,108 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
     );
 }
 
+/// A status Linear will not run a document under says which part of it Linear refused.
+///
+/// Linear answers a rejected document with 400 and its error envelope in the body, so a
+/// refusal reported as the status alone leaves nothing to act on. A long body is cut
+/// rather than carried whole.
+#[tokio::test]
+async fn a_status_linear_refuses_under_carries_what_linear_said() {
+    let (endpoint, _) = server(
+        "400 Bad Request",
+        "",
+        r#"{"errors":[{"message":"Argument 'statusId' on InputObject 'ProjectCreateInput' has an invalid value"}]}"#,
+    );
+    let refused = source(&endpoint).health().await.unwrap_err();
+    let SourceError::Unavailable { message } = refused else {
+        panic!("a refused status is an unavailable source: {refused:?}");
+    };
+    assert!(
+        message.contains("HTTP 400 Bad Request"),
+        "the status is still named: {message}"
+    );
+    assert!(
+        message.contains("statusId") && message.contains("ProjectCreateInput"),
+        "and Linear's own words come with it: {message}"
+    );
+
+    // An answering proxy chooses the body, and this message is written to a terminal, so a
+    // body cannot carry an escape sequence or a newline into it.
+    let (endpoint, _) = server(
+        "502 Bad Gateway",
+        "",
+        "<html>\r\n\u{1b}[2J\u{1b}[HTaken over\n\tby a proxy</html>",
+    );
+    let refused = source(&endpoint).health().await.unwrap_err();
+    let SourceError::Unavailable { message } = refused else {
+        panic!("a refused status is an unavailable source: {refused:?}");
+    };
+    assert!(
+        !message.chars().any(char::is_control),
+        "no control character reaches the message: {message:?}"
+    );
+    assert!(
+        message.ends_with("<html> [2J [HTaken over by a proxy</html>"),
+        "what the proxy said stays readable, with the escapes' introducer gone rather \
+         than their text guessed at: {message}"
+    );
+
+    // And whatever it answers with, the message stays a message.
+    let page = "x".repeat(5000);
+    let (endpoint, _) = server("502 Bad Gateway", "", page);
+    let refused = source(&endpoint).health().await.unwrap_err();
+    let SourceError::Unavailable { message } = refused else {
+        panic!("a refused status is an unavailable source: {refused:?}");
+    };
+    assert!(
+        message.len() < 600 && message.ends_with('\u{2026}'),
+        "a body that is a page is cut and marked: {} characters",
+        message.chars().count()
+    );
+}
+
+/// A validation refusal leads with Linear's own sentence, because that is what gets cut.
+///
+/// The envelope replayed here is the shape the real API answered a `projectRelationCreate`
+/// with on 2026-09-04, identifiers replaced by invented ones of the same length: HTTP 200,
+/// a `message` that is only the category name, and — after a `validationErrors` echoing
+/// the whole rejected input back — the sentence naming the field and the values it would
+/// have taken. That envelope is longer than the cut, which is asserted here too, so the
+/// question is which part of it survives. The assertion is therefore not that the message
+/// carries the sentence but that it carries it *first*: rendered raw the sentence lands
+/// ahead of the echo only because this build sorts object keys and
+/// `userPresentableMessage` sorts before `validationErrors`, which is a fact about
+/// spelling rather than a decision anyone made.
+#[tokio::test]
+async fn a_validation_refusal_leads_with_the_sentence_that_names_the_field() {
+    let (endpoint, _) = server(
+        "200 OK",
+        "",
+        r#"{"errors":[{"message":"Argument Validation Error","path":["projectRelationCreate"],"extensions":{"code":"INVALID_INPUT","validationErrors":[{"target":{"type":"blocks","projectId":"11111111-2222-4333-8444-555555555555","anchorType":"start","relatedProjectId":"66666666-7777-4888-8999-aaaaaaaaaaaa","relatedAnchorType":"end"},"value":"blocks","property":"type","children":[],"constraints":{"isEnum":"type must be one of the following values: dependency"}}],"type":"invalid input","userError":true,"userPresentableMessage":"type must be one of the following values: dependency."}}]}"#,
+    );
+    let refused = source(&endpoint).health().await.unwrap_err();
+    let SourceError::Refused { message } = refused else {
+        panic!("a GraphQL error envelope is a refusal: {refused:?}");
+    };
+    let sentence = "type must be one of the following values: dependency.";
+    let at = message
+        .find(sentence)
+        .unwrap_or_else(|| panic!("Linear's own sentence reaches the caller: {message}"));
+    assert!(
+        at < "Argument Validation Error: ".len() + 1,
+        "and reaches it first, ahead of the echoed input: {message}"
+    );
+    assert!(
+        message.starts_with("Argument Validation Error"),
+        "the category name Linear led with is still named: {message}"
+    );
+    assert!(
+        message.ends_with('\u{2026}'),
+        "the envelope is long enough to be cut, which is why leading with the sentence \
+         is what carries it: {message}"
+    );
+}
+
 #[tokio::test]
 async fn rate_limit_carries_retry_hint() {
     let (endpoint, _) = server("429 Too Many Requests", "Retry-After: 17\r\n", r#"{}"#);
@@ -1447,13 +2425,29 @@ async fn graphql_rate_limit_uses_http_hint_and_viewer_id_is_validated() {
             SourceError::Malformed { .. }
         ));
     }
+    // A refusal carries Linear's `extensions` as well as its `message`, because the
+    // message alone is a category name: the live project-relation write was refused with
+    // the bare phrase `Argument Validation Error`, which names neither the field nor the
+    // value, while `extensions` says which. So the whole message is asserted rather than
+    // its first clause.
     let (endpoint, _) = server(
         "200 OK",
         "",
         r#"{"errors":[{"message":"ordinary refusal","extensions":{"code":"BAD"}}]}"#,
     );
     assert!(
-        matches!(source(&endpoint).health().await.unwrap_err(), SourceError::Refused { ref message } if message == "ordinary refusal")
+        matches!(source(&endpoint).health().await.unwrap_err(), SourceError::Refused { ref message } if message == r#"ordinary refusal: {"code":"BAD"}"#)
+    );
+    // Extensions Linear sends without a `code` are still carried, and are still a refusal:
+    // typing them would fail the whole envelope's deserialization and report a refusal
+    // this source could have explained as an unexplained malformed response instead.
+    let (endpoint, _) = server(
+        "200 OK",
+        "",
+        r#"{"errors":[{"message":"Argument Validation Error","extensions":{"exception":{"validationErrors":[{"property":"type"}]}}}]}"#,
+    );
+    assert!(
+        matches!(source(&endpoint).health().await.unwrap_err(), SourceError::Refused { ref message } if message.contains("Argument Validation Error") && message.contains("\"property\":\"type\""))
     );
 }
 
@@ -1795,8 +2789,11 @@ async fn dependency_cursors_are_sent_on_second_task_and_project_requests() {
         } else {
             "relatedIssue"
         };
+        // Linear's two roots do not share a relation vocabulary: a project dependency is
+        // typed `dependency` and an issue's is `blocks`.
+        let ordering = if projects { "dependency" } else { "blocks" };
         let body = format!(
-            r#"{{"data":{{"{root}":{{"description":null,"relations":{{"nodes":[{{"type":"blocks","{related}":{{"id":"other"}}}}],"pageInfo":{{"hasNextPage":true,"endCursor":"next-edge"}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
+            r#"{{"data":{{"{root}":{{"description":null,"relations":{{"nodes":[{{"type":"{ordering}","{related}":{{"id":"other"}}}}],"pageInfo":{{"hasNextPage":true,"endCursor":"next-edge"}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
         );
         let (endpoint, _) = server("200 OK", "", body);
         let first = if projects {
@@ -2001,7 +2998,11 @@ async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
         .unwrap();
     assert_eq!(page.items.len(), 4);
     let wire = wire.recv().unwrap();
-    assert!(wire.contains("every") && wire.contains("null") && wire.contains("250"));
+    assert!(
+        wire.contains("every")
+            && wire.contains("null")
+            && wire.contains(&onetaskgraph_linear::MAX_PAGE_SIZE.to_string())
+    );
     let (endpoint, _) = server(
         "200 OK",
         "",
@@ -2037,7 +3038,7 @@ async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
         .unwrap();
     assert!(wire.recv().unwrap().contains("started"));
     let caps = source("http://127.0.0.1:1").capabilities();
-    assert_eq!(caps.max_page_size, 250);
+    assert_eq!(caps.max_page_size, onetaskgraph_linear::MAX_PAGE_SIZE);
     assert!(matches!(
         caps.search_title,
         onetaskgraph_plugin_api::Support::Unsupported
@@ -2173,6 +3174,23 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
             .await
             .unwrap_err(),
         SourceError::Malformed { ref message } if message.contains("relation type")
+    ));
+    // `related` is the issue vocabulary and only the issue vocabulary: Linear's validator
+    // enumerates a project relation's type as `dependency` alone, so a project relation
+    // typed `related` is a shape this workspace cannot hold and is refused rather than
+    // read as an edge this source could never have written.
+    let (endpoint, _) = server(
+        "200 OK",
+        "",
+        r#"{"data":{"project":{"relations":{"nodes":[{"type":"related","relatedProject":{"id":"other"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}"#,
+    );
+    assert!(matches!(
+        source(&endpoint)
+            .project_dependencies(&"p".into(), Direction::DependsOn, &request)
+            .await
+            .unwrap_err(),
+        SourceError::Malformed { ref message }
+            if message.contains("related") && message.contains("project")
     ));
     assert!(matches!(
         source("http://127.0.0.1:1").health().await.unwrap_err(),
@@ -2597,6 +3615,15 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
     assert!(wire.recv().unwrap().contains("teams(filter:"));
     let request = wire.recv().unwrap();
     assert!(request.contains(r#""teamId":"TEAM""#), "{request}");
+    // And no `projectId` at all, not a null one. `documentCreate` refuses an input naming
+    // more than one home — `Exactly one of initiativeId, teamId, issueId, releaseId,
+    // cycleId or projectId must be defined.` — and it counts a key that is *present*:
+    // observed on 2026-09-04, `{projectId: null, teamId: …}` is refused where `{teamId: …}`
+    // is accepted. A null cannot be spelled out of that, so the key has to go.
+    assert!(
+        !request.contains("projectId"),
+        "a null home is a home as far as Linear's validator is concerned: {request}"
+    );
 
     // Updated: the target is read first, so a second copy addresses the one already there.
     let (endpoint, wire) = response_server(vec![
@@ -2615,6 +3642,25 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
     let request = wire.recv().unwrap();
     assert!(request.contains("documentUpdate(id:$id"), "{request}");
     assert!(request.contains("Revised"), "{request}");
+
+    // An update keeps its explicit null, and that is the opposite rule for the opposite
+    // reason: there the null is the instruction. It is how a document is moved out of a
+    // project, and omitting the key would leave it where it was — Linear answered
+    // `project: null` to exactly that update on 2026-09-04.
+    let (endpoint, wire) = response_server(vec![
+        document("D-NEW"),
+        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"D-NEW"}}}),
+    ]);
+    writable_source(&endpoint)
+        .write_document(&ItemWrite {
+            target: Some("D-NEW".into()),
+            ..written("Design", Some("Revised"), None)
+        })
+        .await
+        .expect("the document is moved out of its project");
+    assert!(wire.recv().unwrap().contains("document(id:$id)"));
+    let request = wire.recv().unwrap();
+    assert!(request.contains(r#""projectId":null"#), "{request}");
 
     // And removed again, which is what lets a copy that could not finish take it back.
     let (endpoint, wire) = response_server(vec![

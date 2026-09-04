@@ -6,7 +6,7 @@
         "nodes": [
           {
             "id": "r1",
-            "type": "blocks",
+            "type": "dependency",
             "relatedProject": {
               "id": "p2"
             }
@@ -21,7 +21,7 @@
         "nodes": [
           {
             "id": "r2",
-            "type": "blocks",
+            "type": "dependency",
             "project": {
               "id": "p3"
             }

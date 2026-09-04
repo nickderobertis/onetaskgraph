@@ -1,17 +1,18 @@
 //! The parts of the live lane that reach nothing.
 //!
-//! Two test targets share them. `tests/live.rs` is the credentialed journey itself, which
-//! `#[ignore]` keeps out of every required check and only `test-live` runs; `tests/lane_shape.rs`
-//! asserts the decisions made here — which board and repository the lane may write to, which
-//! artifacts a run recognises as its own, and that cleanup runs whether the journey passed or
-//! failed — and reaches no network at all, so it belongs in the everyday gate rather than behind
-//! a credential. Splitting them is what lets both be true at once:
-//! `scripts/check-live-lane.sh` reads `tests/live.rs` and requires every test it declares to
-//! carry `#[ignore]`, and a lane-shape test parked there would have been ignored with it.
+//! Two test targets share them, and both are ordinary tests in this crate's ordinary
+//! `test` target: change this plugin and they run, change anything else and affected
+//! selection does not select them. `tests/live.rs` is the journey against GitHub itself;
+//! `tests/lane_shape.rs` asserts the decisions made here — which board and repository the
+//! lane may write to, which artifacts a run recognises as its own, and that cleanup runs
+//! whether the journey passed or failed — and reaches no network at all, which is why it
+//! can assert them without a credential.
 
 use std::future::Future;
 
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
+use onetaskgraph_github_projects::accounting::{Outcome, StatusCode};
+use onetaskgraph_live::{Credential, missing, required};
 use onetaskgraph_plugin_api::SecretResolver;
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -21,6 +22,21 @@ pub struct LiveSecret(pub SecretString);
 impl SecretResolver for LiveSecret {
     fn get(&self, variable: &str) -> Option<SecretString> {
         (variable == "GH_PROJECTS_TOKEN").then(|| self.0.clone())
+    }
+}
+
+/// What this lane records for one REST response, once it knows whether it could read it.
+///
+/// [`Outcome::of_response`] rules on the status and the rate-limit headers and leaves the
+/// rest to the caller, because a success whose body the caller cannot use is a refusal only
+/// the caller can see. This is that narrowing for a REST call: a `2xx` carrying something
+/// this lane could not decode did not answer what was asked for, however cleanly it
+/// arrived, and recording it as `Answered` would make the session report say a call
+/// succeeded that produced nothing.
+pub fn rest_outcome(status: StatusCode, exhausted: bool, body: &str, decoded: bool) -> Outcome {
+    match Outcome::of_response(status, exhausted, body) {
+        Outcome::Answered if !decoded => Outcome::Refused,
+        settled => settled,
     }
 }
 
@@ -134,13 +150,55 @@ where
 #[derive(Debug, PartialEq, Eq)]
 pub enum LiveLane {
     Run {
-        token: String,
+        token: Credential,
         owner: String,
         project_number: u32,
         repository: String,
     },
     Skip(String),
 }
+
+/// The session this lane opens against GitHub, by the name its seat and its refusals use.
+pub const SESSION_NAME: &str = "GitHub Projects";
+
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] GitHub publishes this grammar as prose in its own UI rather than as an artifact anything here could read, so there is nothing offline to derive these two from or reconcile them against. What stands in for the gate is stated on each function and holds in both directions: this filter may only ever be NARROWER than GitHub's spelling, being a floor on what reaches a URL rather than a mirror of what GitHub accepts, and a divergence either way fails the credentialed lane in the required check — a name GitHub would spell but this refuses fails here, naming the variable and the value, before a credential is spent, and a name this keeps that GitHub does not spell is answered by GitHub with a 404. Neither drift is silent, which is the failure this rule exists to prevent.
+
+/// Whether `login` may be filled into the `{owner}` of this lane's REST endpoint templates.
+///
+/// Letters, digits and hyphens, no hyphen at either end and none doubled, at most the 39
+/// characters GitHub accepted when this was written on 2026-09-03.
+///
+/// **This is a floor, not a mirror of GitHub's grammar.** What it must never do is keep a
+/// value that would address something other than the account it names; being narrower than
+/// GitHub costs a refusal that names the variable and the value, which is loud and cheap.
+/// So GitHub loosening its spelling cannot make this wrong, only strict — and GitHub is
+/// still the authority on whether such an account exists, which it answers with a 404.
+fn is_login(login: &str) -> bool {
+    !login.is_empty()
+        && login.len() <= 39
+        && !login.starts_with('-')
+        && !login.ends_with('-')
+        && !login.contains("--")
+        && login
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+}
+
+/// Whether `name` may be filled into the `{repo}` of this lane's REST endpoint templates.
+///
+/// Letters, digits, hyphens, underscores and dots, at most the 100 characters GitHub
+/// accepted when this was written on 2026-09-03, and neither of the two relative path
+/// segments. The same floor as [`is_login`], and the same reason.
+fn is_repository_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 100
+        && name != "."
+        && name != ".."
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+}
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 /// Decides whether this lane may run, and against which board.
 ///
@@ -149,47 +207,56 @@ pub enum LiveLane {
 /// Nothing here asks GitHub which project was updated most recently, for the viewer or for any
 /// organization: a credentialed lane that writes and deletes must reach only a board somebody
 /// nominated by name, and that requirement — rather than any cleanup — is what keeps it off a
-/// board nobody nominated. `ONETASKGRAPH_LIVE_REQUIRED=1` turns a skip into
+/// board nobody nominated.
+///
+/// **A nomination that reaches a URL is held to the grammar of what it names.** The two
+/// halves of `GH_PROJECTS_REPOSITORY` are filled into the `{owner}` and `{repo}` of this
+/// lane's own REST endpoint templates, so a value carrying `?`, `#`, a space or a second
+/// path segment would not point at the repository it appears to name — it would address
+/// something else, with a credential, and the endpoint the session report named would not
+/// be the one that was called. Both halves are therefore refused here unless GitHub itself
+/// would spell them that way, which is before anything is sent rather than after. The board
+/// is not checked here because it reaches no URL: `GH_PROJECTS_OWNER` and
+/// `GH_PROJECTS_NUMBER` are bound as GraphQL variables, and the production boundary this
+/// lane drives validates them.
+///
+/// `ONETASKGRAPH_LIVE_REQUIRED=1` turns a skip into
 /// a failure, the same pairing an absent credential already has. `Err` is a misconfiguration,
 /// which fails whether or not the lane is required.
+///
+/// The skip-or-fail pairing itself is [`onetaskgraph_live::missing`], so this lane and
+/// Linear's answer an absent input the same way rather than in two dialects. What this
+/// function decides is only *which* names are needed; whether a session may then start is
+/// [`onetaskgraph_live::Session::open`]'s, and the token below is unusable until it has.
 pub fn live_lane(
     token: Option<&str>,
     owner: Option<&str>,
     project_number: Option<&str>,
     repository: Option<&str>,
-    required: Option<&str>,
+    live_required: Option<&str>,
 ) -> Result<LiveLane, String> {
-    let required = match required.map(str::trim) {
-        None | Some("") | Some("0") => false,
-        Some("1") => true,
-        Some(other) => {
-            return Err(format!(
-                "ONETASKGRAPH_LIVE_REQUIRED must be 1, 0 or unset, not {other:?}"
-            ));
-        }
-    };
-    let skip = |reason: String| -> Result<LiveLane, String> {
-        if required {
-            return Err(format!(
-                "{reason}, and ONETASKGRAPH_LIVE_REQUIRED=1 requires the GitHub Projects live \
-                 lane to run"
-            ));
-        }
-        Ok(LiveLane::Skip(reason))
+    let live_required = required(live_required)?;
+    let skip = |reason: &str| -> Result<LiveLane, String> {
+        Ok(LiveLane::Skip(missing(
+            live_required,
+            SESSION_NAME,
+            reason,
+        )?))
     };
     // llmlint: ignore[live_tier_compiles_and_requires_credential] An absent credential
-    // skipping is the recorded decision, not an oversight: AGENTS.md keeps this lane off
-    // the required checks because a required check a third party can turn red stops being
-    // trusted, and a Linear or GitHub outage must not block an unrelated merge. What makes
-    // the decision true rather than stated is that the lane is `#[ignore]`d and only
-    // `test-live` runs it — with `ONETASKGRAPH_LIVE_REQUIRED=1`, which turns every skip
-    // below into the failure this rule asks for.
+    // skips rather than fails only where no credential was expected — a contributor with no
+    // keys, and a pull request from a fork, which the host gives no secrets. The run where
+    // one *is* expected sets `ONETASKGRAPH_LIVE_REQUIRED=1`, which turns every skip below
+    // into the failure this rule asks for, and .github/workflows/ci.yml sets it on the one
+    // lane the credentials reach.
     let Some(token) = token else {
-        return skip("GH_PROJECTS_TOKEN is not set".to_owned());
+        return skip("GH_PROJECTS_TOKEN is not set");
     };
-    if token.trim().is_empty() {
-        return skip("GH_PROJECTS_TOKEN is empty".to_owned());
-    }
+    // `Credential::new` is what decides a token is usable, rather than a second reading of
+    // "empty" here: the session this lane opens takes one of those and nothing else.
+    let Some(token) = Credential::new(token) else {
+        return skip("GH_PROJECTS_TOKEN is empty");
+    };
     let owner = owner.map(str::trim).filter(|owner| !owner.is_empty());
     let project_number = project_number
         .map(str::trim)
@@ -199,8 +266,7 @@ pub fn live_lane(
         (None, None) => {
             return skip(
                 "GH_PROJECTS_OWNER and GH_PROJECTS_NUMBER are not set, and this lane writes only \
-                 to the board those two name rather than discovering one"
-                    .to_owned(),
+                 to the board those two name rather than discovering one",
             );
         }
         (owner, _) => {
@@ -227,20 +293,21 @@ pub fn live_lane(
     else {
         return skip(
             "GH_PROJECTS_REPOSITORY is not set, and this lane creates its artifact as an issue \
-             in the repository that name gives rather than discovering one"
-                .to_owned(),
+             in the repository that name gives rather than discovering one",
         );
     };
     if repository
         .split_once('/')
-        .is_none_or(|(owner, name)| owner.is_empty() || name.is_empty() || name.contains('/'))
+        .is_none_or(|(owner, name)| !is_login(owner) || !is_repository_name(name))
     {
         return Err(format!(
-            "GH_PROJECTS_REPOSITORY must be spelled owner/name, not {repository:?}"
+            "GH_PROJECTS_REPOSITORY must be spelled owner/name, in GitHub's own spelling of \
+             each — an owner of letters, digits and single inner hyphens, and a name of \
+             letters, digits, hyphens, underscores and dots — not {repository:?}"
         ));
     }
     Ok(LiveLane::Run {
-        token: token.to_owned(),
+        token,
         owner: owner.to_owned(),
         project_number: number,
         repository: repository.to_owned(),
