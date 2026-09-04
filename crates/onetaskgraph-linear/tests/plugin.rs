@@ -3555,6 +3555,15 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
     assert!(wire.recv().unwrap().contains("teams(filter:"));
     let request = wire.recv().unwrap();
     assert!(request.contains(r#""teamId":"TEAM""#), "{request}");
+    // And no `projectId` at all, not a null one. `documentCreate` refuses an input naming
+    // more than one home — `Exactly one of initiativeId, teamId, issueId, releaseId,
+    // cycleId or projectId must be defined.` — and it counts a key that is *present*:
+    // observed on 2026-09-04, `{projectId: null, teamId: …}` is refused where `{teamId: …}`
+    // is accepted. A null cannot be spelled out of that, so the key has to go.
+    assert!(
+        !request.contains("projectId"),
+        "a null home is a home as far as Linear's validator is concerned: {request}"
+    );
 
     // Updated: the target is read first, so a second copy addresses the one already there.
     let (endpoint, wire) = response_server(vec![
@@ -3573,6 +3582,25 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
     let request = wire.recv().unwrap();
     assert!(request.contains("documentUpdate(id:$id"), "{request}");
     assert!(request.contains("Revised"), "{request}");
+
+    // An update keeps its explicit null, and that is the opposite rule for the opposite
+    // reason: there the null is the instruction. It is how a document is moved out of a
+    // project, and omitting the key would leave it where it was — Linear answered
+    // `project: null` to exactly that update on 2026-09-04.
+    let (endpoint, wire) = response_server(vec![
+        document("D-NEW"),
+        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"D-NEW"}}}),
+    ]);
+    writable_source(&endpoint)
+        .write_document(&ItemWrite {
+            target: Some("D-NEW".into()),
+            ..written("Design", Some("Revised"), None)
+        })
+        .await
+        .expect("the document is moved out of its project");
+    assert!(wire.recv().unwrap().contains("document(id:$id)"));
+    let request = wire.recv().unwrap();
+    assert!(request.contains(r#""projectId":null"#), "{request}");
 
     // And removed again, which is what lets a copy that could not finish take it back.
     let (endpoint, wire) = response_server(vec![

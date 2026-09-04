@@ -1826,6 +1826,22 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     &["title"],
                     &["content", "projectId", "teamId"],
                 )
+                // Exactly one home, counted by the key being *present*. Linear refuses this
+                // input with `Exactly one of initiativeId, teamId, issueId, releaseId,
+                // cycleId or projectId must be defined.` and a `projectId: null` beside a
+                // `teamId` is two as far as that validator is concerned — observed
+                // 2026-09-04, and it is what the live document write failed on. A fake that
+                // took the null would put this straight back on a credentialed run.
+                && variables
+                    .get("input")
+                    .and_then(Value::as_object)
+                    .is_some_and(|input| {
+                        ["projectId", "teamId"]
+                            .iter()
+                            .filter(|key| input.contains_key(**key))
+                            .count()
+                            == 1
+                    })
         }
         graphql::DOCUMENT_UPDATE => {
             exact_linear_variable_keys(variables, &["id", "input"])

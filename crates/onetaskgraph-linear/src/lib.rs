@@ -1533,14 +1533,25 @@ impl TaskSource for LinearSource {
                 )
             }
             None => {
-                let mut input =
-                    json!({"title":write.item.title,"content":content,"projectId":project});
+                let mut input = json!({"title":write.item.title,"content":content});
                 // A Linear document lives in a project, an initiative, an issue or a team.
                 // One filed under no project needs the configured team to be its home, and
                 // one filed under a project already has one — so the team is asked for
                 // only where it is the answer, rather than made a condition of every write.
-                if project.is_none() {
-                    input["teamId"] = Value::String(self.team_id().await?.0);
+                //
+                // **`projectId` is left out rather than sent as null, and that is Linear's
+                // rule rather than tidiness.** `documentCreate` refuses an input that names
+                // more than one home — `Exactly one of initiativeId, teamId, issueId,
+                // releaseId, cycleId or projectId must be defined.` — and it counts a
+                // *present* key, observed on 2026-09-04: `{projectId: null, teamId: …}` is
+                // refused where `{teamId: …}` is accepted. So a document filed under no
+                // project must carry no `projectId` at all. `documentUpdate` is the
+                // opposite and keeps its explicit null, because there the null is the
+                // instruction — it is how a document is moved out of a project, and
+                // omitting the key would leave it where it was.
+                match &project {
+                    Some(project) => input["projectId"] = Value::String(project.clone()),
+                    None => input["teamId"] = Value::String(self.team_id().await?.0),
                 }
                 (
                     graphql::DOCUMENT_CREATE,
