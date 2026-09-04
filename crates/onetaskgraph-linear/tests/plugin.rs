@@ -1377,6 +1377,47 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
     );
 }
 
+/// A status Linear will not run a document under says which part of it Linear refused.
+///
+/// Linear answers a rejected document with 400 and its error envelope in the body, so a
+/// refusal reported as the status alone names the whole call and nothing about what was
+/// wrong with it. That is how a credentialed run's one failure reached this repository:
+/// `Linear returned HTTP 400 Bad Request`, over a mutation whose document is unchanged,
+/// with nothing to act on. A long body is cut rather than carried whole.
+#[tokio::test]
+async fn a_status_linear_refuses_under_carries_what_linear_said() {
+    let (endpoint, _) = server(
+        "400 Bad Request",
+        "",
+        r#"{"errors":[{"message":"Argument 'statusId' on InputObject 'ProjectCreateInput' has an invalid value"}]}"#,
+    );
+    let refused = source(&endpoint).health().await.unwrap_err();
+    let SourceError::Unavailable { message } = refused else {
+        panic!("a refused status is an unavailable source: {refused:?}");
+    };
+    assert!(
+        message.contains("HTTP 400 Bad Request"),
+        "the status is still named: {message}"
+    );
+    assert!(
+        message.contains("statusId") && message.contains("ProjectCreateInput"),
+        "and Linear's own words come with it: {message}"
+    );
+
+    // Whatever a proxy in front of Linear answers with, the message stays a message.
+    let page = "x".repeat(5000);
+    let (endpoint, _) = server("502 Bad Gateway", "", page);
+    let refused = source(&endpoint).health().await.unwrap_err();
+    let SourceError::Unavailable { message } = refused else {
+        panic!("a refused status is an unavailable source: {refused:?}");
+    };
+    assert!(
+        message.len() < 600 && message.ends_with('\u{2026}'),
+        "a body that is a page is cut and marked: {} characters",
+        message.chars().count()
+    );
+}
+
 #[tokio::test]
 async fn rate_limit_carries_retry_hint() {
     let (endpoint, _) = server("429 Too Many Requests", "Retry-After: 17\r\n", r#"{}"#);

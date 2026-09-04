@@ -414,6 +414,25 @@ enum GqlErrorCode {
     Other,
 }
 
+/// How much of a failed response's body a refusal carries.
+///
+/// Enough for Linear's own error envelope, which is one or two sentences naming the field
+/// or argument it would not accept, and short enough that a proxy's HTML error page does
+/// not become the whole message.
+const SAID_LIMIT: usize = 400;
+
+/// `said`, cut to [`SAID_LIMIT`] characters on a character boundary and marked when cut.
+///
+/// Characters rather than bytes: a body is arbitrary text, and slicing one mid-codepoint
+/// would panic inside the error path that exists to explain a failure.
+fn elided(said: &str) -> String {
+    if said.chars().count() <= SAID_LIMIT {
+        return said.to_owned();
+    }
+    let kept: String = said.chars().take(SAID_LIMIT).collect();
+    format!("{kept}…")
+}
+
 impl LinearSource {
     // llmlint: ignore[invalid_states_unrepresentable] This private generic transport accepts only variables constructed immediately at typed TaskSource call sites, never untrusted input; per-operation response mappers validate every external field before returning public values.
     async fn send(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
@@ -448,8 +467,22 @@ impl LinearSource {
             });
         }
         if !status.is_success() {
+            // Linear answers a document it will not run with 400 and a GraphQL error
+            // envelope in the *body*: the status alone says a request failed and nothing
+            // about which part of it Linear objected to. Reporting the status by itself
+            // left a credentialed run's only refusal unreadable — the message named the
+            // whole call and could not say what was wrong with it — so what Linear said
+            // is carried out with it. The body is Linear's answer to this request, so it
+            // holds no credential; it is truncated because an error page from a proxy in
+            // front of Linear can be a page rather than a sentence.
+            let said = response.text().await.unwrap_or_default();
+            let said = said.trim();
             return Err(SourceError::Unavailable {
-                message: format!("Linear returned HTTP {status}"),
+                message: if said.is_empty() {
+                    format!("Linear returned HTTP {status}")
+                } else {
+                    format!("Linear returned HTTP {status}: {}", elided(said))
+                },
             });
         }
         let body: Envelope = response.json().await.map_err(|e| SourceError::Malformed {
