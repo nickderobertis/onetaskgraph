@@ -1,7 +1,7 @@
 {
   "name": "@onetaskgraph/cli",
   "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] The launcher and the five carriers it names are published packages, not development ones: release.yml builds and `npm pack`s each carrier at release time, so nothing under npm/ holds a binary here. As workspace members the optionalDependencies below would link five empty local directories, and `workspace:*` names no version an end user's npm can resolve. scripts/set-version.sh and scripts/check-distribution-contract.sh hold the six numbers and this list together. JSON has no comment to scope this to one block.",
-  "version": "0.2.22",
+  "version": "0.2.23",
   "description": "Platform-selecting launcher for onetaskgraph",
   "x-exit-codes": {
     "64": "unsupported platform",
@@ -16,11 +16,11 @@
     "bin"
   ],
   "optionalDependencies": {
-    "@onetaskgraph/cli-linux-x64": "0.2.22",
-    "@onetaskgraph/cli-linux-arm64": "0.2.22",
-    "@onetaskgraph/cli-darwin-x64": "0.2.22",
-    "@onetaskgraph/cli-darwin-arm64": "0.2.22",
-    "@onetaskgraph/cli-win32-x64": "0.2.22"
+    "@onetaskgraph/cli-linux-x64": "0.2.23",
+    "@onetaskgraph/cli-linux-arm64": "0.2.23",
+    "@onetaskgraph/cli-darwin-x64": "0.2.23",
+    "@onetaskgraph/cli-darwin-arm64": "0.2.23",
+    "@onetaskgraph/cli-win32-x64": "0.2.23"
   },
   "publishConfig": {
     "access": "public"

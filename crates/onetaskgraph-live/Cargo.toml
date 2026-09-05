@@ -4,7 +4,7 @@ description = "The one gate every live test in this workspace passes through bef
 # Not published: this is the workspace's own test-support crate, and the plugin crates name
 # it as a path-only dev-dependency, which cargo strips when it packages them.
 # llmlint: ignore[crates_stay_in_one_cargo_workspace] A literal rather than `version.workspace = true` because that is what all eight of this workspace's crate manifests spell, and because the release tooling reads a number here: `scripts/set-version.sh` writes this line through `scripts/product_versions.py`, and `--check` reads it back and refuses any value but the workspace's — a command of `distribution-check`, which is part of the required `check`. So the two cannot drift, and a ninth crate spelling it a second way would be the one manifest that tooling has to learn an exception for.
-version = "0.2.22"
+version = "0.2.23"
 publish = false
 edition.workspace = true
 rust-version.workspace = true
