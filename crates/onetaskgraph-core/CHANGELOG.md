@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.23](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.22...onetaskgraph-core-v0.2.23) - 2026-09-05
+
+### Fixed
+
+- *(copy)* guard the copy path's pagination loops against a repeated cursor ([#397](https://github.com/nickderobertis/onetaskgraph/pull/397))
+
 ## [0.2.22](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.21...onetaskgraph-core-v0.2.22) - 2026-09-04
 
 ### Added
