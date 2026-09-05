@@ -75,16 +75,11 @@ where
         let asked = cursor.clone();
         let page = fetch(asked.clone(), asked_for).await?;
         fits(page.items.len(), asked_for)?;
-
-        // A source that answers a cursor with the same cursor is a source this walk
-        // would ask forever. Saying so names the defect; looping would hang the command.
-        if page.next.is_some() && page.next == asked {
-            return Err(SourceError::Malformed {
-                message: "the source returned the cursor it was given, so a walk of it \
-                          would never end"
-                    .to_owned(),
-            });
-        }
+        advances(
+            page.next.as_ref(),
+            asked.as_ref(),
+            "one of its streams was being walked",
+        )?;
 
         let mut ordinal = 0u32;
         for item in page.items {
@@ -140,6 +135,42 @@ pub(crate) fn fits(returned: usize, asked_for: u32) -> Result<(), SourceError> {
         message: format!(
             "the source returned {returned} rows for a page of at most {asked_for}; a \
              source may return fewer than it was asked for and never more"
+        ),
+    })
+}
+
+/// Refuse a source that answers a cursor with the cursor it was given.
+///
+/// A source handed back its own cursor is a source the loop that asked would ask again
+/// with the same cursor, for ever: the command never ends, and from outside it is
+/// indistinguishable from one still working. Saying so names the defect instead.
+///
+/// One implementation for every pagination loop in this engine — the stream walk above,
+/// the bounded reverse-edge scan in `mod.rs`, and the four walks the copy verb makes —
+/// because two spellings of one refusal are two things that drift apart, and a loop
+/// added later with neither is a loop that hangs. `scan` names what was being walked, so
+/// the message says which of them stopped.
+///
+/// Generic over what the loop pages by: a source [`Cursor`] where the loop asks a source
+/// directly, and the engine's own page token where a copy walks a verb of this engine.
+/// Handing back the token you were given is the same defect one level up, and it has the
+/// same cause — a source that did not advance.
+///
+/// # Errors
+///
+/// Returns [`SourceError::Malformed`] when `returned` is `Some` and equal to `asked`.
+pub(crate) fn advances<T: PartialEq>(
+    returned: Option<&T>,
+    asked: Option<&T>,
+    scan: &str,
+) -> Result<(), SourceError> {
+    if returned.is_none() || returned != asked {
+        return Ok(());
+    }
+    Err(SourceError::Malformed {
+        message: format!(
+            "the source returned the cursor it was given while {scan}, so the walk would \
+             never end"
         ),
     })
 }

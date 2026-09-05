@@ -27,7 +27,7 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
+    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
     ItemKind, ItemWrite, NativeId, Page, PageRequest, Project, ProjectQuery, Repository,
     SourceError, SourceName, Task, TaskQuery,
 };
@@ -38,6 +38,7 @@ use serde_json::Value;
 use crate::GlobalId;
 use crate::resolve::ResolvedSource;
 
+use super::fetch::{advances, fits};
 use super::local::ProjectSelector;
 use super::{Engine, EngineError, Filters, LeftBehind, Paging, TaskRequest};
 
@@ -769,7 +770,17 @@ impl Engine {
             },
         };
         let mut members = Vec::new();
+        // This walk pages by the engine's own token rather than by a source cursor, and
+        // the two rules below are the same ones every other loop here is held to, one
+        // level up: a token handed back unchanged is a source that did not advance — the
+        // token carries that source's cursors — and a page longer than the one asked for
+        // is a source overrunning the memory a copy holds.
+        let misbehaved = |error| EngineError::SourceRefused {
+            name: project.source.to_string(),
+            error,
+        };
         loop {
+            let asked = request.paging.token.clone();
             let response = self.tasks(&request).await?;
             if let Some(failure) = response.errors.first() {
                 return Err(EngineError::SourceRefused {
@@ -777,6 +788,13 @@ impl Engine {
                     error: failure.error.clone(),
                 });
             }
+            fits(response.items.len(), PROJECT_PAGE.get()).map_err(misbehaved)?;
+            advances(
+                response.next.as_ref(),
+                asked.as_ref(),
+                "the tasks of a project were being read for a copy",
+            )
+            .map_err(misbehaved)?;
             members.extend(response.items.into_iter().map(|task| task.id));
             match response.next {
                 Some(token) => request.paging.token = Some(token),
@@ -797,13 +815,16 @@ impl Engine {
         copied: &[GlobalId],
     ) -> Result<Vec<CopyOutcome>, EngineError> {
         let mut orphans = Vec::new();
-        let mut cursor = None;
+        let mut cursor: Option<Cursor> = None;
         loop {
+            let asked = cursor.clone();
+            let request = request_for(destination, cursor);
             let page: Page<Task> = destination
                 .source()
-                .query_tasks(&TaskQuery::default(), &request_for(destination, cursor))
+                .query_tasks(&TaskQuery::default(), &request)
                 .await
                 .map_err(|error| refused(destination, error))?;
+            fits(page.items.len(), request.limit).map_err(|error| refused(destination, error))?;
             for task in &page.items {
                 if task.project.as_ref() != Some(at_destination) {
                     continue;
@@ -821,6 +842,12 @@ impl Engine {
                     },
                 });
             }
+            advances(
+                page.next.as_ref(),
+                asked.as_ref(),
+                "the destination was being read for items the copy left behind",
+            )
+            .map_err(|error| refused(destination, error))?;
             match page.next {
                 Some(next) => cursor = Some(next),
                 None => return Ok(orphans),
@@ -1030,14 +1057,18 @@ impl Engine {
         kind: Level,
         wanted: &Wanted,
     ) -> Result<Option<NativeId>, EngineError> {
-        let mut cursor = None;
+        let mut cursor: Option<Cursor> = None;
         loop {
+            let asked = cursor.clone();
+            let request = request_for(destination, cursor);
             let next = match kind {
                 Level::Task => {
                     let page = destination
                         .source()
-                        .query_tasks(&TaskQuery::default(), &request_for(destination, cursor))
+                        .query_tasks(&TaskQuery::default(), &request)
                         .await
+                        .map_err(|error| refused(destination, error))?;
+                    fits(page.items.len(), request.limit)
                         .map_err(|error| refused(destination, error))?;
                     for task in &page.items {
                         if wanted.found(&task.title, &task.metadata) {
@@ -1049,8 +1080,10 @@ impl Engine {
                 Level::Project => {
                     let page = destination
                         .source()
-                        .query_projects(&ProjectQuery::default(), &request_for(destination, cursor))
+                        .query_projects(&ProjectQuery::default(), &request)
                         .await
+                        .map_err(|error| refused(destination, error))?;
+                    fits(page.items.len(), request.limit)
                         .map_err(|error| refused(destination, error))?;
                     for project in &page.items {
                         if wanted.found(&project.title, &project.metadata) {
@@ -1062,11 +1095,10 @@ impl Engine {
                 Level::Document => {
                     let page = destination
                         .source()
-                        .query_documents(
-                            &DocumentQuery::default(),
-                            &request_for(destination, cursor),
-                        )
+                        .query_documents(&DocumentQuery::default(), &request)
                         .await
+                        .map_err(|error| refused(destination, error))?;
+                    fits(page.items.len(), request.limit)
                         .map_err(|error| refused(destination, error))?;
                     for document in &page.items {
                         if wanted.found(&document.title, &document.metadata) {
@@ -1076,6 +1108,12 @@ impl Engine {
                     page.next
                 }
             };
+            advances(
+                next.as_ref(),
+                asked.as_ref(),
+                "the destination was being scanned for the item to update",
+            )
+            .map_err(|error| refused(destination, error))?;
             match next {
                 Some(next) => cursor = Some(next),
                 None => return Ok(None),
@@ -1350,10 +1388,7 @@ impl Engine {
 const PROJECT_PAGE: std::num::NonZeroU32 = std::num::NonZeroU32::new(50).expect("50 is not zero");
 
 /// One page request against `source`, at the largest page it will serve.
-fn request_for(
-    source: &ResolvedSource,
-    cursor: Option<onetaskgraph_plugin_api::Cursor>,
-) -> PageRequest {
+fn request_for(source: &ResolvedSource, cursor: Option<Cursor>) -> PageRequest {
     PageRequest {
         cursor,
         limit: source.source().capabilities().max_page_size.max(1),
@@ -1471,24 +1506,33 @@ async fn forward_edges(
         return Ok(Vec::new());
     }
     let mut edges = Vec::new();
-    let mut cursor = None;
+    let mut cursor: Option<Cursor> = None;
     loop {
+        let asked = cursor.clone();
+        let request = request_for(source, cursor);
         let page = match kind {
             Level::Task | Level::Document => {
                 source
                     .source()
-                    .task_dependencies(id, Direction::DependsOn, &request_for(source, cursor))
+                    .task_dependencies(id, Direction::DependsOn, &request)
                     .await
             }
             Level::Project => {
                 source
                     .source()
-                    .project_dependencies(id, Direction::DependsOn, &request_for(source, cursor))
+                    .project_dependencies(id, Direction::DependsOn, &request)
                     .await
             }
         }
         .map_err(|error| refused(source, error))?;
+        fits(page.items.len(), request.limit).map_err(|error| refused(source, error))?;
         edges.extend(page.items);
+        advances(
+            page.next.as_ref(),
+            asked.as_ref(),
+            "an item's dependencies were being read for a copy",
+        )
+        .map_err(|error| refused(source, error))?;
         match page.next {
             Some(next) => cursor = Some(next),
             None => return Ok(edges),
