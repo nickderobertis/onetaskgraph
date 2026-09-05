@@ -43,6 +43,7 @@
       "options": {
         "commands": [
           "bash scripts/check-bash4-array-builtins-enforced.sh",
+          "bash scripts/check-copy-pagination-guards-enforced.sh",
           "bash scripts/check-guard-path-spelling.sh",
           "bash scripts/check-line-reads.sh",
           "bash scripts/check-live-lane-enforced.sh"
@@ -61,7 +62,7 @@
     },
     "coverage": {
       "executor": "nx:noop",
-      "//": "Declared and empty. The 95% line floor is measured by instrumenting a compiled crate or an interpreted SDK; there is no line coverage for a shell script, and what stands in its place is scripts/check-bash4-array-builtins-enforced.sh and scripts/check-line-reads.sh driving these guards until they refuse."
+      "//": "Declared and empty. The 95% line floor is measured by instrumenting a compiled crate or an interpreted SDK; there is no line coverage for a shell script, and what stands in its place is scripts/check-bash4-array-builtins-enforced.sh, scripts/check-copy-pagination-guards-enforced.sh and scripts/check-line-reads.sh driving these guards until they refuse."
     },
     "distribution-check": {
       "executor": "nx:run-commands",

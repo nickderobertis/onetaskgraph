@@ -2247,9 +2247,13 @@ async fn a_source_whose_cursors_cycle_stops_the_walk_of_a_projects_members() {
 
 #[tokio::test]
 async fn a_source_that_overruns_its_page_stops_the_walk_of_a_projects_members() {
-    // The same walk, the other fault. A page longer than the one asked for is refused
-    // where the copy reads that page rather than held: the bound is the shared one, and
-    // the source that broke it is named.
+    // The same walk, the other fault, refused one level below where the walk reads. This
+    // is the one walk of the copy path that pages by a verb of this engine rather than by
+    // a source cursor, and that verb ends in a merge stopping at the budget it was asked
+    // for — so an over-long page cannot reach the copy's own loop, and the bound that a
+    // source really crosses is the shared one inside the walk that reads its page. What
+    // matters to the operator is that it is refused while a project's members are being
+    // read for a copy, and that the source that broke it is named.
     let (engine, _) = from_misbehaving(
         Misbehaving::new(At::Tasks, Fault::OverrunsThePage, Onset::TheFirstRead)
             .holding_a_project(),

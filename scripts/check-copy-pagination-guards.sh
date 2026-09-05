@@ -9,9 +9,21 @@
 # one asked for is refused rather than held. `engine/fetch.rs` is where both decisions are
 # implemented, once.
 #
-# This holds the copy path to them. It enumerates no loop: every loop in the file that
-# reads a page has to call both, so a loop added later is caught here rather than by an
-# operator watching a copy spin.
+# This holds the copy path to them, and it enumerates no loop: it reads the rule off each
+# loop's own text, so a loop added later is caught here rather than by an operator watching
+# a copy spin. The rule has two halves, because the copy path pages at two levels:
+#
+#   * A loop that reads a page **from a plugin** — anything through `ResolvedSource::source()`
+#     — owes both refusals itself. That page is somebody else's program's answer, and
+#     nothing between it and this loop has looked at it.
+#   * A loop that reads a page **from a verb of this engine** owes the cursor-repeat guard
+#     and must NOT call the page bound: that verb ends in a merge that stops at the budget
+#     it was asked for, so an over-long page cannot reach such a loop and a bound there
+#     could never fail. A guard that cannot fail reads like the guard, to the next person
+#     and to the next audit; the real bound is `fits` where that verb reads the source.
+#
+# Named exemptions are what this deliberately does not have. Change a loop from one shape
+# to the other and the half it now owes is demanded of it here.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -118,6 +130,13 @@ for found in LOOP.finditer(source):
     line = source.count("\n", 0, found.start()) + 1
     loops.append((line, opened, body_of(source, opened)))
 
+# Where a loop's page comes from, which is what decides which half of the rule it owes.
+# A plugin is reached through `ResolvedSource::source()` and nowhere else, so that call is
+# the marker; a verb of this engine is reached through `self`. A loop showing neither is
+# read as reading a plugin, because the safe reading of "cannot tell" is the strict one.
+FROM_PLUGIN = re.compile(r"\.source\(\)")
+FROM_ENGINE = re.compile(r"\bself\.\w+\(")
+
 problems = []
 for line, opened, body in loops:
     own = body
@@ -126,13 +145,16 @@ for line, opened, body in loops:
             own = own.replace(other_body, "")
     if PAGING.search(own) is None:
         continue
-    missing = [
-        what
-        for call, what in (("advances(", "the cursor-repeat guard"), ("fits(", "the page bound"))
-        if call not in own
-    ]
-    if missing:
-        problems.append(f"{posix}:{line} paginates without {' and without '.join(missing)}")
+    reads_a_plugin = FROM_PLUGIN.search(own) is not None or FROM_ENGINE.search(own) is None
+    if "advances(" not in own:
+        problems.append(f"{posix}:{line} paginates without the cursor-repeat guard")
+    if reads_a_plugin and "fits(" not in own:
+        problems.append(f"{posix}:{line} reads a plugin's page without the page bound")
+    if not reads_a_plugin and "fits(" in own:
+        problems.append(
+            f"{posix}:{line} bounds a page this engine's own verb already bounded, so that "
+            "call can never fail"
+        )
 
 if not loops:
     fail(
@@ -145,10 +167,10 @@ if problems:
     for problem in problems:
         print(f"check-copy-pagination-guards: {problem}", file=sys.stderr)
     fail(
-        "a pagination loop on the copy path would walk a misbehaving source for ever",
-        "call `advances(page.next.as_ref(), asked.as_ref(), \"<what is being walked>\")` "
-        "and `fits(page.items.len(), request.limit)` in each loop above, both from "
-        f"{authority_path} — a source that repeats its cursor is refused there rather "
-        "than walked, and a source that overruns its page is refused rather than held.",
+        "a pagination loop on the copy path does not hold the half of the rule it owes",
+        "call `advances(page.next.as_ref(), asked.as_ref(), \"<what is being walked>\")` in "
+        "every loop above, and `fits(page.items.len(), request.limit)` in each one that "
+        f"reads its page from a plugin — both from {authority_path}. A loop reading its page "
+        "from a verb of this engine takes its bound from that verb and must not restate it.",
     )
 PY

@@ -771,10 +771,24 @@ impl Engine {
         };
         let mut members = Vec::new();
         // This walk pages by the engine's own token rather than by a source cursor, and
-        // the two rules below are the same ones every other loop here is held to, one
-        // level up: a token handed back unchanged is a source that did not advance — the
-        // token carries that source's cursors — and a page longer than the one asked for
-        // is a source overrunning the memory a copy holds.
+        // that asymmetry with the three walks below is deliberate — do not tidy it away.
+        //
+        // A source that answers two cursors with each other for ever *advances* on every
+        // page, so the `advances` inside the walk that reads it never fires and nothing
+        // under the list verb can see it. What such a source does produce is a page token
+        // this verb hands back unchanged, so a loop paging by that token is the only place
+        // that cycle is visible — and this is that loop. Reading the source directly here
+        // would make all four walks look alike and leave a copy of a project spinning for
+        // ever on exactly the source this guard exists for.
+        //
+        // The bound the other three hold themselves is held for this one, one level down,
+        // and there is nothing left here to bound: the page comes from `Engine::tasks`,
+        // whose merge stops at the budget this request asked for, so a page longer than
+        // `PROJECT_PAGE` cannot reach this loop however the source misbehaves. What a
+        // source can really overrun is its own page, and `fits` inside `fetch::walk`
+        // refuses that where that page is read — while these very members are being read.
+        // A `fits` call here could not fail, and a guard that cannot fail reads like the
+        // guard to the next person and to the next audit.
         let misbehaved = |error| EngineError::SourceRefused {
             name: project.source.to_string(),
             error,
@@ -788,7 +802,6 @@ impl Engine {
                     error: failure.error.clone(),
                 });
             }
-            fits(response.items.len(), PROJECT_PAGE.get()).map_err(misbehaved)?;
             advances(
                 response.next.as_ref(),
                 asked.as_ref(),
