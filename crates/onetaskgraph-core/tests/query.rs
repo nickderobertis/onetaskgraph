@@ -810,10 +810,10 @@ async fn a_source_that_never_advances_its_cursor_is_reported_rather_than_walked_
 
     assert_eq!(response.errors.len(), 1);
     assert!(
-        response.errors[0]
-            .error
-            .to_string()
-            .contains("returned the cursor it was given"),
+        response.errors[0].error.to_string().contains(
+            "the source returned the cursor it was given while one of its streams was \
+             being walked"
+        ),
         "{:?}",
         response.errors[0]
     );

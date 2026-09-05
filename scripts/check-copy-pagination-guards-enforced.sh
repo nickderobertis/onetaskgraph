@@ -55,7 +55,7 @@ pub(crate) fn fits(returned: usize, asked_for: u32) -> Result<(), SourceError> {
     unimplemented!()
 }
 
-pub(crate) fn advances<T: PartialEq>(returned: Option<&T>, asked: Option<&T>, scan: &str) {
+pub(crate) fn unrepeated<T: PartialEq>(returned: Option<&T>, asked: Option<&T>, scan: &str) {
     unimplemented!()
 }
 
@@ -112,7 +112,7 @@ impl Engine {
         loop {
             let asked = request.paging.token.clone();
             let response = self.tasks(&request).await?;
-            advances(
+            unrepeated(
                 response.next.as_ref(),
                 asked.as_ref(),
                 "the tasks of a project were being read for a copy",
@@ -130,7 +130,7 @@ impl Engine {
             let request = request_for(destination, cursor);
             let page = destination.source().query_tasks(&query, &request).await?;
             fits(page.items.len(), request.limit)?;
-            advances(
+            unrepeated(
                 page.next.as_ref(),
                 asked.as_ref(),
                 "the destination was being read for items the copy left behind",
@@ -234,9 +234,9 @@ refuses "a walk taking its page from an engine verb with no definition to follow
 # The other half: a bound restated on a page this engine's own verb already bounded reads
 # like the guard and can never fail, so it is refused rather than tolerated.
 plant_copy
-substitute copy.rs "            advances(
+substitute copy.rs "            unrepeated(
                 response.next.as_ref()," "            fits(response.items.len(), PROJECT_PAGE.get())?;
-            advances(
+            unrepeated(
                 response.next.as_ref(),"
 refuses "a page bound restated on a page an engine verb already bounded" \
   "bounds a page this engine's own verb already bounded"
@@ -249,7 +249,7 @@ refuses "a plugin-reading walk with no page bound" "reads a plugin's page, and h
 
 # Either loop shape with its cursor-repeat guard taken away: that half is owed by both.
 plant_copy
-substitute copy.rs "            advances(
+substitute copy.rs "            unrepeated(
                 response.next.as_ref(),
                 asked.as_ref(),
                 \"the tasks of a project were being read for a copy\",
@@ -259,7 +259,7 @@ refuses "a walk over an engine verb with no cursor-repeat guard" \
   "paginates without the cursor-repeat guard"
 
 plant_copy
-substitute copy.rs "            advances(
+substitute copy.rs "            unrepeated(
                 page.next.as_ref(),
                 asked.as_ref(),
                 \"the destination was being read for items the copy left behind\",

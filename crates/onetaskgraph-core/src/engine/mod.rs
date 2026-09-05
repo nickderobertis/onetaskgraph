@@ -38,7 +38,7 @@ use crate::config::Config;
 use crate::plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
 use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available};
 
-use fetch::{Fetched, Stream, advances, fits, merge, walk};
+use fetch::{Fetched, Stream, fits, merge, unrepeated, walk};
 use join::join_all;
 use local::{LocalDocuments, LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
@@ -2220,7 +2220,7 @@ async fn fetch_edges(
                     // that overruns here overruns the engine's memory just as surely.
                     fits(page.items.len(), limit)?;
                     edges.extend(page.items.into_iter().filter(|edge| &edge.to == native));
-                    advances(
+                    unrepeated(
                         page.next.as_ref(),
                         inner.as_ref(),
                         "its forward edges were being scanned",

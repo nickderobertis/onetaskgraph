@@ -78,7 +78,7 @@ authority = read(authority_path)
 # every loop check below while refusing in its own words, which is the drift this exists
 # to stop.
 for wanted, what in (
-    ("pub(crate) fn advances", "the cursor-repeat refusal"),
+    ("pub(crate) fn unrepeated", "the cursor-repeat refusal"),
     ("pub(crate) fn fits", "the page bound"),
 ):
     if wanted not in authority:
@@ -242,7 +242,7 @@ for line, opened, body in loops:
             own = own.replace(other_body, "")
     if PAGING.search(own) is None:
         continue
-    if "advances(" not in own:
+    if "unrepeated(" not in own:
         problems.append(f"{posix}:{line} paginates without the cursor-repeat guard")
 
     called = sorted(set(ENGINE_CALL.findall(own)))
@@ -280,7 +280,7 @@ if problems:
         print(f"check-copy-pagination-guards: {problem}", file=sys.stderr)
     fail(
         "a pagination loop on the copy path does not hold the half of the rule it owes",
-        "call `advances(page.next.as_ref(), asked.as_ref(), \"<what is being walked>\")` in "
+        "call `unrepeated(page.next.as_ref(), asked.as_ref(), \"<what is being walked>\")` in "
         "every loop above, and `fits(page.items.len(), request.limit)` in each one whose "
         f"page this engine has not already bounded — both from {authority_path}. Only a loop "
         "taking its page from a verb that reaches this engine's own page assembly is excused "

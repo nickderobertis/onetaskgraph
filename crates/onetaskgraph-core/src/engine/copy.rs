@@ -38,7 +38,7 @@ use serde_json::Value;
 use crate::GlobalId;
 use crate::resolve::ResolvedSource;
 
-use super::fetch::{advances, fits};
+use super::fetch::{fits, unrepeated};
 use super::local::ProjectSelector;
 use super::{Engine, EngineError, Filters, LeftBehind, Paging, TaskRequest};
 
@@ -773,9 +773,9 @@ impl Engine {
         // This walk pages by the engine's own token rather than by a source cursor, and
         // that asymmetry with the three walks below is deliberate — do not tidy it away.
         //
-        // A source that answers two cursors with each other for ever *advances* on every
-        // page, so the `advances` inside the walk that reads it never fires and nothing
-        // under the list verb can see it. What such a source does produce is a page token
+        // A source that answers two cursors with each other for ever advances on every
+        // page, so the `unrepeated` check inside the walk that reads it — which compares
+        // one pair and no more — never fires, and nothing under the list verb can see it. What such a source does produce is a page token
         // this verb hands back unchanged, so a loop paging by that token is the only place
         // that cycle is visible — and this is that loop. Reading the source directly here
         // would make all four walks look alike and leave a copy of a project spinning for
@@ -802,7 +802,7 @@ impl Engine {
                     error: failure.error.clone(),
                 });
             }
-            advances(
+            unrepeated(
                 response.next.as_ref(),
                 asked.as_ref(),
                 "the tasks of a project were being read for a copy",
@@ -855,7 +855,7 @@ impl Engine {
                     },
                 });
             }
-            advances(
+            unrepeated(
                 page.next.as_ref(),
                 asked.as_ref(),
                 "the destination was being read for items the copy left behind",
@@ -1121,7 +1121,7 @@ impl Engine {
                     page.next
                 }
             };
-            advances(
+            unrepeated(
                 next.as_ref(),
                 asked.as_ref(),
                 "the destination was being scanned for the item to update",
@@ -1540,7 +1540,7 @@ async fn forward_edges(
         .map_err(|error| refused(source, error))?;
         fits(page.items.len(), request.limit).map_err(|error| refused(source, error))?;
         edges.extend(page.items);
-        advances(
+        unrepeated(
             page.next.as_ref(),
             asked.as_ref(),
             "an item's dependencies were being read for a copy",
