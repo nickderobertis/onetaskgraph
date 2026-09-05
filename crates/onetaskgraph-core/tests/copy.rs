@@ -1648,7 +1648,7 @@ enum At {
     /// `query_documents`: the same scan again, looking for the counterpart of a document.
     Documents,
     /// `task_dependencies`: the walk that reads a task's forward edges out of its source.
-    Edges,
+    TaskEdges,
     /// `project_dependencies`: that walk again, at the project level.
     ProjectEdges,
 }
@@ -1938,7 +1938,7 @@ impl TaskSource for Misbehaving {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         self.pages_served.fetch_add(1, Ordering::Relaxed);
-        if self.misbehaves_at(At::Edges) {
+        if self.misbehaves_at(At::TaskEdges) {
             let near = id.clone();
             return Ok(self.faulted(page, || edge(&near, ItemKind::Task)));
         }
@@ -2264,7 +2264,7 @@ async fn a_source_that_overruns_its_page_stops_the_walk_of_a_projects_members() 
 #[tokio::test]
 async fn a_source_that_repeats_its_cursor_stops_the_walk_of_the_edges_a_copy_reads() {
     let (engine, pages) = from_misbehaving(Misbehaving::new(
-        At::Edges,
+        At::TaskEdges,
         Fault::RepeatsTheCursor,
         Onset::TheFirstRead,
     ));
@@ -2285,7 +2285,7 @@ async fn a_source_that_repeats_its_cursor_stops_the_walk_of_the_edges_a_copy_rea
 #[tokio::test]
 async fn a_source_that_overruns_its_page_stops_the_walk_of_the_edges_a_copy_reads() {
     let (engine, pages) = from_misbehaving(Misbehaving::new(
-        At::Edges,
+        At::TaskEdges,
         Fault::OverrunsThePage,
         Onset::TheFirstRead,
     ));
