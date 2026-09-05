@@ -16,11 +16,23 @@
 #   * A loop that reads a page **from a plugin** — anything through `ResolvedSource::source()`
 #     — owes both refusals itself. That page is somebody else's program's answer, and
 #     nothing between it and this loop has looked at it.
-#   * A loop that reads a page **from a verb of this engine** owes the cursor-repeat guard
-#     and must NOT call the page bound: that verb ends in a merge that stops at the budget
-#     it was asked for, so an over-long page cannot reach such a loop and a bound there
-#     could never fail. A guard that cannot fail reads like the guard, to the next person
-#     and to the next audit; the real bound is `fits` where that verb reads the source.
+#   * A loop that reads a page **from a verb of this engine whose bound is demonstrable**
+#     owes the cursor-repeat guard and must NOT call the page bound: such a verb ends in
+#     the assembly that stops at the budget it was asked for, so an over-long page cannot
+#     reach the loop and a bound there could never fail. A guard that cannot fail reads
+#     like the guard, to the next person and to the next audit; the real bound is `fits`
+#     where that verb reads the source.
+#
+# "Demonstrable" is the load-bearing word, and it is why the second half is not simply
+# "the loop calls `self.something(`". Being a method of this engine bounds nothing by
+# itself: a loop taking its page from a new `self.some_page(..)` that assembles its own
+# answer would otherwise be exempted from the page bound by the accident of how it spells
+# the call. So every engine method a paginating loop calls is FOLLOWED here — to its
+# definition, and through whatever engine methods that in turn calls — and it counts as
+# bounded only when it reaches the one page assembly this engine has, which is read out of
+# the engine module together with the budget stop it rests on in `engine/fetch.rs`. A
+# method that does not reach it, or that cannot be found at all, is not bounded, and the
+# loop taking its page from it owes the page bound like any other.
 #
 # Named exemptions are what this deliberately does not have. Change a loop from one shape
 # to the other and the half it now owes is demanded of it here.
@@ -31,6 +43,7 @@ cd "$ROOT"
 
 COPY_PATH="crates/onetaskgraph-core/src/engine/copy.rs" \
 AUTHORITY="crates/onetaskgraph-core/src/engine/fetch.rs" \
+ENGINE="crates/onetaskgraph-core/src/engine/mod.rs" \
 python3 <<'PY'
 import os
 import pathlib
@@ -39,6 +52,7 @@ import sys
 
 copy_path = os.environ["COPY_PATH"]
 authority_path = os.environ["AUTHORITY"]
+engine_path = os.environ["ENGINE"]
 
 
 def fail(problem, action):
@@ -75,6 +89,22 @@ for wanted, what in (
             "it moved — and move every caller in the same change.",
         )
 
+# The stop the whole engine-verb exemption below rests on: the merge that assembles a page
+# refuses to hand back more rows than the budget it was asked for. Read rather than
+# assumed, because the day it stops being true is the day a loop reading an engine verb
+# needs its own bound back.
+MERGE_BOUND = re.compile(r"items\.len\(\)\s*as\s*u64\s*>=\s*u64::from\(budget\)")
+if MERGE_BOUND.search(authority) is None:
+    fail(
+        f"{pathlib.PurePath(authority_path).as_posix()} no longer shows the merge stopping "
+        "at the budget it was asked for, so no loop reading a verb of this engine can be "
+        "excused its own page bound",
+        "restore that stop in the merge, or — if a page is bounded some other way now — "
+        "teach this check to read the new one and give every exempted loop its own "
+        "`fits` until you have.",
+    )
+
+engine = read(engine_path)
 source = read(copy_path)
 
 # Forward slashes on every platform: python renders a path with the running platform's
@@ -135,7 +165,74 @@ for found in LOOP.finditer(source):
 # the marker; a verb of this engine is reached through `self`. A loop showing neither is
 # read as reading a plugin, because the safe reading of "cannot tell" is the strict one.
 FROM_PLUGIN = re.compile(r"\.source\(\)")
-FROM_ENGINE = re.compile(r"\bself\.\w+\(")
+ENGINE_CALL = re.compile(r"\bself\.(\w+)\(")
+
+# The one page assembly this engine has, and the thing that makes it an assembly rather
+# than a name: it hands its rows to the merge under a budget, and the merge stops there.
+# A verb reaching this is bounded; a verb that does not is not, however it is spelled.
+ASSEMBLY = "finish"
+ASSEMBLY_CALL = re.compile(r"\.%s\(" % ASSEMBLY)
+ASSEMBLY_MERGES = re.compile(r"\bmerge\([^)]*\bbudget\b")
+
+
+def body_after(text, index):
+    """The braced body opening at or after `index`, or None when there is no whole one."""
+    try:
+        opened = text.index("{", index)
+    except ValueError:
+        return None
+    depth = 0
+    for at in range(opened, len(text)):
+        if text[at] == "{":
+            depth += 1
+        elif text[at] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[opened + 1 : at]
+    return None
+
+
+def defined(name):
+    """The body of `fn name`, wherever on the copy path or in the engine module it is."""
+    wanted = re.compile(r"\bfn\s+%s\s*[<(]" % re.escape(name))
+    for text in (engine, source):
+        found = wanted.search(text)
+        if found is not None:
+            return body_after(text, found.end() - 1)
+    return None
+
+
+assembly = defined(ASSEMBLY)
+if assembly is None or ASSEMBLY_MERGES.search(assembly) is None:
+    fail(
+        f"{pathlib.PurePath(engine_path).as_posix()} defines no `fn {ASSEMBLY}` that hands "
+        "its rows to the merge under a budget, so this check cannot tell a bounded verb of "
+        "this engine from an unbounded one",
+        "keep that assembly there, or teach this check to read whichever one bounds a page "
+        "now — until then every loop taking its page from a verb of this engine owes its "
+        "own `fits`.",
+    )
+
+
+def bounded(name, seen=None):
+    """Whether `self.name(..)` yields a page this engine has already bounded.
+
+    Followed rather than assumed, and followed through the engine methods that method
+    calls in turn: what makes a verb bounded is reaching the assembly above, not being
+    reached through `self`. A method this check cannot find is not bounded — the safe
+    reading of "cannot tell" is the strict one here too.
+    """
+    seen = seen or set()
+    if name in seen:
+        return False
+    seen.add(name)
+    body = defined(name)
+    if body is None:
+        return False
+    if ASSEMBLY_CALL.search(body) is not None:
+        return True
+    return any(bounded(called, seen) for called in set(ENGINE_CALL.findall(body)))
+
 
 problems = []
 for line, opened, body in loops:
@@ -145,12 +242,27 @@ for line, opened, body in loops:
             own = own.replace(other_body, "")
     if PAGING.search(own) is None:
         continue
-    reads_a_plugin = FROM_PLUGIN.search(own) is not None or FROM_ENGINE.search(own) is None
     if "advances(" not in own:
         problems.append(f"{posix}:{line} paginates without the cursor-repeat guard")
-    if reads_a_plugin and "fits(" not in own:
-        problems.append(f"{posix}:{line} reads a plugin's page without the page bound")
-    if not reads_a_plugin and "fits(" in own:
+
+    called = sorted(set(ENGINE_CALL.findall(own)))
+    unbounded = [name for name in called if not bounded(name)]
+    if FROM_PLUGIN.search(own) is not None:
+        why = "reads a plugin's page"
+    elif not called:
+        why = "takes its page from neither a plugin nor a verb of this engine"
+    elif unbounded:
+        why = (
+            "takes its page from `self."
+            + "`, `self.".join(unbounded)
+            + "`, which does not reach this engine's bounded page assembly"
+        )
+    else:
+        why = None
+
+    if why is not None and "fits(" not in own:
+        problems.append(f"{posix}:{line} {why}, and has no page bound of its own")
+    if why is None and "fits(" in own:
         problems.append(
             f"{posix}:{line} bounds a page this engine's own verb already bounded, so that "
             "call can never fail"
@@ -169,8 +281,9 @@ if problems:
     fail(
         "a pagination loop on the copy path does not hold the half of the rule it owes",
         "call `advances(page.next.as_ref(), asked.as_ref(), \"<what is being walked>\")` in "
-        "every loop above, and `fits(page.items.len(), request.limit)` in each one that "
-        f"reads its page from a plugin — both from {authority_path}. A loop reading its page "
-        "from a verb of this engine takes its bound from that verb and must not restate it.",
+        "every loop above, and `fits(page.items.len(), request.limit)` in each one whose "
+        f"page this engine has not already bounded — both from {authority_path}. Only a loop "
+        "taking its page from a verb that reaches this engine's own page assembly is excused "
+        "the bound, and such a loop must not restate it.",
     )
 PY

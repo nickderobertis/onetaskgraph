@@ -44,7 +44,9 @@ cp "$ROOT/scripts/$GUARD" "$scratch/scripts/$GUARD" || fatal \
 
 readonly ENGINE="$scratch/crates/onetaskgraph-core/src/engine"
 
-# Both refusals, where the guard insists they are implemented once.
+# Both refusals, where the guard insists they are implemented once — and the budget stop
+# in the merge, which is the whole reason a loop reading a verb of this engine is excused
+# its own page bound.
 plant_authority() {
   cat >"$ENGINE/fetch.rs" <<'RS' || fatal \
     "could not write the fixture standing in for engine/fetch.rs" \
@@ -55,6 +57,46 @@ pub(crate) fn fits(returned: usize, asked_for: u32) -> Result<(), SourceError> {
 
 pub(crate) fn advances<T: PartialEq>(returned: Option<&T>, asked: Option<&T>, scan: &str) {
     unimplemented!()
+}
+
+pub(crate) fn merge<T>(streams: Vec<Stream<T>>, budget: u32) -> Vec<T> {
+    let mut items = Vec::new();
+    for stream in streams {
+        if items.len() as u64 >= u64::from(budget) {
+            break;
+        }
+        items.push(stream.row);
+    }
+    items
+}
+RS
+}
+
+# The engine module the guard follows a `self.<verb>(..)` call into: one verb that reaches
+# the bounded page assembly, and one that assembles its own answer and does not.
+plant_engine() {
+  cat >"$ENGINE/mod.rs" <<'RS' || fatal \
+    "could not write the fixture standing in for engine/mod.rs" \
+    "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+impl Answer {
+    fn finish<T>(self, streams: Vec<Stream<T>>, budget: u32) -> QueryResponse<T> {
+        QueryResponse {
+            items: merge(streams, budget),
+        }
+    }
+}
+
+impl Engine {
+    pub async fn tasks(&self, request: &TaskRequest) -> Result<QueryResponse<Task>, EngineError> {
+        let answer = Answer::new();
+        answer.finish(streams, request.paging.limit.get())
+    }
+
+    async fn unbounded_page(&self, request: &TaskRequest) -> Result<QueryResponse<Task>, EngineError> {
+        Ok(QueryResponse {
+            items: everything_the_source_gave(),
+        })
+    }
 }
 RS
 }
@@ -161,6 +203,7 @@ accepts() {
 
 # The baseline. Both loop shapes, each holding exactly the half of the rule it owes.
 plant_authority
+plant_engine
 plant_copy
 accepts "a copy path where each loop holds the half of the rule it owes"
 
@@ -169,7 +212,24 @@ accepts "a copy path where each loop holds the half of the rule it owes"
 plant_copy
 substitute copy.rs "self.tasks(&request)" "self.resolved(project)?.source().query_tasks(&query, &request)"
 refuses "a walk repointed from an engine verb at a plugin, with no page bound" \
-  "reads a plugin's page without the page bound"
+  "reads a plugin's page, and has no page bound of its own"
+
+# Being a method of this engine bounds nothing by itself, and this is the case that says
+# so: a walk taking its page from a verb that assembles its own answer instead of reaching
+# the bounded assembly owes the page bound, however the call is spelled. Without this the
+# exemption would be handed out by the shape `self.<anything>(..)`.
+plant_engine
+plant_copy
+substitute copy.rs "self.tasks(&request)" "self.unbounded_page(&request)"
+refuses "a walk taking its page from an engine verb that never reaches the bounded assembly" \
+  "self.unbounded_page"
+
+# And a verb this check cannot find at all is not bounded either: the safe reading of
+# "cannot tell" is the strict one, so the loop owes the bound rather than being excused it.
+plant_copy
+substitute copy.rs "self.tasks(&request)" "self.nowhere_this_check_can_find(&request)"
+refuses "a walk taking its page from an engine verb with no definition to follow" \
+  "self.nowhere_this_check_can_find"
 
 # The other half: a bound restated on a page this engine's own verb already bounded reads
 # like the guard and can never fail, so it is refused rather than tolerated.
@@ -185,7 +245,7 @@ refuses "a page bound restated on a page an engine verb already bounded" \
 plant_copy
 substitute copy.rs "            fits(page.items.len(), request.limit)?;
 " ""
-refuses "a plugin-reading walk with no page bound" "reads a plugin's page without the page bound"
+refuses "a plugin-reading walk with no page bound" "reads a plugin's page, and has no page bound of its own"
 
 # Either loop shape with its cursor-repeat guard taken away: that half is owed by both.
 plant_copy
@@ -213,7 +273,27 @@ substitute copy.rs "impl Engine {" "// the source returned the cursor it was giv
 impl Engine {"
 refuses "the cursor-repeat refusal spelled a second time on the copy path" "spells"
 
+# What the exemption itself rests on, watched failing in both halves. Take the budget stop
+# out of the merge and no page is bounded any more, so no loop may be excused its own.
+plant_engine
+plant_copy
+substitute fetch.rs "        if items.len() as u64 >= u64::from(budget) {
+            break;
+        }
+" ""
+refuses "a merge that no longer stops at the budget it was asked for" \
+  "no longer shows the merge stopping at the budget"
+
+# Take the assembly out of the engine module and this check can no longer tell a bounded
+# verb from an unbounded one, which is a refusal rather than a pass.
+plant_authority
+plant_copy
+substitute mod.rs "    fn finish<T>" "    fn assembles<T>"
+refuses "an engine module with no bounded page assembly to follow a verb into" \
+  "hands its rows to the merge under a budget"
+
 # Neither refusal implemented where the copy path shares it from.
+plant_engine
 plant_copy
 plant_authority
 python3 - "$ENGINE/fetch.rs" <<'PY' || fatal \
@@ -230,6 +310,7 @@ refuses "a page bound with no single implementation to share" "has no single imp
 # A copy path with no loop in it at all, which is a check that read nothing rather than a
 # copy path that is safe.
 plant_authority
+plant_engine
 printf 'impl Engine {}\n' >"$ENGINE/copy.rs"
 refuses "a copy path holding no loop at all" "contains no loop at all"
 
