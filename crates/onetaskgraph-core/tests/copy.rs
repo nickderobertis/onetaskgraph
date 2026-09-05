@@ -19,9 +19,9 @@ use onetaskgraph_core::{
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Health, ItemKind, ItemWrite, Label, NativeId, Page, PageRequest, Project,
-    ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
-    Support, Task, TaskQuery, TaskSource, WriteSupport,
+    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, NativeId, Page,
+    PageRequest, Project, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, WriteSupport, documentless,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -1605,7 +1605,6 @@ async fn a_document_copy_that_cannot_finish_leaves_the_destination_as_it_found_i
     );
 }
 
-// ---------------------------------------------------------------------------------------
 // A copy that would never end.
 //
 // Every pagination loop the copy path has asks a source for a page, and asks again with
@@ -1644,11 +1643,18 @@ const EMPTY_HALF: &str = "the-page-holding-none";
 /// Which read misbehaves, which decides which pagination loop of the copy path it meets.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum At {
-    /// `query_tasks`: the scan that looks for a counterpart at the destination, and the
-    /// walk that reports what a project copy left behind there.
+    /// `query_tasks`: the scan that looks for a counterpart at the destination, the walk
+    /// that reports what a project copy left behind there, and the read of a project's
+    /// members out of its own source.
     Tasks,
-    /// `task_dependencies`: the walk that reads an item's forward edges out of its source.
+    /// `query_projects`: the same scan, looking for the counterpart of a project.
+    Projects,
+    /// `query_documents`: the same scan again, looking for the counterpart of a document.
+    Documents,
+    /// `task_dependencies`: the walk that reads a task's forward edges out of its source.
     Edges,
+    /// `project_dependencies`: that walk again, at the project level.
+    ProjectEdges,
 }
 
 /// When the fault starts.
@@ -1668,12 +1674,18 @@ struct Misbehaving {
     onset: Onset,
     /// Whether it holds the project a copy names, and so has members to be walked.
     project: bool,
+    /// Whether it declares documents, without which a copy never names it at either end.
+    documents: bool,
     /// The largest page it serves.
     ceiling: u32,
-    /// Counted so a test can show the walk stopped rather than ran away.
-    reads: Arc<AtomicU32>,
-    /// What this copy has written here, which is what [`Onset::TheFirstWrite`] waits for.
-    writes: AtomicU32,
+    /// Every page it has served, of any kind, counted so a test can show the walk stopped
+    /// rather than ran away.
+    pages_served: Arc<AtomicU32>,
+    /// Tasks, and only tasks, written here. [`Onset::TheFirstWrite`] waits for one of
+    /// these rather than for any write, because the project of a project copy lands
+    /// first: counting that one would turn the fault on before the scan this source has
+    /// to answer well.
+    tasks_written: AtomicU32,
 }
 
 impl Misbehaving {
@@ -1685,9 +1697,10 @@ impl Misbehaving {
             fault,
             onset,
             project: false,
+            documents: false,
             ceiling: 2,
-            reads: Arc::new(AtomicU32::new(0)),
-            writes: AtomicU32::new(0),
+            pages_served: Arc::new(AtomicU32::new(0)),
+            tasks_written: AtomicU32::new(0),
         }
     }
 
@@ -1704,16 +1717,26 @@ impl Misbehaving {
         }
     }
 
-    /// Whether this read is one of the misbehaving ones.
+    /// The same source, declaring that it has documents.
+    ///
+    /// The engine reads that declaration once at the handshake and refuses a document
+    /// copy naming a source without it before anything is read, so this is what gets a
+    /// document copy as far as the walk under test.
+    fn with_documents(self) -> Self {
+        Self {
+            documents: true,
+            ..self
+        }
+    }
+
     fn misbehaves_at(&self, at: At) -> bool {
         self.at == at
             && match self.onset {
                 Onset::TheFirstRead => true,
-                Onset::TheFirstWrite => self.writes.load(Ordering::Relaxed) > 0,
+                Onset::TheFirstWrite => self.tasks_written.load(Ordering::Relaxed) > 0,
             }
     }
 
-    /// The page a misbehaving read answers with.
     fn faulted<T>(&self, page: &PageRequest, row: impl Fn() -> T) -> Page<T> {
         match self.fault {
             Fault::RepeatsTheCursor => Page {
@@ -1749,7 +1772,6 @@ impl Misbehaving {
     }
 }
 
-/// One task, as this source reports it.
 fn reported(id: &NativeId) -> Task {
     Task {
         id: id.clone(),
@@ -1770,7 +1792,6 @@ fn reported(id: &NativeId) -> Task {
     }
 }
 
-/// One task of the one project a misbehaving source holds.
 fn member(id: &NativeId) -> Task {
     Task {
         project: Some(NativeId::from("P-1")),
@@ -1778,7 +1799,30 @@ fn member(id: &NativeId) -> Task {
     }
 }
 
-/// The one project a misbehaving source holds, as it reports it.
+fn held_document(id: &NativeId) -> Document {
+    Document {
+        id: id.clone(),
+        title: "Design review".to_owned(),
+        content: None,
+        project: None,
+        labels: Vec::new(),
+        url: None,
+        location: None,
+        created_at: None,
+        updated_at: None,
+        metadata: std::collections::BTreeMap::new(),
+        repositories: Vec::new(),
+    }
+}
+
+fn edge(near: &NativeId, kind: ItemKind) -> DependencyEdge {
+    DependencyEdge {
+        from: DependencyEndpoint::from_native(near.clone(), kind),
+        to: DependencyEndpoint::from_native(NativeId::from("T-9"), kind),
+        kind: DependencyKind::Blocks,
+    }
+}
+
 fn held_project(id: &NativeId) -> Project {
     Project {
         id: id.clone(),
@@ -1807,7 +1851,11 @@ impl TaskSource for Misbehaving {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
-            documents: Support::Unsupported,
+            documents: if self.documents {
+                Support::Native
+            } else {
+                Support::Unsupported
+            },
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -1843,7 +1891,7 @@ impl TaskSource for Misbehaving {
         _query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
-        self.reads.fetch_add(1, Ordering::Relaxed);
+        self.pages_served.fetch_add(1, Ordering::Relaxed);
         if self.misbehaves_at(At::Tasks) {
             return Ok(match self.fault {
                 Fault::CyclesItsCursors => self.cycled(page),
@@ -1856,12 +1904,34 @@ impl TaskSource for Misbehaving {
     async fn query_projects(
         &self,
         _query: &ProjectQuery,
-        _page: &PageRequest,
+        page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
+        self.pages_served.fetch_add(1, Ordering::Relaxed);
+        if self.misbehaves_at(At::Projects) {
+            return Ok(self.faulted(page, || held_project(&NativeId::from("H-1"))));
+        }
+        Ok(Page::last(Vec::new()))
+    }
+
+    async fn query_documents(
+        &self,
+        _query: &DocumentQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        // What a source with no documents owes: a refusal rather than an empty page,
+        // which is what the engine reads the declaration at the handshake to avoid.
+        if !self.documents {
+            return Err(documentless(self.kind()));
+        }
+        self.pages_served.fetch_add(1, Ordering::Relaxed);
+        if self.misbehaves_at(At::Documents) {
+            return Ok(self.faulted(page, || held_document(&NativeId::from("H-1"))));
+        }
         Ok(Page::last(Vec::new()))
     }
 
     async fn labels(&self, _page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        self.pages_served.fetch_add(1, Ordering::Relaxed);
         Ok(Page::last(Vec::new()))
     }
 
@@ -1871,29 +1941,30 @@ impl TaskSource for Misbehaving {
         _direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        self.reads.fetch_add(1, Ordering::Relaxed);
+        self.pages_served.fetch_add(1, Ordering::Relaxed);
         if self.misbehaves_at(At::Edges) {
             let near = id.clone();
-            return Ok(self.faulted(page, || DependencyEdge {
-                from: DependencyEndpoint::from_native(near.clone(), ItemKind::Task),
-                to: DependencyEndpoint::from_native(NativeId::from("T-9"), ItemKind::Task),
-                kind: DependencyKind::Blocks,
-            }));
+            return Ok(self.faulted(page, || edge(&near, ItemKind::Task)));
         }
         Ok(Page::last(Vec::new()))
     }
 
     async fn project_dependencies(
         &self,
-        _id: &NativeId,
+        id: &NativeId,
         _direction: Direction,
-        _page: &PageRequest,
+        page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.pages_served.fetch_add(1, Ordering::Relaxed);
+        if self.misbehaves_at(At::ProjectEdges) {
+            let near = id.clone();
+            return Ok(self.faulted(page, || edge(&near, ItemKind::Project)));
+        }
         Ok(Page::last(Vec::new()))
     }
 
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
-        self.writes.fetch_add(1, Ordering::Relaxed);
+        self.tasks_written.fetch_add(1, Ordering::Relaxed);
         Ok(write.target.clone().unwrap_or(NativeId::from("W-1")))
     }
 
@@ -1908,6 +1979,14 @@ impl TaskSource for Misbehaving {
     async fn delete_project(&self, _id: &NativeId) -> Result<(), SourceError> {
         Ok(())
     }
+
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        Ok(write.target.clone().unwrap_or(NativeId::from("W-D")))
+    }
+
+    async fn delete_document(&self, _id: &NativeId) -> Result<(), SourceError> {
+        Ok(())
+    }
 }
 
 /// One `in-memory` source, built through its own plugin so an engine can hold it beside a
@@ -1919,31 +1998,36 @@ fn in_memory(source: &str, config: Value) -> ConfiguredSource {
     ConfiguredSource::Ready(ResolvedSource::adopt(name(source), built))
 }
 
-/// An engine whose destination misbehaves, over a source holding `T-1` in project `P-1`.
-fn into_misbehaving(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
-    let reads = Arc::clone(&source.reads);
+/// An engine whose destination misbehaves, over the `in-memory` source described.
+fn into_misbehaving_over(from: Value, source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
+    let pages = Arc::clone(&source.pages_served);
     let engine = Engine::new(
         vec![
-            in_memory(
-                "from",
-                json!({
-                    "projects": [{"id": "P-1", "title": "Engine",
-                                  "status": {"category": "todo", "name": "Todo"}, "labels": []}],
-                    "tasks": [{"id": "T-1", "title": "Alpha engine",
-                               "status": {"category": "todo", "name": "Todo"},
-                               "labels": [], "project": "P-1"}],
-                }),
-            ),
+            in_memory("from", from),
             ConfiguredSource::Ready(ResolvedSource::adopt(name("into"), Box::new(source))),
         ],
         vec![name("from"), name("into")],
     );
-    (engine, reads)
+    (engine, pages)
+}
+
+/// The same, over a source holding `T-1` in project `P-1`.
+fn into_misbehaving(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
+    into_misbehaving_over(
+        json!({
+            "projects": [{"id": "P-1", "title": "Engine",
+                          "status": {"category": "todo", "name": "Todo"}, "labels": []}],
+            "tasks": [{"id": "T-1", "title": "Alpha engine",
+                       "status": {"category": "todo", "name": "Todo"},
+                       "labels": [], "project": "P-1"}],
+        }),
+        source,
+    )
 }
 
 /// An engine whose source misbehaves, copying into an ordinary `in-memory` destination.
 fn from_misbehaving(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
-    let reads = Arc::clone(&source.reads);
+    let pages = Arc::clone(&source.pages_served);
     let engine = Engine::new(
         vec![
             ConfiguredSource::Ready(ResolvedSource::adopt(name("from"), Box::new(source))),
@@ -1951,7 +2035,7 @@ fn from_misbehaving(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
         ],
         vec![name("from"), name("into")],
     );
-    (engine, reads)
+    (engine, pages)
 }
 
 /// What a copy refused, or the test's own fault.
@@ -1973,7 +2057,7 @@ async fn refusal(engine: &Engine, request: &CopyRequest) -> String {
 
 #[tokio::test]
 async fn a_destination_that_repeats_its_cursor_stops_the_scan_for_a_counterpart() {
-    let (engine, reads) = into_misbehaving(Misbehaving::new(
+    let (engine, pages) = into_misbehaving(Misbehaving::new(
         At::Tasks,
         Fault::RepeatsTheCursor,
         Onset::TheFirstRead,
@@ -1989,12 +2073,12 @@ async fn a_destination_that_repeats_its_cursor_stops_the_scan_for_a_counterpart(
         ),
         "{refused}"
     );
-    assert!(reads.load(Ordering::Relaxed) <= 3, "the scan stopped early");
+    assert!(pages.load(Ordering::Relaxed) <= 3, "the scan stopped early");
 }
 
 #[tokio::test]
 async fn a_destination_that_overruns_its_page_stops_the_scan_for_a_counterpart() {
-    let (engine, reads) = into_misbehaving(Misbehaving::new(
+    let (engine, pages) = into_misbehaving(Misbehaving::new(
         At::Tasks,
         Fault::OverrunsThePage,
         Onset::TheFirstRead,
@@ -2006,7 +2090,7 @@ async fn a_destination_that_overruns_its_page_stops_the_scan_for_a_counterpart()
         refused.contains("the source returned 3 rows for a page of at most 2"),
         "{refused}"
     );
-    assert_eq!(reads.load(Ordering::Relaxed), 1, "the scan stopped at once");
+    assert_eq!(pages.load(Ordering::Relaxed), 1, "the scan stopped at once");
 }
 
 #[tokio::test]
@@ -2054,6 +2138,81 @@ async fn a_destination_that_overruns_its_page_stops_the_walk_for_what_a_copy_lef
     assert!(refused.contains("source into could not do it"), "{refused}");
     assert!(
         refused.contains("the source returned 3 rows for a page of at most 2"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_destination_that_overruns_its_page_stops_the_scan_for_a_project() {
+    // The same scan as the task one, down its project branch: a project copy looks for
+    // the counterpart of the project itself before it looks for any of its tasks.
+    let (engine, _) = into_misbehaving(Misbehaving::new(
+        At::Projects,
+        Fault::OverrunsThePage,
+        Onset::TheFirstRead,
+    ));
+
+    let refused = refusal(
+        &engine,
+        &many(&["from:P-1"], CopyScope::Projects { tasks: false }),
+    )
+    .await;
+
+    assert!(refused.contains("source into could not do it"), "{refused}");
+    assert!(
+        refused.contains("the source returned 3 rows for a page of at most 2"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_destination_that_overruns_its_page_stops_the_scan_for_a_document() {
+    // That scan's third branch. A document is not work — it has no status and no
+    // dependencies — but it is looked for at the destination exactly as the other two
+    // are, and a destination overrunning that page is refused there too.
+    let (engine, _) = into_misbehaving_over(
+        json!({
+            "capabilities": {"documents": "native"},
+            "documents": [a_document("D-1", "Design review")],
+        }),
+        Misbehaving::new(At::Documents, Fault::OverrunsThePage, Onset::TheFirstRead)
+            .with_documents(),
+    );
+
+    let refused = refusal(&engine, &many(&["from:D-1"], CopyScope::Documents)).await;
+
+    assert!(refused.contains("source into could not do it"), "{refused}");
+    assert!(
+        refused.contains("the source returned 3 rows for a page of at most 2"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_source_that_repeats_its_cursor_stops_the_walk_of_a_projects_own_edges() {
+    // The edge walk's other branch: a project's dependencies are read out of its source
+    // by the same loop that reads a task's, and are held to the same rule.
+    let (engine, _) = from_misbehaving(
+        Misbehaving::new(
+            At::ProjectEdges,
+            Fault::RepeatsTheCursor,
+            Onset::TheFirstRead,
+        )
+        .holding_a_project(),
+    );
+
+    let refused = refusal(
+        &engine,
+        &many(&["from:P-1"], CopyScope::Projects { tasks: false }),
+    )
+    .await;
+
+    assert!(refused.contains("source from could not do it"), "{refused}");
+    assert!(
+        refused.contains(
+            "the source returned the cursor it was given while an item's dependencies \
+             were being read for a copy"
+        ),
         "{refused}"
     );
 }
@@ -2108,7 +2267,7 @@ async fn a_source_that_overruns_its_page_stops_the_walk_of_a_projects_members() 
 
 #[tokio::test]
 async fn a_source_that_repeats_its_cursor_stops_the_walk_of_the_edges_a_copy_reads() {
-    let (engine, reads) = from_misbehaving(Misbehaving::new(
+    let (engine, pages) = from_misbehaving(Misbehaving::new(
         At::Edges,
         Fault::RepeatsTheCursor,
         Onset::TheFirstRead,
@@ -2124,12 +2283,12 @@ async fn a_source_that_repeats_its_cursor_stops_the_walk_of_the_edges_a_copy_rea
         ),
         "{refused}"
     );
-    assert!(reads.load(Ordering::Relaxed) <= 3, "the walk stopped early");
+    assert!(pages.load(Ordering::Relaxed) <= 3, "the walk stopped early");
 }
 
 #[tokio::test]
 async fn a_source_that_overruns_its_page_stops_the_walk_of_the_edges_a_copy_reads() {
-    let (engine, reads) = from_misbehaving(Misbehaving::new(
+    let (engine, pages) = from_misbehaving(Misbehaving::new(
         At::Edges,
         Fault::OverrunsThePage,
         Onset::TheFirstRead,
@@ -2141,7 +2300,7 @@ async fn a_source_that_overruns_its_page_stops_the_walk_of_the_edges_a_copy_read
         refused.contains("the source returned 3 rows for a page of at most 2"),
         "{refused}"
     );
-    assert_eq!(reads.load(Ordering::Relaxed), 1, "the walk stopped at once");
+    assert_eq!(pages.load(Ordering::Relaxed), 1, "the walk stopped at once");
 }
 
 #[tokio::test]

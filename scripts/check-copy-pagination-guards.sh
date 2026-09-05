@@ -86,17 +86,16 @@ for phrase, what in (
 # A loop's own text, with any loop nested inside it removed: each loop answers for
 # itself, so an inner loop's guard may not stand in for the outer one's.
 LOOP = re.compile(r"^[ \t]*(?:\}\s*)?(?:loop\s*|while\b[^{]*)\{[ \t]*$", re.MULTILINE)
-# What makes a loop a pagination loop: it asks something for a page, or it advances a
-# cursor or a token to ask again.
-PAGING = re.compile(
-    r"query_tasks\(|query_projects\(|query_documents\(|labels\(|task_dependencies\(|"
-    r"project_dependencies\(|request_for\(|PageRequest|self\.tasks\(|self\.projects\(|"
-    r"self\.documents\(|\.next\b"
-)
+# What makes a loop a pagination loop: it builds a page request, or it reads the `next`
+# field off the page it got back. Deliberately NOT a list of the methods that serve a
+# page — such a list is this contract restated in a second place, and it goes stale the
+# day a paging method is added or renamed, which is the day it would matter. Every walk
+# advances by reading a `next`, whatever it called to get one. The negative lookahead is
+# what keeps an iterator's `.next()` — a call, not a field — from reading as one.
+PAGING = re.compile(r"request_for\(|PageRequest|\.next\b(?!\()")
 
 
 def body_of(text, opened):
-    """The text between the brace at `opened` and the one that closes it."""
     depth = 0
     for index in range(opened, len(text)):
         if text[index] == "{":
