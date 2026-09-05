@@ -810,14 +810,159 @@ async fn a_source_that_never_advances_its_cursor_is_reported_rather_than_walked_
 
     assert_eq!(response.errors.len(), 1);
     assert!(
-        response.errors[0]
-            .error
-            .to_string()
-            .contains("returned the cursor it was given"),
+        response.errors[0].error.to_string().contains(
+            "the source returned the cursor it was given while one of its streams was \
+             being walked"
+        ),
         "{:?}",
         response.errors[0]
     );
     assert!(calls.load(Ordering::Relaxed) <= 3, "the walk stopped early");
+}
+
+/// A forward-only source whose forward edges answer every cursor with the cursor they
+/// were given.
+///
+/// Answering `DependedOnBy` here is the engine's own bounded scan: it walks this source's
+/// tasks and reads each one's forward edges, keeping the ones that point back. That inner
+/// read is a pagination loop of its own, and it is the one loop no walk of a source's own
+/// stream covers — the outer walk sees cursors that advance while the inner one is asked
+/// the same cursor for ever.
+struct StuckEdges;
+
+#[async_trait::async_trait]
+impl TaskSource for StuckEdges {
+    fn kind(&self) -> &'static str {
+        "stuck-edges"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            projects: Support::Native,
+            documents: Support::Unsupported,
+            orphan_tasks: Support::Native,
+            filter_by_label: Support::Native,
+            filter_by_status: Support::Native,
+            search_title: Support::Native,
+            search_content: Support::Native,
+            // Forward-only, which is what makes a reverse read a scan rather than a
+            // question this source could answer itself.
+            task_dependencies: DependencySupport::ForwardOnly,
+            project_dependencies: DependencySupport::ForwardOnly,
+            max_page_size: 10,
+        }
+    }
+
+    async fn health(&self) -> Result<Health, SourceError> {
+        Ok(Health {
+            reachable: true,
+            detail: None,
+        })
+    }
+
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        Ok(Some(one_task(id)))
+    }
+
+    async fn get_project(&self, _id: &NativeId) -> Result<Option<Project>, SourceError> {
+        Ok(None)
+    }
+
+    async fn query_tasks(
+        &self,
+        _query: &TaskQuery,
+        _page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        // One task, so the scan has exactly one item's forward edges to read.
+        Ok(Page::last(vec![one_task(&NativeId::from("T-1"))]))
+    }
+
+    async fn query_projects(
+        &self,
+        _query: &ProjectQuery,
+        _page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+
+    async fn labels(&self, _page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+
+    async fn task_dependencies(
+        &self,
+        _id: &NativeId,
+        _direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        Ok(Page {
+            items: Vec::new(),
+            next: Some(page.cursor.clone().unwrap_or(Cursor("start".to_owned()))),
+        })
+    }
+
+    async fn project_dependencies(
+        &self,
+        _id: &NativeId,
+        _direction: Direction,
+        _page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+}
+
+/// The one task [`StuckEdges`] holds, under whichever id it was asked for.
+fn one_task(id: &NativeId) -> Task {
+    Task {
+        id: id.clone(),
+        title: "Alpha".to_owned(),
+        content: None,
+        status: Status {
+            category: StatusCategory::Todo,
+            name: "Todo".to_owned(),
+        },
+        labels: Vec::new(),
+        project: None,
+        url: None,
+        location: None,
+        created_at: None,
+        updated_at: None,
+        metadata: std::collections::BTreeMap::new(),
+        repositories: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn a_source_that_never_advances_its_edge_cursor_stops_the_scan_that_answers_in_reverse() {
+    let engine = Engine::new(
+        vec![ConfiguredSource::Ready(ResolvedSource::adopt(
+            name("scanned"),
+            Box::new(StuckEdges),
+        ))],
+        vec![name("scanned")],
+    );
+
+    let response = tokio::time::timeout(
+        Duration::from_secs(10),
+        engine.task_dependencies(&DependencyRequest {
+            id: "scanned:T-1".parse().expect("a qualified id"),
+            direction: Direction::DependedOnBy,
+            paging: page(10),
+        }),
+    )
+    .await
+    .expect("the scan stops instead of running away")
+    .expect("the walk runs");
+
+    assert_eq!(response.errors.len(), 1, "{response:?}");
+    assert!(
+        response.errors[0].error.to_string().contains(
+            "the source returned the cursor it was given while its forward edges were \
+             being scanned"
+        ),
+        "{:?}",
+        response.errors[0]
+    );
 }
 
 #[tokio::test]
