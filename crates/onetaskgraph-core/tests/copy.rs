@@ -1607,17 +1607,13 @@ async fn a_document_copy_that_cannot_finish_leaves_the_destination_as_it_found_i
 
 // A copy that would never end.
 //
-// Every pagination loop the copy path has asks a source for a page, and asks again with
-// the cursor that source handed back. A source that hands back the cursor it was given is
-// a loop with no end, and from outside a copy that will never finish is indistinguishable
-// from one still working — which is exactly what an operator watching one spin cannot
-// tell. A source that returns more rows than the page it was asked for overruns the one
-// page of memory the engine holds. Both are refusals of the plugin contract, and both are
-// refused here rather than waited on.
+// A source handing back the cursor it was given is a loop with no end, and from outside it
+// is indistinguishable from a copy still working — which is what an operator watching one
+// spin cannot tell. A source returning more rows than it was asked for overruns the one
+// page the engine holds. Both are refused here rather than waited on.
 //
-// The instrumentation below is at the boundary rather than a stand-in for the layer under
-// test: the copy is the real `Engine::copy` over a real destination write, and what is
-// written here is the one thing no correct plugin does.
+// The misbehaviour below is at the boundary, not a stand-in for the layer under test: the
+// copy is the real `Engine::copy` over a real destination write.
 
 /// What a source does that no correct plugin does.
 #[derive(Debug, Clone, Copy)]
@@ -2247,13 +2243,9 @@ async fn a_source_whose_cursors_cycle_stops_the_walk_of_a_projects_members() {
 
 #[tokio::test]
 async fn a_source_that_overruns_its_page_stops_the_walk_of_a_projects_members() {
-    // The same walk, the other fault, refused one level below where the walk reads. This
-    // is the one walk of the copy path that pages by a verb of this engine rather than by
-    // a source cursor, and that verb ends in a merge stopping at the budget it was asked
-    // for — so an over-long page cannot reach the copy's own loop, and the bound that a
-    // source really crosses is the shared one inside the walk that reads its page. What
-    // matters to the operator is that it is refused while a project's members are being
-    // read for a copy, and that the source that broke it is named.
+    // The same walk, the other fault. This one is refused a level below the copy's own
+    // loop, in the walk that reads the source's page — what matters is that it is refused
+    // while a project's members are read, and that the source is named.
     let (engine, _) = from_misbehaving(
         Misbehaving::new(At::Tasks, Fault::OverrunsThePage, Onset::TheFirstRead)
             .holding_a_project(),

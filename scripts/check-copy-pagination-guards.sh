@@ -2,40 +2,27 @@
 # Fail when a pagination loop on the copy path is missing the cursor-repeat guard or the
 # page bound — or when either is spelled a second time instead of called.
 #
-# A source that answers a cursor with the cursor it was given is a loop that never ends,
-# and from outside a command that will never finish looks exactly like one still working:
-# the operator watching it cannot tell. The engine already decided everywhere else that
-# this is a refusal rather than a wait, and it already decided that a page longer than the
-# one asked for is refused rather than held. `engine/fetch.rs` is where both decisions are
-# implemented, once.
+# `engine/fetch.rs` decided both once: a source answering a cursor with the cursor it was
+# given is refused rather than waited on, and so is a page longer than the one asked for.
+# This holds the copy path to them, enumerating no loop, so one added later is caught here
+# rather than by an operator watching a copy spin. Two halves, because the copy path pages
+# at two levels:
 #
-# This holds the copy path to them, and it enumerates no loop: it reads the rule off each
-# loop's own text, so a loop added later is caught here rather than by an operator watching
-# a copy spin. The rule has two halves, because the copy path pages at two levels:
+#   * A loop reading a page **from a plugin** — through `ResolvedSource::source()` — owes
+#     both refusals itself. Nothing between that answer and the loop has looked at it.
+#   * A loop reading one **from a verb of this engine whose bound is demonstrable** owes
+#     the cursor-repeat guard and must NOT call the page bound: such a verb ends in the
+#     assembly that stops at the budget, so a bound there could never fail, and a guard
+#     that cannot fail reads like the guard.
 #
-#   * A loop that reads a page **from a plugin** — anything through `ResolvedSource::source()`
-#     — owes both refusals itself. That page is somebody else's program's answer, and
-#     nothing between it and this loop has looked at it.
-#   * A loop that reads a page **from a verb of this engine whose bound is demonstrable**
-#     owes the cursor-repeat guard and must NOT call the page bound: such a verb ends in
-#     the assembly that stops at the budget it was asked for, so an over-long page cannot
-#     reach the loop and a bound there could never fail. A guard that cannot fail reads
-#     like the guard, to the next person and to the next audit; the real bound is `fits`
-#     where that verb reads the source.
+# "Demonstrable" is load-bearing: being a method of this engine bounds nothing, so a page
+# from a new `self.some_page(..)` that assembles its own answer must not be exempted by
+# how the call is spelled. Every engine method a paginating loop names is FOLLOWED to its
+# definition and through what it calls in turn, and counts as bounded only on reaching the
+# one page assembly this engine has — read here, with the budget stop it rests on. A verb
+# that does not reach it, or that cannot be found, is not bounded.
 #
-# "Demonstrable" is the load-bearing word, and it is why the second half is not simply
-# "the loop calls `self.something(`". Being a method of this engine bounds nothing by
-# itself: a loop taking its page from a new `self.some_page(..)` that assembles its own
-# answer would otherwise be exempted from the page bound by the accident of how it spells
-# the call. So every engine method a paginating loop calls is FOLLOWED here — to its
-# definition, and through whatever engine methods that in turn calls — and it counts as
-# bounded only when it reaches the one page assembly this engine has, which is read out of
-# the engine module together with the budget stop it rests on in `engine/fetch.rs`. A
-# method that does not reach it, or that cannot be found at all, is not bounded, and the
-# loop taking its page from it owes the page bound like any other.
-#
-# Named exemptions are what this deliberately does not have. Change a loop from one shape
-# to the other and the half it now owes is demanded of it here.
+# Named exemptions are what this deliberately does not have.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -145,27 +145,15 @@ pub(crate) fn fits(returned: usize, asked_for: u32) -> Result<(), SourceError> {
 /// with the same cursor, for ever: the command never ends, and from outside it is
 /// indistinguishable from one still working. Saying so names the defect instead.
 ///
-/// **It compares one pair and no more, and its name says so.** What it establishes is
-/// that this page's cursor is not the cursor this page was asked with — not that the walk
-/// is making progress, which no comparison of one pair can establish. A source cycling
-/// through two cursors, answering each with the other, passes this every time: every page
-/// differs from the one before it and the walk still never ends. Detecting that needs
-/// memory of more than one cursor, which is memory this engine deliberately does not keep
-/// while walking a source. Where such a cycle *is* caught, it is caught one level up —
-/// the copy's walk of a project's members pages by this engine's own token, and a cycle
-/// under a list verb shows up there as a token handed back unchanged, which is a repeat
-/// this does see.
+/// **One pair, and no more — which is why it is not called `advances`.** A source cycling
+/// through two cursors passes every time, and catching that needs memory a walk here does
+/// not keep. It is caught one level up instead, as a page token handed back unchanged to
+/// the copy's walk of a project's members.
 ///
-/// One implementation for every pagination loop in this engine — the stream walk above,
-/// the bounded reverse-edge scan in `mod.rs`, and the four walks the copy verb makes —
-/// because two spellings of one refusal are two things that drift apart, and a loop
-/// added later with neither is a loop that hangs. `scan` names what was being walked, so
-/// the message says which of them stopped.
-///
-/// Generic over what the loop pages by: a source [`Cursor`] where the loop asks a source
-/// directly, and the engine's own page token where a copy walks a verb of this engine.
-/// Handing back the token you were given is the same defect one level up, and it has the
-/// same cause — a source that did not move.
+/// One implementation for every pagination loop in this engine, because two spellings of
+/// one refusal drift apart. `scan` names what was being walked. Generic over what the
+/// loop pages by: a source [`Cursor`], or this engine's own page token where a copy walks
+/// a verb of it — the same defect one level up.
 ///
 /// # Errors
 ///

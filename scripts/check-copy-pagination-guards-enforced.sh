@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 # Watch scripts/check-copy-pagination-guards.sh refuse what it is meant to refuse.
 #
-# That guard reads a rule off each pagination loop's own text, and a text scan keeps
-# passing after it has stopped matching what it describes. Its rule has two halves and the
-# second one is the one nobody would notice going missing: a loop reading its page from a
-# verb of this engine takes its bound from that verb, so if someone later points such a
-# loop straight at a plugin the page bound becomes that loop's own again — and the guard
-# has to start demanding it. Case by case below, in a scratch tree, both halves are put to
-# it, along with the loop it must NOT demand a bound of and the second spelling it refuses.
+# A text scan keeps passing after it has stopped matching what it describes, and the half
+# of that guard's rule nobody would notice going missing is the exemption: point a loop
+# that read a verb of this engine straight at a plugin, or at a verb that bounds nothing,
+# and the page bound becomes that loop's own again. Each case below puts one such shape to
+# it in a scratch tree, along with the shapes it must still accept.
 #
-# The fixtures are written here rather than mutated out of the real engine source: what is
-# under test is the rule the guard applies, and the real file is what the guard already
-# reads on every gate. Keeping the cases synthetic is also what keeps this project reading
-# nothing outside `scripts/` — an input from a crate is an edge this project refuses.
+# The fixtures are written here rather than cut from the real engine source, which is what
+# the guard already reads on every gate — and it keeps this project reading nothing outside
+# `scripts/`, an input from a crate being an edge it refuses.
 set -euo pipefail
 
 fatal() {
