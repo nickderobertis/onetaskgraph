@@ -34,16 +34,19 @@ set -euo pipefail
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-readonly MODE="${1:?usage: scripts/live-lane-selection.sh <crate>|--nx-exclusions [base]}"
+MODE="${1-}"
+readonly MODE
 
 # The crate argument names a crate of this workspace, not a path the caller chooses. Held
 # to Cargo's own package-name grammar first, exactly as scripts/check-live-decline.sh holds
-# its own, so nothing that is not a package name can be spliced into a path below.
+# its own, so nothing that is not a package name can be spliced into a path below. An
+# absent argument is refused the same way rather than through `${1:?}`, whose message says
+# `1` where a reader needs the name of the thing that is missing.
 case "$MODE" in
   --nx-exclusions) ;;
   *[!a-z0-9_-]* | "" | -*)
-    echo "live-lane-selection: $MODE is neither --nx-exclusions nor a cargo package name (lowercase, digits, hyphens and underscores)." >&2
-    echo "live-lane-selection: pass the name of a crate of this workspace that has a live session, or --nx-exclusions." >&2
+    echo "live-lane-selection: ${MODE:-no argument} is neither --nx-exclusions nor a cargo package name (lowercase, digits, hyphens and underscores)." >&2
+    echo "live-lane-selection: usage: scripts/live-lane-selection.sh <crate>|--nx-exclusions [base] — name a crate of this workspace that has a live session." >&2
     exit 2
     ;;
 esac
@@ -76,6 +79,11 @@ BASE = os.environ["ONETASKGRAPH_LIVE_LANE_BASE"]
 
 RUN = "run"
 NOT_SELECTED = "not-selected"
+
+# Cargo's package-name grammar, the same one the shell above holds the argument to. A name
+# read out of a project.json is data from a file rather than a constant, and it is spliced
+# into `--exclude=<names>`, where a comma or a space would name Nx a different set.
+PACKAGE_NAME = re.compile(r"^[a-z0-9_-]+$")
 
 # The two paths at the repository root the contract accepts. Any other lockfile —
 # `bun.lock`, `uv.lock` — is outside the set and answers `run`, and so is any `Cargo.toml`
@@ -144,8 +152,11 @@ def live_crates():
             return None
         if any(isinstance(tag, str) and tag.startswith("live:") for tag in tags):
             name = project.get("name")
-            if not isinstance(name, str) or not name:
-                say(f"{path.as_posix()} is tagged `live:` but declares no name.")
+            if not isinstance(name, str) or not PACKAGE_NAME.match(name):
+                say(
+                    f"{path.as_posix()} is tagged `live:` but its name is not a cargo "
+                    f"package name (lowercase, digits, hyphens and underscores): {name!r}."
+                )
                 return None
             names.append(name)
     return sorted(names)
@@ -260,7 +271,14 @@ def workspace_members():
                 if (child / "Cargo.toml").is_file():
                     members.add(child.as_posix())
         elif "*" not in pattern:
-            members.add(Path(pattern).as_posix())
+            member = Path(pattern)
+            if not (member / "Cargo.toml").is_file():
+                raise Unanswerable(
+                    f"{WORKSPACE_MANIFEST} names {member.as_posix()} as a member, but "
+                    "there is no Cargo.toml there, so which files belong to a crate is "
+                    "unknown"
+                )
+            members.add(member.as_posix())
         else:
             raise Unanswerable(
                 f"{WORKSPACE_MANIFEST} names members as {pattern!r}, a pattern this "
@@ -459,6 +477,7 @@ def decide(crate, base, changes):
     )
 
 
+# llmlint: ignore-block[tool_output_is_signal] stdout here is the answer a caller reads, as the `schema` recipe's stdout is the schema its generators read; what these two add is one line of stderr each, and it is the signal rather than chatter. A lane that does not run has to say so — distinctly from a credential that went missing, which is this decision's contract — and a fail-open has to say what it could not answer, or a lane that quietly spends the budget looks exactly like one that was asked to.
 def report_not_selected(crate, base, reason):
     """Say, in the lane's own words, that it was not selected — and that it is not a skip.
 
@@ -483,12 +502,17 @@ def answer(crate):
         changes = changed_files(resolved)
         verdict, reason = decide(crate, resolved, changes)
     except Unanswerable as question:
-        say(f"cannot tell whether the {crate} live lane is reachable: {question}.")
-        say("answering `run`, because this decision fails toward spending the budget.")
+        say(
+            f"cannot tell whether the {crate} live lane is reachable: {question} — "
+            "answering `run`, because this decision fails toward spending the budget."
+        )
         return RUN
     if verdict == NOT_SELECTED:
         report_not_selected(crate, base, reason)
     return verdict
+
+
+# llmlint: ignore-end[tool_output_is_signal]
 
 
 if MODE == "--nx-exclusions":

@@ -73,6 +73,10 @@ scratch="$(mktemp -d)" || fatal \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 trap 'rm -rf "$scratch"' EXIT
 
+# The word a caller reads as "do not run this lane". Spelled here so the cases below
+# compare against what scripts/live-lane-selection.sh actually prints.
+readonly NOT_SELECTED_WORD="not-selected"
+
 readonly REPO="$scratch/repo"
 readonly NX_LOG="$scratch/nx-invocations"
 
@@ -433,6 +437,78 @@ for unanswerable in "no-such-base-ref-for-this-check" "$BASE"; do
   fi
 done
 
+# An argument that is neither mode is refused rather than guessed at: it is spliced into a
+# path and, in the other mode, into Nx's own arguments. A refusal answers nothing at all,
+# which a caller reads as `run` for the same reason everything else here does.
+for refused in "" "crates/../etc" "--no-such-mode" "Onetaskgraph"; do
+  answer="$(cd "$REPO" && bash scripts/live-lane-selection.sh "$refused" 2>"$scratch/decide-stderr")" \
+    && fail "the decision accepted ${refused:-an empty argument} instead of refusing it, and that argument is spliced into a path and into Nx's arguments"
+  case "$answer" in
+    *"$NOT_SELECTED_WORD"*)
+      fail "the decision refused ${refused:-an empty argument} and still printed something a caller reads as a refusal to run the lane: $answer"
+      ;;
+  esac
+  if ! grep -q "cargo package name" "$scratch/decide-stderr"; then
+    fail "the decision refused ${refused:-an empty argument} without saying what to pass instead: $(cat "$scratch/decide-stderr")"
+  fi
+done
+
+# The two things it reads out of this repository's own files rather than off the command
+# line: which crates have a live lane, and which directories are workspace crates. Both are
+# data, both are spliced into something — Nx's `--exclude` and a path — and both answer
+# toward running when they cannot be read, which is the only direction a wrong answer here
+# is recoverable in.
+
+fixture_version_only
+plugin_project="$REPO/crates/$PLUGIN/project.json"
+python3 - "$plugin_project" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    project = json.load(handle)
+project["name"] = "onetaskgraph-github-projects,onetaskgraph-linear"
+with open(path, "w", encoding="utf-8", newline="\n") as handle:
+    json.dump(project, handle, indent=2)
+PY
+exclusions="$(cd "$REPO" && bash scripts/live-lane-selection.sh --nx-exclusions "$BASE" 2>"$scratch/decide-stderr")" \
+  || exclusions="<the decision could not be run>"
+if [ -n "$exclusions" ]; then
+  fail "a live crate whose declared name is not a package name still reached Nx's arguments as '$exclusions', where a comma names a different set of projects"
+fi
+if ! grep -q "cargo package name" "$scratch/decide-stderr"; then
+  fail "the decision read a live crate's name that is not a package name without saying so: $(cat "$scratch/decide-stderr")"
+fi
+reset_fixture
+
+fixture_version_only
+python3 - "$REPO/Cargo.toml" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    text = handle.read()
+# A member named outright rather than through a glob, and pointing at a directory that is
+# not a crate: `scripts/` is a project of this workspace and has no Cargo.toml at all.
+text = re.sub(r'(?m)^members = \[(.*)\]$', r'members = [\1, "scripts"]', text, count=1)
+with open(path, "w", encoding="utf-8", newline="\n") as handle:
+    handle.write(text)
+PY
+expect_answer "a workspace member that is not a crate" run
+if ! grep -q "no Cargo.toml there" "$scratch/decide-stderr"; then
+  fail "the decision accepted a workspace member with no manifest, so which files belong to a crate was assumed rather than read: $(cat "$scratch/decide-stderr")"
+fi
+reset_fixture
+
+# No argument at all, refused the same way and naming what is missing rather than `$1`.
+if (cd "$REPO" && bash scripts/live-lane-selection.sh >"$scratch/decide-stdout" 2>"$scratch/decide-stderr"); then
+  fail "the decision ran with no argument at all, so it answered about a crate nobody named"
+elif ! grep -q "no argument" "$scratch/decide-stderr" || ! grep -q "usage" "$scratch/decide-stderr"; then
+  fail "the decision refused an invocation with no argument without naming what was missing and how to invoke it: $(cat "$scratch/decide-stderr")"
+fi
+
 # 4. Every path that can open a live session consults the decision.
 #
 # Enumerated from the workflow, the hook and the justfile rather than listed here: a path
@@ -729,6 +805,174 @@ done
 fixture_plugin_source
 drive gate-generated "$BASE"
 expect_unconditional_targets
+reset_fixture
+
+# 6. The bases those paths derive.
+#
+# Case 5 hands each path a base; this is where that base comes from. Each derivation is
+# shell only its own lane runs, so the ways it can be wrong — a branch the remote has never
+# seen, a push of two refs, a ref being deleted, a predecessor this checkout does not have
+# — are exactly the ways nothing else would notice. An implicit base is how affected
+# selection quietly starts comparing against the wrong commit, and on the default branch it
+# compares against this very commit and selects nothing at all.
+#
+# The tree is two commits ahead of $BASE throughout, so the four answers a derivation can
+# give — this commit, its predecessor, $BASE and the merge base with the default branch —
+# are four different shas and no case can pass by returning the wrong one.
+
+fixture_plugin_source
+
+readonly ZERO_SHA="0000000000000000000000000000000000000000"
+readonly UNKNOWN_SHA="0123456789abcdef0123456789abcdef01234567"
+HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
+# What `HEAD~1` names here, which is the fixture's own first commit rather than $BASE: the
+# workflow's last resort is the commit before this one, whatever that is.
+PREDECESSOR="$(git -C "$REPO" rev-parse HEAD~1)"
+readonly HEAD_SHA PREDECESSOR
+
+# What the hook falls back to when the records do not answer: the merge base with the very
+# ref Nx would have compared against. Left empty when this clone has no such ref, and the
+# expectations below then hold everything about the answer except its exact value.
+DEFAULT_BASE="$(cd "$REPO" && python3 -c '
+import json
+import sys
+
+try:
+    base = json.load(open("nx.json")).get("defaultBase")
+except (OSError, ValueError):
+    raise SystemExit(0)
+if isinstance(base, str):
+    sys.stdout.write(base)
+')"
+FALLBACK=""
+if [ -n "$DEFAULT_BASE" ] && git -C "$REPO" rev-parse --verify --quiet "$DEFAULT_BASE^{commit}" >/dev/null 2>&1; then
+  FALLBACK="$(git -C "$REPO" merge-base "$DEFAULT_BASE" HEAD)"
+fi
+readonly DEFAULT_BASE FALLBACK
+
+expect_pre_push_base() {
+  local case_name="$1" records="$2" expected="$3" derived
+  derived="$(printf '%s' "$records" | (cd "$REPO" && bash scripts/pre-push-base.sh))" \
+    || derived="<the derivation could not be run>"
+  if [ "$expected" != "fallback" ]; then
+    [ "$derived" = "$expected" ] || fail "the pre-push base for $case_name came back as '$derived', expected $expected"
+    return
+  fi
+  if [ "$derived" = "$ZERO_SHA" ] || [ "$derived" = "$UNKNOWN_SHA" ] || [ "$derived" = "$HEAD_SHA" ]; then
+    fail "the pre-push base for $case_name came back as '$derived', which is not a commit the remote already has — the gate would compare against the wrong one"
+    return
+  fi
+  if [ -n "$derived" ] && ! git -C "$REPO" rev-parse --verify --quiet "$derived^{commit}" >/dev/null 2>&1; then
+    fail "the pre-push base for $case_name came back as '$derived', which this repository cannot resolve, so Nx would refuse it"
+    return
+  fi
+  if [ -n "$FALLBACK" ] && [ "$derived" != "$FALLBACK" ]; then
+    fail "the pre-push base for $case_name came back as '$derived', expected the merge base with $DEFAULT_BASE ($FALLBACK)"
+  fi
+}
+
+expect_pre_push_base "one ref the remote already has" \
+  "refs/heads/checked $HEAD_SHA refs/heads/checked $BASE
+" "$BASE"
+expect_pre_push_base "a branch the remote has never seen" \
+  "refs/heads/checked $HEAD_SHA refs/heads/checked $ZERO_SHA
+" fallback
+expect_pre_push_base "a predecessor this checkout does not have" \
+  "refs/heads/checked $HEAD_SHA refs/heads/checked $UNKNOWN_SHA
+" fallback
+expect_pre_push_base "two refs in one push" \
+  "refs/heads/one $HEAD_SHA refs/heads/one $BASE
+refs/heads/two $HEAD_SHA refs/heads/two $BASE
+" fallback
+expect_pre_push_base "a ref being deleted, which pushes nothing to check" \
+  "refs/heads/gone $ZERO_SHA refs/heads/gone $BASE
+" fallback
+expect_pre_push_base "no records at all" "" fallback
+
+# The default branch's own derivation is shell in the workflow, and the workflow is the only
+# place it lives — so it is read out of the step that declares it and run, rather than
+# restated here where it could drift from what CI does.
+if ! (cd "$REPO" && python3 - <<'PY'
+import re
+import sys
+from pathlib import Path
+
+workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+steps = re.split(r"(?m)^      - (?=name:|uses:)", workflow)
+declaring = [step for step in steps if re.search(r"(?m)^\s*id:\s*base\s*$", step)]
+if len(declaring) != 1:
+    print(
+        "check-live-lane-selection: expected exactly one workflow step with `id: base`, "
+        f"found {len(declaring)}.",
+        file=sys.stderr,
+    )
+    print(
+        "check-live-lane-selection: next: give the base derivation one step with that id, "
+        "or point this case at where it moved to.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+body = re.search(r"(?ms)^\s*run:\s*\|\s*\n(.*)\Z", declaring[0])
+if not body:
+    print(
+        "check-live-lane-selection: the workflow step with `id: base` has no block `run:` "
+        "body, so there is nothing to drive.",
+        file=sys.stderr,
+    )
+    print(
+        "check-live-lane-selection: next: keep that derivation as a `run: |` block, which "
+        "is what makes it drivable outside CI.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+lines = body.group(1).splitlines()
+margin = min((len(line) - len(line.lstrip()) for line in lines if line.strip()), default=0)
+sys.stdout.reconfigure(newline="\n")
+print("\n".join(line[margin:] for line in lines))
+PY
+) > "$scratch/base-step.sh" 2>"$scratch/base-step-error"; then
+  fail "the workflow's base derivation could not be read: $(cat "$scratch/base-step-error")"
+else
+  expect_workflow_base() {
+    local case_name="$1" where="$2" base_sha="$3" before_sha="$4" expected="$5" derived
+    : > "$scratch/github-output"
+    if ! (cd "$where" && GITHUB_OUTPUT="$scratch/github-output" BASE_REF=main \
+      BASE_SHA="$base_sha" BEFORE_SHA="$before_sha" bash "$scratch/base-step.sh") \
+      >"$scratch/base-step-output" 2>&1; then
+      fail "the workflow's base derivation failed for $case_name, so the lane would run with no base at all: $(cat "$scratch/base-step-output")"
+      return
+    fi
+    derived="$(sed -n 's/^base=//p' "$scratch/github-output" | tr -d '\r')"
+    if [ "$expected" = "none" ]; then
+      [ -z "$derived" ] || fail "the workflow derived '$derived' for $case_name, where there is no commit to compare against and Nx's own defaultBase is what should apply"
+      if ! grep -q "No base could be derived" "$scratch/base-step-output"; then
+        fail "the workflow derived no base for $case_name and said nothing about it, so a lane comparing against a default reads as one comparing against a commit: $(cat "$scratch/base-step-output")"
+      fi
+      return
+    fi
+    [ "$derived" = "$expected" ] || fail "the workflow derived '$derived' for $case_name, expected $expected"
+  }
+
+  expect_workflow_base "a change request" "$REPO" "$BASE" "" "$BASE"
+  expect_workflow_base "a push to the default branch" "$REPO" "" "$BASE" "$BASE"
+  expect_workflow_base "a push the remote has no predecessor for" "$REPO" "" "$ZERO_SHA" "$PREDECESSOR"
+  expect_workflow_base "a predecessor this checkout does not have" "$REPO" "" "$UNKNOWN_SHA" "$PREDECESSOR"
+
+  # A repository with one commit, where there is no predecessor of any kind: the lane must
+  # say so rather than name a commit, because Nx's own defaultBase is what then applies.
+  single="$scratch/single"
+  if git init --quiet "$single" 2>/dev/null \
+    && git -C "$single" config user.email "check-live-lane-selection@invalid" \
+    && git -C "$single" config user.name "check-live-lane-selection" \
+    && : > "$single/only" \
+    && git -C "$single" add only \
+    && git -C "$single" commit --quiet -m "the only commit"; then
+    expect_workflow_base "a push with no predecessor at all" "$single" "" "" none
+  else
+    fail "could not build the one-commit repository the no-predecessor case needs"
+  fi
+fi
+
 reset_fixture
 
 # 1. Real Nx over real repository states.
