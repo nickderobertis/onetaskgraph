@@ -21,6 +21,7 @@
 
 use std::io::{Read, Write as _};
 use std::net::TcpListener;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -109,13 +110,18 @@ static RUNS: LazyLock<Runs> = LazyLock::new(|| {
 /// A run of this machine that has ENDED: really registered, and its registration really
 /// given up, which is the state the kernel leaves behind when a process dies.
 fn ended_run(offset: u32) -> Run {
-    let registration = Registration::take(&RUNS.registry, 40_000 + offset)
+    let registration = Registration::take(&RUNS.registry, process(40_000 + offset))
         .expect("a run that this check then ends");
     let run = registration.run();
     // Given up here, so the lock is free — the same thing the kernel does for a process that
     // has died, and the only state that authorises a removal.
     drop(registration);
     run
+}
+
+/// A run's process id, which no operating system numbers zero.
+fn process(number: u32) -> NonZeroU32 {
+    NonZeroU32::new(number).expect("a process id this check names is never zero")
 }
 
 /// The sweep this run makes at `now`, decided against the registry above.
@@ -142,7 +148,7 @@ impl LiveRunBeside {
         )
         .args([
             "--exact",
-            "a_re_execution_of_this_binary_is_the_live_run_beside_a_sweep",
+            "a_run_of_this_binary_is_registered_and_the_registry_says_it_is_live",
         ])
         .env(CHILD_VARIABLE, &RUNS.directory)
         .env(
@@ -157,13 +163,13 @@ impl LiveRunBeside {
             RUNS.mine
                 .host()
                 .expect("the registry every drive here decides against"),
-            child.id(),
+            process(child.id()),
         );
         // Waited for by a file that child writes AFTER it has registered, rather than by
         // asking the registry: asking means taking the very lock the child is trying to
         // take, and losing that race would leave it unable to say who it is.
         let started = Instant::now();
-        while !ready_marker(child.id()).exists() {
+        while !ready_marker(process(child.id())).exists() {
             assert!(
                 started.elapsed() < PATIENCE,
                 "the live run beside this sweep never registered"
@@ -179,7 +185,11 @@ impl LiveRunBeside {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let started = Instant::now();
-        while !RUNS.registry.finished_runs().contains(&self.child.id()) {
+        while !RUNS
+            .registry
+            .finished_runs()
+            .contains(&process(self.child.id()))
+        {
             assert!(
                 started.elapsed() < PATIENCE,
                 "the kernel never released the ended run's registration"
@@ -196,20 +206,30 @@ impl Drop for LiveRunBeside {
     }
 }
 
-/// The other half of [`LiveRunBeside`]: what a re-execution of this binary does.
+/// A run of this binary registers itself, and the registry it joined says it is live.
 ///
-/// An ordinary run of this target reaches the early return and asserts nothing, because
-/// there is no sweep beside it to be the live run for.
+/// **That is the assertion in both of this test's roles, and it is the whole premise of
+/// every drive above.** Ordinarily it is a check of its own: what a sweep decides on is the
+/// registration a live run holds, so a run that did not register — or that registered and
+/// read back as over — would make every one of those drives prove nothing.
+///
+/// [`LiveRunBeside`] then re-executes this binary at exactly this test with the registry to
+/// join named, which is how a sweep is driven beside a run in another process. In that role
+/// it makes the same assertion, says it has registered, and stays alive to be swept at.
 #[test]
-fn a_re_execution_of_this_binary_is_the_live_run_beside_a_sweep() {
-    let Some(directory) = std::env::var_os(CHILD_VARIABLE) else {
-        return;
-    };
+fn a_run_of_this_binary_is_registered_and_the_registry_says_it_is_live() {
     let run = Run::current();
     assert!(
         run.host().is_some(),
         "the registry this run was pointed at could not vouch for it"
     );
+    assert!(
+        !Registry::shared().finished_runs().contains(&run.process()),
+        "the registry reported a run that is running as one that has ended"
+    );
+    let Some(directory) = std::env::var_os(CHILD_VARIABLE) else {
+        return;
+    };
     std::fs::write(
         PathBuf::from(directory).join(format!("ready-{}", run.process())),
         b"",
@@ -220,7 +240,7 @@ fn a_re_execution_of_this_binary_is_the_live_run_beside_a_sweep() {
 }
 
 /// The file the live run beside a sweep writes once it has registered.
-fn ready_marker(process: u32) -> PathBuf {
+fn ready_marker(process: NonZeroU32) -> PathBuf {
     RUNS.directory.join(format!("ready-{process}"))
 }
 

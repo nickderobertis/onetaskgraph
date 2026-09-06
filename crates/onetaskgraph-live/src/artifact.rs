@@ -131,13 +131,13 @@ static CURRENT: LazyLock<Run> = LazyLock::new(|| SHARED.enrol());
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Run {
     host: Option<NonZeroU32>,
-    process: u32,
+    process: NonZeroU32,
 }
 
 impl Run {
     /// The run `process`, on the machine whose registry identity is `host`.
     #[must_use]
-    pub fn vouched(host: NonZeroU32, process: u32) -> Self {
+    pub fn vouched(host: NonZeroU32, process: NonZeroU32) -> Self {
         Self {
             host: Some(host),
             process,
@@ -146,7 +146,7 @@ impl Run {
 
     /// The run `process`, which no registry can answer for.
     #[must_use]
-    pub fn unvouched(process: u32) -> Self {
+    pub fn unvouched(process: NonZeroU32) -> Self {
         Self {
             host: None,
             process,
@@ -171,20 +171,21 @@ impl Run {
 
     /// The process this run is.
     #[must_use]
-    pub fn process(self) -> u32 {
+    pub fn process(self) -> NonZeroU32 {
         self.process
     }
 
     /// The run `spelled` names, or `None` when it names no run.
     ///
     /// Digits only, on both halves, and both halves non-empty. A host of `0` is a run no
-    /// registry vouches for rather than a run on machine zero.
+    /// registry vouches for rather than a run on machine zero; a *process* of zero is no run
+    /// at all, because no operating system numbers a running process zero.
     #[must_use]
     pub fn read(spelled: &str) -> Option<Self> {
         let (host, process) = spelled.split_once('-')?;
         Some(Self {
             host: NonZeroU32::new(number(host)?),
-            process: number(process)?,
+            process: NonZeroU32::new(number(process)?)?,
         })
     }
 }
@@ -246,7 +247,7 @@ impl Stamp {
         Some(Self {
             run: Run {
                 host: NonZeroU32::new(number(host)?),
-                process: number(process)?,
+                process: NonZeroU32::new(number(process)?)?,
             },
             micros: number(micros)?,
         })
@@ -345,7 +346,7 @@ impl Registry {
     /// returns the same run rather than a second registration.
     #[must_use]
     pub fn enrol(&self) -> Run {
-        let process = std::process::id();
+        let process = this_process();
         let path = self.registration_path(process);
         let mut held = HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(host) = self.host
@@ -369,7 +370,7 @@ impl Registry {
 
     /// Where the run `process` registers itself in this registry.
     #[must_use]
-    pub fn registration_path(&self, process: u32) -> PathBuf {
+    pub fn registration_path(&self, process: NonZeroU32) -> PathBuf {
         self.directory
             .join(format!("{REGISTRATION_PREFIX}{process}"))
     }
@@ -386,7 +387,7 @@ impl Registry {
     /// refuse a run that was registering right then — which would leave that run unable to
     /// say who it is. Two sweeps asking at once do not refuse each other either.
     #[must_use]
-    pub fn finished_runs(&self) -> Vec<u32> {
+    pub fn finished_runs(&self) -> Vec<NonZeroU32> {
         let Ok(entries) = fs::read_dir(&self.directory) else {
             return Vec::new();
         };
@@ -397,6 +398,7 @@ impl Registry {
                 .to_str()
                 .and_then(|name| name.strip_prefix(REGISTRATION_PREFIX))
                 .and_then(number::<u32>)
+                .and_then(NonZeroU32::new)
             else {
                 continue;
             };
@@ -448,7 +450,7 @@ impl Registration {
     /// lock is already held — including by this very process, which is what a second
     /// registration of one run is.
     #[must_use]
-    pub fn take(registry: &Registry, process: u32) -> Option<Self> {
+    pub fn take(registry: &Registry, process: NonZeroU32) -> Option<Self> {
         let host = registry.host?;
         let file = OpenOptions::new()
             .read(true)
@@ -490,7 +492,7 @@ pub struct Sweep {
     window: Duration,
     /// The runs of this machine the registry says are over — the only ones this sweep may
     /// remove anything of.
-    finished: Vec<u32>,
+    finished: Vec<NonZeroU32>,
 }
 
 impl Sweep {
@@ -585,6 +587,15 @@ fn read_host(path: &Path) -> Option<NonZeroU32> {
     NonZeroU32::new(number(fs::read_to_string(path).ok()?.trim())?)
 }
 
+/// This process, as a run identity.
+///
+/// `std::process::id` is a `u32` and a run is not: no operating system numbers a running
+/// process zero — it is the scheduler on Unix and the idle process on Windows — so a `Run`
+/// carrying one would be a state nothing could ever be in.
+fn this_process() -> NonZeroU32 {
+    NonZeroU32::new(std::process::id()).expect("no operating system numbers a running process zero")
+}
+
 /// An identity for a machine that has none yet.
 ///
 /// It has to differ between machines and it never has to be secret, so it is a hash of the
@@ -619,6 +630,11 @@ mod tests {
         NonZeroU32::new(number).expect("a test host identity is never zero")
     }
 
+    /// The same for a run's process id, which no operating system numbers zero either.
+    fn process(number: u32) -> NonZeroU32 {
+        NonZeroU32::new(number).expect("a test process id is never zero")
+    }
+
     /// A registry directory of this test's own, so what it holds is what this test put there.
     fn scratch(what: &str) -> PathBuf {
         static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -637,20 +653,23 @@ mod tests {
 
     #[test]
     fn a_stamp_reads_back_exactly_what_was_written() {
-        let stamp = Stamp::new(Run::vouched(host(41), 2533), NOW);
+        let stamp = Stamp::new(Run::vouched(host(41), process(2533)), NOW);
         assert_eq!(stamp.to_string(), format!("41-2533-{NOW}"));
         assert_eq!(Stamp::read(&stamp.to_string()), Some(stamp));
-        assert_eq!(stamp.run(), Run::vouched(host(41), 2533));
+        assert_eq!(stamp.run(), Run::vouched(host(41), process(2533)));
         assert_eq!(stamp.run().host(), Some(host(41)));
-        assert_eq!(stamp.run().process(), 2533);
+        assert_eq!(stamp.run().process(), process(2533));
         assert_eq!(stamp.micros(), NOW);
-        assert_eq!(Run::read("41-2533"), Some(Run::vouched(host(41), 2533)));
-        assert_eq!(Run::vouched(host(41), 2533).to_string(), "41-2533");
+        assert_eq!(
+            Run::read("41-2533"),
+            Some(Run::vouched(host(41), process(2533)))
+        );
+        assert_eq!(Run::vouched(host(41), process(2533)).to_string(), "41-2533");
     }
 
     #[test]
     fn a_run_no_registry_vouches_for_reads_and_writes_as_one_rather_than_as_machine_zero() {
-        let unvouched = Run::unvouched(2533);
+        let unvouched = Run::unvouched(process(2533));
         assert_eq!(unvouched.host(), None);
         assert_eq!(unvouched.to_string(), "0-2533");
         assert_eq!(Run::read("0-2533"), Some(unvouched));
@@ -692,7 +711,7 @@ mod tests {
 
     #[test]
     fn a_stamp_written_now_is_one_this_grammar_can_read_back() {
-        let stamp = Stamp::new(Run::unvouched(std::process::id()), now_micros());
+        let stamp = Stamp::new(Run::unvouched(process(std::process::id())), now_micros());
         assert_eq!(Stamp::read(&stamp.to_string()), Some(stamp));
         assert!(
             stamp.micros() > NOW,
@@ -728,13 +747,21 @@ mod tests {
         fs::write(&occupied, b"not a directory").expect("a file in the way");
         let registry = Registry::at(&occupied.join("registry"));
         assert_eq!(registry.host(), None);
-        assert_eq!(registry.enrol(), Run::unvouched(std::process::id()));
-        assert!(Registration::take(&registry, 4242).is_none());
-        let sweep = registry.sweep(Run::vouched(host(7), std::process::id()), NOW, WINDOW);
-        assert!(!sweep.is_orphan(Stamp::new(Run::vouched(host(7), 4242), 0)));
+        assert_eq!(
+            registry.enrol(),
+            Run::unvouched(process(std::process::id()))
+        );
+        assert!(Registration::take(&registry, process(4242)).is_none());
+        let sweep = registry.sweep(
+            Run::vouched(host(7), process(std::process::id())),
+            NOW,
+            WINDOW,
+        );
+        assert!(!sweep.is_orphan(Stamp::new(Run::vouched(host(7), process(4242)), 0)));
         // And a run nothing vouches for is nobody's orphan either, sweeping or swept.
         assert!(
-            !Sweep::of(Run::unvouched(2533), NOW).is_orphan(Stamp::new(Run::unvouched(4242), 0))
+            !Sweep::of(Run::unvouched(process(2533)), NOW)
+                .is_orphan(Stamp::new(Run::unvouched(process(4242)), 0))
         );
         let _ = fs::remove_file(&occupied);
     }
@@ -743,27 +770,28 @@ mod tests {
     fn a_run_is_over_exactly_when_its_registration_can_be_locked_again() {
         let directory = scratch("liveness");
         let registry = Registry::at(&directory);
-        let live = Registration::take(&registry, 4242).expect("a registration this run can take");
+        let live =
+            Registration::take(&registry, process(4242)).expect("a registration this run can take");
         assert_eq!(
             live.run(),
-            Run::vouched(registry.host().expect("an identity"), 4242)
+            Run::vouched(registry.host().expect("an identity"), process(4242))
         );
         assert!(
-            !registry.finished_runs().contains(&4242),
+            !registry.finished_runs().contains(&process(4242)),
             "a run holding its registration is not over"
         );
         // A second registration of the same run is refused: the lock is already held, and
         // that is true whichever process holds it.
-        assert!(Registration::take(&registry, 4242).is_none());
+        assert!(Registration::take(&registry, process(4242)).is_none());
         drop(live);
         assert!(
-            registry.finished_runs().contains(&4242),
+            registry.finished_runs().contains(&process(4242)),
             "a registration nothing holds is a run the kernel says has ended"
         );
         // Whatever else is in the directory is not a registration and is never read as one.
         fs::write(directory.join("onetaskgraph-live-run-notanumber"), b"").expect("a stray file");
         fs::write(directory.join("something-else"), b"").expect("another stray file");
-        assert_eq!(registry.finished_runs(), vec![4242]);
+        assert_eq!(registry.finished_runs(), vec![process(4242)]);
         let _ = fs::remove_dir_all(&directory);
     }
 
@@ -774,11 +802,16 @@ mod tests {
         let run = registry.enrol();
         assert_eq!(
             run,
-            Run::vouched(registry.host().expect("an identity"), std::process::id())
+            Run::vouched(
+                registry.host().expect("an identity"),
+                process(std::process::id())
+            )
         );
         assert_eq!(registry.enrol(), run);
         assert!(
-            !registry.finished_runs().contains(&std::process::id()),
+            !registry
+                .finished_runs()
+                .contains(&process(std::process::id())),
             "this process is registered here and is not over"
         );
         // Deliberately not removed: the registration is held for the life of the process, so
@@ -794,7 +827,7 @@ mod tests {
         let directory = scratch("live-run");
         let registry = Registry::at(&directory);
         let mine = registry.enrol();
-        let theirs = Registration::take(&registry, 4242).expect("a second live run");
+        let theirs = Registration::take(&registry, process(4242)).expect("a second live run");
         let sweep = registry.sweep(mine, NOW, WINDOW);
         for age in [0, micros(WINDOW), micros(WINDOW) * 100_000] {
             assert!(
@@ -817,7 +850,8 @@ mod tests {
         let registry = Registry::at(&directory);
         let mine = registry.enrol();
         let ended = {
-            let registration = Registration::take(&registry, 4242).expect("a run that will end");
+            let registration =
+                Registration::take(&registry, process(4242)).expect("a run that will end");
             registration.run()
         };
         let stamp = |age: u64| Stamp::new(ended, NOW - age);
@@ -831,7 +865,7 @@ mod tests {
         assert!(!sweep.is_orphan(Stamp::new(ended, NOW + micros(WINDOW) * 100)));
         // A run this registry never heard of is no evidence at all, ended or not.
         assert!(!sweep.is_orphan(Stamp::new(
-            Run::vouched(registry.host().expect("an identity"), 4243),
+            Run::vouched(registry.host().expect("an identity"), process(4243)),
             NOW - micros(WINDOW) - 1
         )));
         let _ = fs::remove_dir_all(&directory);
@@ -842,16 +876,16 @@ mod tests {
         let directory = scratch("foreign-host");
         let registry = Registry::at(&directory);
         let mine = registry.enrol();
-        drop(Registration::take(&registry, 4242).expect("a run that has ended here"));
+        drop(Registration::take(&registry, process(4242)).expect("a run that has ended here"));
         let sweep = registry.sweep(mine, NOW, WINDOW);
         let stale = NOW - micros(WINDOW) - 1;
         let here = registry.host().expect("an identity");
         let elsewhere = host(here.get().wrapping_add(1).max(1));
         assert!(
-            !sweep.is_orphan(Stamp::new(Run::vouched(elsewhere, 4242), stale)),
+            !sweep.is_orphan(Stamp::new(Run::vouched(elsewhere, process(4242)), stale)),
             "a process id of another machine was looked up in this machine's registry"
         );
-        assert!(!sweep.is_orphan(Stamp::new(Run::unvouched(4242), stale)));
+        assert!(!sweep.is_orphan(Stamp::new(Run::unvouched(process(4242)), stale)));
         let _ = fs::remove_dir_all(&directory);
     }
 
@@ -861,7 +895,8 @@ mod tests {
         let registry = Registry::at(&directory);
         let mine = registry.enrol();
         let ended = {
-            let registration = Registration::take(&registry, 4242).expect("a run that has ended");
+            let registration =
+                Registration::take(&registry, process(4242)).expect("a run that has ended");
             registration.run()
         };
         let sweep = registry.sweep(mine, NOW, WINDOW);
@@ -893,7 +928,8 @@ mod tests {
                 "a machine identity has to fit in the nine digits WIDEST_STAMP allows it"
             );
         }
-        let widest = Stamp::new(Run::vouched(host(999_999_999), u32::MAX), u64::MAX).to_string();
+        let widest =
+            Stamp::new(Run::vouched(host(999_999_999), process(u32::MAX)), u64::MAX).to_string();
         assert_eq!(widest.len(), WIDEST_STAMP);
         assert_eq!(
             Stamp::read(&widest).map(|read| read.to_string()),
