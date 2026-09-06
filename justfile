@@ -32,18 +32,12 @@ bootstrap:
 # Everyday gate: format, lint, types, tests and coverage over the affected projects.
 check: format-check lint typecheck test coverage distribution-check distribution-test
 
-# This is what .githooks/pre-push runs and what the default branch runs on every push.
-# It SELECTS rather than sweeps, and that reverses an earlier decision: a sweep runs the
-# `test` target of every plugin whatever the diff touched, and two of those targets reach
-# a real API. One live GitHub Projects session costs about a fifth of the account's hourly
-# GraphQL allowance, so a sweep on a release commit — which reaches no plugin behaviour at
-# all — is how the default branch went red with the budget exhausted outright. Both
-# callers derive a base explicitly and export NX_BASE, exactly as the pull-request lane
-# does; scripts/pre-push-base.sh is the hook's half.
-#
-# Nothing goes unchecked by the change: `deny`, `distribution-check` and
-# `distribution-test` sit outside affected selection on purpose and are the recipe's own
-# dependencies, so they run on every gate as they always have.
+# What .githooks/pre-push and the default branch run. It SELECTS rather than sweeps, which
+# reverses an earlier decision: a sweep ran every plugin's live tests whatever the diff
+# touched, and that is how a release commit exhausted the account's GraphQL budget. Both
+# callers export NX_BASE, as the pull-request lane does; scripts/pre-push-base.sh is the
+# hook's half. `deny` and the two distribution stages sit outside affected selection and
+# are dependencies here, so nothing the sweep checked goes unchecked. AGENTS.md records why.
 
 # Full quality gate over the affected projects, plus the supply chain. Fails on any issue.
 gate: deny check
@@ -69,13 +63,10 @@ distribution-check:
 distribution-test:
     @{{nx}} run scripts:distribution-test
 
-# The one place the live-lane decision is consulted, which is why every path that can open
-# a live session reaches the API through this recipe: the change-request lane runs `just
-# check`, the default branch and .githooks/pre-push run `just gate`, and both of those have
-# this as a phase. scripts/live-lane-selection.sh answers whether the diff against NX_BASE
-# can reach each live plugin's behaviour and prints the `--exclude` for the ones it cannot,
-# saying so in the lane's own words; a crash or an empty answer excludes nothing, so the
-# lane runs. scripts/check-live-lane-selection.sh drives all of that.
+# The one place the live-lane decision is consulted, so every path that can open a live
+# session reaches the API through this recipe. scripts/live-lane-selection.sh prints the
+# `--exclude` for each live plugin the diff against NX_BASE cannot reach; an empty or
+# failed answer excludes nothing, so the lane runs.
 
 # llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] `affected` is the edge these suites sit behind: a plugin's live tests run only when that plugin's own diff selects it, and the exclusion below is the second half of that edge — a version bump selects every project through Cargo.lock and reaches no plugin behaviour.
 # Tests only, for the affected projects.

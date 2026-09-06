@@ -2,28 +2,17 @@
 # Prove the live-lane selection decides the same way whatever line ending the host's python
 # writes.
 #
-# The decision and the check that drives it both answer through python, and python opens
-# stdout in text mode — so on Windows every "\n" it prints leaves as "\r\n" while on Linux
-# and macOS it does not. A command substitution strips the newline and leaves the carriage
-# return, and the difference is not cosmetic on either side of this seam:
+# Both answer through python, which opens stdout in text mode — so on the Windows runner
+# every "\n" they print leaves as "\r\n" while on Linux and macOS it does not, and a
+# command substitution keeps the carriage return. AGENTS.md records what that cost. Either
+# side of this seam is a real defect: a caller reading `not-selected\r` runs the very lane
+# the decision refused, and this check's own captured version rides into a fixture as
+# `version = "0.2.24<CR>"`, which python reads back as two lines.
 #
-#   * `scripts/live-lane-selection.sh` answers one word. A caller reading `not-selected\r`
-#     does not match `not-selected` and runs the very lane the decision refused, which is
-#     the live GraphQL budget this whole arrangement exists to protect. In
-#     `--nx-exclusions` mode the same carriage return rides into `--exclude=<crate>\r`,
-#     naming Nx a project it has never heard of.
-#   * `scripts/check-live-lane-selection.sh` captures a bumped version and the names of the
-#     targets held outside affected selection. A version carrying a carriage return is
-#     written into its fixtures as `version = "0.2.24<CR>"`, which python reads back as TWO
-#     lines — so every version fixture answered `run`, and `check (windows-latest)` failed
-#     eleven expectations against a decision that was correct, plus three more on target
-#     names that had just run.
-#
-# That is this lane, on this one: the real decision and the real check, run again through a
-# python that ends its lines the way the Windows runner's does. Nothing stands in for the
-# decision or the check — only for the platform, which is the variable under test. Case 1
-# below refuses to let the rest pass vacuously, because a simulation that did not take
-# would prove nothing while looking exactly like a pass.
+# So this is the real decision and the real check, run again through a python that ends its
+# lines the way the Windows runner's does. Nothing stands in for either — only for the
+# platform, which is the variable under test. Case 1 refuses to let the rest pass
+# vacuously, because a simulation that did not take would look exactly like a pass.
 set -euo pipefail
 
 fatal() {
@@ -83,7 +72,6 @@ fail() {
 CR="$(printf '\r')"
 readonly CR
 
-# ---------------------------------------------------------------------------------------
 # 1. The simulation takes. Everything below is evidence only while this holds: a shim that
 # did nothing would leave the cases passing on the very platform they cannot fail on.
 
@@ -93,9 +81,6 @@ if [ "$(PYTHONPATH="$scratch" python3 -c 'print("simulated")' | tr -d '\n')" != 
     "run 'python3 -c \"import sys; sys.stdout.reconfigure\"' to confirm this python supports reconfigure, then rerun"
 fi
 
-echo "check-selection-line-endings: putting the decision to a python that ends lines the Windows way" >&2
-
-# ---------------------------------------------------------------------------------------
 # 2. The decision's answer. A caller reads the exact word on stdout, so a carriage return
 # anywhere in it is the defect whatever the word is.
 #
@@ -118,13 +103,10 @@ if [ -n "$exclusions" ]; then
   fail "the decision excluded a lane for a tree identical to its base, and whatever it printed the recipe splices straight into Nx's arguments: $(printf '%s' "$exclusions" | cat -v)"
 fi
 
-# ---------------------------------------------------------------------------------------
 # 3. The real check, over the real decision, on the simulated platform. This is the case
 # that reaches the check's own captures — the bumped version its fixtures are built from
 # and the names of the targets held outside affected selection — which no assertion about
 # the decision alone can reach.
-
-echo "check-selection-line-endings: driving the real selection check on the simulated platform" >&2
 
 if ! (cd "$ROOT" && PYTHONPATH="$scratch" bash scripts/check-live-lane-selection.sh) \
   >"$scratch/selection-output" 2>&1; then

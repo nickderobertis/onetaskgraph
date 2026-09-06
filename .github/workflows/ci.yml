@@ -1,14 +1,9 @@
 # Prove the workspace from a clean checkout, on the real platform matrix.
 #
-# Every lane runs the gate over the projects its diff can actually reach, and each derives
-# its base explicitly below rather than letting Nx guess one. The default branch used to
-# sweep instead, which ran the `test` target of every plugin whatever the push contained —
-# and two of those targets reach a real API at about a fifth of the account's hourly
-# GraphQL allowance apiece, so a release commit that reaches no plugin behaviour at all
-# exhausted the budget outright. Both lanes go through the same `just` recipes a
-# contributor runs locally, and the stages that sit outside affected selection —
-# `workspace:deny`, `scripts:distribution-check`, `scripts:distribution-test` — still run
-# on every one of them.
+# Every lane runs the same `just` recipes a contributor runs locally, over the projects its
+# diff can reach, and derives its base explicitly below rather than letting Nx guess one —
+# the default branch included, where a sweep once ran every plugin's live tests for a
+# release commit and exhausted the account's GraphQL budget. AGENTS.md records that.
 #
 # Two things about the tests that reach a real API are this file's alone. One live session
 # per run: only the `ubuntu-latest` leg carries the credentials, and scripts/rust-coverage.sh

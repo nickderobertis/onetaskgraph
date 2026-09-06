@@ -1,86 +1,34 @@
 #!/usr/bin/env bash
 # The one answer to: can this diff reach one live plugin's behaviour?
 #
-# The tests that reach a real API are ordinary tests of an ordinary `test` target, so what
-# decides whether a session is opened is which projects the diff selects. That is nearly
-# enough. The hole it leaves is a release: release-plz bumps every crate's `version`, the
-# changelogs and the lockfiles, which touches this plugin's own directory AND `Cargo.lock`
-# — a `sharedGlobals` input, so affected selection marks every project in the workspace.
-# A version bump exercises no plugin behaviour, and one live GitHub Projects session costs
-# about a fifth of the account's hourly GraphQL allowance
-# (crates/onetaskgraph-github-projects/session-cost.md), so a release must not draw it.
-# It already did: the default branch has been red since the last release with the budget
-# exhausted outright, which refuses ordinary reads against this repository too.
+# The tests that reach a real API are ordinary tests of an ordinary `test` target, so which
+# projects a diff selects is nearly all of what decides whether a session is opened. The
+# hole it leaves is a release: release-plz rewrites `Cargo.lock`, a `sharedGlobals` input,
+# so Nx marks every project for a diff that reaches no plugin behaviour at all — and one
+# live GitHub Projects session costs about a fifth of the account's hourly GraphQL
+# allowance (crates/onetaskgraph-github-projects/session-cost.md). That is how the default
+# branch went red with the budget exhausted outright.
 #
-# So this is the second half of the selection, and it is ONE implementation because every
-# caller has to give the same answer: `just test` consults it, and the change-request, the
-# default-branch and the local pre-push paths all reach the live lane through that recipe.
-# scripts/check-live-lane-selection.sh drives all of that.
+# This is the second half of that selection, and ONE implementation because every caller
+# has to give the same answer. AGENTS.md states the contract it answers under — the
+# permitted set is whole paths rather than basenames, a version substitution is evidence
+# about a line rather than about a file, and any question this cannot answer is `run`,
+# because it fails toward spending the budget rather than toward skipping the lane. What
+# is written below is why each of those is spelled the way the code spells it.
 #
-# ## The contract
-#
-# It is asked about one live plugin crate and one base ref, and it answers `run` or
-# `not-selected`.
-#
-# Its only `not-selected` is this: inside that crate's own directory the diff changes
-# nothing but the `version` field of that crate's `Cargo.toml` and that crate's
-# `CHANGELOG.md`; and outside that directory it changes nothing but version lines — a line
-# that is the same line with the old version substituted for the new — of the workspace
-# lockfile, of other crates' manifests, and of changelogs. Any other change, INCLUDING any
-# other edit to that same manifest, is `run`.
-#
-# **A file outside that set is `run` whatever its change looks like**, and that is the rule
-# rather than a gap in it. A version substitution is evidence about a LINE, not about a
-# file: `sdks/python/src/onetaskgraph_sdk/__init__.py` declares `__version__` and
-# `sdks/typescript/src/index.ts` declares `VERSION`, and those are source files whose
-# contents a reader cannot bound by the shape of one line.
-#
-# **The set is whole paths, not basenames**, for the same reason one level down. A basename
-# is not a location: `crates/<some-crate>/tests/fixtures/Cargo.toml` is a test fixture and
-# `sdks/python/CHANGELOG.md` is a package's own log, and admitting either because of what it
-# is CALLED would let a diff reach a plugin's behaviour through a file nobody meant to
-# permit. So the accepted set is exactly:
-#
-#   Cargo.lock                    the workspace lockfile, at the repository root
-#   Cargo.toml                    the workspace manifest, at the repository root
-#   <member>/Cargo.toml           one workspace crate's own manifest
-#   <member>/CHANGELOG.md         one workspace crate's own changelog
-#
-# where `<member>` is a real member of `[workspace] members`, expanded against the tree
-# rather than assumed — so a crate added or removed moves this set without an edit here, and
-# a directory that merely looks like a crate is not one. Everything else answers `run`
-# before its lines are even read.
-#
-# The consequence is deliberate and worth stating where it will be met: a release that also
-# moves `pyproject.toml`, the `package.json` files, `bun.lock`, `uv.lock` or those two SDK
-# constants answers `run`, and both lanes open a session for it. Widening the set to cover
-# them is a change to the contract this decision is given under, not a fix to this file.
-#
-# The workspace root `Cargo.toml` is one of the accepted paths, because it is the manifest
-# every crate's version is declared through: it carries `[workspace.package] version` and
-# the path-dependency pins that a crate's own bump necessarily moves, so a release that
-# could not touch it could not bump a crate at all. It is accepted as that one path, not as
-# "a file called Cargo.toml".
-#
-# Any question it cannot answer is `run`. It fails toward spending the budget, never
-# toward skipping the lane — an unresolvable base, an unreadable blob, a diff it cannot
-# explain and a crate it has never heard of all answer `run`, with the reason on stderr.
-#
-# ## Usage
+# Usage:
 #
 #   scripts/live-lane-selection.sh <crate> [base]   -> prints `run` or `not-selected`
 #   scripts/live-lane-selection.sh --nx-exclusions [base]
-#                                                   -> prints Nx's `--exclude=<names>` for
-#                                                      every live crate this diff cannot
-#                                                      reach, and nothing when there are
-#                                                      none, so a recipe can splice it in
+#                                                   -> Nx's `--exclude=<names>` for every
+#                                                      live crate this diff cannot reach,
+#                                                      and nothing when there are none
 #
-# `base` defaults to $NX_BASE, and then to nx.json's own `defaultBase`, so the recipes and
-# Nx compare against the same commit without either restating the other's default.
-#
-# A caller reads the answer rather than the exit status: only the exact word
-# `not-selected` on stdout means do not run, so a crash, an empty answer or anything else
-# leaves the lane running.
+# `base` defaults to $NX_BASE, then to nx.json's own `defaultBase`, so the recipes and Nx
+# compare against the same commit. A caller reads the answer rather than the exit status:
+# only the exact word `not-selected` on stdout means do not run, so a crash, an empty
+# answer or anything else leaves the lane running.
+# scripts/check-live-lane-selection.sh drives all of that.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -131,7 +79,10 @@ NOT_SELECTED = "not-selected"
 
 # The two paths at the repository root the contract accepts. Any other lockfile —
 # `bun.lock`, `uv.lock` — is outside the set and answers `run`, and so is any `Cargo.toml`
-# that is not one of these or a workspace member's own.
+# that is not one of these or a workspace member's own. The workspace manifest is accepted
+# as this one path rather than as "a file called Cargo.toml": it carries
+# `[workspace.package] version` and the path-dependency pins a crate's bump necessarily
+# moves, so a release that could not touch it could not bump a crate at all.
 LOCKFILE = "Cargo.lock"
 WORKSPACE_MANIFEST = "Cargo.toml"
 
@@ -514,14 +465,14 @@ def report_not_selected(crate, base, reason):
     Distinct from a missing credential on purpose. `ONETASKGRAPH_LIVE_REQUIRED` keeps the
     meaning it has: it demands a credential where one was expected, and a run given none
     still fails through it. A defect in THIS decision therefore cannot make an absent
-    credential read as an unselected lane, and a reader can tell the two apart from the
-    first line.
+    credential read as an unselected lane, and a reader can tell the two apart from the one
+    line this prints.
     """
-    say(f"the {crate} live lane was NOT SELECTED by this diff against {base}.")
-    say(f"{reason} — so no live session is opened and its GraphQL budget is not drawn.")
     say(
-        "this is not a missing credential and not a skip: a credential absent where one "
-        "was expected still fails the run through ONETASKGRAPH_LIVE_REQUIRED."
+        f"the {crate} live lane was NOT SELECTED by this diff against {base}: {reason}, so "
+        "no live session is opened and its GraphQL budget is not drawn. This is not a "
+        "missing credential and not a skip — a credential absent where one was expected "
+        "still fails the run through ONETASKGRAPH_LIVE_REQUIRED."
     )
 
 

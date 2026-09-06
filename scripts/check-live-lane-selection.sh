@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
 # Prove the second half of the live lanes' edge, against real Nx and the real recipes.
 #
-# The first half is affected selection, and scripts/check-affected-selection.sh gates it.
-# The second half is scripts/live-lane-selection.sh, which exists because a release commit
-# defeats the first: it rewrites `Cargo.lock`, a `sharedGlobals` input, so every project in
-# the workspace is selected and both hosted plugins open a session against a real API for a
-# diff that reaches no plugin behaviour at all. That is not hypothetical — it is why the
-# default branch has been red with the account's GraphQL budget exhausted.
+# The first half is affected selection, which scripts/check-affected-selection.sh gates; the
+# second is scripts/live-lane-selection.sh, whose reason AGENTS.md records.
 #
 # Reasoning about the recipes does not prove any of this, so every case below makes a real
-# edit in a scratch clone, commits it, and puts it either to real Nx or to the real
-# `just` recipes each path runs. Nothing here has a credential and nothing here reaches an
-# API: what is under test is which targets would run, and the decision that says so.
+# edit in a scratch clone, commits it, and puts it either to real Nx or to the real `just`
+# recipes each path runs. Nothing here has a credential and nothing here reaches an API:
+# what is under test is which targets would run, and the decision that says so.
 #
 #   1. Real Nx over real repository states: a core-only diff does not select the GitHub
 #      Projects plugin's `test` target, a diff of that plugin's own source does, and a
@@ -241,7 +237,6 @@ reset_fixture() {
     "check 'df -h' for free space, then rerun"
 }
 
-# ---------------------------------------------------------------------------------------
 # The fixtures. Each is one diff against $BASE, named for the answer it is owed.
 
 # Only the plugin's own manifest version, its changelog, and the lockfile's version lines.
@@ -348,7 +343,6 @@ fixture_core_source() {
   commit_fixture "the engine's own source"
 }
 
-# ---------------------------------------------------------------------------------------
 # 2 and 3. The decision's answers, put to the real script over those real git states.
 
 decide() {
@@ -362,8 +356,6 @@ expect_answer() {
     fail "$case_name — the decision answered '$answer', expected '$expected'. It said: $(cat "$scratch/decide-stderr")"
   fi
 }
-
-echo "check-live-lane-selection: putting the decision each diff it must tell apart" >&2
 
 fixture_version_only
 expect_answer "a version-only diff" not-selected
@@ -441,14 +433,11 @@ for unanswerable in "no-such-base-ref-for-this-check" "$BASE"; do
   fi
 done
 
-# ---------------------------------------------------------------------------------------
 # 4. Every path that can open a live session consults the decision.
 #
 # Enumerated from the workflow, the hook and the justfile rather than listed here: a path
 # added or rewired later has to appear in one of those three, and this fails when one of
 # them reaches the live lane without reading the answer.
-
-echo "check-live-lane-selection: enumerating the paths that can open a live session" >&2
 
 if ! (cd "$REPO" && python3 - <<'PY'
 import json
@@ -596,7 +585,6 @@ PY
   fail "the paths that can open a live session do not all consult the decision — see above."
 fi
 
-# ---------------------------------------------------------------------------------------
 # 5. Each of those paths, driven over both answers.
 #
 # The recipes are real, the decision is real and the git states are real; Nx is the
@@ -714,8 +702,6 @@ pre_push_base() {
     | (cd "$REPO" && bash scripts/pre-push-base.sh)
 }
 
-echo "check-live-lane-selection: driving each path over both answers" >&2
-
 for expectation in not-selected run; do
   if [ "$expectation" = "not-selected" ]; then
     fixture_version_only
@@ -745,7 +731,6 @@ drive gate-generated "$BASE"
 expect_unconditional_targets
 reset_fixture
 
-# ---------------------------------------------------------------------------------------
 # 1. Real Nx over real repository states.
 #
 # Windows cannot run this section, and the obstacle is the runner rather than the graph:
@@ -799,8 +784,6 @@ $2
       esac
       return 1
     }
-
-    echo "check-live-lane-selection: putting three diffs to real Nx" >&2
 
     fixture_core_source
     selection="$(selected_test_projects)"
