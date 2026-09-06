@@ -6,9 +6,13 @@
 # would catch, locally, before the push. `just bootstrap` activates it by pointing
 # core.hooksPath here.
 #
-# It runs the FULL sweep rather than the affected set on purpose: a push is the last
-# moment the whole tree is cheap to check, and affected selection is an optimisation for
-# the inner loop, not a reason to let an unrelated project go unproven.
+# It runs `just gate`, which SELECTS against the commit the remote already has rather than
+# sweeping every project. A sweep here ran the `test` target of every plugin whatever the
+# push contained, and two of those targets reach a real API at a fifth of the account's
+# hourly GraphQL allowance apiece. scripts/pre-push-base.sh reads that commit out of the
+# records git feeds this hook on stdin, so the base is derived rather than guessed — an
+# implicit base is how affected selection quietly starts comparing against the wrong
+# commit. The supply-chain and distribution stages stay outside selection and still run.
 #
 # Provisioning comes first, and its refusal is deliberately not spelled like the gate's.
 # A fresh worktree has no node_modules and no synced Python environment, so a hook that
@@ -34,6 +38,16 @@ if ! bash scripts/provision-gate.sh; then
   echo "pre-push: nothing about this push has been checked — the message above names what" >&2
   echo "pre-push: is missing. Provision it and push again." >&2
   exit 1
+fi
+
+# git feeds the ref records on stdin, and this is the only reader of them; `just gate`
+# below inherits a stdin that has been consumed, which is what it expects. A base that
+# could not be derived comes back empty and leaves NX_BASE unset, so Nx falls back to its
+# own defaultBase rather than the push being refused for it.
+base="$(bash scripts/pre-push-base.sh)" || base=""
+if [ -n "$base" ]; then
+  export NX_BASE="$base"
+  echo "pre-push: checking what this push adds since $base" >&2
 fi
 
 echo "pre-push: running the complete gate (just gate)" >&2
