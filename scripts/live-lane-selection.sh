@@ -113,6 +113,16 @@ import sys
 from difflib import SequenceMatcher
 from pathlib import Path
 
+# The answer is one word on one line, on every platform. Python opens stdout in text mode,
+# so on Windows every "\n" it writes leaves as "\r\n": a caller comparing against
+# `not-selected` then reads `not-selected\r`, does not match, and runs the very lane this
+# decision refused — and `--exclude=<crate>\r` names Nx a project it has never heard of.
+# Held here rather than in each caller, because this is the ONE implementation and a caller
+# repairing an answer is a caller restating the rule. stderr goes with it so the reason a
+# reader is given is one line per line there too.
+sys.stdout.reconfigure(newline="\n")
+sys.stderr.reconfigure(newline="\n")
+
 MODE = os.environ["ONETASKGRAPH_LIVE_LANE_MODE"]
 BASE = os.environ["ONETASKGRAPH_LIVE_LANE_BASE"]
 

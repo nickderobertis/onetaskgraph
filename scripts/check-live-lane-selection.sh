@@ -115,6 +115,11 @@ VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$REPO/$PLUGIN_MANIFEST" | hea
 [ -n "$VERSION" ] || fatal \
   "$PLUGIN_MANIFEST declares no [package] version, so no version fixture can be built" \
   "restore that manifest's version field, then rerun"
+# `tr -d '\r'`: python opens stdout in text mode, so on Windows every "\n" it prints
+# arrives as "\r\n" and a command substitution, which strips only the newline, leaves the
+# carriage return behind. A version carrying one is written into the fixtures below as
+# `version = "0.2.24<CR>"`, which python then reads back as two lines — so every version
+# fixture answered `run` and the windows-latest lane failed on a decision that was correct.
 BUMPED="$(printf '%s' "$VERSION" | python3 -c '
 import re
 import sys
@@ -122,7 +127,7 @@ import sys
 major, minor, patch = sys.stdin.read().strip().split(".")[:3]
 digits = re.match(r"[0-9]+", patch)
 print("{}.{}.{}".format(major, minor, int(digits.group(0)) + 1))
-')" || fatal \
+' | tr -d '\r')" || fatal \
   "could not derive a bumped version from $VERSION" \
   "restore $PLUGIN_MANIFEST to an X.Y.Z version, then rerun"
 readonly VERSION BUMPED
@@ -166,6 +171,11 @@ fail() {
   echo "check-live-lane-selection: $1" >&2
   failures=$((failures + 1))
 }
+
+# Held in a variable rather than written literally: a carriage return in this file is one
+# git's own `* text=auto eol=lf` would take straight back out.
+CR="$(printf '\r')"
+readonly CR
 
 # Rewrite one file in the scratch tree with python, which every platform here spells the
 # same way — `sed -i` differs between GNU and BSD and fails on the macOS runner. The
@@ -616,6 +626,17 @@ expect_path() {
     fail "$path_name — \`just $recipe\` never ran the tests at all, so nothing here says whether the lane was selected. It printed: $(cat "$scratch/drive-output")"
     return
   fi
+  # What the recipe spliced in is an ARGUMENT to Nx, so the bytes of it are the assertion
+  # and a glob that ends in `*` would accept a trailing one. The one that gets in here is a
+  # carriage return: the decision answers through python, python opens stdout in text mode,
+  # and `--exclude=<crate><CR>` names Nx a project it has never heard of while reading, in
+  # every message either of them prints, exactly like the name that works.
+  case "$invocation" in
+    *"$CR"*)
+      fail "$path_name — what \`just $recipe\` handed Nx carried a carriage return, so the argument does not name the project it appears to: $(printf '%s' "$invocation" | cat -v)"
+      return
+      ;;
+  esac
   case "$expectation" in
     not-selected)
       if ! grep -q "NOT SELECTED" "$scratch/drive-output"; then
@@ -646,7 +667,10 @@ expect_path() {
 # dropped from the gate's own dependencies still has its recipe, and so is still expected.
 expect_unconditional_targets() {
   local named target
-  named="$(cd "$REPO" && python3 - <<'NAMED'
+  # `tr -d '\r'` for the reason the version above carries one: on Windows each name would
+  # come back as `scripts:distribution-check<CR>`, which `grep -qx` never matches, and the
+  # gate would be reported as having skipped a stage it had just run.
+  named="$(cd "$REPO" && python3 - <<'NAMED' | tr -d '\r'
 import json
 import re
 from pathlib import Path
@@ -669,7 +693,7 @@ for line in Path("justfile").read_text(encoding="utf-8").splitlines():
             named.add(":".join(reference))
 print("\n".join(sorted(named)))
 NAMED
-)"
+  )"
   if [ -z "$named" ]; then
     fail "no recipe runs a target by name any more, so the supply-chain and distribution stages no longer sit outside affected selection at all."
     return

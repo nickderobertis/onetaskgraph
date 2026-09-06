@@ -47,7 +47,8 @@
           "bash scripts/check-guard-path-spelling.sh",
           "bash scripts/check-line-reads.sh",
           "bash scripts/check-live-lane-enforced.sh",
-          "bash scripts/check-live-lane-selection.sh"
+          "bash scripts/check-live-lane-selection.sh",
+          "bash scripts/check-selection-line-endings.sh"
         ],
         "parallel": false
       },

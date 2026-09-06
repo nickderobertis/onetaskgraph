@@ -630,6 +630,21 @@ them do; this is the inventory of what is owed, not a status board.
   that watch it refuse are `scripts:test`. `just script-check` runs both by hand — it is
   the entry point their diagnostics name — and is not a phase of `check`, because the
   phases already cover it.
+- **A value captured from python has to survive that python's line endings.** Python opens
+  stdout in text mode, so on the Windows runner every `\n` it prints leaves as `\r\n`, and
+  a command substitution strips the newline and keeps the carriage return. It then reads
+  like the value it is not: that is what failed `check (windows-latest)` on the live-lane
+  selection, where a bumped version captured as `0.2.24<CR>` went into a manifest as
+  `version = "0.2.24<CR>"`, which python read back as two lines — so every version fixture
+  answered `run` and eleven expectations failed against a decision that was correct. Strip
+  it where it is captured, with `tr -d '\r'` as `scripts/check-plugin-isolation.sh` does,
+  or hold the stream to `"\n"` where it is written, which is what
+  `scripts/live-lane-selection.sh` does because it is the ONE implementation of an answer
+  its callers compare a word against and a caller repairing that answer is a caller
+  restating the rule. `scripts/check-selection-line-endings.sh`, a command in
+  `scripts:test`, runs that decision and the check that drives it again through a python
+  that ends its lines the Windows way — and refuses to run at all if the simulation did not
+  take, because a shim that did nothing would look exactly like a pass.
 - **Suppress narrowly.** A diagnostic is an error or a suppression at that one site with a
   stated reason. `notignored` posts every suppression a PR adds, so they are read.
 - **`gh-secrets.json` is tracked and load-bearing.** It declares the repository secrets
