@@ -1726,16 +1726,38 @@ async fn drive_every_declared_capability(
     // writes. This journey is many commands' worth of work driven through one object, so
     // the legs below take a source built the way the next command would build one — which
     // is what makes a change nothing here wrote visible to them.
-    let rebuilt = rebuilt();
-    let writer = rebuilt.as_ref();
-
-    // GitHub decides when a created issue appears on the board, so the reads below wait
-    // for the fixture rather than racing it.
+    //
+    // GitHub decides when a created issue appears on the board and when its issue search
+    // reports one — the search is an index and is documented as eventually consistent —
+    // so the reads below wait for the fixture rather than racing it.
+    //
+    // **Each attempt asks through a source built afresh, and that is the whole of what
+    // makes this a wait.** The paragraph above is also why: a source reads the board once
+    // and answers every later question from that one read for the rest of its life. Asking
+    // one source twenty times therefore asks GitHub once and compares the same answer
+    // twenty times, so an item that landed a second later could never be seen however long
+    // the loop ran. That is not hypothetical — it is what left a credentialed run
+    // reporting that the board "never reported all three tasks" after a single read of it.
+    //
+    // What the legs below take is the source that answered the converging attempt, which
+    // serves both purposes at once: it was built the way the next command would build one,
+    // and its view of the board is the one just confirmed complete rather than one taken
+    // before the fixture had settled.
     let mut readable = None;
-    for _ in 0..20 {
-        let tasks = task_titles(writer, &by_prefix(), "fixture settling task read").await?;
+    let mut last_read = (Vec::new(), Vec::new());
+    let mut source = rebuilt();
+    // Two minutes at two-second intervals, against an index whose lag is usually seconds:
+    // patience costs nothing on a run that is going to pass, and the two requests an
+    // attempt makes are spent only by a run that is already failing.
+    for attempt in 0..60 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            source = rebuilt();
+        }
+        let reader = source.as_ref();
+        let tasks = task_titles(reader, &by_prefix(), "fixture settling task read").await?;
         let projects = project_titles(
-            writer,
+            reader,
             &ProjectQuery {
                 text: Some(TextQuery {
                     terms: prefix.clone(),
@@ -1750,12 +1772,15 @@ async fn drive_every_declared_capability(
             readable = Some((tasks, projects));
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        last_read = (tasks, projects);
     }
+    let writer = source.as_ref();
     let Some((run_tasks, run_projects)) = readable else {
+        let (tasks, projects) = last_read;
         return Err(format!(
             "the live fixture never became readable: the board never reported all three \
-             tasks and both projects titled {prefix}*"
+             tasks and both projects titled {prefix}*; the last read of it reported the \
+             tasks {tasks:?} and the projects {projects:?}"
         ));
     };
 
