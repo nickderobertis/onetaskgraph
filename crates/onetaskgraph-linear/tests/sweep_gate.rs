@@ -252,6 +252,12 @@ struct Workspace {
     /// its delete arrives the entity is gone. Staged rather than waited for, because a race
     /// nobody can stage is a race nobody can prove either way.
     vanishing: Vec<String>,
+    /// Ids this workspace refuses to delete and goes on listing.
+    ///
+    /// The other refusal, and the one the tolerance must NOT swallow: a delete that stays
+    /// refused while the entity is still there is residue left behind, and a cleanup that
+    /// reported success would leave it in somebody's real workspace with nothing said.
+    immortal: Vec<String>,
     /// What this workspace has already refused a delete for, so a drive can assert the
     /// tolerance was exercised rather than that nothing was ever deleted.
     refused: Vec<String>,
@@ -289,28 +295,61 @@ static STANDIN: LazyLock<Arc<Mutex<Workspace>>> = LazyLock::new(|| {
 
 /// One drive at a time: the workspace is one shared fixture and every drive sweeps all of it.
 ///
-/// Tokio's rather than the standard library's, because the guard is held across the awaits
-/// of the drive it is serialising.
-static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// **The standard library's, and it is what a drive holds for its whole length.** Each
+/// `#[tokio::test]` is a current-thread runtime of its own on a test thread of its own, so a
+/// guard that blocks excludes the other drives without ever blocking the runtime it is held
+/// in — and it excludes them whichever runtime they are waiting in, which is the half a
+/// runtime-aware guard here left to chance. What that chance cost was a drive whose fixture
+/// another drive replaced underneath it, which then passed or failed on the wrong workspace.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-/// Take the workspace, planted with `entities`, for the length of one drive.
-async fn planted(
-    entities: Vec<Entity>,
-    vanishing: Vec<String>,
-) -> tokio::sync::MutexGuard<'static, ()> {
-    let held = ONE_AT_A_TIME.lock().await;
-    // A drive that failed poisoned nothing of consequence: the next one replants the
-    // workspace outright, and reporting a poisoned lock instead would hide the failure that
-    // caused it.
-    let mut workspace = STANDIN
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    *workspace = Workspace {
-        entities,
-        vanishing,
-        refused: Vec::new(),
-    };
-    held
+/// The workspace, planted for one drive and nobody else's, for as long as this is held.
+///
+/// Every reading of the workspace goes through this rather than through the fixture, so a
+/// drive cannot read one it does not hold: what the type system says here is the whole of
+/// why the exclusion above can be relied on.
+struct Drive {
+    _exclusive: std::sync::MutexGuard<'static, ()>,
+}
+
+impl Drive {
+    /// Take the workspace, planted with `entities`, for the length of one drive.
+    fn plant(entities: Vec<Entity>, vanishing: Vec<String>, immortal: Vec<String>) -> Self {
+        // A drive that failed poisoned nothing of consequence: the next one replants the
+        // workspace outright, and reporting a poisoned lock instead would hide the failure
+        // that caused it.
+        let exclusive = ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *STANDIN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Workspace {
+            entities,
+            vanishing,
+            immortal,
+            refused: Vec::new(),
+        };
+        Self {
+            _exclusive: exclusive,
+        }
+    }
+
+    /// What the workspace holds now, as sorted names.
+    fn left(&self) -> Vec<String> {
+        STANDIN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .names()
+    }
+
+    /// Every delete this workspace refused, in the order it refused them.
+    fn refused(&self) -> Vec<String> {
+        STANDIN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .refused
+            .clone()
+    }
 }
 
 /// One artifact of `run`, of every kind this lane writes, planted under its own naming.
@@ -333,14 +372,6 @@ fn name_of(residue: &Residue, run: Run, micros: u64) -> String {
     } else {
         artifact_title(run, micros)
     }
-}
-
-/// What the workspace holds now, as sorted names.
-fn left() -> Vec<String> {
-    STANDIN
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .names()
 }
 
 fn sorted(mut names: Vec<String>) -> Vec<String> {
@@ -375,7 +406,7 @@ async fn a_sweep_leaves_a_concurrent_live_runs_artifacts_however_old_they_are() 
         vec![nobodys.clone()],
     ]
     .concat();
-    let _one_at_a_time = planted(planted_entities, vec![]).await;
+    let drive = Drive::plant(planted_entities, vec![], vec![]);
 
     cleanup::sweep_orphans(KEY, &sweep_at(NOW))
         .await
@@ -385,7 +416,7 @@ async fn a_sweep_leaves_a_concurrent_live_runs_artifacts_however_old_they_are() 
         entities.iter().map(|entity| entity.name.clone()).collect()
     };
     assert_eq!(
-        left(),
+        drive.left(),
         sorted(
             [
                 survived(&theirs),
@@ -405,7 +436,7 @@ async fn a_sweep_leaves_a_concurrent_live_runs_artifacts_however_old_they_are() 
     cleanup::sweep_orphans(KEY, &sweep_at(NOW))
         .await
         .expect("a second sweep over the same workspace succeeds");
-    let remaining = left();
+    let remaining = drive.left();
     for gone in survived(&theirs) {
         assert!(
             !remaining.contains(&gone),
@@ -427,22 +458,17 @@ async fn an_artifact_another_deleter_took_first_leaves_the_cleanup_successful() 
     let ended = ended_run(3);
     let racing = artifacts_of(ended, aged(2), "racing");
     let ids: Vec<String> = racing.iter().map(|entity| entity.id.clone()).collect();
-    let _one_at_a_time = planted(racing, ids.clone()).await;
+    let drive = Drive::plant(racing, ids.clone(), vec![]);
 
     cleanup::sweep_orphans(KEY, &sweep_at(NOW))
         .await
         .expect("a delete of what has already gone is the outcome the delete was asking for");
 
-    assert!(left().is_empty(), "{:?}", left());
+    assert!(drive.left().is_empty(), "{:?}", drive.left());
     // And the tolerance was really exercised: the workspace refused every delete rather than
     // this having passed because nothing was ever asked of it.
-    let refused = STANDIN
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .refused
-        .clone();
     assert_eq!(
-        sorted(refused),
+        sorted(drive.refused()),
         sorted(ids),
         "the workspace did not refuse the deletes this case is about"
     );
@@ -457,11 +483,11 @@ async fn this_runs_own_cleanup_removes_everything_it_wrote_and_nothing_else() {
     let mine = artifacts_of(RUNS.mine, NOW, "mine");
     let also_mine = artifacts_of(RUNS.mine, NOW + 1, "also-mine");
     let theirs = artifacts_of(ended, NOW, "theirs");
-    let _one_at_a_time = planted(
+    let drive = Drive::plant(
         [mine.clone(), also_mine.clone(), theirs.clone()].concat(),
         vec![],
-    )
-    .await;
+        vec![],
+    );
 
     let run = RUNS.mine;
     cleanup::remove_artifacts(KEY, &|prefix, name| is_this_runs(run, prefix, name))
@@ -469,10 +495,37 @@ async fn this_runs_own_cleanup_removes_everything_it_wrote_and_nothing_else() {
         .expect("this run's own cleanup over a workspace it can read succeeds");
 
     assert_eq!(
-        left(),
+        drive.left(),
         sorted(theirs.iter().map(|entity| entity.name.clone()).collect()),
         "this run's cleanup left its own work, or took a run's that is not it"
     );
+}
+
+#[tokio::test]
+async fn residue_a_delete_never_takes_fails_the_cleanup_rather_than_passing_quietly() {
+    // The other side of the tolerance, and the side that has to stay sharp. A delete refused
+    // for something that has already GONE is the outcome the delete was asking for; a delete
+    // refused for something still there is residue left in somebody's real workspace, and a
+    // cleanup that reported success would leave it there with nothing said.
+    let ended = ended_run(5);
+    let stuck = artifacts_of(ended, aged(2), "stuck");
+    let ids: Vec<String> = stuck.iter().map(|entity| entity.id.clone()).collect();
+    let names: Vec<String> = stuck.iter().map(|entity| entity.name.clone()).collect();
+    let drive = Drive::plant(stuck, vec![], ids.clone());
+
+    let refusal = cleanup::sweep_orphans(KEY, &sweep_at(NOW))
+        .await
+        .expect_err("a sweep that left residue behind has not swept");
+
+    // Every kind this lane writes is named, because residue of any of them is residue the
+    // next run inherits.
+    for kind in RESIDUE.iter().map(|residue| residue.kind) {
+        assert!(
+            refusal.contains(kind),
+            "the refusal has to name the {kind} it could not remove: {refusal}"
+        );
+    }
+    assert_eq!(drive.left(), sorted(names));
 }
 
 #[tokio::test]
@@ -595,6 +648,10 @@ fn delete(workspace: &mut Workspace, residue: &Residue, variables: &Value) -> Va
     let Some(id) = variables.get("id").and_then(Value::as_str) else {
         return errors("a delete arrived with no id");
     };
+    if workspace.immortal.iter().any(|held| held == id) {
+        workspace.refused.push(id.to_owned());
+        return errors(&format!("this workspace will not part with {id}"));
+    }
     let held = workspace
         .entities
         .iter()

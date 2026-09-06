@@ -267,6 +267,12 @@ struct Board {
     /// before the listing that names it is not the race — it is an empty listing.
     vanishing_items: Vec<String>,
     vanishing_labels: Vec<String>,
+    /// Item ids and label names this board refuses to delete and goes on listing.
+    ///
+    /// The other refusal, and the one the tolerance must NOT swallow: a delete that stays
+    /// refused while the thing is still there is residue left behind, and a cleanup that
+    /// reported success would leave it on somebody's real board with nothing said.
+    immortal: Vec<String>,
     /// What this board has already refused a delete for, so a test can assert the tolerance
     /// was exercised rather than that nothing was ever deleted.
     refused: Vec<String>,
@@ -287,6 +293,11 @@ impl Board {
         let taken = std::mem::take(&mut self.vanishing_labels);
         self.labels.retain(|name| !taken.contains(name));
         self.vanishing_labels = taken;
+    }
+
+    /// Whether this board will refuse every delete of `what` and go on listing it.
+    fn immortal(&self, what: &str) -> bool {
+        self.immortal.iter().any(|held| held == what)
     }
 
     fn holds_item(&self, id: &str) -> bool {
@@ -337,48 +348,85 @@ static STANDIN: LazyLock<Arc<Mutex<Board>>> = LazyLock::new(|| {
 
 /// One drive at a time: the board is one shared fixture and every test below sweeps all of it.
 ///
-/// Tokio's rather than the standard library's, because the guard is held across the awaits
-/// of the drive it is serialising — which is the whole of what it is for, and what a
-/// blocking guard would deadlock a runtime on.
-static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// **The standard library's, and it is what a drive holds for its whole length.** Each
+/// `#[tokio::test]` is a current-thread runtime of its own on a test thread of its own, so a
+/// guard that blocks excludes the other drives without ever blocking the runtime it is held
+/// in — and it excludes them whichever runtime they are waiting in, which is the half a
+/// runtime-aware guard leaves to chance. What that chance costs is a drive whose fixture
+/// another drive replaces underneath it, which then passes or fails on the wrong board.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-/// Take the board, planted with `items` and `labels`, for the length of one drive.
-async fn planted(
-    items: Vec<(&str, Option<&str>, String)>,
-    labels: Vec<String>,
-    vanishing_items: Vec<String>,
-    vanishing_labels: Vec<String>,
-) -> tokio::sync::MutexGuard<'static, ()> {
-    let held = ONE_AT_A_TIME.lock().await;
-    // A test that failed poisoned nothing of consequence: the next one replants the board
-    // outright, and reporting a poisoned lock instead would hide the failure that caused it.
-    let mut board = STANDIN
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let items: Vec<_> = items
-        .into_iter()
-        .map(|(item, issue, title)| (item.to_owned(), issue.map(str::to_owned), title))
-        .collect();
-    *board = Board {
-        issues: items
-            .iter()
-            .filter_map(|(_, issue, _)| issue.clone())
-            .collect(),
-        items,
-        labels,
-        vanishing_items,
-        vanishing_labels,
-        refused: Vec::new(),
-    };
-    held
+/// The board, planted for one drive and nobody else's, for as long as this is held.
+///
+/// Every reading of the board goes through this rather than through the fixture, so a drive
+/// cannot read one it does not hold: what the type system says here is the whole of why the
+/// exclusion above can be relied on.
+struct Drive {
+    _exclusive: std::sync::MutexGuard<'static, ()>,
 }
 
-/// What the board holds now, as sorted titles and sorted label names.
-fn left() -> (Vec<String>, Vec<String>) {
-    let board = STANDIN
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    (board.titles(), board.label_names())
+impl Drive {
+    /// Take the board, planted with `items` and `labels`, for the length of one drive.
+    fn plant(
+        items: Vec<(&str, Option<&str>, String)>,
+        labels: Vec<String>,
+        vanishing_items: Vec<String>,
+        vanishing_labels: Vec<String>,
+        immortal: Vec<String>,
+    ) -> Self {
+        // A test that failed poisoned nothing of consequence: the next one replants the
+        // board outright, and reporting a poisoned lock instead would hide the failure that
+        // caused it.
+        let exclusive = ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let items: Vec<_> = items
+            .into_iter()
+            .map(|(item, issue, title)| (item.to_owned(), issue.map(str::to_owned), title))
+            .collect();
+        *STANDIN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Board {
+            issues: items
+                .iter()
+                .filter_map(|(_, issue, _)| issue.clone())
+                .collect(),
+            items,
+            labels,
+            vanishing_items,
+            vanishing_labels,
+            immortal,
+            refused: Vec::new(),
+        };
+        Self {
+            _exclusive: exclusive,
+        }
+    }
+
+    /// What the board holds now, as sorted titles and sorted label names.
+    fn left(&self) -> (Vec<String>, Vec<String>) {
+        let board = STANDIN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (board.titles(), board.label_names())
+    }
+
+    /// Every delete this board refused, in the order it refused them.
+    fn refused(&self) -> Vec<String> {
+        STANDIN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .refused
+            .clone()
+    }
+
+    /// Whether the repository still holds the issue `id`.
+    fn holds_issue(&self, id: &str) -> bool {
+        STANDIN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .holds_issue(id)
+    }
 }
 
 /// The session a lane holds while it is reaching its API, opened the way this lane opens it.
@@ -418,7 +466,7 @@ async fn a_sweep_leaves_a_concurrent_live_runs_artifacts_however_old_they_are() 
     let fresh_ended = ended_run(2);
     let fresh = artifact_title(fresh_ended, NOW);
     let fresh_label = artifact_label(fresh_ended, NOW);
-    let _one_at_a_time = planted(
+    let drive = Drive::plant(
         vec![
             ("PVTI_theirs", Some("I_theirs"), theirs.clone()),
             ("PVTI_mine", Some("I_mine"), mine.clone()),
@@ -435,15 +483,15 @@ async fn a_sweep_leaves_a_concurrent_live_runs_artifacts_however_old_they_are() 
         ],
         vec![],
         vec![],
-    )
-    .await;
+        vec![],
+    );
     let _in_flight = session_in_flight();
 
     journey::sweep_orphans(TOKEN, BOARD, REPOSITORY, &sweep_at(NOW))
         .await
         .expect("an orphan sweep over a board it can read succeeds");
 
-    let (titles, labels) = left();
+    let (titles, labels) = drive.left();
     assert_eq!(
         titles,
         sorted(vec![
@@ -476,7 +524,7 @@ async fn a_sweep_leaves_a_concurrent_live_runs_artifacts_however_old_they_are() 
     journey::sweep_orphans(TOKEN, BOARD, REPOSITORY, &sweep_at(NOW))
         .await
         .expect("a second sweep over the same board succeeds");
-    let (titles, labels) = left();
+    let (titles, labels) = drive.left();
     assert!(
         !titles.contains(&theirs) && !labels.contains(&their_label),
         "an ended run's artifacts were not recovered: {titles:?} {labels:?}"
@@ -499,7 +547,7 @@ async fn a_process_id_reissued_to_a_new_run_costs_a_delay_and_never_a_deletion()
     // to a new process looks like from here.
     let taken_over = Registration::take(&RUNS.registry, reused.process())
         .expect("the run that was issued that number next");
-    let _one_at_a_time = planted(
+    let drive = Drive::plant(
         vec![
             ("PVTI_residue", Some("I_residue"), residue.clone()),
             ("PVTI_in_flight", Some("I_in_flight"), in_flight.clone()),
@@ -507,15 +555,15 @@ async fn a_process_id_reissued_to_a_new_run_costs_a_delay_and_never_a_deletion()
         vec![residue_label.clone(), in_flight_label.clone()],
         vec![],
         vec![],
-    )
-    .await;
+        vec![],
+    );
     let _session = session_in_flight();
 
     journey::sweep_orphans(TOKEN, BOARD, REPOSITORY, &sweep_at(NOW))
         .await
         .expect("an orphan sweep over a board it can read succeeds");
 
-    let (titles, labels) = left();
+    let (titles, labels) = drive.left();
     assert_eq!(
         titles,
         sorted(vec![in_flight, residue.clone()]),
@@ -532,7 +580,7 @@ async fn a_process_id_reissued_to_a_new_run_costs_a_delay_and_never_a_deletion()
     journey::sweep_orphans(TOKEN, BOARD, REPOSITORY, &sweep_at(NOW))
         .await
         .expect("a second sweep over the same board succeeds");
-    let (titles, labels) = left();
+    let (titles, labels) = drive.left();
     assert!(
         !titles.contains(&residue) && !labels.contains(&residue_label),
         "the residue was not recovered once the run that took its number ended: {titles:?} {labels:?}"
@@ -547,36 +595,63 @@ async fn an_artifact_another_deleter_took_first_leaves_the_cleanup_successful() 
     let ended = ended_run(3);
     let stale = artifact_title(ended, aged(2));
     let stale_label = artifact_label(ended, aged(2));
-    let _one_at_a_time = planted(
+    let drive = Drive::plant(
         vec![("PVTI_racing", Some("I_racing"), stale.clone())],
         vec![stale_label.clone()],
         vec!["PVTI_racing".to_owned()],
         vec![stale_label.clone()],
-    )
-    .await;
+        vec![],
+    );
     let _in_flight = session_in_flight();
 
     journey::sweep_orphans(TOKEN, BOARD, REPOSITORY, &sweep_at(NOW))
         .await
         .expect("a delete of what has already gone is the outcome the delete was asking for");
 
-    let (titles, labels) = left();
+    let (titles, labels) = drive.left();
     assert!(
         titles.is_empty() && labels.is_empty(),
         "{titles:?} {labels:?}"
     );
     // And the tolerance was really exercised: the board refused both deletes rather than
     // this having passed because nothing was ever asked of it.
-    let refused = STANDIN
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .refused
-        .clone();
     assert_eq!(
-        sorted(refused),
+        sorted(drive.refused()),
         sorted(vec!["PVTI_racing".to_owned(), stale_label]),
         "the board did not refuse the deletes this case is about"
     );
+}
+
+#[tokio::test]
+async fn residue_a_delete_never_takes_fails_the_cleanup_rather_than_passing_quietly() {
+    // The other side of the tolerance, and the side that has to stay sharp. A delete refused
+    // for something that has already GONE is the outcome the delete was asking for; a delete
+    // refused for something still there is residue left on somebody's real board, and a
+    // cleanup that reported success would leave it there with nothing said.
+    let ended = ended_run(6);
+    let stuck = artifact_title(ended, aged(2));
+    let stuck_label = artifact_label(ended, aged(2));
+    let drive = Drive::plant(
+        vec![("PVTI_stuck", Some("I_stuck"), stuck.clone())],
+        vec![stuck_label.clone()],
+        vec![],
+        vec![],
+        vec!["PVTI_stuck".to_owned(), stuck_label.clone()],
+    );
+    let _in_flight = session_in_flight();
+
+    let refusal = journey::sweep_orphans(TOKEN, BOARD, REPOSITORY, &sweep_at(NOW))
+        .await
+        .expect_err("a sweep that left residue behind has not swept");
+
+    // Both stores are named, because residue in either is residue the next run inherits.
+    assert!(
+        refusal.contains("PVTI_stuck") && refusal.contains(&stuck_label),
+        "the refusal has to name what is still there, in both stores: {refusal}"
+    );
+    let (titles, labels) = drive.left();
+    assert_eq!(titles, vec![stuck]);
+    assert_eq!(labels, vec![stuck_label]);
 }
 
 #[tokio::test]
@@ -590,7 +665,7 @@ async fn this_runs_own_cleanup_removes_everything_it_wrote_and_nothing_else() {
     let ended = ended_run(4);
     let theirs = artifact_title(ended, NOW);
     let their_label = artifact_label(ended, NOW);
-    let _one_at_a_time = planted(
+    let drive = Drive::plant(
         vec![
             ("PVTI_mine", Some("I_mine"), mine),
             ("PVTI_mine_draft", None, also_mine),
@@ -599,28 +674,25 @@ async fn this_runs_own_cleanup_removes_everything_it_wrote_and_nothing_else() {
         vec![my_label, their_label.clone(), "bug".to_owned()],
         vec![],
         vec![],
-    )
-    .await;
+        vec![],
+    );
     let _in_flight = session_in_flight();
 
     journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
         .await
         .expect("this run's own cleanup over a board it can read succeeds");
 
-    let (titles, labels) = left();
+    let (titles, labels) = drive.left();
     assert_eq!(titles, vec![theirs]);
     assert_eq!(labels, sorted(vec![their_label, "bug".to_owned()]));
     // The issue behind the board item goes with it: taking an item off the board leaves the
     // issue in the repository, and this lane's claim is that it leaves no residue anywhere.
-    let board = STANDIN
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     assert!(
-        !board.holds_issue("I_mine"),
+        !drive.holds_issue("I_mine"),
         "the issue behind this run's board item is still in the repository"
     );
     assert!(
-        board.holds_issue("I_theirs"),
+        drive.holds_issue("I_theirs"),
         "this run's cleanup took another run's issue with it"
     );
 }
@@ -695,6 +767,14 @@ fn graphql(board: &Arc<Mutex<Board>>, request: &Value) -> (&'static str, String)
             .as_str()
             .expect("a board item id")
             .to_owned();
+        if board.immortal(&item) {
+            board.refused.push(item.clone());
+            return (
+                "200 OK",
+                json!({"errors":[{"message":format!("this board will not part with {item}")}]})
+                    .to_string(),
+            );
+        }
         if !board.holds_item(&item) {
             board.refused.push(item.clone());
             return gone(&item);
@@ -736,6 +816,13 @@ fn rest(board: &Arc<Mutex<Board>>, method: &str, path: &str) -> (&'static str, S
     if method == "DELETE"
         && let Some(name) = path.strip_prefix(&format!("{listing}/"))
     {
+        if board.immortal(name) {
+            board.refused.push(name.to_owned());
+            return (
+                "500 Internal Server Error",
+                json!({"message":"this repository will not part with that label"}).to_string(),
+            );
+        }
         if !board.holds_label(name) {
             board.refused.push(name.to_owned());
             return (
