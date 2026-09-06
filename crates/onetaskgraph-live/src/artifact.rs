@@ -128,6 +128,22 @@ static CURRENT: LazyLock<Run> = LazyLock::new(|| SHARED.enrol());
 /// different states rather than one state with a sentinel in it, and an unvouched run is
 /// never anybody's orphan, while a sweep made by one removes nothing at all. On the wire
 /// they are one grammar: a host of `0` spells the second, because a stamp is digits.
+///
+/// # Two runs of one machine that reuse a process id are one `Run`, and that is safe
+///
+/// An operating system reissues process ids, so a machine can have had two runs numbered
+/// alike — one long finished, one going now — and this type cannot tell them apart. Neither
+/// direction of that loses work, and [`STALE_AFTER`] is why:
+///
+/// - The **new** run's artifacts are new, so they have not waited the window out and are
+///   never orphans, whatever the registry says about the number they share.
+/// - The **old** run's artifacts are protected as well, for as long as the new run holds the
+///   registration they now share. They become removable when it ends, which is later than it
+///   might have been and is a delay rather than a loss.
+///
+/// So the conflation costs a cleanup that waits, which is the direction everything here is
+/// wrong in on purpose. `crates/onetaskgraph-github-projects/tests/sweep_gate.rs` drives it
+/// against the real cleanup and a real re-registration of one number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Run {
     host: Option<NonZeroU32>,
@@ -530,6 +546,11 @@ impl Sweep {
     /// An artifact stamped in the future is never removed: two machines' clocks disagree, and
     /// the direction to be wrong in is leaving somebody's work alone. That falls out of the
     /// saturating subtraction rather than being a case of its own.
+    ///
+    /// The registry was read once, when this sweep was made, and a run may have started or
+    /// ended since — including one reusing a process id this reading called finished. The
+    /// window is what covers that: an artifact of a run that started after this reading is
+    /// newer than this reading, so it has not waited the window out. See [`Run`].
     #[must_use]
     pub fn is_orphan(&self, stamp: Stamp) -> bool {
         if self.run.host.is_none() || stamp.run.host != self.run.host {
@@ -914,6 +935,39 @@ mod tests {
                 "{foreign:?} is not an orphan of this run's"
             );
         }
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_process_id_reissued_to_a_new_run_costs_a_delay_and_never_a_deletion() {
+        // The operating system's own reuse of a number, made real: one run registers and
+        // ends, and a second registers under the very same number. The two are one `Run` to
+        // this contract, and neither loses work — see the note on that type.
+        let directory = scratch("reuse");
+        let registry = Registry::at(&directory);
+        let mine = registry.enrol();
+        let reused = {
+            let first = Registration::take(&registry, process(4242)).expect("the first run");
+            first.run()
+        };
+        let stale = NOW - micros(WINDOW) - 1;
+        assert!(
+            registry
+                .sweep(mine, NOW, WINDOW)
+                .is_orphan(Stamp::new(reused, stale)),
+            "the first run really has ended, which is what the second one then takes over"
+        );
+        let _second = Registration::take(&registry, process(4242)).expect("the second run");
+        let sweep = registry.sweep(mine, NOW, WINDOW);
+        assert!(
+            !sweep.is_orphan(Stamp::new(reused, NOW)),
+            "the run holding that number now is live, and its own artifacts are new"
+        );
+        assert!(
+            !sweep.is_orphan(Stamp::new(reused, stale)),
+            "the ended run's residue waits for the one that took its number, rather than \
+             being taken while that one is going"
+        );
         let _ = fs::remove_dir_all(&directory);
     }
 

@@ -484,6 +484,62 @@ async fn a_sweep_leaves_a_concurrent_live_runs_artifacts_however_old_they_are() 
 }
 
 #[tokio::test]
+async fn a_process_id_reissued_to_a_new_run_costs_a_delay_and_never_a_deletion() {
+    // An operating system reissues process ids, so a board can hold the residue of a run
+    // that has ended beside the in-flight work of a run that took its number. The two are
+    // one run to the stamp they both carry, and this is what that costs: the second run's
+    // work is safe because it is new, and the first run's residue waits rather than being
+    // taken while the second is going.
+    let reused = ended_run(5);
+    let residue = artifact_title(reused, aged(2));
+    let residue_label = artifact_label(reused, aged(2));
+    let in_flight = artifact_title(reused, NOW);
+    let in_flight_label = artifact_label(reused, NOW);
+    // The number is registered again, which is exactly what the operating system handing it
+    // to a new process looks like from here.
+    let taken_over = Registration::take(&RUNS.registry, reused.process())
+        .expect("the run that was issued that number next");
+    let _one_at_a_time = planted(
+        vec![
+            ("PVTI_residue", Some("I_residue"), residue.clone()),
+            ("PVTI_in_flight", Some("I_in_flight"), in_flight.clone()),
+        ],
+        vec![residue_label.clone(), in_flight_label.clone()],
+        vec![],
+        vec![],
+    )
+    .await;
+    let _session = session_in_flight();
+
+    journey::sweep_orphans(TOKEN, BOARD, REPOSITORY, &sweep_at(NOW))
+        .await
+        .expect("an orphan sweep over a board it can read succeeds");
+
+    let (titles, labels) = left();
+    assert_eq!(
+        titles,
+        sorted(vec![in_flight, residue.clone()]),
+        "the run holding that number now lost work, or the residue was taken while it runs"
+    );
+    assert_eq!(
+        labels,
+        sorted(vec![in_flight_label, residue_label.clone()]),
+        "the label sweep took a label while the run numbered like its writer is going"
+    );
+
+    // And once that run ends, the residue it was shielding is recovered as usual.
+    drop(taken_over);
+    journey::sweep_orphans(TOKEN, BOARD, REPOSITORY, &sweep_at(NOW))
+        .await
+        .expect("a second sweep over the same board succeeds");
+    let (titles, labels) = left();
+    assert!(
+        !titles.contains(&residue) && !labels.contains(&residue_label),
+        "the residue was not recovered once the run that took its number ended: {titles:?} {labels:?}"
+    );
+}
+
+#[tokio::test]
 async fn an_artifact_another_deleter_took_first_leaves_the_cleanup_successful() {
     // The board answers the listing and then the item is gone — swept by another run,
     // removed by hand, whatever. GitHub refuses the delete that follows, and treating that

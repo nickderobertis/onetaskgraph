@@ -84,7 +84,25 @@ run_journey() {
 # what a passing test printed. A skip nobody can read is indistinguishable from a journey
 # that ran and asserted nothing, which is the one thing this check may not confuse.
 
-if grep -q 'Exclusivity::OneAtATime' "$JOURNEY"; then
+# Which exclusivity the lane opens with, read from its code rather than from its prose.
+#
+# **Line comments are stripped first, and both variants appearing is an error rather than a
+# choice.** A grep over the raw file answers `OneAtATime` for a lane that merely *mentions*
+# it in a note about the arrangement — which is exactly what these journeys carry — and
+# would then drive a decline that lane cannot produce and report the failure as the lane's.
+# Neither half is syntax-aware, so what stands behind them is the drive itself: a lane whose
+# real call this reads wrongly fails below, naming what it expected.
+exclusivity=""
+for variant in OneAtATime Shared; do
+  if sed 's|//.*||' "$JOURNEY" | grep -q "Exclusivity::$variant"; then
+    if [ -n "$exclusivity" ]; then
+      fail "$JOURNEY opens a session with both Exclusivity::$exclusivity and Exclusivity::$variant, so which precondition can decline it is ambiguous. Open one."
+    fi
+    exclusivity="$variant"
+  fi
+done
+
+if [ "$exclusivity" = "OneAtATime" ]; then
   # A seat directory that is a FILE: the seat cannot be created there, so the lane is
   # declined before it reaches its API. Nothing here names the seat file — the crate that
   # decides that name is the only place it is spelled.
@@ -118,15 +136,38 @@ if grep -q 'Exclusivity::OneAtATime' "$JOURNEY"; then
     *ONETASKGRAPH_LIVE_SEAT_DIR*) ;;
     *) fail "a declined session did not name what a reader can change to make it run. Output: $declined_output" ;;
   esac
-elif grep -q 'Exclusivity::Shared' "$JOURNEY"; then
+elif [ "$exclusivity" = "Shared" ]; then
   # No seat, so no decline this check can produce — but the lane must still HAVE one that
   # some check drives to a red result, or the outcome above stops being proven for it.
+  #
+  # The project file is PARSED rather than grepped: a decline check named in a comment, in
+  # another target, or in a string that is not a command satisfies a regex and drives
+  # nothing. What counts is a command of this crate's own `test` target.
   targets="crates/$CRATE/project.json"
-  driven="$(grep -o 'scripts/check-[a-z-]*-decline\.sh' "$targets" | grep -v 'check-live-decline\.sh' | head -1 || true)"
+  driven="$(python3 - "$targets" <<'PYTHON'
+import json, re, sys
+
+targets = json.load(open(sys.argv[1], encoding="utf-8")).get("targets", {})
+options = targets.get("test", {}).get("options", {})
+commands = options.get("commands", [])
+if not isinstance(commands, list):
+    commands = [commands]
+if "command" in options:
+    commands.append(options["command"])
+named = re.compile(r"scripts/check-[a-z-]+-decline\.sh")
+for command in commands:
+    if not isinstance(command, str):
+        command = command.get("command", "")
+    for found in named.findall(command):
+        if not found.endswith("check-live-decline.sh"):
+            print(found)
+            raise SystemExit(0)
+PYTHON
+)" || fail "$targets could not be read as the project file it has to be. Fix its JSON, then re-run."
   if [ -z "$driven" ]; then
-    fail "$JOURNEY opens a shared session, so no seat can decline it — and $targets runs no other check-*-decline.sh, so nothing drives this lane's decline through to a red result. Add one, or give the lane back a precondition this check can refuse."
+    fail "$JOURNEY opens a shared session, so no seat can decline it — and the test target in $targets runs no other check-*-decline.sh, so nothing drives this lane's decline through to a red result. Add one as a command of that target, or give the lane back a precondition this check can refuse."
   elif [ ! -f "$driven" ]; then
-    fail "$targets names $driven, which is not in the tree."
+    fail "the test target in $targets runs $driven, which is not in the tree. Add that script, or point that command at the check that really drives this lane's decline."
   else
     echo "check-live-decline: $CRATE opens a shared session; its decline is driven by $driven."
   fi

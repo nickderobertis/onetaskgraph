@@ -1181,11 +1181,12 @@ mod tests {
 
     #[test]
     fn a_shared_session_takes_no_seat_and_a_second_one_opens_beside_it() {
-        // The lane that asks for this has run-scoped artifacts and an age-decided sweep, so
-        // there is nothing left for a seat to protect — and a seat never protected the case
-        // that is left, which is two hosted runners on two machines. What must be true is
-        // that the second session opens rather than being declined, and that neither of
-        // them wrote a seat anything else could then be declined by.
+        // The lane that asks for this has run-scoped artifacts and a sweep that removes
+        // another run's only once the kernel says that run has ended, so there is nothing
+        // left for a seat to protect — and a seat never protected the case that is left,
+        // which is two hosted runners on two machines. What must be true is that the second
+        // session opens rather than being declined, and that neither of them wrote a seat
+        // anything else could then be declined by.
         let directory = scratch();
         let held = Session::open_in(
             &directory,
