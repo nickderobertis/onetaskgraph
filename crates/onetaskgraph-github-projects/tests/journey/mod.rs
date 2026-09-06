@@ -1603,6 +1603,95 @@ async fn await_on_board(
     ))
 }
 
+/// A fixture every part of which one source has now reported, and that source.
+pub struct Settled {
+    /// The source that answered the converging attempt, for the legs that follow.
+    pub source: Box<dyn TaskSource>,
+    /// Every task title it reported under the run's prefix.
+    pub tasks: Vec<String>,
+    /// Every project title it reported under the same prefix.
+    pub projects: Vec<String>,
+}
+
+/// Waits until one source reports the whole of a run's fixture, and hands that source back.
+///
+/// GitHub decides when a created issue appears on the board and when its issue search
+/// reports one — the search is an index and is documented as eventually consistent — so a
+/// run reads its own fixture by waiting for it rather than by racing it.
+///
+/// **Each attempt asks through a source built afresh, and that is the whole of what makes
+/// this a wait.** A source reads the board once and answers every later question from that
+/// one read for the rest of its life: that is what one invocation of the binary needs — it
+/// is what stops a copy of a project re-reading the whole board per item it writes — and it
+/// is what a poll must never do. Asking one source twenty times asks GitHub once and
+/// compares the same answer twenty times, so an item that landed a second after that read
+/// could never be seen however long the loop ran. That is not hypothetical: it is what left
+/// a credentialed run reporting that the board "never reported all three tasks".
+///
+/// What comes back is the source that answered the converging attempt, which serves the
+/// callers' two needs at once — it was built the way the next command would build one, so a
+/// change nothing here wrote is visible to it, and its view of the board is the one just
+/// confirmed complete rather than one taken before the fixture had settled.
+pub async fn settled_fixture(
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    // Narrowed to one run's own titles, so what is counted is that run's fixture however
+    // much else the nominated board holds.
+    prefix: &str,
+    tasks_expected: usize,
+    projects_expected: usize,
+) -> Result<Settled, String> {
+    let ours = || {
+        Some(TextQuery {
+            terms: prefix.to_owned(),
+            fields: TextFields::Title,
+        })
+    };
+    let mut last_read = (Vec::new(), Vec::new());
+    let mut source = rebuilt();
+    // Two minutes at two-second intervals, against an index whose lag is usually seconds:
+    // patience costs nothing on a run that is going to pass, and the two requests an
+    // attempt makes are spent only by a run that is already failing.
+    for attempt in 0..60 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            source = rebuilt();
+        }
+        let reader = source.as_ref();
+        let tasks = task_titles(
+            reader,
+            &TaskQuery {
+                text: ours(),
+                ..Default::default()
+            },
+            "fixture settling task read",
+        )
+        .await?;
+        let projects = project_titles(
+            reader,
+            &ProjectQuery {
+                text: ours(),
+                ..Default::default()
+            },
+            "fixture settling project read",
+        )
+        .await?;
+        if tasks.len() == tasks_expected && projects.len() == projects_expected {
+            return Ok(Settled {
+                source,
+                tasks,
+                projects,
+            });
+        }
+        last_read = (tasks, projects);
+    }
+    let (tasks, projects) = last_read;
+    Err(format!(
+        "the live fixture never became readable: the board never reported all \
+         {tasks_expected} tasks and all {projects_expected} projects titled {prefix}*; the \
+         last read of it reported the tasks {tasks:?} and the projects {projects:?}"
+    ))
+}
+
 /// Drives every field of the source's declared `Capabilities` against the real board.
 ///
 /// The fixture is five items this run creates: two projects, one task filed under each,
@@ -1719,70 +1808,15 @@ async fn drive_every_declared_capability(
         .map_err(|error| format!("live task write of {orphan:?} failed: {error}"))?;
     let label_id = create_artifact_label(&run.token, &run.repository, &label_name).await?;
     attach_artifact_label(&run.token, &first_id.0, &label_id).await?;
-    // That label went onto the issue through GitHub's own REST API rather than through
-    // this source, and this source reads the board once for the command it is serving:
-    // one invocation of the binary is one process, one source and one read of the board,
-    // which is what stops a copy of a project re-reading the whole board per item it
-    // writes. This journey is many commands' worth of work driven through one object, so
-    // the legs below take a source built the way the next command would build one — which
-    // is what makes a change nothing here wrote visible to them.
-    //
-    // GitHub decides when a created issue appears on the board and when its issue search
-    // reports one — the search is an index and is documented as eventually consistent —
-    // so the reads below wait for the fixture rather than racing it.
-    //
-    // **Each attempt asks through a source built afresh, and that is the whole of what
-    // makes this a wait.** The paragraph above is also why: a source reads the board once
-    // and answers every later question from that one read for the rest of its life. Asking
-    // one source twenty times therefore asks GitHub once and compares the same answer
-    // twenty times, so an item that landed a second later could never be seen however long
-    // the loop ran. That is not hypothetical — it is what left a credentialed run
-    // reporting that the board "never reported all three tasks" after a single read of it.
-    //
-    // What the legs below take is the source that answered the converging attempt, which
-    // serves both purposes at once: it was built the way the next command would build one,
-    // and its view of the board is the one just confirmed complete rather than one taken
-    // before the fixture had settled.
-    let mut readable = None;
-    let mut last_read = (Vec::new(), Vec::new());
-    let mut source = rebuilt();
-    // Two minutes at two-second intervals, against an index whose lag is usually seconds:
-    // patience costs nothing on a run that is going to pass, and the two requests an
-    // attempt makes are spent only by a run that is already failing.
-    for attempt in 0..60 {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            source = rebuilt();
-        }
-        let reader = source.as_ref();
-        let tasks = task_titles(reader, &by_prefix(), "fixture settling task read").await?;
-        let projects = project_titles(
-            reader,
-            &ProjectQuery {
-                text: Some(TextQuery {
-                    terms: prefix.clone(),
-                    fields: TextFields::Title,
-                }),
-                ..Default::default()
-            },
-            "fixture settling project read",
-        )
-        .await?;
-        if tasks.len() == 3 && projects.len() == 2 {
-            readable = Some((tasks, projects));
-            break;
-        }
-        last_read = (tasks, projects);
-    }
+    // That label went onto the issue through GitHub's own REST API rather than through this
+    // source, so the legs below need a source that has not already read the board — which is
+    // what waiting for the fixture leaves them. See `settled_fixture`.
+    let Settled {
+        source,
+        tasks: run_tasks,
+        projects: run_projects,
+    } = settled_fixture(rebuilt, &prefix, 3, 2).await?;
     let writer = source.as_ref();
-    let Some((run_tasks, run_projects)) = readable else {
-        let (tasks, projects) = last_read;
-        return Err(format!(
-            "the live fixture never became readable: the board never reported all three \
-             tasks and both projects titled {prefix}*; the last read of it reported the \
-             tasks {tasks:?} and the projects {projects:?}"
-        ));
-    };
 
     // `search_title` and `projects`: one title search over the whole board selects exactly
     // this run's five items, three of which are tasks and two of which are projects.
