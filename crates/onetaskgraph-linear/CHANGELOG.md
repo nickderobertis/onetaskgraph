@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.24](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.2.23...onetaskgraph-linear-v0.2.24) - 2026-09-06
+
+### Fixed
+
+- *(live)* stop the startup sweep touching a run in flight, and land it past this repository's own merge path ([#538](https://github.com/nickderobertis/onetaskgraph/pull/538))
+
 ## [0.2.22](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.2.21...onetaskgraph-linear-v0.2.22) - 2026-09-04
 
 ### Added
