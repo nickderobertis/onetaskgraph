@@ -289,6 +289,51 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   signal the merge does not wait on. It is a different outcome from a session that
   *declined*: an outage makes a run that happened fail, and a decline is a run that never
   happened, which says so on its face and is not read as a defect in the code.
+- **A version bump is not a reason to reach a real API, and one decision says so.**
+  Affected selection is the edge those tests sit behind, and a release defeats it:
+  release-plz rewrites `Cargo.lock`, which is a `sharedGlobals` input, so every project in
+  the workspace is selected and both hosted lanes open a session for a diff that reaches no
+  plugin behaviour at all. That is not a hypothetical — it is why the default branch went
+  red with the account's whole GraphQL allowance exhausted, which then refuses ordinary
+  reads against this repository from anywhere else.
+  `scripts/live-lane-selection.sh` is the second half of that edge and the ONE
+  implementation of it: asked about one live crate and one base ref, answering `run` or
+  `not-selected`, and every caller reads that answer rather than restating the rule. Its
+  only `not-selected` is a version bump and its changelogs — inside the crate's own
+  directory nothing but its manifest's `version` field and its `CHANGELOG.md`, and outside
+  it nothing but four whole paths — the repository-root `Cargo.lock` and `Cargo.toml`, and
+  a workspace member's own `Cargo.toml` and `CHANGELOG.md`, the members expanded from
+  `[workspace] members` against the tree — each changed only in lines that are
+  byte-for-byte the same line with the version substituted.
+  **The set is whole paths rather than basenames, and a file outside it is `run` whatever
+  its change looks like.** A nested `Cargo.toml` that is a test fixture and a
+  `CHANGELOG.md` belonging to something that is not a workspace crate are both `run`: a
+  basename is not a location. A version substitution is likewise evidence about a line
+  rather than about a file, and both SDKs declare a version constant in ordinary source —
+  so a release that also moves `pyproject.toml`, a `package.json`, `bun.lock`, `uv.lock`
+  or one of those constants answers `run` and does open the lanes. Widening the set to
+  cover a release in full is a change to this contract, not a repair to the script.
+  **Any question it cannot answer is `run`**: an unresolvable base, an unreadable blob, a
+  diff it cannot explain. It fails toward spending the budget, never toward skipping the
+  lane, because that is the direction a wrong answer is recoverable in.
+  A lane it refuses reports that it was **not selected**, in words a reader can tell from a
+  lane whose credential is missing. `ONETASKGRAPH_LIVE_REQUIRED` keeps exactly the meaning
+  it has, so a defect in this decision cannot make an absent credential read as an
+  unselected lane.
+  **Every path that can open a session reaches it through `just test`**, which is why there
+  is one consultation point rather than three: the change-request path runs `just check`,
+  and the default branch and `.githooks/pre-push` run `just gate`, which is now `deny` plus
+  that same `check`. Each derives its base explicitly — `.github/workflows/ci.yml` from the
+  merge base or from `github.event.before`, the hook from the records git feeds it on stdin
+  through `scripts/pre-push-base.sh` — because an implicit base is how affected selection
+  quietly starts comparing against the wrong commit, and on the default branch it compares
+  against this very commit and selects nothing at all.
+  `scripts/check-live-lane-selection.sh`, a command in `scripts:test`, holds all of that:
+  it puts the five diffs to the real decision over real git states, drives the real recipes
+  for each of the three paths, puts three diffs to real Nx, and ENUMERATES the paths from
+  the workflow and the hook rather than listing them — so a path added or rewired later
+  cannot silently bypass the decision. Nothing it runs has a credential and nothing it runs
+  reaches an API.
 - **One gate, because the next precondition has to govern every path.** A live test cannot
   hold its credential except from `onetaskgraph_live::Session::open`
   (`crates/onetaskgraph-live`), which runs every precondition first and hands the credential
@@ -585,6 +630,33 @@ them do; this is the inventory of what is owed, not a status board.
   that watch it refuse are `scripts:test`. `just script-check` runs both by hand — it is
   the entry point their diagnostics name — and is not a phase of `check`, because the
   phases already cover it.
+- **A value captured from python has to survive that python's line endings.** Python opens
+  stdout in text mode, so on the Windows runner every `\n` it prints leaves as `\r\n`, and
+  a command substitution strips the newline and keeps the carriage return. It then reads
+  like the value it is not: that is what failed `check (windows-latest)` on the live-lane
+  selection, where a bumped version captured as `0.2.24<CR>` went into a manifest as
+  `version = "0.2.24<CR>"`, which python read back as two lines — so every version fixture
+  answered `run` and eleven expectations failed against a decision that was correct. Strip
+  it where it is captured, with `tr -d '\r'` as `scripts/check-plugin-isolation.sh` does,
+  or hold the stream to `"\n"` where it is written, which is what
+  `scripts/live-lane-selection.sh` does because it is the ONE implementation of an answer
+  its callers compare a word against and a caller repairing that answer is a caller
+  restating the rule. `scripts/check-selection-line-endings.sh`, a command in
+  `scripts:test`, runs that decision and the check that drives it again through a python
+  that ends its lines the Windows way — and refuses to run at all if the simulation did not
+  take, because a shim that did nothing would look exactly like a pass.
+- **And text a python reads back from a subprocess has to name the encoding it was written
+  in.** Text mode with no encoding picks the *platform's* — UTF-8 on the Linux and macOS
+  runners, the ANSI code page on the Windows one — so `git show` handed
+  `scripts/live-lane-selection.sh` a manifest's `—` as `â€"` while the same file read off
+  the disk as UTF-8 kept it. Every line carrying one then read as a line the diff had
+  changed, every version-only diff answered `run`, and `check (windows-latest)` failed
+  twice on a decision no other lane could see was broken. Write `encoding="utf-8"`, as that
+  decision now does. `scripts/check-selection-code-page.sh`, a command in `scripts:test`,
+  runs the decision and the check that drives it again through a python whose code page is
+  the Windows runner's — and refuses to run when the shim did not take, or when no manifest
+  a version-only diff touches carries a byte the two decodings disagree about, because
+  either would look exactly like a pass.
 - **Suppress narrowly.** A diagnostic is an error or a suppression at that one site with a
   stated reason. `notignored` posts every suppression a PR adds, so they are read.
 - **`gh-secrets.json` is tracked and load-bearing.** It declares the repository secrets

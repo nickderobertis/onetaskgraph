@@ -32,12 +32,15 @@ bootstrap:
 # Everyday gate: format, lint, types, tests and coverage over the affected projects.
 check: format-check lint typecheck test coverage distribution-check distribution-test
 
-# This is what .githooks/pre-push runs and what the default branch sweeps on every
-# push, so nothing affected-detection could miss goes unchecked.
+# What .githooks/pre-push and the default branch run. It SELECTS rather than sweeps, which
+# reverses an earlier decision: a sweep ran every plugin's live tests whatever the diff
+# touched, and that is how a release commit exhausted the account's GraphQL budget. Both
+# callers export NX_BASE, as the pull-request lane does; scripts/pre-push-base.sh is the
+# hook's half. `deny` and the two distribution stages sit outside affected selection and
+# are dependencies here, so nothing the sweep checked goes unchecked. AGENTS.md records why.
 
-# Full quality gate over EVERY project, plus the supply chain. Fails on any issue.
-gate: deny distribution-check distribution-test
-    @{{nx}} run-many -t check --all
+# Full quality gate over the affected projects, plus the supply chain. Fails on any issue.
+gate: deny check
 
 # scripts/ is a project, so the phases above already reach these: `lint` runs the bash 3.2
 # scan and `test` runs the checks that watch it refuse, over the affected projects. This is
@@ -60,10 +63,15 @@ distribution-check:
 distribution-test:
     @{{nx}} run scripts:distribution-test
 
-# llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] `affected` is the edge these suites sit behind: a plugin's live tests run only when that plugin's own diff selects it.
+# The one place the live-lane decision is consulted, so every path that can open a live
+# session reaches the API through this recipe. scripts/live-lane-selection.sh prints the
+# `--exclude` for each live plugin the diff against NX_BASE cannot reach; an empty or
+# failed answer excludes nothing, so the lane runs.
+
+# llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] `affected` is the edge these suites sit behind: a plugin's live tests run only when that plugin's own diff selects it, and the exclusion below is the second half of that edge — a version bump selects every project through Cargo.lock and reaches no plugin behaviour.
 # Tests only, for the affected projects.
 test:
-    @{{nx}} affected -t test
+    @{{nx}} affected -t test $(bash scripts/live-lane-selection.sh --nx-exclusions)
 # llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]
 
 # Each project measures its own crate and fails below 95% lines. The measurement is
@@ -113,7 +121,7 @@ generate-check:
 # Linux CI aggregate: generated-code drift plus the affected-project gate.
 check-generated: generate-check check
 
-# Linux CI aggregate: generated-code drift plus the all-project gate.
+# Linux CI aggregate: generated-code drift plus the affected-project gate and the supply chain.
 gate-generated: generate-check gate
 
 # Upgrade every ecosystem's dependencies, then re-run the complete bar on the result.

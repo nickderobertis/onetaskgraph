@@ -1,8 +1,9 @@
 # Prove the workspace from a clean checkout, on the real platform matrix.
 #
-# A pull request runs the gate over the projects its diff can actually reach; the default
-# branch sweeps every project, so nothing affected-detection or a stale cache could miss
-# goes unchecked. Both go through the same `just` recipes a contributor runs locally.
+# Every lane runs the same `just` recipes a contributor runs locally, over the projects its
+# diff can reach, and derives its base explicitly below rather than letting Nx guess one —
+# the default branch included, where a sweep once ran every plugin's live tests for a
+# release commit and exhausted the account's GraphQL budget. AGENTS.md records that.
 #
 # Two things about the tests that reach a real API are this file's alone. One live session
 # per run: only the `ubuntu-latest` leg carries the credentials, and scripts/rust-coverage.sh
@@ -92,19 +93,35 @@ jobs:
         run: just bootstrap
 
       # Derive the base explicitly rather than letting Nx guess: an implicit base is how
-      # affected selection quietly starts comparing against the wrong commit.
-      - name: Derive the merge base
+      # affected selection quietly starts comparing against the wrong commit. On the
+      # default branch that is not a stylistic preference — `defaultBase` is origin/main,
+      # which on a push to main IS this commit, so an implicit base would select nothing at
+      # all. `github.event.before` is the commit this push replaced, and it is all-zeros on
+      # a branch the remote has never seen, so HEAD~1 is the fallback.
+      - name: Derive the comparison base
         id: base
         shell: bash
         env:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
+          zero=0000000000000000000000000000000000000000
           if [ -n "${BASE_SHA:-}" ]; then
             git fetch --no-tags origin "$BASE_REF"
             merge_base="$(git merge-base "$BASE_SHA" HEAD)"
             echo "base=$merge_base" >> "$GITHUB_OUTPUT"
             echo "Affected against the merge base with $BASE_REF: $merge_base"
+          elif [ -n "${BEFORE_SHA:-}" ] && [ "${BEFORE_SHA}" != "$zero" ] \
+            && git rev-parse --verify --quiet "${BEFORE_SHA}^{commit}" >/dev/null; then
+            echo "base=$BEFORE_SHA" >> "$GITHUB_OUTPUT"
+            echo "Affected against the commit this push replaced: $BEFORE_SHA"
+          elif git rev-parse --verify --quiet 'HEAD~1^{commit}' >/dev/null; then
+            fallback="$(git rev-parse HEAD~1)"
+            echo "base=$fallback" >> "$GITHUB_OUTPUT"
+            echo "Affected against HEAD~1, this push having no readable predecessor: $fallback"
+          else
+            echo "No base could be derived; Nx will fall back to its own defaultBase."
           fi
 
       # llmlint: ignore[live_tier_compiles_and_requires_credential] This leg is given no credential, for the reason the file header states, so it cannot demand one.
@@ -146,15 +163,19 @@ jobs:
         # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] These targets run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just check-generated
 
-      # On the default branch, sweep everything. A cache is for speed and must never be
-      # what makes a broken clean build look green.
+      # On the default branch, the same gate against the commit this push replaced. A cache
+      # is for speed and must never be what makes a broken clean build look green, which is
+      # why `just gate` keeps the supply-chain and distribution stages outside selection.
       # llmlint: ignore[live_tier_compiles_and_requires_credential] This leg is given no credential, for the reason the file header states, so it cannot demand one.
-      - name: Sweep every project
+      - name: Check the affected projects on the default branch
         if: github.event_name != 'pull_request' && matrix.os != 'ubuntu-latest'
+        env:
+          NX_BASE: ${{ steps.base.outputs.base }}
+          NX_HEAD: HEAD
         run: just gate
 
 
-      - name: Sweep every project and check generated Python SDK
+      - name: Check the affected projects and generated Python SDK on the default branch
         if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
         env:
           # The default-branch half of the pull-request step above; why is written there.
@@ -169,6 +190,8 @@ jobs:
           # push to the default branch, and a push is never a fork pull request, so there is
           # no run here where a credential was not expected.
           ONETASKGRAPH_LIVE_REQUIRED: "1"
+          NX_BASE: ${{ steps.base.outputs.base }}
+          NX_HEAD: HEAD
         run: just gate-generated
 
   # Supply chain, Linux-only: the graph is the same on every platform, so running it three
