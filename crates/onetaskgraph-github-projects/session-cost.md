@@ -195,8 +195,8 @@ what makes a change nothing here wrote visible at all — the label attached out
 each further item GitHub has not reported yet. That loop settles on the first attempt
 against this fixture and so builds exactly one source here, which is why the row above is
 what it is; against GitHub it builds one more per attempt it has to make, because a source
-answers every board question from one read and asking the same one twice asks GitHub once. Collapsing any of them would buy one
-request by deleting a proof.
+answers every board question from one read and asking the same one twice asks GitHub once.
+Collapsing any of them would buy one request by deleting a proof.
 
 **The page sizes the source asks for.** Measured by driving the journey with its page limit
 at 100 and at 5, against 50 as it stands. All three are whole sessions as this branch now

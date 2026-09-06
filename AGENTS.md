@@ -436,9 +436,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   retargeted the credentialed lane from the fixture board onto the board plans are authored on.
   Requiring the board to be named is what keeps the lane off a board nobody nominated. The
   lane's separate sweep of orphaned artifacts is self-healing after an interrupted run — it
-  recovers residue a killed process left behind, and it is not what bounds where the lane
-  may write. **The Linear lane names its scratch team the same
-  way**, through `LINEAR_WRITE_TEAM`, which is the `LINEAR_WRITE_TEAM` repository variable
+  recovers residue a killed process left behind, and it is not what bounds where the lane may
+  write. **The Linear lane names its scratch team the same way**, through
+  `LINEAR_WRITE_TEAM`, which is the `LINEAR_WRITE_TEAM` repository variable
   on this repository — a variable rather than a secret, because a nomination has to be
   readable for anyone reviewing where a credentialed write may land, and it names the
   scratch team the operator set aside for it. A run that reaches that lane without the
