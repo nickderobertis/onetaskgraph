@@ -147,23 +147,41 @@ elif [ "$exclusivity" = "Shared" ]; then
   driven="$(python3 - "$targets" <<'PYTHON'
 import json, re, sys
 
+# Nx spells a target's commands two ways — one `command`, or a `commands` list whose entries
+# are a string or a mapping with a `command` in it — and this reads both. Anything ELSE is a
+# project file this cannot rule on, and it says so rather than reading a shape it guessed at:
+# a silent empty answer here would report the crate as running no decline check at all, which
+# is a different failure with a different fix.
+def spelled(command, where):
+    if isinstance(command, str):
+        return command
+    if isinstance(command, dict) and isinstance(command.get("command"), str):
+        return command["command"]
+    raise SystemExit(
+        f"{where} is neither a command string nor a mapping carrying one: {command!r}"
+    )
+
 targets = json.load(open(sys.argv[1], encoding="utf-8")).get("targets", {})
 options = targets.get("test", {}).get("options", {})
-commands = options.get("commands", [])
-if not isinstance(commands, list):
-    commands = [commands]
+listed = options.get("commands", [])
+if not isinstance(listed, (list, str, dict)):
+    raise SystemExit(f"targets.test.options.commands is neither a list nor one command: {listed!r}")
+if not isinstance(listed, list):
+    listed = [listed]
+commands = [
+    spelled(command, f"targets.test.options.commands[{at}]")
+    for at, command in enumerate(listed)
+]
 if "command" in options:
-    commands.append(options["command"])
+    commands.append(spelled(options["command"], "targets.test.options.command"))
 named = re.compile(r"scripts/check-[a-z-]+-decline\.sh")
 for command in commands:
-    if not isinstance(command, str):
-        command = command.get("command", "")
     for found in named.findall(command):
         if not found.endswith("check-live-decline.sh"):
             print(found)
             raise SystemExit(0)
 PYTHON
-)" || fail "$targets could not be read as the project file it has to be. Fix its JSON, then re-run."
+)" || fail "$targets could not be read as the project file it has to be: ${driven:-see the message above}. Fix that file's shape, then re-run."
   if [ -z "$driven" ]; then
     fail "$JOURNEY opens a shared session, so no seat can decline it — and the test target in $targets runs no other check-*-decline.sh, so nothing drives this lane's decline through to a red result. Add one as a command of that target, or give the lane back a precondition this check can refuse."
   elif [ ! -f "$driven" ]; then
