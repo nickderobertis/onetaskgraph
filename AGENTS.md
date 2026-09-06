@@ -392,13 +392,15 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   artifacts,** which is what made two concurrent runs delete each other's in-flight items
   and made a seat the only thing between them; the rule that replaced it recognised any
   run's artifacts that were old enough, which is the same failure against a *slow* run.
-  That sweep now runs at the END of a run and reaches only what the kernel says is nobody's;
-  `crates/onetaskgraph-github-projects/tests/sweep_gate.rs` drives the real cleanup against
-  a loopback board and holds every half — a **real second process**, holding a real
-  registration, keeps its artifacts through a sweep whose window they are already ten times
-  older than and loses them to the very same sweep once it is killed, and a delete of an
-  artifact another deleter took first leaves the cleanup successful rather than failing the
-  run.
+  That sweep now runs at the END of a run and reaches only what the kernel says is nobody's.
+  **Each lane has a `tests/sweep_gate.rs` that drives its own real cleanup against a loopback
+  stand-in**, with no credential and no third party, and both hold every half — a **real
+  second process**, holding a real registration, keeps its artifacts through a sweep whose
+  window they are already ten times older than and loses them to the very same sweep once it
+  is killed, and a delete of an artifact another deleter took first leaves the cleanup
+  successful rather than failing the run. Linear's is what the extraction of
+  `crates/onetaskgraph-linear/tests/cleanup/` is for: one cleanup that the credentialed
+  journey and that stand-in both drive, rather than a second spelling of it beside the first.
 - **Two things still hold one session per lane per run, and the second is the one a fold
   that stops at the test target gets wrong**: `scripts/rust-coverage.sh` clearing the
   credentials, because `just check` performs the affected `test` target **and** the affected
