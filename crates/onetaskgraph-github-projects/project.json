@@ -47,7 +47,7 @@
       "options": {
         "commands": [
           "cargo test --quiet -p onetaskgraph-github-projects --all-features --locked",
-          "bash scripts/check-live-decline.sh onetaskgraph-github-projects onetaskgraph-live-github-projects.seat",
+          "bash scripts/check-live-decline.sh onetaskgraph-github-projects",
           "bash scripts/check-budget-decline.sh"
         ],
         "parallel": false

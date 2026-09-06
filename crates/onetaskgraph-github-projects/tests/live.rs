@@ -9,7 +9,7 @@
 
 use std::env;
 
-use onetaskgraph_live::Session;
+use onetaskgraph_live::{Exclusivity, Session};
 
 // The stand-ins that prove the budget precondition build their answers from `journey`'s
 // own pinned names, and this target reaches none of them: it points the journey at GitHub,
@@ -62,7 +62,17 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     // The one gate: nothing below may reach GitHub until the session is open, because the
     // token below is the one this returns rather than the one the lane read. A session that
     // is refused did not run and did not pass, and says so.
-    let session = Session::open(SESSION_NAME, token).unwrap_or_else(|declined| declined.refuse());
+    //
+    // `Shared`: this lane takes no seat. Every artifact it writes carries this run's own
+    // process id, its cleanup removes only those, and what it recovers of an interrupted
+    // run's is decided by that artifact's own stamp — so two sessions of this lane cannot
+    // reach each other's work and there is nothing left for a seat to protect. What it
+    // never protected is the case that remains: the hosted check runs on three platforms
+    // and a file on one runner excludes nothing on another. The precondition that can
+    // decline this lane is the budget one, inside `journey::run`, which
+    // `scripts/check-budget-decline.sh` drives through to a red check without a credential.
+    let session = Session::open(SESSION_NAME, token, Exclusivity::Shared)
+        .unwrap_or_else(|declined| declined.refuse());
     journey::against(journey::Endpoints::github());
     journey::run(journey::Nomination {
         token: session.credential().expose().to_owned(),

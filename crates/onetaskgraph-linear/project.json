@@ -47,7 +47,7 @@
       "options": {
         "commands": [
           "cargo test --quiet -p onetaskgraph-linear --all-features --locked",
-          "bash scripts/check-live-decline.sh onetaskgraph-linear onetaskgraph-live-linear.seat"
+          "bash scripts/check-live-decline.sh onetaskgraph-linear"
         ],
         "parallel": false
       },

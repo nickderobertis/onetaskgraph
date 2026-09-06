@@ -9,8 +9,9 @@
 //! The board comes from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, and the repository this
 //! source creates its issues in comes from `GH_PROJECTS_REPOSITORY`, or the lane skips:
 //! requiring both to be named is what keeps a credentialed write lane off a board and a
-//! repository nobody nominated. Clearing residue before each run is a separate thing —
-//! self-healing after an interrupted run.
+//! repository nobody nominated. Clearing residue is a separate thing — self-healing after an
+//! interrupted run — and it happens at the END of a run, over artifacts whose own stamps say
+//! they are nobody's live work. See [`sweep_orphans`].
 //!
 //! The artifact this lane writes is a real issue, because a project is an issue and a task is
 //! its sub-issue, so leaving no residue means deleting the board item **and** the issue. The
@@ -36,9 +37,12 @@ use onetaskgraph_plugin_api::{
 };
 use serde_json::{Value, json};
 
+use onetaskgraph_live::artifact::Sweep;
+
 use crate::lane::{
-    ARTIFACT_PREFIX, LABEL_PREFIX, LiveSecret, artifact_label, artifact_title, is_artifact_label,
-    is_artifact_title, is_run_artifact_title, live_write_config, rest_outcome, run_then_cleanup,
+    ARTIFACT_PREFIX, LiveSecret, artifact_label, artifact_title, is_orphan_label, is_orphan_title,
+    is_run_artifact_label, is_run_artifact_title, live_write_config, rest_outcome,
+    run_then_cleanup,
 };
 
 /// Everything this run costs GitHub, this lane's own calls and the source's alike.
@@ -537,36 +541,69 @@ async fn artifact_item_ids(
     }
 }
 
+/// Deletes every board item `matches` names, and the issue behind each one.
+///
+/// **A delete that fails does not fail the cleanup on its own, and the listing above is why
+/// it does not have to.** An item this run listed can be gone by the time the delete lands —
+/// another run swept it, somebody removed it by hand, the board is answering a read of
+/// itself that is behind — and GitHub answers a delete of what is no longer there by
+/// refusing it. That refusal is the outcome the delete was asking for, and treating it as a
+/// failure once killed a whole journey over an item that had already gone.
+///
+/// So a refusal is *remembered* rather than returned, and the next round asks the board what
+/// is actually left. What decides is the board: nothing matching means done, however many
+/// deletes were refused getting there, and something still matching after every round fails
+/// naming both what is left and what GitHub said about it. Nothing here has to know how
+/// GitHub spells "already gone" — which is what would otherwise have to be guessed at, and
+/// what would then go stale the day that spelling changed.
 async fn remove_live_artifacts(
     token: &str,
     project_id: &str,
     matches: &dyn Fn(&str) -> bool,
 ) -> Result<(), String> {
+    let mut refused = Vec::new();
     for _ in 0..10 {
         let item_ids = artifact_item_ids(token, project_id, matches).await?;
         if item_ids.is_empty() {
             return Ok(());
         }
+        refused.clear();
         for (item_id, issue_id) in item_ids {
-            let response = graphql_variables(
+            let taken = match graphql_variables(
                 token,
                 "mutation($input:DeleteProjectV2ItemInput!){deleteProjectV2Item(input:$input){deletedItemId}}",
                 "live artifact cleanup",
                 json!({"input":{"projectId":project_id,"itemId":item_id}}),
             )
-            .await?;
-            if response
-                .pointer("/data/deleteProjectV2Item/deletedItemId")
-                .and_then(Value::as_str)
-                != Some(item_id.as_str())
+            .await
             {
-                return Err(format!(
-                    "GitHub did not confirm deletion of project item {item_id}"
-                ));
-            }
+                Ok(response) => {
+                    let confirmed = response
+                        .pointer("/data/deleteProjectV2Item/deletedItemId")
+                        .and_then(Value::as_str)
+                        == Some(item_id.as_str());
+                    if !confirmed {
+                        refused.push(format!(
+                            "GitHub did not confirm deletion of project item {item_id}"
+                        ));
+                    }
+                    confirmed
+                }
+                Err(problem) => {
+                    refused.push(problem);
+                    false
+                }
+            };
             // Taking the item off the board leaves the issue in the repository, and this
             // lane's whole claim is that it leaves no residue anywhere.
-            if let Some(issue_id) = issue_id {
+            //
+            // Only after a delete this run's own call was confirmed, and that is the
+            // difference between tolerating a race and losing an issue. A confirmed delete
+            // says the item WAS there, so the issue behind it is there too and a refusal
+            // now is a real failure — the board will not report that issue again, so
+            // nothing below would catch it. A delete that was refused says the item had
+            // already gone, and whoever took it took its issue the same way this lane does.
+            if taken && let Some(issue_id) = issue_id {
                 graphql_variables(
                     token,
                     "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){repository{id}}}",
@@ -579,13 +616,18 @@ async fn remove_live_artifacts(
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
     Err(format!(
-        "live artifact cleanup left project items: {}",
+        "live artifact cleanup left project items: {}{}",
         artifact_item_ids(token, project_id, matches)
             .await?
             .into_iter()
             .map(|(item, _)| item)
             .collect::<Vec<_>>()
-            .join(", ")
+            .join(", "),
+        if refused.is_empty() {
+            String::new()
+        } else {
+            format!("; GitHub refused: {}", refused.join("; "))
+        }
     ))
 }
 
@@ -778,11 +820,12 @@ async fn attach_artifact_label(token: &str, issue_id: &str, label_id: &str) -> R
     Ok(())
 }
 
-async fn remove_artifact_labels(
+/// Every label of the repository `matches` names, walked to exhaustion.
+async fn listed_labels(
     token: &str,
     repository: &str,
     matches: &dyn Fn(&str) -> bool,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let mut names = Vec::new();
     for number in 1..=50 {
         let listed = rest(
@@ -809,11 +852,21 @@ async fn remove_artifact_labels(
             break;
         }
     }
+    Ok(names)
+}
+
+async fn remove_artifact_labels(
+    token: &str,
+    repository: &str,
+    matches: &dyn Fn(&str) -> bool,
+) -> Result<(), String> {
+    let names = listed_labels(token, repository, matches).await?;
+    let mut refused = Vec::new();
     for name in &names {
         // Safe unescaped: `matches` accepts only the grammar `LABEL_PREFIX` documents.
         let mut parameters = repository_parameters(repository);
         parameters.push(("name", name));
-        rest(
+        if let Err(problem) = rest(
             token,
             Method::Delete,
             "/repos/{owner}/{repo}/labels/{name}",
@@ -822,9 +875,27 @@ async fn remove_artifact_labels(
             None,
             "live label cleanup",
         )
-        .await?;
+        .await
+        {
+            refused.push(problem);
+        }
     }
-    Ok(())
+    // The repository decides, for the reason the board does one function up: a label
+    // another deleter took between this listing and this delete is refused by GitHub, and
+    // that refusal is the outcome the delete was asking for. So what is asked at the end is
+    // whether any is still there, not whether every call was answered.
+    if refused.is_empty() {
+        return Ok(());
+    }
+    let left = listed_labels(token, repository, matches).await?;
+    if left.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "live label cleanup left labels: {}; GitHub refused: {}",
+        left.join(", "),
+        refused.join("; ")
+    ))
 }
 
 /// Everything one run of this lane created, removed whether its journey passed or failed.
@@ -834,7 +905,22 @@ async fn remove_artifact_labels(
 /// set holds the origin field the write path needs. Every one of them is swept, and every
 /// failure is reported rather than the first, because residue left in one is residue the
 /// next run has to heal.
-async fn remove_live_state(
+///
+/// **Scoped to this run's own process id, and nothing wider.** This is what leaves a
+/// concurrent session's in-flight items where they are; what recovers an *interrupted* run's
+/// is [`sweep_orphans`], which is a different decision made on a different piece of evidence.
+///
+/// # The origin field, which this scoping does not reach
+///
+/// `onetaskgraph.origin` is the board's, not this run's: a session that finds it absent
+/// creates it and removes it again here, and a session that found it there reuses it and
+/// leaves it. Two sessions on one board can therefore have the first delete the field the
+/// second is still writing through. Nothing here fixes that — the fix belongs to the
+/// field's own lifecycle — and it is stated so that it is a known bound rather than a
+/// surprise. It is not a bound this lane's exclusivity used to cover either: the hosted
+/// check runs on more than one runner and a seat file on one machine says nothing about
+/// another, so two credentialed runs have always been able to meet here.
+pub async fn remove_live_state(
     token: &str,
     project_id: &str,
     repository: &str,
@@ -846,7 +932,7 @@ async fn remove_live_state(
     })
     .await;
     let label_result = remove_artifact_labels(token, repository, &|name| {
-        is_artifact_label(name) && name.starts_with(&format!("{LABEL_PREFIX}{process_id}-"))
+        is_run_artifact_label(process_id, name)
     })
     .await;
     let field_result = if remove_origin_field {
@@ -855,6 +941,43 @@ async fn remove_live_state(
         Ok(())
     };
     let problems = [item_result, label_result, field_result]
+        .into_iter()
+        .filter_map(Result::err)
+        .collect::<Vec<_>>();
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("; additionally, "))
+    }
+}
+
+/// What an *interrupted* earlier run left behind, and nothing a live run owns.
+///
+/// A process killed between its writes and its cleanup never reaches [`remove_live_state`],
+/// so its items, its issues and its label stay on somebody's real board. Recovering them is
+/// what this is for, and the whole difficulty is telling them from the artifacts of a run
+/// that is still going.
+///
+/// `sweep` is that decision and it is not this lane's: `onetaskgraph_live::artifact` holds
+/// it, both hosted lanes derive from it, and it rests on nothing but the artifact's own
+/// stamp and the id of the run asking. An artifact of the sweeping run is never an orphan,
+/// whatever its age; an artifact of another run is one only once its stamp has gone stale.
+///
+/// **It runs after the journey rather than before it, and that ordering is the point.**
+/// A sweep at startup was what deleted a concurrent session's in-flight board items, and
+/// there is nothing a start can do that an end cannot: teardown already runs whether the
+/// journey passed or failed, and an orphan an hour old will still be an orphan then.
+pub async fn sweep_orphans(
+    token: &str,
+    project_id: &str,
+    repository: &str,
+    sweep: Sweep,
+) -> Result<(), String> {
+    let item_result =
+        remove_live_artifacts(token, project_id, &|title| is_orphan_title(sweep, title)).await;
+    let label_result =
+        remove_artifact_labels(token, repository, &|name| is_orphan_label(sweep, name)).await;
+    let problems = [item_result, label_result]
         .into_iter()
         .filter_map(Result::err)
         .collect::<Vec<_>>();
@@ -2039,8 +2162,9 @@ pub struct Nomination {
     pub repository: String,
 }
 
-/// Drives the whole session — schema verification, board and field lookups, the residue
-/// sweep, every declared capability, and the cleanup — against whatever [`Endpoints`] names.
+/// Drives the whole session — schema verification, board and field lookups, every declared
+/// capability, this run's own cleanup and the orphan sweep — against whatever [`Endpoints`]
+/// names.
 ///
 /// Every failure panics, exactly as it did when this was one test function: the journey is
 /// the assertion, and a caller that could go on after one had nothing left to assert. What
@@ -2090,22 +2214,6 @@ pub async fn run(nomination: Nomination) {
     let project_id = nominated_project_id(&token, &owner, project_number)
         .await
         .unwrap_or_else(|error| panic!("GitHub Projects live board lookup failed: {error}"));
-    // Self-healing after an interrupted run: a process killed between its writes and its
-    // cleanup never reaches `run_then_cleanup`, so the next run clears the items and the
-    // label it left. What bounds where this lane may write is `live_lane`, not this sweep.
-    remove_live_artifacts(&token, &project_id, &is_artifact_title)
-        .await
-        .unwrap_or_else(|error| {
-            panic!("live residue left by an earlier interrupted run could not be cleared: {error}")
-        });
-    remove_artifact_labels(&token, &repository, &is_artifact_label)
-        .await
-        .unwrap_or_else(|error| {
-            panic!(
-                "live label residue from an earlier interrupted run could not be cleared: {error}"
-            )
-        });
-
     assert!(source.health().await.unwrap().reachable);
     // Every field of the contract's `Capabilities`, spelled out: the struct has no
     // `Default`, so a field added to the contract fails to compile here rather than going
@@ -2248,14 +2356,40 @@ pub async fn run(nomination: Nomination) {
     let writer = rebuild();
     run_then_cleanup(
         || drive_every_declared_capability(&run, writer.as_ref(), &rebuild),
-        || {
-            remove_live_state(
+        || async {
+            // This run's own, first: everything it wrote goes whether the journey passed or
+            // failed. Then what an interrupted EARLIER run left, which is a different
+            // decision on different evidence — and which is deliberately here, at the end,
+            // rather than at the start where it used to be. A sweep before the journey
+            // deleted the in-flight items of any session that happened to be running
+            // beside this one; a sweep after it recovers exactly the same orphans and can
+            // reach nothing a live run owns.
+            let mine = remove_live_state(
                 &token,
                 &project_id,
                 &repository,
                 run.process_id,
                 origin_field_created,
             )
+            .await;
+            let orphans = sweep_orphans(
+                &token,
+                &project_id,
+                &repository,
+                Sweep::of(run.process_id, chrono::Utc::now().timestamp_micros()),
+            )
+            .await;
+            match (mine, orphans) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(mine), Ok(())) => Err(mine),
+                (Ok(()), Err(orphans)) => Err(format!(
+                    "residue left by an earlier interrupted run could not be cleared: {orphans}"
+                )),
+                (Err(mine), Err(orphans)) => Err(format!(
+                    "{mine}; additionally, residue left by an earlier interrupted run could \
+                     not be cleared: {orphans}"
+                )),
+            }
         },
     )
     .await

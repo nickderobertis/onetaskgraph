@@ -15,13 +15,15 @@
 //! `ONETASKGRAPH_LIVE_REQUIRED=1` and each of those skips becomes a failure naming the
 //! variable, so the required lane cannot pass green for want of a credential.
 //!
-//! Everything it creates it deletes, whether its assertions passed or failed, and it
-//! clears residue titled the way it titles its own before it starts — which is
-//! self-healing after a run killed between its writes and its cleanup.
+//! Everything it creates it deletes, whether its assertions passed or failed. It also
+//! recovers what a run killed between its writes and its cleanup left behind — but only
+//! artifacts whose own stamps say no run still owns them, and only once its own journey is
+//! over. See [`sweep_orphans`].
 
-use std::{collections::BTreeMap, env, future::Future};
+use std::{collections::BTreeMap, env, future::Future, time::Duration};
 
-use onetaskgraph_live::{Credential, Session, missing, required};
+use onetaskgraph_live::artifact::{Stamp, Sweep};
+use onetaskgraph_live::{Credential, Exclusivity, Session, missing, required};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
     Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId,
@@ -78,34 +80,31 @@ async fn linear(key: &str, query: &str, variables: Value, what: &str) -> Result<
 /// The session this lane opens against Linear, by the name its seat and its refusals use.
 const SESSION_NAME: &str = "Linear";
 
-/// The prefix of every issue, project and label this lane writes.
+/// The prefix of every issue, project and document this lane writes.
 ///
-/// The rest of a name is `<process id>-<microsecond timestamp>`, which makes one run's
-/// artifacts unique and makes any run's artifacts recognisable to the next run.
+/// The rest of a name is an [`onetaskgraph_live::artifact::Stamp`] — the writing process's
+/// id and a microsecond timestamp — which is what makes one run's artifacts unique, what
+/// makes them recognisable to that run's own cleanup, and what says how old they are to a
+/// later run deciding whether they are orphans. The grammar of that half is not spelled
+/// here: it is one contract shared with the GitHub Projects lane, because both have to
+/// answer the same question about an artifact with the same answer.
 const ARTIFACT_PREFIX: &str = "onetaskgraph live cleanup ";
 
 /// The same for a label, whose name Linear shows in its own filter menus.
 const LABEL_PREFIX: &str = "onetaskgraph-live-";
 
 fn artifact_title(process_id: u32, stamp_micros: i64) -> String {
-    format!("{ARTIFACT_PREFIX}{process_id}-{stamp_micros}")
+    format!("{ARTIFACT_PREFIX}{}", Stamp::new(process_id, stamp_micros))
 }
 
 fn artifact_label(process_id: u32, stamp_micros: i64) -> String {
-    format!("{LABEL_PREFIX}{process_id}-{stamp_micros}")
+    format!("{LABEL_PREFIX}{}", Stamp::new(process_id, stamp_micros))
 }
 
-/// Whether a name is one this lane wrote, under `prefix`, in this run or an earlier one.
-fn is_artifact(prefix: &str, name: &str) -> bool {
-    let Some(suffix) = name.strip_prefix(prefix) else {
-        return false;
-    };
-    let Some((process_id, stamp_micros)) = suffix.split_once('-') else {
-        return false;
-    };
-    [process_id, stamp_micros]
-        .iter()
-        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+/// Whether a name under `prefix` is one *this* run wrote.
+fn is_this_runs(process_id: u32, prefix: &str, name: &str) -> bool {
+    Stamp::read(name.strip_prefix(prefix).unwrap_or(""))
+        .is_some_and(|stamp| stamp.process_id() == process_id)
 }
 
 const TEAM_STATES: &str = "query($key:String!){teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id key states(first:100){nodes{id name type}}}}}";
@@ -172,105 +171,172 @@ async fn walk(
     Err(format!("{what} did not terminate"))
 }
 
+/// One kind of thing this lane writes: how it is listed, and how one of them is deleted.
+///
+/// A table rather than four near-identical blocks, because what has to be true of all four
+/// is the same — find what matches, delete it, and let Linear's own listing decide whether
+/// the cleanup worked.
+struct Residue {
+    listing: &'static str,
+    connection: &'static str,
+    name_field: &'static str,
+    /// The prefix every name of this kind carries.
+    prefix: &'static str,
+    /// Whether `listing` narrows by that prefix itself, which the label connection does not.
+    narrowed: bool,
+    delete: &'static str,
+    /// Where in the mutation's answer Linear confirms it.
+    confirm: &'static str,
+    kind: &'static str,
+}
+
+const RESIDUE: [Residue; 4] = [
+    Residue {
+        listing: ISSUES_BY_TITLE,
+        connection: "issues",
+        name_field: "title",
+        prefix: ARTIFACT_PREFIX,
+        narrowed: true,
+        delete: onetaskgraph_linear::graphql::ISSUE_DELETE,
+        confirm: "/issueDelete/success",
+        kind: "issue",
+    },
+    Residue {
+        listing: PROJECTS_BY_NAME,
+        connection: "projects",
+        name_field: "name",
+        prefix: ARTIFACT_PREFIX,
+        narrowed: true,
+        delete: onetaskgraph_linear::graphql::PROJECT_DELETE,
+        confirm: "/projectDelete/success",
+        kind: "project",
+    },
+    Residue {
+        listing: DOCUMENTS_BY_TITLE,
+        connection: "documents",
+        name_field: "title",
+        prefix: ARTIFACT_PREFIX,
+        narrowed: true,
+        delete: onetaskgraph_linear::graphql::DOCUMENT_DELETE,
+        confirm: "/documentDelete/success",
+        kind: "document",
+    },
+    Residue {
+        listing: LABELS_PAGE,
+        connection: "issueLabels",
+        name_field: "name",
+        prefix: LABEL_PREFIX,
+        narrowed: false,
+        delete: LABEL_DELETE,
+        confirm: "/issueLabelDelete/success",
+        kind: "label",
+    },
+];
+
+/// Everything of every kind whose name `matches`, as `(kind, id, name)`.
+async fn find_artifacts<'a>(
+    key: &str,
+    matches: &dyn Fn(&str, &str) -> bool,
+) -> Result<Vec<(&'a Residue, String, String)>, String> {
+    let mut found = Vec::new();
+    for residue in &RESIDUE {
+        let listed = walk(
+            key,
+            residue.listing,
+            residue.connection,
+            residue.name_field,
+            residue.narrowed.then_some(residue.prefix),
+            &format!("live {} residue lookup", residue.kind),
+        )
+        .await?;
+        found.extend(
+            listed
+                .into_iter()
+                .filter(|(_, name)| matches(residue.prefix, name))
+                .map(|(id, name)| (residue, id, name)),
+        );
+    }
+    Ok(found)
+}
+
 /// Deletes every issue, project, document and label whose name `matches`.
 ///
-/// Called twice: once before the journey, over any run's naming, which is what heals a
-/// run killed between its writes and its cleanup; and once after it, over this run's own,
-/// which is what makes the lane leave nothing behind whether it passed or failed.
+/// Called twice, over two different `matches`: once after the journey over this run's own
+/// naming, which is what makes the lane leave nothing behind whether it passed or failed;
+/// and once more over the orphans of runs that never got that far. See [`sweep_orphans`].
+///
+/// **A delete that fails does not fail the cleanup on its own, and the listing is why it
+/// does not have to.** An entity this listing named can be gone by the time the delete
+/// lands — another run swept it, somebody removed it by hand — and Linear refuses a delete
+/// of what is no longer there. That refusal is the outcome the delete was asking for, and
+/// treating it as a failure once killed a whole journey over an issue that had already
+/// gone. So a refusal is remembered and the next round asks Linear what is actually left:
+/// nothing matching means done, however many deletes were refused getting there. Nothing
+/// here has to know how Linear spells "already gone", which is what would otherwise have to
+/// be guessed at and would then go stale the day that spelling changed.
 async fn remove_artifacts(key: &str, matches: &dyn Fn(&str, &str) -> bool) -> Result<(), String> {
-    let issues = walk(
-        key,
-        ISSUES_BY_TITLE,
-        "issues",
-        "title",
-        Some(ARTIFACT_PREFIX),
-        "live issue residue lookup",
-    )
-    .await?;
-    for (id, title) in issues
-        .iter()
-        .filter(|(_, title)| matches(ARTIFACT_PREFIX, title))
-    {
-        let data = linear(
-            key,
-            onetaskgraph_linear::graphql::ISSUE_DELETE,
-            json!({"id":id}),
-            "live issue cleanup",
-        )
-        .await?;
-        if data.pointer("/issueDelete/success") != Some(&Value::Bool(true)) {
-            return Err(format!("Linear did not confirm deleting issue {title:?}"));
+    let mut refused = Vec::new();
+    for _ in 0..3 {
+        let found = find_artifacts(key, matches).await?;
+        if found.is_empty() {
+            return Ok(());
         }
-    }
-    let projects = walk(
-        key,
-        PROJECTS_BY_NAME,
-        "projects",
-        "name",
-        Some(ARTIFACT_PREFIX),
-        "live project residue lookup",
-    )
-    .await?;
-    for (id, name) in projects
-        .iter()
-        .filter(|(_, name)| matches(ARTIFACT_PREFIX, name))
-    {
-        let data = linear(
-            key,
-            onetaskgraph_linear::graphql::PROJECT_DELETE,
-            json!({"id":id}),
-            "live project cleanup",
-        )
-        .await?;
-        if data.pointer("/projectDelete/success") != Some(&Value::Bool(true)) {
-            return Err(format!("Linear did not confirm deleting project {name:?}"));
+        refused.clear();
+        for (residue, id, name) in found {
+            match linear(
+                key,
+                residue.delete,
+                json!({ "id": id }),
+                &format!("live {} cleanup", residue.kind),
+            )
+            .await
+            {
+                Ok(data) if data.pointer(residue.confirm) == Some(&Value::Bool(true)) => {}
+                Ok(_) => refused.push(format!(
+                    "Linear did not confirm deleting {} {name:?}",
+                    residue.kind
+                )),
+                Err(problem) => refused.push(problem),
+            }
         }
-    }
-    let documents = walk(
-        key,
-        DOCUMENTS_BY_TITLE,
-        "documents",
-        "title",
-        Some(ARTIFACT_PREFIX),
-        "live document residue lookup",
-    )
-    .await?;
-    for (id, title) in documents
-        .iter()
-        .filter(|(_, title)| matches(ARTIFACT_PREFIX, title))
-    {
-        let data = linear(
-            key,
-            onetaskgraph_linear::graphql::DOCUMENT_DELETE,
-            json!({"id":id}),
-            "live document cleanup",
-        )
-        .await?;
-        if data.pointer("/documentDelete/success") != Some(&Value::Bool(true)) {
-            return Err(format!(
-                "Linear did not confirm deleting document {title:?}"
-            ));
+        if refused.is_empty() {
+            return Ok(());
         }
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    let labels = walk(
-        key,
-        LABELS_PAGE,
-        "issueLabels",
-        "name",
-        None,
-        "live label lookup",
-    )
-    .await?;
-    for (id, name) in labels
-        .iter()
-        .filter(|(_, name)| matches(LABEL_PREFIX, name))
-    {
-        let data = linear(key, LABEL_DELETE, json!({"id":id}), "live label cleanup").await?;
-        if data.pointer("/issueLabelDelete/success") != Some(&Value::Bool(true)) {
-            return Err(format!("Linear did not confirm deleting label {name:?}"));
-        }
-    }
-    Ok(())
+    Err(format!(
+        "live cleanup left {}; Linear refused: {}",
+        find_artifacts(key, matches)
+            .await?
+            .into_iter()
+            .map(|(residue, _, name)| format!("{} {name:?}", residue.kind))
+            .collect::<Vec<_>>()
+            .join(", "),
+        refused.join("; ")
+    ))
+}
+
+/// What an *interrupted* earlier run left behind, and nothing a live run owns.
+///
+/// A process killed between its writes and its cleanup never reaches [`run_then_cleanup`],
+/// so its issues, projects, documents and label stay in the scratch team. Recovering them is
+/// what this is for, and the whole difficulty is telling them from the artifacts of a run
+/// that is still going.
+///
+/// `sweep` is that decision and it is not this lane's: `onetaskgraph_live::artifact` holds
+/// it, both hosted lanes derive from it, and it rests on nothing but the artifact's own
+/// stamp and the id of the run asking. An artifact of the sweeping run is never an orphan,
+/// whatever its age; an artifact of another run is one only once its stamp has gone stale.
+///
+/// **It runs after the journey rather than before it, and that ordering is the point.** A
+/// sweep at startup was what deleted a concurrent session's in-flight issues, and there is
+/// nothing a start can do that an end cannot: the cleanup already runs whether the journey
+/// passed or failed, and an orphan will still be an orphan then.
+async fn sweep_orphans(key: &str, sweep: Sweep) -> Result<(), String> {
+    remove_artifacts(key, &move |prefix, name| {
+        sweep.names_an_orphan(prefix, name)
+    })
+    .await
 }
 
 async fn run_then_cleanup<J, JF, C, CF>(journey: J, cleanup: C) -> Result<(), String>
@@ -982,7 +1048,7 @@ async fn drive_documents(
             .items
             .into_iter()
             .map(|document| document.title)
-            .filter(|title| is_artifact(ARTIFACT_PREFIX, title))
+            .filter(|title| is_this_runs(run.process_id, ARTIFACT_PREFIX, title))
             .collect::<Vec<_>>();
         found.sort();
         Ok::<_, String>(found)
@@ -1083,7 +1149,16 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     // The one gate: nothing below may reach Linear until the session is open, because the
     // key below is the one this returns rather than the one the environment held. A session
     // that is refused did not run and did not pass, and says so.
-    let session = Session::open(SESSION_NAME, key).unwrap_or_else(|declined| declined.refuse());
+    //
+    // `OneAtATime`: this lane still asks for a seat. Not because its cleanup needs one —
+    // every artifact it writes carries this run's process id, its own cleanup removes only
+    // those, and what it recovers of an interrupted run's is decided by that artifact's own
+    // stamp — but because a seat is the one precondition that can decline this lane without
+    // a credential and without reaching Linear, and `scripts/check-live-decline.sh` drives
+    // that decline through to a red check. What a seat does not cover, and never did, is two
+    // hosted runners: a file on one machine excludes nothing on another.
+    let session = Session::open(SESSION_NAME, key, Exclusivity::OneAtATime)
+        .unwrap_or_else(|declined| declined.refuse());
     let key = session.credential().expose().to_owned();
     let source = onetaskgraph_linear::Plugin
         .build(
@@ -1112,14 +1187,6 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         }
     );
 
-    // Self-healing after an interrupted run: a process killed between its writes and its
-    // cleanup never reaches `run_then_cleanup`, so the next run clears what it left. What
-    // bounds where this lane may write is `LINEAR_WRITE_TEAM`, not this sweep.
-    remove_artifacts(&key, &is_artifact)
-        .await
-        .unwrap_or_else(|error| {
-            panic!("live residue left by an earlier interrupted run could not be cleared: {error}")
-        });
     let team_id = linear(&key, TEAM_STATES, json!({"key":team}), "live team lookup")
         .await
         .and_then(|data| {
@@ -1147,13 +1214,37 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         done_state,
         project_status,
     };
-    let mine = format!("{}-", run.process_id);
-    let is_this_runs = move |prefix: &str, name: &str| {
-        is_artifact(prefix, name) && name.starts_with(&format!("{prefix}{mine}"))
-    };
+    let process_id = run.process_id;
     run_then_cleanup(
         || drive_every_declared_capability(&run, source.as_ref(), &team_id),
-        || remove_artifacts(&key, &is_this_runs),
+        || async {
+            // This run's own, first: everything it wrote goes whether the journey passed or
+            // failed. Then what an interrupted EARLIER run left, which is a different
+            // decision on different evidence — and which is deliberately here, at the end,
+            // rather than at the start where it used to be. A sweep before the journey
+            // deleted the in-flight issues of any session running beside this one; a sweep
+            // after it recovers exactly the same orphans and can reach nothing a live run
+            // owns.
+            let mine =
+                remove_artifacts(&key, &|prefix, name| is_this_runs(process_id, prefix, name))
+                    .await;
+            let orphans = sweep_orphans(
+                &key,
+                Sweep::of(process_id, chrono::Utc::now().timestamp_micros()),
+            )
+            .await;
+            match (mine, orphans) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(mine), Ok(())) => Err(mine),
+                (Ok(()), Err(orphans)) => Err(format!(
+                    "residue left by an earlier interrupted run could not be cleared: {orphans}"
+                )),
+                (Err(mine), Err(orphans)) => Err(format!(
+                    "{mine}; additionally, residue left by an earlier interrupted run could \
+                     not be cleared: {orphans}"
+                )),
+            }
+        },
     )
     .await
     .unwrap_or_else(|error| panic!("Linear live capability journey failed: {error}"));

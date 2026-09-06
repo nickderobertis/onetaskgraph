@@ -13,7 +13,8 @@
 //!
 //! # The three answers, and why the third is not either of the others
 //!
-//! - **Run.** [`Session::open`] returned, the seat is held, and the lane may reach its API.
+//! - **Run.** [`Session::open`] returned, every precondition passed, and the lane may reach
+//!   its API.
 //! - **Skip.** A credential or a nomination the lane needs was not given, and nobody said
 //!   one was expected. [`missing`] reports it with its reason and the lane returns without
 //!   asserting anything. This is a contributor with no keys, and it is a pull request from
@@ -29,13 +30,19 @@
 //!
 //! # The preconditions this crate ships
 //!
-//! **Exclusivity**: a test that reads and writes a shared external fixture must not run
-//! concurrently with another instance of itself. Both live journeys sweep residue by
-//! title before they start — that is what makes them self-healing after an interrupted run
-//! — and a sweep that recognises *any* run's artifacts will delete a concurrent run's
-//! in-flight items. So concurrency is a correctness problem here rather than a cost one,
-//! and [`Session::open`] holds a seat for the session's name for as long as the session
-//! lasts. A second instance is declined rather than allowed to race.
+//! **Exclusivity**, for a lane that asks for it: [`Exclusivity::OneAtATime`] holds a seat
+//! for the session's name for as long as the session lasts, and a second instance on that
+//! machine is declined rather than allowed to race.
+//!
+//! **It is no longer what keeps one run's sweep off another run's items, and that is the
+//! change to read before reaching for it.** Both lanes used to clear residue at startup with
+//! a predicate that recognised *any* run's artifacts, so two sessions really did delete each
+//! other's in-flight work and the seat was the only thing between them. Cleanup is now
+//! decided by [`artifact`]: a run removes what it wrote, and an orphan is somebody else's
+//! artifact whose own stamp has gone stale. Nothing in either lane's cleanup consults a seat.
+//! So [`Exclusivity::Shared`] is the ordinary answer, a seat is a lane's own choice, and the
+//! bound a seat never covered anyway — two runners of the hosted check are two machines, and
+//! a file on one of them says nothing about the other — is now the only one left.
 //!
 //! **Affordability**: a live session must never be the thing that exhausts a budget the
 //! work outside this repository depends on. [`affordable`] is that decision, and
@@ -51,6 +58,8 @@
 
 #![deny(missing_docs)]
 
+pub mod artifact;
+
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write as _};
@@ -63,8 +72,9 @@ use std::time::{Duration, SystemTime};
 /// The directory the session seats live in, when the default is not wanted.
 ///
 /// The default is the platform temporary directory. A caller sets this to prove what a
-/// contended seat does without touching a directory anything else on the machine shares —
-/// `scripts/check-live-decline.sh` does exactly that.
+/// seat does without touching a directory anything else on the machine shares —
+/// `scripts/check-live-decline.sh` points it at something that cannot hold a seat at all,
+/// which is how it drives a decline for a lane that asks for [`Exclusivity::OneAtATime`].
 pub const SEAT_DIRECTORY_VARIABLE: &str = "ONETASKGRAPH_LIVE_SEAT_DIR";
 
 /// The variable that says a live session is expected here.
@@ -77,6 +87,12 @@ pub const REQUIRED_VARIABLE: &str = "ONETASKGRAPH_LIVE_REQUIRED";
 /// every later run on that machine for ever, which is a worse failure than the race the
 /// seat exists to prevent — CI gets a fresh runner each time and would never notice, and
 /// the contributor whose run was interrupted would.
+///
+/// Not [`artifact::STALE_AFTER`], and deliberately not the same figure: this one bounds how
+/// long a *seat file nobody released* blocks the next run on one machine, and that one
+/// bounds how long a *foreign run's artifacts* are treated as a live run's. The costs of
+/// being wrong point in opposite directions, so one number for both would be a coincidence
+/// dressed as a decision.
 const SEAT_IS_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// How many seats this process has taken, which is the last part of a seat's own token.
@@ -636,7 +652,29 @@ impl fmt::Debug for Credential {
     }
 }
 
-/// A live session in progress: the credential, and the seat that says it is the only one.
+/// Whether a lane's session excludes another of the same name on this machine.
+///
+/// A lane says which it is at the point it opens, because the answer is a property of that
+/// lane's fixture rather than of this crate. Neither answer changes what a cleanup may
+/// remove: that is [`artifact`]'s, and it consults no seat under either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exclusivity {
+    /// Two sessions of this lane may run side by side.
+    ///
+    /// What makes that safe is that the lane's artifacts are run-scoped and its cleanup is
+    /// decided by [`artifact::Sweep`], so neither session can remove the other's work. It
+    /// is also the only answer that is *true*: a seat is a file on one machine, and two
+    /// hosted runners were never excluded by one.
+    Shared,
+    /// One session of this name at a time on this machine, held as a seat file.
+    ///
+    /// For a lane with something left that two concurrent runs would still get wrong. It
+    /// is a decline this crate can produce without a credential and without reaching
+    /// anything, which is the other thing it is good for — see `scripts/check-live-decline.sh`.
+    OneAtATime,
+}
+
+/// A live session in progress: the credential, and any seat the lane asked to hold.
 ///
 /// Held for as long as the lane is reaching its API. Dropping it releases the seat, so a
 /// lane that ends — passed, failed or panicked — leaves nothing behind for the next run to
@@ -646,7 +684,8 @@ pub struct Session {
     // llmlint: ignore[invalid_states_unrepresentable] The name is not input: each lane names its own session with a `const` of its own, there are two in this workspace, and neither reaches a user or a file a user writes. The state a newtype would remove — two names whose seats slug alike — is a spurious *decline*, which fails loudly with both names in the message rather than letting two runs race; and `slug` is total, with its empty and punctuation-only cases pinned by this crate's own tests. A validated type here would be ceremony over two constants.
     name: String,
     credential: Credential,
-    seat: Seat,
+    /// `None` for a [`Exclusivity::Shared`] lane, which takes no seat at all.
+    seat: Option<Seat>,
 }
 
 impl Session {
@@ -657,12 +696,19 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// When a precondition refuses. Today that is exclusivity alone: another instance of
-    /// this session is already running against the same shared fixture.
-    pub fn open(name: &str, credential: Credential) -> Result<Self, Declined> {
+    /// When a precondition refuses. Today the preconditions this crate itself applies are
+    /// exclusivity — for a lane that asked for [`Exclusivity::OneAtATime`], and then only
+    /// because another instance of it is already running on this machine, or because its
+    /// seat could not be taken at all. A lane with a precondition of its own reports it
+    /// through [`Declined`] too; see [`affordable`].
+    pub fn open(
+        name: &str,
+        credential: Credential,
+        exclusivity: Exclusivity,
+    ) -> Result<Self, Declined> {
         let directory = std::env::var_os(SEAT_DIRECTORY_VARIABLE)
             .map_or_else(std::env::temp_dir, PathBuf::from);
-        Self::open_in(&directory, name, credential)
+        Self::open_in(&directory, name, credential, exclusivity)
     }
 
     /// [`Session::open`], against a named directory rather than the default one.
@@ -670,12 +716,22 @@ impl Session {
     /// # Errors
     ///
     /// As [`Session::open`].
-    pub fn open_in(directory: &Path, name: &str, credential: Credential) -> Result<Self, Declined> {
-        let seat = Seat::take(directory, name).map_err(|reason| Declined {
-            session: name.to_owned(),
-            reason,
-            cause: None,
-        })?;
+    pub fn open_in(
+        directory: &Path,
+        name: &str,
+        credential: Credential,
+        exclusivity: Exclusivity,
+    ) -> Result<Self, Declined> {
+        let seat = match exclusivity {
+            Exclusivity::Shared => None,
+            Exclusivity::OneAtATime => {
+                Some(Seat::take(directory, name).map_err(|reason| Declined {
+                    session: name.to_owned(),
+                    reason,
+                    cause: None,
+                })?)
+            }
+        };
         Ok(Self {
             name: name.to_owned(),
             credential,
@@ -695,10 +751,13 @@ impl Session {
         &self.name
     }
 
-    /// Where this session's seat is held.
+    /// Where this session's seat is held, for a lane that asked to hold one.
+    ///
+    /// `None` for a [`Exclusivity::Shared`] lane: not a seat whose path is unknown, but no
+    /// seat, and a caller reading this is entitled to tell those apart.
     #[must_use]
-    pub fn seat_path(&self) -> &Path {
-        &self.seat.path
+    pub fn seat_path(&self) -> Option<&Path> {
+        self.seat.as_ref().map(|seat| seat.path.as_path())
     }
 }
 
@@ -743,9 +802,8 @@ impl Seat {
     fn already_running(path: &Path) -> String {
         format!(
             "another instance of it is already running against the same shared fixture, and \
-             two of them would delete each other's in-flight items — each sweeps residue by \
-             title before it starts, and that sweep recognises any run's artifacts. Its seat \
-             is {}; wait for that run to finish, or delete that file if no run holds it",
+             this lane asked for one at a time. Its seat is {}; wait for that run to finish, \
+             or delete that file if no run holds it",
             path.display()
         )
     }
@@ -792,7 +850,7 @@ impl Seat {
     /// out-of-date reading finds the seat fresh under the claim and is declined instead of
     /// deleting a live run's seat.
     ///
-    /// llmlint: ignore-block[changed_behavior_has_e2e] Reclaiming is the branch that lets the session open, and a session that opens is a journey that reaches the real API on its next line — so driving this one through either live journey means spending a live session against a third party to prove a decision about a file's age, on every run of the required check, and cannot be arranged at all without a credential. The half that CAN be driven through the real journey binary is, in `scripts/check-live-decline.sh`: a seat a live run still holds declines, and the run that was declined leaves it where it found it. What is left is the age comparison, the claim and the re-creation, which this crate's own tests drive against a real seat file whose modification time is really in the past and against real concurrent reclaimers.
+    /// llmlint: ignore-block[changed_behavior_has_e2e] Reclaiming is the branch that lets the session open, and a session that opens is a journey that reaches the real API on its next line — so driving this one through either live journey means spending a live session against a third party to prove a decision about a file's age, on every run of the required check, and cannot be arranged at all without a credential. The half that CAN be driven through the real journey binary is, in `scripts/check-live-decline.sh`: a seat this lane cannot take declines, and the run that was declined goes red saying it did not run. What is left is the age comparison, the claim and the re-creation, which this crate's own tests drive against a real seat file whose modification time is really in the past and against real concurrent reclaimers.
     fn reclaim(path: &Path) -> Result<Self, String> {
         let claim = path.with_extension("reclaim");
         if Self::hold(&claim).is_err() {
@@ -1070,20 +1128,32 @@ mod tests {
     #[test]
     fn one_session_holds_its_seat_and_a_second_instance_is_declined() {
         let directory = scratch();
-        let held = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
-            .expect("the first instance takes the seat");
+        let held = Session::open_in(
+            &directory,
+            "GitHub Projects",
+            credential("live-token"),
+            Exclusivity::OneAtATime,
+        )
+        .expect("the first instance takes the seat");
         assert_eq!(held.credential().expose(), "live-token");
         assert_eq!(held.name(), "GitHub Projects");
-        assert!(held.seat_path().exists());
+        let held_seat = held
+            .seat_path()
+            .expect("a one-at-a-time session holds a seat");
+        assert!(held_seat.exists());
         assert!(
-            held.seat_path()
-                .ends_with("onetaskgraph-live-github-projects.seat"),
+            held_seat.ends_with("onetaskgraph-live-github-projects.seat"),
             "{}",
-            held.seat_path().display()
+            held_seat.display()
         );
 
-        let declined = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
-            .expect_err("a second instance against the same fixture must be declined");
+        let declined = Session::open_in(
+            &directory,
+            "GitHub Projects",
+            credential("live-token"),
+            Exclusivity::OneAtATime,
+        )
+        .expect_err("a second instance against the same fixture must be declined");
         let message = declined.message();
         assert!(message.contains("DID NOT RUN"), "{message}");
         assert!(message.contains("GitHub Projects"), "{message}");
@@ -1095,11 +1165,50 @@ mod tests {
         );
         assert_eq!(message, declined.to_string());
 
-        let seat = held.seat_path().to_owned();
+        let seat = held_seat.to_owned();
         drop(held);
         assert!(!seat.exists(), "a finished session releases its seat");
-        Session::open_in(&directory, "GitHub Projects", credential("live-token"))
-            .expect("the seat is free once the run that held it ended");
+        Session::open_in(
+            &directory,
+            "GitHub Projects",
+            credential("live-token"),
+            Exclusivity::OneAtATime,
+        )
+        .expect("the seat is free once the run that held it ended");
+    }
+
+    #[test]
+    fn a_shared_session_takes_no_seat_and_a_second_one_opens_beside_it() {
+        // The lane that asks for this has run-scoped artifacts and an age-decided sweep, so
+        // there is nothing left for a seat to protect — and a seat never protected the case
+        // that is left, which is two hosted runners on two machines. What must be true is
+        // that the second session opens rather than being declined, and that neither of
+        // them wrote a seat anything else could then be declined by.
+        let directory = scratch();
+        let held = Session::open_in(
+            &directory,
+            "GitHub Projects",
+            credential("live-token"),
+            Exclusivity::Shared,
+        )
+        .expect("a shared session has no precondition to fail here");
+        assert_eq!(held.seat_path(), None);
+        let beside = Session::open_in(
+            &directory,
+            "GitHub Projects",
+            credential("live-token"),
+            Exclusivity::Shared,
+        )
+        .expect("a second shared session of the same lane is not declined for a seat");
+        assert_eq!(beside.seat_path(), None);
+        assert_eq!(
+            fs::read_dir(&directory)
+                .expect("the scratch seat directory is readable")
+                .count(),
+            0,
+            "a shared session left a seat file behind in {}",
+            directory.display()
+        );
     }
 
     #[test]
@@ -1108,9 +1217,14 @@ mod tests {
         let path = directory.join("onetaskgraph-live-linear.seat");
         interrupted_runs_file(&path);
 
-        let reclaimed = Session::open_in(&directory, "Linear", credential("live-key"))
-            .expect("a seat older than any session lasts is an interrupted run's");
-        assert_eq!(reclaimed.seat_path(), path);
+        let reclaimed = Session::open_in(
+            &directory,
+            "Linear",
+            credential("live-key"),
+            Exclusivity::OneAtATime,
+        )
+        .expect("a seat older than any session lasts is an interrupted run's");
+        assert_eq!(reclaimed.seat_path(), Some(path.as_path()));
     }
 
     #[test]
@@ -1120,14 +1234,27 @@ mod tests {
         // seat with it: that would let a third run open beside a live one, which is the two
         // concurrent sessions against one shared fixture the seat exists to prevent.
         let directory = scratch();
-        let displaced = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
-            .expect("the first instance takes the seat");
-        let seat = displaced.seat_path().to_owned();
+        let displaced = Session::open_in(
+            &directory,
+            "GitHub Projects",
+            credential("live-token"),
+            Exclusivity::OneAtATime,
+        )
+        .expect("the first instance takes the seat");
+        let seat = displaced
+            .seat_path()
+            .expect("a one-at-a-time session holds a seat")
+            .to_owned();
         age_out_of_the_window(&seat);
 
-        let replacement = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
-            .expect("a seat older than any session lasts is reclaimed");
-        assert_eq!(replacement.seat_path(), seat);
+        let replacement = Session::open_in(
+            &directory,
+            "GitHub Projects",
+            credential("live-token"),
+            Exclusivity::OneAtATime,
+        )
+        .expect("a seat older than any session lasts is reclaimed");
+        assert_eq!(replacement.seat_path(), Some(seat.as_path()));
         let taken_by_the_replacement =
             fs::read_to_string(&seat).expect("the reclaimed seat is readable");
 
@@ -1142,8 +1269,13 @@ mod tests {
             taken_by_the_replacement,
             "the seat there is the replacement's, and nothing this run did replaced it"
         );
-        let declined = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
-            .expect_err("a third instance must be declined while the replacement runs");
+        let declined = Session::open_in(
+            &directory,
+            "GitHub Projects",
+            credential("live-token"),
+            Exclusivity::OneAtATime,
+        )
+        .expect_err("a third instance must be declined while the replacement runs");
         assert!(
             declined.message().contains("already running"),
             "{}",
@@ -1181,9 +1313,14 @@ mod tests {
         );
 
         // What it buys: the next run opens instead of being declined for an hour.
-        let next = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
-            .expect("the seat a tokenless holder released is free");
-        assert_eq!(next.seat_path(), path);
+        let next = Session::open_in(
+            &directory,
+            "GitHub Projects",
+            credential("live-token"),
+            Exclusivity::OneAtATime,
+        )
+        .expect("the seat a tokenless holder released is free");
+        assert_eq!(next.seat_path(), Some(path.as_path()));
 
         // And what it costs, stated rather than assumed: a tokenless holder cannot tell this
         // run's file from a replacement's, so a second one dropping now takes the live
@@ -1217,8 +1354,13 @@ mod tests {
         )
         .expect("the claim is writable");
 
-        let declined = Session::open_in(&directory, "GitHub Projects", credential("live-token"))
-            .expect_err("a second reclaimer must be declined rather than delete the first's seat");
+        let declined = Session::open_in(
+            &directory,
+            "GitHub Projects",
+            credential("live-token"),
+            Exclusivity::OneAtATime,
+        )
+        .expect_err("a second reclaimer must be declined rather than delete the first's seat");
         let message = declined.message();
         assert!(message.contains("DID NOT RUN"), "{message}");
         assert!(message.contains("is reclaiming"), "{message}");
@@ -1232,9 +1374,14 @@ mod tests {
         interrupted_runs_file(&path);
         interrupted_runs_file(&claim);
 
-        let reclaimed = Session::open_in(&directory, "Linear", credential("live-key"))
-            .expect("a claim older than any session lasts is an interrupted reclaim's");
-        assert_eq!(reclaimed.seat_path(), path);
+        let reclaimed = Session::open_in(
+            &directory,
+            "Linear",
+            credential("live-key"),
+            Exclusivity::OneAtATime,
+        )
+        .expect("a claim older than any session lasts is an interrupted reclaim's");
+        assert_eq!(reclaimed.seat_path(), Some(path.as_path()));
         assert!(
             !claim.exists(),
             "a finished reclaim leaves no claim for the next run to wait behind"
@@ -1258,9 +1405,14 @@ mod tests {
         ));
         interrupted_runs_file(&election);
 
-        let reclaimed = Session::open_in(&directory, "Linear", credential("live-key"))
-            .expect("an election older than any session lasts is an interrupted recovery's");
-        assert_eq!(reclaimed.seat_path(), path);
+        let reclaimed = Session::open_in(
+            &directory,
+            "Linear",
+            credential("live-key"),
+            Exclusivity::OneAtATime,
+        )
+        .expect("an election older than any session lasts is an interrupted recovery's");
+        assert_eq!(reclaimed.seat_path(), Some(path.as_path()));
         assert!(
             !election.exists(),
             "a finished recovery leaves no election for the next run to stand against"
@@ -1285,7 +1437,13 @@ mod tests {
                 let start = Arc::clone(&start);
                 std::thread::spawn(move || {
                     start.wait();
-                    Session::open_in(&directory, "GitHub Projects", credential("live-token")).ok()
+                    Session::open_in(
+                        &directory,
+                        "GitHub Projects",
+                        credential("live-token"),
+                        Exclusivity::OneAtATime,
+                    )
+                    .ok()
                 })
             })
             .collect();
@@ -1301,7 +1459,7 @@ mod tests {
             held.len()
         );
         assert!(
-            held[0].seat_path().exists(),
+            held[0].seat_path().is_some_and(std::path::Path::exists),
             "the winner really holds a seat"
         );
     }
@@ -1337,8 +1495,13 @@ mod tests {
                     let start = Arc::clone(&start);
                     std::thread::spawn(move || {
                         start.wait();
-                        Session::open_in(&directory, "GitHub Projects", credential("live-token"))
-                            .ok()
+                        Session::open_in(
+                            &directory,
+                            "GitHub Projects",
+                            credential("live-token"),
+                            Exclusivity::OneAtATime,
+                        )
+                        .ok()
                     })
                 })
                 .collect();
@@ -1354,7 +1517,7 @@ mod tests {
                 held.len()
             );
             assert!(
-                held[0].seat_path().exists(),
+                held[0].seat_path().is_some_and(std::path::Path::exists),
                 "round {round}: the winner really holds a seat"
             );
             assert!(
@@ -1368,8 +1531,13 @@ mod tests {
     #[test]
     fn a_seat_directory_that_does_not_exist_declines_rather_than_running_unguarded() {
         let directory = scratch().join("absent");
-        let declined = Session::open_in(&directory, "Linear", credential("live-key"))
-            .expect_err("a seat that cannot be taken must decline rather than run");
+        let declined = Session::open_in(
+            &directory,
+            "Linear",
+            credential("live-key"),
+            Exclusivity::OneAtATime,
+        )
+        .expect_err("a seat that cannot be taken must decline rather than run");
         let message = declined.message();
         assert!(message.contains("DID NOT RUN"), "{message}");
         assert!(message.contains(SEAT_DIRECTORY_VARIABLE), "{message}");
@@ -1380,10 +1548,20 @@ mod tests {
         // SAFETY-of-the-suite note: this is the one test that reads the process
         // environment, and it only reads it.
         let named = std::env::var_os(SEAT_DIRECTORY_VARIABLE);
-        let session = Session::open("onetaskgraph default seat probe", credential("unused"))
-            .expect("nothing else holds this probe's seat");
+        let session = Session::open(
+            "onetaskgraph default seat probe",
+            credential("unused"),
+            Exclusivity::OneAtATime,
+        )
+        .expect("nothing else holds this probe's seat");
         let expected = named.map_or_else(std::env::temp_dir, PathBuf::from);
-        assert_eq!(session.seat_path().parent(), Some(expected.as_path()));
+        assert_eq!(
+            session
+                .seat_path()
+                .expect("a one-at-a-time session holds a seat")
+                .parent(),
+            Some(expected.as_path())
+        );
     }
 
     #[test]
@@ -1419,7 +1597,8 @@ mod tests {
         assert!(
             !format!(
                 "{:?}",
-                Session::open_in(&scratch(), "Redaction", credential).unwrap()
+                Session::open_in(&scratch(), "Redaction", credential, Exclusivity::OneAtATime)
+                    .unwrap()
             )
             .contains("ghp_padded"),
             "nor may the session that holds it"
@@ -1585,10 +1764,20 @@ mod tests {
     #[test]
     fn a_decline_for_any_other_reason_carries_no_budget_to_read() {
         let directory = scratch();
-        let _held = Session::open_in(&directory, "Linear", credential("live-key"))
-            .expect("the first instance takes the seat");
-        let declined = Session::open_in(&directory, "Linear", credential("live-key"))
-            .expect_err("a second instance is declined");
+        let _held = Session::open_in(
+            &directory,
+            "Linear",
+            credential("live-key"),
+            Exclusivity::OneAtATime,
+        )
+        .expect("the first instance takes the seat");
+        let declined = Session::open_in(
+            &directory,
+            "Linear",
+            credential("live-key"),
+            Exclusivity::OneAtATime,
+        )
+        .expect_err("a second instance is declined");
         assert_eq!(declined.unaffordable_because(), None);
     }
 
