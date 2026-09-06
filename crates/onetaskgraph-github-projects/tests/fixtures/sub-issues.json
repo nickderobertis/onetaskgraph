@@ -33,6 +33,11 @@
                   "id": "L_bug",
                   "name": "bug",
                   "color": "ff0000"
+                },
+                {
+                  "id": "L_field",
+                  "name": "team",
+                  "color": "00ff00"
                 }
               ],
               "pageInfo": {
@@ -70,20 +75,6 @@
                         "field": {
                           "id": "FIELD_origin",
                           "name": "onetaskgraph.origin"
-                        }
-                      },
-                      {
-                        "labels": {
-                          "nodes": [
-                            {
-                              "id": "L_field",
-                              "name": "team",
-                              "color": "00ff00"
-                            }
-                          ],
-                          "pageInfo": {
-                            "hasNextPage": false
-                          }
                         }
                       }
                     ],
