@@ -23,7 +23,14 @@ points is the accounting in `src/accounting.rs`, which fills its per-budget figu
 `x-ratelimit-*` headers a credentialed session's own responses carry and prints them at the
 end of every run. That report comes from the live journey in `tests/live.rs`, which runs in
 this repository's required check; it is not something this file's figures can stand in for.
-**Nothing here claims a reduction in points.**
+**No figure in this file is a measurement of points**, and that does not change below.
+
+What does change is that one of the reductions recorded here **is** about points, and says
+so: *The board's own `Labels` field* below argues from GitHub's published pricing rule —
+the one `tests/journey/budget.rs` states in full — rather than from anything this file
+measured. Read that section as arithmetic over a rule GitHub publishes, which is a
+different kind of claim from the two quantities above and a weaker one than the accounting's
+observation; the reductions recorded before it claim nothing about points at all.
 
 ## How they are taken
 
@@ -103,11 +110,54 @@ untouched, because a REST call sends no document.
 Nothing about the reduction moved. The rows are the reduction's rows plus one, and every
 figure in the table above is still what those two changes were worth.
 
+## The board's own `Labels` field, and what dropping it moved
+
+`graphql::BOARD` was the last document selecting
+`... on ProjectV2ItemFieldLabelValue{labels(…)}` — the shared `board_issue!` fragment had
+already stopped, which is what took the three issue reads under GitHub's node limit. It is
+now out of the board read too, and an item's labels come from its content's own `labels`
+connection on every path.
+
+In the two quantities this file measures offline, again in the record's own frame:
+
+|                | before  | after  |
+| -------------- | ------: | -----: |
+| **requests**   |      99 |     99 |
+| **node count** | 1757301 | 504801 |
+
+**Not one request either way** — the selection was a field of a document already being
+sent — and **1,252,500 worst-case nodes gone, 71% of the session's whole total.** The whole
+of it lands in the two rows that send that document: `reading the board` goes from 1043251
+nodes over 5 requests to 40751 over the same 5, and the one-request
+`node-count reconciliation while reading the board` from 260150 to 10150. Every other row of
+the record is byte-for-byte what it was, and `tests/node_count.rs` pins the document itself
+at **260,150 → 10,150** nodes.
+
+**This one is about points, which nothing here measures.** The published rule
+`tests/journey/budget.rs` states in full is that a call costs `max(1, round(A / 100))`,
+where `A` sums, over the call's connections, the product of the page sizes strictly above
+each. That label connection sat under `fieldValues(first: 50)` under `items(first: 100)`, so
+GitHub resolved it **5,000 times** for one page of board items — against roughly 202 for the
+whole of the rest of that document. So `A` for a board read falls from about 5,202 to about
+202, and `round(A / 100)` from about **52 points to about 2**. That is arithmetic over
+GitHub's own rule rather than an observation: what observes points is still the accounting,
+from the `x-ratelimit-*` headers a credentialed run's own responses carry, and this file
+measures requests and worst-case nodes and nothing else.
+
+What is given up is nothing. GitHub derives that field from the item's content: for `Issue`
+content it *is* the issue's own labels, which the same document selects one level up, and a
+`DraftIssue` exposes no `labels` field and cannot carry a value of the board field either —
+`LABELS` is absent from `ProjectV2CustomFieldType`, so no project can create such a field,
+and `ProjectV2FieldValue`, the whole of what `updateProjectV2ItemFieldValue` accepts, offers
+no label member, so no item type's value is writable. A draft therefore reports no labels,
+which is what it reported before this change too.
+
 ## The estimate the gate is sized from, and what it is not
 
 `tests/journey/budget.rs` derives what this session will cost each of GitHub's two budgets
-from the record above and a cost model it states in one place: **1955 points** against the
-GraphQL budget and **5 requests** against the REST one. That is an *estimate*, deliberately
+from the record above and a cost model it states in one place: **702 points** against the
+GraphQL budget and **5 requests** against the REST one — 1955 points before the board read
+stopped selecting the board `Labels` field. That is an *estimate*, deliberately
 high — it is what refuses a run rather than what a run spends, and an estimate that is too
 low is the thing that exhausts a shared budget.
 
@@ -160,6 +210,12 @@ changes remove between them, and the whole of the node-count move.
 **99 → 98 requests; 1757401 → 1757301 nodes.**
 
 ## The three places this step was told to look
+
+Every figure in this section was measured **before** the board read stopped selecting the
+board's own `Labels` field, so its node counts are in the frame of the 1757301-node session
+above rather than the 504801-node one. None of the three findings turns on the size of that
+number — each is a comparison between two sessions measured the same way, and all three came
+out *no change kept* — so they are left as they were recorded rather than re-run.
 
 **The lane's own setup, residue sweep and cleanup.** This is where both kept changes came
 from, above. What is left there is not slack: the two allowance reads either side of the

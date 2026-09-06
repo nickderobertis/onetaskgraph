@@ -54,7 +54,7 @@ fn the_documents_that_reach_an_issue_under_a_page_are_the_ones_with_least_headro
     let count = |document: &str| worst_case_node_count(document).expect("a countable document");
     assert_eq!(count(graphql::SEARCH_ISSUES), 56_100);
     assert_eq!(count(graphql::SUB_ISSUES), 56_100);
-    assert_eq!(count(graphql::BOARD), 260_150);
+    assert_eq!(count(graphql::BOARD), 10_150);
     assert_eq!(count(graphql::ISSUE), 560);
     assert_eq!(count(graphql::ISSUE_DEPENDENCIES), 200);
     assert_eq!(count(graphql::REPOSITORY), 0);

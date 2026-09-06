@@ -910,7 +910,7 @@ impl GitHubBoard {
     ///
     /// The board half is `rendered`'s, read back out of it rather than spelled twice, so
     /// an item reached through the board and the same item reached through its own id
-    /// cannot disagree about its status, its origin or its board labels.
+    /// cannot disagree about its status or its origin.
     fn as_issue(&self, item: &Value) -> Value {
         let board_item = self.rendered(item);
         let mut issue = self.content(item);
@@ -922,14 +922,13 @@ impl GitHubBoard {
     }
 
     fn rendered(&self, item: &Value) -> Value {
-        let mut values = vec![
+        // No board field value carries labels: no document this source sends selects the
+        // board's built-in `Labels` field, so an item's labels are its content's alone.
+        let values = vec![
             json!({"name":item["status"],"field":{"id":"FIELD-status","name":"Status",
                    "options":Self::options()}}),
             json!({"text":item["origin"],"field":{"id":"FIELD-origin","name":"onetaskgraph.origin"}}),
         ];
-        if let Some(labels) = item.get("field_labels") {
-            values.push(json!({"labels":{"nodes":labels,"pageInfo":{"hasNextPage":false}}}));
-        }
         json!({"id":item["item"],
                "fieldValues":{"nodes":values,"pageInfo":{"hasNextPage":false}},
                "content":self.content(item)})

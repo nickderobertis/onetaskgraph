@@ -71,7 +71,7 @@
 //! `nodes / smallest` by under one request, and no document here has more than six
 //! connections. And the bound itself is reached only by a call whose every connection sits
 //! at the smallest page size, which none of this source's do: `reading the board` really
-//! aggregates about 5,200 requests where this bound allows 26,015.
+//! aggregates about 200 requests where this bound allows 1,015.
 //!
 //! **How a reader checks it against GitHub.** Two ways, both already here. Offline: take
 //! any document from `graphql::DOCUMENTS`, count the requests each of its connections needs

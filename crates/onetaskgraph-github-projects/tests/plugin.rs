@@ -70,20 +70,6 @@ struct Item {
     labels: Vec<(&'static str, &'static str)>,
     status: Option<String>,
     origin: Option<String>,
-    /// Whether this item's board half carries the board's built-in `Labels` field.
-    ///
-    /// GitHub derives that field from the issue's own labels — it is absent from
-    /// `ProjectV2CustomFieldType`, so no project can create one, and
-    /// `ProjectV2FieldValue` offers no way to write one — so what it holds is
-    /// `labels_seen_on` and never a set of its own.
-    board_labels_field: bool,
-    /// What that field holds, when it is deliberately not the issue's own labels.
-    ///
-    /// GitHub cannot produce this for `Issue` content — the field mirrors those labels —
-    /// but `graphql::BOARD` selects both connections because a board item's content may be
-    /// a draft with no labels of its own, so the reader unions them, and a union is only
-    /// measurable over two sets that differ.
-    board_labels: Option<Vec<(&'static str, &'static str)>>,
     /// A label set this board answers one path with, instead of the one above.
     ///
     /// Nothing GitHub does. It is how the four-way equivalence check is watched failing:
@@ -94,15 +80,12 @@ struct Item {
 
 /// What the document that just arrived asked for, as far as rendering an item needs it.
 ///
-/// Both halves are read off the document rather than assumed, so this board answers what
-/// was selected: a selection put back into the shared board-issue fragment would start
-/// being answered on those three paths again, and the equivalence check would see it.
+/// Read off the document rather than assumed, so this board answers what was selected
+/// rather than what a test wished for.
 #[derive(Clone, Copy)]
 struct Asked<'a> {
     /// Which of this source's reads this is, by the name `operation_name` gives it.
     path: &'a str,
-    /// Whether it selected the board's built-in `Labels` field value.
-    board_labels: bool,
 }
 
 impl Item {
@@ -121,8 +104,6 @@ impl Item {
             labels: vec![],
             status: None,
             origin: None,
-            board_labels_field: false,
-            board_labels: None,
             path_labels: BTreeMap::new(),
         }
     }
@@ -164,16 +145,6 @@ impl Item {
         self.labels = labels.to_vec();
         self
     }
-    /// Give this item's board half the board's built-in `Labels` field.
-    fn board_labels_field(mut self) -> Self {
-        self.board_labels_field = true;
-        self
-    }
-    /// The same, holding a set of its own. See [`Item::board_labels`].
-    fn board_labels_field_of(mut self, labels: &[(&'static str, &'static str)]) -> Self {
-        self.board_labels = Some(labels.to_vec());
-        self.board_labels_field()
-    }
     /// Answer `path` with a label set of its own. See [`Item::path_labels`].
     fn labels_on(mut self, path: &'static str, labels: &[(&'static str, &'static str)]) -> Self {
         self.path_labels.insert(path, labels.to_vec());
@@ -194,7 +165,7 @@ impl Item {
                "pageInfo":{"hasNextPage":false}})
     }
 
-    fn field_values(&self, options: &Value, asked: Asked) -> Value {
+    fn field_values(&self, options: &Value) -> Value {
         let mut nodes = Vec::new();
         if let Some(status) = &self.status {
             nodes.push(
@@ -204,16 +175,6 @@ impl Item {
         nodes.push(
             json!({"text":self.origin.clone().unwrap_or_default(),"field":{"id":"FIELD_origin","name":"onetaskgraph.origin"}}),
         );
-        if self.board_labels_field && asked.board_labels {
-            let held = self
-                .board_labels
-                .as_deref()
-                .unwrap_or_else(|| self.labels_seen_on(asked.path));
-            nodes.push(json!({"labels":{
-                "nodes":held.iter().map(|(id,name)| json!({"id":id,"name":name,"color":null}))
-                    .collect::<Vec<_>>(),
-                "pageInfo":{"hasNextPage":false}}}));
-        }
         json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}})
     }
 
@@ -222,16 +183,16 @@ impl Item {
     /// The same board item id and the same field values a `ProjectV2.items` read gives it,
     /// reached from the issue instead of from the board. Every fixture item here sits on
     /// the one board this suite configures, which is project number 7.
-    fn project_items(&self, options: &Value, asked: Asked) -> Value {
+    fn project_items(&self, options: &Value) -> Value {
         json!({"nodes":[{"id":self.item_id,"project":{"number":7},
-                         "fieldValues":self.field_values(options, asked)}],
+                         "fieldValues":self.field_values(options)}],
                "pageInfo":{"hasNextPage":false}})
     }
 
     /// This item as a search, a node read or a sub-issue read returns it.
     fn as_issue(&self, options: &Value, asked: Asked) -> Value {
         let mut issue = self.content(asked);
-        issue["projectItems"] = self.project_items(options, asked);
+        issue["projectItems"] = self.project_items(options);
         issue
     }
 
@@ -725,13 +686,11 @@ fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<
 
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     let mut state = state.lock().unwrap();
-    // What this document asked for, read off the document itself. The three reads that
-    // reach an issue share one fragment and do not select the board's built-in `Labels`
-    // field; the board's own item read does. Answering what was selected is what makes the
-    // four-way equivalence check below a check on the production documents.
+    // Which read this is, taken from the document itself: every label this board answers
+    // with hangs on the content, and which path asked is what lets one case make a single
+    // path disagree.
     let asked = Asked {
         path: operation_name(query),
-        board_labels: query.contains("ProjectV2ItemFieldLabelValue"),
     };
     let input = variables.get("input").cloned().unwrap_or(Value::Null);
     if !input.is_null() {
@@ -1006,7 +965,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     let nodes = state.items[offset.min(end)..end]
         .iter()
         .map(|item| {
-            json!({"id":item.item_id,"fieldValues":item.field_values(&options, asked),
+            json!({"id":item.item_id,"fieldValues":item.field_values(&options),
                    "content":item.content(asked)})
         })
         .collect::<Vec<_>>();
@@ -1986,10 +1945,10 @@ fn disagreement(readings: &[Reading]) -> Option<String> {
     })
 }
 
-/// A board of one project and its one task, both carrying the board's `Labels` field.
+/// A board of one project and its one task, each carrying labels of its own.
 ///
-/// The field is the point: it is the connection the shared board-issue fragment stopped
-/// selecting, so this is the shape that would show the loss if anything were lost.
+/// The labels are the point: they are what every one of the four reads has to agree
+/// about, and an unlabelled board would let a check that dropped them all pass.
 fn equivalence_board(plan: Item, step: Item) -> Fixture {
     board(vec![plan, step])
 }
@@ -1999,7 +1958,6 @@ fn labelled_plan() -> Item {
         .sub_issues(1)
         .status("In Progress")
         .labelled(&[("L_bug", "bug"), ("L_team", "team")])
-        .board_labels_field()
 }
 
 fn labelled_step() -> Item {
@@ -2007,15 +1965,15 @@ fn labelled_step() -> Item {
         .parent("I_plan")
         .status("Todo")
         .labelled(&[("L_bug", "bug"), ("L_team", "team")])
-        .board_labels_field()
 }
 
 #[tokio::test]
 async fn an_item_reports_the_same_labels_title_status_and_id_however_it_is_reached() {
-    // The board-issue fragment no longer selects the board's built-in `Labels` field, which
-    // is what took `search` and `subIssues` under GitHub's node limit. It is only sound
-    // because that field mirrors the issue's own labels, which the fragment does select —
-    // so the four documents have to go on agreeing, and this is where that is measured.
+    // No document selects the board's built-in `Labels` field any more — dropping it from
+    // the shared fragment is what took `search` and `subIssues` under GitHub's node limit,
+    // and dropping it from the board read is what took the board's own cost down. It is
+    // only sound because every one of the four reads takes an item's labels from its
+    // content, and this is where that is measured.
     let fixture = equivalence_board(labelled_plan(), labelled_step());
     let source = source(&fixture);
 
@@ -2044,37 +2002,49 @@ async fn an_item_reports_the_same_labels_title_status_and_id_however_it_is_reach
         "an empty label set would let this check pass while proving nothing: {readings:?}"
     );
 
-    let selecting = fixture
-        .documents()
-        .into_iter()
-        .filter(|document| document.contains("ProjectV2ItemFieldLabelValue"))
-        .count();
-    assert_eq!(
-        selecting, 1,
-        "the board's own item read is the one document that still asks for the board \
-         `Labels` field; the three that reach an issue must not, or they are back over the \
-         node limit"
-    );
     assert!(
         fixture
-            .board_item_reads()
+            .documents()
             .iter()
-            .all(|document| document.contains("ProjectV2ItemFieldLabelValue")),
-        "and it is the board read that asks for it"
+            .all(|document| !document.contains("ProjectV2ItemFieldLabelValue")),
+        "and not one of the documents this session sent asked for the board `Labels` field"
+    );
+}
+
+/// No document at all selects the board's built-in `Labels` field.
+///
+/// Over [`graphql::DOCUMENTS`] rather than over a list of names written out here, which is
+/// what makes this cover a document nobody thought about:
+/// `documents_are_all_inventoried` already fails when a `pub const` in that module is left
+/// out of the inventory, so a selection put back into a document later — including one
+/// added after this was written — fails here without this test being edited.
+#[test]
+fn no_document_selects_the_boards_own_labels_field() {
+    let selecting = graphql::DOCUMENTS
+        .iter()
+        .filter(|(document, _)| document.contains("ProjectV2ItemFieldLabelValue"))
+        .map(|(_, doing)| *doing)
+        .collect::<Vec<_>>();
+    assert!(
+        selecting.is_empty(),
+        "the document for {} selects the board's built-in `Labels` field; GitHub derives \
+         that field from the item's content, so it holds nothing the content does not \
+         already say and costs a label connection two page sizes deep. Next: select the \
+         content's own `labels` instead",
+        selecting.join(", ")
     );
 }
 
 #[tokio::test]
-async fn the_boards_own_labels_field_is_read_and_folded_in_without_doubling_the_issues_own() {
-    // `graphql::BOARD` is the one document that still selects the board's built-in
-    // `Labels` field, and it must: a board item's content may be a draft, which has no
-    // `labels` of its own. So the reader unions the two sets and dedupes them by id, and
-    // this is where that is measured — with one label in both and one in the field alone,
-    // neither of which the answer may double or drop.
+async fn a_board_item_whose_content_is_a_draft_reports_no_labels_at_all() {
+    // The half the board read used to be kept for. `DraftIssue` exposes no `labels` field,
+    // and the board's built-in `Labels` field is absent from `ProjectV2CustomFieldType` and
+    // unwritable through `ProjectV2FieldValue` — so a draft has nothing to derive one from
+    // and cannot carry one. What it reports is an empty set: never a failure, and never the
+    // labels of the issue beside it on the same board.
     let fixture = board(vec![
-        Item::issue("I_loose", "Loose end")
-            .labelled(&[("L_bug", "bug"), ("L_team", "team")])
-            .board_labels_field_of(&[("L_bug", "bug"), ("L_extra", "extra")]),
+        Item::issue("I_loose", "Loose end").labelled(&[("L_bug", "bug"), ("L_team", "team")]),
+        Item::draft("DI_note", "Sketch"),
     ]);
     let source = source(&fixture);
 
@@ -2083,14 +2053,23 @@ async fn the_boards_own_labels_field_is_read_and_folded_in_without_doubling_the_
         .await
         .expect("the board lists its tasks");
 
-    assert_eq!(
-        tasks.items[0]
+    let labels = |id: &str| {
+        tasks
+            .items
+            .iter()
+            .find(|task| task.id.0 == id)
+            .unwrap_or_else(|| panic!("the board lists {id}"))
             .labels
             .iter()
             .map(|label| label.name.as_str())
-            .collect::<Vec<_>>(),
-        ["bug", "team", "extra"],
-        "the issue's own labels first, then whatever the board field adds, each once"
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(labels("DI_note"), Vec::<&str>::new());
+    assert_eq!(
+        labels("I_loose"),
+        ["bug", "team"],
+        "and the issue on the same board still reports its own, so the empty set above is \
+         the draft's answer rather than this board answering nobody"
     );
 }
 

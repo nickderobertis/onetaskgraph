@@ -132,18 +132,30 @@
 //! *this* board is not this source's to report, which is what keeps an id naming another
 //! repository's issue from being answered as an item of this board.
 //!
-//! **The board's own `Labels` field is not selected in those three, and nothing is lost by
-//! that.** The board half they read is a fragment `on Issue`, and an issue's labels are
-//! already selected one level up, on the issue itself. A board's `Labels` field is not one
-//! anybody fills in: it is a built-in `ProjectV2FieldType`, it is absent from
-//! `ProjectV2CustomFieldType` so no project can create one, and `ProjectV2FieldValue` —
-//! the whole of what `updateProjectV2ItemFieldValue` accepts — offers no way to write one.
-//! For `Issue` content it *is* the issue's own labels, so selecting it beside them unions a
-//! set with itself. [`graphql::BOARD`] still selects it and must: a board item's content
-//! may be a `DraftIssue`, which has no `labels` of its own to select instead. The four ways
-//! an item is reached are held to reporting one label set by
-//! `an_item_reports_the_same_labels_title_status_and_id_however_it_is_reached` in
-//! `tests/plugin.rs`, which drives each of the four documents against the fixture board.
+//! **No document here selects the board's own `Labels` field, and nothing is lost by
+//! that.** An item's labels are read from its content alone, wherever that content is
+//! reached: the three documents above select `Issue.labels` on the fragment, and
+//! [`graphql::BOARD`] selects the same connection on the `... on Issue` arm of its
+//! `content`. A board's `Labels` field is not one anybody fills in: it is a built-in
+//! `ProjectV2FieldType`, it is absent from `ProjectV2CustomFieldType` so no project can
+//! create one, and `ProjectV2FieldValue` — the whole of what
+//! `updateProjectV2ItemFieldValue` accepts — offers no way to write one. So GitHub derives
+//! it from the content, for every content type it exists on, and there is nothing it can
+//! hold that the content does not already say: for an `Issue` it *is* that issue's own
+//! labels, so selecting it beside them unions a set with itself.
+//!
+//! **A draft loses nothing by that either**, which is the reasoning this paragraph once had
+//! backwards. `DraftIssue` exposes no `labels` field, and by the three schema facts above
+//! it cannot carry a board `Labels` value to be derived from one — so a draft has nothing
+//! to select *and nothing to lose*, and reports no labels at all. A `PullRequest` item is
+//! discarded by [`GitHubProjectsSource::resolve`] before labels are read. Both halves are
+//! held to that by tests in `tests/plugin.rs`: the four ways an item is reached report one
+//! label set, and that set is the fixture issue's own, by
+//! `an_item_reports_the_same_labels_title_status_and_id_however_it_is_reached`; and a board
+//! item whose content is a draft reports an empty set, by
+//! `a_board_item_whose_content_is_a_draft_reports_no_labels_at_all`. The absence of the
+//! selection is held over [`graphql::DOCUMENTS`] by
+//! `no_document_selects_the_boards_own_labels_field`.
 //!
 //! The last row is still the board's own item connection, and deliberately: a **draft**
 //! board item is not an issue, so no search and no node read can reach one, and the reads
@@ -430,8 +442,9 @@ pub mod graphql {
     /// of issues, spending `$nestedFirst` twice down one path, and took
     /// [`SEARCH_ISSUES`] and [`SUB_ISSUES`] to 2,556,100 nodes against a limit of 500,000.
     /// No label is lost — this is a fragment `on Issue`, whose own `labels` are selected
-    /// above, and a board's `Labels` field is a built-in mirror of exactly those. The
-    /// module documentation records why that mirroring holds.
+    /// above, and that connection is where every label this source reports comes from. No
+    /// document in this module selects the board field any longer, [`BOARD`] included; the
+    /// module documentation records why nothing it could have held is lost.
     macro_rules! board_issue {
         () => {
             r#" fragment BoardIssue on Issue{__typename id title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total}
@@ -507,7 +520,6 @@ pub mod graphql {
           ... on ProjectV2SingleSelectField{id name options{id name}}
         }}
         ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2Field{id name}}}
-        ... on ProjectV2ItemFieldLabelValue{labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
       }pageInfo{hasNextPage}} content{
         ... on Issue{__typename id title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
         ... on PullRequest{__typename id}
@@ -2298,11 +2310,6 @@ impl GitHubProjectsSource {
         if let Some(labels) = content.get("labels") {
             complete_connection(labels, "content labels", NESTED_PAGE_SIZE)?;
         }
-        for field_value in nodes {
-            if let Some(labels) = field_value.get("labels") {
-                complete_connection(labels, "project item field labels", NESTED_PAGE_SIZE)?;
-            }
-        }
         let (body, slot) = metadata_body(optional_str(content, "body")?.map(str::to_owned))?;
         let parent = optional_str(content.get("parent").unwrap_or(&Value::Null), "id")?
             .map(|id| NativeId(id.to_owned()));
@@ -2359,7 +2366,7 @@ impl GitHubProjectsSource {
             title,
             body: body.filter(|value| !value.is_empty()),
             status: self.status(item, content)?,
-            labels: labels(content, nodes)?,
+            labels: labels(content)?,
             parent,
             origin: text_field(nodes, ORIGIN_FIELD)?.filter(|value| !value.is_empty()),
             url: optional_str(content, "url")?.map(str::to_owned),
@@ -4173,18 +4180,16 @@ fn slot_metadata(
     metadata
 }
 
-fn labels(content: &Value, field_values: &[Value]) -> Result<Vec<Label>, SourceError> {
-    let direct = optional_nodes(content.get("labels"), "content labels")?;
-    let field = field_values
-        .iter()
-        .find_map(|value| value.get("labels"))
-        .map(|labels| optional_nodes(Some(labels), "field labels"))
-        .transpose()?
-        .flatten();
-    let labels = direct
+/// Every label one item carries, from its content's own connection and nowhere else.
+///
+/// There is no second place to read one from: no document this source sends selects the
+/// board's built-in `Labels` field, because GitHub derives it from the content and a draft
+/// cannot carry one at all. The module documentation records the three schema facts that
+/// settle it.
+fn labels(content: &Value) -> Result<Vec<Label>, SourceError> {
+    optional_nodes(content.get("labels"), "content labels")?
         .into_iter()
         .flatten()
-        .chain(field.into_iter().flatten())
         .map(|v| {
             Ok(Label {
                 id: NativeId(required_str(v, "id")?.to_owned()),
@@ -4192,15 +4197,7 @@ fn labels(content: &Value, field_values: &[Value]) -> Result<Vec<Label>, SourceE
                 color: optional_str(v, "color")?.map(str::to_owned),
             })
         })
-        .collect::<Result<Vec<_>, SourceError>>()?
-        .into_iter()
-        .fold(Vec::new(), |mut labels, label| {
-            if !labels.iter().any(|x: &Label| x.id == label.id) {
-                labels.push(label);
-            }
-            labels
-        });
-    Ok(labels)
+        .collect()
 }
 
 fn text_field(field_values: &[Value], name: &str) -> Result<Option<String>, SourceError> {

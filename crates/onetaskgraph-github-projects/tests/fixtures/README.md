@@ -10,6 +10,14 @@ prove that a task read scoped to one project answers with that project's tasks a
 which is the whole of what a board holding more than one plan needs; the task under no
 parent is what the project-less selection keeps. Their labels, statuses, titles and bodies
 differ from one another so that every predicate a query carries separates them.
+
+**Every label here hangs on an issue's own `Issue.labels` connection, and none of these
+files carries a `ProjectV2ItemFieldLabelValue`.** No document this source sends selects the
+board's built-in `Labels` field any longer — GitHub derives that field from the item's
+content, and a draft, which has no `labels` of its own, cannot carry one at all — so a
+board field value here would be a shape nothing asks for and an answer nothing reads. The
+two values these fixtures used to hold, `team` on the task and `docs` on the document, are
+now on those issues' own connections, which is where GitHub would have derived them from.
 `dependencies.json` follows the published `Issue.blockedBy: IssueConnection` and
 `Issue.blocking: IssueConnection` shapes, which provide both dependency directions, with
 each far end carrying the fields that say which kind of item it is.

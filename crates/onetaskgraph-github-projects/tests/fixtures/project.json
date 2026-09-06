@@ -118,20 +118,6 @@
                       "id": "FIELD_origin",
                       "name": "onetaskgraph.origin"
                     }
-                  },
-                  {
-                    "labels": {
-                      "nodes": [
-                        {
-                          "id": "L_field",
-                          "name": "team",
-                          "color": "00ff00"
-                        }
-                      ],
-                      "pageInfo": {
-                        "hasNextPage": false
-                      }
-                    }
                   }
                 ],
                 "pageInfo": {
@@ -163,6 +149,11 @@
                       "id": "L_bug",
                       "name": "bug",
                       "color": "ff0000"
+                    },
+                    {
+                      "id": "L_field",
+                      "name": "team",
+                      "color": "00ff00"
                     }
                   ],
                   "pageInfo": {
@@ -242,20 +233,6 @@
                         }
                       ]
                     }
-                  },
-                  {
-                    "labels": {
-                      "nodes": [
-                        {
-                          "id": "L_docs",
-                          "name": "docs",
-                          "color": "0000ff"
-                        }
-                      ],
-                      "pageInfo": {
-                        "hasNextPage": false
-                      }
-                    }
                   }
                 ],
                 "pageInfo": {
@@ -282,7 +259,13 @@
                   "total": 0
                 },
                 "labels": {
-                  "nodes": [],
+                  "nodes": [
+                    {
+                      "id": "L_docs",
+                      "name": "docs",
+                      "color": "0000ff"
+                    }
+                  ],
                   "pageInfo": {
                     "hasNextPage": false
                   }
