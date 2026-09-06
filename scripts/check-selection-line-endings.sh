@@ -96,22 +96,27 @@ fi
 echo "check-selection-line-endings: putting the decision to a python that ends lines the Windows way" >&2
 
 # ---------------------------------------------------------------------------------------
-# 2. The decision's answer, in both modes. A caller reads the exact word on stdout, so a
-# carriage return anywhere in it is the defect, whatever the word is.
+# 2. The decision's answer. A caller reads the exact word on stdout, so a carriage return
+# anywhere in it is the defect whatever the word is.
+#
+# Against HEAD there is no diff, so the answer here is `run` and `--nx-exclusions` has
+# nothing to exclude. That makes this the cheap half: it reaches the one `print` both modes
+# answer through, and it is exactly the assertion a caller makes. The half it cannot reach
+# is a state the decision REFUSES, where the same carriage return rides into
+# `--exclude=<crate>` — case 3 drives that one, through the real recipes over a real
+# version-only commit.
 
-answer_carries_no_return() {
-  local mode="$1" answer
-  answer="$(cd "$ROOT" && PYTHONPATH="$scratch" bash scripts/live-lane-selection.sh "$mode" HEAD 2>/dev/null)" \
-    || answer="<the decision could not be run>"
-  case "$answer" in
-    *"$CR"*)
-      fail "the decision's answer in $mode mode carried a carriage return, so a caller comparing against 'not-selected' would run a lane the decision refused: $(printf '%s' "$answer" | cat -v)"
-      ;;
-  esac
-}
+answer="$(cd "$ROOT" && PYTHONPATH="$scratch" bash scripts/live-lane-selection.sh onetaskgraph-github-projects HEAD 2>/dev/null)" \
+  || answer="<the decision could not be run>"
+if [ "$answer" != "run" ]; then
+  fail "the decision did not answer the bare word 'run' for a tree identical to its base; a caller compares against a word, so anything else here is what a caller would read: $(printf '%s' "$answer" | cat -v)"
+fi
 
-answer_carries_no_return onetaskgraph-github-projects
-answer_carries_no_return --nx-exclusions
+exclusions="$(cd "$ROOT" && PYTHONPATH="$scratch" bash scripts/live-lane-selection.sh --nx-exclusions HEAD 2>/dev/null)" \
+  || exclusions="<the decision could not be run>"
+if [ -n "$exclusions" ]; then
+  fail "the decision excluded a lane for a tree identical to its base, and whatever it printed the recipe splices straight into Nx's arguments: $(printf '%s' "$exclusions" | cat -v)"
+fi
 
 # ---------------------------------------------------------------------------------------
 # 3. The real check, over the real decision, on the simulated platform. This is the case
