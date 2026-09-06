@@ -190,7 +190,8 @@ struct Residue {
     kind: &'static str,
 }
 
-const RESIDUE: [Residue; 4] = [
+/// The four of them, as one place rather than four blocks that have to agree.
+static RESIDUE: [Residue; 4] = [
     Residue {
         listing: ISSUES_BY_TITLE,
         connection: "issues",
@@ -234,10 +235,10 @@ const RESIDUE: [Residue; 4] = [
 ];
 
 /// Everything of every kind whose name `matches`, as `(kind, id, name)`.
-async fn find_artifacts<'a>(
+async fn find_artifacts(
     key: &str,
     matches: &dyn Fn(&str, &str) -> bool,
-) -> Result<Vec<(&'a Residue, String, String)>, String> {
+) -> Result<Vec<(&'static Residue, String, String)>, String> {
     let mut found = Vec::new();
     for residue in &RESIDUE {
         let listed = walk(
