@@ -59,7 +59,8 @@ const WINDOW: Duration = Duration::from_secs(60);
 /// How long a drive below will wait for a real second process to reach a state.
 const PATIENCE: Duration = Duration::from_secs(30);
 
-/// The variable that tells a re-execution of this binary it is the live run beside a sweep.
+/// The variable that tells a re-execution of this binary it is the live run beside a sweep,
+/// and where to say so once it has registered.
 const CHILD_VARIABLE: &str = "ONETASKGRAPH_SWEEP_GATE_CHILD";
 
 /// The instant every sweep below is made at, in microseconds since the epoch.
@@ -105,10 +106,12 @@ static RUNS: LazyLock<Runs> = LazyLock::new(|| {
 /// A run of this machine that has ENDED: really registered, and its registration really
 /// given up, which is the state the kernel leaves behind when a process dies.
 fn ended_run(offset: u32) -> Run {
-    let run = Registration::take(&RUNS.registry, 40_000 + offset)
+    let registration = Registration::take(&RUNS.registry, 40_000 + offset)
         .expect("a run that this check then ends");
-    let run = run.run();
-    // Dropped, so the lock is free — the same thing the kernel does for a killed process.
+    let run = registration.run();
+    // Given up here, so the lock is free — the same thing the kernel does for a process that
+    // has died, and the only state that authorises a removal.
+    drop(registration);
     run
 }
 
@@ -138,7 +141,7 @@ impl LiveRunBeside {
             "--exact",
             "a_re_execution_of_this_binary_is_the_live_run_beside_a_sweep",
         ])
-        .env(CHILD_VARIABLE, "1")
+        .env(CHILD_VARIABLE, &RUNS.directory)
         .env(
             onetaskgraph_live::artifact::REGISTRY_DIRECTORY_VARIABLE,
             &RUNS.directory,
@@ -148,10 +151,11 @@ impl LiveRunBeside {
         .spawn()
         .expect("a second process for the live run beside this sweep");
         let run = Run::new(RUNS.mine.host(), child.id());
+        // Waited for by a file that child writes AFTER it has registered, rather than by
+        // asking the registry: asking means taking the very lock the child is trying to
+        // take, and losing that race would leave it unable to say who it is.
         let started = Instant::now();
-        while !RUNS.registry.registration_path(child.id()).exists()
-            || RUNS.registry.finished_runs().contains(&child.id())
-        {
+        while !ready_marker(child.id()).exists() {
             assert!(
                 started.elapsed() < PATIENCE,
                 "the live run beside this sweep never registered"
@@ -190,17 +194,27 @@ impl Drop for LiveRunBeside {
 /// there is no sweep beside it to be the live run for.
 #[test]
 fn a_re_execution_of_this_binary_is_the_live_run_beside_a_sweep() {
-    if std::env::var_os(CHILD_VARIABLE).is_none() {
+    let Some(directory) = std::env::var_os(CHILD_VARIABLE) else {
         return;
-    }
+    };
     let run = Run::current();
     assert_ne!(
         run.host(),
         0,
         "the registry this run was pointed at could not vouch for it"
     );
+    std::fs::write(
+        PathBuf::from(directory).join(format!("ready-{}", run.process())),
+        b"",
+    )
+    .expect("saying that this run has registered");
     // Alive until the drive beside this kills it, and not for ever if that drive never does.
     thread::sleep(PATIENCE * 4);
+}
+
+/// The file the live run beside a sweep writes once it has registered.
+fn ready_marker(process: u32) -> PathBuf {
+    RUNS.directory.join(format!("ready-{process}"))
 }
 
 /// Everything the stand-in holds, and the one race it can be told to stage.

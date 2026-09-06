@@ -331,6 +331,11 @@ impl Registry {
     /// exists, whatever it was doing when it stopped. One whose lock is held is a live run.
     /// One this call cannot even open is neither: no evidence, so it is not reported, and a
     /// sweep therefore leaves its artifacts alone.
+    ///
+    /// **A shared lock, because this is a question rather than a claim.** An exclusive one
+    /// would be refused by exactly the same runs and would, for the instant it was held,
+    /// refuse a run that was registering right then — which would leave that run unable to
+    /// say who it is. Two sweeps asking at once do not refuse each other either.
     #[must_use]
     pub fn finished_runs(&self) -> Vec<u32> {
         let Ok(entries) = fs::read_dir(&self.directory) else {
@@ -347,7 +352,7 @@ impl Registry {
                 continue;
             };
             if let Ok(file) = OpenOptions::new().read(true).write(true).open(entry.path())
-                && file.try_lock().is_ok()
+                && file.try_lock_shared().is_ok()
             {
                 let _ = file.unlock();
                 finished.push(process);

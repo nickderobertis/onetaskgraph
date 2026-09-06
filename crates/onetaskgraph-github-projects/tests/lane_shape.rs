@@ -325,9 +325,13 @@ impl Runs {
         let _ = std::fs::remove_dir_all(&directory);
         let registry = Registry::at(&directory);
         let mine = registry.enrol();
-        let ended = Registration::take(&registry, 2533).expect("a run that will end");
-        let ended = ended.run();
-        drop(Registration::take(&registry, 2533));
+        // Registered, and then really given up — which is the state the kernel leaves behind
+        // for a process that has died, and the only state that authorises a removal.
+        let ended = {
+            let registration =
+                Registration::take(&registry, 2533).expect("a run that then ends here");
+            registration.run()
+        };
         let held = Registration::take(&registry, 9998).expect("a run that is still going");
         let live = held.run();
         Self {
