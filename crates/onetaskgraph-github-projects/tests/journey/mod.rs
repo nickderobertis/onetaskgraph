@@ -37,7 +37,7 @@ use onetaskgraph_plugin_api::{
 };
 use serde_json::{Value, json};
 
-use onetaskgraph_live::artifact::Sweep;
+use onetaskgraph_live::artifact::{Run, Sweep};
 
 use crate::lane::{
     ARTIFACT_PREFIX, LiveSecret, artifact_label, artifact_title, is_orphan_label, is_orphan_title,
@@ -906,9 +906,9 @@ async fn remove_artifact_labels(
 /// failure is reported rather than the first, because residue left in one is residue the
 /// next run has to heal.
 ///
-/// **Scoped to this run's own process id, and nothing wider.** This is what leaves a
-/// concurrent session's in-flight items where they are; what recovers an *interrupted* run's
-/// is [`sweep_orphans`], which is a different decision made on a different piece of evidence.
+/// **Scoped to this run and nothing wider.** This is what leaves a concurrent session's
+/// in-flight items where they are; what recovers an *interrupted* run's is [`sweep_orphans`],
+/// which is a different decision made on a different piece of evidence.
 ///
 /// # The origin field, which this scoping does not reach
 ///
@@ -924,17 +924,15 @@ pub async fn remove_live_state(
     token: &str,
     project_id: &str,
     repository: &str,
-    process_id: u32,
+    run: Run,
     remove_origin_field: bool,
 ) -> Result<(), String> {
     let item_result = remove_live_artifacts(token, project_id, &|title| {
-        is_run_artifact_title(process_id, title)
+        is_run_artifact_title(run, title)
     })
     .await;
-    let label_result = remove_artifact_labels(token, repository, &|name| {
-        is_run_artifact_label(process_id, name)
-    })
-    .await;
+    let label_result =
+        remove_artifact_labels(token, repository, &|name| is_run_artifact_label(run, name)).await;
     let field_result = if remove_origin_field {
         remove_live_origin_field(token, project_id).await
     } else {
@@ -959,9 +957,10 @@ pub async fn remove_live_state(
 /// that is still going.
 ///
 /// `sweep` is that decision and it is not this lane's: `onetaskgraph_live::artifact` holds
-/// it, both hosted lanes derive from it, and it rests on nothing but the artifact's own
-/// stamp and the id of the run asking. An artifact of the sweeping run is never an orphan,
-/// whatever its age; an artifact of another run is one only once its stamp has gone stale.
+/// it, both hosted lanes derive from it, and what authorises a removal is positive evidence
+/// that no live run owns the artifact — the registration lock of the run that wrote it,
+/// released by the kernel when that process ended. An artifact of a run that is still going
+/// is never taken, whatever its age, and neither is one whose machine this sweep cannot ask.
 ///
 /// **It runs after the journey rather than before it, and that ordering is the point.**
 /// A sweep at startup was what deleted a concurrent session's in-flight board items, and
@@ -971,7 +970,7 @@ pub async fn sweep_orphans(
     token: &str,
     project_id: &str,
     repository: &str,
-    sweep: Sweep,
+    sweep: &Sweep,
 ) -> Result<(), String> {
     let item_result =
         remove_live_artifacts(token, project_id, &|title| is_orphan_title(sweep, title)).await;
@@ -1368,7 +1367,10 @@ struct LiveRun {
     token: String,
     repository: String,
     project_id: String,
-    process_id: u32,
+    /// Which run this is: the machine that can vouch for it and the process on it. Every
+    /// artifact below carries it, which is what its own cleanup finds them by and what a
+    /// later run's sweep looks this run up by before deciding anything about them.
+    id: Run,
     stamp_micros: i64,
     status_option: String,
 }
@@ -1380,13 +1382,13 @@ impl LiveRun {
     /// them still reads as this run's to [`is_run_artifact_title`] and as the lane's own
     /// to the sweep the next run does.
     fn title(&self, offset: i64) -> String {
-        artifact_title(self.process_id, self.stamp_micros + offset)
+        artifact_title(self.id, self.stamp_micros + offset)
     }
 
     /// The prefix no other item on the board carries, which is what lets the listings
     /// below assert an exact set rather than a containment.
     fn prefix(&self) -> String {
-        format!("{ARTIFACT_PREFIX}{}-", self.process_id)
+        format!("{ARTIFACT_PREFIX}{}-", self.id)
     }
 }
 
@@ -1622,8 +1624,13 @@ async fn drive_every_declared_capability(
     let (alpha, beta) = (run.title(0), run.title(1));
     let (first, second, orphan) = (run.title(2), run.title(3), run.title(4));
     let prefix = run.prefix();
-    let body_marker = format!("livebodymarker{}x{}", run.process_id, run.stamp_micros);
-    let label_name = artifact_label(run.process_id, run.stamp_micros);
+    let body_marker = format!(
+        "livebodymarker{}x{}x{}",
+        run.id.host(),
+        run.id.process(),
+        run.stamp_micros
+    );
+    let label_name = artifact_label(run.id, run.stamp_micros);
     let open = Status {
         category: StatusCategory::Todo,
         name: run.status_option.clone(),
@@ -2334,7 +2341,7 @@ pub async fn run(nomination: Nomination) {
         token: token.clone(),
         repository: repository.clone(),
         project_id: project_id.clone(),
-        process_id: std::process::id(),
+        id: Run::current(),
         stamp_micros: chrono::Utc::now().timestamp_micros(),
         status_option: status_name.clone(),
     };
@@ -2368,7 +2375,7 @@ pub async fn run(nomination: Nomination) {
                 &token,
                 &project_id,
                 &repository,
-                run.process_id,
+                run.id,
                 origin_field_created,
             )
             .await;
@@ -2376,7 +2383,7 @@ pub async fn run(nomination: Nomination) {
                 &token,
                 &project_id,
                 &repository,
-                Sweep::of(run.process_id, chrono::Utc::now().timestamp_micros()),
+                &Sweep::of(run.id, chrono::Utc::now().timestamp_micros()),
             )
             .await;
             match (mine, orphans) {

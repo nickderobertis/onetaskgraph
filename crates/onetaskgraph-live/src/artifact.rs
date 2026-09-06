@@ -1,85 +1,208 @@
-//! The stamp a live lane writes into every artifact it creates, and when one is an orphan.
+//! The stamp a live lane writes into every artifact it creates, and what may remove one.
 //!
 //! Both hosted lanes name every item, project, document and label they write
-//! `<their own prefix><process id>-<microsecond timestamp>`. The prefix is each lane's
-//! business — GitHub's board items and Linear's issues are not spelled the same way — but
-//! **what comes after it, and what it means, is one contract**, because both lanes have to
-//! answer the same question with the same answer: *may this run delete that artifact?*
+//! `<their own prefix><stamp>`. The prefix is each lane's business — GitHub's board items
+//! and Linear's issues are not spelled the same way — but **the stamp, and what it
+//! authorises, is one contract**, because both lanes have to answer the same question with
+//! the same answer: *may this run delete that artifact?*
 //!
 //! # The rule
 //!
-//! An artifact is this run's when it carries this run's process id, and it is an **orphan**
-//! when it carries somebody else's and its own stamp is older than [`STALE_AFTER`].
-//! Anything else belongs to a run that may still be alive and is left exactly where it is.
+//! **A deletion is authorised by positive evidence that no live run owns the artifact, and
+//! never by the artifact's age.** An artifact may be removed only when all of these hold:
 //!
-//! Both halves are load-bearing and they protect different things:
+//! 1. It carries a [`Run`] whose **host** is the one this machine's [`Registry`] answers
+//!    for. A run on another machine announces nothing this one can read, so there is no
+//!    evidence about it and it is left alone — for ever, if need be.
+//! 2. It is not this run's own.
+//! 3. That run's **registration** is in the registry and its lock can be taken. A live run
+//!    holds an exclusive lock on its registration for the whole of its life, and the
+//!    operating system releases that lock when the process ends — cleanly, by a panic, or
+//!    by being killed outright. So a lock this run can take is the kernel saying the run
+//!    that wrote the artifact is gone. That is the authorisation.
+//! 4. The artifact is older than the window the sweep was made over ([`STALE_AFTER`] for a
+//!    lane). This is a **waiting period, never an authorisation**: it can only hold a
+//!    removal back, so a window chosen wrong delays a cleanup and cannot take live work.
 //!
-//! - **The process id protects the run doing the sweeping, unconditionally.** A session's
-//!   own artifacts are never orphans to itself, however long that session has been going —
-//!   so a run that hangs, or that a hosted API's secondary limiter parks for fifty minutes,
-//!   cannot sweep its own work out from under itself when it comes back. This is what makes
-//!   safety independent of [`STALE_AFTER`]'s length: whatever the window is set to, a live
-//!   run's own artifacts survive its own sweep.
-//! - **The stamp protects every other run,** to the extent a file's own age can. A run in
-//!   another process — on this machine or on another runner — announces nothing this one
-//!   can read, so how recently its artifacts were written is the only evidence there is.
+//! Anything that fails any of the four belongs to a run that may still be alive, and is
+//! left exactly where it is.
 //!
-//! Getting the window wrong is therefore not symmetric. Too long and an interrupted run's
-//! residue sits on a real board for longer before the next run clears it; too short and a
-//! slow *foreign* session's artifacts are taken while it is still using them. The window is
-//! chosen for the second, and the first is what it costs.
+//! # Why age cannot be the rule
 //!
-//! What this module deliberately does **not** do is decide anything from a lock, a seat or
-//! any other state outside the artifact itself. A removal rests on that artifact's own
-//! stamp and on the identity of the run asking, and on nothing else — which is what lets
-//! two sessions of one lane run side by side.
+//! It was, and it was wrong. "Not mine, and older than a window" deletes the artifacts of a
+//! *concurrent* run that has been going longer than the window — which is exactly what a
+//! hung session is, and what a session parked by a hosted API's secondary rate limiter for
+//! fifty minutes at a time becomes. The run doing the sweeping cannot tell that run from an
+//! abandoned one by looking at its artifacts, because they look identical: old, and somebody
+//! else's. The lock is what tells them apart, and it tells them apart with no clock in it at
+//! all.
+//!
+//! # What this deliberately does not do
+//!
+//! It consults no seat, no lease and no lock held across a whole lane: what a removal rests
+//! on is the artifact's own stamp and the registration of the run that wrote it. Two
+//! sessions of one lane can therefore run side by side.
+//!
+//! It also reaches nothing over the network. A registration is a file on the machine the run
+//! is on, so deciding what to sweep costs no API budget — which is why a renewed lease
+//! against the hosted API, which would answer for a foreign machine too, is not what is here.
+//!
+//! **The bound that leaves, stated where it is met:** residue written by a run on *another*
+//! machine is never swept, because nothing here is evidence about a foreign process. An
+//! interrupted hosted-check run leaves its artifacts for a person or a separate janitor to
+//! clear. That direction is chosen: a leak is recoverable and a deleted live run is not.
 
 use std::fmt;
-use std::time::Duration;
+use std::fs::{self, File, OpenOptions, TryLockError};
+use std::hash::{BuildHasher, Hasher};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, SystemTime};
 
-/// How long after its own stamp an artifact stops being a live run's and becomes an orphan.
+/// The directory live runs register themselves in, when the default is not wanted.
 ///
-/// **Six hours**, and the reasoning matters more than the number, because the next reader
-/// may well want to change it:
+/// The default is the platform temporary directory. A check points this at a directory of
+/// its own so that what it drives is a registry holding exactly the runs it put there.
+pub const REGISTRY_DIRECTORY_VARIABLE: &str = "ONETASKGRAPH_LIVE_RUN_DIR";
+
+/// How long an artifact must have existed before a sweep will consider it at all.
 ///
-/// - It has to be **comfortably longer than a session can last**, since a foreign run's
-///   artifacts are protected by nothing else. A journey is minutes at the outside, but a
-///   hosted API's secondary rate limiter refuses a burst for up to an hour at a time and a
-///   run can meet more than one of those, so an hour is not comfortable and six is.
-/// - It does **not** bound how long a live run may take without losing its own work: that
-///   is the process id's job, and it holds however long the run goes on. See the module
-///   documentation.
-/// - What it does bound is how long an interrupted run's residue lives on a real board:
-///   until the next run of that lane at least six hours later. Residue is visible and
-///   cheap; another run's items disappearing mid-journey is neither.
+/// **Six hours, and it authorises nothing.** Read the module documentation first: what
+/// permits a removal is the owning run's registration lock, which has no clock in it. This
+/// is a fourth condition on top, and being a condition rather than a permission is what
+/// makes its length safe to get wrong — too long delays an abandoned artifact's removal, and
+/// too short removes nothing that the lock did not already say was abandoned.
 ///
-/// So a longer window delays a cleanup and a shorter one risks a live run's work. Change it
-/// with that trade in mind rather than to make a check faster — a check chooses its own
-/// window, exactly so it never has to wait out this one.
+/// So why have it at all, and why six hours:
+///
+/// - It is what is left if the lock ever stops being evidence. `File::try_lock` is `flock`
+///   on Unix and `LockFileEx` on Windows, and there are filesystems — some network mounts
+///   above all — where a lock is quietly a no-op and every registration reads as takeable.
+///   On one of those, this window is the only thing standing between a sweep and a live
+///   run's work, so it is set comfortably longer than a session can last: a journey is
+///   minutes, a secondary rate limiter refuses a burst for up to an hour at a time, and a
+///   run can meet more than one of those.
+/// - What it costs is how long an interrupted run's residue lives on a real board before
+///   the next run of that lane clears it. Residue is visible and cheap.
+///
+/// Change it with that trade in mind rather than to make a check faster — a check chooses
+/// its own window through [`Sweep::within`], exactly so it never has to wait out this one.
 pub const STALE_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
 
-/// The `<process id>-<microsecond timestamp>` every artifact name ends with.
+/// The file every live run of this machine registers itself as, less the run's own number.
+const REGISTRATION_PREFIX: &str = "onetaskgraph-live-run-";
+
+/// The file this machine's own [`Registry`] identity is kept in.
+const HOST_FILE: &str = "onetaskgraph-live-host";
+
+/// The registrations this process holds open, and therefore locked, until it exits.
+///
+/// A run's registration lasts as long as the run, and "as long as the run" includes a run
+/// killed mid-journey — which is the case the whole mechanism exists for, and the one no
+/// `Drop` can serve. So the file is held here and never closed: the kernel closes it, and
+/// closing it is what publishes that the run is over.
+static HELD: Mutex<Vec<(PathBuf, File)>> = Mutex::new(Vec::new());
+
+/// The registry the lanes use, from [`REGISTRY_DIRECTORY_VARIABLE`] or the temporary
+/// directory.
+static SHARED: LazyLock<Registry> = LazyLock::new(|| {
+    Registry::at(
+        &std::env::var_os(REGISTRY_DIRECTORY_VARIABLE)
+            .map_or_else(std::env::temp_dir, PathBuf::from),
+    )
+});
+
+/// This process's own run, registered once and reported the same way every time after.
+static CURRENT: LazyLock<Run> = LazyLock::new(|| SHARED.enrol());
+
+/// Which run wrote an artifact: the machine that can answer for it, and the process on it.
+///
+/// The host half is not decoration. Without it a sweep cannot tell a process id it may look
+/// up in its own registry from one belonging to a machine it knows nothing about, and
+/// treating the second as the first is how a foreign live run's artifacts get deleted.
+///
+/// A host of zero means *no registry could answer* — the directory could not be written, or
+/// its identity could not be read. A run stamped that way is never anybody's orphan, and a
+/// sweep made by one removes nothing at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Run {
+    host: u32,
+    process: u32,
+}
+
+impl Run {
+    /// The run `process` on the machine `host`.
+    #[must_use]
+    pub fn new(host: u32, process: u32) -> Self {
+        Self { host, process }
+    }
+
+    /// This process's run, registered in the shared registry the first time it is asked for.
+    ///
+    /// Registering here rather than at [`crate::Session::open`] is deliberate: this is the
+    /// call that names an artifact, so a run cannot write one without first having published
+    /// the lock that protects it.
+    #[must_use]
+    pub fn current() -> Self {
+        *CURRENT
+    }
+
+    /// The machine whose registry can answer for this run, or zero when none can.
+    #[must_use]
+    pub fn host(self) -> u32 {
+        self.host
+    }
+
+    /// The process this run is.
+    #[must_use]
+    pub fn process(self) -> u32 {
+        self.process
+    }
+
+    /// The run `spelled` names, or `None` when it names no run.
+    ///
+    /// Digits only, on both halves, and both halves non-empty.
+    #[must_use]
+    pub fn read(spelled: &str) -> Option<Self> {
+        let (host, process) = spelled.split_once('-')?;
+        Some(Self {
+            host: number(host)?,
+            process: number(process)?,
+        })
+    }
+}
+
+impl fmt::Display for Run {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}-{}", self.host, self.process)
+    }
+}
+
+/// The `<host>-<process>-<microsecond timestamp>` every artifact name ends with.
 ///
 /// One type rather than two lanes' worth of `split_once('-')`, because writing a stamp and
 /// reading one back have to agree: a lane that formatted what this cannot parse would write
 /// artifacts no sweep could ever recognise, on somebody's real board.
+///
+/// Digits and hyphens throughout, which is what lets a lane put one in a URL path unescaped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stamp {
-    process_id: u32,
+    run: Run,
     micros: i64,
 }
 
 impl Stamp {
-    /// The stamp a run writing at `micros` puts on its artifacts.
+    /// The stamp `run` puts on the artifact it writes at `micros`.
     #[must_use]
-    pub fn new(process_id: u32, micros: i64) -> Self {
-        Self { process_id, micros }
+    pub fn new(run: Run, micros: i64) -> Self {
+        Self { run, micros }
     }
 
-    /// Which process wrote the artifact carrying this stamp.
+    /// Which run wrote the artifact carrying this stamp.
     #[must_use]
-    pub fn process_id(self) -> u32 {
-        self.process_id
+    pub fn run(self) -> Run {
+        self.run
     }
 
     /// When it was written, in microseconds since the epoch.
@@ -90,41 +213,232 @@ impl Stamp {
 
     /// The stamp `suffix` spells, or `None` when it spells no stamp at all.
     ///
-    /// Digits only, on both halves, and both halves non-empty: `12-34` is a stamp and
-    /// `12-34-56`, `-34`, `12-` and `abc-34` are not. A name whose suffix is not a stamp is
-    /// not this lane's artifact, so the sweep passes over it rather than guessing.
+    /// Three digit groups, all non-empty: `1-2-3` is a stamp and `1-2`, `1-2-3-4`, `-2-3`
+    /// and `a-2-3` are not. A name whose suffix is not a stamp is not this lane's artifact,
+    /// so the sweep passes over it rather than guessing.
     #[must_use]
     pub fn read(suffix: &str) -> Option<Self> {
-        let (process_id, micros) = suffix.split_once('-')?;
-        if [process_id, micros]
-            .iter()
-            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
-        {
-            return None;
-        }
+        let (host, rest) = suffix.split_once('-')?;
+        let (process, micros) = rest.split_once('-')?;
         Some(Self {
-            process_id: process_id.parse().ok()?,
-            micros: micros.parse().ok()?,
+            run: Run {
+                host: number(host)?,
+                process: number(process)?,
+            },
+            micros: number::<i64>(micros)?,
         })
     }
 }
 
 impl fmt::Display for Stamp {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}-{}", self.process_id, self.micros)
+        write!(formatter, "{}-{}", self.run, self.micros)
     }
 }
 
-/// One run's decision about which of the artifacts it can see are orphans.
+/// `spelled` as a number, when it is digits and nothing else and fits.
 ///
-/// Made once at the point the sweep starts and then asked of each name, so every artifact
-/// in one sweep is judged against the same instant rather than against a clock that moves
-/// while the sweep pages through a board.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `str::parse` alone accepts a leading `+` and, for a signed type, a leading `-` — neither
+/// of which anything here writes, and both of which would let one field of a stamp swallow
+/// the separator before the next.
+fn number<T: std::str::FromStr>(spelled: &str) -> Option<T> {
+    if spelled.is_empty() || !spelled.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    spelled.parse().ok()
+}
+
+/// Where the live runs of one machine say they are alive, and the identity of that machine.
+///
+/// One directory holding one identity file and one file per run. Nothing in it is read for
+/// its contents except the identity: what a registration says is said by whether its lock
+/// can be taken, which is a fact the kernel keeps rather than one a killed process could
+/// have failed to write.
+#[derive(Debug)]
+pub struct Registry {
+    directory: PathBuf,
+    host: u32,
+}
+
+impl Registry {
+    /// The registry kept in `directory`, creating it and its identity if they are not there.
+    ///
+    /// A directory that cannot be made, or an identity that can be neither read nor written,
+    /// leaves the host zero — which is this type saying it can answer for nothing, and which
+    /// makes every sweep made through it remove nothing.
+    #[must_use]
+    pub fn at(directory: &Path) -> Self {
+        let host = if fs::create_dir_all(directory).is_ok() {
+            host_of(&directory.join(HOST_FILE))
+        } else {
+            0
+        };
+        Self {
+            directory: directory.to_owned(),
+            host,
+        }
+    }
+
+    /// The registry the lanes use, from [`REGISTRY_DIRECTORY_VARIABLE`] or the temporary
+    /// directory.
+    #[must_use]
+    pub fn shared() -> &'static Self {
+        &SHARED
+    }
+
+    /// This machine's identity as this registry knows it, or zero when it has none.
+    #[must_use]
+    pub fn host(&self) -> u32 {
+        self.host
+    }
+
+    /// Register this process as a live run, and report the run it is.
+    ///
+    /// The registration is held for the rest of the process's life. Calling this again
+    /// returns the same run rather than a second registration.
+    #[must_use]
+    pub fn enrol(&self) -> Run {
+        let process = std::process::id();
+        let path = self.registration_path(process);
+        let mut held = HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if held.iter().any(|(registered, _)| *registered == path) {
+            // Already registered here, and the lock this call could not take is this
+            // process's own. A second registration of one run is not a second run.
+            return Run::new(self.host, process);
+        }
+        match Registration::take(self, process) {
+            Some(registration) => {
+                let run = registration.run();
+                held.push((path, registration.into_file()));
+                run
+            }
+            // Nothing here could vouch for this run, so it stamps its artifacts with no
+            // host — which is what keeps every other run's sweep off them for ever.
+            None => Run::new(0, process),
+        }
+    }
+
+    /// Where the run `process` registers itself in this registry.
+    #[must_use]
+    pub fn registration_path(&self, process: u32) -> PathBuf {
+        self.directory
+            .join(format!("{REGISTRATION_PREFIX}{process}"))
+    }
+
+    /// The runs of this machine the kernel says are over.
+    ///
+    /// A registration whose lock this call can take belonged to a process that no longer
+    /// exists, whatever it was doing when it stopped. One whose lock is held is a live run.
+    /// One this call cannot even open is neither: no evidence, so it is not reported, and a
+    /// sweep therefore leaves its artifacts alone.
+    #[must_use]
+    pub fn finished_runs(&self) -> Vec<u32> {
+        let Ok(entries) = fs::read_dir(&self.directory) else {
+            return Vec::new();
+        };
+        let mut finished = Vec::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(process) = name
+                .to_str()
+                .and_then(|name| name.strip_prefix(REGISTRATION_PREFIX))
+                .and_then(number::<u32>)
+            else {
+                continue;
+            };
+            if let Ok(file) = OpenOptions::new().read(true).write(true).open(entry.path())
+                && file.try_lock().is_ok()
+            {
+                let _ = file.unlock();
+                finished.push(process);
+            }
+        }
+        finished
+    }
+
+    /// The sweep `run` makes at `now_micros` over `window`, decided against this registry.
+    #[must_use]
+    pub fn sweep(&self, run: Run, now_micros: i64, window: Duration) -> Sweep {
+        Sweep {
+            run,
+            now_micros,
+            window,
+            finished: if run.host() == 0 || run.host() != self.host {
+                // A run this registry does not answer for gets no evidence from it, and a
+                // sweep with no evidence removes nothing.
+                Vec::new()
+            } else {
+                self.finished_runs()
+            },
+        }
+    }
+}
+
+/// One live run's claim on its own artifacts, held as a lock the kernel releases when the
+/// process ends.
+///
+/// A lane takes one through [`Registry::enrol`] and never sees this type. A check takes one
+/// for a nominated run id, which is how it stands a second live run beside the one sweeping
+/// without waiting for anything: the lock is real, and a sweep cannot tell it from a lock a
+/// separate process holds because there is nothing to tell apart.
+#[derive(Debug)]
+pub struct Registration {
+    run: Run,
+    file: File,
+}
+
+impl Registration {
+    /// Register `process` in `registry`, or `None` when it could not be registered.
+    ///
+    /// `None` covers both a registry that could not be written and a registration whose
+    /// lock is already held — including by this very process, which is what a second
+    /// registration of one run is.
+    #[must_use]
+    pub fn take(registry: &Registry, process: u32) -> Option<Self> {
+        if registry.host == 0 {
+            return None;
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(registry.registration_path(process))
+            .ok()?;
+        match file.try_lock() {
+            Ok(()) => Some(Self {
+                run: Run::new(registry.host, process),
+                file,
+            }),
+            Err(TryLockError::WouldBlock | TryLockError::Error(_)) => None,
+        }
+    }
+
+    /// The run this registration is for.
+    #[must_use]
+    pub fn run(&self) -> Run {
+        self.run
+    }
+
+    /// Give up the guard and keep the lock, by keeping the file open.
+    fn into_file(self) -> File {
+        self.file
+    }
+}
+
+/// One run's decision about which of the artifacts it can see no live run owns.
+///
+/// Made once at the point the sweep starts and then asked of each name, so every artifact in
+/// one sweep is judged against the same reading of the registry and the same instant, rather
+/// than against a clock and a directory that both move while the sweep pages through a board.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sweep {
-    run: u32,
+    run: Run,
     now_micros: i64,
     window: Duration,
+    /// The runs of this machine the registry says are over — the only ones this sweep may
+    /// remove anything of.
+    finished: Vec<u32>,
 }
 
 impl Sweep {
@@ -133,7 +447,7 @@ impl Sweep {
     /// This is what a lane uses. [`Sweep::within`] is for a check that would otherwise have
     /// to wait out [`STALE_AFTER`] to observe anything.
     #[must_use]
-    pub fn of(run: u32, now_micros: i64) -> Self {
+    pub fn of(run: Run, now_micros: i64) -> Self {
         Self::within(run, now_micros, STALE_AFTER)
     }
 
@@ -143,53 +457,122 @@ impl Sweep {
     /// six hours — and so that what it proves is *independent* of the window, which is the
     /// property [`STALE_AFTER`] is chosen under rather than relied upon.
     #[must_use]
-    pub fn within(run: u32, now_micros: i64, window: Duration) -> Self {
-        Self {
-            run,
-            now_micros,
-            window,
-        }
+    pub fn within(run: Run, now_micros: i64, window: Duration) -> Self {
+        Registry::shared().sweep(run, now_micros, window)
     }
 
     /// The run this sweep is being made by, whose artifacts it never touches.
     #[must_use]
-    pub fn run(self) -> u32 {
+    pub fn run(&self) -> Run {
         self.run
     }
 
-    /// Whether the artifact carrying `stamp` is an orphan this run may remove.
+    /// Whether the artifact carrying `stamp` is one no live run owns.
     ///
-    /// An artifact stamped in the future is not an orphan: two machines' clocks disagree,
-    /// and the direction to be wrong in is leaving somebody's work alone.
+    /// All four conditions of the module documentation, in the order that makes what is
+    /// missing readable: the wrong machine and this run's own are refused outright, then the
+    /// registry has to say the owning run is over, and only then does age come into it.
+    ///
+    /// An artifact stamped in the future is never removed: two machines' clocks disagree, and
+    /// the direction to be wrong in is leaving somebody's work alone.
     #[must_use]
-    pub fn is_orphan(self, stamp: Stamp) -> bool {
-        if stamp.process_id == self.run {
+    pub fn is_orphan(&self, stamp: Stamp) -> bool {
+        if self.run.host == 0 || stamp.run.host != self.run.host {
+            return false;
+        }
+        if stamp.run.process == self.run.process {
+            return false;
+        }
+        if !self.finished.contains(&stamp.run.process) {
             return false;
         }
         u128::try_from(self.now_micros.saturating_sub(stamp.micros))
             .is_ok_and(|age| age > self.window.as_micros())
     }
 
-    /// Whether `name` is an orphan artifact written under `prefix`.
+    /// Whether `name` is an artifact under `prefix` that no live run owns.
     ///
-    /// The whole decision for a lane whose names are `prefix` then a stamp: anything that
-    /// is not spelled that way belongs to somebody else entirely and is never touched.
+    /// The whole decision for a lane whose names are `prefix` then a stamp: anything that is
+    /// not spelled that way belongs to somebody else entirely and is never touched.
     #[must_use]
-    pub fn names_an_orphan(self, prefix: &str, name: &str) -> bool {
+    pub fn names_an_orphan(&self, prefix: &str, name: &str) -> bool {
         name.strip_prefix(prefix)
             .and_then(Stamp::read)
             .is_some_and(|stamp| self.is_orphan(stamp))
     }
 }
 
+/// This machine's registry identity, read from `path` or written there if it has none.
+///
+/// Zero when it can be neither read nor written, which is this machine declining to answer
+/// for any run rather than answering wrongly.
+fn host_of(path: &Path) -> u32 {
+    for _ in 0..8 {
+        if let Some(host) = read_host(path) {
+            return host;
+        }
+        // `create_new`, so two processes arriving together cannot each write an identity and
+        // leave the machine with two. The loser reads the winner's on the next turn.
+        if let Ok(mut file) = OpenOptions::new().write(true).create_new(true).open(path) {
+            let host = fresh_host();
+            if writeln!(file, "{host}").and_then(|()| file.flush()).is_ok() {
+                return host;
+            }
+            // An identity half-written is one nothing can read, and leaving it there would
+            // make this machine hostless for ever rather than for this call.
+            let _ = fs::remove_file(path);
+            return 0;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    0
+}
+
+/// The identity `path` holds, when it holds one that means anything.
+fn read_host(path: &Path) -> Option<u32> {
+    let host = number::<u32>(fs::read_to_string(path).ok()?.trim())?;
+    (host != 0).then_some(host)
+}
+
+/// An identity for a machine that has none yet.
+///
+/// It has to differ between machines and it never has to be secret, so it is a hash of the
+/// two things that differ — when this process started asking and which process it is — under
+/// `RandomState`, whose seed is itself random per process. Bounded to nine digits so that a
+/// whole stamp still fits inside a hosted API's own limit on a label name, and forced
+/// non-zero because zero is this contract's word for "no registry answers here".
+fn fresh_host() -> u32 {
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u128(
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos()),
+    );
+    hasher.write_u32(std::process::id());
+    u32::try_from(hasher.finish() % 999_999_937).unwrap_or(1) | 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     /// A window a test can drive either side of without waiting for anything.
     const WINDOW: Duration = Duration::from_secs(60);
 
     const NOW: i64 = 1_787_816_134_627_361;
+
+    /// A registry directory of this test's own, so what it holds is what this test put there.
+    fn scratch(what: &str) -> PathBuf {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "onetaskgraph-live-artifact-{}-{what}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        directory
+    }
 
     fn micros(window: Duration) -> i64 {
         i64::try_from(window.as_micros()).expect("a test window fits in the stamp's own type")
@@ -197,11 +580,15 @@ mod tests {
 
     #[test]
     fn a_stamp_reads_back_exactly_what_was_written() {
-        let stamp = Stamp::new(2533, NOW);
-        assert_eq!(stamp.to_string(), format!("2533-{NOW}"));
+        let stamp = Stamp::new(Run::new(41, 2533), NOW);
+        assert_eq!(stamp.to_string(), format!("41-2533-{NOW}"));
         assert_eq!(Stamp::read(&stamp.to_string()), Some(stamp));
-        assert_eq!(stamp.process_id(), 2533);
+        assert_eq!(stamp.run(), Run::new(41, 2533));
+        assert_eq!(stamp.run().host(), 41);
+        assert_eq!(stamp.run().process(), 2533);
         assert_eq!(stamp.micros(), NOW);
+        assert_eq!(Run::read("41-2533"), Some(Run::new(41, 2533)));
+        assert_eq!(Run::new(41, 2533).to_string(), "41-2533");
     }
 
     #[test]
@@ -209,78 +596,205 @@ mod tests {
         for spelled in [
             "",
             "2533",
-            "-2533",
-            "2533-",
-            "abc-17",
-            "2533-abc",
-            "2533-17-19",
-            "2533 -17",
-            "+2533-17",
-            "2533--17",
+            "41-2533",
+            "-41-2533",
+            "41--2533",
+            "41-2533-",
+            "a-41-2533",
+            "41-a-2533",
+            "41-2533-a",
+            "41-2533-17-19",
+            "41 -2533-17",
+            "+41-2533-17",
             // Wider than the halves they are parsed into: a name nothing here could have
             // written, and reading it as a stamp would be reading a number that overflowed.
-            "99999999999-17",
-            "2533-99999999999999999999",
+            "99999999999-2533-17",
+            "41-99999999999-17",
+            "41-2533-99999999999999999999",
         ] {
             assert_eq!(Stamp::read(spelled), None, "{spelled:?} is not a stamp");
         }
-    }
-
-    #[test]
-    fn a_sweep_takes_another_runs_stale_artifact_and_leaves_its_fresh_one() {
-        let sweep = Sweep::within(2533, NOW, WINDOW);
-        assert!(sweep.is_orphan(Stamp::new(9999, NOW - micros(WINDOW) - 1)));
-        assert!(!sweep.is_orphan(Stamp::new(9999, NOW - micros(WINDOW))));
-        assert!(!sweep.is_orphan(Stamp::new(9999, NOW)));
-        assert_eq!(sweep.run(), 2533);
-    }
-
-    #[test]
-    fn a_sweep_never_takes_its_own_runs_artifact_however_old_it_is() {
-        // The live-session case: a run parked by a secondary rate limiter for longer than
-        // the window comes back to find its own fixture still there. Age alone cannot say
-        // this, which is why the run is part of the decision at all.
-        let sweep = Sweep::within(2533, NOW, WINDOW);
-        for age in [0, micros(WINDOW), micros(WINDOW) * 1_000] {
-            assert!(
-                !sweep.is_orphan(Stamp::new(2533, NOW - age)),
-                "a run's own artifact {age} microseconds old is not an orphan to it"
-            );
+        for spelled in ["", "41", "-41", "41-", "a-41", "41-a", "41-2533-17"] {
+            assert_eq!(Run::read(spelled), None, "{spelled:?} is not a run");
         }
     }
 
     #[test]
-    fn an_artifact_stamped_in_the_future_is_left_alone() {
-        let sweep = Sweep::within(2533, NOW, WINDOW);
-        assert!(!sweep.is_orphan(Stamp::new(9999, NOW + micros(WINDOW) * 1_000)));
+    fn one_machine_keeps_one_identity_however_many_registries_read_it() {
+        let directory = scratch("identity");
+        let first = Registry::at(&directory);
+        let second = Registry::at(&directory);
+        assert_ne!(first.host(), 0, "a writable directory has an identity");
+        assert_eq!(first.host(), second.host());
+        // And a second machine's is a different one, which is what makes a foreign run's
+        // artifacts recognisable as foreign.
+        assert_ne!(
+            first.host(),
+            Registry::at(&scratch("identity-elsewhere")).host()
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_registry_that_cannot_be_written_answers_for_nothing() {
+        // A directory that cannot be made, because a file is already at that path. The
+        // machine then has no identity, so it vouches for no run and its sweeps take nothing.
+        let occupied = scratch("occupied");
+        fs::create_dir_all(occupied.parent().expect("a temporary directory")).expect("a parent");
+        fs::write(&occupied, b"not a directory").expect("a file in the way");
+        let registry = Registry::at(&occupied.join("registry"));
+        assert_eq!(registry.host(), 0);
+        assert_eq!(registry.enrol(), Run::new(0, std::process::id()));
+        assert!(Registration::take(&registry, 4242).is_none());
+        let sweep = registry.sweep(Run::new(7, std::process::id()), NOW, WINDOW);
+        assert!(!sweep.is_orphan(Stamp::new(Run::new(7, 4242), 0)));
+        let _ = fs::remove_file(&occupied);
+    }
+
+    #[test]
+    fn a_run_is_over_exactly_when_its_registration_can_be_locked_again() {
+        let directory = scratch("liveness");
+        let registry = Registry::at(&directory);
+        let live = Registration::take(&registry, 4242).expect("a registration this run can take");
+        assert_eq!(live.run(), Run::new(registry.host(), 4242));
+        assert!(
+            !registry.finished_runs().contains(&4242),
+            "a run holding its registration is not over"
+        );
+        // A second registration of the same run is refused: the lock is already held, and
+        // that is true whichever process holds it.
+        assert!(Registration::take(&registry, 4242).is_none());
+        drop(live);
+        assert!(
+            registry.finished_runs().contains(&4242),
+            "a registration nothing holds is a run the kernel says has ended"
+        );
+        // Whatever else is in the directory is not a registration and is never read as one.
+        fs::write(directory.join("onetaskgraph-live-run-notanumber"), b"").expect("a stray file");
+        fs::write(directory.join("something-else"), b"").expect("another stray file");
+        assert_eq!(registry.finished_runs(), vec![4242]);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn enrolling_twice_reports_one_run_rather_than_refusing_the_second() {
+        let directory = scratch("enrol");
+        let registry = Registry::at(&directory);
+        let run = registry.enrol();
+        assert_eq!(run, Run::new(registry.host(), std::process::id()));
+        assert_eq!(registry.enrol(), run);
+        assert!(
+            !registry.finished_runs().contains(&std::process::id()),
+            "this process is registered here and is not over"
+        );
+        // Deliberately not removed: the registration is held for the life of the process, so
+        // the directory is left for the operating system to clear.
+    }
+
+    #[test]
+    fn a_sweep_leaves_a_live_runs_artifacts_however_old_they_are() {
+        // The case the age rule got wrong: a concurrent run that has been going longer than
+        // the window — a hung session, or one a secondary rate limiter parked — is
+        // indistinguishable from an abandoned one by age alone. Its lock is what tells them
+        // apart, and it says nothing about time.
+        let directory = scratch("live-run");
+        let registry = Registry::at(&directory);
+        let mine = registry.enrol();
+        let _theirs = Registration::take(&registry, 4242).expect("a second live run");
+        let sweep = registry.sweep(mine, NOW, WINDOW);
+        for age in [0, micros(WINDOW), micros(WINDOW) * 100_000] {
+            assert!(
+                !sweep.is_orphan(Stamp::new(Run::new(registry.host(), 4242), NOW - age)),
+                "a live run's artifact {age} microseconds old was taken"
+            );
+            assert!(
+                !sweep.is_orphan(Stamp::new(mine, NOW - age)),
+                "this run's own artifact {age} microseconds old was taken"
+            );
+        }
+        assert_eq!(sweep.run(), mine);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_sweep_takes_an_ended_runs_artifact_once_it_has_waited_the_window_out() {
+        let directory = scratch("ended-run");
+        let registry = Registry::at(&directory);
+        let mine = registry.enrol();
+        let ended = Registration::take(&registry, 4242).expect("a run that will end");
+        let stamp = |age: i64| Stamp::new(Run::new(registry.host(), 4242), NOW - age);
+        drop(ended);
+        let sweep = registry.sweep(mine, NOW, WINDOW);
+        assert!(sweep.is_orphan(stamp(micros(WINDOW) + 1)));
+        // The window is a waiting period and only that: it holds a removal back and it
+        // never authorises one.
+        assert!(!sweep.is_orphan(stamp(micros(WINDOW))));
+        assert!(!sweep.is_orphan(stamp(0)));
+        // Nor is an artifact stamped in the future, whose clock disagrees with this one's.
+        assert!(!sweep.is_orphan(stamp(-micros(WINDOW) * 100)));
+        // A run this registry never heard of is no evidence at all, ended or not.
+        assert!(!sweep.is_orphan(Stamp::new(
+            Run::new(registry.host(), 4243),
+            NOW - micros(WINDOW) - 1
+        )));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_run_of_another_machine_is_never_swept_whatever_its_number() {
+        let directory = scratch("foreign-host");
+        let registry = Registry::at(&directory);
+        let mine = registry.enrol();
+        drop(Registration::take(&registry, 4242).expect("a run that has ended here"));
+        let sweep = registry.sweep(mine, NOW, WINDOW);
+        let stale = NOW - micros(WINDOW) - 1;
+        let elsewhere = registry.host().wrapping_add(1);
+        assert!(
+            !sweep.is_orphan(Stamp::new(Run::new(elsewhere, 4242), stale)),
+            "a process id of another machine was looked up in this machine's registry"
+        );
+        assert!(!sweep.is_orphan(Stamp::new(Run::new(0, 4242), stale)));
+        let _ = fs::remove_dir_all(&directory);
     }
 
     #[test]
     fn only_a_name_spelled_this_way_under_this_prefix_is_ever_an_orphan() {
-        let sweep = Sweep::within(2533, NOW, WINDOW);
+        let directory = scratch("names");
+        let registry = Registry::at(&directory);
+        let mine = registry.enrol();
+        drop(Registration::take(&registry, 4242).expect("a run that has ended"));
+        let sweep = registry.sweep(mine, NOW, WINDOW);
+        let host = registry.host();
         let stale = NOW - micros(WINDOW) - 1;
-        assert!(sweep.names_an_orphan("live ", &format!("live 9999-{stale}")));
+        assert!(sweep.names_an_orphan("live ", &format!("live {host}-4242-{stale}")));
         for foreign in [
-            format!("9999-{stale}"),
-            format!("copy of live 9999-{stale}"),
-            "live 9999".to_owned(),
+            format!("{host}-4242-{stale}"),
+            format!("copy of live {host}-4242-{stale}"),
+            format!("live {host}-4242"),
             "live ".to_owned(),
-            format!("live 2533-{stale}"),
+            format!("live {}-{stale}", mine),
         ] {
             assert!(
                 !sweep.names_an_orphan("live ", &foreign),
                 "{foreign:?} is not an orphan of this run's"
             );
         }
+        let _ = fs::remove_dir_all(&directory);
     }
 
     #[test]
     fn the_declared_window_is_the_one_a_lane_sweeps_on() {
-        // `Sweep::of` is what the lanes call, and what it must not do is quietly carry a
-        // window of its own: the reasoning for the length is written on the constant, and a
-        // second figure here would mean nothing a reader of that reasoning could act on.
-        let stale = NOW - micros(STALE_AFTER) - 1;
-        assert!(Sweep::of(2533, NOW).is_orphan(Stamp::new(9999, stale)));
-        assert!(!Sweep::of(2533, NOW).is_orphan(Stamp::new(9999, stale + 2)));
+        // `Sweep::of` and `Sweep::within` are what the lanes and their checks call, and both
+        // go to the shared registry rather than carrying a registry or a window of their
+        // own. The reasoning for the length is written on the constant, and a second figure
+        // here would mean nothing a reader of that reasoning could act on.
+        let run = Run::current();
+        assert_eq!(run, Run::current());
+        assert_eq!(Sweep::of(run, NOW).run(), run);
+        assert_eq!(Sweep::of(run, NOW), Sweep::within(run, NOW, STALE_AFTER));
+        assert_ne!(Sweep::of(run, NOW), Sweep::within(run, NOW, WINDOW));
+        // Whatever else the shared registry holds, this run is live in it and its own
+        // artifacts are its own — which is the property that holds at any window.
+        assert!(!Sweep::of(run, NOW).is_orphan(Stamp::new(run, 0)));
     }
 }

@@ -365,24 +365,40 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   in for it. `scripts/check-budget-decline.sh`, a command in that plugin's `test` target,
   follows such a decline through to the conclusion the required check reads, because a test
   that asserts a panic passes and the half worth proving is that the check goes red.
-- **What a run of one of these journeys may delete is decided by the artifact, never by a
-  lock.** Both lanes stamp every item, project, document and label they write with the
-  writing process's id and a microsecond timestamp, and
-  `onetaskgraph_live::artifact` — one contract both derive from — turns that stamp into the
-  only two answers cleanup needs: this run's own artifact, which its teardown removes
-  whether the journey passed or failed, and an **orphan**, which is somebody else's whose
-  stamp is older than `STALE_AFTER`. Anything else belongs to a run that may still be alive
-  and is left where it is. The run's own id protects the sweeping session *unconditionally*,
-  so a run parked by a secondary limiter for fifty minutes cannot sweep its own fixture out
-  from under itself, and safety therefore does not rest on the window's length — choosing it
-  wrong delays an orphan's removal rather than taking a live run's work.
+- **A run of one of these journeys deletes another run's work only on positive evidence
+  that no live run owns it, and never because the work is old.** Both lanes stamp every
+  item, project, document and label they write with the machine and process that wrote it
+  and a microsecond timestamp, and `onetaskgraph_live::artifact` — one contract both derive
+  from — is where that stamp is turned into an answer. **A live run holds an exclusive
+  operating-system lock on its own registration for the whole of its life, and the kernel
+  releases that lock when the process ends, killed or not.** So a lock a sweep can take is
+  the kernel saying the run that wrote the artifact is over, and that — not a clock — is
+  what authorises a removal. A run's own artifacts are its own; an artifact whose owning
+  run still holds its registration is left alone however old it is; an artifact stamped by
+  another machine is left alone for ever, because nothing local is evidence about a foreign
+  process.
+  **`STALE_AFTER` is a waiting period and never an authorisation.** It is a fourth
+  condition on top of the three above, so choosing it wrong delays an abandoned artifact's
+  removal and cannot take a live run's work — which is the property the whole arrangement
+  is for. It is declared in one place with the reasoning for its length beside it, and what
+  it is really left for is the day locking stops being evidence, on a filesystem that
+  quietly makes `flock` a no-op.
+  **What this costs is stated rather than discovered: residue an interrupted run on another
+  machine left is never swept**, and the hosted check's runners are a fresh machine each
+  time. A leak a person or a janitor can clear is the direction to fail in; deleting a live
+  run's work is not recoverable, and telling a hung foreign run from a dead one needs either
+  a channel this has no budget for or the age rule this replaces.
   **Both lanes used to sweep at startup with a predicate that recognised any run's
   artifacts,** which is what made two concurrent runs delete each other's in-flight items
-  and made a seat the only thing between them. That sweep now runs at the END of a run and
-  only over orphans; `crates/onetaskgraph-github-projects/tests/sweep_gate.rs` drives the
-  real cleanup against a loopback board and holds both halves — a live run's artifacts
-  survive a sweep whose window they are already older than, and a delete of an artifact
-  another deleter took first leaves the cleanup successful rather than failing the run.
+  and made a seat the only thing between them; the rule that replaced it recognised any
+  run's artifacts that were old enough, which is the same failure against a *slow* run.
+  That sweep now runs at the END of a run and reaches only what the kernel says is nobody's;
+  `crates/onetaskgraph-github-projects/tests/sweep_gate.rs` drives the real cleanup against
+  a loopback board and holds every half — a **real second process**, holding a real
+  registration, keeps its artifacts through a sweep whose window they are already ten times
+  older than and loses them to the very same sweep once it is killed, and a delete of an
+  artifact another deleter took first leaves the cleanup successful rather than failing the
+  run.
 - **Two things still hold one session per lane per run, and the second is the one a fold
   that stops at the test target gets wrong**: `scripts/rust-coverage.sh` clearing the
   credentials, because `just check` performs the affected `test` target **and** the affected

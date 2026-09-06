@@ -12,7 +12,7 @@ use std::future::Future;
 
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_github_projects::accounting::{Outcome, StatusCode};
-use onetaskgraph_live::artifact::{Stamp, Sweep};
+use onetaskgraph_live::artifact::{Run, Stamp, Sweep};
 use onetaskgraph_live::{Credential, missing, required};
 use onetaskgraph_plugin_api::SecretResolver;
 use secrecy::SecretString;
@@ -62,16 +62,16 @@ pub fn live_write_config(
 
 /// The prefix of every board item this lane writes.
 ///
-/// The rest of a title is an [`onetaskgraph_live::artifact::Stamp`] — the writing process's
-/// id and a microsecond timestamp — which is what makes one run's artifact unique, what
-/// makes it recognisable to that run's own cleanup, and what says how old it is to a later
-/// run deciding whether it is an orphan. The grammar of that half is not spelled here: it
-/// is one contract shared with the Linear lane, because both have to answer the same
-/// question about an artifact with the same answer.
+/// The rest of a title is an [`onetaskgraph_live::artifact::Stamp`] — the machine and
+/// process that wrote it, and a microsecond timestamp — which is what makes one run's
+/// artifact unique, what makes it recognisable to that run's own cleanup, and what a later
+/// run looks the writing run up by before deciding whether anything still owns it. The
+/// grammar of that half is not spelled here: it is one contract shared with the Linear lane,
+/// because both have to answer the same question about an artifact with the same answer.
 pub const ARTIFACT_PREFIX: &str = "onetaskgraph live cleanup ";
 
-pub fn artifact_title(process_id: u32, stamp_micros: i64) -> String {
-    format!("{ARTIFACT_PREFIX}{}", Stamp::new(process_id, stamp_micros))
+pub fn artifact_title(run: Run, stamp_micros: i64) -> String {
+    format!("{ARTIFACT_PREFIX}{}", Stamp::new(run, stamp_micros))
 }
 
 /// The artifact title inside one board issue's own title.
@@ -85,52 +85,57 @@ fn artifact_part(title: &str) -> &str {
     title.strip_prefix(DESIGN_TITLE_PREFIX).unwrap_or(title)
 }
 
-/// Whether a board item is an orphan `sweep` may remove.
+/// Whether a board item is an artifact `sweep` may remove.
 ///
-/// **Never anything a live run owns, and that is the whole of what this decides.** An
-/// artifact carrying the sweeping run's own process id is that run's, whatever its age; an
-/// artifact of another run is left alone until its own stamp has gone stale. The rule and
-/// the window are `onetaskgraph_live::artifact`'s, so this lane and Linear's cannot come to
-/// sweep on two different ones.
-pub fn is_orphan_title(sweep: Sweep, title: &str) -> bool {
+/// **Never anything a live run owns, and that is the whole of what this decides.** What
+/// permits a removal is positive evidence that the run which wrote the artifact has ended —
+/// its registration lock, which the kernel releases when that process does — and never how
+/// old the artifact is. The rule and the window are `onetaskgraph_live::artifact`'s, so this
+/// lane and Linear's cannot come to sweep on two different ones.
+pub fn is_orphan_title(sweep: &Sweep, title: &str) -> bool {
     sweep.names_an_orphan(ARTIFACT_PREFIX, artifact_part(title))
 }
 
 /// Whether a board item is one *this* run wrote.
 ///
-/// Every artifact of one run carries this process's id, so a run names its own for cleanup
-/// without touching one another run is still using or one an interrupted earlier run left
-/// for [`is_orphan_title`] to sweep.
-pub fn is_run_artifact_title(process_id: u32, title: &str) -> bool {
+/// Every artifact of one run carries that run, so a run names its own for cleanup without
+/// touching one another run is still using or one an interrupted earlier run left for
+/// [`is_orphan_title`] to sweep.
+pub fn is_run_artifact_title(run: Run, title: &str) -> bool {
     Stamp::read(
         artifact_part(title)
             .strip_prefix(ARTIFACT_PREFIX)
             .unwrap_or(""),
     )
-    .is_some_and(|stamp| stamp.process_id() == process_id)
+    .is_some_and(|stamp| stamp.run() == run)
 }
 
 /// The prefix of the one repository label this lane creates.
 ///
-/// A label this lane created is residue exactly as an issue is, so it is named the way
-/// board items are — this process's id and a timestamp — and removed the same way. The
-/// grammar a stamp accepts is digits and one hyphen, which is what lets the cleanup below
-/// name a label in a URL path unescaped.
-pub const LABEL_PREFIX: &str = "onetaskgraph-live-";
+/// A label this lane created is residue exactly as an issue is, so it is named the way board
+/// items are — the writing run and a timestamp — and removed the same way. The grammar a
+/// stamp accepts is digits and hyphens, which is what lets the cleanup below name a label in
+/// a URL path unescaped.
+///
+/// **Short on purpose**, where the board item's prefix is a readable sentence: GitHub holds a
+/// label name to fifty characters, and a stamp now names the machine as well as the process.
+/// `otg-live-` plus the widest stamp either can write leaves room to spare; the eighteen
+/// characters this used to be did not.
+pub const LABEL_PREFIX: &str = "otg-live-";
 
-pub fn artifact_label(process_id: u32, stamp_micros: i64) -> String {
-    format!("{LABEL_PREFIX}{}", Stamp::new(process_id, stamp_micros))
+pub fn artifact_label(run: Run, stamp_micros: i64) -> String {
+    format!("{LABEL_PREFIX}{}", Stamp::new(run, stamp_micros))
 }
 
-/// Whether a repository label is an orphan `sweep` may remove. See [`is_orphan_title`].
-pub fn is_orphan_label(sweep: Sweep, name: &str) -> bool {
+/// Whether a repository label is an artifact `sweep` may remove. See [`is_orphan_title`].
+pub fn is_orphan_label(sweep: &Sweep, name: &str) -> bool {
     sweep.names_an_orphan(LABEL_PREFIX, name)
 }
 
 /// Whether a repository label is one *this* run created.
-pub fn is_run_artifact_label(process_id: u32, name: &str) -> bool {
+pub fn is_run_artifact_label(run: Run, name: &str) -> bool {
     Stamp::read(name.strip_prefix(LABEL_PREFIX).unwrap_or(""))
-        .is_some_and(|stamp| stamp.process_id() == process_id)
+        .is_some_and(|stamp| stamp.run() == run)
 }
 
 pub async fn run_then_cleanup<J, JF, C, CF>(journey: J, cleanup: C) -> Result<(), String>

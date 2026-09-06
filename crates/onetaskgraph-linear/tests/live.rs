@@ -17,12 +17,12 @@
 //!
 //! Everything it creates it deletes, whether its assertions passed or failed. It also
 //! recovers what a run killed between its writes and its cleanup left behind — but only
-//! artifacts whose own stamps say no run still owns them, and only once its own journey is
-//! over. See [`sweep_orphans`].
+//! artifacts the kernel says no live run owns, and only once its own journey is over. See
+//! [`sweep_orphans`].
 
 use std::{collections::BTreeMap, env, future::Future, time::Duration};
 
-use onetaskgraph_live::artifact::{Stamp, Sweep};
+use onetaskgraph_live::artifact::{Run, Stamp, Sweep};
 use onetaskgraph_live::{Credential, Exclusivity, Session, missing, required};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
@@ -82,29 +82,29 @@ const SESSION_NAME: &str = "Linear";
 
 /// The prefix of every issue, project and document this lane writes.
 ///
-/// The rest of a name is an [`onetaskgraph_live::artifact::Stamp`] — the writing process's
-/// id and a microsecond timestamp — which is what makes one run's artifacts unique, what
-/// makes them recognisable to that run's own cleanup, and what says how old they are to a
-/// later run deciding whether they are orphans. The grammar of that half is not spelled
-/// here: it is one contract shared with the GitHub Projects lane, because both have to
-/// answer the same question about an artifact with the same answer.
+/// The rest of a name is an [`onetaskgraph_live::artifact::Stamp`] — the machine and process
+/// that wrote it, and a microsecond timestamp — which is what makes one run's artifacts
+/// unique, what makes them recognisable to that run's own cleanup, and what a later run
+/// looks the writing run up by before deciding whether anything still owns them. The grammar
+/// of that half is not spelled here: it is one contract shared with the GitHub Projects
+/// lane, because both have to answer the same question about an artifact with the same
+/// answer.
 const ARTIFACT_PREFIX: &str = "onetaskgraph live cleanup ";
 
 /// The same for a label, whose name Linear shows in its own filter menus.
-const LABEL_PREFIX: &str = "onetaskgraph-live-";
+const LABEL_PREFIX: &str = "otg-live-";
 
-fn artifact_title(process_id: u32, stamp_micros: i64) -> String {
-    format!("{ARTIFACT_PREFIX}{}", Stamp::new(process_id, stamp_micros))
+fn artifact_title(run: Run, stamp_micros: i64) -> String {
+    format!("{ARTIFACT_PREFIX}{}", Stamp::new(run, stamp_micros))
 }
 
-fn artifact_label(process_id: u32, stamp_micros: i64) -> String {
-    format!("{LABEL_PREFIX}{}", Stamp::new(process_id, stamp_micros))
+fn artifact_label(run: Run, stamp_micros: i64) -> String {
+    format!("{LABEL_PREFIX}{}", Stamp::new(run, stamp_micros))
 }
 
 /// Whether a name under `prefix` is one *this* run wrote.
-fn is_this_runs(process_id: u32, prefix: &str, name: &str) -> bool {
-    Stamp::read(name.strip_prefix(prefix).unwrap_or(""))
-        .is_some_and(|stamp| stamp.process_id() == process_id)
+fn is_this_runs(run: Run, prefix: &str, name: &str) -> bool {
+    Stamp::read(name.strip_prefix(prefix).unwrap_or("")).is_some_and(|stamp| stamp.run() == run)
 }
 
 const TEAM_STATES: &str = "query($key:String!){teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id key states(first:100){nodes{id name type}}}}}";
@@ -325,19 +325,17 @@ async fn remove_artifacts(key: &str, matches: &dyn Fn(&str, &str) -> bool) -> Re
 /// that is still going.
 ///
 /// `sweep` is that decision and it is not this lane's: `onetaskgraph_live::artifact` holds
-/// it, both hosted lanes derive from it, and it rests on nothing but the artifact's own
-/// stamp and the id of the run asking. An artifact of the sweeping run is never an orphan,
-/// whatever its age; an artifact of another run is one only once its stamp has gone stale.
+/// it, both hosted lanes derive from it, and what authorises a removal is positive evidence
+/// that no live run owns the artifact — the registration lock of the run that wrote it,
+/// released by the kernel when that process ended. An artifact of a run that is still going
+/// is never taken, whatever its age, and neither is one whose machine this sweep cannot ask.
 ///
 /// **It runs after the journey rather than before it, and that ordering is the point.** A
 /// sweep at startup was what deleted a concurrent session's in-flight issues, and there is
 /// nothing a start can do that an end cannot: the cleanup already runs whether the journey
 /// passed or failed, and an orphan will still be an orphan then.
-async fn sweep_orphans(key: &str, sweep: Sweep) -> Result<(), String> {
-    remove_artifacts(key, &move |prefix, name| {
-        sweep.names_an_orphan(prefix, name)
-    })
-    .await
+async fn sweep_orphans(key: &str, sweep: &Sweep) -> Result<(), String> {
+    remove_artifacts(key, &|prefix, name| sweep.names_an_orphan(prefix, name)).await
 }
 
 async fn run_then_cleanup<J, JF, C, CF>(journey: J, cleanup: C) -> Result<(), String>
@@ -509,7 +507,10 @@ async fn task_titles(
 /// Everything this lane needs to reach the one team it may write to.
 struct LiveRun {
     key: String,
-    process_id: u32,
+    /// Which run this is: the machine that can vouch for it and the process on it. Every
+    /// artifact below carries it, which is what its own cleanup finds them by and what a
+    /// later run's sweep looks this run up by before deciding anything about them.
+    id: Run,
     stamp_micros: i64,
     open_state: String,
     done_state: String,
@@ -525,11 +526,11 @@ async fn drive_every_declared_capability(
     source: &dyn TaskSource,
     team_id: &str,
 ) -> Result<(), String> {
-    let title = |offset: i64| artifact_title(run.process_id, run.stamp_micros + offset);
+    let title = |offset: i64| artifact_title(run.id, run.stamp_micros + offset);
     let (alpha, beta) = (title(0), title(1));
     let (first, second, orphan) = (title(2), title(3), title(4));
-    let run_label = artifact_label(run.process_id, run.stamp_micros);
-    let only_label = artifact_label(run.process_id, run.stamp_micros + 1);
+    let run_label = artifact_label(run.id, run.stamp_micros);
+    let only_label = artifact_label(run.id, run.stamp_micros + 1);
     create_label(&run.key, team_id, &run_label).await?;
     create_label(&run.key, team_id, &only_label).await?;
     let open = Status {
@@ -1027,7 +1028,7 @@ async fn drive_documents(
     // dropped — the one answer a copy must never turn into a silent success.
     let refusal = source
         .write_document(&write(Document {
-            labels: vec![label(&artifact_label(run.process_id, run.stamp_micros))],
+            labels: vec![label(&artifact_label(run.id, run.stamp_micros))],
             ..document(filed, Some(under))
         }))
         .await;
@@ -1049,7 +1050,7 @@ async fn drive_documents(
             .items
             .into_iter()
             .map(|document| document.title)
-            .filter(|title| is_this_runs(run.process_id, ARTIFACT_PREFIX, title))
+            .filter(|title| is_this_runs(run.id, ARTIFACT_PREFIX, title))
             .collect::<Vec<_>>();
         found.sort();
         Ok::<_, String>(found)
@@ -1080,7 +1081,7 @@ async fn drive_documents(
     ensure!(
         titles(DocumentQuery {
             labels: LabelFilter {
-                any_of: vec![artifact_label(run.process_id, run.stamp_micros)],
+                any_of: vec![artifact_label(run.id, run.stamp_micros)],
                 ..LabelFilter::default()
             },
             ..DocumentQuery::default()
@@ -1209,13 +1210,13 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         .unwrap_or_else(|error| panic!("the Linear live lane cannot file its projects: {error}"));
     let run = LiveRun {
         key: key.clone(),
-        process_id: std::process::id(),
+        id: Run::current(),
         stamp_micros: chrono::Utc::now().timestamp_micros(),
         open_state,
         done_state,
         project_status,
     };
-    let process_id = run.process_id;
+    let id = run.id;
     run_then_cleanup(
         || drive_every_declared_capability(&run, source.as_ref(), &team_id),
         || async {
@@ -1226,14 +1227,9 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             // deleted the in-flight issues of any session running beside this one; a sweep
             // after it recovers exactly the same orphans and can reach nothing a live run
             // owns.
-            let mine =
-                remove_artifacts(&key, &|prefix, name| is_this_runs(process_id, prefix, name))
-                    .await;
-            let orphans = sweep_orphans(
-                &key,
-                Sweep::of(process_id, chrono::Utc::now().timestamp_micros()),
-            )
-            .await;
+            let mine = remove_artifacts(&key, &|prefix, name| is_this_runs(id, prefix, name)).await;
+            let orphans =
+                sweep_orphans(&key, &Sweep::of(id, chrono::Utc::now().timestamp_micros())).await;
             match (mine, orphans) {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(mine), Ok(())) => Err(mine),

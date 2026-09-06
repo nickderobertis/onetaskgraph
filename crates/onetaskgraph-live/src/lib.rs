@@ -38,9 +38,11 @@
 //! change to read before reaching for it.** Both lanes used to clear residue at startup with
 //! a predicate that recognised *any* run's artifacts, so two sessions really did delete each
 //! other's in-flight work and the seat was the only thing between them. Cleanup is now
-//! decided by [`artifact`]: a run removes what it wrote, and an orphan is somebody else's
-//! artifact whose own stamp has gone stale. Nothing in either lane's cleanup consults a seat.
-//! So [`Exclusivity::Shared`] is the ordinary answer, a seat is a lane's own choice, and the
+//! decided by [`artifact`]: a run removes what it wrote, and it may remove somebody else's
+//! only on positive evidence that no live run owns it — the lock the owning run holds on its
+//! registration, which the kernel releases when that process ends. Nothing in either lane's
+//! cleanup consults a seat, and nothing in it rests on how old an artifact is. So
+//! [`Exclusivity::Shared`] is the ordinary answer, a seat is a lane's own choice, and the
 //! bound a seat never covered anyway — two runners of the hosted check are two machines, and
 //! a file on one of them says nothing about the other — is now the only one left.
 //!
@@ -88,11 +90,10 @@ pub const REQUIRED_VARIABLE: &str = "ONETASKGRAPH_LIVE_REQUIRED";
 /// seat exists to prevent — CI gets a fresh runner each time and would never notice, and
 /// the contributor whose run was interrupted would.
 ///
-/// Not [`artifact::STALE_AFTER`], and deliberately not the same figure: this one bounds how
-/// long a *seat file nobody released* blocks the next run on one machine, and that one
-/// bounds how long a *foreign run's artifacts* are treated as a live run's. The costs of
-/// being wrong point in opposite directions, so one number for both would be a coincidence
-/// dressed as a decision.
+/// Not [`artifact::STALE_AFTER`], and deliberately not the same figure: this one is what
+/// *authorises* taking over a seat, and that one only says how long a sweep waits before
+/// considering an artifact whose owner the kernel has already reported gone. One number for
+/// two decisions of such different weight would be a coincidence dressed as a decision.
 const SEAT_IS_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// How many seats this process has taken, which is the last part of a seat's own token.
@@ -662,9 +663,10 @@ pub enum Exclusivity {
     /// Two sessions of this lane may run side by side.
     ///
     /// What makes that safe is that the lane's artifacts are run-scoped and its cleanup is
-    /// decided by [`artifact::Sweep`], so neither session can remove the other's work. It
-    /// is also the only answer that is *true*: a seat is a file on one machine, and two
-    /// hosted runners were never excluded by one.
+    /// decided by [`artifact::Sweep`], which removes another run's artifact only once the
+    /// kernel has reported that run over — so neither session can remove the other's work,
+    /// however long either has been going. It is also the only answer that is *true*: a seat
+    /// is a file on one machine, and two hosted runners were never excluded by one.
     Shared,
     /// One session of this name at a time on this machine, held as a seat file.
     ///

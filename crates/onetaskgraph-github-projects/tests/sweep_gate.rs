@@ -21,11 +21,13 @@
 
 use std::io::{Read, Write as _};
 use std::net::TcpListener;
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use onetaskgraph_live::artifact::Sweep;
+use onetaskgraph_live::artifact::{Registration, Registry, Run, Sweep};
 use onetaskgraph_live::{Credential, Exclusivity, Session};
 use serde_json::{Value, json};
 
@@ -48,10 +50,17 @@ const TOKEN: &str = "test-token";
 /// The window these drives sweep on.
 ///
 /// **A check chooses its own, and that is a property of the rule rather than a shortcut.**
-/// Safety does not rest on the window's length — a run's own artifacts are its own whatever
-/// it is — so proving what a sweep does needs no session that runs for the length of the real
-/// one. See `onetaskgraph_live::artifact::STALE_AFTER` for the length the lanes use and why.
+/// Safety does not rest on the window's length — what permits a removal is the owning run's
+/// registration lock, and the window can only hold a removal back — so proving what a sweep
+/// does needs no session that runs for the length of the real one. See
+/// `onetaskgraph_live::artifact::STALE_AFTER` for the length the lanes use and why.
 const WINDOW: Duration = Duration::from_secs(60);
+
+/// How long a drive below will wait for a real second process to reach a state.
+const PATIENCE: Duration = Duration::from_secs(30);
+
+/// The variable that tells a re-execution of this binary it is the live run beside a sweep.
+const CHILD_VARIABLE: &str = "ONETASKGRAPH_SWEEP_GATE_CHILD";
 
 /// The instant every sweep below is made at, in microseconds since the epoch.
 ///
@@ -64,9 +73,134 @@ fn aged(windows: i64) -> i64 {
     NOW - windows * i64::try_from(WINDOW.as_micros()).expect("a minute fits in microseconds")
 }
 
-/// Another run's process id, which is any id that is not this process's.
-fn another_run(offset: u32) -> u32 {
-    std::process::id().wrapping_add(offset).wrapping_add(1)
+/// The registry every drive below decides against, and this process's own run in it.
+///
+/// A directory of this check's own rather than the machine's, so what the registry holds is
+/// exactly the runs this file put there — and so a real live session of some other lane on
+/// this machine is neither consulted nor disturbed.
+struct Runs {
+    directory: PathBuf,
+    registry: Registry,
+    mine: Run,
+}
+
+static RUNS: LazyLock<Runs> = LazyLock::new(|| {
+    let directory =
+        std::env::temp_dir().join(format!("onetaskgraph-sweep-gate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let registry = Registry::at(&directory);
+    let mine = registry.enrol();
+    assert_ne!(
+        mine.host(),
+        0,
+        "a registry this check can write is what every drive below decides against"
+    );
+    Runs {
+        directory,
+        registry,
+        mine,
+    }
+});
+
+/// A run of this machine that has ENDED: really registered, and its registration really
+/// given up, which is the state the kernel leaves behind when a process dies.
+fn ended_run(offset: u32) -> Run {
+    let run = Registration::take(&RUNS.registry, 40_000 + offset)
+        .expect("a run that this check then ends");
+    let run = run.run();
+    // Dropped, so the lock is free — the same thing the kernel does for a killed process.
+    run
+}
+
+/// The sweep this run makes at `now`, decided against the registry above.
+fn sweep_at(now: i64) -> Sweep {
+    RUNS.registry.sweep(RUNS.mine, now, WINDOW)
+}
+
+/// A REAL second process, holding a live registration in the same registry.
+///
+/// This is what a concurrent session is, and nothing smaller proves the property: the whole
+/// question is whether a sweep can tell a run that is still going from one that is over, and
+/// a description of a live run is not one. So this binary is re-executed with
+/// [`CHILD_VARIABLE`] set, it registers itself and waits, and the sweep beside it decides on
+/// the lock that child really holds.
+struct LiveRunBeside {
+    child: Child,
+    run: Run,
+}
+
+impl LiveRunBeside {
+    fn start() -> Self {
+        let child = Command::new(
+            std::env::current_exe().expect("the path of the test binary being re-executed"),
+        )
+        .args([
+            "--exact",
+            "a_re_execution_of_this_binary_is_the_live_run_beside_a_sweep",
+        ])
+        .env(CHILD_VARIABLE, "1")
+        .env(
+            onetaskgraph_live::artifact::REGISTRY_DIRECTORY_VARIABLE,
+            &RUNS.directory,
+        )
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("a second process for the live run beside this sweep");
+        let run = Run::new(RUNS.mine.host(), child.id());
+        let started = Instant::now();
+        while !RUNS.registry.registration_path(child.id()).exists()
+            || RUNS.registry.finished_runs().contains(&child.id())
+        {
+            assert!(
+                started.elapsed() < PATIENCE,
+                "the live run beside this sweep never registered"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        Self { child, run }
+    }
+
+    /// End that run the way an interrupted one ends, and wait until the kernel has said so.
+    fn end(&mut self) {
+        // A process this drive started itself, by the handle it started it with.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let started = Instant::now();
+        while !RUNS.registry.finished_runs().contains(&self.child.id()) {
+            assert!(
+                started.elapsed() < PATIENCE,
+                "the kernel never released the ended run's registration"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for LiveRunBeside {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The other half of [`LiveRunBeside`]: what a re-execution of this binary does.
+///
+/// An ordinary run of this target reaches the early return and asserts nothing, because
+/// there is no sweep beside it to be the live run for.
+#[test]
+fn a_re_execution_of_this_binary_is_the_live_run_beside_a_sweep() {
+    if std::env::var_os(CHILD_VARIABLE).is_none() {
+        return;
+    }
+    let run = Run::current();
+    assert_ne!(
+        run.host(),
+        0,
+        "the registry this run was pointed at could not vouch for it"
+    );
+    // Alive until the drive beside this kills it, and not for ever if that drive never does.
+    thread::sleep(PATIENCE * 4);
 }
 
 /// Everything the stand-in holds, and the one race it can be told to stage.
@@ -225,28 +359,37 @@ fn session_in_flight() -> Session {
 }
 
 #[tokio::test]
-async fn a_sweep_takes_only_orphans_and_leaves_the_artifacts_of_every_live_run() {
-    // This session's own artifacts are OLDER than the window it sweeps on, which is what a
-    // hung or unusually slow run looks like — a hosted API's secondary limiter parks a burst
-    // for up to an hour at a time. Age alone would take them, and the run's own identity is
-    // what stops it: that is the property this case exists for.
-    let mine = artifact_title(std::process::id(), aged(10));
-    let my_label = artifact_label(std::process::id(), aged(10));
-    let fresh = artifact_title(another_run(1), NOW);
-    let fresh_label = artifact_label(another_run(1), NOW);
-    let stale = artifact_title(another_run(2), aged(2));
-    let stale_label = artifact_label(another_run(2), aged(2));
+async fn a_sweep_leaves_a_concurrent_live_runs_artifacts_however_old_they_are() {
+    // The property the age rule got wrong, driven against the real cleanup. The run beside
+    // this one is a REAL second process holding a REAL registration lock, and its artifacts
+    // are stamped ten windows ago — which is what a hung session looks like, and what a
+    // session a secondary rate limiter has parked for the best part of an hour becomes.
+    // Nothing about their age is different from an abandoned run's; the lock is the whole of
+    // the difference, and the sweep decides on it.
+    let mut beside = LiveRunBeside::start();
+    let theirs = artifact_title(beside.run, aged(10));
+    let their_label = artifact_label(beside.run, aged(10));
+    let mine = artifact_title(RUNS.mine, aged(10));
+    let my_label = artifact_label(RUNS.mine, aged(10));
+    let ended = ended_run(1);
+    let stale = artifact_title(ended, aged(2));
+    let stale_label = artifact_label(ended, aged(2));
+    let fresh_ended = ended_run(2);
+    let fresh = artifact_title(fresh_ended, NOW);
+    let fresh_label = artifact_label(fresh_ended, NOW);
     let _one_at_a_time = planted(
         vec![
+            ("PVTI_theirs", Some("I_theirs"), theirs.clone()),
             ("PVTI_mine", Some("I_mine"), mine.clone()),
-            ("PVTI_fresh", Some("I_fresh"), fresh.clone()),
             ("PVTI_stale", Some("I_stale"), stale.clone()),
-            ("PVTI_theirs", None, "AI Orchestrator plan".to_owned()),
+            ("PVTI_fresh", Some("I_fresh"), fresh.clone()),
+            ("PVTI_nobodys", None, "AI Orchestrator plan".to_owned()),
         ],
         vec![
+            their_label.clone(),
             my_label.clone(),
-            fresh_label.clone(),
             stale_label.clone(),
+            fresh_label.clone(),
             "bug".to_owned(),
         ],
         vec![],
@@ -255,29 +398,47 @@ async fn a_sweep_takes_only_orphans_and_leaves_the_artifacts_of_every_live_run()
     .await;
     let _in_flight = session_in_flight();
 
-    journey::sweep_orphans(
-        TOKEN,
-        BOARD,
-        REPOSITORY,
-        Sweep::within(std::process::id(), NOW, WINDOW),
-    )
-    .await
-    .expect("an orphan sweep over a board it can read succeeds");
+    journey::sweep_orphans(TOKEN, BOARD, REPOSITORY, &sweep_at(NOW))
+        .await
+        .expect("an orphan sweep over a board it can read succeeds");
 
     let (titles, labels) = left();
     assert_eq!(
         titles,
-        sorted(vec![mine, fresh, "AI Orchestrator plan".to_owned()]),
-        "the sweep took an artifact that was not an orphan"
+        sorted(vec![
+            theirs.clone(),
+            mine,
+            fresh,
+            "AI Orchestrator plan".to_owned()
+        ]),
+        "the sweep took an artifact a live run owns"
     );
     assert_eq!(
         labels,
-        sorted(vec![my_label, fresh_label, "bug".to_owned()]),
-        "the label sweep took a label that was not an orphan"
+        sorted(vec![
+            their_label.clone(),
+            my_label,
+            fresh_label,
+            "bug".to_owned()
+        ]),
+        "the label sweep took a label a live run owns"
     );
     assert!(
         !titles.contains(&stale) && !labels.contains(&stale_label),
-        "the sweep left the interrupted run's residue it exists to recover"
+        "the sweep left the residue of a run that has ended, which is what it exists to recover"
+    );
+
+    // And the second half of the same property: once that run really ends, the very same
+    // artifacts — not one microsecond older in the sweep's eyes, since it is made at the
+    // same instant — become the residue this sweep recovers. Nothing changed but the run.
+    beside.end();
+    journey::sweep_orphans(TOKEN, BOARD, REPOSITORY, &sweep_at(NOW))
+        .await
+        .expect("a second sweep over the same board succeeds");
+    let (titles, labels) = left();
+    assert!(
+        !titles.contains(&theirs) && !labels.contains(&their_label),
+        "an ended run's artifacts were not recovered: {titles:?} {labels:?}"
     );
 }
 
@@ -286,8 +447,9 @@ async fn an_artifact_another_deleter_took_first_leaves_the_cleanup_successful() 
     // The board answers the listing and then the item is gone — swept by another run,
     // removed by hand, whatever. GitHub refuses the delete that follows, and treating that
     // refusal as a failure once killed a whole journey over an item that had already gone.
-    let stale = artifact_title(another_run(3), aged(2));
-    let stale_label = artifact_label(another_run(3), aged(2));
+    let ended = ended_run(3);
+    let stale = artifact_title(ended, aged(2));
+    let stale_label = artifact_label(ended, aged(2));
     let _one_at_a_time = planted(
         vec![("PVTI_racing", Some("I_racing"), stale.clone())],
         vec![stale_label.clone()],
@@ -297,14 +459,9 @@ async fn an_artifact_another_deleter_took_first_leaves_the_cleanup_successful() 
     .await;
     let _in_flight = session_in_flight();
 
-    journey::sweep_orphans(
-        TOKEN,
-        BOARD,
-        REPOSITORY,
-        Sweep::within(std::process::id(), NOW, WINDOW),
-    )
-    .await
-    .expect("a delete of what has already gone is the outcome the delete was asking for");
+    journey::sweep_orphans(TOKEN, BOARD, REPOSITORY, &sweep_at(NOW))
+        .await
+        .expect("a delete of what has already gone is the outcome the delete was asking for");
 
     let (titles, labels) = left();
     assert!(
@@ -327,14 +484,15 @@ async fn an_artifact_another_deleter_took_first_leaves_the_cleanup_successful() 
 
 #[tokio::test]
 async fn this_runs_own_cleanup_removes_everything_it_wrote_and_nothing_else() {
-    // The other half of the arrangement: the sweep above recovers an interrupted run's, and
-    // this removes this run's own — whether the journey passed or failed, which is
+    // The other half of the arrangement: the sweep above recovers an ended run's, and this
+    // removes this run's own — whether the journey passed or failed, which is
     // `run_then_cleanup`'s and is asserted in `lane_shape.rs`.
-    let mine = artifact_title(std::process::id(), NOW);
-    let also_mine = artifact_title(std::process::id(), NOW + 1);
-    let my_label = artifact_label(std::process::id(), NOW);
-    let theirs = artifact_title(another_run(4), NOW);
-    let their_label = artifact_label(another_run(4), NOW);
+    let mine = artifact_title(RUNS.mine, NOW);
+    let also_mine = artifact_title(RUNS.mine, NOW + 1);
+    let my_label = artifact_label(RUNS.mine, NOW);
+    let ended = ended_run(4);
+    let theirs = artifact_title(ended, NOW);
+    let their_label = artifact_label(ended, NOW);
     let _one_at_a_time = planted(
         vec![
             ("PVTI_mine", Some("I_mine"), mine),
@@ -348,7 +506,7 @@ async fn this_runs_own_cleanup_removes_everything_it_wrote_and_nothing_else() {
     .await;
     let _in_flight = session_in_flight();
 
-    journey::remove_live_state(TOKEN, BOARD, REPOSITORY, std::process::id(), false)
+    journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
         .await
         .expect("this run's own cleanup over a board it can read succeeds");
 
