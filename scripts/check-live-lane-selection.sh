@@ -17,8 +17,10 @@
 #      Projects plugin's `test` target, a diff of that plugin's own source does, and a
 #      version-only diff selects it until the decision's own `--exclude` is applied — which
 #      is the whole reason the decision exists.
-#   2. The decision's five answers, each put to it as exactly that diff, so a manifest edit
-#      cannot be mistaken for a version bump.
+#   2. The decision's answers, each put to it as exactly that diff, so a manifest edit
+#      cannot be mistaken for a version bump — and neither can the same version
+#      substitution applied to a file the contract does not permit, which is the case that
+#      holds the permitted set to being a set of PATHS rather than a shape a line has.
 #   3. A question it cannot answer is answered `run`. It fails toward spending the budget.
 #   4. Every path that can open a live session consults it. The paths are ENUMERATED from
 #      the workflow and the hook rather than listed here, so one added or rewired later
@@ -46,6 +48,11 @@ readonly PLUGIN_SOURCE="crates/$PLUGIN/src/lib.rs"
 readonly CORE_MANIFEST="crates/onetaskgraph-core/Cargo.toml"
 readonly CORE_SOURCE="crates/onetaskgraph-core/src/registry.rs"
 readonly CORE_CHANGELOG="crates/onetaskgraph-core/CHANGELOG.md"
+# Outside the plugin, outside the permitted set, and version-bearing: this is where the
+# Python SDK declares `__version__`, so a release bumps it with the very substitution a
+# permitted manifest line gets. It is the case that tells the decision apart from one that
+# reads a line's shape instead of the file it is in.
+readonly OUTSIDE_SOURCE="sdks/python/src/onetaskgraph_sdk/__init__.py"
 
 command -v just >/dev/null 2>&1 || fatal \
   "just is not installed, and case 5 drives the very recipes each path runs" \
@@ -260,6 +267,18 @@ fixture_other_versions_and_changelogs() {
   commit_fixture "other crates' version lines and changelogs beside the bump"
 }
 
+# That, and the one line of an outside SOURCE file a release bumps: the Python SDK's
+# `__version__`. Every changed line in this diff is the same line with the version
+# substituted, so a decision that read a line's shape rather than the file it sits in would
+# call this a version bump. It is not one the contract permits: outside the crate only the
+# workspace lockfile, other crates' manifests and changelogs may move at all.
+fixture_outside_source_version() {
+  fixture_version_only
+  bump_version_lines "$CORE_MANIFEST"
+  rewrite "$OUTSIDE_SOURCE" "__version__ = \"$VERSION\"" "__version__ = \"$BUMPED\""
+  commit_fixture "a version-looking edit in an outside source file"
+}
+
 # The engine alone, which reaches no plugin.
 fixture_core_source() {
   append "$CORE_SOURCE" "
@@ -283,7 +302,7 @@ expect_answer() {
   fi
 }
 
-echo "check-live-lane-selection: putting the decision its five diffs" >&2
+echo "check-live-lane-selection: putting the decision each diff it must tell apart" >&2
 
 fixture_version_only
 expect_answer "a version-only diff" not-selected
@@ -318,6 +337,16 @@ fixture_other_versions_and_changelogs
 expect_answer "other crates' version lines and changelogs beside the bump" not-selected
 if ! grep -q "NOT SELECTED" "$scratch/decide-stderr"; then
   fail "a workspace-wide version bump did not report that the lane was not selected: $(cat "$scratch/decide-stderr")"
+fi
+reset_fixture
+
+# The pair the case above exists to be told apart from: the same substitution, applied to a
+# file the contract does not permit. Both diffs consist of nothing but version lines, so
+# only the permitted SET distinguishes them.
+fixture_outside_source_version
+expect_answer "a version-looking edit in an outside source file" run
+if grep -q "NOT SELECTED" "$scratch/decide-stderr"; then
+  fail "a version-looking edit in an outside source file was reported as not selected, so the permitted set is being read from a line's shape rather than from the file: $(cat "$scratch/decide-stderr")"
 fi
 reset_fixture
 

@@ -25,17 +25,27 @@
 # Its only `not-selected` is this: inside that crate's own directory the diff changes
 # nothing but the `version` field of that crate's `Cargo.toml` and that crate's
 # `CHANGELOG.md`; and outside that directory it changes nothing but version lines — a line
-# that is the same line with the old version substituted for the new — of the workspace's
-# manifests and lockfiles, plus changelogs. Any other change, INCLUDING any other edit to
-# that same manifest, is `run`.
+# that is the same line with the old version substituted for the new — of the workspace
+# lockfile, of other crates' manifests, and of changelogs. Any other change, INCLUDING any
+# other edit to that same manifest, is `run`.
 #
-# "Manifest" is read as every version-bearing file `scripts/set-version.sh` writes rather
-# than as `Cargo.toml` alone, because a release moves all of them together: the last one
-# also rewrote `bun.lock`, `uv.lock`, `pyproject.toml`, the six `package.json` files and
-# the two SDK version constants. Reading it narrowly would answer `run` for the very
-# commit this exists for. What is NOT widened is the permission itself: a line qualifies
-# only when it is byte-for-byte the old line with the version transition applied, so a
-# dependency added beside a version bump, or a feature toggled in the same file, is `run`.
+# **A file outside that set is `run` whatever its change looks like**, and that is the rule
+# rather than a gap in it. A version substitution is evidence about a LINE, not about a
+# file: `sdks/python/src/onetaskgraph_sdk/__init__.py` declares `__version__` and
+# `sdks/typescript/src/index.ts` declares `VERSION`, and those are source files whose
+# contents a reader cannot bound by the shape of one line. So the permitted set is named by
+# path — the workspace `Cargo.lock`, any `Cargo.toml`, any `CHANGELOG.md` — and everything
+# else answers `run` before its lines are even read.
+#
+# The consequence is deliberate and worth stating where it will be met: a release that also
+# moves `pyproject.toml`, the `package.json` files, `bun.lock`, `uv.lock` or those two SDK
+# constants answers `run`, and both lanes open a session for it. Widening the set to cover
+# them is a change to the contract this decision is given under, not a fix to this file.
+#
+# The workspace root `Cargo.toml` is one of the manifests, because it is a Cargo manifest:
+# it carries `[workspace.package] version` and the path-dependency pins that a crate's own
+# bump necessarily moves, so a release that could not touch it could not bump a crate at
+# all.
 #
 # Any question it cannot answer is `run`. It fails toward spending the budget, never
 # toward skipping the lane — an unresolvable base, an unreadable blob, a diff it cannot
@@ -93,6 +103,10 @@ BASE = os.environ["ONETASKGRAPH_LIVE_LANE_BASE"]
 
 RUN = "run"
 NOT_SELECTED = "not-selected"
+
+# The workspace lockfile, which is the one lockfile the contract names. Any other lockfile
+# — `bun.lock`, `uv.lock` — is outside the permitted set and answers `run`.
+LOCKFILE = "Cargo.lock"
 
 # A version this repository could be at. `scripts/set-version.sh` holds every manifest to
 # exactly this grammar, so a transition it did not write is not one this decision explains.
@@ -342,6 +356,12 @@ def decide(crate, base, changes):
             return RUN, (
                 f"{path} is {crate}'s own source, so this diff reaches that plugin's "
                 "behaviour"
+            )
+        if not inside and path != LOCKFILE and name != "Cargo.toml":
+            return RUN, (
+                f"{path} is neither {LOCKFILE}, a Cargo manifest nor a changelog, and a "
+                "version bump writes nothing else. A line that looks like a version is "
+                "evidence about that line, not about the file it is in"
             )
         old_text = blob(base, path)
         new_text = worktree(path)

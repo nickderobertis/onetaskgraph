@@ -301,7 +301,14 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   `not-selected`, and every caller reads that answer rather than restating the rule. Its
   only `not-selected` is a version bump and its changelogs — inside the crate's own
   directory nothing but its manifest's `version` field and its `CHANGELOG.md`, and outside
-  it nothing but a line that is byte-for-byte the same line with the version substituted.
+  it nothing but `Cargo.lock`, a `Cargo.toml` and a `CHANGELOG.md`, each changed only in
+  lines that are byte-for-byte the same line with the version substituted.
+  **The permitted set is named by path, and a file outside it is `run` whatever its change
+  looks like.** A version substitution is evidence about a line rather than about a file,
+  and both SDKs declare a version constant in ordinary source — so a release that also
+  moves `pyproject.toml`, a `package.json`, `bun.lock`, `uv.lock` or one of those constants
+  answers `run` and does open the lanes. Widening the set to cover a release in full is a
+  change to this contract, not a repair to the script.
   **Any question it cannot answer is `run`**: an unresolvable base, an unreadable blob, a
   diff it cannot explain. It fails toward spending the budget, never toward skipping the
   lane, because that is the direction a wrong answer is recoverable in.
