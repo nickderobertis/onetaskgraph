@@ -540,6 +540,50 @@ expect_path() {
   esac
 }
 
+# Nothing the sweep used to check may go unchecked now that the gate selects. The targets
+# that deliberately sit outside affected selection are exactly the ones a recipe runs BY
+# NAME rather than through `nx affected -t <phase>` — the supply chain and the two
+# distribution stages, plus the generator on the Linux aggregate — so they are read out of
+# the justfile and nx.json rather than listed here. Reading the whole command surface, not
+# only what the gate reaches, is what makes this catch the regression it is for: a stage
+# dropped from the gate's own dependencies still has its recipe, and so is still expected.
+expect_unconditional_targets() {
+  local named target
+  named="$(cd "$REPO" && python3 - <<'NAMED'
+import json
+import re
+from pathlib import Path
+
+# The phases `check` fans out over, from nx.json itself. A target named by hand that is one
+# of these is a by-hand entry point for a phase — `just script-check` is the one — rather
+# than a stage outside selection, and the gate reaches it through `affected` instead.
+fan_out = set(
+    json.loads(Path("nx.json").read_text(encoding="utf-8"))
+    .get("targetDefaults", {})
+    .get("check", {})
+    .get("dependsOn", [])
+)
+named = set()
+for line in Path("justfile").read_text(encoding="utf-8").splitlines():
+    if line.lstrip().startswith("#"):
+        continue
+    for reference in re.findall(r"run\s+([a-z][a-z0-9-]*):([a-z][a-z0-9-]*)", line):
+        if reference[1] not in fan_out:
+            named.add(":".join(reference))
+print("\n".join(sorted(named)))
+NAMED
+)"
+  if [ -z "$named" ]; then
+    fail "no recipe runs a target by name any more, so the supply-chain and distribution stages no longer sit outside affected selection at all."
+    return
+  fi
+  for target in $named; do
+    if ! grep -qx -- "run $target" "$NX_LOG"; then
+      fail "the gate did not run $target, which sits outside affected selection on purpose and has to run on every gate. It ran: $(tr '\n' ';' < "$NX_LOG")"
+    fi
+  done
+}
+
 # The pre-push path derives its base from the records git feeds the hook on stdin, so that
 # derivation is driven with real refs before the recipe is.
 pre_push_base() {
@@ -571,6 +615,14 @@ for expectation in not-selected run; do
 
   reset_fixture
 done
+
+# Selecting must not have taken anything away from the gate. `gate-generated` is the Linux
+# aggregate the default branch runs, and it is the recipe that reaches every stage held
+# outside affected selection.
+fixture_plugin_source
+drive gate-generated "$BASE"
+expect_unconditional_targets
+reset_fixture
 
 # ---------------------------------------------------------------------------------------
 # 1. Real Nx over real repository states.
