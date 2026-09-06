@@ -67,11 +67,11 @@ const CHILD_VARIABLE: &str = "ONETASKGRAPH_SWEEP_GATE_CHILD";
 ///
 /// Fixed rather than read from the clock, so what each artifact's age *is* relative to the
 /// window is decided by this file and not by how long the suite took to get here.
-const NOW: i64 = 1_787_816_134_627_361;
+const NOW: u64 = 1_787_816_134_627_361;
 
 /// A stamp written `windows` windows before [`NOW`].
-fn aged(windows: i64) -> i64 {
-    NOW - windows * i64::try_from(WINDOW.as_micros()).expect("a minute fits in microseconds")
+fn aged(windows: u64) -> u64 {
+    NOW - windows * u64::try_from(WINDOW.as_micros()).expect("a minute fits in microseconds")
 }
 
 /// The registry every drive below decides against, and this process's own run in it.
@@ -79,6 +79,10 @@ fn aged(windows: i64) -> i64 {
 /// A directory of this check's own rather than the machine's, so what the registry holds is
 /// exactly the runs this file put there — and so a real live session of some other lane on
 /// this machine is neither consulted nor disturbed.
+///
+/// Left behind when this binary ends, for the same reason a registration is: the registration
+/// this process holds is an open file, and what closes it is the process exiting. It is a
+/// handful of empty files under the platform's own temporary directory.
 struct Runs {
     directory: PathBuf,
     registry: Registry,
@@ -91,9 +95,8 @@ static RUNS: LazyLock<Runs> = LazyLock::new(|| {
     let _ = std::fs::remove_dir_all(&directory);
     let registry = Registry::at(&directory);
     let mine = registry.enrol();
-    assert_ne!(
-        mine.host(),
-        0,
+    assert!(
+        mine.host().is_some(),
         "a registry this check can write is what every drive below decides against"
     );
     Runs {
@@ -116,7 +119,7 @@ fn ended_run(offset: u32) -> Run {
 }
 
 /// The sweep this run makes at `now`, decided against the registry above.
-fn sweep_at(now: i64) -> Sweep {
+fn sweep_at(now: u64) -> Sweep {
     RUNS.registry.sweep(RUNS.mine, now, WINDOW)
 }
 
@@ -150,7 +153,12 @@ impl LiveRunBeside {
         .stderr(Stdio::null())
         .spawn()
         .expect("a second process for the live run beside this sweep");
-        let run = Run::new(RUNS.mine.host(), child.id());
+        let run = Run::vouched(
+            RUNS.mine
+                .host()
+                .expect("the registry every drive here decides against"),
+            child.id(),
+        );
         // Waited for by a file that child writes AFTER it has registered, rather than by
         // asking the registry: asking means taking the very lock the child is trying to
         // take, and losing that race would leave it unable to say who it is.
@@ -198,9 +206,8 @@ fn a_re_execution_of_this_binary_is_the_live_run_beside_a_sweep() {
         return;
     };
     let run = Run::current();
-    assert_ne!(
-        run.host(),
-        0,
+    assert!(
+        run.host().is_some(),
         "the registry this run was pointed at could not vouch for it"
     );
     std::fs::write(

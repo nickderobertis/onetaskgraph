@@ -12,15 +12,16 @@ mod lane;
 use std::time::Duration;
 
 use lane::{
-    LiveLane, LiveSecret, SESSION_NAME, artifact_label, artifact_title, is_orphan_label,
-    is_orphan_title, is_run_artifact_label, is_run_artifact_title, live_lane, live_write_config,
-    rest_outcome, run_then_cleanup,
+    LABEL_PREFIX, LiveLane, LiveSecret, SESSION_NAME, artifact_label, artifact_title,
+    is_orphan_label, is_orphan_title, is_run_artifact_label, is_run_artifact_title, live_lane,
+    live_write_config, rest_outcome, run_then_cleanup,
 };
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_github_projects::accounting::{Outcome, StatusCode};
-use onetaskgraph_live::artifact::{Registration, Registry, Run, Sweep};
+use onetaskgraph_live::artifact::{Registration, Registry, Run, Sweep, WIDEST_STAMP};
 use onetaskgraph_live::{Credential, Exclusivity, Session};
 use onetaskgraph_plugin_api::{SourceName, SourcePlugin};
+use std::num::NonZeroU32;
 
 /// A window these assertions drive either side of, rather than waiting out the real one.
 ///
@@ -30,11 +31,16 @@ use onetaskgraph_plugin_api::{SourceName, SourcePlugin};
 const WINDOW: Duration = Duration::from_secs(60);
 
 /// Microseconds since the epoch, far enough in that ageing a stamp cannot go negative.
-const NOW: i64 = 1_787_816_134_627_361;
+const NOW: u64 = 1_787_816_134_627_361;
+
+/// A machine identity written out by hand, for the runs this file names itself.
+fn host(number: u32) -> NonZeroU32 {
+    NonZeroU32::new(number).expect("a check's own host identity is never zero")
+}
 
 /// A stamp `by` wrote `windows` windows ago.
-fn aged(windows: i64) -> i64 {
-    NOW - windows * i64::try_from(WINDOW.as_micros()).expect("a minute fits in microseconds")
+fn aged(windows: u64) -> u64 {
+    NOW - windows * u64::try_from(WINDOW.as_micros()).expect("a minute fits in microseconds")
 }
 
 #[tokio::test]
@@ -344,8 +350,15 @@ impl Runs {
         }
     }
 
-    fn sweep(&self, now: i64) -> Sweep {
+    fn sweep(&self, now: u64) -> Sweep {
         self.registry.sweep(self.mine, now, WINDOW)
+    }
+
+    /// The machine this check's own registry answers for.
+    fn host(&self) -> NonZeroU32 {
+        self.registry
+            .host()
+            .expect("a registry this check can write has an identity")
     }
 }
 
@@ -377,9 +390,9 @@ fn a_sweep_takes_an_ended_runs_artifacts_and_leaves_every_live_runs_alone() {
         artifact_title(live, NOW),
         artifact_title(mine, aged(1_000)),
         artifact_title(mine, NOW),
-        artifact_title(Run::new(runs.registry.host(), 4242), aged(1_000)),
+        artifact_title(Run::vouched(runs.host(), 4242), aged(1_000)),
         artifact_title(
-            Run::new(runs.registry.host().wrapping_add(1), 2533),
+            Run::vouched(host(runs.host().get().wrapping_add(1).max(1)), 2533),
             aged(1_000),
         ),
         "AI Orchestrator plan".to_owned(),
@@ -449,11 +462,11 @@ fn a_label_this_lane_writes_fits_inside_the_limit_github_holds_one_to() {
     // Fifty characters, and a stamp now names the machine as well as the process — which is
     // why the label prefix is the short one. A label GitHub refuses is an artifact this lane
     // cannot write at all, and it would fail on somebody's real repository rather than here.
-    let widest = artifact_label(Run::new(u32::MAX, u32::MAX), i64::MAX);
+    // The room a stamp needs is the contract's own figure rather than one counted again here.
     assert!(
-        widest.len() <= 50,
-        "the widest label this lane could write is {} characters: {widest}",
-        widest.len()
+        LABEL_PREFIX.len() + WIDEST_STAMP <= 50,
+        "the widest label this lane could write is {} characters",
+        LABEL_PREFIX.len() + WIDEST_STAMP
     );
 }
 
@@ -461,7 +474,7 @@ fn a_label_this_lane_writes_fits_inside_the_limit_github_holds_one_to() {
 fn a_run_names_its_own_artifacts_and_no_other_runs() {
     // Teardown's half: a run removes everything it wrote, whether its assertions passed or
     // failed, by the run every one of its artifacts carries.
-    let mine = Run::new(41, 2533);
+    let mine = Run::vouched(host(41), 2533);
     assert!(is_run_artifact_title(mine, &artifact_title(mine, 17)));
     assert!(is_run_artifact_title(
         mine,
@@ -469,15 +482,15 @@ fn a_run_names_its_own_artifacts_and_no_other_runs() {
     ));
     assert!(is_run_artifact_label(mine, &artifact_label(mine, 17)));
     for other in [
-        artifact_title(Run::new(41, 25330), 17),
-        artifact_title(Run::new(41, 253), 17),
-        artifact_title(Run::new(41, 12533), 17),
+        artifact_title(Run::vouched(host(41), 25330), 17),
+        artifact_title(Run::vouched(host(41), 253), 17),
+        artifact_title(Run::vouched(host(41), 12533), 17),
         // The same process id on another machine is another run, and this is the one a
         // process id alone could not tell apart.
-        artifact_title(Run::new(42, 2533), 17),
+        artifact_title(Run::vouched(host(42), 2533), 17),
         format!(
             "{DESIGN_TITLE_PREFIX}{}",
-            artifact_title(Run::new(41, 25330), 17)
+            artifact_title(Run::vouched(host(41), 25330), 17)
         ),
         "onetaskgraph live cleanup 2533".to_owned(),
         "AI Orchestrator plan".to_owned(),
@@ -488,8 +501,8 @@ fn a_run_names_its_own_artifacts_and_no_other_runs() {
         );
     }
     for other in [
-        artifact_label(Run::new(41, 25330), 17),
-        artifact_label(Run::new(42, 2533), 17),
+        artifact_label(Run::vouched(host(41), 25330), 17),
+        artifact_label(Run::vouched(host(42), 2533), 17),
         "otg-live-2533".to_owned(),
         "bug".to_owned(),
     ] {

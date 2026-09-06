@@ -22,7 +22,7 @@
 
 use std::{collections::BTreeMap, env, future::Future, time::Duration};
 
-use onetaskgraph_live::artifact::{Run, Stamp, Sweep};
+use onetaskgraph_live::artifact::{Run, Stamp, Sweep, now_micros};
 use onetaskgraph_live::{Credential, Exclusivity, Session, missing, required};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
@@ -94,11 +94,11 @@ const ARTIFACT_PREFIX: &str = "onetaskgraph live cleanup ";
 /// The same for a label, whose name Linear shows in its own filter menus.
 const LABEL_PREFIX: &str = "otg-live-";
 
-fn artifact_title(run: Run, stamp_micros: i64) -> String {
+fn artifact_title(run: Run, stamp_micros: u64) -> String {
     format!("{ARTIFACT_PREFIX}{}", Stamp::new(run, stamp_micros))
 }
 
-fn artifact_label(run: Run, stamp_micros: i64) -> String {
+fn artifact_label(run: Run, stamp_micros: u64) -> String {
     format!("{LABEL_PREFIX}{}", Stamp::new(run, stamp_micros))
 }
 
@@ -511,7 +511,7 @@ struct LiveRun {
     /// artifact below carries it, which is what its own cleanup finds them by and what a
     /// later run's sweep looks this run up by before deciding anything about them.
     id: Run,
-    stamp_micros: i64,
+    stamp_micros: u64,
     open_state: String,
     done_state: String,
     project_status: String,
@@ -526,7 +526,7 @@ async fn drive_every_declared_capability(
     source: &dyn TaskSource,
     team_id: &str,
 ) -> Result<(), String> {
-    let title = |offset: i64| artifact_title(run.id, run.stamp_micros + offset);
+    let title = |offset: u64| artifact_title(run.id, run.stamp_micros + offset);
     let (alpha, beta) = (title(0), title(1));
     let (first, second, orphan) = (title(2), title(3), title(4));
     let run_label = artifact_label(run.id, run.stamp_micros);
@@ -1211,7 +1211,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     let run = LiveRun {
         key: key.clone(),
         id: Run::current(),
-        stamp_micros: chrono::Utc::now().timestamp_micros(),
+        stamp_micros: now_micros(),
         open_state,
         done_state,
         project_status,
@@ -1228,8 +1228,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             // after it recovers exactly the same orphans and can reach nothing a live run
             // owns.
             let mine = remove_artifacts(&key, &|prefix, name| is_this_runs(id, prefix, name)).await;
-            let orphans =
-                sweep_orphans(&key, &Sweep::of(id, chrono::Utc::now().timestamp_micros())).await;
+            let orphans = sweep_orphans(&key, &Sweep::of(id, now_micros())).await;
             match (mine, orphans) {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(mine), Ok(())) => Err(mine),

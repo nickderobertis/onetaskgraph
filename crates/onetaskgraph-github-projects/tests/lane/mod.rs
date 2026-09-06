@@ -70,7 +70,7 @@ pub fn live_write_config(
 /// because both have to answer the same question about an artifact with the same answer.
 pub const ARTIFACT_PREFIX: &str = "onetaskgraph live cleanup ";
 
-pub fn artifact_title(run: Run, stamp_micros: i64) -> String {
+pub fn artifact_title(run: Run, stamp_micros: u64) -> String {
     format!("{ARTIFACT_PREFIX}{}", Stamp::new(run, stamp_micros))
 }
 
@@ -123,7 +123,7 @@ pub fn is_run_artifact_title(run: Run, title: &str) -> bool {
 /// characters this used to be did not.
 pub const LABEL_PREFIX: &str = "otg-live-";
 
-pub fn artifact_label(run: Run, stamp_micros: i64) -> String {
+pub fn artifact_label(run: Run, stamp_micros: u64) -> String {
     format!("{LABEL_PREFIX}{}", Stamp::new(run, stamp_micros))
 }
 

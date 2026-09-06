@@ -84,7 +84,6 @@ run_journey() {
 # what a passing test printed. A skip nobody can read is indistinguishable from a journey
 # that ran and asserted nothing, which is the one thing this check may not confuse.
 
-# 1. A declined session, produced by whichever precondition this lane has.
 if grep -q 'Exclusivity::OneAtATime' "$JOURNEY"; then
   # A seat directory that is a FILE: the seat cannot be created there, so the lane is
   # declined before it reaches its API. Nothing here names the seat file — the crate that
@@ -142,7 +141,6 @@ fi
 # credential where one WAS expected — and it asserts the run is red and names what demanded
 # it, which is the demand this rule exists for. Removing case 2 would not add a demand; it
 # would only stop anybody proving that a fork pull request still reads honestly.
-# 2. No credential and none expected: a skip, with the reason, and nothing red.
 free="$scratch/free"
 mkdir -p "$free"
 skipped_status=0
@@ -159,7 +157,6 @@ if [ -n "$(ls -A "$free")" ]; then
   fail "a skipped run took a seat it was never going to use: $(ls -A "$free")"
 fi
 
-# 3. No credential where one was expected: the required check may not pass green for it.
 demanded_status=0
 demanded_output="$(run_journey "$free" 1 \
   GH_PROJECTS_TOKEN= LINEAR_API_KEY=)" || demanded_status=$?

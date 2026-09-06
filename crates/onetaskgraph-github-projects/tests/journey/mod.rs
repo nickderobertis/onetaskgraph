@@ -37,7 +37,7 @@ use onetaskgraph_plugin_api::{
 };
 use serde_json::{Value, json};
 
-use onetaskgraph_live::artifact::{Run, Sweep};
+use onetaskgraph_live::artifact::{Run, Sweep, now_micros};
 
 use crate::lane::{
     ARTIFACT_PREFIX, LiveSecret, artifact_label, artifact_title, is_orphan_label, is_orphan_title,
@@ -1371,7 +1371,7 @@ struct LiveRun {
     /// artifact below carries it, which is what its own cleanup finds them by and what a
     /// later run's sweep looks this run up by before deciding anything about them.
     id: Run,
-    stamp_micros: i64,
+    stamp_micros: u64,
     status_option: String,
 }
 
@@ -1381,7 +1381,7 @@ impl LiveRun {
     /// One stamp per artifact, so every title this run writes is unique and every one of
     /// them still reads as this run's to [`is_run_artifact_title`] and as the lane's own
     /// to the sweep the next run does.
-    fn title(&self, offset: i64) -> String {
+    fn title(&self, offset: u64) -> String {
         artifact_title(self.id, self.stamp_micros + offset)
     }
 
@@ -1624,9 +1624,11 @@ async fn drive_every_declared_capability(
     let (alpha, beta) = (run.title(0), run.title(1));
     let (first, second, orphan) = (run.title(2), run.title(3), run.title(4));
     let prefix = run.prefix();
+    // Letters and digits alone: this goes into a full-text search below, and a hyphen or a
+    // separator of any other kind is a term boundary rather than part of one term.
     let body_marker = format!(
         "livebodymarker{}x{}x{}",
-        run.id.host(),
+        run.id.host().map_or(0, std::num::NonZeroU32::get),
         run.id.process(),
         run.stamp_micros
     );
@@ -2342,7 +2344,7 @@ pub async fn run(nomination: Nomination) {
         repository: repository.clone(),
         project_id: project_id.clone(),
         id: Run::current(),
-        stamp_micros: chrono::Utc::now().timestamp_micros(),
+        stamp_micros: now_micros(),
         status_option: status_name.clone(),
     };
     let rebuild = || {
@@ -2383,7 +2385,7 @@ pub async fn run(nomination: Nomination) {
                 &token,
                 &project_id,
                 &repository,
-                &Sweep::of(run.id, chrono::Utc::now().timestamp_micros()),
+                &Sweep::of(run.id, now_micros()),
             )
             .await;
             match (mine, orphans) {
