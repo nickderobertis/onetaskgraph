@@ -33,19 +33,34 @@
 # rather than a gap in it. A version substitution is evidence about a LINE, not about a
 # file: `sdks/python/src/onetaskgraph_sdk/__init__.py` declares `__version__` and
 # `sdks/typescript/src/index.ts` declares `VERSION`, and those are source files whose
-# contents a reader cannot bound by the shape of one line. So the permitted set is named by
-# path — the workspace `Cargo.lock`, any `Cargo.toml`, any `CHANGELOG.md` — and everything
-# else answers `run` before its lines are even read.
+# contents a reader cannot bound by the shape of one line.
+#
+# **The set is whole paths, not basenames**, for the same reason one level down. A basename
+# is not a location: `crates/<some-crate>/tests/fixtures/Cargo.toml` is a test fixture and
+# `sdks/python/CHANGELOG.md` is a package's own log, and admitting either because of what it
+# is CALLED would let a diff reach a plugin's behaviour through a file nobody meant to
+# permit. So the accepted set is exactly:
+#
+#   Cargo.lock                    the workspace lockfile, at the repository root
+#   Cargo.toml                    the workspace manifest, at the repository root
+#   <member>/Cargo.toml           one workspace crate's own manifest
+#   <member>/CHANGELOG.md         one workspace crate's own changelog
+#
+# where `<member>` is a real member of `[workspace] members`, expanded against the tree
+# rather than assumed — so a crate added or removed moves this set without an edit here, and
+# a directory that merely looks like a crate is not one. Everything else answers `run`
+# before its lines are even read.
 #
 # The consequence is deliberate and worth stating where it will be met: a release that also
 # moves `pyproject.toml`, the `package.json` files, `bun.lock`, `uv.lock` or those two SDK
 # constants answers `run`, and both lanes open a session for it. Widening the set to cover
 # them is a change to the contract this decision is given under, not a fix to this file.
 #
-# The workspace root `Cargo.toml` is one of the manifests, because it is a Cargo manifest:
-# it carries `[workspace.package] version` and the path-dependency pins that a crate's own
-# bump necessarily moves, so a release that could not touch it could not bump a crate at
-# all.
+# The workspace root `Cargo.toml` is one of the accepted paths, because it is the manifest
+# every crate's version is declared through: it carries `[workspace.package] version` and
+# the path-dependency pins that a crate's own bump necessarily moves, so a release that
+# could not touch it could not bump a crate at all. It is accepted as that one path, not as
+# "a file called Cargo.toml".
 #
 # Any question it cannot answer is `run`. It fails toward spending the budget, never
 # toward skipping the lane — an unresolvable base, an unreadable blob, a diff it cannot
@@ -104,9 +119,11 @@ BASE = os.environ["ONETASKGRAPH_LIVE_LANE_BASE"]
 RUN = "run"
 NOT_SELECTED = "not-selected"
 
-# The workspace lockfile, which is the one lockfile the contract names. Any other lockfile
-# — `bun.lock`, `uv.lock` — is outside the permitted set and answers `run`.
+# The two paths at the repository root the contract accepts. Any other lockfile —
+# `bun.lock`, `uv.lock` — is outside the set and answers `run`, and so is any `Cargo.toml`
+# that is not one of these or a workspace member's own.
 LOCKFILE = "Cargo.lock"
+WORKSPACE_MANIFEST = "Cargo.toml"
 
 # A version this repository could be at. `scripts/set-version.sh` holds every manifest to
 # exactly this grammar, so a transition it did not write is not one this decision explains.
@@ -237,6 +254,79 @@ class Unanswerable(Exception):
     """A question this decision cannot answer, which is therefore answered `run`."""
 
 
+def workspace_members():
+    """Every workspace member directory, expanded against the tree.
+
+    Read from `[workspace] members` rather than assumed to be `crates/*`, and expanded by
+    looking for the manifest each member must have — so a crate added, removed or moved
+    changes the accepted set without an edit here, and a directory that merely sits beside
+    the crates is not mistaken for one.
+
+    A pattern this cannot expand is [`Unanswerable`], not an empty answer: an accepted set
+    that silently shrank would answer `run` too often, which is harmless, but one that
+    silently grew would not be, and neither should be decided by a `except: pass`.
+    """
+    text = worktree(WORKSPACE_MANIFEST)
+    lines = text.splitlines()
+    sections = section_of(lines)
+    declaration = None
+    for index, (line, section) in enumerate(zip(lines, sections)):
+        if section == "workspace" and re.match(r"^\s*members\s*=", line):
+            declaration = "\n".join(lines[index:])
+            break
+    if declaration is None:
+        raise Unanswerable(
+            f"{WORKSPACE_MANIFEST} declares no `[workspace] members`, so which "
+            "directories are this workspace's crates cannot be read"
+        )
+    listing = re.search(r"\[(.*?)\]", declaration, re.DOTALL)
+    patterns = re.findall(r'"([^"]*)"', listing.group(1)) if listing else []
+    if not patterns:
+        raise Unanswerable(
+            f"{WORKSPACE_MANIFEST}'s `members` is empty or unreadable, so this workspace "
+            "appears to have no crates at all"
+        )
+    members = set()
+    for pattern in patterns:
+        if pattern.endswith("/*") and "*" not in pattern[:-2]:
+            parent = Path(pattern[:-2])
+            if not parent.is_dir():
+                raise Unanswerable(
+                    f"{WORKSPACE_MANIFEST} names members under {parent.as_posix()}, which "
+                    "is not a directory here"
+                )
+            for child in sorted(parent.iterdir()):
+                if (child / "Cargo.toml").is_file():
+                    members.add(child.as_posix())
+        elif "*" not in pattern:
+            members.add(Path(pattern).as_posix())
+        else:
+            raise Unanswerable(
+                f"{WORKSPACE_MANIFEST} names members as {pattern!r}, a pattern this "
+                "decision does not expand, so which files belong to a crate is unknown"
+            )
+    if not members:
+        raise Unanswerable(
+            f"{WORKSPACE_MANIFEST}'s members expanded to no crate directory at all"
+        )
+    return sorted(members)
+
+
+def accepted_paths():
+    """The exact paths a version bump may touch, as whole paths rather than basenames.
+
+    A basename is not a location. `crates/<a-crate>/tests/fixtures/Cargo.toml` is a test
+    fixture and `sdks/python/CHANGELOG.md` is a package's own log; admitting either because
+    of what it is called would let a diff reach a plugin's behaviour through a file the
+    contract never named.
+    """
+    accepted = {LOCKFILE, WORKSPACE_MANIFEST}
+    for member in workspace_members():
+        accepted.add(f"{member}/Cargo.toml")
+        accepted.add(f"{member}/CHANGELOG.md")
+    return accepted
+
+
 def base_commit():
     """The commit `BASE` names, or `Unanswerable`."""
     base = BASE or default_base()
@@ -340,28 +430,34 @@ def decide(crate, base, changes):
         return RUN, "this tree is identical to the base, so there is no diff to read"
 
     move = transition(base, changes)
+    accepted = accepted_paths()
 
     for status, path in changes:
         name = Path(path).name
         inside = path.startswith(directory)
+        # The path gate, first and for every file: what a version bump may touch is a set
+        # of whole paths, and a file outside it is refused before a line of it is read.
+        if path not in accepted:
+            if inside:
+                return RUN, (
+                    f"{path} is {crate}'s own source, so this diff reaches that plugin's "
+                    "behaviour"
+                )
+            return RUN, (
+                f"{path} is not one of the paths a version bump writes — {LOCKFILE}, "
+                f"{WORKSPACE_MANIFEST}, or a workspace crate's own Cargo.toml or "
+                "CHANGELOG.md. What a file is CALLED is not where it lives, and a line "
+                "that looks like a version is evidence about that line rather than about "
+                "the file it is in"
+            )
         if name == "CHANGELOG.md":
-            # A changelog is prose about what already shipped. It is the one file a
-            # release may add, rewrite or remove without reaching any behaviour.
+            # A crate's own changelog is prose about what already shipped. It is the one
+            # accepted path a release may add, rewrite or remove without reaching any
+            # behaviour.
             continue
         if status != "M":
             return RUN, (
                 f"{path} was added, removed or renamed, which no version bump does"
-            )
-        if inside and name != "Cargo.toml":
-            return RUN, (
-                f"{path} is {crate}'s own source, so this diff reaches that plugin's "
-                "behaviour"
-            )
-        if not inside and path != LOCKFILE and name != "Cargo.toml":
-            return RUN, (
-                f"{path} is neither {LOCKFILE}, a Cargo manifest nor a changelog, and a "
-                "version bump writes nothing else. A line that looks like a version is "
-                "evidence about that line, not about the file it is in"
             )
         old_text = blob(base, path)
         new_text = worktree(path)

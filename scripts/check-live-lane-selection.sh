@@ -53,6 +53,13 @@ readonly CORE_CHANGELOG="crates/onetaskgraph-core/CHANGELOG.md"
 # permitted manifest line gets. It is the case that tells the decision apart from one that
 # reads a line's shape instead of the file it is in.
 readonly OUTSIDE_SOURCE="sdks/python/src/onetaskgraph_sdk/__init__.py"
+# Two files this repository does not have, planted in the base below, whose BASENAMES are
+# the two the contract accepts and whose LOCATIONS are not. A test fixture called Cargo.toml
+# and a package's own changelog are both ordinary things to find in a repository, and a
+# decision that matched on the name alone would let a diff reach a plugin's behaviour
+# through either.
+readonly NESTED_MANIFEST="crates/onetaskgraph-core/tests/fixtures/Cargo.toml"
+readonly OUTSIDE_CHANGELOG="sdks/python/CHANGELOG.md"
 
 command -v just >/dev/null 2>&1 || fatal \
   "just is not installed, and case 5 drives the very recipes each path runs" \
@@ -101,6 +108,46 @@ printf '%s\n' "$*" >> "${ONETASKGRAPH_NX_RECORD:?ONETASKGRAPH_NX_RECORD is unset
 RECORDER
 chmod +x "$REPO/scripts/nx.sh"
 
+# The plugin's current version, and the one every version fixture below bumps it to. Read
+# before the base is committed, because the two decoys planted into it carry the version
+# they will later be bumped from.
+VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$REPO/$PLUGIN_MANIFEST" | head -n1)"
+[ -n "$VERSION" ] || fatal \
+  "$PLUGIN_MANIFEST declares no [package] version, so no version fixture can be built" \
+  "restore that manifest's version field, then rerun"
+BUMPED="$(printf '%s' "$VERSION" | python3 -c '
+import re
+import sys
+
+major, minor, patch = sys.stdin.read().strip().split(".")[:3]
+digits = re.match(r"[0-9]+", patch)
+print("{}.{}.{}".format(major, minor, int(digits.group(0)) + 1))
+')" || fatal \
+  "could not derive a bumped version from $VERSION" \
+  "restore $PLUGIN_MANIFEST to an X.Y.Z version, then rerun"
+readonly VERSION BUMPED
+
+# The decoys, in the base so that a later case can MODIFY them: an added file answers `run`
+# on its status alone, which would prove nothing about where the file lives. Each carries a
+# line the release-shaped substitution below moves, so the only thing telling them from the
+# manifests and changelogs beside them is their path.
+mkdir -p "$REPO/$(dirname "$NESTED_MANIFEST")" "$REPO/$(dirname "$OUTSIDE_CHANGELOG")" || fatal \
+  "could not make room for the decoy files in $REPO" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+cat > "$REPO/$NESTED_MANIFEST" <<DECOY || fatal "could not plant $NESTED_MANIFEST" "check 'df -h', then rerun"
+# A fixture for a test, not a crate of this workspace.
+[package]
+name = "a-fixture-that-is-not-a-workspace-crate"
+version = "$VERSION"
+DECOY
+cat > "$REPO/$OUTSIDE_CHANGELOG" <<DECOY || fatal "could not plant $OUTSIDE_CHANGELOG" "check 'df -h', then rerun"
+# Changelog
+
+## $VERSION
+
+- the Python package's own log, which is not a workspace crate's
+DECOY
+
 git -C "$REPO" add -A || fatal \
   "could not stage the overlaid tree in $REPO, so no case could be undone after it ran" \
   "check 'df -h' for free space, then rerun"
@@ -119,23 +166,6 @@ fail() {
   echo "check-live-lane-selection: $1" >&2
   failures=$((failures + 1))
 }
-
-# The plugin's current version, and the one every version fixture below bumps it to.
-VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$REPO/$PLUGIN_MANIFEST" | head -n1)"
-[ -n "$VERSION" ] || fatal \
-  "$PLUGIN_MANIFEST declares no [package] version, so no version fixture can be built" \
-  "restore that manifest's version field, then rerun"
-BUMPED="$(printf '%s' "$VERSION" | python3 -c '
-import re
-import sys
-
-major, minor, patch = sys.stdin.read().strip().split(".")[:3]
-digits = re.match(r"[0-9]+", patch)
-print("{}.{}.{}".format(major, minor, int(digits.group(0)) + 1))
-')" || fatal \
-  "could not derive a bumped version from $VERSION" \
-  "restore $PLUGIN_MANIFEST to an X.Y.Z version, then rerun"
-readonly VERSION BUMPED
 
 # Rewrite one file in the scratch tree with python, which every platform here spells the
 # same way — `sed -i` differs between GNU and BSD and fails on the macOS runner. The
@@ -279,6 +309,27 @@ fixture_outside_source_version() {
   commit_fixture "a version-looking edit in an outside source file"
 }
 
+# That, and the version line of a `Cargo.toml` that is a test fixture rather than a crate's
+# own manifest. Same basename as a permitted path, same substitution, wrong location.
+fixture_nested_manifest_basename() {
+  fixture_version_only
+  bump_version_lines "$NESTED_MANIFEST"
+  commit_fixture "a Cargo.toml that is not a workspace crate's own manifest"
+}
+
+# That, and a changelog belonging to a package that is not a workspace crate. The changelog
+# exception is the widest one the contract grants — any change, any status — so it is the
+# one where a basename match would cost the most.
+fixture_outside_changelog_basename() {
+  fixture_version_only
+  append "$OUTSIDE_CHANGELOG" "
+## $BUMPED
+
+- released
+"
+  commit_fixture "a CHANGELOG.md that is not a workspace crate's own"
+}
+
 # The engine alone, which reaches no plugin.
 fixture_core_source() {
   append "$CORE_SOURCE" "
@@ -347,6 +398,23 @@ fixture_outside_source_version
 expect_answer "a version-looking edit in an outside source file" run
 if grep -q "NOT SELECTED" "$scratch/decide-stderr"; then
   fail "a version-looking edit in an outside source file was reported as not selected, so the permitted set is being read from a line's shape rather than from the file: $(cat "$scratch/decide-stderr")"
+fi
+reset_fixture
+
+# The same distinction one level in: a basename is not a location. Both files below are
+# called exactly what a permitted path is called and neither is one, so a decision matching
+# on the name would accept a diff that reaches whatever those files really are.
+fixture_nested_manifest_basename
+expect_answer "a Cargo.toml that is not a workspace crate's own manifest" run
+if grep -q "NOT SELECTED" "$scratch/decide-stderr"; then
+  fail "a nested Cargo.toml that is no crate's manifest was accepted, so the permitted set is being matched by basename rather than by path: $(cat "$scratch/decide-stderr")"
+fi
+reset_fixture
+
+fixture_outside_changelog_basename
+expect_answer "a CHANGELOG.md that is not a workspace crate's own" run
+if grep -q "NOT SELECTED" "$scratch/decide-stderr"; then
+  fail "a CHANGELOG.md outside every workspace crate was accepted, so the changelog exception is being matched by basename rather than by path: $(cat "$scratch/decide-stderr")"
 fi
 reset_fixture
 
