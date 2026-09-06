@@ -31,8 +31,9 @@ this repository's required check; it is not something this file's figures can st
 `tests/plugin.rs`, drives the whole of `tests/journey` — the same code the credentialed
 target drives — against this crate's loopback fixture board, with no credential and no
 third-party API. The session it measures is the **whole** one: the schema verification, the
-node-count reconciliation, the board and field lookups, the start-of-run residue sweep,
-every declared capability, and the cleanup, beside every request the source itself sends.
+node-count reconciliation, the board and field lookups, every declared capability, this
+run's own cleanup and the end-of-run orphan sweep, beside every request the source itself
+sends.
 `tests/fixtures/session-cost.txt` is the checked-in record of the figures below, and that
 test fails when a session stops costing them.
 
@@ -189,9 +190,13 @@ with the number of commands the journey stands in for rather than with how much 
 **No change is kept.** Every source this journey builds is load-bearing: the read-configured
 one proves that a source configured with no `status_mapping` reads the board, each rebuild
 inside `await_on_board` is what makes GitHub's own view visible rather than the writing
-source's record of itself, and the rebuild after the label is attached out of band is what
-makes a change nothing here wrote visible at all. Collapsing any of them would buy one
-request by deleting a proof.
+source's record of itself, and the rebuild the fixture settling loop makes per attempt is
+what makes a change nothing here wrote visible at all — the label attached out of band, and
+each further item GitHub has not reported yet. That loop settles on the first attempt
+against this fixture and so builds exactly one source here, which is why the row above is
+what it is; against GitHub it builds one more per attempt it has to make, because a source
+answers every board question from one read and asking the same one twice asks GitHub once.
+Collapsing any of them would buy one request by deleting a proof.
 
 **The page sizes the source asks for.** Measured by driving the journey with its page limit
 at 100 and at 5, against 50 as it stands. All three are whole sessions as this branch now

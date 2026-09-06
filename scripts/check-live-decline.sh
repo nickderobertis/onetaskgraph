@@ -1,26 +1,38 @@
 #!/usr/bin/env bash
 # Drive one plugin's live journey through all three of its outcomes, reaching no API.
 #
-# 1. **Skipped** — no credential, and none expected: exit zero with the reason printed.
-# 2. **Expected and absent** — `ONETASKGRAPH_LIVE_REQUIRED=1` makes that same skip a failure
-#    naming the variable, so the required check cannot pass green for a missing credential.
-# 3. **Declined** — a precondition refused a run that could have happened, so it tested
+# 1. **Declined** — a precondition refused a run that could have happened, so it tested
 #    nothing. The run fails, which branch protection accepts neither as success nor in place
 #    of it, and its first line says the tests DID NOT RUN so it is not read as a code defect.
-#    This is the outcome the check exists for; the precondition producing it here is a seat
-#    another instance holds, so what is proven is the wiring rather than one reason.
+#    This is the outcome the check exists for.
+# 2. **Skipped** — no credential, and none expected: exit zero with the reason printed.
+# 3. **Expected and absent** — `ONETASKGRAPH_LIVE_REQUIRED=1` makes that same skip a failure
+#    naming the variable, so the required check cannot pass green for a missing credential.
 #
 # Every run below gets a placeholder credential and a scratch seat directory, so nothing
 # here reaches a real API.
 #
-# Usage: scripts/check-live-decline.sh <crate> <seat-file-name>
+# ## Which precondition produces the decline, and why this reads the lane to find out
+#
+# A lane says at `Session::open` whether it wants `Exclusivity::OneAtATime`. For a lane that
+# does, the seat is a precondition this can refuse offline — by pointing
+# `ONETASKGRAPH_LIVE_SEAT_DIR` at something that cannot hold a seat at all — so case 1 below
+# drives the real journey binary into a real decline. The seat file's own NAME is never
+# spelled here: `onetaskgraph_live` decides it, and a check restating it would be a second
+# spelling of one contract.
+#
+# A lane that opens `Exclusivity::Shared` has no seat to refuse, and its decline has to be
+# driven by a check of its own. That is not taken on trust either: this refuses such a lane
+# unless the crate's own `test` target really runs another `check-*-decline.sh`, so the
+# decline case cannot be lost by a lane quietly giving up its seat.
+#
+# Usage: scripts/check-live-decline.sh <crate>
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-readonly CRATE="${1:?usage: scripts/check-live-decline.sh <crate> <seat-file-name>}"
-readonly SEAT_FILE="${2:?usage: scripts/check-live-decline.sh <crate> <seat-file-name>}"
+readonly CRATE="${1:?usage: scripts/check-live-decline.sh <crate>}"
 
 # The argument names a crate of this workspace with a live journey in it; it is not a path
 # the caller chooses. Held to Cargo's own package-name grammar first, so nothing that is not
@@ -33,23 +45,12 @@ case "$CRATE" in
     exit 1
     ;;
 esac
-if [ ! -f "crates/$CRATE/tests/live.rs" ]; then
-  echo "check-live-decline: $CRATE has no crates/$CRATE/tests/live.rs, so it has no live journey." >&2
+readonly JOURNEY="crates/$CRATE/tests/live.rs"
+if [ ! -f "$JOURNEY" ]; then
+  echo "check-live-decline: $CRATE has no $JOURNEY, so it has no live journey." >&2
   echo "check-live-decline: pass the name of a crate that does." >&2
   exit 1
 fi
-# The second argument names the seat file inside that scratch directory, so a name that is
-# not a file name would be spliced into a path this script then writes to. A leading dot is
-# refused along with the rest: `.` and `..` are the scratch directory itself, and the
-# redirection below would abort on one with the shell's own "Is a directory" and no next
-# action, which is the diagnostic a caller cannot act on.
-case "$SEAT_FILE" in
-  *[!a-z0-9.-]* | "" | .*)
-    echo "check-live-decline: $SEAT_FILE is not a seat file name (lowercase, digits, dots and hyphens, not beginning with a dot)." >&2
-    echo "check-live-decline: pass the name onetaskgraph_live::Session uses for this session's seat." >&2
-    exit 1
-    ;;
-esac
 
 scratch="$(mktemp -d)" || {
   echo "check-live-decline: could not create a scratch directory for the seats and logs." >&2
@@ -83,36 +84,113 @@ run_journey() {
 # what a passing test printed. A skip nobody can read is indistinguishable from a journey
 # that ran and asserted nothing, which is the one thing this check may not confuse.
 
-# 1. A declined session: the seat is already held, so the journey did not run.
-held="$scratch/held"
-mkdir -p "$held"
-printf 'held by scripts/check-live-decline.sh\n' > "$held/$SEAT_FILE"
-declined_output=""
-declined_status=0
-declined_output="$(run_journey "$held" "" \
-  GH_PROJECTS_TOKEN=placeholder-not-a-credential \
-  GH_PROJECTS_OWNER=placeholder-owner \
-  GH_PROJECTS_NUMBER=1 \
-  GH_PROJECTS_REPOSITORY=placeholder-owner/placeholder-repository \
-  LINEAR_API_KEY=placeholder-not-a-credential \
-  LINEAR_WRITE_TEAM=PLACEHOLDER)" || declined_status=$?
-if [ "$declined_status" -eq 0 ]; then
-  fail "a declined session exited 0, so the required check would accept a run that never happened. Output: $declined_output"
-fi
-case "$declined_output" in
-  *"DID NOT RUN"*) ;;
-  *) fail "a declined session did not say it did not run, so a refusal reads as a code defect. Output: $declined_output" ;;
-esac
-case "$declined_output" in
-  *"not a test failure in the code under test"*) ;;
-  *) fail "a declined session did not distinguish itself from an ordinary test failure. Output: $declined_output" ;;
-esac
-case "$declined_output" in
-  *"already running"*) ;;
-  *) fail "a declined session did not say why it declined. Output: $declined_output" ;;
-esac
-if [ ! -f "$held/$SEAT_FILE" ]; then
-  fail "a declined session removed the seat another run holds, so the next instance would race it."
+# Which exclusivity the lane opens with, read from its code rather than from its prose.
+#
+# **Line comments are stripped first, and both variants appearing is an error rather than a
+# choice.** A grep over the raw file answers `OneAtATime` for a lane that merely *mentions*
+# it in a note about the arrangement — which is exactly what these journeys carry — and
+# would then drive a decline that lane cannot produce and report the failure as the lane's.
+# Neither half is syntax-aware, so what stands behind them is the drive itself: a lane whose
+# real call this reads wrongly fails below, naming what it expected.
+exclusivity=""
+for variant in OneAtATime Shared; do
+  if sed 's|//.*||' "$JOURNEY" | grep -q "Exclusivity::$variant"; then
+    if [ -n "$exclusivity" ]; then
+      fail "$JOURNEY opens a session with both Exclusivity::$exclusivity and Exclusivity::$variant, so which precondition can decline it is ambiguous. Open one."
+    fi
+    exclusivity="$variant"
+  fi
+done
+
+if [ "$exclusivity" = "OneAtATime" ]; then
+  # A seat directory that is a FILE: the seat cannot be created there, so the lane is
+  # declined before it reaches its API. Nothing here names the seat file — the crate that
+  # decides that name is the only place it is spelled.
+  held="$scratch/not-a-directory"
+  printf 'this is a file, so no seat may be taken inside it\n' > "$held"
+  declined_output=""
+  declined_status=0
+  declined_output="$(run_journey "$held" "" \
+    GH_PROJECTS_TOKEN=placeholder-not-a-credential \
+    GH_PROJECTS_OWNER=placeholder-owner \
+    GH_PROJECTS_NUMBER=1 \
+    GH_PROJECTS_REPOSITORY=placeholder-owner/placeholder-repository \
+    LINEAR_API_KEY=placeholder-not-a-credential \
+    LINEAR_WRITE_TEAM=PLACEHOLDER)" || declined_status=$?
+  if [ "$declined_status" -eq 0 ]; then
+    fail "a declined session exited 0, so the required check would accept a run that never happened. Output: $declined_output"
+  fi
+  case "$declined_output" in
+    *"DID NOT RUN"*) ;;
+    *) fail "a declined session did not say it did not run, so a refusal reads as a code defect. Output: $declined_output" ;;
+  esac
+  case "$declined_output" in
+    *"not a test failure in the code under test"*) ;;
+    *) fail "a declined session did not distinguish itself from an ordinary test failure. Output: $declined_output" ;;
+  esac
+  case "$declined_output" in
+    *"seat"*) ;;
+    *) fail "a declined session did not say why it declined. Output: $declined_output" ;;
+  esac
+  case "$declined_output" in
+    *ONETASKGRAPH_LIVE_SEAT_DIR*) ;;
+    *) fail "a declined session did not name what a reader can change to make it run. Output: $declined_output" ;;
+  esac
+elif [ "$exclusivity" = "Shared" ]; then
+  # No seat, so no decline this check can produce — but the lane must still HAVE one that
+  # some check drives to a red result, or the outcome above stops being proven for it.
+  #
+  # The project file is PARSED rather than grepped: a decline check named in a comment, in
+  # another target, or in a string that is not a command satisfies a regex and drives
+  # nothing. What counts is a command of this crate's own `test` target.
+  targets="crates/$CRATE/project.json"
+  driven="$(python3 - "$targets" <<'PYTHON'
+import json, re, sys
+
+# Nx spells a target's commands two ways — one `command`, or a `commands` list whose entries
+# are a string or a mapping with a `command` in it — and this reads both. Anything ELSE is a
+# project file this cannot rule on, and it says so rather than reading a shape it guessed at:
+# a silent empty answer here would report the crate as running no decline check at all, which
+# is a different failure with a different fix.
+def spelled(command, where):
+    if isinstance(command, str):
+        return command
+    if isinstance(command, dict) and isinstance(command.get("command"), str):
+        return command["command"]
+    raise SystemExit(
+        f"{where} is neither a command string nor a mapping carrying one: {command!r}"
+    )
+
+targets = json.load(open(sys.argv[1], encoding="utf-8")).get("targets", {})
+options = targets.get("test", {}).get("options", {})
+listed = options.get("commands", [])
+if not isinstance(listed, (list, str, dict)):
+    raise SystemExit(f"targets.test.options.commands is neither a list nor one command: {listed!r}")
+if not isinstance(listed, list):
+    listed = [listed]
+commands = [
+    spelled(command, f"targets.test.options.commands[{at}]")
+    for at, command in enumerate(listed)
+]
+if "command" in options:
+    commands.append(spelled(options["command"], "targets.test.options.command"))
+named = re.compile(r"scripts/check-[a-z-]+-decline\.sh")
+for command in commands:
+    for found in named.findall(command):
+        if not found.endswith("check-live-decline.sh"):
+            print(found)
+            raise SystemExit(0)
+PYTHON
+)" || fail "$targets could not be read as the project file it has to be: ${driven:-see the message above}. Fix that file's shape, then re-run."
+  if [ -z "$driven" ]; then
+    fail "$JOURNEY opens a shared session, so no seat can decline it — and the test target in $targets runs no other check-*-decline.sh, so nothing drives this lane's decline through to a red result. Add one as a command of that target, or give the lane back a precondition this check can refuse."
+  elif [ ! -f "$driven" ]; then
+    fail "the test target in $targets runs $driven, which is not in the tree. Add that script, or point that command at the check that really drives this lane's decline."
+  else
+    echo "check-live-decline: $CRATE opens a shared session; its decline is driven by $driven."
+  fi
+else
+  fail "$JOURNEY does not say which Exclusivity it opens its session with, so which precondition can decline it is unknown. Name one at Session::open."
 fi
 
 # llmlint: ignore-block[live_tier_compiles_and_requires_credential] Case 2 asserting a green
@@ -122,7 +200,6 @@ fi
 # credential where one WAS expected — and it asserts the run is red and names what demanded
 # it, which is the demand this rule exists for. Removing case 2 would not add a demand; it
 # would only stop anybody proving that a fork pull request still reads honestly.
-# 2. No credential and none expected: a skip, with the reason, and nothing red.
 free="$scratch/free"
 mkdir -p "$free"
 skipped_status=0
@@ -139,7 +216,6 @@ if [ -n "$(ls -A "$free")" ]; then
   fail "a skipped run took a seat it was never going to use: $(ls -A "$free")"
 fi
 
-# 3. No credential where one was expected: the required check may not pass green for it.
 demanded_status=0
 demanded_output="$(run_journey "$free" 1 \
   GH_PROJECTS_TOKEN= LINEAR_API_KEY=)" || demanded_status=$?
@@ -155,7 +231,7 @@ esac
 if [ "$failures" -ne 0 ]; then
   echo "check-live-decline: $failures expectation(s) failed for $CRATE." >&2
   echo "check-live-decline: the three outcomes are decided in crates/onetaskgraph-live and" >&2
-  echo "check-live-decline: reported by crates/$CRATE/tests/live.rs — fix whichever the" >&2
+  echo "check-live-decline: reported by $JOURNEY — fix whichever the" >&2
   echo "check-live-decline: failure above names, then re-run this check." >&2
   exit 1
 fi

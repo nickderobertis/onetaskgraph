@@ -19,10 +19,11 @@ readonly MIN_LINES=95
 # ONE live session per run of the gate, and this is where the second one would come from.
 # `just check` runs `test` AND `coverage`, and `cargo llvm-cov --package <crate>` below
 # re-runs those same integration tests — so credentials left set here would open a second
-# session against the shared external fixture the first may still be writing to. A test that
-# reads and writes a shared external fixture must not run concurrently with another instance
-# of itself: each sweeps residue by title before it starts and that sweep recognises ANY
-# run's artifacts, so two concurrent runs delete each other's in-flight items.
+# session against the shared external fixture the first may still be writing to. Neither
+# session would delete the other's work — every artifact carries its writing run's own
+# process id and the sweep that recovers an interrupted run's is decided by that stamp, in
+# `onetaskgraph_live::artifact` — but a second session is a second session's worth of a
+# third party's budget, spent to measure tests llvm-cov never measured anyway.
 #
 # The demand is cleared with them, or the skip that clearing produces would fail this phase
 # for a session it is deliberately not running. Nothing is lost: llvm-cov never measured

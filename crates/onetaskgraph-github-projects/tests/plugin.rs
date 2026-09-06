@@ -5532,6 +5532,105 @@ async fn a_board_changed_by_something_else_is_seen_by_the_next_source_and_not_by
     assert_eq!(fixture.requests("issue"), 1);
 }
 
+/// The wait a live run reads its own fixture through, driven against a board that is behind.
+///
+/// `journey::settled_fixture` is the real one — the code the credentialed lane runs — and
+/// what it is driven against is this file's own loopback board. No credential, no third
+/// party, nothing outside this process.
+///
+/// The board is held one item behind what it really holds, which is what GitHub's
+/// eventually-consistent item connection and its issue search both do to a run reading the
+/// fixture it has just written. **It then catches up on its own, when it has answered the
+/// first attempt's second read, rather than when the wait does anything** — which is what
+/// makes this evidence about the wait rather than about the fixture. By the time the second
+/// attempt runs the item is there and readable, so a wait that kept its first source would
+/// be reading a board read taken while that item was still hidden, and would never see it
+/// however long it went on. That is exactly what
+/// `a_board_changed_by_something_else_is_seen_by_the_next_source_and_not_by_this_one` pins
+/// about a source, and it is what failed the credentialed lane with "the board never
+/// reported all three tasks".
+#[tokio::test]
+async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up() {
+    // One run's five artifacts, titled the way a run titles them: two projects — an issue
+    // with sub-issues and no parent — and three tasks. The one this board holds back is
+    // last, because `read_behind` holds back what a board took most recently, and it is a
+    // task on purpose: a task list is answered from the board read a source keeps, so the
+    // half held back is the half a kept source could never recover.
+    let prefix = "onetaskgraph live cleanup 4242-909-";
+    let titles = (1..=5)
+        .map(|number| format!("{prefix}{number}"))
+        .collect::<Vec<_>>();
+    let fixture = board(vec![
+        Item::issue("P_alpha", &titles[0])
+            .status("Todo")
+            .sub_issues(1),
+        Item::issue("P_beta", &titles[1])
+            .status("Todo")
+            .sub_issues(1),
+        Item::issue("T_first", &titles[2])
+            .status("Todo")
+            .parent("P_alpha"),
+        Item::issue("T_second", &titles[3])
+            .status("Todo")
+            .parent("P_beta"),
+        Item::issue("T_orphan", &titles[4]).status("Todo"),
+    ]);
+    fixture.read_behind(1);
+
+    // The catch-up, from a thread of its own so that when it happens is this board's
+    // business and not the wait's: the search is the second of the two reads one attempt
+    // makes, so answering one means the first attempt is over.
+    let catching_up = Arc::clone(&fixture.state);
+    let caught_up = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            {
+                let mut state = catching_up.lock().unwrap();
+                if state
+                    .documents
+                    .iter()
+                    .any(|document| document.contains("search(query:$search"))
+                {
+                    state.lagging_reads = 0;
+                    return true;
+                }
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        false
+    });
+
+    let built = std::cell::Cell::new(0_usize);
+    let rebuild = || {
+        built.set(built.get() + 1);
+        source(&fixture)
+    };
+    let settled = journey::settled_fixture(&rebuild, prefix, 3, 2)
+        .await
+        .expect("the wait settles once the board has caught up");
+
+    assert!(
+        caught_up.join().expect("the catch-up thread"),
+        "this board never caught up, so nothing below would be about the wait"
+    );
+    assert_eq!(
+        built.get(),
+        2,
+        "the wait answered from one source, so what it read was a board read taken while \
+         the fixture was still behind"
+    );
+    assert_eq!(
+        settled.tasks,
+        vec![titles[2].clone(), titles[3].clone(), titles[4].clone()],
+        "the task the board was holding back was not reported once it caught up"
+    );
+    assert_eq!(settled.projects, vec![titles[0].clone(), titles[1].clone()]);
+    // Two attempts, each one board read and one search: the second pair is the request the
+    // rebuild buys, and it is the whole cost of being able to wait at all.
+    assert_eq!(fixture.requests("board"), 2);
+    assert_eq!(fixture.requests("search"), 2);
+}
+
 #[test]
 fn the_shipped_pacing_defaults_are_githubs_published_limits() {
     // What GitHub publishes is `CONTENT_CREATION_PER_MINUTE`, and that is pinned and

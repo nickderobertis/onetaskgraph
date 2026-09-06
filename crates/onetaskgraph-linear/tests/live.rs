@@ -15,13 +15,15 @@
 //! `ONETASKGRAPH_LIVE_REQUIRED=1` and each of those skips becomes a failure naming the
 //! variable, so the required lane cannot pass green for want of a credential.
 //!
-//! Everything it creates it deletes, whether its assertions passed or failed, and it
-//! clears residue titled the way it titles its own before it starts — which is
-//! self-healing after a run killed between its writes and its cleanup.
+//! Everything it creates it deletes, whether its assertions passed or failed. It also
+//! recovers what a run killed between its writes and its cleanup left behind — but only
+//! artifacts the kernel says no live run owns, and only once its own journey is over. See
+//! [`sweep_orphans`].
 
-use std::{collections::BTreeMap, env, future::Future};
+use std::{collections::BTreeMap, env};
 
-use onetaskgraph_live::{Credential, Session, missing, required};
+use onetaskgraph_live::artifact::{Run, Sweep, now_micros};
+use onetaskgraph_live::{Credential, Exclusivity, Session, missing, required};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
     Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId,
@@ -51,246 +53,17 @@ macro_rules! ensure {
     };
 }
 
-async fn linear(key: &str, query: &str, variables: Value, what: &str) -> Result<Value, String> {
-    let body: Value = reqwest::Client::new()
-        .post("https://api.linear.app/graphql")
-        .header("Authorization", key)
-        .json(&json!({"query":query,"variables":variables}))
-        .send()
-        .await
-        .map_err(|error| format!("{what} could not reach Linear: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("{what} failed: {error}"))?
-        .json()
-        .await
-        .map_err(|error| format!("{what} returned invalid JSON: {error}"))?;
-    if let Some(errors) = body
-        .get("errors")
-        .filter(|errors| !errors.as_array().is_some_and(Vec::is_empty))
-    {
-        return Err(format!("{what} was rejected by Linear: {errors}"));
-    }
-    body.get("data")
-        .cloned()
-        .ok_or_else(|| format!("{what} returned no data: {body}"))
-}
+// `cleanup` is shared with `tests/sweep_gate.rs`, which drives the same code against a
+// loopback stand-in. What this target does not reach is that drive's — the endpoint seam it
+// uses to be pointed somewhere other than Linear — rather than dead code.
+#[allow(dead_code)]
+mod cleanup;
 
-/// The session this lane opens against Linear, by the name its seat and its refusals use.
-const SESSION_NAME: &str = "Linear";
-
-/// The prefix of every issue, project and label this lane writes.
-///
-/// The rest of a name is `<process id>-<microsecond timestamp>`, which makes one run's
-/// artifacts unique and makes any run's artifacts recognisable to the next run.
-const ARTIFACT_PREFIX: &str = "onetaskgraph live cleanup ";
-
-/// The same for a label, whose name Linear shows in its own filter menus.
-const LABEL_PREFIX: &str = "onetaskgraph-live-";
-
-fn artifact_title(process_id: u32, stamp_micros: i64) -> String {
-    format!("{ARTIFACT_PREFIX}{process_id}-{stamp_micros}")
-}
-
-fn artifact_label(process_id: u32, stamp_micros: i64) -> String {
-    format!("{LABEL_PREFIX}{process_id}-{stamp_micros}")
-}
-
-/// Whether a name is one this lane wrote, under `prefix`, in this run or an earlier one.
-fn is_artifact(prefix: &str, name: &str) -> bool {
-    let Some(suffix) = name.strip_prefix(prefix) else {
-        return false;
-    };
-    let Some((process_id, stamp_micros)) = suffix.split_once('-') else {
-        return false;
-    };
-    [process_id, stamp_micros]
-        .iter()
-        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-}
-
-const TEAM_STATES: &str = "query($key:String!){teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id key states(first:100){nodes{id name type}}}}}";
-const PROJECT_STATUSES: &str = "query{projectStatuses{nodes{id name type}}}";
-const LABEL_CREATE: &str = "mutation($input:IssueLabelCreateInput!){issueLabelCreate(input:$input){success issueLabel{id name}}}";
-const LABEL_DELETE: &str = "mutation($id:String!){issueLabelDelete(id:$id){success}}";
-const LABELS_PAGE: &str = "query($first:Int!,$after:String){issueLabels(first:$first,after:$after){nodes{id name} pageInfo{hasNextPage endCursor}}}";
-const ISSUES_BY_TITLE: &str = "query($first:Int!,$after:String,$prefix:String!){issues(first:$first,after:$after,filter:{title:{startsWith:$prefix}}){nodes{id title} pageInfo{hasNextPage endCursor}}}";
-const PROJECTS_BY_NAME: &str = "query($first:Int!,$after:String,$prefix:String!){projects(first:$first,after:$after,filter:{name:{startsWith:$prefix}}){nodes{id name} pageInfo{hasNextPage endCursor}}}";
-const ISSUE_PAGE_PROBE: &str = "query($first:Int!){issues(first:$first){nodes{id}}}";
-const DOCUMENTS_BY_TITLE: &str = "query($first:Int!,$after:String,$prefix:String!){documents(first:$first,after:$after,filter:{title:{startsWith:$prefix}}){nodes{id title} pageInfo{hasNextPage endCursor}}}";
-
-/// Every `(id, name)` a paged Linear connection reports.
-async fn walk(
-    key: &str,
-    query: &str,
-    connection: &str,
-    name_field: &str,
-    prefix: Option<&str>,
-    what: &str,
-) -> Result<Vec<(String, String)>, String> {
-    let mut after = Value::Null;
-    let mut found = Vec::new();
-    for _ in 0..50 {
-        let mut variables = json!({"first":onetaskgraph_linear::MAX_PAGE_SIZE,"after":after});
-        if let Some(prefix) = prefix {
-            variables["prefix"] = Value::String(prefix.to_owned());
-        }
-        let data = linear(key, query, variables, what).await?;
-        let page = data
-            .get(connection)
-            .ok_or_else(|| format!("{what} returned no {connection} connection"))?;
-        for node in page
-            .get("nodes")
-            .and_then(Value::as_array)
-            .ok_or_else(|| format!("{what} returned {connection}.nodes that is not an array"))?
-        {
-            let (Some(id), Some(name)) = (
-                node.get("id").and_then(Value::as_str),
-                node.get(name_field).and_then(Value::as_str),
-            ) else {
-                return Err(format!(
-                    "{what} returned a {connection} node with no id or name"
-                ));
-            };
-            found.push((id.to_owned(), name.to_owned()));
-        }
-        if page
-            .pointer("/pageInfo/hasNextPage")
-            .and_then(Value::as_bool)
-            != Some(true)
-        {
-            return Ok(found);
-        }
-        let next = page
-            .pointer("/pageInfo/endCursor")
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("{what} has no advancing cursor"))?;
-        if after.as_str() == Some(next) {
-            return Err(format!("{what} cursor did not advance"));
-        }
-        after = Value::String(next.to_owned());
-    }
-    Err(format!("{what} did not terminate"))
-}
-
-/// Deletes every issue, project, document and label whose name `matches`.
-///
-/// Called twice: once before the journey, over any run's naming, which is what heals a
-/// run killed between its writes and its cleanup; and once after it, over this run's own,
-/// which is what makes the lane leave nothing behind whether it passed or failed.
-async fn remove_artifacts(key: &str, matches: &dyn Fn(&str, &str) -> bool) -> Result<(), String> {
-    let issues = walk(
-        key,
-        ISSUES_BY_TITLE,
-        "issues",
-        "title",
-        Some(ARTIFACT_PREFIX),
-        "live issue residue lookup",
-    )
-    .await?;
-    for (id, title) in issues
-        .iter()
-        .filter(|(_, title)| matches(ARTIFACT_PREFIX, title))
-    {
-        let data = linear(
-            key,
-            onetaskgraph_linear::graphql::ISSUE_DELETE,
-            json!({"id":id}),
-            "live issue cleanup",
-        )
-        .await?;
-        if data.pointer("/issueDelete/success") != Some(&Value::Bool(true)) {
-            return Err(format!("Linear did not confirm deleting issue {title:?}"));
-        }
-    }
-    let projects = walk(
-        key,
-        PROJECTS_BY_NAME,
-        "projects",
-        "name",
-        Some(ARTIFACT_PREFIX),
-        "live project residue lookup",
-    )
-    .await?;
-    for (id, name) in projects
-        .iter()
-        .filter(|(_, name)| matches(ARTIFACT_PREFIX, name))
-    {
-        let data = linear(
-            key,
-            onetaskgraph_linear::graphql::PROJECT_DELETE,
-            json!({"id":id}),
-            "live project cleanup",
-        )
-        .await?;
-        if data.pointer("/projectDelete/success") != Some(&Value::Bool(true)) {
-            return Err(format!("Linear did not confirm deleting project {name:?}"));
-        }
-    }
-    let documents = walk(
-        key,
-        DOCUMENTS_BY_TITLE,
-        "documents",
-        "title",
-        Some(ARTIFACT_PREFIX),
-        "live document residue lookup",
-    )
-    .await?;
-    for (id, title) in documents
-        .iter()
-        .filter(|(_, title)| matches(ARTIFACT_PREFIX, title))
-    {
-        let data = linear(
-            key,
-            onetaskgraph_linear::graphql::DOCUMENT_DELETE,
-            json!({"id":id}),
-            "live document cleanup",
-        )
-        .await?;
-        if data.pointer("/documentDelete/success") != Some(&Value::Bool(true)) {
-            return Err(format!(
-                "Linear did not confirm deleting document {title:?}"
-            ));
-        }
-    }
-    let labels = walk(
-        key,
-        LABELS_PAGE,
-        "issueLabels",
-        "name",
-        None,
-        "live label lookup",
-    )
-    .await?;
-    for (id, name) in labels
-        .iter()
-        .filter(|(_, name)| matches(LABEL_PREFIX, name))
-    {
-        let data = linear(key, LABEL_DELETE, json!({"id":id}), "live label cleanup").await?;
-        if data.pointer("/issueLabelDelete/success") != Some(&Value::Bool(true)) {
-            return Err(format!("Linear did not confirm deleting label {name:?}"));
-        }
-    }
-    Ok(())
-}
-
-async fn run_then_cleanup<J, JF, C, CF>(journey: J, cleanup: C) -> Result<(), String>
-where
-    J: FnOnce() -> JF,
-    JF: Future<Output = Result<(), String>>,
-    C: FnOnce() -> CF,
-    CF: Future<Output = Result<(), String>>,
-{
-    let journey_result = journey().await;
-    let cleanup_result = cleanup().await;
-    match (journey_result, cleanup_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(journey), Ok(())) => Err(journey),
-        (Ok(()), Err(cleanup)) => Err(format!("live cleanup failed: {cleanup}")),
-        (Err(journey), Err(cleanup)) => Err(format!(
-            "{journey}; additionally, live cleanup failed: {cleanup}"
-        )),
-    }
-}
+use cleanup::{
+    ARTIFACT_PREFIX, ISSUE_PAGE_PROBE, LABEL_CREATE, PROJECT_STATUSES, SESSION_NAME, TEAM_STATES,
+    artifact_label, artifact_title, is_this_runs, linear, remove_artifacts, run_then_cleanup,
+    sweep_orphans,
+};
 
 /// The two workflow states this fixture files its issues under.
 ///
@@ -442,8 +215,11 @@ async fn task_titles(
 /// Everything this lane needs to reach the one team it may write to.
 struct LiveRun {
     key: String,
-    process_id: u32,
-    stamp_micros: i64,
+    /// Which run this is: the machine that can vouch for it and the process on it. Every
+    /// artifact below carries it, which is what its own cleanup finds them by and what a
+    /// later run's sweep looks this run up by before deciding anything about them.
+    id: Run,
+    stamp_micros: u64,
     open_state: String,
     done_state: String,
     project_status: String,
@@ -458,11 +234,11 @@ async fn drive_every_declared_capability(
     source: &dyn TaskSource,
     team_id: &str,
 ) -> Result<(), String> {
-    let title = |offset: i64| artifact_title(run.process_id, run.stamp_micros + offset);
+    let title = |offset: u64| artifact_title(run.id, run.stamp_micros + offset);
     let (alpha, beta) = (title(0), title(1));
     let (first, second, orphan) = (title(2), title(3), title(4));
-    let run_label = artifact_label(run.process_id, run.stamp_micros);
-    let only_label = artifact_label(run.process_id, run.stamp_micros + 1);
+    let run_label = artifact_label(run.id, run.stamp_micros);
+    let only_label = artifact_label(run.id, run.stamp_micros + 1);
     create_label(&run.key, team_id, &run_label).await?;
     create_label(&run.key, team_id, &only_label).await?;
     let open = Status {
@@ -960,7 +736,7 @@ async fn drive_documents(
     // dropped — the one answer a copy must never turn into a silent success.
     let refusal = source
         .write_document(&write(Document {
-            labels: vec![label(&artifact_label(run.process_id, run.stamp_micros))],
+            labels: vec![label(&artifact_label(run.id, run.stamp_micros))],
             ..document(filed, Some(under))
         }))
         .await;
@@ -982,7 +758,7 @@ async fn drive_documents(
             .items
             .into_iter()
             .map(|document| document.title)
-            .filter(|title| is_artifact(ARTIFACT_PREFIX, title))
+            .filter(|title| is_this_runs(run.id, ARTIFACT_PREFIX, title))
             .collect::<Vec<_>>();
         found.sort();
         Ok::<_, String>(found)
@@ -1013,7 +789,7 @@ async fn drive_documents(
     ensure!(
         titles(DocumentQuery {
             labels: LabelFilter {
-                any_of: vec![artifact_label(run.process_id, run.stamp_micros)],
+                any_of: vec![artifact_label(run.id, run.stamp_micros)],
                 ..LabelFilter::default()
             },
             ..DocumentQuery::default()
@@ -1083,7 +859,16 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     // The one gate: nothing below may reach Linear until the session is open, because the
     // key below is the one this returns rather than the one the environment held. A session
     // that is refused did not run and did not pass, and says so.
-    let session = Session::open(SESSION_NAME, key).unwrap_or_else(|declined| declined.refuse());
+    //
+    // `OneAtATime`: this lane still asks for a seat. Not because its cleanup needs one —
+    // every artifact it writes carries this run's process id, its own cleanup removes only
+    // those, and what it recovers of an interrupted run's is decided by that artifact's own
+    // stamp — but because a seat is the one precondition that can decline this lane without
+    // a credential and without reaching Linear, and `scripts/check-live-decline.sh` drives
+    // that decline through to a red check. What a seat does not cover, and never did, is two
+    // hosted runners: a file on one machine excludes nothing on another.
+    let session = Session::open(SESSION_NAME, key, Exclusivity::OneAtATime)
+        .unwrap_or_else(|declined| declined.refuse());
     let key = session.credential().expose().to_owned();
     let source = onetaskgraph_linear::Plugin
         .build(
@@ -1112,14 +897,6 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         }
     );
 
-    // Self-healing after an interrupted run: a process killed between its writes and its
-    // cleanup never reaches `run_then_cleanup`, so the next run clears what it left. What
-    // bounds where this lane may write is `LINEAR_WRITE_TEAM`, not this sweep.
-    remove_artifacts(&key, &is_artifact)
-        .await
-        .unwrap_or_else(|error| {
-            panic!("live residue left by an earlier interrupted run could not be cleared: {error}")
-        });
     let team_id = linear(&key, TEAM_STATES, json!({"key":team}), "live team lookup")
         .await
         .and_then(|data| {
@@ -1141,19 +918,37 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         .unwrap_or_else(|error| panic!("the Linear live lane cannot file its projects: {error}"));
     let run = LiveRun {
         key: key.clone(),
-        process_id: std::process::id(),
-        stamp_micros: chrono::Utc::now().timestamp_micros(),
+        id: Run::current(),
+        stamp_micros: now_micros(),
         open_state,
         done_state,
         project_status,
     };
-    let mine = format!("{}-", run.process_id);
-    let is_this_runs = move |prefix: &str, name: &str| {
-        is_artifact(prefix, name) && name.starts_with(&format!("{prefix}{mine}"))
-    };
+    let id = run.id;
     run_then_cleanup(
         || drive_every_declared_capability(&run, source.as_ref(), &team_id),
-        || remove_artifacts(&key, &is_this_runs),
+        || async {
+            // This run's own, first: everything it wrote goes whether the journey passed or
+            // failed. Then what an interrupted EARLIER run left, which is a different
+            // decision on different evidence — and which is deliberately here, at the end,
+            // rather than at the start where it used to be. A sweep before the journey
+            // deleted the in-flight issues of any session running beside this one; a sweep
+            // after it recovers exactly the same orphans and can reach nothing a live run
+            // owns.
+            let mine = remove_artifacts(&key, &|prefix, name| is_this_runs(id, prefix, name)).await;
+            let orphans = sweep_orphans(&key, &Sweep::of(id, now_micros())).await;
+            match (mine, orphans) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(mine), Ok(())) => Err(mine),
+                (Ok(()), Err(orphans)) => Err(format!(
+                    "residue left by an earlier interrupted run could not be cleared: {orphans}"
+                )),
+                (Err(mine), Err(orphans)) => Err(format!(
+                    "{mine}; additionally, residue left by an earlier interrupted run could \
+                     not be cleared: {orphans}"
+                )),
+            }
+        },
     )
     .await
     .unwrap_or_else(|error| panic!("Linear live capability journey failed: {error}"));

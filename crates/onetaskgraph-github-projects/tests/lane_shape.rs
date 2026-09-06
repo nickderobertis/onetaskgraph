@@ -9,14 +9,44 @@
 
 mod lane;
 
+use std::time::Duration;
+
 use lane::{
-    LiveLane, LiveSecret, artifact_label, artifact_title, is_artifact_label, is_artifact_title,
-    is_run_artifact_title, live_lane, live_write_config, rest_outcome, run_then_cleanup,
+    LABEL_PREFIX, LiveLane, LiveSecret, SESSION_NAME, artifact_label, artifact_title,
+    is_orphan_label, is_orphan_title, is_run_artifact_label, is_run_artifact_title, live_lane,
+    live_write_config, rest_outcome, run_then_cleanup,
 };
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_github_projects::accounting::{Outcome, StatusCode};
-use onetaskgraph_live::Credential;
+use onetaskgraph_live::artifact::{Registration, Registry, Run, Sweep, WIDEST_STAMP};
+use onetaskgraph_live::{Credential, Exclusivity, Session};
 use onetaskgraph_plugin_api::{SourceName, SourcePlugin};
+use std::num::NonZeroU32;
+
+/// A window these assertions drive either side of, rather than waiting out the real one.
+///
+/// Safety here does not rest on the window's length — what permits a removal is the owning
+/// run's registration lock, and the window can only hold a removal back — so a check may
+/// choose whichever window makes what it is proving visible.
+const WINDOW: Duration = Duration::from_secs(60);
+
+/// Microseconds since the epoch, far enough in that ageing a stamp cannot go negative.
+const NOW: u64 = 1_787_816_134_627_361;
+
+/// A machine identity written out by hand, for the runs this file names itself.
+fn host(number: u32) -> NonZeroU32 {
+    NonZeroU32::new(number).expect("a check's own host identity is never zero")
+}
+
+/// The same for a run's process id, which no operating system numbers zero.
+fn process(number: u32) -> NonZeroU32 {
+    NonZeroU32::new(number).expect("a process id this check names is never zero")
+}
+
+/// A stamp `by` wrote `windows` windows ago.
+fn aged(windows: u64) -> u64 {
+    NOW - windows * u64::try_from(WINDOW.as_micros()).expect("a minute fits in microseconds")
+}
 
 #[tokio::test]
 async fn cleanup_runs_after_a_successful_live_journey() {
@@ -282,93 +312,245 @@ fn a_repository_nomination_that_would_address_something_else_is_refused_before_a
     ));
 }
 
+/// A registry of this check's own, holding one run that has ended and one that is live.
+///
+/// Real registrations rather than a description of them: `ended` was taken and given up, so
+/// the kernel reports its lock free, and `live` is still held. That is the whole of the
+/// evidence a sweep decides on, and it is the same evidence whichever process holds the lock
+/// — flock and `LockFileEx` both refuse a second handle in the process that already has one.
+struct Runs {
+    directory: std::path::PathBuf,
+    registry: Registry,
+    mine: Run,
+    ended: Run,
+    live: Run,
+    _held: Registration,
+}
+
+impl Runs {
+    fn take() -> Self {
+        let directory = std::env::temp_dir().join(format!(
+            "onetaskgraph-lane-shape-runs-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        let registry = Registry::at(&directory);
+        let mine = registry.enrol();
+        // Registered, and then really given up — which is the state the kernel leaves behind
+        // for a process that has died, and the only state that authorises a removal.
+        let ended = {
+            let registration =
+                Registration::take(&registry, process(2533)).expect("a run that then ends here");
+            registration.run()
+        };
+        let held = Registration::take(&registry, process(9998)).expect("a run that is still going");
+        let live = held.run();
+        Self {
+            directory,
+            registry,
+            mine,
+            ended,
+            live,
+            _held: held,
+        }
+    }
+
+    fn sweep(&self, now: u64) -> Sweep {
+        self.registry.sweep(self.mine, now, WINDOW)
+    }
+
+    /// The machine this check's own registry answers for.
+    fn host(&self) -> NonZeroU32 {
+        self.registry
+            .host()
+            .expect("a registry this check can write has an identity")
+    }
+}
+
+impl Drop for Runs {
+    /// Best effort: the registration this check still holds is an open file, which Windows
+    /// will not let a directory be removed under. Leaving it is what the platform's own
+    /// temporary directory is for.
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
 #[test]
-fn residue_recovery_matches_this_lanes_own_artifacts_and_nothing_else() {
-    // The stale item this lane's recovery exists for: another run's process id and timestamp.
-    assert!(is_artifact_title(
-        "onetaskgraph live cleanup 2533-1787816134627361"
-    ));
-    assert!(is_artifact_title(&artifact_title(std::process::id(), 1)));
-    for foreign in [
-        "AI Orchestrator plan",
-        "onetaskgraph live cleanup",
-        "onetaskgraph live cleanup 2533",
-        "onetaskgraph live cleanup abc-1787816134627361",
-        "onetaskgraph live cleanup 2533-",
-        "copy of onetaskgraph live cleanup 2533-1787816134627361",
+fn a_sweep_takes_an_ended_runs_artifacts_and_leaves_every_live_runs_alone() {
+    let runs = Runs::take();
+    let sweep = runs.sweep(NOW);
+    let (ended, live, mine) = (runs.ended, runs.live, runs.mine);
+    // What the sweep exists for: a run the kernel says has ended, whose artifact has waited
+    // the window out.
+    assert!(is_orphan_title(&sweep, &artifact_title(ended, aged(2))));
+    // And the things it must never take. A fresh artifact of an ended run has not waited the
+    // window out; an artifact of a run that is STILL GOING is that run's however old it is,
+    // which is what a hung or rate-limited session looks like and what age alone cannot
+    // protect; one of THIS run is this run's whatever its age; and a title that is not
+    // spelled the way this lane spells one belongs to somebody else entirely.
+    for left in [
+        artifact_title(ended, NOW),
+        artifact_title(live, aged(1_000)),
+        artifact_title(live, NOW),
+        artifact_title(mine, aged(1_000)),
+        artifact_title(mine, NOW),
+        artifact_title(Run::vouched(runs.host(), process(4242)), aged(1_000)),
+        artifact_title(
+            Run::vouched(
+                host(runs.host().get().wrapping_add(1).max(1)),
+                process(2533),
+            ),
+            aged(1_000),
+        ),
+        "AI Orchestrator plan".to_owned(),
+        "onetaskgraph live cleanup".to_owned(),
+        "onetaskgraph live cleanup 2533".to_owned(),
+        format!("onetaskgraph live cleanup abc-{}", aged(2)),
+        "onetaskgraph live cleanup 9999-".to_owned(),
+        format!("copy of {}", artifact_title(ended, aged(2))),
     ] {
         assert!(
-            !is_artifact_title(foreign),
-            "residue recovery must not match {foreign:?}"
+            !is_orphan_title(&sweep, &left),
+            "a sweep must not take {left:?}"
         );
     }
+
     // A *document* this lane writes is titled the way this source spells one — the design
     // prefix, put there by the source rather than by the caller — so cleanup reads a title
     // the artifact prefix does not start. Recognition takes that prefix off first: without
     // it, a document a run created would be residue no sweep could ever name, on somebody's
     // real board.
-    assert!(is_artifact_title(&format!(
-        "{DESIGN_TITLE_PREFIX}onetaskgraph live cleanup 2533-1787816134627361"
-    )));
-    assert!(is_artifact_title(&format!(
-        "{DESIGN_TITLE_PREFIX}{}",
-        artifact_title(std::process::id(), 1)
-    )));
+    assert!(is_orphan_title(
+        &sweep,
+        &format!("{DESIGN_TITLE_PREFIX}{}", artifact_title(ended, aged(2)))
+    ));
+    assert!(
+        !is_orphan_title(
+            &sweep,
+            &format!("{DESIGN_TITLE_PREFIX}{}", artifact_title(mine, aged(2)))
+        ),
+        "and this run's own document is this run's, exactly as its issue is"
+    );
     for foreign in [
         format!("{DESIGN_TITLE_PREFIX}AI Orchestrator plan"),
-        format!("{DESIGN_TITLE_PREFIX}onetaskgraph live cleanup 2533"),
-        format!("copy of {DESIGN_TITLE_PREFIX}onetaskgraph live cleanup 2533-17"),
+        format!("{DESIGN_TITLE_PREFIX}onetaskgraph live cleanup 9999"),
+        format!(
+            "copy of {DESIGN_TITLE_PREFIX}{}",
+            artifact_title(ended, aged(2))
+        ),
     ] {
         assert!(
-            !is_artifact_title(&foreign),
-            "residue recovery must not match {foreign:?}"
+            !is_orphan_title(&sweep, &foreign),
+            "a sweep must not take {foreign:?}"
         );
     }
 
-    // A run names its own by the process id every one of its artifacts shares, so it
-    // cleans up after itself without touching what an interrupted earlier run left for
-    // the sweep above.
-    assert!(is_run_artifact_title(
-        2533,
-        "onetaskgraph live cleanup 2533-17"
-    ));
-    assert!(is_run_artifact_title(
-        2533,
-        &format!("{DESIGN_TITLE_PREFIX}onetaskgraph live cleanup 2533-17")
-    ));
+    // The label is residue exactly as an item is, and is decided the same way.
+    assert!(is_orphan_label(&sweep, &artifact_label(ended, aged(2))));
+    for left in [
+        artifact_label(ended, NOW),
+        artifact_label(live, aged(1_000)),
+        artifact_label(mine, aged(1_000)),
+        "bug".to_owned(),
+        "otg-live-".to_owned(),
+        "otg-live-9999".to_owned(),
+        format!("otg-live-abc-{}", aged(2)),
+        format!("not-{}", artifact_label(ended, aged(2))),
+    ] {
+        assert!(
+            !is_orphan_label(&sweep, &left),
+            "a label sweep must not take {left:?}"
+        );
+    }
+}
+
+#[test]
+fn a_label_this_lane_writes_fits_inside_the_limit_github_holds_one_to() {
+    // Fifty characters, and a stamp now names the machine as well as the process — which is
+    // why the label prefix is the short one. A label GitHub refuses is an artifact this lane
+    // cannot write at all, and it would fail on somebody's real repository rather than here.
+    // The room a stamp needs is the contract's own figure rather than one counted again here.
     assert!(
-        !is_run_artifact_title(
-            2533,
-            &format!("{DESIGN_TITLE_PREFIX}onetaskgraph live cleanup 25330-17")
-        ),
-        "and a document of another run is another run's, exactly as an issue is"
+        LABEL_PREFIX.len() + WIDEST_STAMP <= 50,
+        "the widest label this lane could write is {} characters",
+        LABEL_PREFIX.len() + WIDEST_STAMP
     );
+}
+
+#[test]
+fn a_run_names_its_own_artifacts_and_no_other_runs() {
+    // Teardown's half: a run removes everything it wrote, whether its assertions passed or
+    // failed, by the run every one of its artifacts carries.
+    let mine = Run::vouched(host(41), process(2533));
+    assert!(is_run_artifact_title(mine, &artifact_title(mine, 17)));
+    assert!(is_run_artifact_title(
+        mine,
+        &format!("{DESIGN_TITLE_PREFIX}{}", artifact_title(mine, 17))
+    ));
+    assert!(is_run_artifact_label(mine, &artifact_label(mine, 17)));
     for other in [
-        "onetaskgraph live cleanup 25330-17",
-        "onetaskgraph live cleanup 253-17",
-        "onetaskgraph live cleanup 12533-17",
+        artifact_title(Run::vouched(host(41), process(25330)), 17),
+        artifact_title(Run::vouched(host(41), process(253)), 17),
+        artifact_title(Run::vouched(host(41), process(12533)), 17),
+        // The same process id on another machine is another run, and this is the one a
+        // process id alone could not tell apart.
+        artifact_title(Run::vouched(host(42), process(2533)), 17),
+        format!(
+            "{DESIGN_TITLE_PREFIX}{}",
+            artifact_title(Run::vouched(host(41), process(25330)), 17)
+        ),
+        "onetaskgraph live cleanup 2533".to_owned(),
+        "AI Orchestrator plan".to_owned(),
     ] {
         assert!(
-            !is_run_artifact_title(2533, other),
-            "one run's cleanup must not match another run's {other:?}"
+            !is_run_artifact_title(mine, &other),
+            "one run's cleanup must not match {other:?}"
         );
     }
-    // The label is residue exactly as an item is, and is recognised the same way.
-    assert!(is_artifact_label("onetaskgraph-live-2533-1787816134627361"));
-    assert!(is_artifact_label(&artifact_label(std::process::id(), 1)));
-    for foreign in [
-        "bug",
-        "onetaskgraph-live-",
-        "onetaskgraph-live-2533",
-        "onetaskgraph-live-abc-1787816134627361",
-        "onetaskgraph-live-2533-",
-        "not-onetaskgraph-live-2533-1787816134627361",
+    for other in [
+        artifact_label(Run::vouched(host(41), process(25330)), 17),
+        artifact_label(Run::vouched(host(42), process(2533)), 17),
+        "otg-live-2533".to_owned(),
+        "bug".to_owned(),
     ] {
         assert!(
-            !is_artifact_label(foreign),
-            "label recovery must not match {foreign:?}"
+            !is_run_artifact_label(mine, &other),
+            "one run's label cleanup must not match {other:?}"
         );
     }
+}
+
+#[test]
+fn a_second_session_of_this_lane_opens_beside_the_first_rather_than_being_declined() {
+    // The seat this lane used to take is gone, and this is what that means: two sessions of
+    // it on one machine no longer exclude one another. They cannot reach each other's work —
+    // every artifact carries its own run's process id and the sweep above is decided on
+    // that — and a seat never excluded the case that is left, which is two hosted runners.
+    let held = Session::open(
+        SESSION_NAME,
+        Credential::new("live-token").expect("a placeholder credential is not blank"),
+        Exclusivity::Shared,
+    )
+    .unwrap_or_else(|declined| {
+        panic!(
+            "this lane takes no seat, so nothing may decline it here: {}",
+            declined.message()
+        )
+    });
+    assert_eq!(held.seat_path(), None, "this lane took a seat");
+    let beside = Session::open(
+        SESSION_NAME,
+        Credential::new("live-token").expect("a placeholder credential is not blank"),
+        Exclusivity::Shared,
+    )
+    .unwrap_or_else(|declined| {
+        panic!(
+            "a second session of this lane was declined while the first was open: {}",
+            declined.message()
+        )
+    });
+    assert_eq!(beside.seat_path(), None, "this lane took a seat");
 }
 
 #[test]
