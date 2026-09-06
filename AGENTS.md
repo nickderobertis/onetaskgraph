@@ -645,6 +645,18 @@ them do; this is the inventory of what is owed, not a status board.
   `scripts:test`, runs that decision and the check that drives it again through a python
   that ends its lines the Windows way — and refuses to run at all if the simulation did not
   take, because a shim that did nothing would look exactly like a pass.
+- **And text a python reads back from a subprocess has to name the encoding it was written
+  in.** Text mode with no encoding picks the *platform's* — UTF-8 on the Linux and macOS
+  runners, the ANSI code page on the Windows one — so `git show` handed
+  `scripts/live-lane-selection.sh` a manifest's `—` as `â€"` while the same file read off
+  the disk as UTF-8 kept it. Every line carrying one then read as a line the diff had
+  changed, every version-only diff answered `run`, and `check (windows-latest)` failed
+  twice on a decision no other lane could see was broken. Write `encoding="utf-8"`, as that
+  decision now does. `scripts/check-selection-code-page.sh`, a command in `scripts:test`,
+  runs the decision and the check that drives it again through a python whose code page is
+  the Windows runner's — and refuses to run when the shim did not take, or when no manifest
+  a version-only diff touches carries a byte the two decodings disagree about, because
+  either would look exactly like a pass.
 - **Suppress narrowly.** A diagnostic is an error or a suppression at that one site with a
   stated reason. `notignored` posts every suppression a PR adds, so they are read.
 - **`gh-secrets.json` is tracked and load-bearing.** It declares the repository secrets

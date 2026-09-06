@@ -48,7 +48,8 @@
           "bash scripts/check-line-reads.sh",
           "bash scripts/check-live-lane-enforced.sh",
           "bash scripts/check-live-lane-selection.sh",
-          "bash scripts/check-selection-line-endings.sh"
+          "bash scripts/check-selection-line-endings.sh",
+          "bash scripts/check-selection-code-page.sh"
         ],
         "parallel": false
       },

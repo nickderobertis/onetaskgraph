@@ -113,15 +113,22 @@ def say(line):
 
 
 def git(*arguments):
-    """A git command's stdout, or `None` when it could not be run or refused."""
+    """A git command's stdout as UTF-8, or `None` when it could not be run or refused.
+
+    The encoding is named rather than left to text mode, which picks the platform's: a blob
+    read here is compared line for line against the same file read off the disk by
+    `worktree` below, and the two have to agree about every byte. AGENTS.md records what
+    disagreeing cost. A blob that is not UTF-8 is `None`, which the callers answer `run`
+    for, as they do for everything else they cannot read.
+    """
     try:
         finished = subprocess.run(
             ["git", *arguments],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
             check=False,
         )
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     if finished.returncode != 0:
         return None
