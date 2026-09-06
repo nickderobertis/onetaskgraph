@@ -31,8 +31,9 @@ this repository's required check; it is not something this file's figures can st
 `tests/plugin.rs`, drives the whole of `tests/journey` — the same code the credentialed
 target drives — against this crate's loopback fixture board, with no credential and no
 third-party API. The session it measures is the **whole** one: the schema verification, the
-node-count reconciliation, the board and field lookups, the start-of-run residue sweep,
-every declared capability, and the cleanup, beside every request the source itself sends.
+node-count reconciliation, the board and field lookups, every declared capability, this
+run's own cleanup and the end-of-run orphan sweep, beside every request the source itself
+sends.
 `tests/fixtures/session-cost.txt` is the checked-in record of the figures below, and that
 test fails when a session stops costing them.
 
