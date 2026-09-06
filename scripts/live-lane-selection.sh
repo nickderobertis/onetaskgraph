@@ -34,6 +34,12 @@ set -euo pipefail
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+if [ "$#" -gt 2 ]; then
+  echo "live-lane-selection: takes a crate (or --nx-exclusions) and at most a base ref; got $# arguments." >&2
+  echo "live-lane-selection: usage: scripts/live-lane-selection.sh <crate>|--nx-exclusions [base]" >&2
+  exit 2
+fi
+
 MODE="${1-}"
 readonly MODE
 
@@ -128,6 +134,8 @@ def default_base():
         configuration = json.loads(Path("nx.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    if not isinstance(configuration, dict):
+        return None
     base = configuration.get("defaultBase")
     return base if isinstance(base, str) and base else None
 
@@ -145,6 +153,9 @@ def live_crates():
             project = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as problem:
             say(f"could not read {path.as_posix()}: {problem}.")
+            return None
+        if not isinstance(project, dict):
+            say(f"{path.as_posix()} is not a JSON object, so it declares no project.")
             return None
         tags = project.get("tags", [])
         if not isinstance(tags, list):
@@ -328,7 +339,9 @@ def changed_files(base):
 
     The working tree rather than HEAD, which is what `nx affected` compares by default, so
     a contributor running the gate over uncommitted work gets the same answer as CI gets
-    over the commit it checked out.
+    over the commit it checked out. Untracked files are part of that difference and come
+    back as `?`: a plugin's new source file is not yet in `git diff`, and a decision that
+    could not see it would answer `not-selected` for a diff that adds a whole behaviour.
     """
     listing = git("diff", "--name-status", "-z", base, "--")
     if listing is None:
@@ -354,6 +367,12 @@ def changed_files(base):
             )
         changes.append((status[:1], fields[index + 1]))
         index += 2
+    others = git("ls-files", "--others", "--exclude-standard", "-z")
+    if others is None:
+        raise Unanswerable(
+            "git could not list this tree's untracked files, so what changed is unknown"
+        )
+    changes.extend(("?", path) for path in others.split("\0") if path)
     return changes
 
 
@@ -419,8 +438,9 @@ def decide(crate, base, changes):
         if path not in accepted:
             if inside:
                 return RUN, (
-                    f"{path} is {crate}'s own source, so this diff reaches that plugin's "
-                    "behaviour"
+                    f"{path} is {crate}'s own source"
+                    + (" and is not even tracked yet" if status == "?" else "")
+                    + ", so this diff reaches that plugin's behaviour"
                 )
             return RUN, (
                 f"{path} is not one of the paths a version bump writes — {LOCKFILE}, "
@@ -436,7 +456,9 @@ def decide(crate, base, changes):
             continue
         if status != "M":
             return RUN, (
-                f"{path} was added, removed or renamed, which no version bump does"
+                f"{path} is untracked here, which no version bump leaves behind"
+                if status == "?"
+                else f"{path} was added, removed or renamed, which no version bump does"
             )
         old_text = blob(base, path)
         new_text = worktree(path)

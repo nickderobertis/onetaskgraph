@@ -453,6 +453,19 @@ for refused in "" "crates/../etc" "--no-such-mode" "Onetaskgraph"; do
   fi
 done
 
+# A file the plugin gained that git does not track yet. `git diff` does not report one, so
+# a decision reading that alone would answer `not-selected` for a diff that adds a whole
+# behaviour — and this is the local gate's own case, where a contributor runs the hook over
+# work that is not committed.
+# A `run` answer says nothing, so what proves the file was seen is the answer moving: the
+# same tree answers `not-selected` until the untracked file is there.
+fixture_version_only
+expect_answer "a version-only diff, before the untracked file is added" not-selected
+printf '// added by scripts/check-live-lane-selection.sh\n' > "$REPO/crates/$PLUGIN/src/untracked.rs"
+expect_answer "an untracked file in the plugin's own source" run
+rm -f "$REPO/crates/$PLUGIN/src/untracked.rs"
+reset_fixture
+
 # The two things it reads out of this repository's own files rather than off the command
 # line: which crates have a live lane, and which directories are workspace crates. Both are
 # data, both are spliced into something — Nx's `--exclude` and a path — and both answer
@@ -501,6 +514,13 @@ if ! grep -q "no Cargo.toml there" "$scratch/decide-stderr"; then
   fail "the decision accepted a workspace member with no manifest, so which files belong to a crate was assumed rather than read: $(cat "$scratch/decide-stderr")"
 fi
 reset_fixture
+
+# More arguments than it takes, which is a caller meaning something this does not do.
+if (cd "$REPO" && bash scripts/live-lane-selection.sh "$PLUGIN" "$BASE" extra >"$scratch/decide-stdout" 2>"$scratch/decide-stderr"); then
+  fail "the decision accepted a third argument and answered anyway, so a caller meaning something else got an answer to a question it did not ask"
+elif ! grep -q "usage" "$scratch/decide-stderr"; then
+  fail "the decision refused a third argument without printing its usage: $(cat "$scratch/decide-stderr")"
+fi
 
 # No argument at all, refused the same way and naming what is missing rather than `$1`.
 if (cd "$REPO" && bash scripts/live-lane-selection.sh >"$scratch/decide-stdout" 2>"$scratch/decide-stderr"); then
