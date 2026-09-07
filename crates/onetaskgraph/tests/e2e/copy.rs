@@ -363,10 +363,22 @@ fn a_round_trip_edit_updates_the_item_it_came_from_rather_than_duplicating_it() 
 
     // Out of the destination and into Markdown.
     let copied = ok(&sandbox, &["task", "copy", "remote:ENG-1", "--to", NOTES]);
+    let mut printed = copied.lines();
     assert_eq!(
-        copied.split_whitespace().collect::<Vec<_>>(),
+        printed
+            .next()
+            .expect("a copy prints its item")
+            .split_whitespace()
+            .collect::<Vec<_>>(),
         ["remote:ENG-1", "notes:ENG-1", "created"]
     );
+    // The one line every copy ends with. A task copy carries no document, so it recognised
+    // no reference and says so with zeroes rather than by omission.
+    assert_eq!(
+        printed.next(),
+        Some("references: 0 rewritten, 0 unresolved (0 ambiguous)")
+    );
+    assert_eq!(printed.next(), None);
     let before = shown(&sandbox, "task", "remote:ENG-1");
 
     // Edited the way a person edits it: one field, in the file.
@@ -2439,6 +2451,272 @@ fn a_document_copies_into_a_folder_of_markdown_and_the_next_invocation_reads_it_
                 .count(),
             1,
             "{boundary:?}: exactly one where there was one before:\n{listed}"
+        );
+    }
+}
+
+/// The three Markdown folders either reference topology below is built out of.
+///
+/// A `local-md` root is the destination this journey needs: it persists between
+/// invocations, holds all three record kinds, is writable, and reports `Location::Path` —
+/// so a rewrite from one root's paths to another's is directly observable through a
+/// *later* command, which is what makes this a journey rather than an assertion about a
+/// report a process printed and then exited.
+///
+/// The document is written by [`plan_naming`] afterwards rather than here, because what it
+/// has to name is what the source itself reports, and that is a canonical absolute path
+/// under a temporary tree nothing can spell in advance.
+fn plan_stores(sandbox: &Sandbox) {
+    let root = sandbox.subdirectory("authoring");
+    for (kind, id, front, body) in [
+        (
+            "projects",
+            "P-1",
+            "title: The plan\nstatus: Todo",
+            "the plan",
+        ),
+        (
+            "tasks",
+            "A",
+            "title: Alpha\nstatus: Todo\nproject: P-1",
+            "the first task",
+        ),
+        (
+            "tasks",
+            "B",
+            "title: Beta\nstatus: Todo\nproject: P-1",
+            "the second task",
+        ),
+    ] {
+        let path = root.join(kind).join(format!("{id}.md"));
+        std::fs::create_dir_all(path.parent().expect("a fixture parent")).expect("the folder");
+        std::fs::write(path, format!("---\n{front}\n---\n{body}\n")).expect("the Markdown");
+    }
+    sandbox.project_document(&document(&json!({
+        "authoring": {"plugin": "local-md", "config": {
+            "root": root, "status_mapping": {"todo": "todo"},
+        }},
+        "staging": {"plugin": "local-md", "config": empty_folder(sandbox, "staging")},
+        "board": {"plugin": "local-md", "config": empty_folder(sandbox, "board")},
+    })));
+}
+
+/// The design document the plan ends with, in the shape the artifact this exists for
+/// really has: a table of the planned tasks, one row apiece, whose last column is a bare
+/// absolute path inside backticks.
+///
+/// The last line is the whole-reference guard: the same path with a further suffix names a
+/// different file, and must come through byte-for-byte however the rest of the table is
+/// rewritten.
+///
+/// Answers with the body as the source *reports* it, which is the file's own text without
+/// its closing newline — a folder of Markdown holds the body in the file and trims that,
+/// so comparing against the text written here would be comparing against something no
+/// reader ever sees.
+fn plan_naming(sandbox: &Sandbox) -> String {
+    let content = format!(
+        "## Planned tasks\n\n\
+         | Task | Where |\n\
+         | --- | --- |\n\
+         | Alpha | `{alpha}` |\n\
+         | Beta | `{beta}` |\n\n\
+         The backup at `{alpha}.bak` is not the task.",
+        alpha = markdown_path(sandbox, "authoring", "task", "A"),
+        beta = markdown_path(sandbox, "authoring", "task", "B"),
+    );
+    let path = sandbox.subdirectory("authoring").join("documents/D-1.md");
+    std::fs::create_dir_all(path.parent().expect("a fixture parent")).expect("the folder");
+    std::fs::write(
+        &path,
+        format!(
+            "---\ntitle: Design review\nproject: P-1\n\
+             metadata: {{caller.flags: [true, null]}}\n---\n{content}\n"
+        ),
+    )
+    .expect("the authored document");
+    content
+}
+
+/// The body one source holds for a document, read back by a later invocation.
+fn body(sandbox: &Sandbox, id: &str) -> String {
+    shown(sandbox, "document", id)["content"]
+        .as_str()
+        .expect("a document carries a body")
+        .to_owned()
+}
+
+/// The three figures a `--json` copy reports.
+fn references(rendered: &str) -> Value {
+    let report: Value = serde_json::from_str(rendered).expect("a copy emits JSON");
+    report["references"].clone()
+}
+
+/// The one line a copy's ordinary summary output says about references.
+fn reference_line(rendered: &str) -> String {
+    rendered
+        .lines()
+        .find(|line| line.starts_with("references:"))
+        .unwrap_or_else(|| panic!("a copy says what it did to references:\n{rendered}"))
+        .to_owned()
+}
+
+#[test]
+fn a_copied_document_names_the_destinations_own_records_across_a_one_level_fan_out() {
+    // The fan-out the two keys resolve: the project and its tasks are copied out of
+    // `authoring` into *both* other stores, and the document travels to `board` by way of
+    // `staging`. So `staging`'s tasks and `board`'s tasks each record `authoring:…` and
+    // neither holds the other's id — the correspondence exists only through the one
+    // predecessor they share, which is the only thing the second key buys.
+    let sandbox = Sandbox::new();
+    plan_stores(&sandbox);
+    let authored = plan_naming(&sandbox);
+
+    ok(
+        &sandbox,
+        &["project", "copy", "authoring:P-1", "--to", "staging"],
+    );
+    let onto_staging = ok(
+        &sandbox,
+        &[
+            "document",
+            "copy",
+            "authoring:D-1",
+            "--to",
+            "staging",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        references(&onto_staging),
+        json!({"rewritten": 2, "unresolved": 0, "ambiguous": 0}),
+        "the first hop rewrites both rows: {onto_staging}"
+    );
+    ok(
+        &sandbox,
+        &["project", "copy", "authoring:P-1", "--to", "board"],
+    );
+
+    // A dry run reads everything, writes nothing, and reports what it would have done.
+    let planned = ok(
+        &sandbox,
+        &[
+            "document",
+            "copy",
+            "staging:D-1",
+            "--to",
+            "board",
+            "--dry-run",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        references(&planned),
+        json!({"rewritten": 2, "unresolved": 0, "ambiguous": 0})
+    );
+    assert!(
+        !sandbox
+            .subdirectory("board")
+            .join("documents/D-1.md")
+            .is_file(),
+        "a dry run writes nothing"
+    );
+
+    let copied = ok(
+        &sandbox,
+        &["document", "copy", "staging:D-1", "--to", "board"],
+    );
+    assert_eq!(
+        reference_line(&copied),
+        "references: 2 rewritten, 0 unresolved (0 ambiguous)",
+        "the same three figures reach the ordinary summary output:\n{copied}"
+    );
+
+    // Read back by a *separate* invocation: every row of the table names the board's own
+    // file, so a reader of the copy can reach what it names.
+    let landed = body(&sandbox, "board:D-1");
+    assert_eq!(
+        landed,
+        format!(
+            "## Planned tasks\n\n\
+             | Task | Where |\n\
+             | --- | --- |\n\
+             | Alpha | `{alpha}` |\n\
+             | Beta | `{beta}` |\n\n\
+             The backup at `{authored_alpha}.bak` is not the task.",
+            alpha = markdown_path(&sandbox, "board", "task", "A"),
+            beta = markdown_path(&sandbox, "board", "task", "B"),
+            authored_alpha = markdown_path(&sandbox, "authoring", "task", "A"),
+        ),
+        "the backup path is a longer location-like string and is left byte-for-byte;\n\
+         the authored body was:\n{authored}"
+    );
+
+    // Nothing else about the document moved.
+    let held = shown(&sandbox, "document", "board:D-1");
+    assert_eq!(held["title"], json!("Design review"));
+    assert_eq!(held["metadata"]["caller.flags"], json!([true, null]));
+    assert_eq!(
+        held["metadata"]["onetaskgraph.origin"],
+        json!("staging:D-1")
+    );
+
+    // A correct reference is never rewritten into something else.
+    let again = ok(
+        &sandbox,
+        &["document", "copy", "staging:D-1", "--to", "board", "--json"],
+    );
+    assert_eq!(
+        reported(&again),
+        vec![(
+            "staging:D-1".to_owned(),
+            json!("board:D-1"),
+            "unchanged".to_owned()
+        )]
+    );
+    assert_eq!(body(&sandbox, "board:D-1"), landed);
+}
+
+#[test]
+fn a_copied_document_leaves_a_two_hop_chain_byte_for_byte_and_says_it_was_unresolved() {
+    // The chain the two keys cannot reach: the records travel `authoring` → `staging` →
+    // `board`, so the board keys them by `staging:…` and `authoring:…` is gone — every hop
+    // overwrites the one origin there is. The document is copied to the board directly out
+    // of `authoring`, where the records were authored and so record no origin at all.
+    // Disjoint key sets, permanently.
+    let sandbox = Sandbox::new();
+    plan_stores(&sandbox);
+    let authored = plan_naming(&sandbox);
+
+    ok(
+        &sandbox,
+        &["project", "copy", "authoring:P-1", "--to", "staging"],
+    );
+    ok(
+        &sandbox,
+        &["project", "copy", "staging:P-1", "--to", "board"],
+    );
+
+    let copied = ok(
+        &sandbox,
+        &["document", "copy", "authoring:D-1", "--to", "board"],
+    );
+    assert_eq!(
+        reference_line(&copied),
+        "references: 0 rewritten, 2 unresolved (0 ambiguous)",
+        "a history the two keys cannot prove is counted, never guessed at:\n{copied}"
+    );
+    assert_eq!(
+        body(&sandbox, "board:D-1"),
+        authored,
+        "and the text comes through byte-for-byte as it was"
+    );
+
+    // The board really does hold its own record for both tasks — the copy declined a
+    // correspondence it could not prove rather than one that was not there.
+    for id in ["A", "B"] {
+        assert_eq!(
+            shown(&sandbox, "task", &format!("board:{id}"))["metadata"]["onetaskgraph.origin"],
+            json!(format!("staging:{id}")),
         );
     }
 }
