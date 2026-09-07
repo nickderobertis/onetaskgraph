@@ -24,7 +24,7 @@
 //! through that source's own write interface into that source's own store, and is never
 //! read back to answer a query. That is what makes it a write and not a cache.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use onetaskgraph_plugin_api::{
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
@@ -1270,10 +1270,16 @@ impl Engine {
     /// Walk the destination once for every record it holds at the levels named, one page
     /// at a time.
     ///
-    /// One page is held at a time and nothing is written down, which is the same bound
-    /// [`Engine::scan`] and every other compensation in this engine works under. What is
-    /// different is the *answer*: this one keeps every match, so a destination holding two
-    /// records for one work item is reported as ambiguous rather than resolved to the first.
+    /// One page is *read* at a time, and what is kept from each is three fields of each
+    /// record — its id, the origin it records and the location the destination reports —
+    /// never the page. That is more than [`Engine::scan`] keeps, and deliberately: the whole
+    /// point of this walk is that one pass answers every document and every referent of the
+    /// invocation, so what it learns has to outlive the page it learned it from. Nothing is
+    /// written down and the index is dropped with the call.
+    ///
+    /// The other difference from `scan` is the *answer*: this one keeps every match, so a
+    /// destination holding two records for one work item is reported as ambiguous rather
+    /// than resolved to the first.
     async fn counterparts(
         &self,
         destination: &ResolvedSource,
@@ -1281,8 +1287,32 @@ impl Engine {
     ) -> Result<Counterparts, EngineError> {
         let mut found = Counterparts::default();
         for level in levels {
+            // Every cursor this level has already been sent. `unrepeated` below catches a
+            // source that hands back the cursor it was just given, and its own note says
+            // why it catches no more than that: a source cycling through two cursors
+            // advances on every page, and seeing it needs memory the walks that share that
+            // helper do not keep. This walk does keep memory — it is building an index that
+            // outlives each page — so here the memory exists and the cycle is caught. The
+            // walks one level up catch the same defect as a page token handed back
+            // unchanged; this one pages by the source's own cursor and has no level above
+            // it, so nothing else would.
+            let mut asked_before: BTreeSet<String> = BTreeSet::new();
             let mut cursor: Option<Cursor> = None;
             loop {
+                if let Some(next) = &cursor
+                    && !asked_before.insert(next.0.clone())
+                {
+                    return Err(refused(
+                        destination,
+                        SourceError::Malformed {
+                            message: "the source returned a cursor it had already been \
+                                      given while the destination was being walked for the \
+                                      records a document's references name, so the walk \
+                                      would never end"
+                                .to_owned(),
+                        },
+                    ));
+                }
                 let asked = cursor.clone();
                 let request = request_for(destination, cursor);
                 let next = match level {

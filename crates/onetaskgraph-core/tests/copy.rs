@@ -3297,3 +3297,32 @@ async fn the_reference_figures_are_absent_when_zero_and_read_back_as_zero_when_a
         json!({"items": [], "references_rewritten": 2})
     );
 }
+
+#[tokio::test]
+async fn a_destination_whose_cursors_cycle_stops_the_walk_for_a_documents_references() {
+    // The cycle `unrepeated` cannot see: two cursors answering each other, so every page
+    // advances and no page is ever the one just asked for. Every other walk in this engine
+    // meets that defect one level up, as a page token handed back unchanged; this one pages
+    // by the destination's own cursor and has no level above it, so its own memory of what
+    // it has already asked for is the only thing between this destination and a copy with
+    // no end.
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Tasks, Fault::CyclesItsCursors, Onset::FirstRead).with_documents(),
+    );
+
+    let refused = document_refusal(&engine).await;
+
+    assert!(
+        refused.contains("returned a cursor it had already been given"),
+        "the refusal says the walk would never end: {refused}"
+    );
+    assert!(
+        refused.contains("a document's references name"),
+        "and names what it was walking for: {refused}"
+    );
+    assert!(
+        pages.load(Ordering::Relaxed) <= 6,
+        "the walk stopped early rather than cycling"
+    );
+}
