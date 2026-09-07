@@ -177,12 +177,12 @@ pub struct CopyReport {
     /// ambiguous one says the destination holds duplicate records for one work item, or the
     /// source reports one location for two records, and re-running the copy will never
     /// clear it.
+    #[serde(default)]
     // llmlint: ignore[invalid_states_unrepresentable] JSON Schema cannot express an
     // inequality between two numbers, so a private constructor here would hold this in one
     // consumer of three while both SDKs' generated models went on admitting it. What holds
     // it is `substitute`: `Resolution` has no variant that counts an occurrence ambiguous
     // without counting it unresolved.
-    #[serde(default)]
     pub references_ambiguous: u64,
 }
 

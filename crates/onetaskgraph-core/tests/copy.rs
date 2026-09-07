@@ -2964,3 +2964,95 @@ async fn a_task_sharing_the_documents_own_id_is_still_a_referent() {
         "Alpha is at `/srv/into/board/A.md` today.\n"
     );
 }
+
+/// The same record shape as [`located`], reported as a link rather than as a file.
+///
+/// `Location` has two variants and a plugin picks one — `local-md` reports a canonical
+/// absolute path and `github-projects` reports an issue URL — so a rewrite that only ever
+/// saw paths would be half the contract.
+fn linked(id: &str, title: &str, url: &str, origin: Option<&str>) -> Value {
+    let mut record = located(id, title, "unused", origin);
+    record["location"] = json!({ "url": url });
+    record
+}
+
+#[tokio::test]
+async fn a_reference_reported_as_a_link_is_rewritten_and_not_inside_a_longer_link() {
+    // `.../issues/1` occurs inside `.../issues/12`, which names a different issue: the
+    // whole-reference rule has to hold for a link exactly as it does for a path.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+            "tasks": [
+                linked("A", "Alpha", "https://example.invalid/from/issues/1", Some("root:A")),
+                linked("B", "Beta", "https://example.invalid/from/issues/12", Some("root:B")),
+            ],
+            "documents": [plan_document(
+                "Alpha is `https://example.invalid/from/issues/1` and Beta is \
+                 `https://example.invalid/from/issues/12`.\n",
+            )],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                linked("A", "Alpha", "https://example.invalid/board/issues/7", Some("root:A")),
+                linked("B", "Beta", "https://example.invalid/board/issues/8", Some("root:B")),
+            ],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (2, 0, 0));
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        "Alpha is `https://example.invalid/board/issues/7` and Beta is \
+         `https://example.invalid/board/issues/8`.\n",
+        "the shorter link is rewritten as itself and never inside the longer one"
+    );
+}
+
+#[tokio::test]
+async fn a_document_naming_another_document_of_its_project_is_rewritten_too() {
+    // The referent set is the project's record, its tasks and its *other documents*. A plan
+    // that points at the runbook beside it is the case this third read is for.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+            "documents": [
+                plan_document("The runbook is `/srv/from/plans/P-1/D-2.md`.\n"),
+                {
+                    "id": "D-2",
+                    "title": "Runbook",
+                    "content": "how to read the plan",
+                    "project": "P-1",
+                    "labels": [],
+                    "location": {"path": "/srv/from/plans/P-1/D-2.md"},
+                    "metadata": {GlobalId::ORIGIN_KEY: "root:D-2"},
+                },
+            ],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "documents": [{
+                "id": "D-2",
+                "title": "Runbook",
+                "content": "how to read the plan",
+                "project": "P-1",
+                "labels": [],
+                "location": {"path": "/srv/into/board/D-2.md"},
+                "metadata": {GlobalId::ORIGIN_KEY: "root:D-2"},
+            }],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (1, 0, 0));
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        "The runbook is `/srv/into/board/D-2.md`.\n"
+    );
+}
