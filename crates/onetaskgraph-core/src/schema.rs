@@ -23,15 +23,20 @@ use crate::{
     SourceListing, SourcePlan,
 };
 
-/// The bundle's own version, bumped whenever a root is added, removed or renamed.
+/// The bundle's own version, bumped whenever any root's schema changes — added, removed,
+/// renamed, **or altered inside**.
 ///
 /// Consumers generate code from this document, so the version is part of the
 /// contract rather than a convenience: an SDK can refuse a bundle it was not
-/// generated against instead of silently emitting the wrong models.
+/// generated against instead of silently emitting the wrong models. A property added to an
+/// existing root is a new field in both SDKs' generated models exactly as a new root is a
+/// new model, which is why the reach is the whole document rather than the set of names.
 ///
-/// Which roots each version brought is what `git log` answers; what this number owes a
-/// reader is that it moves whenever [`schema_bundle`] below gains, loses or renames one.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 9;
+/// What each version brought is what `git log` answers; what this number owes a reader is
+/// that it moves whenever [`schema_bundle`] below emits a different document. The golden
+/// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
+/// root's schema by digest from this version on.
+pub const SCHEMA_BUNDLE_VERSION: u32 = 10;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]

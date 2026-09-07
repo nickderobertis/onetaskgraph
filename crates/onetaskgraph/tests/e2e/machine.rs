@@ -233,6 +233,28 @@ fn every_verbs_machine_readable_output_validates_against_the_emitted_schema() {
             "the document copy has to have done something: {copied_document}"
         );
 
+        // A figure of zero is absent from the machine output rather than written as nought,
+        // so a copy that recognised no reference emits exactly the document a consumer
+        // written before these figures existed already handles — and the schema, which
+        // declares each of them optional with a default of `0`, still validates it above.
+        for figure in [
+            "references_rewritten",
+            "references_unresolved",
+            "references_ambiguous",
+        ] {
+            for (verb, report) in [
+                ("task copy", &copied),
+                ("project copy", &copied_project),
+                ("document copy", &copied_document),
+            ] {
+                assert!(
+                    report.get(figure).is_none(),
+                    "{boundary:?}: `{verb} --json` recognised no reference, so it carries no \
+                     {figure}: {report}"
+                );
+            }
+        }
+
         // `config show --json` answers about the configuration rather than about work, so it
         // carries no items and no plan — but it is a verb with a machine-readable form, and a
         // root in the bundle, so an SDK is generated against it like any other.

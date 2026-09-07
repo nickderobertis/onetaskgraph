@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, resolve } from "node:path";
+import Ajv2020 from "ajv/dist/2020.js";
 import {
   OnetaskgraphClient,
   OnetaskgraphExecutionError,
@@ -17,6 +18,8 @@ import {
   assertCompleteCommandSurface,
   clientCommands,
 } from "../src/index.ts";
+import type { CopyReport } from "../src/generated/models.ts";
+import { runtimeSchemas } from "../src/generated/schemas.ts";
 
 const binary = resolve(import.meta.dir, "../../../target/debug/onetaskgraph");
 let root = "";
@@ -259,6 +262,14 @@ test("copy drives the real binary and reports what it did to each item", async (
     expect(created.items).toEqual([
       { source: "from:T-1", action: "created", destination: "into:T-1" },
     ]);
+    // A copy of tasks carries no document, so it recognised no reference and the binary
+    // writes no figure at all — which is why a consumer generated before these figures
+    // existed reads this document unchanged.
+    expect([
+      created.references_rewritten,
+      created.references_unresolved,
+      created.references_ambiguous,
+    ]).toEqual([undefined, undefined, undefined]);
     // The destination really holds it, read back through the same binary.
     const copied = await copyClient.taskShow("into:T-1");
     expect(copied.items[0]?.item.metadata).toMatchObject({ "caller.count": 3 });
@@ -547,4 +558,49 @@ test("schema output and unsupported exit statuses are validated from real execut
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }
+});
+
+test("the reference figures round-trip absent, zero and non-zero through the generated model", () => {
+  // This SDK's model of a root is two halves — a compile-time type and the runtime schema
+  // the client validates responses against — so both have to say the same thing about a
+  // figure the binary omits when it has nothing to report.
+  const schema = runtimeSchemas.CopyReport;
+
+  // The schema declares each figure optional with a default of nought, so a validator that
+  // applies defaults reads an absent figure as zero rather than as null. That default is
+  // the only thing standing between a generated consumer and branching on `undefined`.
+  const withDefaults = new Ajv2020({ strict: false, useDefaults: true }).compile(schema);
+  const absent: Record<string, unknown> = {
+    items: [{ source: "work:D-1", action: "created", destination: "notes:D-1" }],
+  };
+  expect(withDefaults(absent)).toBe(true);
+  expect(absent.references_rewritten).toBe(0);
+  expect(absent.references_unresolved).toBe(0);
+  expect(absent.references_ambiguous).toBe(0);
+
+  const validate = new Ajv2020({ strict: false }).compile(schema);
+  expect(
+    validate({ items: [{ source: "work:D-1", action: "created", destination: "notes:D-1" }] }),
+  ).toBe(true);
+
+  // A figure with something to say validates and is carried by the type, the ambiguous one
+  // being a sub-count of the unresolved one rather than a second total.
+  const reported: CopyReport = {
+    items: [],
+    references_rewritten: 3,
+    references_unresolved: 2,
+    references_ambiguous: 1,
+  };
+  expect(validate(reported)).toBe(true);
+  expect(reported.references_ambiguous ?? 0).toBeLessThanOrEqual(
+    reported.references_unresolved ?? 0,
+  );
+
+  const partial: Record<string, unknown> = { items: [], references_rewritten: 2 };
+  expect(validate(partial)).toBe(true);
+  expect(withDefaults(partial)).toBe(true);
+  expect(partial.references_unresolved).toBe(0);
+  expect(partial.references_ambiguous).toBe(0);
+
+  expect(validate({ items: [], references_rewritten: -1 })).toBe(false);
 });

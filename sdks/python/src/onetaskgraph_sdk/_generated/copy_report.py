@@ -71,3 +71,24 @@ class CopyReport(BaseModel):
             description="One entry per item the copy considered, in the order it considered them."
         ),
     ]
+    references_ambiguous: Annotated[
+        int | None,
+        Field(
+            description="How many of [`Self::references_unresolved`] were left alone because the\ncorrespondence was **ambiguous** rather than merely absent. A sub-count, never\nlarger than it.\n\nSplit out because the two mean different things to a reader. A reference with no\ncounterpart is ordinary and expected under the bound above — the design working. An\nambiguous one says the destination holds duplicate records for one work item, or the\nsource reports one location for two records, and re-running the copy will never\nclear it.",
+            ge=0,
+        ),
+    ] = 0
+    references_rewritten: Annotated[
+        int | None,
+        Field(
+            description="Reference occurrences the copy rewrote to the destination's own location for the\nrecord they name.\n\nA silent bound is indistinguishable from a bug, so the copy says what it did to the\nreferences the documents it carried hold. This and the two below are totals over the\nwhole invocation rather than figures per document, and all three default to zero, so\na consumer written against the output before they existed is unaffected.\n\n**What these figures do not claim.** The referent set is a document's own project,\nso a reference to a record in a *different* project is never recognised at all and\ncannot appear in [`Self::references_unresolved`] either. These are the references\nthe copy recognised; they are not a census of every reference a document holds.\nNoticing an out-of-scope reference would need exactly the unbounded destination walk\nthis design refuses.",
+            ge=0,
+        ),
+    ] = 0
+    references_unresolved: Annotated[
+        int | None,
+        Field(
+            description="Reference occurrences the copy recognised and left byte-for-byte as they were,\nbecause the correspondence could not be established.",
+            ge=0,
+        ),
+    ] = 0

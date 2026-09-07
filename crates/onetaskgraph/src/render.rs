@@ -141,12 +141,17 @@ pub fn projects(items: &[Qualified<Project>]) -> String {
     )
 }
 
-/// One line per item a copy considered: where it came from, where it went, what happened.
+/// One line per item a copy considered: where it came from, where it went, what happened —
+/// and one final line for what it did to the references its documents hold.
 ///
 /// A dry run that would create has no destination id to print, because nothing was
 /// created and inventing one would be a claim about an id the destination never issued.
+///
+/// The reference line is **one** line and always printed, not a second report and not a
+/// section a reader has to know to ask for: a silent bound is indistinguishable from a bug,
+/// so a copy that recognised nothing says so with zeroes rather than by omission.
 pub fn copied(report: &CopyReport) -> String {
-    columns(
+    let mut rendered = columns(
         &report
             .items
             .iter()
@@ -160,6 +165,22 @@ pub fn copied(report: &CopyReport) -> String {
                 ]
             })
             .collect::<Vec<_>>(),
+    );
+    rendered.push_str(&references(report));
+    rendered
+}
+
+/// The one line a copy says about the references its documents hold.
+///
+/// The ambiguous figure is spelled as what it is — part of the unresolved one — because
+/// the two mean different things to a reader: an unresolved reference is ordinary under
+/// the bound the copy works to, while an ambiguous one says the destination holds
+/// duplicate records for one work item, or the source reports one location for two, and
+/// re-running the copy will never clear it.
+fn references(report: &CopyReport) -> String {
+    format!(
+        "references: {} rewritten, {} unresolved ({} ambiguous)\n",
+        report.references_rewritten, report.references_unresolved, report.references_ambiguous
     )
 }
 

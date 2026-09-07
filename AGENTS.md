@@ -557,9 +557,76 @@ them do; this is the inventory of what is owed, not a status board.
 36. A document copies into another document-bearing source with every field and every
     caller-defined metadata key it was read with, its JSON types intact, and a second copy
     of the same document updates the one already there rather than adding a duplicate.
+37. A copied document names the **destination's** records for the things copied alongside
+    it. Both topologies, against stores that outlive the invocation: the one-level fan-out
+    the two keys resolve, and the two-hop chain they cannot, which comes through
+    byte-for-byte and is counted unresolved. A location string occurring inside a longer
+    location-like string is left alone, every copy reports what it rewrote, what it left
+    unresolved and how many of those were ambiguous, and a dry run reports the same figures
+    and writes nothing.
+
+## What a copied document's references are pointed at
+
+Only a **document** is rewritten, and only its `content`. A reference is a literal
+occurrence in it of the exact location string a source reports for a related record — the
+`String` inside `Location::Path` or `Location::Url` — and it becomes the location string
+the *destination* reports for that record's counterpart. Both ends come from the plugins'
+own reported `Location`; nothing composes an address from a name, an id or a root. It is
+deliberately not a Markdown-link parser: the artifact this exists for holds bare absolute
+paths inside backticks in a table cell, which `[text](target)` matching would have left
+exactly as it found them.
+
+The referent set is the document's **own project** — that project's record, the tasks filed
+under it, and the other documents filed under it — so a reference to a record in another
+project is never recognised at all and cannot appear in the unresolved figure either.
+Widening it would need the unbounded destination walk this design refuses.
+
+**Two keys, one recorded hop of ancestry on each side.** A destination record is a
+referent's counterpart when its `onetaskgraph.origin` equals either the referent's own
+qualified source id or the origin the referent itself records. So a single hop resolves,
+and a one-level fan-out resolves — a record copied from one store into two, with the
+document arriving by one route and naming records that arrived by the other. **A chain of
+two or more hops does not, permanently**, because only one origin is ever recorded and
+every hop overwrites it. Chasing the chain further would need the intermediate stores
+configured and reachable, which would put a third party's availability inside a copy; a
+durable lineage id would identify only records written after it landed.
+
+**Where the correspondence is not confident, no record is chosen and the text is left
+byte-for-byte.** Two triggers: more than one destination record matching a referent's two
+keys, and two referents reporting the same source location string. That is a **stricter
+discipline than `Engine::scan`**, which takes the first hit and stops and must go on doing
+so — it chooses the copy's own target, where a caller named the item, while this edits the
+content of somebody's document, where a wrong answer is silent corruption of prose a person
+will act on. The two lookups are meant to disagree on a destination holding duplicates.
+
+`CopyReport` carries three figures over the whole invocation — rewritten, unresolved, and
+how many of those were ambiguous. The human rendering prints all three in one line however
+they read, because a reader there needs to be told the copy looked. The machine output
+**omits a figure of zero** rather than writing a nought, so what a task or a project copy
+emits is byte-for-byte the document it emitted before these figures existed; absence reads
+back as zero, which is what `#[schemars(!skip_serializing_if)]` is for — it keeps the
+`"default": 0` the skip would otherwise strip from the emitted schema, without which both
+SDKs would model an absent figure as null instead of nought. They are three flat fields
+rather than one nested object because schemars writes a non-required model-typed field's
+whole default into the emitted schema and the Python generator renders that as a dict
+literal `ty` refuses. The destination is walked for counterparts **once per copy
+invocation**, and a copy whose documents hold no candidate reference makes no such walk at
+all.
 
 ## Recorded decisions
 
+- **`SCHEMA_BUNDLE_VERSION` tracks the emitted document, not the set of root names.** A
+  property added to an existing root is a new field in both SDKs' generated models exactly
+  as a new root is a new model, so it moves the version. The golden that holds it to that is
+  `PUBLISHED_BUNDLES` in `crates/onetaskgraph-core/tests/engine.rs`, which from version 10
+  records every root beside a digest of the schema it emitted rather than its name alone —
+  under the name-only rows a changed root was invisible, and `CopyReport` gaining three
+  properties is the change that proved it. The table is append-only, its rows are the
+  versions in order, no two rows may publish the same shape, and a row at or past version 10
+  may not fall back to names. When the emitted document disagrees with it the test prints
+  the row to paste. The cost is stated rather than discovered: a schemars upgrade that
+  rewords one generated keyword moves a digest and demands a bump, which is the correct
+  answer — the document really did change and both SDKs really are regenerated from it.
 - **The SDKs drive the real binary as a subprocess.** They do not reimplement the engine
   and do not link it. One implementation of the query semantics means the CLI, a script
   and a TypeScript application cannot answer the same question differently — which is the

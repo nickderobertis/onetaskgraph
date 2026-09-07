@@ -1657,10 +1657,17 @@ enum At {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Onset {
     /// From the first read, which for a task copy is the scan for a counterpart.
-    TheFirstRead,
+    FirstRead,
+    /// Only from the *second* read at that level, which leaves the first walk to succeed
+    /// and meets the one after it instead.
+    ///
+    /// A document copy reads a destination's documents twice: the scan that finds the
+    /// document's own counterpart, and then the walk that finds the counterparts a
+    /// document's references name. `FirstRead` can only ever meet the first of those.
+    SecondRead,
     /// Only once this copy has written a task here, which leaves that scan to succeed and
     /// meets the orphan walk that comes after it instead.
-    TheFirstWrite,
+    FirstWrite,
 }
 
 /// A source that misbehaves in exactly one way, so a copy can be driven into one loop.
@@ -1677,11 +1684,14 @@ struct Misbehaving {
     /// Every page it has served, of any kind, counted so a test can show the walk stopped
     /// rather than ran away.
     pages_served: Arc<AtomicU32>,
-    /// Tasks, and only tasks, written here. [`Onset::TheFirstWrite`] waits for one of
+    /// Tasks, and only tasks, written here. [`Onset::FirstWrite`] waits for one of
     /// these rather than for any write, because the project of a project copy lands
     /// first: counting that one would turn the fault on before the scan this source has
     /// to answer well.
     tasks_written: AtomicU32,
+    /// Reads asked of the interface this source faults at, counted so [`Onset::SecondRead`]
+    /// can let the first through.
+    reads_at_fault: AtomicU32,
 }
 
 impl Misbehaving {
@@ -1697,6 +1707,7 @@ impl Misbehaving {
             ceiling: 2,
             pages_served: Arc::new(AtomicU32::new(0)),
             tasks_written: AtomicU32::new(0),
+            reads_at_fault: AtomicU32::new(0),
         }
     }
 
@@ -1726,11 +1737,16 @@ impl Misbehaving {
     }
 
     fn misbehaves_at(&self, at: At) -> bool {
-        self.at == at
-            && match self.onset {
-                Onset::TheFirstRead => true,
-                Onset::TheFirstWrite => self.tasks_written.load(Ordering::Relaxed) > 0,
-            }
+        if self.at != at {
+            return false;
+        }
+        match self.onset {
+            Onset::FirstRead => true,
+            // Counted here rather than in each query method, because this is the one place
+            // every read at the faulting level passes through.
+            Onset::SecondRead => self.reads_at_fault.fetch_add(1, Ordering::Relaxed) > 0,
+            Onset::FirstWrite => self.tasks_written.load(Ordering::Relaxed) > 0,
+        }
     }
 
     fn faulted<T>(&self, page: &PageRequest, row: impl Fn() -> T) -> Page<T> {
@@ -1811,6 +1827,16 @@ fn held_document(id: &NativeId) -> Document {
     }
 }
 
+/// The document this source answers `get_document` with: filed under `P-1` and with a body,
+/// which is what makes a copy of it read that project's records to find its references.
+fn authored_document(id: &NativeId) -> Document {
+    Document {
+        content: Some("Alpha is at `/srv/from/plans/P-1/A.md`.".to_owned()),
+        project: Some(NativeId::from("P-1")),
+        ..held_document(id)
+    }
+}
+
 fn edge(near: &NativeId, kind: ItemKind) -> DependencyEdge {
     DependencyEdge {
         from: DependencyEndpoint::from_native(near.clone(), kind),
@@ -1880,6 +1906,13 @@ impl TaskSource for Misbehaving {
 
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
         Ok(self.project.then(|| held_project(id)))
+    }
+
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        if !self.documents {
+            return Err(documentless(self.kind()));
+        }
+        Ok(Some(authored_document(id)))
     }
 
     async fn query_tasks(
@@ -2023,11 +2056,21 @@ fn into_misbehaving(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
 
 /// An engine whose source misbehaves, copying into an ordinary `in-memory` destination.
 fn from_misbehaving(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
+    from_misbehaving_into(source, json!({}))
+}
+
+/// The same, into a destination that declares it has documents — without which a document
+/// copy is refused at the handshake and never reaches the source at all.
+fn from_misbehaving_documentary(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
+    from_misbehaving_into(source, json!({"capabilities": {"documents": "native"}}))
+}
+
+fn from_misbehaving_into(source: Misbehaving, into: Value) -> (Engine, Arc<AtomicU32>) {
     let pages = Arc::clone(&source.pages_served);
     let engine = Engine::new(
         vec![
             ConfiguredSource::Ready(ResolvedSource::adopt(name("from"), Box::new(source))),
-            in_memory("into", json!({})),
+            in_memory("into", into),
         ],
         vec![name("from"), name("into")],
     );
@@ -2056,7 +2099,7 @@ async fn a_destination_that_repeats_its_cursor_stops_the_scan_for_a_counterpart(
     let (engine, pages) = into_misbehaving(Misbehaving::new(
         At::Tasks,
         Fault::RepeatsTheCursor,
-        Onset::TheFirstRead,
+        Onset::FirstRead,
     ));
 
     let refused = refusal(&engine, &one("from:T-1")).await;
@@ -2077,7 +2120,7 @@ async fn a_destination_that_overruns_its_page_stops_the_scan_for_a_counterpart()
     let (engine, pages) = into_misbehaving(Misbehaving::new(
         At::Tasks,
         Fault::OverrunsThePage,
-        Onset::TheFirstRead,
+        Onset::FirstRead,
     ));
 
     let refused = refusal(&engine, &one("from:T-1")).await;
@@ -2096,7 +2139,7 @@ async fn a_destination_that_repeats_its_cursor_stops_the_walk_for_what_a_copy_le
     let (engine, _) = into_misbehaving(Misbehaving::new(
         At::Tasks,
         Fault::RepeatsTheCursor,
-        Onset::TheFirstWrite,
+        Onset::FirstWrite,
     ));
 
     let refused = refusal(
@@ -2122,7 +2165,7 @@ async fn a_destination_that_overruns_its_page_stops_the_walk_for_what_a_copy_lef
     let (engine, _) = into_misbehaving(Misbehaving::new(
         At::Tasks,
         Fault::OverrunsThePage,
-        Onset::TheFirstWrite,
+        Onset::FirstWrite,
     ));
 
     let refused = refusal(
@@ -2145,7 +2188,7 @@ async fn a_destination_that_overruns_its_page_stops_the_scan_for_a_project() {
     let (engine, _) = into_misbehaving(Misbehaving::new(
         At::Projects,
         Fault::OverrunsThePage,
-        Onset::TheFirstRead,
+        Onset::FirstRead,
     ));
 
     let refused = refusal(
@@ -2171,8 +2214,7 @@ async fn a_destination_that_overruns_its_page_stops_the_scan_for_a_document() {
             "capabilities": {"documents": "native"},
             "documents": [a_document("D-1", "Design review")],
         }),
-        Misbehaving::new(At::Documents, Fault::OverrunsThePage, Onset::TheFirstRead)
-            .with_documents(),
+        Misbehaving::new(At::Documents, Fault::OverrunsThePage, Onset::FirstRead).with_documents(),
     );
 
     let refused = refusal(&engine, &many(&["from:D-1"], CopyScope::Documents)).await;
@@ -2189,12 +2231,8 @@ async fn a_source_that_repeats_its_cursor_stops_the_walk_of_a_projects_own_edges
     // The edge walk's other branch: a project's dependencies are read out of its source
     // by the same loop that reads a task's, and are held to the same rule.
     let (engine, _) = from_misbehaving(
-        Misbehaving::new(
-            At::ProjectEdges,
-            Fault::RepeatsTheCursor,
-            Onset::TheFirstRead,
-        )
-        .holding_a_project(),
+        Misbehaving::new(At::ProjectEdges, Fault::RepeatsTheCursor, Onset::FirstRead)
+            .holding_a_project(),
     );
 
     let refused = refusal(
@@ -2221,8 +2259,7 @@ async fn a_source_whose_cursors_cycle_stops_the_walk_of_a_projects_members() {
     // token it was just given, gets the same page again, and would do so for ever. The
     // loop that pages by that token is the only thing that can see it.
     let (engine, _) = from_misbehaving(
-        Misbehaving::new(At::Tasks, Fault::CyclesItsCursors, Onset::TheFirstRead)
-            .holding_a_project(),
+        Misbehaving::new(At::Tasks, Fault::CyclesItsCursors, Onset::FirstRead).holding_a_project(),
     );
 
     let refused = refusal(
@@ -2247,8 +2284,7 @@ async fn a_source_that_overruns_its_page_stops_the_walk_of_a_projects_members() 
     // loop, in the walk that reads the source's page — what matters is that it is refused
     // while a project's members are read, and that the source is named.
     let (engine, _) = from_misbehaving(
-        Misbehaving::new(At::Tasks, Fault::OverrunsThePage, Onset::TheFirstRead)
-            .holding_a_project(),
+        Misbehaving::new(At::Tasks, Fault::OverrunsThePage, Onset::FirstRead).holding_a_project(),
     );
 
     let refused = refusal(
@@ -2266,7 +2302,7 @@ async fn a_source_that_repeats_its_cursor_stops_the_walk_of_the_edges_a_copy_rea
     let (engine, pages) = from_misbehaving(Misbehaving::new(
         At::TaskEdges,
         Fault::RepeatsTheCursor,
-        Onset::TheFirstRead,
+        Onset::FirstRead,
     ));
 
     let refused = refusal(&engine, &one("from:T-1")).await;
@@ -2287,7 +2323,7 @@ async fn a_source_that_overruns_its_page_stops_the_walk_of_the_edges_a_copy_read
     let (engine, pages) = from_misbehaving(Misbehaving::new(
         At::TaskEdges,
         Fault::OverrunsThePage,
-        Onset::TheFirstRead,
+        Onset::FirstRead,
     ));
 
     let refused = refusal(&engine, &one("from:T-1")).await;
@@ -2363,5 +2399,969 @@ async fn a_well_behaved_copy_still_walks_every_page_of_every_loop_it_has() {
     assert_eq!(
         depends_on(&engine, "into:T-1").await,
         vec!["into:T-2 Task".to_owned(), "from:T-3 Task".to_owned()]
+    );
+}
+
+// The reference rewrite at the engine's own boundary. Driven the way a user drives it,
+// against stores that outlive one invocation, in `crates/onetaskgraph/tests/e2e/copy.rs`.
+
+/// One record of a store, with the location its source reports and the origin it records.
+///
+/// `origin` is what makes a fixture a *topology* rather than a heap: a record carrying one
+/// is a record that arrived from somewhere, and which somewhere is the whole of what the
+/// two-key rule can and cannot see.
+fn located(id: &str, title: &str, path: &str, origin: Option<&str>) -> Value {
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        "caller.shape".to_owned(),
+        json!({"nested": [1, true, null]}),
+    );
+    if let Some(origin) = origin {
+        metadata.insert(GlobalId::ORIGIN_KEY.to_owned(), json!(origin));
+    }
+    json!({
+        "id": id,
+        "title": title,
+        "status": {"category": "todo", "name": "Todo"},
+        "labels": [],
+        "project": "P-1",
+        "location": {"path": path},
+        "metadata": Value::Object(metadata),
+    })
+}
+
+/// The project both stores file everything under, at the location the store reports.
+fn located_project(path: &str, origin: Option<&str>) -> Value {
+    let mut project = located("P-1", "The plan", path, origin);
+    project
+        .as_object_mut()
+        .expect("a record is an object")
+        .remove("project");
+    project
+}
+
+/// The plan document the copy carries, in the shape the artifact this exists for really
+/// has: bare absolute paths inside backticks in a table cell.
+///
+/// The last two lines are the whole-reference guards. `…/A.md.bak` is a path extended by a
+/// further suffix, and the project's own location is a directory prefix of every task's, so
+/// both occur inside a longer location-like string and neither may be rewritten there.
+fn plan_document(content: &str) -> Value {
+    json!({
+        "id": "D-1",
+        "title": "Design review",
+        "content": content,
+        "project": "P-1",
+        "labels": [],
+        "location": {"path": "/srv/from/plans/P-1/D-1.md"},
+        "metadata": {"caller.shape": {"nested": [1, true, null]}},
+    })
+}
+
+/// The body the fixtures below copy, naming the two tasks and the project by their paths.
+const AUTHORED: &str = "# Plan\n\n\
+     | Task | Where |\n\
+     | --- | --- |\n\
+     | Alpha | `/srv/from/plans/P-1/A.md` |\n\
+     | Beta | `/srv/from/plans/P-1/B.md` |\n\n\
+     Everything lives under `/srv/from/plans/P-1`, and `/srv/from/plans/P-1/A.md.bak` is a \
+     backup.\n";
+
+/// A document-bearing `in-memory` source holding one project, two tasks in it, and the
+/// plan document that names all three.
+fn authoring_store(origins: Option<(&str, &str, &str)>) -> Value {
+    let (project, alpha, beta) = match origins {
+        Some((project, alpha, beta)) => (Some(project), Some(alpha), Some(beta)),
+        None => (None, None, None),
+    };
+    json!({
+        "capabilities": {"documents": "native"},
+        "projects": [located_project("/srv/from/plans/P-1", project)],
+        "tasks": [
+            located("A", "Alpha", "/srv/from/plans/P-1/A.md", alpha),
+            located("B", "Beta", "/srv/from/plans/P-1/B.md", beta),
+        ],
+        "documents": [plan_document(AUTHORED)],
+    })
+}
+
+/// The content one document holds at one source, read back through the engine's own show
+/// verb rather than off the write.
+async fn body(engine: &Engine, id: &str) -> String {
+    engine
+        .document(&self::id(id))
+        .await
+        .expect("the show verb answers")
+        .items[0]
+        .item
+        .content
+        .clone()
+        .expect("the document has a body")
+}
+
+/// A copy of one document into `into`, and the figures it reported.
+async fn copy_document(engine: &Engine, item: &str) -> onetaskgraph_core::CopyReport {
+    engine
+        .copy(&many(&[item], CopyScope::Documents))
+        .await
+        .expect("the document copy runs")
+}
+
+/// The three figures a copy reports, as a comparable triple.
+fn figures(report: &onetaskgraph_core::CopyReport) -> (u64, u64, u64) {
+    (
+        report.references_rewritten,
+        report.references_unresolved,
+        report.references_ambiguous,
+    )
+}
+
+#[tokio::test]
+async fn a_document_arrives_naming_the_destinations_own_records_across_a_one_level_fan_out() {
+    // The fan-out: `root` is where all three records were authored, `from` and `into` are
+    // the two stores they were copied into, and the document travels by the `from` route
+    // while the records it names arrived at `into` by the other one. Neither side holds the
+    // other's id, so nothing here resolves on a referent's own id — both sides trace to one
+    // common predecessor, which is the whole of what the second key buys.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": authoring_store(Some((
+            "root:P-1", "root:A", "root:B",
+        )))},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/into/board/A.md", Some("root:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+            ],
+        }},
+    }));
+
+    let first = copy_document(&engine, "from:D-1").await;
+    assert_eq!(
+        first.items.iter().map(landed).collect::<Vec<_>>(),
+        [(Some("into:D-1".to_owned()), "created".to_owned())]
+    );
+    assert_eq!(figures(&first), (3, 0, 0));
+
+    // Every reference names the destination's own record; every other character of the
+    // body is byte-for-byte what the source held, and no section was added.
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        "# Plan\n\n\
+         | Task | Where |\n\
+         | --- | --- |\n\
+         | Alpha | `/srv/into/board/A.md` |\n\
+         | Beta | `/srv/into/board/B.md` |\n\n\
+         Everything lives under `/srv/into/board`, and `/srv/from/plans/P-1/A.md.bak` is a \
+         backup.\n"
+    );
+
+    // Nothing else about the document moved: the caller's own key keeps its JSON types and
+    // the copy records the provenance it always did.
+    let landed_document = &engine
+        .document(&id("into:D-1"))
+        .await
+        .expect("the destination is configured")
+        .items[0]
+        .item;
+    assert_eq!(
+        landed_document.metadata["caller.shape"],
+        json!({"nested": [1, true, null]})
+    );
+    assert_eq!(
+        landed_document.metadata[GlobalId::ORIGIN_KEY],
+        json!("from:D-1")
+    );
+
+    // A correct reference is never rewritten into something else: the second copy reads the
+    // same source body, rewrites it the same way, and finds the destination already saying
+    // it.
+    let before = body(&engine, "into:D-1").await;
+    let again = copy_document(&engine, "from:D-1").await;
+    assert_eq!(
+        again.items.iter().map(landed).collect::<Vec<_>>(),
+        [(Some("into:D-1".to_owned()), "unchanged".to_owned())]
+    );
+    assert_eq!(figures(&again), (3, 0, 0));
+    assert_eq!(body(&engine, "into:D-1").await, before);
+}
+
+#[tokio::test]
+async fn a_history_the_two_keys_cannot_prove_is_left_byte_for_byte_and_counted_unresolved() {
+    // The chain the rule cannot reach: the records travelled `from` → an intermediate store
+    // → `into`, so `into` keys them by that intermediate, while the document is copied to
+    // `into` directly out of `from`, where the records were authored and so record no origin
+    // at all. Disjoint key sets, permanently — only one origin is ever recorded and every
+    // hop overwrites it.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": authoring_store(None)},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("mid:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/into/board/A.md", Some("mid:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("mid:B")),
+            ],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (0, 3, 0));
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        AUTHORED,
+        "a history the two keys cannot prove is left byte-for-byte, never guessed at"
+    );
+}
+
+#[tokio::test]
+async fn a_destination_holding_two_records_for_one_referent_is_ambiguous_and_scan_still_answers() {
+    // One record keyed by the referent's own id, a second keyed by the origin the referent
+    // itself records. Both match the two keys, so the correspondence is not confident.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": authoring_store(Some((
+            "root:P-1", "root:A", "root:B",
+        )))},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A-by-id", "Alpha", "/srv/into/board/A-by-id.md", Some("from:A")),
+                located("A-by-origin", "Alpha", "/srv/into/board/A-by-origin.md", Some("root:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+            ],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    // Alpha's one occurrence is ambiguous; Beta's and the project's still resolve.
+    assert_eq!(figures(&report), (2, 1, 1));
+    assert!(
+        body(&engine, "into:D-1")
+            .await
+            .contains("`/srv/from/plans/P-1/A.md`"),
+        "an ambiguous reference is left byte-for-byte, and no record is chosen"
+    );
+
+    // `Engine::scan` is untouched by that stricter discipline: it takes the first hit and
+    // stops, which is what every consumer of the copy already depends on. The two lookups
+    // answer different questions and are meant to disagree on a destination holding
+    // duplicates.
+    let copied = engine
+        .copy(&one("from:A"))
+        .await
+        .expect("the task copy runs");
+    assert_eq!(
+        copied.items[0].destination().map(ToString::to_string),
+        Some("into:A-by-id".to_owned()),
+        "the copy's own target lookup takes the first record recording the id it is \
+         copying, exactly as it did before the reference rewrite existed"
+    );
+}
+
+#[tokio::test]
+async fn two_referents_reporting_one_location_leave_every_occurrence_of_it_alone() {
+    // The source reports one location for two records, so an occurrence of it cannot be
+    // attributed to either — the case where a rewrite would be confidently wrong rather
+    // than merely unhelpful.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/from/plans/P-1/shared.md", Some("root:A")),
+                located("B", "Beta", "/srv/from/plans/P-1/shared.md", Some("root:B")),
+            ],
+            "documents": [plan_document(
+                "Both rows point at `/srv/from/plans/P-1/shared.md` today.\n",
+            )],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/into/board/A.md", Some("root:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+            ],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (0, 1, 1));
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        "Both rows point at `/srv/from/plans/P-1/shared.md` today.\n"
+    );
+}
+
+#[tokio::test]
+async fn a_counterpart_the_destination_does_not_hold_or_reports_no_location_for_is_left_alone() {
+    // Beta has no counterpart at all; Alpha has one the destination reports no location
+    // for, which names nowhere a reader could go. Neither is ambiguous — both are the
+    // ordinary, expected outcome under the bound this design works to — and the copy still
+    // succeeds.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": authoring_store(Some((
+            "root:P-1", "root:A", "root:B",
+        )))},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [{
+                "id": "A",
+                "title": "Alpha",
+                "status": {"category": "todo", "name": "Todo"},
+                "labels": [],
+                "project": "P-1",
+                "metadata": {GlobalId::ORIGIN_KEY: "root:A"},
+            }],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (1, 2, 0));
+    let landed_body = body(&engine, "into:D-1").await;
+    assert!(landed_body.contains("`/srv/from/plans/P-1/A.md`"));
+    assert!(landed_body.contains("`/srv/from/plans/P-1/B.md`"));
+    assert!(landed_body.contains("`/srv/into/board`"));
+}
+
+#[tokio::test]
+async fn a_dry_run_reports_the_references_it_would_have_rewritten_and_writes_nothing() {
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": authoring_store(Some((
+            "root:P-1", "root:A", "root:B",
+        )))},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/into/board/A.md", Some("root:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+            ],
+        }},
+    }));
+
+    let planned = engine
+        .copy(&CopyRequest {
+            dry_run: true,
+            ..many(&["from:D-1"], CopyScope::Documents)
+        })
+        .await
+        .expect("the dry run reads everything");
+    assert_eq!(figures(&planned), (3, 0, 0));
+    assert_eq!(
+        planned.items.iter().map(landed).collect::<Vec<_>>(),
+        [(None, "created".to_owned())]
+    );
+    assert_eq!(
+        engine
+            .documents(&onetaskgraph_core::DocumentRequest {
+                sources: vec![name("into")],
+                filters: onetaskgraph_core::DocumentFilters::default(),
+                project: onetaskgraph_core::ProjectSelector::Any,
+                paging: Paging {
+                    limit: NonZeroU32::new(20).expect("a non-zero limit"),
+                    token: None,
+                },
+            })
+            .await
+            .expect("the destination is configured")
+            .items
+            .len(),
+        0,
+        "a dry run writes nothing"
+    );
+}
+
+/// A destination that answers exactly as the `in-memory` source it wraps, and counts the
+/// task pages it was asked for.
+///
+/// A **document** copy asks a destination for task pages in exactly one place — the walk
+/// that finds the counterparts a document's references name. Its own target is found
+/// through `query_documents`, and the project it is filed under through `query_projects`.
+/// So this count is that walk and nothing else, which is what lets a test say the walk
+/// happened once for a whole invocation, or never happened at all.
+struct Counting {
+    inner: Box<dyn TaskSource>,
+    task_pages: Arc<AtomicU32>,
+}
+
+#[async_trait::async_trait]
+impl TaskSource for Counting {
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn writes(&self) -> WriteSupport {
+        self.inner.writes()
+    }
+
+    async fn health(&self) -> Result<Health, SourceError> {
+        self.inner.health().await
+    }
+
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        self.inner.get_task(id).await
+    }
+
+    async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+        self.inner.get_project(id).await
+    }
+
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        self.inner.get_document(id).await
+    }
+
+    async fn query_tasks(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        self.task_pages.fetch_add(1, Ordering::Relaxed);
+        self.inner.query_tasks(query, page).await
+    }
+
+    async fn query_projects(
+        &self,
+        query: &ProjectQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        self.inner.query_projects(query, page).await
+    }
+
+    async fn query_documents(
+        &self,
+        query: &DocumentQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        self.inner.query_documents(query, page).await
+    }
+
+    async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        self.inner.labels(page).await
+    }
+
+    async fn task_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.task_dependencies(id, direction, page).await
+    }
+
+    async fn project_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.project_dependencies(id, direction, page).await
+    }
+
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        self.inner.write_task(write).await
+    }
+
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        self.inner.write_project(write).await
+    }
+
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        self.inner.write_document(write).await
+    }
+
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_task(id).await
+    }
+
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_project(id).await
+    }
+
+    async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_document(id).await
+    }
+}
+
+/// An engine reading `from` and writing into a counting wrapper around `into`.
+fn into_counting(from: Value, into: Value) -> (Engine, Arc<AtomicU32>) {
+    let task_pages = Arc::new(AtomicU32::new(0));
+    let inner = onetaskgraph_in_memory::Plugin
+        .build(&name("into"), &into, &NoSecrets)
+        .expect("the in-memory plugin builds");
+    let counting = Counting {
+        inner,
+        task_pages: Arc::clone(&task_pages),
+    };
+    let engine = Engine::new(
+        vec![
+            in_memory("from", from),
+            ConfiguredSource::Ready(ResolvedSource::adopt(name("into"), Box::new(counting))),
+        ],
+        vec![name("from"), name("into")],
+    );
+    (engine, task_pages)
+}
+
+/// The authoring store above, plus a second document of the same project naming the same
+/// two tasks. Two documents in one project is the ordinary case, and it is what a
+/// per-document walk would multiply reads for.
+fn two_documents_of_one_project() -> Value {
+    let mut store = authoring_store(Some(("root:P-1", "root:A", "root:B")));
+    let mut second = plan_document(AUTHORED);
+    second["id"] = json!("D-2");
+    second["location"] = json!({"path": "/srv/from/plans/P-1/D-2.md"});
+    store["documents"] = json!([plan_document(AUTHORED), second]);
+    store
+}
+
+/// The destination both cases below copy into.
+fn board_holding_counterparts() -> Value {
+    json!({
+        "capabilities": {"documents": "native"},
+        "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+        "tasks": [
+            located("A", "Alpha", "/srv/into/board/A.md", Some("root:A")),
+            located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+        ],
+    })
+}
+
+#[tokio::test]
+async fn the_destination_is_walked_once_for_a_whole_invocation_and_not_at_all_for_nothing() {
+    let (engine, task_pages) =
+        into_counting(two_documents_of_one_project(), board_holding_counterparts());
+
+    let report = engine
+        .copy(&many(&["from:D-1", "from:D-2"], CopyScope::Documents))
+        .await
+        .expect("the document copy runs");
+    // Three references apiece, and one walk serving both documents and every referent.
+    assert_eq!(figures(&report), (6, 0, 0));
+    assert_eq!(
+        task_pages.load(Ordering::Relaxed),
+        1,
+        "the destination is walked for counterparts once per copy invocation, not once \
+         per document"
+    );
+
+    // A copy whose documents hold no candidate reference makes no such walk at all: the
+    // referent set is read at the source, and nothing it holds occurs in this body.
+    let mut quiet = authoring_store(Some(("root:P-1", "root:A", "root:B")));
+    quiet["documents"] = json!([plan_document("Nothing here names a record.\n")]);
+    let (engine, task_pages) = into_counting(quiet, board_holding_counterparts());
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (0, 0, 0));
+    assert_eq!(
+        task_pages.load(Ordering::Relaxed),
+        0,
+        "a copy that recognises no reference asks the destination for no task page"
+    );
+}
+
+#[tokio::test]
+async fn a_task_sharing_the_documents_own_id_is_still_a_referent() {
+    // A folder of Markdown files `A.md` under `tasks/` and under `documents/` and reports
+    // `A` for both, so a source's id does not identify a record on its own. Told apart by
+    // id alone, the task here would be dropped from its own document's referent set.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+            "tasks": [located("D-1", "Alpha", "/srv/from/plans/P-1/A.md", Some("root:A"))],
+            "documents": [{
+                "id": "D-1",
+                "title": "Design review",
+                "content": "Alpha is at `/srv/from/plans/P-1/A.md` today.\n",
+                "project": "P-1",
+                "labels": [],
+                "location": {"path": "/srv/from/plans/P-1/D-1.md"},
+                "metadata": {},
+            }],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [located("A", "Alpha", "/srv/into/board/A.md", Some("root:A"))],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (1, 0, 0));
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        "Alpha is at `/srv/into/board/A.md` today.\n"
+    );
+}
+
+/// The same record shape as [`located`], reported as a link rather than as a file.
+///
+/// `Location` has two variants and a plugin picks one — `local-md` reports a canonical
+/// absolute path and `github-projects` reports an issue URL — so a rewrite that only ever
+/// saw paths would be half the contract.
+fn linked(id: &str, title: &str, url: &str, origin: Option<&str>) -> Value {
+    let mut record = located(id, title, "unused", origin);
+    record["location"] = json!({ "url": url });
+    record
+}
+
+#[tokio::test]
+async fn a_reference_reported_as_a_link_is_rewritten_and_not_inside_a_longer_link() {
+    // `.../issues/1` occurs inside `.../issues/12`, which names a different issue: the
+    // whole-reference rule has to hold for a link exactly as it does for a path.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+            "tasks": [
+                linked("A", "Alpha", "https://example.invalid/from/issues/1", Some("root:A")),
+                linked("B", "Beta", "https://example.invalid/from/issues/12", Some("root:B")),
+            ],
+            "documents": [plan_document(
+                "Alpha is `https://example.invalid/from/issues/1` and Beta is \
+                 `https://example.invalid/from/issues/12`.\n",
+            )],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                linked("A", "Alpha", "https://example.invalid/board/issues/7", Some("root:A")),
+                linked("B", "Beta", "https://example.invalid/board/issues/8", Some("root:B")),
+            ],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (2, 0, 0));
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        "Alpha is `https://example.invalid/board/issues/7` and Beta is \
+         `https://example.invalid/board/issues/8`.\n",
+        "the shorter link is rewritten as itself and never inside the longer one"
+    );
+}
+
+#[tokio::test]
+async fn a_location_before_a_full_stop_is_not_recognised_and_comes_through_byte_for_byte() {
+    // The cost the boundary rule states, put to the engine rather than left in prose. `.`
+    // is not a stop, because `/…/A.md` inside `/…/A.md.bak` is a different file, so a
+    // location written bare before a full stop is not recognised at all: left
+    // byte-for-byte and counted in neither figure, exactly as a reference to another
+    // project's record is. The line above it names the *same* task at the *same*
+    // destination inside backticks and is rewritten, so what declines the second
+    // occurrence is the delimiter beside it and nothing about the correspondence.
+    let authored = "Alpha is at `/srv/from/plans/P-1/A.md`.\n\n\
+                    The same file, written bare, is at /srv/from/plans/P-1/A.md.\n";
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+            "tasks": [located("A", "Alpha", "/srv/from/plans/P-1/A.md", Some("root:A"))],
+            "documents": [plan_document(authored)],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [located("A", "Alpha", "/srv/into/board/A.md", Some("root:A"))],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(
+        figures(&report),
+        (1, 0, 0),
+        "an unrecognised occurrence is not an unresolved one: the figures report what the \
+         copy recognised, not a census of what the document holds"
+    );
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        "Alpha is at `/srv/into/board/A.md`.\n\n\
+         The same file, written bare, is at /srv/from/plans/P-1/A.md.\n"
+    );
+}
+
+#[tokio::test]
+async fn a_document_naming_another_document_of_its_project_is_rewritten_too() {
+    // The referent set is the project's record, its tasks and its *other documents*. A plan
+    // that points at the runbook beside it is the case this third read is for.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+            "documents": [
+                plan_document("The runbook is `/srv/from/plans/P-1/D-2.md`.\n"),
+                {
+                    "id": "D-2",
+                    "title": "Runbook",
+                    "content": "how to read the plan",
+                    "project": "P-1",
+                    "labels": [],
+                    "location": {"path": "/srv/from/plans/P-1/D-2.md"},
+                    "metadata": {GlobalId::ORIGIN_KEY: "root:D-2"},
+                },
+            ],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "documents": [{
+                "id": "D-2",
+                "title": "Runbook",
+                "content": "how to read the plan",
+                "project": "P-1",
+                "labels": [],
+                "location": {"path": "/srv/into/board/D-2.md"},
+                "metadata": {GlobalId::ORIGIN_KEY: "root:D-2"},
+            }],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (1, 0, 0));
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        "The runbook is `/srv/into/board/D-2.md`.\n"
+    );
+}
+
+/// A document-bearing store whose one document names the project, a task and a second
+/// document — so a copy of it walks the destination at all three levels.
+///
+/// Which level a walk reaches is decided by what the content really names, so a fixture
+/// that named only tasks could not drive the other two arms at all.
+fn naming_every_level() -> Value {
+    json!({
+        "capabilities": {"documents": "native"},
+        "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+        "tasks": [located("A", "Alpha", "/srv/from/plans/P-1/A.md", Some("root:A"))],
+        "documents": [
+            plan_document(
+                "Alpha is `/srv/from/plans/P-1/A.md`, the runbook is \
+                 `/srv/from/plans/P-1/D-2.md`, and it all lives under \
+                 `/srv/from/plans/P-1`.\n",
+            ),
+            {
+                "id": "D-2",
+                "title": "Runbook",
+                "content": "how to read the plan",
+                "project": "P-1",
+                "labels": [],
+                "location": {"path": "/srv/from/plans/P-1/D-2.md"},
+                "metadata": {GlobalId::ORIGIN_KEY: "root:D-2"},
+            },
+        ],
+    })
+}
+
+/// A document copy into a destination that misbehaves, and what it refused with.
+async fn document_refusal(engine: &Engine) -> String {
+    refusal(engine, &many(&["from:D-1"], CopyScope::Documents)).await
+}
+
+#[tokio::test]
+async fn a_destination_that_overruns_its_page_stops_the_walk_for_a_documents_references() {
+    // A document copy asks a destination for a task page in exactly one place — the walk
+    // that finds the counterparts its references name — so this is that walk's own guard.
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Tasks, Fault::OverrunsThePage, Onset::FirstRead).with_documents(),
+    );
+
+    let refused = document_refusal(&engine).await;
+
+    assert!(
+        refused.contains("the source returned 3 rows for a page of at most 2"),
+        "{refused}"
+    );
+    assert!(pages.load(Ordering::Relaxed) <= 3, "the walk stopped early");
+}
+
+#[tokio::test]
+async fn a_destination_that_repeats_its_cursor_stops_the_walk_for_a_documents_references() {
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Tasks, Fault::RepeatsTheCursor, Onset::FirstRead).with_documents(),
+    );
+
+    let refused = document_refusal(&engine).await;
+
+    assert!(
+        refused.contains("the destination was being walked for the records a document's"),
+        "the refusal names what the walk was doing: {refused}"
+    );
+    // One page apiece for the document scan and the project and document arms of the walk,
+    // then the task arm's first page, which is where the repeated cursor is caught. An
+    // unguarded walk would never stop at all.
+    assert!(pages.load(Ordering::Relaxed) <= 4, "the walk stopped early");
+}
+
+#[tokio::test]
+async fn a_destination_that_overruns_its_page_stops_that_walk_at_the_project_level() {
+    // The project arm of the same walk, reached because the content names the project's
+    // own location. It runs before the scan that files the document under a destination
+    // project, so this is the first thing to ask this destination for a project page.
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Projects, Fault::OverrunsThePage, Onset::FirstRead).with_documents(),
+    );
+
+    let refused = document_refusal(&engine).await;
+
+    assert!(
+        refused.contains("the source returned 3 rows for a page of at most 2"),
+        "{refused}"
+    );
+    assert!(pages.load(Ordering::Relaxed) <= 3, "the walk stopped early");
+}
+
+#[tokio::test]
+async fn a_destination_that_overruns_its_page_stops_that_walk_at_the_document_level() {
+    // The document arm, which `Onset::FirstRead` cannot reach: the copy's own scan for
+    // the document's counterpart is the first read of this interface, and the walk is the
+    // second. A fault from the first read would stop at the scan every existing test
+    // already covers, and say nothing about this walk.
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Documents, Fault::OverrunsThePage, Onset::SecondRead).with_documents(),
+    );
+
+    let refused = document_refusal(&engine).await;
+
+    assert!(
+        refused.contains("the source returned 3 rows for a page of at most 2"),
+        "{refused}"
+    );
+    assert!(pages.load(Ordering::Relaxed) <= 4, "the walk stopped early");
+}
+
+#[tokio::test]
+async fn a_source_that_overruns_its_page_stops_the_read_of_a_documents_own_project_members() {
+    // Referent discovery reads the document's project, the tasks filed under it and the
+    // other documents filed under it. A source that misbehaves during any of those has to
+    // stop the copy, not be walked around: this is the task half.
+    let (engine, pages) = from_misbehaving_documentary(
+        Misbehaving::new(At::Tasks, Fault::OverrunsThePage, Onset::FirstRead)
+            .holding_a_project()
+            .with_documents(),
+    );
+
+    let refused = refusal(&engine, &many(&["from:D-1"], CopyScope::Documents)).await;
+
+    assert!(refused.contains("rows for a page of at most"), "{refused}");
+    assert!(pages.load(Ordering::Relaxed) <= 2, "the walk stopped early");
+}
+
+#[tokio::test]
+async fn a_source_that_overruns_its_page_stops_the_read_of_a_documents_own_project_documents() {
+    // And the document half of the same discovery, which is a read this copy did not make
+    // before the references it rewrites existed.
+    let (engine, pages) = from_misbehaving_documentary(
+        Misbehaving::new(At::Documents, Fault::OverrunsThePage, Onset::FirstRead)
+            .holding_a_project()
+            .with_documents(),
+    );
+
+    let refused = refusal(&engine, &many(&["from:D-1"], CopyScope::Documents)).await;
+
+    assert!(refused.contains("rows for a page of at most"), "{refused}");
+    assert!(pages.load(Ordering::Relaxed) <= 3, "the walk stopped early");
+}
+
+#[tokio::test]
+async fn the_reference_figures_are_absent_when_zero_and_read_back_as_zero_when_absent() {
+    // The three figures are additive, and this is the whole of what that has to mean on the
+    // wire: a copy with nothing to report writes no key, output written before they existed
+    // still reads, and a figure that has something to say survives both directions.
+
+    // A report the copy really made, with nothing to say: no `references_*` key at all, so
+    // this document is byte-for-byte what a copy emitted before these figures existed.
+    let engine = pair();
+    let quiet = engine.copy(&one("from:T-1")).await.expect("the copy runs");
+    let emitted = serde_json::to_value(&quiet).expect("a copy report serialises");
+    let keys: Vec<&String> = emitted
+        .as_object()
+        .expect("a report is an object")
+        .keys()
+        .collect();
+    assert_eq!(keys, ["items"], "a figure of zero is absent, not nought");
+
+    // Absent reads back as zero rather than refusing, which is what lets a consumer written
+    // against the older document hand it to this type unchanged.
+    let older: onetaskgraph_core::CopyReport = serde_json::from_value(json!({
+        "items": [{"source": "from:T-1", "action": "created", "destination": "into:T-1"}]
+    }))
+    .expect("a report without the figures still reads");
+    assert_eq!(figures(&older), (0, 0, 0));
+
+    // And a figure with something to say is written, survives a round trip, and keeps the
+    // ambiguous count at or below the unresolved one it is part of.
+    let reported = onetaskgraph_core::CopyReport {
+        items: Vec::new(),
+        references_rewritten: 3,
+        references_unresolved: 2,
+        references_ambiguous: 1,
+    };
+    let wire = serde_json::to_value(&reported).expect("a copy report serialises");
+    assert_eq!(
+        wire,
+        json!({
+            "items": [],
+            "references_rewritten": 3,
+            "references_unresolved": 2,
+            "references_ambiguous": 1,
+        })
+    );
+    let back: onetaskgraph_core::CopyReport = serde_json::from_value(wire).expect("it reads back");
+    assert_eq!(back, reported);
+    assert!(back.references_ambiguous <= back.references_unresolved);
+
+    // One figure of the three having something to say leaves the other two absent, rather
+    // than dragging all three onto the wire together.
+    let partial = onetaskgraph_core::CopyReport {
+        items: Vec::new(),
+        references_rewritten: 2,
+        references_unresolved: 0,
+        references_ambiguous: 0,
+    };
+    assert_eq!(
+        serde_json::to_value(&partial).expect("it serialises"),
+        json!({"items": [], "references_rewritten": 2})
+    );
+}
+
+#[tokio::test]
+async fn a_destination_whose_cursors_cycle_stops_the_walk_for_a_documents_references() {
+    // The cycle `unrepeated` cannot see: two cursors answering each other, so every page
+    // advances and no page is ever the one just asked for. Every other walk in this engine
+    // meets that defect one level up, as a page token handed back unchanged; this one pages
+    // by the destination's own cursor and has no level above it, so its own memory of what
+    // it has already asked for is the only thing between this destination and a copy with
+    // no end.
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Tasks, Fault::CyclesItsCursors, Onset::FirstRead).with_documents(),
+    );
+
+    let refused = document_refusal(&engine).await;
+
+    assert!(
+        refused.contains("returned a cursor it had already been given"),
+        "the refusal says the walk would never end: {refused}"
+    );
+    assert!(
+        refused.contains("a document's references name"),
+        "and names what it was walking for: {refused}"
+    );
+    assert!(
+        pages.load(Ordering::Relaxed) <= 6,
+        "the walk stopped early rather than cycling"
     );
 }
