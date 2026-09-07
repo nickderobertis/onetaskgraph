@@ -1,5 +1,5 @@
 requests 100
-node count 509901
+node count 222516
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -19,21 +19,21 @@ requests per call
     1       0  live origin field cleanup
     1       0  live origin field creation
     8       0  mutation schema introspection
-    1   56100  node-count reconciliation while reading a project's tasks
+    1   20400  node-count reconciliation while reading a project's tasks
     1     200  node-count reconciliation while reading an issue's dependencies
-    1     560  node-count reconciliation while reading one issue
+    1     203  node-count reconciliation while reading one issue
     1    5100  node-count reconciliation while reading one issue's board memberships past the page it came with
     1   10150  node-count reconciliation while reading the board
     1       0  node-count reconciliation while reading the destination repository
-    1   56100  node-count reconciliation while searching this board's issues
+    1   20400  node-count reconciliation while searching this board's issues
     1       0  nominated board lookup
-    2  112200  reading a project's tasks
+    2   40800  reading a project's tasks
     9    1400  reading an issue's dependencies
-    4    2240  reading one issue
+    4     812  reading one issue
     5   40751  reading the board
     2       0  reading the destination repository
     2       0  recording a dependency
-    4  224400  searching this board's issues
+    4   81600  searching this board's issues
     1       0  updating an issue
     3     300  writable field discovery
    10       0  writing a board field

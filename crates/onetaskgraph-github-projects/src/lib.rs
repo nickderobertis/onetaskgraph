@@ -193,6 +193,10 @@
 //! `BOARD_ITEMS_PAGE_SIZE` on the page of an issue's board memberships a read carries.
 //! `$nestedFirst` is spent twice down one path of a board read, so that constant is
 //! effectively squared there, which is why it is the one the limit is most sensitive to.
+//! `BOARD_ITEMS_PAGE_SIZE` is small for a reason of its own, recorded beside it: what a
+//! page of memberships misses is recovered by one further read rather than refused, so it
+//! buys a bound every read pays for at the price of a request only a multi-board issue
+//! pays.
 //!
 //! **`nodeCount` and `cost` are two numbers against two limits, and none of this is about
 //! the second.** `nodeCount` is the one above: the most nodes one query may return,
@@ -358,12 +362,16 @@ const NESTED_PAGE_SIZE: u32 = 50;
 /// is paid for whether or not any issue is on a second board — which is why it is
 /// deliberately far smaller than [`NESTED_PAGE_SIZE`].
 ///
-/// Ten is what it has been, and an issue on ten boards at once is already well past what
-/// a person keeps track of. An issue whose entry for this board sits past this page is not
-/// refused and is not reported as absent: it costs one further request —
-/// [`graphql::ISSUE_BOARD_ITEMS`], resumed from that page's own cursor and walked to
-/// exhaustion — and then resolves exactly as it would have on the page.
-const BOARD_ITEMS_PAGE_SIZE: u32 = 10;
+/// **Three, because what a page misses is now recovered rather than refused**, and the
+/// recovery is what the value is chosen against. An issue whose entry for this board sits
+/// past this page costs one further request — [`graphql::ISSUE_BOARD_ITEMS`], resumed from
+/// that page's own cursor — so the value trades a bound every read pays for a request only
+/// a multi-board issue pays. At one, a deployment whose issues commonly sit on two or more
+/// boards would pay that request *per issue*, which is order N against the one page per
+/// hundred issues a read costs today. At three it is only reached by an issue on four or
+/// more boards at once, which keeps the recovery path exceptional rather than routine for
+/// a plausible deployment.
+const BOARD_ITEMS_PAGE_SIZE: u32 = 3;
 
 pub use github_graphql_node_count::{NodeCountError, Variables};
 

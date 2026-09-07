@@ -57,11 +57,11 @@ fn every_document_this_source_sends_stays_under_githubs_node_limit() {
 #[test]
 fn the_documents_that_reach_an_issue_under_a_page_are_the_ones_with_least_headroom() {
     let count = |document: &str| worst_case_node_count(document).expect("a countable document");
-    assert_eq!(count(graphql::SEARCH_ISSUES), 56_100);
-    assert_eq!(count(graphql::SUB_ISSUES), 56_100);
+    assert_eq!(count(graphql::SEARCH_ISSUES), 20_400);
+    assert_eq!(count(graphql::SUB_ISSUES), 20_400);
     assert_eq!(count(graphql::BOARD), 10_150);
     assert_eq!(count(graphql::ISSUE_BOARD_ITEMS), 5_100);
-    assert_eq!(count(graphql::ISSUE), 560);
+    assert_eq!(count(graphql::ISSUE), 203);
     assert_eq!(count(graphql::ISSUE_DEPENDENCIES), 200);
     assert_eq!(count(graphql::REPOSITORY), 0);
 }
@@ -72,6 +72,15 @@ fn the_documents_that_reach_an_issue_under_a_page_are_the_ones_with_least_headro
 /// time this query traverses to the labels connection, it is requesting up to 2,500,000
 /// possible nodes which exceeds the maximum limit of 500,000"*, and it is what makes the
 /// check above evidence rather than an assertion nobody has watched fail.
+///
+/// **GitHub's figures were for this text under a `BOARD_ITEMS_PAGE_SIZE` of ten**, where
+/// the innermost path alone is the 2,500,000 it quoted and the whole document 2,556,100.
+/// The check counts it under the page sizes this source binds *today*, which is what makes
+/// it a drive of the real verdict rather than of a second calculation, so the numbers
+/// below are that same text at a membership page of three: 750,000 down the innermost path
+/// and 770,400 over the whole document. Both properties GitHub's message demonstrates
+/// survive the smaller page — the document is refused, and the count is the sum rather than
+/// the deepest path.
 const SEARCH_ISSUES_BEFORE_THE_FIX: &str = r#"query($search:String!,$type:SearchType!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
       search(query:$search,type:$type,first:$first,after:$after){
         pageInfo{hasNextPage endCursor}
@@ -103,20 +112,21 @@ fn the_check_reports_a_failure_naming_an_over_limit_document_and_its_count() {
         refusal.contains("searching this board's issues before the fix"),
         "{refusal}"
     );
-    assert!(refusal.contains("2556100"), "{refusal}");
+    assert!(refusal.contains("770400"), "{refusal}");
     assert!(refusal.contains("500000"), "{refusal}");
 }
 
 /// The sum across sibling paths, not the deepest path alone.
 ///
-/// GitHub's message quotes 2,500,000 — the innermost path on its own — and a check that
-/// computed only that would be a different check from the one GitHub runs. This pins the
-/// pre-fix document at the sum of every path, which is the figure the published rules
-/// produce and the one the limit is applied to.
+/// GitHub's message quotes the innermost path on its own — 2,500,000 at the membership
+/// page of ten it was refused under, 750,000 at the three this source binds now — and a
+/// check that computed only that would be a different check from the one GitHub runs. This
+/// pins the pre-fix document at the sum of every path, which is the figure the published
+/// rules produce and the one the limit is applied to.
 #[test]
 fn the_count_sums_sibling_paths_rather_than_taking_the_deepest_one() {
     assert_eq!(
         worst_case_node_count(SEARCH_ISSUES_BEFORE_THE_FIX).expect("a countable document"),
-        2_556_100
+        770_400
     );
 }

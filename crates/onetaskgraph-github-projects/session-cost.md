@@ -178,6 +178,48 @@ sits on one board, so its memberships arrive exhausted and there is nothing to r
 That is what this costs a deployment whose issues sit on one board: nothing. Every other
 row of the record is byte-for-byte what it was.
 
+## The board memberships a read carries, and what shrinking them moved
+
+`BOARD_ITEMS_PAGE_SIZE` — the page of `Issue.projectItems` that rides along on every
+document reaching an issue — was ten and is now **three**. It sits under a page of a
+hundred issues, so it multiplies through `SEARCH_ISSUES`, `SUB_ISSUES` and `ISSUE`, and
+every point of it is paid whether or not any issue is on a second board. What had kept it
+generous was the refusal above; with a miss recoverable, a constant that had to be generous
+can be small.
+
+In the two quantities this file measures offline, again in the record's own frame:
+
+|                | before | after  |
+| -------------- | -----: | -----: |
+| **requests**   |    100 |    100 |
+| **node count** | 509901 | 222516 |
+
+**Not one request either way** — a page size is a bound on what a document may return
+rather than on how many are sent — and **287,385 worst-case nodes gone, 56% of the
+session's whole total.** The whole of it lands in the six rows that carry the fragment or
+ask about it: `searching this board's issues` goes from 224400 nodes over 4 requests to
+81600 over the same 4, `reading a project's tasks` from 112200 to 40800 over 2, and
+`reading one issue` from 2240 to 812 over 4; the three matching reconciliation rows move
+with them, 56100 → 20400, 56100 → 20400 and 560 → 203. Every other row of the record is
+byte-for-byte what it was, and `tests/node_count.rs` pins the documents themselves at
+**56,100 → 20,400** for both the search and the sub-issue read and **560 → 203** for the
+issue read.
+
+**Three is chosen against the recovery read's cost, which is a property of the product
+rather than of this instrument.** At one, a deployment whose issues commonly sit on two or
+more boards would pay that further request *per issue* — order N, against the one page read
+per hundred issues a board-scoped read costs today. At three it is reached only by an issue
+on four or more boards at once, which keeps the recovery path exceptional rather than
+routine for a plausible deployment.
+
+**One observation that is deliberately not a reason.** The estimate in
+`tests/journey/budget.rs` divides by the smallest page size this source binds, which was ten
+and is now three, so shrinking this constant loosens that bound: the estimate rises from 702
+points to 934 even as the session's worst-case nodes fall by more than half. That is real,
+and it is recorded here as an observation. It is **not** what chose the value — an estimate
+deliberately sized high, whose job is to refuse a run rather than to describe one, must not
+be what picks a production constant.
+
 ## The estimate the gate is sized from, and what it is not
 
 `tests/journey/budget.rs` derives what this session will cost each of GitHub's two budgets
