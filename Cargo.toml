@@ -34,7 +34,7 @@ graphql-parser = "0.4.1"
 # document's own text. It is depended on rather than reimplemented: the number that
 # decides whether GitHub will execute a query at all is one arithmetic, and a second
 # spelling of it here would be a second answer nobody reconciles.
-github-graphql-node-count = "0.0.0"
+github-graphql-node-count = "0.0.1"
 schemars = { version = "1.2.2", features = ["chrono04"] }
 secrecy = "0.10.3"
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "native-tls-vendored"] }

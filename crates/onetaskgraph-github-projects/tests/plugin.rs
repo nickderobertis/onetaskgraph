@@ -1104,33 +1104,32 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
 /// The calls a *session* makes that the source itself never does, answered by this board.
 ///
 /// One whole session of the live journey is the source's own reads and writes plus the
-/// journey's — a schema verification, a node-count reconciliation, the board and field
+/// journey's — a schema verification, the reconciliation with GitHub, the board and field
 /// lookups, the residue sweep and the cleanup. Counting what a session costs means driving
 /// all of it, so this board answers all of it. `None` means the document is one of the
 /// source's own and [`answer`] goes on to it.
 ///
 /// **What this stands in for, and what it therefore cannot prove.** The schema
 /// introspection is answered *from the journey's own contract tables*, and the
-/// `rateLimit(dryRun: true)` probe from this workspace's own `worst_case_node_count`, so a
-/// drive against this board agrees with itself by construction. That is the point: GitHub
-/// is the authority on both, and the credentialed drive is where they are really
-/// reconciled. What a drive against this board measures is how many requests a session
-/// makes and what each one carries, which is a property of the journey rather than of
-/// GitHub.
+/// `rateLimit(dryRun: true)` probe from this workspace's own `worst_case_node_count` and
+/// `worst_case_point_cost`, so a drive against this board agrees with itself by
+/// construction. That is the point: GitHub is the authority on all three, and the
+/// credentialed drive is where they are really reconciled — what a board that disagrees
+/// does is
+/// `a_board_that_prices_a_document_differently_makes_the_reconciliation_fail`. What a drive
+/// against this board measures is how many requests a session makes and what each one
+/// carries, which is a property of the journey rather than of GitHub.
 fn answer_a_session_call(
     state: &mut State,
     query: &str,
     variables: &Value,
     input: &Value,
 ) -> Option<Value> {
-    // The node-count probe, which asks about a document without running it. Checked first:
-    // the production document it was joined to is still in the text, and answering that
-    // would run a query GitHub would not have.
+    // The probe, which asks about a document's node count and its price without running
+    // it. Checked first: the production document it was joined to is still in the text, and
+    // answering that would run a query GitHub would not have.
     if let Some(production) = query.strip_probe() {
-        return Some(json!({"rateLimit":{"cost":1,
-            "nodeCount":onetaskgraph_github_projects::worst_case_node_count(&production)
-                .expect("a countable production document"),
-            "limit":FIXTURE_BUDGET_LIMIT,"remaining":FIXTURE_BUDGET_LIMIT}}));
+        return Some(probe_answer(&production, |price| price));
     }
     if query.contains("__type(name:") {
         return Some(introspected(query));
@@ -1218,7 +1217,60 @@ fn leaked(value: &str) -> &'static str {
     Box::leak(value.to_owned().into_boxed_str())
 }
 
-/// The production half of a node-count probe, or `None` when this is not one.
+/// What this board answers a `rateLimit(dryRun: true)` probe about `production` with.
+///
+/// The count and the price are this workspace's own, which is what makes a drive against
+/// this board agree with itself: GitHub is the authority, and the credentialed lane is
+/// where the two are really reconciled. `price` is how a board is made to disagree —
+/// handed back unchanged this is a truthful board, and the test below hands back something
+/// else so the reconciliation is watched refusing rather than assumed to.
+fn probe_answer(production: &str, price: impl Fn(u64) -> u64) -> Value {
+    json!({"rateLimit":{
+        "cost":price(onetaskgraph_github_projects::worst_case_point_cost(production)
+            .expect("a priceable production document")),
+        "nodeCount":onetaskgraph_github_projects::worst_case_node_count(production)
+            .expect("a countable production document"),
+        "limit":FIXTURE_BUDGET_LIMIT,"remaining":FIXTURE_BUDGET_LIMIT}})
+}
+
+/// A board answering a price this workspace does not compute is refused, naming both.
+///
+/// The session drive above answers every probe with what this workspace computes, so it
+/// passes by construction — which is exactly why it is not evidence on its own. This drives
+/// the real verdict, `journey::reconciled`, over this board's own answer with one point
+/// added to it, and asserts the refusal names GitHub's figure and this workspace's alike.
+/// The same shape as `tests/node_count.rs`'s pre-fix document, and the same reason: a check
+/// nobody has watched fail is a check nobody knows works.
+///
+/// The truthful answer is driven too, so what the refusal is about is the price rather than
+/// the shape of the answer.
+#[test]
+fn a_board_that_prices_a_document_differently_makes_the_reconciliation_fail() {
+    let doing = "reading the board";
+    let document = onetaskgraph_github_projects::graphql::BOARD;
+    let ours = onetaskgraph_github_projects::worst_case_point_cost(document)
+        .expect("a priceable production document");
+    journey::reconciled(
+        doing,
+        document,
+        &json!({"data":probe_answer(document, |price| price)}),
+    )
+    .expect("a board answering this workspace's own figures agrees with it");
+    let refusal = journey::reconciled(
+        doing,
+        document,
+        &json!({"data":probe_answer(document, |price| price + 1)}),
+    )
+    .expect_err("a board pricing this document differently is refused");
+    assert!(refusal.contains(doing), "{refusal}");
+    assert!(
+        refusal.contains(&format!("at {} points", ours + 1)),
+        "{refusal}"
+    );
+    assert!(refusal.contains(&format!("computes {ours}")), "{refusal}");
+}
+
+/// The production half of a `rateLimit(dryRun: true)` probe, or `None` when this is not one.
 trait ProbedDocument {
     fn strip_probe(&self) -> Option<String>;
 }
@@ -8147,12 +8199,13 @@ fn answer_a_label_call(
 ///
 /// The credentialed target drives this same journey against GitHub with a credential; this
 /// drives it against the fixture board above with none, and counts what it cost. Two numbers
-/// come out of it and they are the two this crate can know offline: **how many requests the
-/// session makes**, and **the worst-case node count** of the documents it sends. Neither is
-/// rate-limit points. Points are metered by GitHub per call and nothing offline can observe
-/// them; what observes them is the accounting's own per-budget figures, filled from the
-/// rate-limit headers a credentialed session's responses carry, which the required check's
-/// live run prints.
+/// come out of it and they are the two this crate can know offline about a whole session:
+/// **how many requests the session makes**, and **the worst-case node count** of the
+/// documents it sends. Neither is rate-limit points. What is pinned offline in points is a
+/// **per-document** price, one document at a time, in `tests/point_cost.rs`; what a whole
+/// session consumes of the hourly allowance is observed only by the accounting's own
+/// per-budget figures, filled from the `x-ratelimit-*` headers a credentialed session's
+/// responses carry, which the required check's live run prints.
 ///
 /// The introspection batch stays under GitHub's cap, and stays complete.
 ///

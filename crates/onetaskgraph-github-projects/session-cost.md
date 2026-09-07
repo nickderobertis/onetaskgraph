@@ -17,20 +17,36 @@ Two quantities, both taken offline:
   `github-graphql-node-count`.
 
 **Neither of them is rate-limit points.** `cost` is metered by GitHub per call across
-everything one credential does in an hour, and nothing offline can observe it — a document
-well under the node limit says nothing about what GitHub charged for it. What observes
-points is the accounting in `src/accounting.rs`, which fills its per-budget figures from the
-`x-ratelimit-*` headers a credentialed session's own responses carry and prints them at the
-end of every run. That report comes from the live journey in `tests/live.rs`, which runs in
-this repository's required check; it is not something this file's figures can stand in for.
-**No figure in this file is a measurement of points**, and that does not change below.
+everything one credential does in an hour, and a document well under the node limit says
+nothing about what GitHub charged for it — two numbers against two limits. What observes
+what a **session** spends in points is the accounting in `src/accounting.rs`, which fills its
+per-budget figures from the `x-ratelimit-*` headers a credentialed session's own responses
+carry and prints them at the end of every run. That report comes from the live journey in
+`tests/live.rs`, which runs in this repository's required check; it is not something this
+file's figures can stand in for. **No figure in this file is a measurement of points**, and
+that does not change below.
 
-What does change is that one of the reductions recorded here **is** about points, and says
-so: *The board's own `Labels` field* below argues from GitHub's published pricing rule —
-the one `tests/journey/budget.rs` states in full — rather than from anything this file
-measured. Read that section as arithmetic over a rule GitHub publishes, which is a
-different kind of claim from the two quantities above and a weaker one than the accounting's
-observation; the reductions recorded before it claim nothing about points at all.
+**What is computed offline in points is a per-document price, and it lives elsewhere.**
+`worst_case_point_cost` prices one document from its own text under the largest page sizes
+this source can be driven with, and `tests/point_cost.rs` pins every document in
+`graphql::DOCUMENTS` at what it costs, so a shared fragment that gives a reduction back moves
+a number somebody has to change. GitHub is the authority on its own pricing, and the
+credentialed lane asks it: the `rateLimit(dryRun: true)` probe it already sends per read
+document reports GitHub's own `cost`, and the reconciliation fails naming both figures when
+they disagree. **None of that is what a session costs.** It is one document at a time, a
+worst case rather than a bill, and the two quantities this file measures over a whole session
+are still requests and worst-case nodes; what a whole session consumes of the hourly
+allowance is still reported only by a credentialed run's own `x-ratelimit-*` headers.
+
+One of the reductions recorded here **is** about points, and says so: *The board's own
+`Labels` field* below argues from GitHub's published pricing rule — the one
+`tests/journey/budget.rs` states in full — rather than from anything this file measured. Read
+that section as arithmetic over a rule GitHub publishes, which is a different kind of claim
+from the two quantities above and a weaker one than the accounting's observation; the
+reductions recorded before it claim nothing about points at all. What that section argued by
+hand is now a pinned figure: `tests/point_cost.rs` records the board read at **2 points**,
+which is that argument's own "about 2" as the released `github-graphql-node-count` computes
+it.
 
 ## How they are taken
 
@@ -38,9 +54,9 @@ observation; the reductions recorded before it claim nothing about points at all
 `tests/plugin.rs`, drives the whole of `tests/journey` — the same code the credentialed
 target drives — against this crate's loopback fixture board, with no credential and no
 third-party API. The session it measures is the **whole** one: the schema verification, the
-node-count reconciliation, the board and field lookups, every declared capability, this
-run's own cleanup and the end-of-run orphan sweep, beside every request the source itself
-sends.
+reconciliation of every read document's node count and price against GitHub's own, the board
+and field lookups, every declared capability, this run's own cleanup and the end-of-run
+orphan sweep, beside every request the source itself sends.
 `tests/fixtures/session-cost.txt` is the checked-in record of the figures below, and that
 test fails when a session stops costing them.
 

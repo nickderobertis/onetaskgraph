@@ -5,7 +5,9 @@
 //!
 //! The number is `nodeCount`, the most nodes **one query may return**, which GitHub checks
 //! per query and refuses a document above before executing it. It is not `cost`, the
-//! rate-limit points a call spends against an hourly allowance; nothing here is about that.
+//! rate-limit points a call spends against an hourly allowance: that is the sibling file
+//! `tests/point_cost.rs`, which pins every document's price rather than holding one under a
+//! limit, there being no per-call point limit to hold it under.
 
 use onetaskgraph_github_projects::{NODE_COUNT_LIMIT, graphql, worst_case_node_count};
 

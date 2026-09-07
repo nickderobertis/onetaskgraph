@@ -6,8 +6,8 @@ requests per call
     1       0  GET /rate_limit
     2       0  GET /repos/{owner}/{repo}/labels
     1       0  POST /repos/{owner}/{repo}/labels
-    1       0  account allowance after the node-count reconciliation
-    1       0  account allowance before the node-count reconciliation
+    1       0  account allowance after the reconciliation
+    1       0  account allowance before the reconciliation
     6       0  adding an issue to the board
     2     100  board page size probe
     6       0  creating an issue
@@ -19,13 +19,13 @@ requests per call
     1       0  live origin field cleanup
     1       0  live origin field creation
     8       0  mutation schema introspection
-    1   20400  node-count reconciliation while reading a project's tasks
-    1     200  node-count reconciliation while reading an issue's dependencies
-    1     203  node-count reconciliation while reading one issue
-    1    5100  node-count reconciliation while reading one issue's board memberships past the page it came with
-    1   10150  node-count reconciliation while reading the board
-    1       0  node-count reconciliation while reading the destination repository
-    1   20400  node-count reconciliation while searching this board's issues
+    1   20400  node-count and point-cost reconciliation while reading a project's tasks
+    1     200  node-count and point-cost reconciliation while reading an issue's dependencies
+    1     203  node-count and point-cost reconciliation while reading one issue
+    1    5100  node-count and point-cost reconciliation while reading one issue's board memberships past the page it came with
+    1   10150  node-count and point-cost reconciliation while reading the board
+    1       0  node-count and point-cost reconciliation while reading the destination repository
+    1   20400  node-count and point-cost reconciliation while searching this board's issues
     1       0  nominated board lookup
     2   40800  reading a project's tasks
     9    1400  reading an issue's dependencies
