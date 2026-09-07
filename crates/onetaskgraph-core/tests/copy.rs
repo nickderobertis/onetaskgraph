@@ -3050,6 +3050,45 @@ async fn a_reference_reported_as_a_link_is_rewritten_and_not_inside_a_longer_lin
 }
 
 #[tokio::test]
+async fn a_location_before_a_full_stop_is_not_recognised_and_comes_through_byte_for_byte() {
+    // The cost the boundary rule states, put to the engine rather than left in prose. `.`
+    // is not a stop, because `/…/A.md` inside `/…/A.md.bak` is a different file, so a
+    // location written bare before a full stop is not recognised at all: left
+    // byte-for-byte and counted in neither figure, exactly as a reference to another
+    // project's record is. The line above it names the *same* task at the *same*
+    // destination inside backticks and is rewritten, so what declines the second
+    // occurrence is the delimiter beside it and nothing about the correspondence.
+    let authored = "Alpha is at `/srv/from/plans/P-1/A.md`.\n\n\
+                    The same file, written bare, is at /srv/from/plans/P-1/A.md.\n";
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+            "tasks": [located("A", "Alpha", "/srv/from/plans/P-1/A.md", Some("root:A"))],
+            "documents": [plan_document(authored)],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [located("A", "Alpha", "/srv/into/board/A.md", Some("root:A"))],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(
+        figures(&report),
+        (1, 0, 0),
+        "an unrecognised occurrence is not an unresolved one: the figures report what the \
+         copy recognised, not a census of what the document holds"
+    );
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        "Alpha is at `/srv/into/board/A.md`.\n\n\
+         The same file, written bare, is at /srv/from/plans/P-1/A.md.\n"
+    );
+}
+
+#[tokio::test]
 async fn a_document_naming_another_document_of_its_project_is_rewritten_too() {
     // The referent set is the project's record, its tasks and its *other documents*. A plan
     // that points at the runbook beside it is the case this third read is for.

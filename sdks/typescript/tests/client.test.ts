@@ -578,8 +578,6 @@ test("the reference figures round-trip absent, zero and non-zero through the gen
   expect(absent.references_unresolved).toBe(0);
   expect(absent.references_ambiguous).toBe(0);
 
-  // And the document a copy that recognised nothing really emits — no figure at all — is
-  // valid without them, which is what "additive" has to mean to a consumer.
   const validate = new Ajv2020({ strict: false }).compile(schema);
   expect(
     validate({ items: [{ source: "work:D-1", action: "created", destination: "notes:D-1" }] }),
@@ -598,14 +596,11 @@ test("the reference figures round-trip absent, zero and non-zero through the gen
     reported.references_unresolved ?? 0,
   );
 
-  // One figure having something to say leaves the other two absent, exactly as the binary
-  // writes them.
   const partial: Record<string, unknown> = { items: [], references_rewritten: 2 };
   expect(validate(partial)).toBe(true);
   expect(withDefaults(partial)).toBe(true);
   expect(partial.references_unresolved).toBe(0);
   expect(partial.references_ambiguous).toBe(0);
 
-  // A figure the contract cannot hold is refused rather than carried.
   expect(validate({ items: [], references_rewritten: -1 })).toBe(false);
 });

@@ -140,21 +140,10 @@ impl MatchBy {
 pub struct CopyReport {
     /// One entry per item the copy considered, in the order it considered them.
     pub items: Vec<CopyOutcome>,
-    // Three flat fields rather than one nested object, and the reason is the generated
-    // SDKs rather than taste: schemars writes a non-required field's whole default into
-    // the emitted schema, and for a field whose type is a model that default is an object,
-    // which the Python generator renders as a dict literal its own annotation does not
-    // admit — `ty` refuses it, and the enforcement that refuses it is not ours to relax. A
-    // scalar default is a number, and every generator renders one as a number.
-    //
-    // Each carries `skip_serializing_if` so a figure of zero is *absent* from the machine
-    // output rather than written as `0`, and `serde(default)` so absence reads back as
-    // zero. `#[schemars(!skip_serializing_if)]` keeps the emitted schema's `"default": 0`
-    // that the skip would otherwise remove — without it a generator has no way to know what
-    // an absent figure means, and both SDKs would model it as null instead of nought. The
-    // schema and the wire then say the same thing: not required, and zero when it is not
-    // there. Kept out of the doc comments below because those are what the SDKs publish to
-    // a caller, and this is about how they are built.
+    // Three flat scalars rather than one nested object, and a `!skip_serializing_if` beside
+    // every skip: both are load-bearing for the generated SDKs rather than matters of
+    // taste, and AGENTS.md's note on what a copied document's references are pointed at is
+    // where that reasoning lives.
     /// Reference occurrences the copy rewrote to the destination's own location for the
     /// record they name.
     ///
@@ -2181,30 +2170,31 @@ fn table_for(referents: &[Referent], counterparts: &Counterparts) -> Vec<(String
     table
 }
 
-/// Whether `content` holds `location` at least once as a whole reference.
+/// Whether `content` holds `location` at least once, stopped on both sides.
 fn holds(content: &str, location: &str) -> bool {
-    (0..content.len()).any(|at| whole_at(content, at, location))
+    (0..content.len()).any(|at| delimited_at(content, at, location))
 }
 
-/// Whether `location` occurs at `at` **as a whole reference** rather than as part of a
-/// longer location-like string.
+/// Whether `location` occurs at `at` **stopped on both sides** — by
+/// [`stops_a_location`], or by the end of the content — rather than as part of a longer
+/// location-like string.
 ///
 /// A location string occurring inside a longer one is a different string naming a
 /// different record: `/…/tasks/p/t.md` must not be rewritten inside `/…/tasks/p/t.md.bak`,
 /// `https://example.invalid/1` must not be rewritten inside `https://example.invalid/12`,
 /// and a project's location that is a directory prefix of a task's must not be rewritten
-/// inside that task's.
-fn whole_at(content: &str, at: usize, location: &str) -> bool {
+/// inside that task's. What deciding it this way costs is stated on [`stops_a_location`].
+fn delimited_at(content: &str, at: usize, location: &str) -> bool {
     if !content.is_char_boundary(at) || !content[at..].starts_with(location) {
         return false;
     }
     let before = content[..at].chars().next_back();
     let after = content[at + location.len()..].chars().next();
-    boundary(before) && boundary(after)
+    stops_a_location(before) && stops_a_location(after)
 }
 
-/// Whether a character ends a path or a link, so a location string next to one is the
-/// whole of that location.
+/// Whether a character cannot continue a path or a link, so a location string beside one
+/// ends there.
 ///
 /// Stated as what *stops* a location rather than as what one may contain, because the
 /// second list is unbounded — a path may hold very nearly any byte, and a URL more. Every
@@ -2212,7 +2202,17 @@ fn whole_at(content: &str, at: usize, location: &str) -> bool {
 /// the end of the content counts as a stop. The set is what the artifact this exists for
 /// really wraps a bare path in — a backtick in a table cell — plus the delimiters prose
 /// and Markdown put next to one.
-fn boundary(character: Option<char>) -> bool {
+///
+/// **Sentence punctuation is deliberately absent, and that is a stated cost rather than an
+/// oversight.** `.`, `!`, `?` and `:` each equally *continue* a real location — `/…/t.md`
+/// and `/…/t.md.bak` are two files, `…/1` and `…/1?q=2` two pages — so admitting them as
+/// stops would rewrite one record's location into another's. The price is that a location
+/// written bare at the end of a sentence is not recognised at all: its text is left
+/// byte-for-byte and it is counted in neither figure, exactly as a reference to another
+/// project's record is. That is the direction to be wrong in, because this edits the
+/// content of somebody's document, where a confidently wrong rewrite is worse than one
+/// that never happens.
+fn stops_a_location(character: Option<char>) -> bool {
     match character {
         None => true,
         Some(character) => character.is_whitespace() || "`\"'()[]{}<>|,;".contains(character),
@@ -2231,7 +2231,7 @@ fn substitute(content: &str, table: &[(String, Resolution)]) -> (String, Counted
     while at < content.len() {
         if let Some((location, resolution)) = table
             .iter()
-            .find(|(location, _)| whole_at(content, at, location))
+            .find(|(location, _)| delimited_at(content, at, location))
         {
             match resolution {
                 Resolution::Rewrite(there) => {

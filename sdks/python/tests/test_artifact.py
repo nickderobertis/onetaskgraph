@@ -150,8 +150,6 @@ def test_the_reference_figures_round_trip_absent_zero_and_nonzero() -> None:
         absent.references_ambiguous,
     ) == (0, 0, 0)
 
-    # And zero goes back out absent, so a document this model round-trips is the one the
-    # binary would have written.
     assert absent.model_dump(mode="json", exclude_defaults=True) == {
         "items": [{"source": "work:D-1", "action": "created", "destination": "notes:D-1"}]
     }
@@ -178,8 +176,6 @@ def test_the_reference_figures_round_trip_absent_zero_and_nonzero() -> None:
     }
     assert CopyReport.model_validate(dumped) == reported
 
-    # One figure having something to say leaves the other two absent, exactly as the binary
-    # writes them.
     partial = CopyReport.model_validate({"items": [], "references_rewritten": 2})
     assert (partial.references_unresolved, partial.references_ambiguous) == (0, 0)
     assert partial.model_dump(mode="json", exclude_defaults=True) == {
