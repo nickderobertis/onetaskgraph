@@ -33,6 +33,15 @@ mod journey;
 #[allow(dead_code)]
 mod lane;
 
+// The half of this board that answers the journey's own calls rather than board state — the
+// probe, the introspection and the allowance read. It lives beside this file because
+// `tests/reconciliation_gate.rs` answers those same calls with the same code, against a
+// board configured to report a price this workspace does not compute.
+#[allow(dead_code)]
+mod board;
+
+use board::{FIXTURE_BUDGET_LIMIT, Pricing, ample_allowance};
+
 struct Secrets;
 impl SecretResolver for Secrets {
     fn get(&self, var: &str) -> Option<SecretString> {
@@ -647,16 +656,6 @@ impl Fixture {
     }
 }
 
-/// The whole allowance this board reports in its own rate-limit headers.
-///
-/// **Deliberately not GitHub's published hourly figure, and that is what makes the
-/// assertions below evidence.** A fixture that mirrored the real allowance would restate
-/// GitHub's contract with nothing reconciling the two, and — worse — a report that printed
-/// a number both sides already knew would pass whether or not it had read a single header.
-/// This one is the board's own, so the only way the report can carry it is by having read
-/// what this board sent.
-const FIXTURE_BUDGET_LIMIT: u64 = 4_321;
-
 fn board(items: Vec<Item>) -> Fixture {
     board_with(items, true, true)
 }
@@ -1114,29 +1113,24 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
 /// `rateLimit(dryRun: true)` probe from this workspace's own `worst_case_node_count` and
 /// `worst_case_point_cost`, so a drive against this board agrees with itself by
 /// construction. That is the point: GitHub is the authority on all three, and the
-/// credentialed drive is where they are really reconciled — what a board that disagrees
-/// does is
-/// `a_board_that_prices_a_document_differently_makes_the_reconciliation_fail`. What a drive
-/// against this board measures is how many requests a session makes and what each one
-/// carries, which is a property of the journey rather than of GitHub.
+/// credentialed drive is where they are really reconciled — what a board that reports
+/// something else does to a run is `tests/reconciliation_gate.rs`, which points this same
+/// journey at the same answers under [`Pricing::Overstating`]. What a drive against this
+/// board measures is how many requests a session makes and what each one carries, which is a
+/// property of the journey rather than of GitHub.
 fn answer_a_session_call(
     state: &mut State,
     query: &str,
     variables: &Value,
     input: &Value,
 ) -> Option<Value> {
-    // The probe, which asks about a document's node count and its price without running
-    // it. Checked first: the production document it was joined to is still in the text, and
-    // answering that would run a query GitHub would not have.
-    if let Some(production) = query.strip_probe() {
-        return Some(probe_answer(&production, |price| price));
-    }
-    if query.contains("__type(name:") {
-        return Some(introspected(query));
-    }
-    if query.contains("rateLimit{") {
-        return Some(json!({"rateLimit":{"cost":1,"limit":FIXTURE_BUDGET_LIMIT,
-            "remaining":FIXTURE_BUDGET_LIMIT,"resetAt":"2026-01-01T00:00:00Z"}}));
+    // The probe, the introspection and the allowance read, answered from this workspace's
+    // own tables and calculations rather than from anything this board holds. First, because
+    // the production document a probe was joined to is still in the text and answering that
+    // would run a query GitHub would not have. This board prices as this workspace computes;
+    // `tests/reconciliation_gate.rs` is the same code answering something else.
+    if let Some(answered) = board::answer_a_stateless_session_call(query, Pricing::AsComputed) {
+        return Some(answered);
     }
     // Narrowed to the lane's own board lookup, which selects the id and nothing else:
     // `graphql::BOARD` reaches `repositoryOwner` too, and answering it here would hand the
@@ -1215,129 +1209,6 @@ fn answer_a_session_call(
 /// one leak per label of one test run.
 fn leaked(value: &str) -> &'static str {
     Box::leak(value.to_owned().into_boxed_str())
-}
-
-/// What this board answers a `rateLimit(dryRun: true)` probe about `production` with.
-///
-/// The count and the price are this workspace's own, which is what makes a drive against
-/// this board agree with itself: GitHub is the authority, and the credentialed lane is
-/// where the two are really reconciled. `price` is how a board is made to disagree —
-/// handed back unchanged this is a truthful board, and the test below hands back something
-/// else so the reconciliation is watched refusing rather than assumed to.
-fn probe_answer(production: &str, price: impl Fn(u64) -> u64) -> Value {
-    json!({"rateLimit":{
-        "cost":price(onetaskgraph_github_projects::worst_case_point_cost(production)
-            .expect("a priceable production document")),
-        "nodeCount":onetaskgraph_github_projects::worst_case_node_count(production)
-            .expect("a countable production document"),
-        "limit":FIXTURE_BUDGET_LIMIT,"remaining":FIXTURE_BUDGET_LIMIT}})
-}
-
-/// A board answering a price this workspace does not compute is refused, naming both.
-///
-/// The session drive above answers every probe with what this workspace computes, so it
-/// passes by construction — which is exactly why it is not evidence on its own. This drives
-/// the real verdict, `journey::reconciled`, over this board's own answer with one point
-/// added to it, and asserts the refusal names GitHub's figure and this workspace's alike.
-/// The same shape as `tests/node_count.rs`'s pre-fix document, and the same reason: a check
-/// nobody has watched fail is a check nobody knows works.
-///
-/// The truthful answer is driven too, so what the refusal is about is the price rather than
-/// the shape of the answer.
-#[test]
-fn a_board_that_prices_a_document_differently_makes_the_reconciliation_fail() {
-    let doing = "reading the board";
-    let document = onetaskgraph_github_projects::graphql::BOARD;
-    let ours = onetaskgraph_github_projects::worst_case_point_cost(document)
-        .expect("a priceable production document");
-    journey::reconciled(
-        doing,
-        document,
-        &json!({"data":probe_answer(document, |price| price)}),
-    )
-    .expect("a board answering this workspace's own figures agrees with it");
-    let refusal = journey::reconciled(
-        doing,
-        document,
-        &json!({"data":probe_answer(document, |price| price + 1)}),
-    )
-    .expect_err("a board pricing this document differently is refused");
-    assert!(refusal.contains(doing), "{refusal}");
-    assert!(
-        refusal.contains(&format!("at {} points", ours + 1)),
-        "{refusal}"
-    );
-    assert!(refusal.contains(&format!("computes {ours}")), "{refusal}");
-}
-
-/// The production half of a `rateLimit(dryRun: true)` probe, or `None` when this is not one.
-trait ProbedDocument {
-    fn strip_probe(&self) -> Option<String>;
-}
-
-impl ProbedDocument for str {
-    fn strip_probe(&self) -> Option<String> {
-        const PROBE: &str = "rateLimit(dryRun:true){cost nodeCount limit remaining} ";
-        self.contains(PROBE).then(|| self.replace(PROBE, ""))
-    }
-}
-
-/// GitHub's mutation surface, as the journey's own contract tables spell it.
-///
-/// The journey asks for the whole contract in one document, as one aliased `__type` root
-/// field per type, so this answers every alias that document carries rather than one type.
-fn introspected(query: &str) -> Value {
-    let mut answered = serde_json::Map::new();
-    for selected in query.split("__type(name:\"").skip(1) {
-        let name = selected
-            .split_once('"')
-            .map(|(name, _)| name)
-            .expect("an introspected type name");
-        answered.insert(name.to_owned(), introspected_type_members(name));
-    }
-    assert!(
-        !answered.is_empty(),
-        "an introspection document selecting no type: {query}"
-    );
-    Value::Object(answered)
-}
-
-/// One introspected type's members, as the selection for its kind spells them.
-fn introspected_type_members(name: &str) -> Value {
-    if name == "Mutation" {
-        let fields = journey::MUTATION_CONTRACT
-            .iter()
-            .map(|(field, input, payload)| {
-                json!({"name":field,"type":{"name":null,"ofType":{"name":payload}},
-                       "args":[{"name":"input","type":{"name":null,"ofType":{"name":input}}}]})
-            })
-            .collect::<Vec<_>>();
-        return json!({ "fields": fields });
-    }
-    let (_, input, expected) = journey::MUTATION_TYPES
-        .iter()
-        .find(|(held, _, _)| *held == name)
-        .unwrap_or_else(|| panic!("the journey asked about a type it does not name: {name}"));
-    let declared = journey::mutation_field_types(name);
-    let mut fields = declared
-        .iter()
-        .map(|(field, signature)| json!({"name":field,"type":introspected_type(signature)}))
-        .collect::<Vec<_>>();
-    for field in *expected {
-        if !declared.iter().any(|(held, _)| held == field) {
-            fields.push(json!({"name":field,"type":introspected_type("String")}));
-        }
-    }
-    let selection = if *input { "inputFields" } else { "fields" };
-    json!({ selection: fields })
-}
-
-/// One type signature, in the nesting GitHub's introspection answers it in.
-fn introspected_type(signature: &str) -> Value {
-    match signature.strip_suffix('!') {
-        Some(inner) => json!({"kind":"NON_NULL","name":null,"ofType":introspected_type(inner)}),
-        None => json!({"kind":"SCALAR","name":signature,"ofType":null}),
-    }
 }
 
 fn is_mutation(query: &str) -> bool {
@@ -8066,7 +7937,7 @@ fn label_endpoints(state: &Arc<Mutex<State>>) -> String {
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("fixture connection");
-            let (method, path, body) = read_http_request(&mut stream);
+            let (method, path, body) = board::read_http_request(&mut stream);
             let (status, payload) = answer_a_label_call(&served, &method, &path, body.as_ref());
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
@@ -8082,63 +7953,6 @@ fn label_endpoints(state: &Arc<Mutex<State>>) -> String {
         }
     });
     host
-}
-
-/// What GitHub's rate-limit endpoint answers for an account with room to spare.
-///
-/// The shape is built by `journey::budget::documented_answer` from the names pinned in
-/// `fixtures/rate-limits.json`, so this board cannot come to answer a shape the precondition
-/// no longer reads. The figures are this board's rather than GitHub's published ones, for
-/// the reason [`FIXTURE_BUDGET_LIMIT`] is: a fixture that restated the real allowance would
-/// let a gate pass without ever having read what it was sent.
-fn ample_allowance() -> Value {
-    journey::budget::documented_answer(
-        FIXTURE_BUDGET_LIMIT,
-        FIXTURE_BUDGET_LIMIT,
-        FIXTURE_BUDGET_LIMIT,
-        ALLOWANCE_RESETS_AT,
-    )
-}
-
-/// The UTC epoch second this board says its budgets come back.
-///
-/// One fixed number, so a refusal naming it can be asserted on rather than approximated.
-const ALLOWANCE_RESETS_AT: u64 = 1_775_000_000;
-
-/// One REST request: its method, its path with any query string, and its body if it sent one.
-fn read_http_request(stream: &mut impl Read) -> (String, String, Option<Value>) {
-    let mut bytes = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    let header_end = loop {
-        let count = stream.read(&mut chunk).expect("a fixture request");
-        assert!(count > 0, "the request ended before its headers");
-        bytes.extend_from_slice(&chunk[..count]);
-        if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-            break end + 4;
-        }
-    };
-    let headers = String::from_utf8_lossy(&bytes[..header_end]).into_owned();
-    assert!(headers.contains("authorization: Bearer test-token"));
-    let mut request_line = headers.lines().next().expect("a request line").split(' ');
-    let method = request_line.next().expect("a method").to_owned();
-    let path = request_line.next().expect("a path").to_owned();
-    let length = headers
-        .lines()
-        .find_map(|line| {
-            line.to_ascii_lowercase()
-                .strip_prefix("content-length: ")
-                .and_then(|value| value.parse::<usize>().ok())
-        })
-        .unwrap_or_default();
-    while bytes.len() - header_end < length {
-        let count = stream.read(&mut chunk).expect("a request body");
-        assert!(count > 0, "the request ended before its declared body");
-        bytes.extend_from_slice(&chunk[..count]);
-    }
-    let body = (length > 0).then(|| {
-        serde_json::from_slice(&bytes[header_end..header_end + length]).expect("body JSON")
-    });
-    (method, path, body)
 }
 
 /// GitHub's three label endpoints, as far as one repository of this board needs them.

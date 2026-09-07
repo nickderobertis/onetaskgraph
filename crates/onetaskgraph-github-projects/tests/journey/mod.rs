@@ -298,11 +298,12 @@ async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String
 /// What GitHub's own answer about one document says against this workspace's figures, or
 /// the failure it is.
 ///
-/// One place the verdict is spelled, so the reconciliation above and the case in
-/// `tests/plugin.rs` that watches it refuse a mispriced board are the same check over
-/// different answers rather than two checks that could come to differ. Both of this
-/// workspace's figures are computed here from the document's own text, so what a caller
-/// supplies is GitHub's half alone.
+/// One place the verdict is spelled, and one caller: the loop above, whichever API it is
+/// pointed at. Both of this workspace's figures are computed here from the document's own
+/// text, so what reaches it from outside is GitHub's half alone — read off the response, so
+/// a board or an API that answers something else is what makes this refuse.
+/// `tests/reconciliation_gate.rs` is that being watched happen, against a loopback board
+/// configured to report a price this workspace does not compute.
 ///
 /// **A `dryRun` probe's `cost` is what the probed document *would* spend, not what the call
 /// carrying the probe spent.** That is why it is read here, at the reconciliation, and
@@ -315,7 +316,7 @@ async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String
 /// Returns the failure naming both figures when GitHub's node count or GitHub's price
 /// disagrees with this workspace's, when the answer carries neither, or when the document
 /// cannot be counted or priced at all.
-pub fn reconciled(doing: &str, document: &str, answer: &Value) -> Result<(), String> {
+fn reconciled(doing: &str, document: &str, answer: &Value) -> Result<(), String> {
     let ours_nodes = worst_case_node_count(document)
         .map_err(|error| format!("the document for {doing} could not be counted: {error}"))?;
     let ours_points = worst_case_point_cost(document)
