@@ -168,6 +168,15 @@ pub struct CopyReport {
     /// because the correspondence could not be established.
     #[serde(default)]
     pub references_unresolved: u64,
+    /// How many of [`Self::references_unresolved`] were left alone because the
+    /// correspondence was **ambiguous** rather than merely absent. A sub-count, never
+    /// larger than it.
+    ///
+    /// Split out because the two mean different things to a reader. A reference with no
+    /// counterpart is ordinary and expected under the bound above — the design working. An
+    /// ambiguous one says the destination holds duplicate records for one work item, or the
+    /// source reports one location for two records, and re-running the copy will never
+    /// clear it.
     // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this
     // restates at a new site the justification recorded at `Task::url` and
     // `Capabilities.max_page_size` in the api crate: this is a serialized contract, and
@@ -181,15 +190,6 @@ pub struct CopyReport {
     // branch, and `Resolution` above has no variant that counts one without the other. That
     // a figure is a *sub-count reported beside its total* is the contract this was given;
     // making the two disjoint would remove the relation and is the contract owner's call.
-    /// How many of [`Self::references_unresolved`] were left alone because the
-    /// correspondence was **ambiguous** rather than merely absent. A sub-count, never
-    /// larger than it.
-    ///
-    /// Split out because the two mean different things to a reader. A reference with no
-    /// counterpart is ordinary and expected under the bound above — the design working. An
-    /// ambiguous one says the destination holds duplicate records for one work item, or the
-    /// source reports one location for two records, and re-running the copy will never
-    /// clear it.
     #[serde(default)]
     pub references_ambiguous: u64,
 }

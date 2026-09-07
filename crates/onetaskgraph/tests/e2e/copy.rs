@@ -2564,6 +2564,17 @@ fn reference_line(rendered: &str) -> String {
         .to_owned()
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] These two reach nothing this
+// rule guards: no external service, no credential, no container — three `local-md` roots
+// under the test's own temporary tree, and about a fifth of a second each. What they cost
+// is what every journey in this file costs, because AGENTS.md requires each journey this
+// repository owes to drive the compiled binary as a subprocess from this one suite, whose
+// table `scripts/check-journey-matrix.sh` reconciles against the registry. Giving these two
+// an edge of their own would put half the copy journeys behind a project the inventory does
+// not name, for a selection this repository already decided: the `onetaskgraph` project is
+// the binary crate, and everything reachable from a plugin selecting it is AGENTS.md's
+// "The four selections the project graph owes", which `scripts/check-affected-selection.sh`
+// proves against real Nx.
 #[test]
 fn a_copied_document_names_the_destinations_own_records_across_a_one_level_fan_out() {
     // The fan-out the two keys resolve: the project and its tasks are copied out of
@@ -2677,6 +2688,17 @@ fn a_copied_document_names_the_destinations_own_records_across_a_one_level_fan_o
     assert_eq!(body(&sandbox, "board:D-1"), landed);
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] These two reach nothing this
+// rule guards: no external service, no credential, no container — three `local-md` roots
+// under the test's own temporary tree, and about a fifth of a second each. What they cost
+// is what every journey in this file costs, because AGENTS.md requires each journey this
+// repository owes to drive the compiled binary as a subprocess from this one suite, whose
+// table `scripts/check-journey-matrix.sh` reconciles against the registry. Giving these two
+// an edge of their own would put half the copy journeys behind a project the inventory does
+// not name, for a selection this repository already decided: the `onetaskgraph` project is
+// the binary crate, and everything reachable from a plugin selecting it is AGENTS.md's
+// "The four selections the project graph owes", which `scripts/check-affected-selection.sh`
+// proves against real Nx.
 #[test]
 fn a_copied_document_leaves_a_two_hop_chain_byte_for_byte_and_says_it_was_unresolved() {
     // The chain the two keys cannot reach: the records travel `authoring` → `staging` →

@@ -2374,7 +2374,7 @@ async fn a_well_behaved_copy_still_walks_every_page_of_every_loop_it_has() {
 // the destination held its own record for every one of them the whole time. What follows
 // drives that at the engine's own boundary; the same behaviour driven the way a user drives
 // it, against destinations that outlive one invocation, is in
-// `crates/onetaskgraph/tests/e2e/document_store.rs`.
+// `crates/onetaskgraph/tests/e2e/copy.rs`.
 // ---------------------------------------------------------------------------------------
 
 /// One record of a store, with the location its source reports and the origin it records.
