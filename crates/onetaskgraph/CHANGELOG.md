@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.25](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.24...v0.2.25) - 2026-09-07
+
+### Performance
+
+- *(github-projects)* stop selecting the board's built-in Labels field value ([#590](https://github.com/nickderobertis/onetaskgraph/pull/590))
+
 ## [0.2.22](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.21...v0.2.22) - 2026-09-04
 
 ### Added

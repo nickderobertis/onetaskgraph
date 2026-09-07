@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.25](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.24...onetaskgraph-github-projects-v0.2.25) - 2026-09-07
+
+### Performance
+
+- *(github-projects)* recover an issue whose board entry is past the first membership page, and shrink that page ([#670](https://github.com/nickderobertis/onetaskgraph/pull/670))
+- *(github-projects)* stop selecting the board's built-in Labels field value ([#590](https://github.com/nickderobertis/onetaskgraph/pull/590))
+
 ## [0.2.24](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.23...onetaskgraph-github-projects-v0.2.24) - 2026-09-06
 
 ### Fixed
