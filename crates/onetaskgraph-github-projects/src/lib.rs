@@ -198,11 +198,23 @@
 //! buys a bound every read pays for at the price of a request only a multi-board issue
 //! pays.
 //!
-//! **`nodeCount` and `cost` are two numbers against two limits, and none of this is about
-//! the second.** `nodeCount` is the one above: the most nodes one query may return,
-//! checked per query. `cost` is rate-limit points, metered per hour across everything one
-//! credential does; it is what the two limiters [`Limiter`] tells apart meter, and a
-//! document under [`NODE_COUNT_LIMIT`] says nothing about it.
+//! **`nodeCount` and `cost` are two numbers against two limits, and both are computed
+//! offline here — per document, one document at a time.** `nodeCount` is the one above: the
+//! most nodes one query may return, checked per query and bounded by [`NODE_COUNT_LIMIT`].
+//! `cost` is rate-limit points, metered per hour across everything one credential does; it
+//! is what the two limiters [`Limiter`] tells apart meter, and a document under
+//! [`NODE_COUNT_LIMIT`] still says nothing about its price. [`worst_case_point_cost`] is
+//! that second number, and `tests/point_cost.rs` pins every document in
+//! [`graphql::DOCUMENTS`] at what it costs — there being no per-call point ceiling to hold
+//! one under, the pin itself is the check. The credentialed lane reconciles both figures
+//! against GitHub's own, off a probe it already sends.
+//!
+//! **What is pinned that way is a per-document price and never a session's.** The record in
+//! `session-cost.md` measures the two quantities a whole session can be counted in offline —
+//! **requests** and **worst-case nodes** — and neither is points. What one whole session
+//! consumes of the hourly point allowance is observable only from a credentialed run's own
+//! `x-ratelimit-*` headers, which is what [`accounting`] fills its per-budget figures from
+//! and what `tests/live.rs` prints at the end of every run.
 //!
 //! [node-limits]: https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api
 //!
@@ -281,19 +293,23 @@
 //! above records the gate's own read like any other request, and
 //! [`accounting::Session::report`] prints the estimate beside what the session really spent.
 //!
-//! **GitHub is the authority on node count, and the credentialed lane goes and asks it.**
-//! Everything above computes `nodeCount` offline from a document's own text, which is what
-//! lets it run on every platform and on a pull request from a fork with no credential — and
-//! that is what actually stops a regression merging. But an offline arithmetic can only
-//! ever agree with itself: if GitHub changes its rules, this workspace goes on computing
-//! the old answer and nothing notices. So `tests/live.rs` reconciles the two. GitHub's
-//! schema exposes `rateLimit(dryRun: true)`, whose `nodeCount` is *"the maximum number of
-//! nodes this query may return"* for a document **without executing it**, and the lane asks
-//! it for every query document this source sends, under the largest bindings this source
-//! sends, and fails when GitHub's number and [`worst_case_node_count`] disagree. It records
-//! what those calls reported about the account's own allowance, because whether asking is
-//! free is a thing to observe rather than to assume. Two quantities, not one:
-//! [`NODE_COUNT_LIMIT`] bounds `nodeCount`, and the accounting above measures `cost`.
+//! **GitHub is the authority on both of its own numbers, and the credentialed lane goes and
+//! asks it.** Everything above computes `nodeCount` and `cost` offline from a document's own
+//! text, which is what lets it run on every platform and on a pull request from a fork with
+//! no credential — and that is what actually stops a regression merging. But an offline
+//! arithmetic can only ever agree with itself: if GitHub changes its rules, this workspace
+//! goes on computing the old answer and nothing notices. So `tests/live.rs` reconciles them.
+//! GitHub's schema exposes `rateLimit(dryRun: true)`, whose `nodeCount` is *"the maximum
+//! number of nodes this query may return"* and whose `cost` is what that document would
+//! spend, both for a document **without executing it**, and the lane asks it for every query
+//! document this source sends, under the largest bindings this source sends, and fails when
+//! GitHub's figure and [`worst_case_node_count`] or [`worst_case_point_cost`] disagree. A
+//! mutation is skipped, because `rateLimit` is a field of `Query` and cannot be asked about
+//! one; the offline pins still cover it. It records what those calls reported about the
+//! account's own allowance, because whether asking is free is a thing to observe rather than
+//! to assume. Two quantities, not one: [`NODE_COUNT_LIMIT`] bounds `nodeCount` per query,
+//! and `cost` is metered against an hourly allowance the accounting above reads off a
+//! credentialed run's own response headers.
 //!
 //! **GitHub has two rate limiters and this source is refused by both, so nothing here
 //! treats them as one thing.** The primary budget is the hourly allowance `gh api
@@ -341,9 +357,18 @@ pub const MAX_PAGE_SIZE: u32 = 100;
 ///
 /// This is `nodeCount`, the maximum number of nodes *one query may return*. It is not
 /// `cost`, the rate-limit points a call spends against an hourly allowance shared by
-/// everything the credential does. Two numbers, two limits; nothing here is about the
-/// second. The module section on the three ways this source reaches an item says how the
-/// count is arrived at, and which of the page sizes below decide it.
+/// everything the credential does — two numbers against two limits, and this constant
+/// bounds only the first. The second is computed offline too, per document:
+/// [`worst_case_point_cost`], pinned for every document in [`graphql::DOCUMENTS`] by
+/// `tests/point_cost.rs`, and reconciled against GitHub's own `cost` by the credentialed
+/// lane. There is no constant like this one to hold a price under, because points are an
+/// hourly allowance rather than a per-call bound.
+///
+/// Neither is a session's price. What `session-cost.md` records of a whole session is its
+/// **requests** and its **worst-case nodes**; what a whole session spends in points is
+/// reported only by a credentialed run's own `x-ratelimit-*` headers, through
+/// [`accounting`]. The module section on the three ways this source reaches an item says how
+/// the count is arrived at, and which of the page sizes below decide it.
 pub const NODE_COUNT_LIMIT: u64 = github_graphql_node_count::NODE_LIMIT;
 
 /// Nested connection size for the connections that hang off one item.
@@ -406,6 +431,28 @@ pub fn largest_page_sizes() -> Variables {
 /// a defect in the document rather than a number.
 pub fn worst_case_node_count(document: &str) -> Result<u64, NodeCountError> {
     node_count(document, &largest_page_sizes())
+}
+
+/// The most rate-limit points one call of `document` could spend, by GitHub's published
+/// rules.
+///
+/// Computed offline from the document's own text under [`largest_page_sizes`] — no
+/// network, no credential and no schema — by
+/// [`github_graphql_node_count::point_cost`], which is where the rules themselves live.
+/// This is `cost`, metered **per hour** against the allowance one credential shares across
+/// everything it does; it is not `nodeCount`, which is [`worst_case_node_count`] and is
+/// bounded per query by [`NODE_COUNT_LIMIT`]. There is no per-call ceiling to hold this
+/// under, so what `tests/point_cost.rs` does with it is pin every document in
+/// [`graphql::DOCUMENTS`] at what it costs, and the credentialed lane reconciles those
+/// figures against GitHub's own reported `cost`.
+///
+/// # Errors
+///
+/// Returns the calculation's own [`NodeCountError`] when `document` does not parse, holds
+/// no single operation, or binds a page size this source does not name — each of which is
+/// a defect in the document rather than a number.
+pub fn worst_case_point_cost(document: &str) -> Result<u64, NodeCountError> {
+    github_graphql_node_count::point_cost(document, &largest_page_sizes())
 }
 
 /// The most nodes `document` could be asked to return under `variables`.

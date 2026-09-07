@@ -28,7 +28,9 @@ use std::{
 use onetaskgraph_github_projects::accounting::{
     Accounting, Endpoint, Method, Mode, Outcome, RateLimit, Request,
 };
-use onetaskgraph_github_projects::{graphql, largest_page_sizes, worst_case_node_count};
+use onetaskgraph_github_projects::{
+    graphql, largest_page_sizes, worst_case_node_count, worst_case_point_cost,
+};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
     Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter, NativeId, PageRequest, Project,
@@ -130,7 +132,7 @@ pub fn say(line: &str) {
 /// Prints this run's session report when the run ends, however it ends.
 ///
 /// A `Drop` rather than a line at the end of the test, because every check in this lane
-/// reports a failure by panicking — the schema verification, the node-count reconciliation,
+/// reports a failure by panicking — the schema verification, the reconciliation with GitHub,
 /// the board lookup, the residue sweep, the journey itself — and a line at the end is only
 /// reached by the ones that do not fail. The run whose cost is most worth reading is the run
 /// that broke, so this has to survive an unwind rather than sit after it. Held from the
@@ -223,16 +225,22 @@ async fn graphql_variables(
     Ok(response)
 }
 
-/// GitHub's own node count for every document this source sends, against this workspace's.
+/// GitHub's own node count and price for every document this source sends, against this
+/// workspace's.
 ///
-/// **GitHub is the authority here and this workspace is not.** The offline calculation in
-/// `tests/node_count.rs` is what actually stops a regression merging — no network, no
-/// credential, so it runs on every platform and on a pull request from a fork — but an
-/// arithmetic checked only against itself goes on agreeing with itself after GitHub changes
-/// the rules. `rateLimit(dryRun: true)` answers with GitHub's own `nodeCount`, documented in
-/// its schema as *"The maximum number of nodes this query may return"*, **without executing
-/// the query**, so this converts "we implemented GitHub's rules correctly" from an
-/// assumption into an observation.
+/// **GitHub is the authority here and this workspace is not.** The offline calculations in
+/// `tests/node_count.rs` and `tests/point_cost.rs` are what actually stop a regression
+/// merging — no network, no credential, so they run on every platform and on a pull request
+/// from a fork — but an arithmetic checked only against itself goes on agreeing with itself
+/// after GitHub changes the rules. `rateLimit(dryRun: true)` answers with GitHub's own
+/// `nodeCount`, documented in its schema as *"The maximum number of nodes this query may
+/// return"*, and with its own `cost`, the rate-limit points that document would spend —
+/// both **without executing the query**, so this converts "we implemented GitHub's rules
+/// correctly" from an assumption into an observation.
+///
+/// It costs no request that was not already being sent, and no extra field: the probe below
+/// selects `cost` beside `nodeCount` on one document, and both figures are read off that one
+/// answer.
 ///
 /// It reads the account's allowance either side, because whether asking is free is itself a
 /// thing to observe: driven while this was written, the remaining allowance did not move
@@ -243,13 +251,19 @@ async fn graphql_variables(
 /// mutation this source sends selects no connection, so there is no page size for GitHub and
 /// this workspace to disagree over, and what is checked instead is that this workspace
 /// computes exactly that.
-async fn reconcile_node_counts(token: &str) -> Result<(), String> {
+async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String> {
     let (limit, before) = account_allowance(token, "before").await?;
     let mut asked = 0_usize;
     for (document, doing) in graphql::DOCUMENTS {
-        let ours = worst_case_node_count(document)
-            .map_err(|error| format!("the document for {doing} could not be counted: {error}"))?;
         if Mode::of_document(document) == Mode::Write {
+            // A mutation is skipped because `rateLimit` is a field of `Query` and there is
+            // no way to ask GitHub about one at all — neither for its node count nor for its
+            // price. What holds a mutation is the offline pin: `tests/node_count.rs` and
+            // `tests/point_cost.rs` both reach it through `graphql::DOCUMENTS`, and this
+            // checks the one property that needs no answer from GitHub.
+            let ours = worst_case_node_count(document).map_err(|error| {
+                format!("the document for {doing} could not be counted: {error}")
+            })?;
             if ours != 0 {
                 return Err(format!(
                     "the mutation for {doing} computes {ours} nodes, and GitHub cannot be asked \
@@ -262,32 +276,73 @@ async fn reconcile_node_counts(token: &str) -> Result<(), String> {
         }
         let response = graphql_variables(
             token,
-            &with_node_count_probe(document)?,
-            &format!("node-count reconciliation while {doing}"),
+            &with_rate_limit_probe(document)?,
+            &format!("node-count and point-cost reconciliation while {doing}"),
             dry_run_variables(document),
         )
         .await?;
-        let theirs = response
-            .pointer("/data/rateLimit/nodeCount")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| format!("GitHub answered no nodeCount for the document for {doing}"))?;
-        if theirs != ours {
-            return Err(format!(
-                "GitHub says the document for {doing} may return {theirs} nodes and this \
-                 workspace computes {ours}; GitHub is the authority, so the calculation \
-                 or the page sizes it is driven with are what is wrong"
-            ));
-        }
+        reconciled(doing, document, &response)?;
         asked += 1;
     }
     let (_, after) = account_allowance(token, "after").await?;
     say(&format!(
-        "node-count reconciliation: {asked} documents agreed with GitHub's own dryRun \
-         nodeCount; the account's GraphQL allowance read {before} of {limit} before and \
-         {after} after, a movement of {} across the whole reconciliation (the \
+        "node-count and point-cost reconciliation: {asked} documents agreed with GitHub's own \
+         dryRun nodeCount and cost; the account's GraphQL allowance read {before} of {limit} \
+         before and {after} after, a movement of {} across the whole reconciliation (the \
          account's, shared with everything else this credential does)",
         before.saturating_sub(after)
     ));
+    Ok(())
+}
+
+/// What GitHub's own answer about one document says against this workspace's figures, or
+/// the failure it is.
+///
+/// One place the verdict is spelled, and one caller: the loop above, whichever API it is
+/// pointed at. Both of this workspace's figures are computed here from the document's own
+/// text, so what reaches it from outside is GitHub's half alone — read off the response, so
+/// a board or an API that answers something else is what makes this refuse.
+/// `tests/reconciliation_gate.rs` is that being watched happen, against a loopback board
+/// configured to report a price this workspace does not compute.
+///
+/// **A `dryRun` probe's `cost` is what the probed document *would* spend, not what the call
+/// carrying the probe spent.** That is why it is read here, at the reconciliation, and
+/// deliberately not picked up as a call's own cost where this module records what a request
+/// spent — the same field, two different purposes, and the accounting is entitled to
+/// neither of them.
+///
+/// # Errors
+///
+/// Returns the failure naming both figures when GitHub's node count or GitHub's price
+/// disagrees with this workspace's, when the answer carries neither, or when the document
+/// cannot be counted or priced at all.
+fn reconciled(doing: &str, document: &str, answer: &Value) -> Result<(), String> {
+    let ours_nodes = worst_case_node_count(document)
+        .map_err(|error| format!("the document for {doing} could not be counted: {error}"))?;
+    let ours_points = worst_case_point_cost(document)
+        .map_err(|error| format!("the document for {doing} could not be priced: {error}"))?;
+    let github = |field: &str| {
+        answer
+            .pointer(&format!("/data/rateLimit/{field}"))
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("GitHub answered no {field} for the document for {doing}"))
+    };
+    let theirs_nodes = github("nodeCount")?;
+    let theirs_points = github("cost")?;
+    if theirs_nodes != ours_nodes {
+        return Err(format!(
+            "GitHub says the document for {doing} may return {theirs_nodes} nodes and this \
+             workspace computes {ours_nodes}; GitHub is the authority, so the calculation \
+             or the page sizes it is driven with are what is wrong"
+        ));
+    }
+    if theirs_points != ours_points {
+        return Err(format!(
+            "GitHub prices the document for {doing} at {theirs_points} points and this \
+             workspace computes {ours_points}; GitHub is the authority, so the calculation \
+             or the page sizes it is driven with are what is wrong"
+        ));
+    }
     Ok(())
 }
 
@@ -300,7 +355,7 @@ async fn account_allowance(token: &str, when: &str) -> Result<(u64, u64), String
     let response = graphql_variables(
         token,
         "query{rateLimit{cost limit remaining resetAt}}",
-        &format!("account allowance {when} the node-count reconciliation"),
+        &format!("account allowance {when} the reconciliation"),
         json!({}),
     )
     .await?;
@@ -313,13 +368,17 @@ async fn account_allowance(token: &str, when: &str) -> Result<(u64, u64), String
     Ok((read("limit")?, read("remaining")?))
 }
 
-/// GitHub's own node-count probe, added to a production document as a second root field.
+/// GitHub's own node-count and price probe, added to a production document as a second root
+/// field.
 ///
-/// `rateLimit` returns one object of scalars and no connection, so it adds nothing to the
-/// count of the operation it joins: what GitHub answers is the production document's number
-/// rather than a number about the probe. `dryRun: true` is what keeps the rest of the
-/// document from running, which is why this is only ever done to a query.
-fn with_node_count_probe(document: &str) -> Result<String, String> {
+/// `rateLimit` returns one object of scalars and **no connection**, so it adds nothing to
+/// either figure of the operation it joins: it contributes nothing to the node count, and
+/// nothing to the aggregate GitHub prices the call from — a connection is what that
+/// aggregate sums over, and this has none. So what GitHub answers for the joined document
+/// is the production document's own count and the production document's own price, rather
+/// than numbers about the probe. `dryRun: true` is what keeps the rest of the document from
+/// running, which is why this is only ever done to a query.
+fn with_rate_limit_probe(document: &str) -> Result<String, String> {
     let opening = document
         .find('{')
         .ok_or_else(|| format!("this document has no selection set to probe: {document}"))?;
@@ -2256,13 +2315,16 @@ pub async fn run(nomination: Nomination) {
     verify_mutation_schema(&token)
         .await
         .unwrap_or_else(|error| panic!("GitHub mutation schema drifted: {error}"));
-    // GitHub, not this workspace, is the authority on node count. It runs here rather than
+    // GitHub, not this workspace, is the authority on both what a document may return and
+    // what it costs. It runs here rather than
     // in the offline gate because it needs the credential this lane already has, and it runs
     // unconditionally once that credential is present: behind no flag, and not skipped
     // because the setup above went well.
-    reconcile_node_counts(&token).await.unwrap_or_else(|error| {
-        panic!("GitHub's own node count disagrees with this workspace's: {error}")
-    });
+    reconcile_node_counts_and_point_costs(&token)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("GitHub's own node count or price disagrees with this workspace's: {error}")
+        });
     // The production boundary validates the board this lane was pointed at — GitHub's owner
     // grammar and the project number's range — before either reaches GitHub. It is built
     // recording into this run's own accounting, so the session total covers the source's
