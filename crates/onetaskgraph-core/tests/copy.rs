@@ -2937,3 +2937,38 @@ async fn the_destination_is_walked_once_for_a_whole_invocation_and_not_at_all_fo
         "a copy that recognises no reference asks the destination for no task page"
     );
 }
+
+#[tokio::test]
+async fn a_task_sharing_the_documents_own_id_is_still_a_referent() {
+    // A folder of Markdown files `A.md` under `tasks/` and under `documents/` and reports
+    // `A` for both, so a source's id does not identify a record on its own. Told apart by
+    // id alone, the task here would be dropped from its own document's referent set.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+            "tasks": [located("D-1", "Alpha", "/srv/from/plans/P-1/A.md", Some("root:A"))],
+            "documents": [{
+                "id": "D-1",
+                "title": "Design review",
+                "content": "Alpha is at `/srv/from/plans/P-1/A.md` today.\n",
+                "project": "P-1",
+                "labels": [],
+                "location": {"path": "/srv/from/plans/P-1/D-1.md"},
+                "metadata": {},
+            }],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [located("A", "Alpha", "/srv/into/board/A.md", Some("root:A"))],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (1, 0, 0));
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        "Alpha is at `/srv/into/board/A.md` today.\n"
+    );
+}

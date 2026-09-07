@@ -1181,8 +1181,11 @@ impl Engine {
         Ok(by_project[&key]
             .iter()
             // A document does not name itself: the referent set is every *other* record
-            // filed under the project.
-            .filter(|referent| referent.id != item.source)
+            // filed under the project. Told by the interface as well as the id, because an
+            // id alone does not identify a record — a folder of Markdown filing `A.md`
+            // under both `tasks/` and `documents/` is the ordinary case rather than the
+            // contrived one, and excluding by id alone would drop that task from the set.
+            .filter(|referent| referent.level != Level::Document || referent.id != item.source)
             .filter(|referent| holds(content, &referent.location))
             .cloned()
             .collect())
