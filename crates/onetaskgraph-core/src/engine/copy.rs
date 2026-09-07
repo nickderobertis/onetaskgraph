@@ -177,19 +177,11 @@ pub struct CopyReport {
     /// ambiguous one says the destination holds duplicate records for one work item, or the
     /// source reports one location for two records, and re-running the copy will never
     /// clear it.
-    // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this
-    // restates at a new site the justification recorded at `Task::url` and
-    // `Capabilities.max_page_size` in the api crate: this is a serialized contract, and
-    // these fields ARE what the schema bundle publishes and what both SDKs' generated
-    // models are. What this field owes the one above it is a numeric inequality between two
-    // counters, which no Rust type makes unrepresentable without a private constructor —
-    // and a private constructor would hold it in one of three consumers, because JSON
-    // Schema cannot express it either, so the generated Python and TypeScript models would
-    // go on admitting exactly the state it removed. What does hold it is the one place the
-    // pair is produced: `substitute` counts an ambiguous occurrence unresolved on the same
-    // branch, and `Resolution` above has no variant that counts one without the other. That
-    // a figure is a *sub-count reported beside its total* is the contract this was given;
-    // making the two disjoint would remove the relation and is the contract owner's call.
+    // llmlint: ignore[invalid_states_unrepresentable] JSON Schema cannot express an
+    // inequality between two numbers, so a private constructor here would hold this in one
+    // consumer of three while both SDKs' generated models went on admitting it. What holds
+    // it is `substitute`: `Resolution` has no variant that counts an occurrence ambiguous
+    // without counting it unresolved.
     #[serde(default)]
     pub references_ambiguous: u64,
 }
