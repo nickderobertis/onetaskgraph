@@ -2365,3 +2365,575 @@ async fn a_well_behaved_copy_still_walks_every_page_of_every_loop_it_has() {
         vec!["into:T-2 Task".to_owned(), "from:T-3 Task".to_owned()]
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// A document's references, pointed at the destination's own records.
+//
+// A document copied out of a local Markdown store used to arrive naming absolute paths
+// under one checkout on one machine — dead for the only reader the copy exists for — while
+// the destination held its own record for every one of them the whole time. What follows
+// drives that at the engine's own boundary; the same behaviour driven the way a user drives
+// it, against destinations that outlive one invocation, is in
+// `crates/onetaskgraph/tests/e2e/document_store.rs`.
+// ---------------------------------------------------------------------------------------
+
+/// One record of a store, with the location its source reports and the origin it records.
+///
+/// `origin` is what makes a fixture a *topology* rather than a heap: a record carrying one
+/// is a record that arrived from somewhere, and which somewhere is the whole of what the
+/// two-key rule can and cannot see.
+fn located(id: &str, title: &str, path: &str, origin: Option<&str>) -> Value {
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        "caller.shape".to_owned(),
+        json!({"nested": [1, true, null]}),
+    );
+    if let Some(origin) = origin {
+        metadata.insert(GlobalId::ORIGIN_KEY.to_owned(), json!(origin));
+    }
+    json!({
+        "id": id,
+        "title": title,
+        "status": {"category": "todo", "name": "Todo"},
+        "labels": [],
+        "project": "P-1",
+        "location": {"path": path},
+        "metadata": Value::Object(metadata),
+    })
+}
+
+/// The project both stores file everything under, at the location the store reports.
+fn located_project(path: &str, origin: Option<&str>) -> Value {
+    let mut project = located("P-1", "The plan", path, origin);
+    project
+        .as_object_mut()
+        .expect("a record is an object")
+        .remove("project");
+    project
+}
+
+/// The plan document the copy carries, in the shape the artifact this exists for really
+/// has: bare absolute paths inside backticks in a table cell.
+///
+/// The last two lines are the whole-reference guards. `…/A.md.bak` is a path extended by a
+/// further suffix, and the project's own location is a directory prefix of every task's, so
+/// both occur inside a longer location-like string and neither may be rewritten there.
+fn plan_document(content: &str) -> Value {
+    json!({
+        "id": "D-1",
+        "title": "Design review",
+        "content": content,
+        "project": "P-1",
+        "labels": [],
+        "location": {"path": "/srv/from/plans/P-1/D-1.md"},
+        "metadata": {"caller.shape": {"nested": [1, true, null]}},
+    })
+}
+
+/// The body the fixtures below copy, naming the two tasks and the project by their paths.
+const AUTHORED: &str = "# Plan\n\n\
+     | Task | Where |\n\
+     | --- | --- |\n\
+     | Alpha | `/srv/from/plans/P-1/A.md` |\n\
+     | Beta | `/srv/from/plans/P-1/B.md` |\n\n\
+     Everything lives under `/srv/from/plans/P-1`, and `/srv/from/plans/P-1/A.md.bak` is a \
+     backup.\n";
+
+/// A document-bearing `in-memory` source holding one project, two tasks in it, and the
+/// plan document that names all three.
+fn authoring_store(origins: Option<(&str, &str, &str)>) -> Value {
+    let (project, alpha, beta) = match origins {
+        Some((project, alpha, beta)) => (Some(project), Some(alpha), Some(beta)),
+        None => (None, None, None),
+    };
+    json!({
+        "capabilities": {"documents": "native"},
+        "projects": [located_project("/srv/from/plans/P-1", project)],
+        "tasks": [
+            located("A", "Alpha", "/srv/from/plans/P-1/A.md", alpha),
+            located("B", "Beta", "/srv/from/plans/P-1/B.md", beta),
+        ],
+        "documents": [plan_document(AUTHORED)],
+    })
+}
+
+/// The content one document holds at one source, read back through the engine's own show
+/// verb rather than off the write.
+async fn body(engine: &Engine, id: &str) -> String {
+    engine
+        .document(&self::id(id))
+        .await
+        .expect("the show verb answers")
+        .items[0]
+        .item
+        .content
+        .clone()
+        .expect("the document has a body")
+}
+
+/// A copy of one document into `into`, and the figures it reported.
+async fn copy_document(engine: &Engine, item: &str) -> onetaskgraph_core::CopyReport {
+    engine
+        .copy(&many(&[item], CopyScope::Documents))
+        .await
+        .expect("the document copy runs")
+}
+
+/// The three figures a copy reports, as a comparable triple.
+fn figures(report: &onetaskgraph_core::CopyReport) -> (u64, u64, u64) {
+    (
+        report.references.rewritten,
+        report.references.unresolved,
+        report.references.ambiguous,
+    )
+}
+
+#[tokio::test]
+async fn a_document_arrives_naming_the_destinations_own_records_across_a_one_level_fan_out() {
+    // The fan-out: `root` is where all three records were authored, `from` and `into` are
+    // the two stores they were copied into, and the document travels by the `from` route
+    // while the records it names arrived at `into` by the other one. Neither side holds the
+    // other's id, so nothing here resolves on a referent's own id — both sides trace to one
+    // common predecessor, which is the whole of what the second key buys.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": authoring_store(Some((
+            "root:P-1", "root:A", "root:B",
+        )))},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/into/board/A.md", Some("root:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+            ],
+        }},
+    }));
+
+    let first = copy_document(&engine, "from:D-1").await;
+    assert_eq!(
+        first.items.iter().map(landed).collect::<Vec<_>>(),
+        [(Some("into:D-1".to_owned()), "created".to_owned())]
+    );
+    assert_eq!(figures(&first), (3, 0, 0));
+
+    // Every reference names the destination's own record; every other character of the
+    // body is byte-for-byte what the source held, and no section was added.
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        "# Plan\n\n\
+         | Task | Where |\n\
+         | --- | --- |\n\
+         | Alpha | `/srv/into/board/A.md` |\n\
+         | Beta | `/srv/into/board/B.md` |\n\n\
+         Everything lives under `/srv/into/board`, and `/srv/from/plans/P-1/A.md.bak` is a \
+         backup.\n"
+    );
+
+    // Nothing else about the document moved: the caller's own key keeps its JSON types and
+    // the copy records the provenance it always did.
+    let landed_document = &engine
+        .document(&id("into:D-1"))
+        .await
+        .expect("the destination is configured")
+        .items[0]
+        .item;
+    assert_eq!(
+        landed_document.metadata["caller.shape"],
+        json!({"nested": [1, true, null]})
+    );
+    assert_eq!(
+        landed_document.metadata[GlobalId::ORIGIN_KEY],
+        json!("from:D-1")
+    );
+
+    // A correct reference is never rewritten into something else: the second copy reads the
+    // same source body, rewrites it the same way, and finds the destination already saying
+    // it.
+    let before = body(&engine, "into:D-1").await;
+    let again = copy_document(&engine, "from:D-1").await;
+    assert_eq!(
+        again.items.iter().map(landed).collect::<Vec<_>>(),
+        [(Some("into:D-1".to_owned()), "unchanged".to_owned())]
+    );
+    assert_eq!(figures(&again), (3, 0, 0));
+    assert_eq!(body(&engine, "into:D-1").await, before);
+}
+
+#[tokio::test]
+async fn a_history_the_two_keys_cannot_prove_is_left_byte_for_byte_and_counted_unresolved() {
+    // The chain the rule cannot reach: the records travelled `from` → an intermediate store
+    // → `into`, so `into` keys them by that intermediate, while the document is copied to
+    // `into` directly out of `from`, where the records were authored and so record no origin
+    // at all. Disjoint key sets, permanently — only one origin is ever recorded and every
+    // hop overwrites it.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": authoring_store(None)},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("mid:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/into/board/A.md", Some("mid:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("mid:B")),
+            ],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (0, 3, 0));
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        AUTHORED,
+        "a history the two keys cannot prove is left byte-for-byte, never guessed at"
+    );
+}
+
+#[tokio::test]
+async fn a_destination_holding_two_records_for_one_referent_is_ambiguous_and_scan_still_answers() {
+    // One record keyed by the referent's own id, a second keyed by the origin the referent
+    // itself records. Both match the two keys, so the correspondence is not confident.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": authoring_store(Some((
+            "root:P-1", "root:A", "root:B",
+        )))},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A-by-id", "Alpha", "/srv/into/board/A-by-id.md", Some("from:A")),
+                located("A-by-origin", "Alpha", "/srv/into/board/A-by-origin.md", Some("root:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+            ],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    // Alpha's one occurrence is ambiguous; Beta's and the project's still resolve.
+    assert_eq!(figures(&report), (2, 1, 1));
+    assert!(
+        body(&engine, "into:D-1")
+            .await
+            .contains("`/srv/from/plans/P-1/A.md`"),
+        "an ambiguous reference is left byte-for-byte, and no record is chosen"
+    );
+
+    // `Engine::scan` is untouched by that stricter discipline: it takes the first hit and
+    // stops, which is what every consumer of the copy already depends on. The two lookups
+    // answer different questions and are meant to disagree on a destination holding
+    // duplicates.
+    let copied = engine
+        .copy(&one("from:A"))
+        .await
+        .expect("the task copy runs");
+    assert_eq!(
+        copied.items[0].destination().map(ToString::to_string),
+        Some("into:A-by-id".to_owned()),
+        "the copy's own target lookup takes the first record recording the id it is \
+         copying, exactly as it did before the reference rewrite existed"
+    );
+}
+
+#[tokio::test]
+async fn two_referents_reporting_one_location_leave_every_occurrence_of_it_alone() {
+    // The source reports one location for two records, so an occurrence of it cannot be
+    // attributed to either — the case where a rewrite would be confidently wrong rather
+    // than merely unhelpful.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/from/plans/P-1/shared.md", Some("root:A")),
+                located("B", "Beta", "/srv/from/plans/P-1/shared.md", Some("root:B")),
+            ],
+            "documents": [plan_document(
+                "Both rows point at `/srv/from/plans/P-1/shared.md` today.\n",
+            )],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/into/board/A.md", Some("root:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+            ],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (0, 1, 1));
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        "Both rows point at `/srv/from/plans/P-1/shared.md` today.\n"
+    );
+}
+
+#[tokio::test]
+async fn a_counterpart_the_destination_does_not_hold_or_reports_no_location_for_is_left_alone() {
+    // Beta has no counterpart at all; Alpha has one the destination reports no location
+    // for, which names nowhere a reader could go. Neither is ambiguous — both are the
+    // ordinary, expected outcome under the bound this design works to — and the copy still
+    // succeeds.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": authoring_store(Some((
+            "root:P-1", "root:A", "root:B",
+        )))},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [{
+                "id": "A",
+                "title": "Alpha",
+                "status": {"category": "todo", "name": "Todo"},
+                "labels": [],
+                "project": "P-1",
+                "metadata": {GlobalId::ORIGIN_KEY: "root:A"},
+            }],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (1, 2, 0));
+    let landed_body = body(&engine, "into:D-1").await;
+    assert!(landed_body.contains("`/srv/from/plans/P-1/A.md`"));
+    assert!(landed_body.contains("`/srv/from/plans/P-1/B.md`"));
+    assert!(landed_body.contains("`/srv/into/board`"));
+}
+
+#[tokio::test]
+async fn a_dry_run_reports_the_references_it_would_have_rewritten_and_writes_nothing() {
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": authoring_store(Some((
+            "root:P-1", "root:A", "root:B",
+        )))},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/into/board/A.md", Some("root:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+            ],
+        }},
+    }));
+
+    let planned = engine
+        .copy(&CopyRequest {
+            dry_run: true,
+            ..many(&["from:D-1"], CopyScope::Documents)
+        })
+        .await
+        .expect("the dry run reads everything");
+    assert_eq!(figures(&planned), (3, 0, 0));
+    assert_eq!(
+        planned.items.iter().map(landed).collect::<Vec<_>>(),
+        [(None, "created".to_owned())]
+    );
+    assert_eq!(
+        engine
+            .documents(&onetaskgraph_core::DocumentRequest {
+                sources: vec![name("into")],
+                filters: onetaskgraph_core::DocumentFilters::default(),
+                project: onetaskgraph_core::ProjectSelector::Any,
+                paging: Paging {
+                    limit: NonZeroU32::new(20).expect("a non-zero limit"),
+                    token: None,
+                },
+            })
+            .await
+            .expect("the destination is configured")
+            .items
+            .len(),
+        0,
+        "a dry run writes nothing"
+    );
+}
+
+/// A destination that answers exactly as the `in-memory` source it wraps, and counts the
+/// task pages it was asked for.
+///
+/// A **document** copy asks a destination for task pages in exactly one place — the walk
+/// that finds the counterparts a document's references name. Its own target is found
+/// through `query_documents`, and the project it is filed under through `query_projects`.
+/// So this count is that walk and nothing else, which is what lets a test say the walk
+/// happened once for a whole invocation, or never happened at all.
+struct Counting {
+    inner: Box<dyn TaskSource>,
+    task_pages: Arc<AtomicU32>,
+}
+
+#[async_trait::async_trait]
+impl TaskSource for Counting {
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn writes(&self) -> WriteSupport {
+        self.inner.writes()
+    }
+
+    async fn health(&self) -> Result<Health, SourceError> {
+        self.inner.health().await
+    }
+
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        self.inner.get_task(id).await
+    }
+
+    async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+        self.inner.get_project(id).await
+    }
+
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        self.inner.get_document(id).await
+    }
+
+    async fn query_tasks(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        self.task_pages.fetch_add(1, Ordering::Relaxed);
+        self.inner.query_tasks(query, page).await
+    }
+
+    async fn query_projects(
+        &self,
+        query: &ProjectQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        self.inner.query_projects(query, page).await
+    }
+
+    async fn query_documents(
+        &self,
+        query: &DocumentQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        self.inner.query_documents(query, page).await
+    }
+
+    async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        self.inner.labels(page).await
+    }
+
+    async fn task_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.task_dependencies(id, direction, page).await
+    }
+
+    async fn project_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.project_dependencies(id, direction, page).await
+    }
+
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        self.inner.write_task(write).await
+    }
+
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        self.inner.write_project(write).await
+    }
+
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        self.inner.write_document(write).await
+    }
+
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_task(id).await
+    }
+
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_project(id).await
+    }
+
+    async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_document(id).await
+    }
+}
+
+/// An engine reading `from` and writing into a counting wrapper around `into`.
+fn into_counting(from: Value, into: Value) -> (Engine, Arc<AtomicU32>) {
+    let task_pages = Arc::new(AtomicU32::new(0));
+    let inner = onetaskgraph_in_memory::Plugin
+        .build(&name("into"), &into, &NoSecrets)
+        .expect("the in-memory plugin builds");
+    let counting = Counting {
+        inner,
+        task_pages: Arc::clone(&task_pages),
+    };
+    let engine = Engine::new(
+        vec![
+            in_memory("from", from),
+            ConfiguredSource::Ready(ResolvedSource::adopt(name("into"), Box::new(counting))),
+        ],
+        vec![name("from"), name("into")],
+    );
+    (engine, task_pages)
+}
+
+/// The authoring store above, plus a second document of the same project naming the same
+/// two tasks. Two documents in one project is the ordinary case, and it is what a
+/// per-document walk would multiply reads for.
+fn two_documents_of_one_project() -> Value {
+    let mut store = authoring_store(Some(("root:P-1", "root:A", "root:B")));
+    let mut second = plan_document(AUTHORED);
+    second["id"] = json!("D-2");
+    second["location"] = json!({"path": "/srv/from/plans/P-1/D-2.md"});
+    store["documents"] = json!([plan_document(AUTHORED), second]);
+    store
+}
+
+/// The destination both cases below copy into.
+fn board_holding_counterparts() -> Value {
+    json!({
+        "capabilities": {"documents": "native"},
+        "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+        "tasks": [
+            located("A", "Alpha", "/srv/into/board/A.md", Some("root:A")),
+            located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+        ],
+    })
+}
+
+#[tokio::test]
+async fn the_destination_is_walked_once_for_a_whole_invocation_and_not_at_all_for_nothing() {
+    let (engine, task_pages) =
+        into_counting(two_documents_of_one_project(), board_holding_counterparts());
+
+    let report = engine
+        .copy(&many(&["from:D-1", "from:D-2"], CopyScope::Documents))
+        .await
+        .expect("the document copy runs");
+    // Three references apiece, and one walk serving both documents and every referent.
+    assert_eq!(figures(&report), (6, 0, 0));
+    assert_eq!(
+        task_pages.load(Ordering::Relaxed),
+        1,
+        "the destination is walked for counterparts once per copy invocation, not once \
+         per document"
+    );
+
+    // A copy whose documents hold no candidate reference makes no such walk at all: the
+    // referent set is read at the source, and nothing it holds occurs in this body.
+    let mut quiet = authoring_store(Some(("root:P-1", "root:A", "root:B")));
+    quiet["documents"] = json!([plan_document("Nothing here names a record.\n")]);
+    let (engine, task_pages) = into_counting(quiet, board_holding_counterparts());
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (0, 0, 0));
+    assert_eq!(
+        task_pages.load(Ordering::Relaxed),
+        0,
+        "a copy that recognises no reference asks the destination for no task page"
+    );
+}

@@ -44,7 +44,10 @@ use local::{LocalDocuments, LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
-pub use copy::{CopyAction, CopyItems, CopyOutcome, CopyReport, CopyRequest, CopyScope, MatchBy};
+pub use copy::{
+    CopyAction, CopyItems, CopyOutcome, CopyReport, CopyRequest, CopyScope, MatchBy,
+    ReferenceCounts,
+};
 pub use local::ProjectSelector;
 
 /// One item, under the qualified id the engine addresses it by.

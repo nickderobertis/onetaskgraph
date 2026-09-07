@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, NativeId, Page, PageRequest, Project, ProjectQuery, Repository,
+    ItemKind, ItemWrite, Location, NativeId, Page, PageRequest, Project, ProjectQuery, Repository,
     SourceError, SourceName, Task, TaskQuery,
 };
 use schemars::JsonSchema;
@@ -40,7 +40,10 @@ use crate::resolve::ResolvedSource;
 
 use super::fetch::{fits, unrepeated};
 use super::local::ProjectSelector;
-use super::{Engine, EngineError, Filters, LeftBehind, Paging, TaskRequest};
+use super::{
+    DocumentFilters, DocumentRequest, Engine, EngineError, Filters, LeftBehind, Paging, Qualified,
+    TaskRequest,
+};
 
 /// A request to copy work into one configured destination.
 #[derive(Debug, Clone)]
@@ -137,6 +140,54 @@ impl MatchBy {
 pub struct CopyReport {
     /// One entry per item the copy considered, in the order it considered them.
     pub items: Vec<CopyOutcome>,
+    /// What the copy did to the references the documents it carried hold, over the whole
+    /// invocation.
+    ///
+    /// `#[serde(default)]` rather than required, so a consumer written against the output
+    /// before these figures existed reads one without them unchanged.
+    #[serde(default)]
+    pub references: ReferenceCounts,
+}
+
+/// How many reference occurrences one copy rewrote, and how many it could not.
+///
+/// A silent bound is indistinguishable from a bug, so the copy says what it did. The two
+/// halves mean different things to a reader: an unresolved reference is ordinary and
+/// expected under the bound below — the design working — while an ambiguous one says the
+/// destination holds duplicate records for one work item, or the source reports one
+/// location for two records, and re-running the copy will never clear it.
+///
+/// **What these figures do not claim.** The referent set is the document's own project, so
+/// a reference to a record in a *different* project is never recognised at all and cannot
+/// appear in [`Self::unresolved`] either. These are the references the copy recognised;
+/// they are not a census of every reference a document holds. Noticing an out-of-scope
+/// reference would need exactly the unbounded destination walk this design refuses.
+///
+/// Every figure is a total over the whole invocation rather than a figure per document,
+/// and all three default to zero, so a copy carrying no document reports zeroes rather
+/// than nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReferenceCounts {
+    /// Occurrences the copy rewrote to the destination's own location for the record.
+    #[serde(default)]
+    pub rewritten: u64,
+    /// Occurrences the copy recognised and left byte-for-byte as they were, because the
+    /// correspondence could not be established.
+    #[serde(default)]
+    pub unresolved: u64,
+    /// How many of [`Self::unresolved`] were left alone because the correspondence was
+    /// **ambiguous** rather than merely absent. A sub-count, never larger than it.
+    #[serde(default)]
+    pub ambiguous: u64,
+}
+
+impl ReferenceCounts {
+    /// Fold one document's figures into the invocation's.
+    fn add(&mut self, other: Self) {
+        self.rewritten += other.rewritten;
+        self.unresolved += other.unresolved;
+        self.ambiguous += other.ambiguous;
+    }
 }
 
 /// What happened to one item.
@@ -421,7 +472,10 @@ impl Item {
 /// and the contract gives it no document variant because nothing may point at a document.
 /// This one names which pair of methods reads and writes an item, which is a different
 /// question with a third answer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Ordered so it can key a map of what a destination holds, per interface: an id alone
+/// does not identify a destination item, for the reason [`Undo::kind`] records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
     /// `get_task`, `write_task`, `delete_task`.
     Task,
@@ -429,6 +483,152 @@ enum Level {
     Project,
     /// `get_document`, `write_document`, `delete_document`.
     Document,
+}
+
+/// One record filed under a document's own project, and the location string its source
+/// reports for it.
+///
+/// A reference is a **literal occurrence, in a document's content, of the exact location
+/// string the source reports for a related record** — the `String` inside
+/// [`Location::Path`] or [`Location::Url`]. Both ends of a rewrite come from the plugins'
+/// own reported [`Location`]: nothing here composes an address out of a name, an id or a
+/// root, because a source that reports a canonical absolute path and a source that reports
+/// an issue link are the two things the contract lets this ask about.
+#[derive(Clone)]
+struct Referent {
+    /// Its qualified id at the source.
+    id: GlobalId,
+    /// The origin it records in its own metadata, when it records one.
+    origin: Option<GlobalId>,
+    /// Which of the destination's three interfaces its counterpart would be read from.
+    level: Level,
+    /// The non-empty location string its source reports for it.
+    location: String,
+}
+
+impl Referent {
+    /// The two keys a destination record's own recorded origin is matched against.
+    ///
+    /// **A destination record is this referent's counterpart when its
+    /// [`GlobalId::ORIGIN_KEY`] equals either this referent's own qualified source id, or
+    /// the origin this referent itself records.** In plainer terms: when the destination
+    /// record was copied directly from this referent, or directly from the one predecessor
+    /// this referent itself records.
+    ///
+    /// That reach is exactly one recorded hop of ancestry on each side, and nothing more:
+    ///
+    /// - **A single hop resolves.** The destination record came straight from the referent.
+    /// - **A one-level fan-out resolves.** A record copied from one store into two, with
+    ///   the document arriving by one route and naming records that arrived by the other,
+    ///   so both sides trace to one common predecessor. That is what the second key buys,
+    ///   and it is the only thing it buys.
+    /// - **A chain of two or more hops does not resolve**, on either side, and that is
+    ///   permanent rather than pending: only one origin is ever recorded and every hop
+    ///   overwrites it. [`carried`] removes the key from the incoming metadata outright and
+    ///   [`recorded`] writes the id at the *immediate* source on every path but the
+    ///   copy-back, so A → B → C leaves C keyed by B and A's id gone.
+    ///
+    /// The second key costs no read — the referent's metadata is already in hand. Chasing
+    /// the chain further would need the intermediate stores configured and reachable, which
+    /// would put a third party's availability inside a copy; a durable lineage id would
+    /// identify only records written after it landed, so it would resolve nothing already
+    /// on a destination.
+    fn keys(&self) -> Vec<String> {
+        let mut keys = vec![self.id.to_string()];
+        if let Some(origin) = &self.origin {
+            let recorded = origin.to_string();
+            if recorded != keys[0] {
+                keys.push(recorded);
+            }
+        }
+        keys
+    }
+}
+
+/// What every whole-reference occurrence of one location string becomes.
+enum Resolution {
+    /// The destination's own location string for the counterpart.
+    Rewrite(String),
+    /// Left byte-for-byte as it was, and counted.
+    Leave {
+        /// Whether the correspondence was **ambiguous** rather than merely absent, which
+        /// is the half of [`ReferenceCounts::unresolved`] a re-run will never clear.
+        ambiguous: bool,
+    },
+}
+
+/// Every destination record that records an origin, read **once per copy invocation**.
+///
+/// Several documents in one project is the ordinary case, and a walk per document would
+/// multiply reads against a rate limiter for no gain — so this is built once, for the
+/// levels the invocation's own documents really name, and every document and every
+/// referent of that invocation is answered out of it. A copy whose documents hold no
+/// candidate reference builds none at all.
+///
+/// **This is a stricter discipline than [`Engine::scan`], deliberately.** That lookup takes
+/// the first hit and stops, and every consumer of the copy already depends on it doing so;
+/// it chooses the copy's own target, where a caller named the item. This one edits the
+/// content of somebody's document, where a wrong answer is silent corruption of prose a
+/// person will act on — so where more than one record matches, it chooses none. The two
+/// lookups answer different questions and are meant to disagree on a destination holding
+/// duplicates.
+#[derive(Default)]
+struct Counterparts {
+    /// The records at one interface recording one origin.
+    by_origin: BTreeMap<(Level, String), Vec<Held>>,
+}
+
+/// One record a destination walk found: where it is there, and the location string that
+/// destination reports for it — `None` when it reports none.
+type Held = (NativeId, Option<String>);
+
+impl Counterparts {
+    /// Record one destination item, when it records an origin at all.
+    fn note(
+        &mut self,
+        level: Level,
+        id: &NativeId,
+        location: Option<&Location>,
+        metadata: &BTreeMap<String, Value>,
+    ) {
+        let Some(origin) = origin_of(metadata) else {
+            return;
+        };
+        self.by_origin
+            .entry((level, origin.to_string()))
+            .or_default()
+            .push((id.clone(), located(location)));
+    }
+
+    /// What one referent's occurrences become, by the two-key rule.
+    ///
+    /// Where the correspondence cannot be established **confidently**, the text is left
+    /// exactly as it is and no record is chosen — see the note on this type.
+    fn resolve(&self, referent: &Referent) -> Resolution {
+        let mut candidates: Vec<&Held> = Vec::new();
+        for key in referent.keys() {
+            for record in self
+                .by_origin
+                .get(&(referent.level, key))
+                .into_iter()
+                .flatten()
+            {
+                // One destination record matching both keys is one record, not two.
+                if !candidates.iter().any(|held| held.0 == record.0) {
+                    candidates.push(record);
+                }
+            }
+        }
+        match candidates.as_slice() {
+            [] => Resolution::Leave { ambiguous: false },
+            // A counterpart the destination reports no location for names nowhere a reader
+            // could go, so the source's own string is left standing rather than removed.
+            [(_, location)] => location
+                .clone()
+                .map_or(Resolution::Leave { ambiguous: false }, Resolution::Rewrite),
+            _ => Resolution::Leave { ambiguous: true },
+        }
+    }
 }
 
 impl Engine {
@@ -479,6 +679,8 @@ impl Engine {
         // a contract type for a reason no caller of it has.
         let mut written: BTreeMap<String, NativeId> = BTreeMap::new();
         let mut deferred: Vec<Deferred> = Vec::new();
+        // One total for the whole invocation rather than one per document.
+        let mut references = ReferenceCounts::default();
         // The whole copied set, established before anything is written. For a project
         // copy that means reading every named project's membership first: the set is the
         // whole request rather than one project of it.
@@ -516,6 +718,7 @@ impl Engine {
                     &mut written,
                     &mut deferred,
                     journal,
+                    &mut references,
                 )
                 .await?
             }
@@ -533,6 +736,7 @@ impl Engine {
                             &mut written,
                             &mut deferred,
                             journal,
+                            &mut references,
                         )
                         .await?,
                     );
@@ -542,7 +746,7 @@ impl Engine {
         };
         self.repair(destination, request, &copied, &written, deferred, journal)
             .await?;
-        Ok(CopyReport { items })
+        Ok(CopyReport { items, references })
     }
 
     /// Write every deferred item again, now that every destination id is known.
@@ -680,6 +884,7 @@ impl Engine {
         written: &mut BTreeMap<String, NativeId>,
         deferred: &mut Vec<Deferred>,
         journal: &mut Journal,
+        references: &mut ReferenceCounts,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
         // On a repeat copy, compare the project with its final remapped edges before the
         // first pass temporarily rewrites it. This preserves an `unchanged` outcome when
@@ -721,6 +926,7 @@ impl Engine {
                 written,
                 deferred,
                 journal,
+                references,
             )
             .await?;
         if !tasks {
@@ -741,6 +947,7 @@ impl Engine {
                 written,
                 deferred,
                 journal,
+                references,
             )
             .await?;
         outcomes.extend(task_outcomes);
@@ -760,6 +967,22 @@ impl Engine {
 
     /// Every task the source holds in `project`, by qualified id.
     async fn project_members(&self, project: &GlobalId) -> Result<Vec<GlobalId>, EngineError> {
+        Ok(self
+            .project_member_tasks(project)
+            .await?
+            .into_iter()
+            .map(|task| task.id)
+            .collect())
+    }
+
+    /// Every task the source holds in `project`, as the source reported it.
+    ///
+    /// The ids alone are what a copy files under a project; the whole task is what a
+    /// document's references need, because the location a reference names is a field of it.
+    async fn project_member_tasks(
+        &self,
+        project: &GlobalId,
+    ) -> Result<Vec<Qualified<Task>>, EngineError> {
         let mut request = TaskRequest {
             sources: vec![project.source.clone()],
             filters: Filters::default(),
@@ -799,12 +1022,282 @@ impl Engine {
                 "the tasks of a project were being read for a copy",
             )
             .map_err(misbehaved)?;
-            members.extend(response.items.into_iter().map(|task| task.id));
+            members.extend(response.items);
             match response.next {
                 Some(token) => request.paging.token = Some(token),
                 None => return Ok(members),
             }
         }
+    }
+
+    /// Every document the source holds in `project`, as the source reported it.
+    ///
+    /// Paged by this engine's own token for the reason the member walk above is, and the
+    /// note there says why.
+    async fn project_documents(
+        &self,
+        project: &GlobalId,
+    ) -> Result<Vec<Qualified<Document>>, EngineError> {
+        let mut request = DocumentRequest {
+            sources: vec![project.source.clone()],
+            filters: DocumentFilters::default(),
+            project: ProjectSelector::Qualified(project.clone()),
+            paging: Paging {
+                limit: PROJECT_PAGE,
+                token: None,
+            },
+        };
+        let mut held = Vec::new();
+        let misbehaved = |error| EngineError::SourceRefused {
+            name: project.source.to_string(),
+            error,
+        };
+        loop {
+            let asked = request.paging.token.clone();
+            let response = self.documents(&request).await?;
+            if let Some(failure) = response.errors.first() {
+                return Err(EngineError::SourceRefused {
+                    name: failure.source.to_string(),
+                    error: failure.error.clone(),
+                });
+            }
+            unrepeated(
+                response.next.as_ref(),
+                asked.as_ref(),
+                "the documents of a project were being read for a copy",
+            )
+            .map_err(misbehaved)?;
+            held.extend(response.items);
+            match response.next {
+                Some(token) => request.paging.token = Some(token),
+                None => return Ok(held),
+            }
+        }
+    }
+
+    /// Point every reference the documents of this copy hold at the destination's own
+    /// records, and say how many it could not.
+    ///
+    /// A document copied out of a local Markdown store used to arrive naming absolute paths
+    /// under one checkout on one machine, dead for the only reader the copy exists for,
+    /// while the destination held its own record for every one of them the whole time. This
+    /// is what closes that, and it is deliberately **not** a Markdown-link parser: the
+    /// artifact that motivated it holds bare absolute paths inside backticks in a table
+    /// cell, which `[text](target)` matching would have left exactly as it found them.
+    ///
+    /// The correspondence is re-established from what the *destination* records at
+    /// [`GlobalId::ORIGIN_KEY`], not from the mapping this copy holds. That mapping is not
+    /// available when it is needed: `project copy` and `document copy` are separate verbs,
+    /// one invocation carries one [`CopyScope`], and a project copy carries no documents —
+    /// so by the time the document is copied, the tasks were written by a process that has
+    /// exited. Reading the destination is also what makes a document copied on its own
+    /// work, which a same-run mapping never could.
+    ///
+    /// Tasks and projects are not touched. Only a document's content is rewritten, and
+    /// nothing else about it changes.
+    async fn rewrite_references(
+        &self,
+        destination: &ResolvedSource,
+        planned: &mut [Planned],
+        counts: &mut ReferenceCounts,
+    ) -> Result<(), EngineError> {
+        // Read at the source, once per project rather than once per document: several
+        // documents of one project is the ordinary case.
+        let mut by_project: BTreeMap<String, Vec<Referent>> = BTreeMap::new();
+        let mut named: Vec<Vec<Referent>> = Vec::new();
+        for item in planned.iter() {
+            named.push(self.named_referents(item, &mut by_project).await?);
+        }
+        // The destination is walked only for a copy that really names something, and only
+        // for the interfaces those referents are read from.
+        let mut levels: Vec<Level> = Vec::new();
+        for referent in named.iter().flatten() {
+            if !levels.contains(&referent.level) {
+                levels.push(referent.level);
+            }
+        }
+        if levels.is_empty() {
+            return Ok(());
+        }
+        let counterparts = self.counterparts(destination, &levels).await?;
+        for (item, referents) in planned.iter_mut().zip(named) {
+            let Item::Document(document) = &mut item.item else {
+                continue;
+            };
+            let Some(content) = &document.content else {
+                continue;
+            };
+            let (rewritten, made) = substitute(content, &table_for(&referents, &counterparts));
+            document.content = Some(rewritten);
+            counts.add(made);
+        }
+        Ok(())
+    }
+
+    /// The records of one document's own project whose location string its content really
+    /// holds, as a whole reference.
+    ///
+    /// A document with no content, or with no project at the source, names nothing: the
+    /// referent set is the document's own project, its tasks and its other documents, and
+    /// there is no such set without a project.
+    async fn named_referents(
+        &self,
+        item: &Planned,
+        by_project: &mut BTreeMap<String, Vec<Referent>>,
+    ) -> Result<Vec<Referent>, EngineError> {
+        let Item::Document(document) = &item.item else {
+            return Ok(Vec::new());
+        };
+        let (Some(content), Some(project)) =
+            (document.content.as_deref(), document.project.as_ref())
+        else {
+            return Ok(Vec::new());
+        };
+        if content.is_empty() {
+            return Ok(Vec::new());
+        }
+        let project = GlobalId::new(item.source.source.clone(), project.clone());
+        let key = project.to_string();
+        if !by_project.contains_key(&key) {
+            let read = self.referents(&project).await?;
+            by_project.insert(key.clone(), read);
+        }
+        Ok(by_project[&key]
+            .iter()
+            // A document does not name itself: the referent set is every *other* record
+            // filed under the project.
+            .filter(|referent| referent.id != item.source)
+            .filter(|referent| holds(content, &referent.location))
+            .cloned()
+            .collect())
+    }
+
+    /// Every record filed under one project at its own source, with the location string
+    /// that source reports for it.
+    ///
+    /// The project record itself, every task filed under it, and every document filed under
+    /// it. All three are reads this engine already knows how to make.
+    async fn referents(&self, project: &GlobalId) -> Result<Vec<Referent>, EngineError> {
+        let source = self.readable(&project.source)?;
+        let mut referents = Vec::new();
+        if let Some(held) = source
+            .source()
+            .get_project(&project.native)
+            .await
+            .map_err(|error| refused(source, error))?
+        {
+            note(
+                &mut referents,
+                project.clone(),
+                Level::Project,
+                held.location.as_ref(),
+                &held.metadata,
+            );
+        }
+        for task in self.project_member_tasks(project).await? {
+            note(
+                &mut referents,
+                task.id,
+                Level::Task,
+                task.item.location.as_ref(),
+                &task.item.metadata,
+            );
+        }
+        for document in self.project_documents(project).await? {
+            note(
+                &mut referents,
+                document.id,
+                Level::Document,
+                document.item.location.as_ref(),
+                &document.item.metadata,
+            );
+        }
+        Ok(referents)
+    }
+
+    /// Walk the destination once for every record it holds at the levels named, one page
+    /// at a time.
+    ///
+    /// One page is held at a time and nothing is written down, which is the same bound
+    /// [`Engine::scan`] and every other compensation in this engine works under. What is
+    /// different is the *answer*: this one keeps every match, so a destination holding two
+    /// records for one work item is reported as ambiguous rather than resolved to the first.
+    async fn counterparts(
+        &self,
+        destination: &ResolvedSource,
+        levels: &[Level],
+    ) -> Result<Counterparts, EngineError> {
+        let mut found = Counterparts::default();
+        for level in levels {
+            let mut cursor: Option<Cursor> = None;
+            loop {
+                let asked = cursor.clone();
+                let request = request_for(destination, cursor);
+                let next = match level {
+                    Level::Task => {
+                        let page = destination
+                            .source()
+                            .query_tasks(&TaskQuery::default(), &request)
+                            .await
+                            .map_err(|error| refused(destination, error))?;
+                        fits(page.items.len(), request.limit)
+                            .map_err(|error| refused(destination, error))?;
+                        for task in &page.items {
+                            found.note(*level, &task.id, task.location.as_ref(), &task.metadata);
+                        }
+                        page.next
+                    }
+                    Level::Project => {
+                        let page = destination
+                            .source()
+                            .query_projects(&ProjectQuery::default(), &request)
+                            .await
+                            .map_err(|error| refused(destination, error))?;
+                        fits(page.items.len(), request.limit)
+                            .map_err(|error| refused(destination, error))?;
+                        for project in &page.items {
+                            found.note(
+                                *level,
+                                &project.id,
+                                project.location.as_ref(),
+                                &project.metadata,
+                            );
+                        }
+                        page.next
+                    }
+                    Level::Document => {
+                        let page = destination
+                            .source()
+                            .query_documents(&DocumentQuery::default(), &request)
+                            .await
+                            .map_err(|error| refused(destination, error))?;
+                        fits(page.items.len(), request.limit)
+                            .map_err(|error| refused(destination, error))?;
+                        for document in &page.items {
+                            found.note(
+                                *level,
+                                &document.id,
+                                document.location.as_ref(),
+                                &document.metadata,
+                            );
+                        }
+                        page.next
+                    }
+                };
+                unrepeated(
+                    next.as_ref(),
+                    asked.as_ref(),
+                    "the destination was being walked for the records a document's \
+                     references name",
+                )
+                .map_err(|error| refused(destination, error))?;
+                match next {
+                    Some(next) => cursor = Some(next),
+                    None => break,
+                }
+            }
+        }
+        Ok(found)
     }
 
     /// Destination tasks filed under the copied project whose origin the source no longer
@@ -882,10 +1375,20 @@ impl Engine {
         written: &mut BTreeMap<String, NativeId>,
         deferred: &mut Vec<Deferred>,
         journal: &mut Journal,
+        references: &mut ReferenceCounts,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
         let mut planned = Vec::new();
         for id in items {
             planned.push(self.plan(destination, request, kind, id).await?);
+        }
+
+        // Only a document's own content names other records, and only once every document
+        // of this call has been read: the destination is walked once for all of them, and
+        // the content the rest of this call lands is the rewritten one — which is what
+        // makes a repeat copy of an already-rewritten document report `unchanged`.
+        if kind == Level::Document {
+            self.rewrite_references(destination, &mut planned, references)
+                .await?;
         }
 
         for item in &planned {
@@ -1542,6 +2045,136 @@ async fn forward_edges(
             None => return Ok(edges),
         }
     }
+}
+
+/// The location string one record reports, when it reports a usable one.
+///
+/// Either variant's own `String`, and `None` for a record the source gave no location for
+/// or gave an empty string for: there is nothing to look for in a document's content and
+/// nothing to point a reader at.
+fn located(location: Option<&Location>) -> Option<String> {
+    let (Location::Path(held) | Location::Url(held)) = location?;
+    (!held.is_empty()).then(|| held.clone())
+}
+
+/// Record one candidate referent, when its source said where it is.
+fn note(
+    into: &mut Vec<Referent>,
+    id: GlobalId,
+    level: Level,
+    location: Option<&Location>,
+    metadata: &BTreeMap<String, Value>,
+) {
+    if let Some(location) = located(location) {
+        into.push(Referent {
+            id,
+            origin: origin_of(metadata),
+            level,
+            location,
+        });
+    }
+}
+
+/// What every location string this document names becomes, longest first.
+///
+/// Longest first because a shorter location may start where a longer one does — a
+/// project's directory and a task's file under it — and the longer of the two is the
+/// record that occurrence names.
+fn table_for(referents: &[Referent], counterparts: &Counterparts) -> Vec<(String, Resolution)> {
+    let mut table: Vec<(String, Resolution)> = Vec::new();
+    for referent in referents {
+        // Two referents reporting one location string: an occurrence of it cannot be
+        // attributed to either, and a rewrite would be *confidently wrong* rather than
+        // merely unhelpful. So neither is chosen and both occurrences are counted.
+        if let Some(held) = table
+            .iter_mut()
+            .find(|(location, _)| location == &referent.location)
+        {
+            held.1 = Resolution::Leave { ambiguous: true };
+            continue;
+        }
+        table.push((referent.location.clone(), counterparts.resolve(referent)));
+    }
+    table.sort_by_key(|(location, _)| std::cmp::Reverse(location.len()));
+    table
+}
+
+/// Whether `content` holds `location` at least once as a whole reference.
+fn holds(content: &str, location: &str) -> bool {
+    (0..content.len()).any(|at| whole_at(content, at, location))
+}
+
+/// Whether `location` occurs at `at` **as a whole reference** rather than as part of a
+/// longer location-like string.
+///
+/// A location string occurring inside a longer one is a different string naming a
+/// different record: `/…/tasks/p/t.md` must not be rewritten inside `/…/tasks/p/t.md.bak`,
+/// `https://example.invalid/1` must not be rewritten inside `https://example.invalid/12`,
+/// and a project's location that is a directory prefix of a task's must not be rewritten
+/// inside that task's.
+fn whole_at(content: &str, at: usize, location: &str) -> bool {
+    if !content.is_char_boundary(at) || !content[at..].starts_with(location) {
+        return false;
+    }
+    let before = content[..at].chars().next_back();
+    let after = content[at + location.len()..].chars().next();
+    boundary(before) && boundary(after)
+}
+
+/// Whether a character ends a path or a link, so a location string next to one is the
+/// whole of that location.
+///
+/// Stated as what *stops* a location rather than as what one may contain, because the
+/// second list is unbounded — a path may hold very nearly any byte, and a URL more. Every
+/// character not named here continues, which is what leaves the three cases above alone;
+/// the end of the content counts as a stop. The set is what the artifact this exists for
+/// really wraps a bare path in — a backtick in a table cell — plus the delimiters prose
+/// and Markdown put next to one.
+fn boundary(character: Option<char>) -> bool {
+    match character {
+        None => true,
+        Some(character) => character.is_whitespace() || "`\"'()[]{}<>|,;".contains(character),
+    }
+}
+
+/// One document's content with every whole reference rewritten, and what that took.
+///
+/// A location string with no confident counterpart is left **byte-for-byte** as it was
+/// rather than removed or guessed at, and so is every character of the content that is not
+/// a rewritten reference. Nothing is added and nothing is reformatted.
+fn substitute(content: &str, table: &[(String, Resolution)]) -> (String, ReferenceCounts) {
+    let mut written = String::with_capacity(content.len());
+    let mut counts = ReferenceCounts::default();
+    let mut at = 0;
+    while at < content.len() {
+        if let Some((location, resolution)) = table
+            .iter()
+            .find(|(location, _)| whole_at(content, at, location))
+        {
+            match resolution {
+                Resolution::Rewrite(there) => {
+                    written.push_str(there);
+                    counts.rewritten += 1;
+                }
+                Resolution::Leave { ambiguous } => {
+                    written.push_str(location);
+                    counts.unresolved += 1;
+                    if *ambiguous {
+                        counts.ambiguous += 1;
+                    }
+                }
+            }
+            at += location.len();
+            continue;
+        }
+        let character = content[at..]
+            .chars()
+            .next()
+            .expect("a character at a boundary this walk only ever lands on");
+        written.push(character);
+        at += character.len_utf8();
+    }
+    (written, counts)
 }
 
 /// The origin one item records, when it records a usable one.

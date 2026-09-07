@@ -45,8 +45,8 @@ pub use engine::{
     ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyReport, CopyRequest, CopyScope,
     DependencyRequest, DocumentFilters, DocumentRequest, Engine, EngineError, Filters,
     LabelRequest, LeftBehind, MatchBy, Paging, ProjectRequest, ProjectSelector, Qualified,
-    QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind, SearchRequest, SourceListing,
-    SourceState, TaskRequest,
+    QualifiedEdge, QualifiedEndpoint, ReferenceCounts, SearchHit, SearchKind, SearchRequest,
+    SourceListing, SourceState, TaskRequest,
 };
 pub use environment::Environment;
 pub use global_id::GlobalId;
