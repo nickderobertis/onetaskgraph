@@ -168,6 +168,19 @@ pub struct CopyReport {
     /// because the correspondence could not be established.
     #[serde(default)]
     pub references_unresolved: u64,
+    // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — this
+    // restates at a new site the justification recorded at `Task::url` and
+    // `Capabilities.max_page_size` in the api crate: this is a serialized contract, and
+    // these fields ARE what the schema bundle publishes and what both SDKs' generated
+    // models are. What this field owes the one above it is a numeric inequality between two
+    // counters, which no Rust type makes unrepresentable without a private constructor —
+    // and a private constructor would hold it in one of three consumers, because JSON
+    // Schema cannot express it either, so the generated Python and TypeScript models would
+    // go on admitting exactly the state it removed. What does hold it is the one place the
+    // pair is produced: `substitute` counts an ambiguous occurrence unresolved on the same
+    // branch, and `Resolution` above has no variant that counts one without the other. That
+    // a figure is a *sub-count reported beside its total* is the contract this was given;
+    // making the two disjoint would remove the relation and is the contract owner's call.
     /// How many of [`Self::references_unresolved`] were left alone because the
     /// correspondence was **ambiguous** rather than merely absent. A sub-count, never
     /// larger than it.
@@ -557,15 +570,23 @@ impl Referent {
 }
 
 /// What every whole-reference occurrence of one location string becomes.
+///
+/// Three variants rather than a rewrite beside a flag, because the two ways of leaving an
+/// occurrence alone are what the two figures a copy reports are *about*: one is the design
+/// working and the other says the destination or the source holds something a re-run will
+/// never fix. A bool would let a reader of this type read them as the same outcome.
 enum Resolution {
     /// The destination's own location string for the counterpart.
     Rewrite(String),
-    /// Left byte-for-byte as it was, and counted.
-    Leave {
-        /// Whether the correspondence was **ambiguous** rather than merely absent, which
-        /// is the half of [`Counted::unresolved`] a re-run will never clear.
-        ambiguous: bool,
-    },
+    /// The destination holds no counterpart, or holds one it reports no location for, so
+    /// the occurrence is left byte-for-byte. Ordinary and expected under the bound this
+    /// design works to.
+    NoCounterpart,
+    /// The correspondence could not be established **confidently** — more than one
+    /// destination record matches the referent's two keys, or two referents report this one
+    /// location string. The occurrence is left byte-for-byte, no record is chosen, and a
+    /// re-run will never clear it.
+    Ambiguous,
 }
 
 /// Every destination record that records an origin, read **once per copy invocation**.
@@ -631,13 +652,13 @@ impl Counterparts {
             }
         }
         match candidates.as_slice() {
-            [] => Resolution::Leave { ambiguous: false },
+            [] => Resolution::NoCounterpart,
             // A counterpart the destination reports no location for names nowhere a reader
             // could go, so the source's own string is left standing rather than removed.
             [(_, location)] => location
                 .clone()
-                .map_or(Resolution::Leave { ambiguous: false }, Resolution::Rewrite),
-            _ => Resolution::Leave { ambiguous: true },
+                .map_or(Resolution::NoCounterpart, Resolution::Rewrite),
+            _ => Resolution::Ambiguous,
         }
     }
 }
@@ -2109,7 +2130,7 @@ fn table_for(referents: &[Referent], counterparts: &Counterparts) -> Vec<(String
             .iter_mut()
             .find(|(location, _)| location == &referent.location)
         {
-            held.1 = Resolution::Leave { ambiguous: true };
+            held.1 = Resolution::Ambiguous;
             continue;
         }
         table.push((referent.location.clone(), counterparts.resolve(referent)));
@@ -2175,12 +2196,16 @@ fn substitute(content: &str, table: &[(String, Resolution)]) -> (String, Counted
                     written.push_str(there);
                     counts.rewritten += 1;
                 }
-                Resolution::Leave { ambiguous } => {
+                // Both left-alone outcomes count as unresolved on the branch that counts
+                // them, which is what really holds `ambiguous` at or below `unresolved`.
+                Resolution::NoCounterpart => {
                     written.push_str(location);
                     counts.unresolved += 1;
-                    if *ambiguous {
-                        counts.ambiguous += 1;
-                    }
+                }
+                Resolution::Ambiguous => {
+                    written.push_str(location);
+                    counts.unresolved += 1;
+                    counts.ambiguous += 1;
                 }
             }
             at += location.len();
