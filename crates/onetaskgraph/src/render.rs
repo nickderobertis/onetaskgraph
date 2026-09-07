@@ -12,8 +12,8 @@
 //! to drift from the one a filter compares against.
 
 use onetaskgraph_core::{
-    CopyReport, Predicate, Qualified, QualifiedEdge, QueryPlan, ReferenceCounts, SearchHit,
-    SourceListing, SourceState,
+    CopyReport, Predicate, Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing,
+    SourceState,
 };
 use onetaskgraph_plugin_api::{Capabilities, Document, Label, Location, Project, Support, Task};
 use serde::Serialize;
@@ -166,7 +166,7 @@ pub fn copied(report: &CopyReport) -> String {
             })
             .collect::<Vec<_>>(),
     );
-    rendered.push_str(&references(&report.references));
+    rendered.push_str(&references(report));
     rendered
 }
 
@@ -177,10 +177,10 @@ pub fn copied(report: &CopyReport) -> String {
 /// the bound the copy works to, while an ambiguous one says the destination holds
 /// duplicate records for one work item, or the source reports one location for two, and
 /// re-running the copy will never clear it.
-fn references(counts: &ReferenceCounts) -> String {
+fn references(report: &CopyReport) -> String {
     format!(
         "references: {} rewritten, {} unresolved ({} ambiguous)\n",
-        counts.rewritten, counts.unresolved, counts.ambiguous
+        report.references_rewritten, report.references_unresolved, report.references_ambiguous
     )
 }
 

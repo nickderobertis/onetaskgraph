@@ -2545,10 +2545,14 @@ fn body(sandbox: &Sandbox, id: &str) -> String {
         .to_owned()
 }
 
-/// The three figures a `--json` copy reports.
-fn references(rendered: &str) -> Value {
+/// The three figures a `--json` copy reports, as a comparable triple.
+fn references(rendered: &str) -> (Value, Value, Value) {
     let report: Value = serde_json::from_str(rendered).expect("a copy emits JSON");
-    report["references"].clone()
+    (
+        report["references_rewritten"].clone(),
+        report["references_unresolved"].clone(),
+        report["references_ambiguous"].clone(),
+    )
 }
 
 /// The one line a copy's ordinary summary output says about references.
@@ -2588,7 +2592,7 @@ fn a_copied_document_names_the_destinations_own_records_across_a_one_level_fan_o
     );
     assert_eq!(
         references(&onto_staging),
-        json!({"rewritten": 2, "unresolved": 0, "ambiguous": 0}),
+        (json!(2), json!(0), json!(0)),
         "the first hop rewrites both rows: {onto_staging}"
     );
     ok(
@@ -2609,10 +2613,7 @@ fn a_copied_document_names_the_destinations_own_records_across_a_one_level_fan_o
             "--json",
         ],
     );
-    assert_eq!(
-        references(&planned),
-        json!({"rewritten": 2, "unresolved": 0, "ambiguous": 0})
-    );
+    assert_eq!(references(&planned), (json!(2), json!(0), json!(0)));
     assert!(
         !sandbox
             .subdirectory("board")

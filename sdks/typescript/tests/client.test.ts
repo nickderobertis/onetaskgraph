@@ -259,6 +259,13 @@ test("copy drives the real binary and reports what it did to each item", async (
     expect(created.items).toEqual([
       { source: "from:T-1", action: "created", destination: "into:T-1" },
     ]);
+    // Every copy carries the three reference figures, and a copy of tasks carries no
+    // document, so it recognised nothing and says so with zeroes rather than by omission.
+    expect([
+      created.references_rewritten,
+      created.references_unresolved,
+      created.references_ambiguous,
+    ]).toEqual([0, 0, 0]);
     // The destination really holds it, read back through the same binary.
     const copied = await copyClient.taskShow("into:T-1");
     expect(copied.items[0]?.item.metadata).toMatchObject({ "caller.count": 3 });

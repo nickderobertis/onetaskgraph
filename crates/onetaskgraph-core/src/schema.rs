@@ -19,8 +19,8 @@ use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::{
     CopyAction, CopyOutcome, CopyReport, GlobalId, PageToken, Predicate, Qualified, QualifiedEdge,
-    QualifiedEndpoint, QueryPlan, QueryResponse, ReferenceCounts, SearchHit, SearchKind,
-    SourceFailure, SourceListing, SourcePlan,
+    QualifiedEndpoint, QueryPlan, QueryResponse, SearchHit, SearchKind, SourceFailure,
+    SourceListing, SourcePlan,
 };
 
 /// The bundle's own version, bumped whenever a root is added, removed or renamed.
@@ -31,7 +31,7 @@ use crate::{
 ///
 /// Which roots each version brought is what `git log` answers; what this number owes a
 /// reader is that it moves whenever [`schema_bundle`] below gains, loses or renames one.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 10;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 9;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -120,11 +120,6 @@ pub fn schema_bundle() -> Value {
     roots.insert("CopyReport", schema_for!(CopyReport));
     roots.insert("CopyOutcome", schema_for!(CopyOutcome));
     roots.insert("CopyAction", schema_for!(CopyAction));
-    // A root of its own although it is reachable inside `CopyReport`, for the reason
-    // `Location` is one: a consumer acts on these figures — an ambiguous reference says the
-    // destination holds duplicates and re-running will never clear it — so the shape it
-    // reads has to be nameable rather than only reachable.
-    roots.insert("ReferenceCounts", schema_for!(ReferenceCounts));
 
     roots.insert("EffectiveConfig", schema_for!(EffectiveConfig));
     roots.insert("Setting", schema_for!(Setting));

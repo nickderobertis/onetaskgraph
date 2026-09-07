@@ -129,6 +129,43 @@ def test_the_generated_package_carries_every_type_of_the_documents_contract() ->
     assert page.next is not None
 
 
+def test_a_copy_report_without_reference_figures_reads_as_zeroes() -> None:
+    """The three figures are additive, so output written before they existed still reads.
+
+    A consumer generated against the copy report as it was hands this model a document with
+    none of the three keys, and gets zeroes rather than a validation error — which is the
+    whole of what "additive and default when absent" has to mean to a caller.
+    """
+    from onetaskgraph_sdk._generated.models import CopyReport
+
+    before = CopyReport.model_validate(
+        {"items": [{"source": "work:D-1", "action": "created", "destination": "notes:D-1"}]}
+    )
+    assert (
+        before.references_rewritten,
+        before.references_unresolved,
+        before.references_ambiguous,
+    ) == (0, 0, 0)
+
+    # And a report that carries them hands them back, the ambiguous figure being a
+    # sub-count of the unresolved one rather than a second total.
+    after = CopyReport.model_validate(
+        {
+            "items": [],
+            "references_rewritten": 3,
+            "references_unresolved": 2,
+            "references_ambiguous": 1,
+        }
+    )
+    assert after.references_ambiguous is not None
+    assert after.references_unresolved is not None
+    assert after.references_ambiguous <= after.references_unresolved
+    dumped = after.model_dump(mode="json")
+    assert dumped["references_rewritten"] == 3
+    assert dumped["references_unresolved"] == 2
+    assert dumped["references_ambiguous"] == 1
+
+
 def test_an_omitted_location_and_an_omitted_documents_capability_read_as_their_defaults() -> None:
     """Both members this contract added are optional, and both defaults are documented.
 

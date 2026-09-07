@@ -2482,9 +2482,9 @@ async fn copy_document(engine: &Engine, item: &str) -> onetaskgraph_core::CopyRe
 /// The three figures a copy reports, as a comparable triple.
 fn figures(report: &onetaskgraph_core::CopyReport) -> (u64, u64, u64) {
     (
-        report.references.rewritten,
-        report.references.unresolved,
-        report.references.ambiguous,
+        report.references_rewritten,
+        report.references_unresolved,
+        report.references_ambiguous,
     )
 }
 

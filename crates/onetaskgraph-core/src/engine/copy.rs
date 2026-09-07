@@ -140,48 +140,59 @@ impl MatchBy {
 pub struct CopyReport {
     /// One entry per item the copy considered, in the order it considered them.
     pub items: Vec<CopyOutcome>,
-    /// What the copy did to the references the documents it carried hold, over the whole
-    /// invocation.
+    // Three flat fields rather than one nested object, and the reason is the generated
+    // SDKs rather than taste: schemars writes a non-required field's whole default into
+    // the emitted schema, and for a field whose type is a model that default is an object,
+    // which the Python generator renders as a dict literal its own annotation does not
+    // admit — `ty` refuses it, and the enforcement that refuses it is not ours to relax. A
+    // scalar default is a number, and every generator renders one as a number. Kept out of
+    // the doc comments below because those are what the SDKs publish to a caller, and this
+    // is about how they are built.
+    /// Reference occurrences the copy rewrote to the destination's own location for the
+    /// record they name.
     ///
-    /// `#[serde(default)]` rather than required, so a consumer written against the output
-    /// before these figures existed reads one without them unchanged.
+    /// A silent bound is indistinguishable from a bug, so the copy says what it did to the
+    /// references the documents it carried hold. This and the two below are totals over the
+    /// whole invocation rather than figures per document, and all three default to zero, so
+    /// a consumer written against the output before they existed is unaffected.
+    ///
+    /// **What these figures do not claim.** The referent set is a document's own project,
+    /// so a reference to a record in a *different* project is never recognised at all and
+    /// cannot appear in [`Self::references_unresolved`] either. These are the references
+    /// the copy recognised; they are not a census of every reference a document holds.
+    /// Noticing an out-of-scope reference would need exactly the unbounded destination walk
+    /// this design refuses.
     #[serde(default)]
-    pub references: ReferenceCounts,
+    pub references_rewritten: u64,
+    /// Reference occurrences the copy recognised and left byte-for-byte as they were,
+    /// because the correspondence could not be established.
+    #[serde(default)]
+    pub references_unresolved: u64,
+    /// How many of [`Self::references_unresolved`] were left alone because the
+    /// correspondence was **ambiguous** rather than merely absent. A sub-count, never
+    /// larger than it.
+    ///
+    /// Split out because the two mean different things to a reader. A reference with no
+    /// counterpart is ordinary and expected under the bound above — the design working. An
+    /// ambiguous one says the destination holds duplicate records for one work item, or the
+    /// source reports one location for two records, and re-running the copy will never
+    /// clear it.
+    #[serde(default)]
+    pub references_ambiguous: u64,
 }
 
-/// How many reference occurrences one copy rewrote, and how many it could not.
-///
-/// A silent bound is indistinguishable from a bug, so the copy says what it did. The two
-/// halves mean different things to a reader: an unresolved reference is ordinary and
-/// expected under the bound below — the design working — while an ambiguous one says the
-/// destination holds duplicate records for one work item, or the source reports one
-/// location for two records, and re-running the copy will never clear it.
-///
-/// **What these figures do not claim.** The referent set is the document's own project, so
-/// a reference to a record in a *different* project is never recognised at all and cannot
-/// appear in [`Self::unresolved`] either. These are the references the copy recognised;
-/// they are not a census of every reference a document holds. Noticing an out-of-scope
-/// reference would need exactly the unbounded destination walk this design refuses.
-///
-/// Every figure is a total over the whole invocation rather than a figure per document,
-/// and all three default to zero, so a copy carrying no document reports zeroes rather
-/// than nothing.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReferenceCounts {
-    /// Occurrences the copy rewrote to the destination's own location for the record.
-    #[serde(default)]
-    pub rewritten: u64,
-    /// Occurrences the copy recognised and left byte-for-byte as they were, because the
-    /// correspondence could not be established.
-    #[serde(default)]
-    pub unresolved: u64,
-    /// How many of [`Self::unresolved`] were left alone because the correspondence was
-    /// **ambiguous** rather than merely absent. A sub-count, never larger than it.
-    #[serde(default)]
-    pub ambiguous: u64,
+/// One document's reference figures, before they are folded into the invocation's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Counted {
+    /// Occurrences rewritten.
+    rewritten: u64,
+    /// Occurrences recognised and left alone.
+    unresolved: u64,
+    /// How many of those were ambiguous.
+    ambiguous: u64,
 }
 
-impl ReferenceCounts {
+impl Counted {
     /// Fold one document's figures into the invocation's.
     fn add(&mut self, other: Self) {
         self.rewritten += other.rewritten;
@@ -552,7 +563,7 @@ enum Resolution {
     /// Left byte-for-byte as it was, and counted.
     Leave {
         /// Whether the correspondence was **ambiguous** rather than merely absent, which
-        /// is the half of [`ReferenceCounts::unresolved`] a re-run will never clear.
+        /// is the half of [`Counted::unresolved`] a re-run will never clear.
         ambiguous: bool,
     },
 }
@@ -680,7 +691,7 @@ impl Engine {
         let mut written: BTreeMap<String, NativeId> = BTreeMap::new();
         let mut deferred: Vec<Deferred> = Vec::new();
         // One total for the whole invocation rather than one per document.
-        let mut references = ReferenceCounts::default();
+        let mut references = Counted::default();
         // The whole copied set, established before anything is written. For a project
         // copy that means reading every named project's membership first: the set is the
         // whole request rather than one project of it.
@@ -746,7 +757,12 @@ impl Engine {
         };
         self.repair(destination, request, &copied, &written, deferred, journal)
             .await?;
-        Ok(CopyReport { items, references })
+        Ok(CopyReport {
+            items,
+            references_rewritten: references.rewritten,
+            references_unresolved: references.unresolved,
+            references_ambiguous: references.ambiguous,
+        })
     }
 
     /// Write every deferred item again, now that every destination id is known.
@@ -884,7 +900,7 @@ impl Engine {
         written: &mut BTreeMap<String, NativeId>,
         deferred: &mut Vec<Deferred>,
         journal: &mut Journal,
-        references: &mut ReferenceCounts,
+        references: &mut Counted,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
         // On a repeat copy, compare the project with its final remapped edges before the
         // first pass temporarily rewrites it. This preserves an `unchanged` outcome when
@@ -1099,7 +1115,7 @@ impl Engine {
         &self,
         destination: &ResolvedSource,
         planned: &mut [Planned],
-        counts: &mut ReferenceCounts,
+        counts: &mut Counted,
     ) -> Result<(), EngineError> {
         // Read at the source, once per project rather than once per document: several
         // documents of one project is the ordinary case.
@@ -1375,7 +1391,7 @@ impl Engine {
         written: &mut BTreeMap<String, NativeId>,
         deferred: &mut Vec<Deferred>,
         journal: &mut Journal,
-        references: &mut ReferenceCounts,
+        references: &mut Counted,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
         let mut planned = Vec::new();
         for id in items {
@@ -2142,9 +2158,9 @@ fn boundary(character: Option<char>) -> bool {
 /// A location string with no confident counterpart is left **byte-for-byte** as it was
 /// rather than removed or guessed at, and so is every character of the content that is not
 /// a rewritten reference. Nothing is added and nothing is reformatted.
-fn substitute(content: &str, table: &[(String, Resolution)]) -> (String, ReferenceCounts) {
+fn substitute(content: &str, table: &[(String, Resolution)]) -> (String, Counted) {
     let mut written = String::with_capacity(content.len());
-    let mut counts = ReferenceCounts::default();
+    let mut counts = Counted::default();
     let mut at = 0;
     while at < content.len() {
         if let Some((location, resolution)) = table
