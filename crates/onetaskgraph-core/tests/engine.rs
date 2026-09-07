@@ -9,6 +9,7 @@ use onetaskgraph_plugin_api::{
     NativeId, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
 };
 use secrecy::SecretString;
+use serde_json::Value;
 
 /// No source in this crate's tests needs a credential.
 struct NoSecrets;
@@ -140,35 +141,187 @@ fn the_registry_resolves_a_kind_to_its_plugin_and_nothing_to_an_unknown_one() {
     assert!(plugin_for("jira").is_none());
 }
 
-/// Every version of the bundle and the exact roots it published. **Append-only.**
+/// What one published version of the bundle is recorded as.
+///
+/// Two variants because this repository can attest less about its own past than about its
+/// present. Versions 1 to 9 were recorded as a set of root *names* and nothing more, and
+/// the schemas those versions really emitted are on the registries rather than here — so a
+/// row for one of them can only ever say which roots it had. From version 10 the row
+/// records the shape: every root, with a digest of the schema that root emitted. A row may
+/// not go back from [`Self::Shapes`] to [`Self::Names`], which the test below refuses.
+enum Published {
+    /// Root names alone — all this repository recorded before version 10.
+    Names(&'static [&'static str]),
+    /// Every root's name beside a digest of the schema it emitted.
+    Shapes(&'static [(&'static str, u64)]),
+}
+
+impl Published {
+    /// The root names this row publishes, however it records them.
+    fn names(&self) -> Vec<&'static str> {
+        match self {
+            Self::Names(names) => names.to_vec(),
+            Self::Shapes(shapes) => shapes.iter().map(|(name, _)| *name).collect(),
+        }
+    }
+}
+
+/// The first version whose row records the shape of every root rather than its name alone.
+const SHAPES_FROM: u32 = 10;
+
+/// Every version of the bundle and the exact shape it published. **Append-only.**
 ///
 /// Both SDKs are generated from this bundle, so adding, removing or renaming a root
-/// changes the surface they emit, and [`SCHEMA_BUNDLE_VERSION`] is what lets an SDK
-/// refuse a bundle it was not generated against. Nothing else ties the two together.
+/// changes the surface they emit — and so does changing what one root *contains*, which
+/// this table records from version [`SHAPES_FROM`] on. A property added to `CopyReport` is
+/// a new field in both SDKs' generated models exactly as a new root is a new model, and
+/// [`SCHEMA_BUNDLE_VERSION`] is what lets an SDK refuse a bundle it was not generated
+/// against. Nothing else ties the two together.
 ///
-/// To change the roots: **append a row** with the next version and bump
+/// To change any root: **append a row** with the next version and bump
 /// `SCHEMA_BUNDLE_VERSION` to match. The test below checks that workflow is
 /// internally consistent — the version equals the row count, no version is listed
-/// twice, no two rows publish the same set, and the current row matches what the
-/// binary actually emits — so the sanctioned path is the mechanically checked one.
+/// twice, no two rows publish the same shape, and the current row matches what the
+/// binary actually emits, root for root and digest for digest — so the sanctioned path is
+/// the mechanically checked one. When it disagrees it prints the row to paste.
 ///
 /// What it deliberately does **not** claim: editing a row in place cannot be
 /// detected from inside the repository, because the edited table is
-/// indistinguishable from one that always read that way. The gate makes a root
+/// indistinguishable from one that always read that way. The gate makes a schema
 /// change impossible to land *accidentally* — it will not compile past this test
 /// without a conscious edit to a table that says not to do that — rather than
 /// impossible to land at all. Catching an in-place edit needs the previously
 /// published bundle, which lives on the registries, not here.
-const PUBLISHED_BUNDLES: &[(u32, &[&str])] = &[
-    (1, &FIRST_BUNDLE_ROOTS),
-    (2, &SECOND_BUNDLE_ROOTS),
-    (3, &THIRD_BUNDLE_ROOTS),
-    (4, &FOURTH_BUNDLE_ROOTS),
-    (5, &FIFTH_BUNDLE_ROOTS),
-    (6, &SIXTH_BUNDLE_ROOTS),
-    (7, &SEVENTH_BUNDLE_ROOTS),
-    (8, &EIGHTH_BUNDLE_ROOTS),
-    (9, &NINTH_BUNDLE_ROOTS),
+///
+/// The cost of recording digests is stated rather than discovered: a schemars upgrade that
+/// reworded one generated keyword moves a digest and demands a version bump. That is the
+/// correct answer — the emitted document really did change, and both SDKs really are
+/// regenerated from it — but it is a bump nobody wrote the code for, and this is where a
+/// reader meets that.
+const PUBLISHED_BUNDLES: &[(u32, Published)] = &[
+    (1, Published::Names(&FIRST_BUNDLE_ROOTS)),
+    (2, Published::Names(&SECOND_BUNDLE_ROOTS)),
+    (3, Published::Names(&THIRD_BUNDLE_ROOTS)),
+    (4, Published::Names(&FOURTH_BUNDLE_ROOTS)),
+    (5, Published::Names(&FIFTH_BUNDLE_ROOTS)),
+    (6, Published::Names(&SIXTH_BUNDLE_ROOTS)),
+    (7, Published::Names(&SEVENTH_BUNDLE_ROOTS)),
+    (8, Published::Names(&EIGHTH_BUNDLE_ROOTS)),
+    (9, Published::Names(&NINTH_BUNDLE_ROOTS)),
+    (10, Published::Shapes(&TENTH_BUNDLE_SHAPE)),
+];
+
+/// One root's schema rendered so that two equal documents render equally.
+///
+/// Object keys sorted at every depth, so nothing about the order `schemars` happened to
+/// build a map in reaches the digest. Arrays keep their order, because in JSON Schema an
+/// array's order is part of what it says.
+fn canonical(value: &Value) -> String {
+    match value {
+        Value::Object(fields) => {
+            let mut keys: Vec<&String> = fields.keys().collect();
+            keys.sort_unstable();
+            let rendered: Vec<String> = keys
+                .iter()
+                .map(|key| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(key).expect("a key renders"),
+                        canonical(&fields[*key])
+                    )
+                })
+                .collect();
+            format!("{{{}}}", rendered.join(","))
+        }
+        Value::Array(items) => {
+            let rendered: Vec<String> = items.iter().map(canonical).collect();
+            format!("[{}]", rendered.join(","))
+        }
+        other => serde_json::to_string(other).expect("a scalar renders"),
+    }
+}
+
+/// A change-detecting digest of one root's emitted schema.
+///
+/// FNV-1a over the canonical rendering above, written out here rather than taken from a
+/// crate: what this has to catch is a schema that changed without the version moving, and
+/// any digest that changes when its input does catches that. It defends against nothing
+/// adversarial and does not pretend to — whoever can edit a row of the table above can edit
+/// the digest beside it, which the table already says of itself.
+fn digest(schema: &Value) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in canonical(schema).as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// The shape version 10 of the bundle publishes: every root, and a digest of its schema.
+///
+/// Version 10 is the first row recorded this way, and the change it records is `CopyReport`
+/// gaining the three figures a copy reports about the references its documents hold. Under
+/// the name-only rows above that change was invisible: no root was added, removed or
+/// renamed, and both SDKs' generated models moved all the same.
+const TENTH_BUNDLE_SHAPE: [(&str, u64); 58] = [
+    ("Capabilities", 0xa10633f78133cd5f),
+    ("CopyAction", 0x92821be0daa46894),
+    ("CopyOutcome", 0xefcf23cfbd5dde3b),
+    ("CopyReport", 0xd45b707b51401c93),
+    ("CredentialLayer", 0x54cdffe467a3b7f1),
+    ("DependencyEdge", 0x965fcb2880071dcc),
+    ("DependencyEndpoint", 0x52371a0138569604),
+    ("DependencyKind", 0x62a3106e8479701a),
+    ("Direction", 0x497cbce272a8a5bb),
+    ("Document", 0x43f55b02791ea15b),
+    ("DocumentQuery", 0xab8ca467012e1a12),
+    ("EffectiveConfig", 0xa41a3361af17368f),
+    ("GlobalId", 0xe692661021d9c53e),
+    ("Health", 0x4a65ae032f76c6ca),
+    ("ItemKind", 0x75db1aa08ed04b2f),
+    ("Label", 0x07555503d77a90c7),
+    ("Location", 0x0690620b049c989a),
+    ("Origin", 0x653235a0d0c3576e),
+    ("OutputFormat", 0xa8a85cfd04d98684),
+    ("PageOfDependencyEdge", 0x529f3ea40c6b71c9),
+    ("PageOfDocument", 0x985c78b3f3c93eeb),
+    ("PageOfLabel", 0xd6110ddeeaaa78e8),
+    ("PageOfProject", 0x41abc46f0e84e0d7),
+    ("PageOfTask", 0x0921303f42a6cb4e),
+    ("PageRequest", 0x6c7be3975028b78c),
+    ("PageToken", 0xc685683af2c78c39),
+    ("Predicate", 0x2c7629f85d039fc6),
+    ("Project", 0x27060ceb590bd2d1),
+    ("ProjectQuery", 0x4ab0fa6b012cc9bd),
+    ("QualifiedDocument", 0x4e539a8ce7b72c47),
+    ("QualifiedEdge", 0xe24f9b34b618df17),
+    ("QualifiedEndpoint", 0x7bc0f5163c4c8594),
+    ("QualifiedLabel", 0x7ac91fcfd8f41e30),
+    ("QualifiedProject", 0x78c2101cd2a90b0d),
+    ("QualifiedTask", 0xb6c4cf33ff76e1b2),
+    ("QueryPlan", 0x5cd046eed149f89b),
+    ("QueryResponseOfQualifiedDocument", 0xea3687e0592dde61),
+    ("QueryResponseOfQualifiedEdge", 0x747c236f676fa46a),
+    ("QueryResponseOfQualifiedLabel", 0x634a582d4af1fad0),
+    ("QueryResponseOfQualifiedProject", 0xd6017091147e11c7),
+    ("QueryResponseOfQualifiedTask", 0x2640335859efe43e),
+    ("QueryResponseOfSearchHit", 0x6d7372360674cc65),
+    ("Repository", 0x98147ade92ced0f0),
+    ("ResolvedCredential", 0x14a23b081a4e8d10),
+    ("SearchHit", 0xb3b5470d71a6d866),
+    ("SearchKind", 0xc4d2cd105ad4b849),
+    ("SecretsReport", 0x245d50b08721b73d),
+    ("Setting", 0xf593f9ae902cba68),
+    ("SourceError", 0x33872c91770f86da),
+    ("SourceFailure", 0x452bd4b53ef4d74c),
+    ("SourceListing", 0x006592f26f65b8b6),
+    ("SourceListings", 0x67cd161375100dcb),
+    ("SourcePlan", 0xd0c5548abc7d7223),
+    ("Status", 0xd14c325a52e464f6),
+    ("StatusCategory", 0xc866ba4d0d422da0),
+    ("Task", 0xe39a3442bae8ceda),
+    ("TaskQuery", 0x963c214c94159671),
+    ("TextFields", 0x7240bd05f9beff93),
 ];
 
 /// The roots version 1 of the bundle publishes.
@@ -629,6 +782,22 @@ const NINTH_BUNDLE_ROOTS: [&str; 58] = [
     "QueryResponseOfQualifiedDocument",
 ];
 
+/// The emitted shape rendered as the Rust literal a reader pastes into the table.
+///
+/// A diagnostic that hands over the answer, because the alternative is a reader deriving
+/// fifty-eight digests by hand from a message that only says they were wrong.
+fn literal(emitted: &[(&str, u64)]) -> String {
+    let rows: Vec<String> = emitted
+        .iter()
+        .map(|(name, digest)| format!("    (\"{name}\", {digest:#018x}),"))
+        .collect();
+    format!(
+        "const NEXT_BUNDLE_SHAPE: [(&str, u64); {}] = [\n{}\n];",
+        emitted.len(),
+        rows.join("\n")
+    )
+}
+
 #[test]
 fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
     let bundle = schema_bundle();
@@ -661,14 +830,33 @@ fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
              in order, so row {index} is version {}.",
             index + 1
         );
+        // Once a version records the shape, no later version may record less: a row that
+        // fell back to names would silently stop noticing a changed root.
+        assert!(
+            *version < SHAPES_FROM || matches!(published, Published::Shapes(_)),
+            "version {version} is at or past {SHAPES_FROM} and must record every root's \
+             schema, not its name alone."
+        );
         // A shape may not be republished under a second version, and a version may not
         // describe two shapes — either would make the version useless for the SDK that
         // reads it.
         assert!(
-            !PUBLISHED_BUNDLES[..index]
-                .iter()
-                .any(|(_, earlier)| sorted(earlier) == sorted(published)),
-            "version {version} republishes an earlier version's exact root set; if the \
+            !PUBLISHED_BUNDLES[..index].iter().any(|(_, earlier)| {
+                match (earlier, published) {
+                    (Published::Names(earlier), Published::Names(now)) => {
+                        sorted(earlier) == sorted(now)
+                    }
+                    (Published::Shapes(earlier), Published::Shapes(now)) => {
+                        let mut earlier = earlier.to_vec();
+                        let mut now = now.to_vec();
+                        earlier.sort_unstable();
+                        now.sort_unstable();
+                        earlier == now
+                    }
+                    _ => false,
+                }
+            }),
+            "version {version} republishes an earlier version's exact shape; if the \
              shape did not change, the version must not either."
         );
     }
@@ -680,15 +868,36 @@ fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
 
     assert_eq!(
         sorted(&roots.keys().map(String::as_str).collect::<Vec<_>>()),
-        sorted(expected),
+        sorted(&expected.names()),
         "the bundle's roots are not what version {SCHEMA_BUNDLE_VERSION} publishes. Append a \
-         row to PUBLISHED_BUNDLES with the new set and bump SCHEMA_BUNDLE_VERSION to match — \
-         an SDK generated against the old version would otherwise silently emit the wrong \
+         row to PUBLISHED_BUNDLES with the new shape and bump SCHEMA_BUNDLE_VERSION to match \
+         — an SDK generated against the old version would otherwise silently emit the wrong \
          models."
     );
 
-    for root in expected.iter() {
-        assert!(roots[*root].is_object(), "the bundle is missing {root}");
+    for root in expected.names() {
+        assert!(roots[root].is_object(), "the bundle is missing {root}");
+    }
+
+    // And what each root *contains*, which the root names alone cannot see. A property
+    // added to `CopyReport` is a new field in both SDKs' generated models exactly as a new
+    // root is a new model, so it moves the version or it fails here.
+    if let Published::Shapes(published) = expected {
+        let mut emitted: Vec<(&str, u64)> = roots
+            .iter()
+            .map(|(name, schema)| (name.as_str(), digest(schema)))
+            .collect();
+        emitted.sort_unstable();
+        let mut recorded = published.to_vec();
+        recorded.sort_unstable();
+        assert_eq!(
+            emitted,
+            recorded,
+            "the schemas version {SCHEMA_BUNDLE_VERSION} publishes are not the ones the \
+             binary emits. If this change is deliberate, append a row to PUBLISHED_BUNDLES \
+             and bump SCHEMA_BUNDLE_VERSION to match; the row to paste is:\n{}",
+            literal(&emitted)
+        );
     }
 
     let plugins = bundle["plugin_config"]

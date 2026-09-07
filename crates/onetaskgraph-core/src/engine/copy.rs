@@ -145,9 +145,16 @@ pub struct CopyReport {
     // the emitted schema, and for a field whose type is a model that default is an object,
     // which the Python generator renders as a dict literal its own annotation does not
     // admit — `ty` refuses it, and the enforcement that refuses it is not ours to relax. A
-    // scalar default is a number, and every generator renders one as a number. Kept out of
-    // the doc comments below because those are what the SDKs publish to a caller, and this
-    // is about how they are built.
+    // scalar default is a number, and every generator renders one as a number.
+    //
+    // Each carries `skip_serializing_if` so a figure of zero is *absent* from the machine
+    // output rather than written as `0`, and `serde(default)` so absence reads back as
+    // zero. `#[schemars(!skip_serializing_if)]` keeps the emitted schema's `"default": 0`
+    // that the skip would otherwise remove — without it a generator has no way to know what
+    // an absent figure means, and both SDKs would model it as null instead of nought. The
+    // schema and the wire then say the same thing: not required, and zero when it is not
+    // there. Kept out of the doc comments below because those are what the SDKs publish to
+    // a caller, and this is about how they are built.
     /// Reference occurrences the copy rewrote to the destination's own location for the
     /// record they name.
     ///
@@ -162,11 +169,13 @@ pub struct CopyReport {
     /// the copy recognised; they are not a census of every reference a document holds.
     /// Noticing an out-of-scope reference would need exactly the unbounded destination walk
     /// this design refuses.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "nothing_to_report")]
+    #[schemars(!skip_serializing_if)]
     pub references_rewritten: u64,
     /// Reference occurrences the copy recognised and left byte-for-byte as they were,
     /// because the correspondence could not be established.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "nothing_to_report")]
+    #[schemars(!skip_serializing_if)]
     pub references_unresolved: u64,
     /// How many of [`Self::references_unresolved`] were left alone because the
     /// correspondence was **ambiguous** rather than merely absent. A sub-count, never
@@ -177,13 +186,24 @@ pub struct CopyReport {
     /// ambiguous one says the destination holds duplicate records for one work item, or the
     /// source reports one location for two records, and re-running the copy will never
     /// clear it.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "nothing_to_report")]
+    #[schemars(!skip_serializing_if)]
     // llmlint: ignore[invalid_states_unrepresentable] JSON Schema cannot express an
     // inequality between two numbers, so a private constructor here would hold this in one
     // consumer of three while both SDKs' generated models went on admitting it. What holds
     // it is `substitute`: `Resolution` has no variant that counts an occurrence ambiguous
     // without counting it unresolved.
     pub references_ambiguous: u64,
+}
+
+/// Whether one of [`CopyReport`]'s reference figures has anything to say.
+///
+/// A copy that recognised no reference reports that by leaving the figure out rather than
+/// by writing a nought, so the machine output of a task or project copy is exactly what it
+/// was before these figures existed. The human rendering says it in words either way,
+/// because a reader there needs to be told the copy looked.
+fn nothing_to_report(figure: &u64) -> bool {
+    *figure == 0
 }
 
 /// One document's reference figures, before they are folded into the invocation's.

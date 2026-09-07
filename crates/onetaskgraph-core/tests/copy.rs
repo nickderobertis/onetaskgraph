@@ -3235,3 +3235,65 @@ async fn a_source_that_overruns_its_page_stops_the_read_of_a_documents_own_proje
     assert!(refused.contains("rows for a page of at most"), "{refused}");
     assert!(pages.load(Ordering::Relaxed) <= 3, "the walk stopped early");
 }
+
+#[tokio::test]
+async fn the_reference_figures_are_absent_when_zero_and_read_back_as_zero_when_absent() {
+    // The three figures are additive, and this is the whole of what that has to mean on the
+    // wire: a copy with nothing to report writes no key, output written before they existed
+    // still reads, and a figure that has something to say survives both directions.
+
+    // A report the copy really made, with nothing to say: no `references_*` key at all, so
+    // this document is byte-for-byte what a copy emitted before these figures existed.
+    let engine = pair();
+    let quiet = engine.copy(&one("from:T-1")).await.expect("the copy runs");
+    let emitted = serde_json::to_value(&quiet).expect("a copy report serialises");
+    let keys: Vec<&String> = emitted
+        .as_object()
+        .expect("a report is an object")
+        .keys()
+        .collect();
+    assert_eq!(keys, ["items"], "a figure of zero is absent, not nought");
+
+    // Absent reads back as zero rather than refusing, which is what lets a consumer written
+    // against the older document hand it to this type unchanged.
+    let older: onetaskgraph_core::CopyReport = serde_json::from_value(json!({
+        "items": [{"source": "from:T-1", "action": "created", "destination": "into:T-1"}]
+    }))
+    .expect("a report without the figures still reads");
+    assert_eq!(figures(&older), (0, 0, 0));
+
+    // And a figure with something to say is written, survives a round trip, and keeps the
+    // ambiguous count at or below the unresolved one it is part of.
+    let reported = onetaskgraph_core::CopyReport {
+        items: Vec::new(),
+        references_rewritten: 3,
+        references_unresolved: 2,
+        references_ambiguous: 1,
+    };
+    let wire = serde_json::to_value(&reported).expect("a copy report serialises");
+    assert_eq!(
+        wire,
+        json!({
+            "items": [],
+            "references_rewritten": 3,
+            "references_unresolved": 2,
+            "references_ambiguous": 1,
+        })
+    );
+    let back: onetaskgraph_core::CopyReport = serde_json::from_value(wire).expect("it reads back");
+    assert_eq!(back, reported);
+    assert!(back.references_ambiguous <= back.references_unresolved);
+
+    // One figure of the three having something to say leaves the other two absent, rather
+    // than dragging all three onto the wire together.
+    let partial = onetaskgraph_core::CopyReport {
+        items: Vec::new(),
+        references_rewritten: 2,
+        references_unresolved: 0,
+        references_ambiguous: 0,
+    };
+    assert_eq!(
+        serde_json::to_value(&partial).expect("it serialises"),
+        json!({"items": [], "references_rewritten": 2})
+    );
+}

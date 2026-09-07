@@ -600,15 +600,33 @@ content of somebody's document, where a wrong answer is silent corruption of pro
 will act on. The two lookups are meant to disagree on a destination holding duplicates.
 
 `CopyReport` carries three figures over the whole invocation — rewritten, unresolved, and
-how many of those were ambiguous — in both renderings, all three defaulting to zero so a
-consumer written before them is unaffected. They are three flat fields rather than one
-nested object because schemars writes a non-required model-typed field's whole default into
-the emitted schema and the Python generator renders that as a dict literal `ty` refuses.
-The destination is walked for counterparts **once per copy invocation**, and a copy whose
-documents hold no candidate reference makes no such walk at all.
+how many of those were ambiguous. The human rendering prints all three in one line however
+they read, because a reader there needs to be told the copy looked. The machine output
+**omits a figure of zero** rather than writing a nought, so what a task or a project copy
+emits is byte-for-byte the document it emitted before these figures existed; absence reads
+back as zero, which is what `#[schemars(!skip_serializing_if)]` is for — it keeps the
+`"default": 0` the skip would otherwise strip from the emitted schema, without which both
+SDKs would model an absent figure as null instead of nought. They are three flat fields
+rather than one nested object because schemars writes a non-required model-typed field's
+whole default into the emitted schema and the Python generator renders that as a dict
+literal `ty` refuses. The destination is walked for counterparts **once per copy
+invocation**, and a copy whose documents hold no candidate reference makes no such walk at
+all.
 
 ## Recorded decisions
 
+- **`SCHEMA_BUNDLE_VERSION` tracks the emitted document, not the set of root names.** A
+  property added to an existing root is a new field in both SDKs' generated models exactly
+  as a new root is a new model, so it moves the version. The golden that holds it to that is
+  `PUBLISHED_BUNDLES` in `crates/onetaskgraph-core/tests/engine.rs`, which from version 10
+  records every root beside a digest of the schema it emitted rather than its name alone —
+  under the name-only rows a changed root was invisible, and `CopyReport` gaining three
+  properties is the change that proved it. The table is append-only, its rows are the
+  versions in order, no two rows may publish the same shape, and a row at or past version 10
+  may not fall back to names. When the emitted document disagrees with it the test prints
+  the row to paste. The cost is stated rather than discovered: a schemars upgrade that
+  rewords one generated keyword moves a digest and demands a bump, which is the correct
+  answer — the document really did change and both SDKs really are regenerated from it.
 - **The SDKs drive the real binary as a subprocess.** They do not reimplement the engine
   and do not link it. One implementation of the query semantics means the CLI, a script
   and a TypeScript application cannot answer the same question differently — which is the

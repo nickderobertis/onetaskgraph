@@ -2546,6 +2546,10 @@ fn body(sandbox: &Sandbox, id: &str) -> String {
 }
 
 /// The three figures a `--json` copy reports, as a comparable triple.
+///
+/// `Value::Null` where a figure is **absent**, which is what a figure of zero is on the
+/// wire: a copy that recognised nothing writes no key at all, so machine output that never
+/// carried these figures is exactly what such a copy still emits.
 fn references(rendered: &str) -> (Value, Value, Value) {
     let report: Value = serde_json::from_str(rendered).expect("a copy emits JSON");
     (
@@ -2597,8 +2601,9 @@ fn a_copied_document_names_the_destinations_own_records_across_a_one_level_fan_o
     );
     assert_eq!(
         references(&onto_staging),
-        (json!(2), json!(0), json!(0)),
-        "the first hop rewrites both rows: {onto_staging}"
+        (json!(2), Value::Null, Value::Null),
+        "the first hop rewrites both rows, and the two figures with nothing to say are \
+         absent rather than nought: {onto_staging}"
     );
     ok(
         &sandbox,
@@ -2618,7 +2623,11 @@ fn a_copied_document_names_the_destinations_own_records_across_a_one_level_fan_o
             "--json",
         ],
     );
-    assert_eq!(references(&planned), (json!(2), json!(0), json!(0)));
+    assert_eq!(
+        references(&planned),
+        (json!(2), Value::Null, Value::Null),
+        "a dry run reports the figures it would have made"
+    );
     assert!(
         !sandbox
             .subdirectory("board")

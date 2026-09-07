@@ -129,27 +129,36 @@ def test_the_generated_package_carries_every_type_of_the_documents_contract() ->
     assert page.next is not None
 
 
-def test_a_copy_report_without_reference_figures_reads_as_zeroes() -> None:
-    """The three figures are additive, so output written before they existed still reads.
+def test_the_reference_figures_round_trip_absent_zero_and_nonzero() -> None:
+    """The three figures are additive, and this is what that has to mean to a caller.
 
-    A consumer generated against the copy report as it was hands this model a document with
-    none of the three keys, and gets zeroes rather than a validation error — which is the
-    whole of what "additive and default when absent" has to mean to a caller.
+    The binary omits a figure of zero rather than writing a nought, so the document a copy
+    that recognised nothing emits is byte-for-byte what one emitted before these figures
+    existed. This model has to read that as zeroes rather than as nulls, put a figure back
+    on the wire the way the binary would, and carry a figure that has something to say.
     """
     from onetaskgraph_sdk._generated.models import CopyReport
 
-    before = CopyReport.model_validate(
+    # Absent reads back as zero, which is what the schema's `"default": 0` buys a generated
+    # consumer: without it this field would model as null and a caller would branch on it.
+    absent = CopyReport.model_validate(
         {"items": [{"source": "work:D-1", "action": "created", "destination": "notes:D-1"}]}
     )
     assert (
-        before.references_rewritten,
-        before.references_unresolved,
-        before.references_ambiguous,
+        absent.references_rewritten,
+        absent.references_unresolved,
+        absent.references_ambiguous,
     ) == (0, 0, 0)
 
-    # And a report that carries them hands them back, the ambiguous figure being a
+    # And zero goes back out absent, so a document this model round-trips is the one the
+    # binary would have written.
+    assert absent.model_dump(mode="json", exclude_defaults=True) == {
+        "items": [{"source": "work:D-1", "action": "created", "destination": "notes:D-1"}]
+    }
+
+    # A figure with something to say survives both directions, the ambiguous one being a
     # sub-count of the unresolved one rather than a second total.
-    after = CopyReport.model_validate(
+    reported = CopyReport.model_validate(
         {
             "items": [],
             "references_rewritten": 3,
@@ -157,13 +166,26 @@ def test_a_copy_report_without_reference_figures_reads_as_zeroes() -> None:
             "references_ambiguous": 1,
         }
     )
-    assert after.references_ambiguous is not None
-    assert after.references_unresolved is not None
-    assert after.references_ambiguous <= after.references_unresolved
-    dumped = after.model_dump(mode="json")
-    assert dumped["references_rewritten"] == 3
-    assert dumped["references_unresolved"] == 2
-    assert dumped["references_ambiguous"] == 1
+    assert reported.references_ambiguous is not None
+    assert reported.references_unresolved is not None
+    assert reported.references_ambiguous <= reported.references_unresolved
+    dumped = reported.model_dump(mode="json", exclude_defaults=True)
+    assert dumped == {
+        "items": [],
+        "references_rewritten": 3,
+        "references_unresolved": 2,
+        "references_ambiguous": 1,
+    }
+    assert CopyReport.model_validate(dumped) == reported
+
+    # One figure having something to say leaves the other two absent, exactly as the binary
+    # writes them.
+    partial = CopyReport.model_validate({"items": [], "references_rewritten": 2})
+    assert (partial.references_unresolved, partial.references_ambiguous) == (0, 0)
+    assert partial.model_dump(mode="json", exclude_defaults=True) == {
+        "items": [],
+        "references_rewritten": 2,
+    }
 
 
 def test_an_omitted_location_and_an_omitted_documents_capability_read_as_their_defaults() -> None:
@@ -243,7 +265,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 9
+    assert emitted_bundle["version"] == 10
     for root in ("Document", "DocumentQuery", "Location", "PageOfDocument"):
         assert root in bundle["roots"], root
         assert root in generate.CONTRACT_ROOTS, root
