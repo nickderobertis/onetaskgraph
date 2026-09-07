@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.27](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.26...onetaskgraph-core-v0.2.27) - 2026-09-07
+
+### Added
+
+- *(copy)* point a copied document's references at the destination's own records ([#774](https://github.com/nickderobertis/onetaskgraph/pull/774))
+
 ## [0.2.23](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.22...onetaskgraph-core-v0.2.23) - 2026-09-05
 
 ### Fixed
