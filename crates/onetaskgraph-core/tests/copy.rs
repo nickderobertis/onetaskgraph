@@ -1657,10 +1657,17 @@ enum At {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Onset {
     /// From the first read, which for a task copy is the scan for a counterpart.
-    TheFirstRead,
+    FirstRead,
+    /// Only from the *second* read at that level, which leaves the first walk to succeed
+    /// and meets the one after it instead.
+    ///
+    /// A document copy reads a destination's documents twice: the scan that finds the
+    /// document's own counterpart, and then the walk that finds the counterparts a
+    /// document's references name. `FirstRead` can only ever meet the first of those.
+    SecondRead,
     /// Only once this copy has written a task here, which leaves that scan to succeed and
     /// meets the orphan walk that comes after it instead.
-    TheFirstWrite,
+    FirstWrite,
 }
 
 /// A source that misbehaves in exactly one way, so a copy can be driven into one loop.
@@ -1677,11 +1684,14 @@ struct Misbehaving {
     /// Every page it has served, of any kind, counted so a test can show the walk stopped
     /// rather than ran away.
     pages_served: Arc<AtomicU32>,
-    /// Tasks, and only tasks, written here. [`Onset::TheFirstWrite`] waits for one of
+    /// Tasks, and only tasks, written here. [`Onset::FirstWrite`] waits for one of
     /// these rather than for any write, because the project of a project copy lands
     /// first: counting that one would turn the fault on before the scan this source has
     /// to answer well.
     tasks_written: AtomicU32,
+    /// Reads asked of the interface this source faults at, counted so [`Onset::SecondRead`]
+    /// can let the first through.
+    reads_at_fault: AtomicU32,
 }
 
 impl Misbehaving {
@@ -1697,6 +1707,7 @@ impl Misbehaving {
             ceiling: 2,
             pages_served: Arc::new(AtomicU32::new(0)),
             tasks_written: AtomicU32::new(0),
+            reads_at_fault: AtomicU32::new(0),
         }
     }
 
@@ -1726,11 +1737,16 @@ impl Misbehaving {
     }
 
     fn misbehaves_at(&self, at: At) -> bool {
-        self.at == at
-            && match self.onset {
-                Onset::TheFirstRead => true,
-                Onset::TheFirstWrite => self.tasks_written.load(Ordering::Relaxed) > 0,
-            }
+        if self.at != at {
+            return false;
+        }
+        match self.onset {
+            Onset::FirstRead => true,
+            // Counted here rather than in each query method, because this is the one place
+            // every read at the faulting level passes through.
+            Onset::SecondRead => self.reads_at_fault.fetch_add(1, Ordering::Relaxed) > 0,
+            Onset::FirstWrite => self.tasks_written.load(Ordering::Relaxed) > 0,
+        }
     }
 
     fn faulted<T>(&self, page: &PageRequest, row: impl Fn() -> T) -> Page<T> {
@@ -1811,6 +1827,16 @@ fn held_document(id: &NativeId) -> Document {
     }
 }
 
+/// The document this source answers `get_document` with: filed under `P-1` and with a body,
+/// which is what makes a copy of it read that project's records to find its references.
+fn authored_document(id: &NativeId) -> Document {
+    Document {
+        content: Some("Alpha is at `/srv/from/plans/P-1/A.md`.".to_owned()),
+        project: Some(NativeId::from("P-1")),
+        ..held_document(id)
+    }
+}
+
 fn edge(near: &NativeId, kind: ItemKind) -> DependencyEdge {
     DependencyEdge {
         from: DependencyEndpoint::from_native(near.clone(), kind),
@@ -1880,6 +1906,13 @@ impl TaskSource for Misbehaving {
 
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
         Ok(self.project.then(|| held_project(id)))
+    }
+
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        if !self.documents {
+            return Err(documentless(self.kind()));
+        }
+        Ok(Some(authored_document(id)))
     }
 
     async fn query_tasks(
@@ -2023,11 +2056,21 @@ fn into_misbehaving(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
 
 /// An engine whose source misbehaves, copying into an ordinary `in-memory` destination.
 fn from_misbehaving(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
+    from_misbehaving_into(source, json!({}))
+}
+
+/// The same, into a destination that declares it has documents — without which a document
+/// copy is refused at the handshake and never reaches the source at all.
+fn from_misbehaving_documentary(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
+    from_misbehaving_into(source, json!({"capabilities": {"documents": "native"}}))
+}
+
+fn from_misbehaving_into(source: Misbehaving, into: Value) -> (Engine, Arc<AtomicU32>) {
     let pages = Arc::clone(&source.pages_served);
     let engine = Engine::new(
         vec![
             ConfiguredSource::Ready(ResolvedSource::adopt(name("from"), Box::new(source))),
-            in_memory("into", json!({})),
+            in_memory("into", into),
         ],
         vec![name("from"), name("into")],
     );
@@ -2056,7 +2099,7 @@ async fn a_destination_that_repeats_its_cursor_stops_the_scan_for_a_counterpart(
     let (engine, pages) = into_misbehaving(Misbehaving::new(
         At::Tasks,
         Fault::RepeatsTheCursor,
-        Onset::TheFirstRead,
+        Onset::FirstRead,
     ));
 
     let refused = refusal(&engine, &one("from:T-1")).await;
@@ -2077,7 +2120,7 @@ async fn a_destination_that_overruns_its_page_stops_the_scan_for_a_counterpart()
     let (engine, pages) = into_misbehaving(Misbehaving::new(
         At::Tasks,
         Fault::OverrunsThePage,
-        Onset::TheFirstRead,
+        Onset::FirstRead,
     ));
 
     let refused = refusal(&engine, &one("from:T-1")).await;
@@ -2096,7 +2139,7 @@ async fn a_destination_that_repeats_its_cursor_stops_the_walk_for_what_a_copy_le
     let (engine, _) = into_misbehaving(Misbehaving::new(
         At::Tasks,
         Fault::RepeatsTheCursor,
-        Onset::TheFirstWrite,
+        Onset::FirstWrite,
     ));
 
     let refused = refusal(
@@ -2122,7 +2165,7 @@ async fn a_destination_that_overruns_its_page_stops_the_walk_for_what_a_copy_lef
     let (engine, _) = into_misbehaving(Misbehaving::new(
         At::Tasks,
         Fault::OverrunsThePage,
-        Onset::TheFirstWrite,
+        Onset::FirstWrite,
     ));
 
     let refused = refusal(
@@ -2145,7 +2188,7 @@ async fn a_destination_that_overruns_its_page_stops_the_scan_for_a_project() {
     let (engine, _) = into_misbehaving(Misbehaving::new(
         At::Projects,
         Fault::OverrunsThePage,
-        Onset::TheFirstRead,
+        Onset::FirstRead,
     ));
 
     let refused = refusal(
@@ -2171,8 +2214,7 @@ async fn a_destination_that_overruns_its_page_stops_the_scan_for_a_document() {
             "capabilities": {"documents": "native"},
             "documents": [a_document("D-1", "Design review")],
         }),
-        Misbehaving::new(At::Documents, Fault::OverrunsThePage, Onset::TheFirstRead)
-            .with_documents(),
+        Misbehaving::new(At::Documents, Fault::OverrunsThePage, Onset::FirstRead).with_documents(),
     );
 
     let refused = refusal(&engine, &many(&["from:D-1"], CopyScope::Documents)).await;
@@ -2189,12 +2231,8 @@ async fn a_source_that_repeats_its_cursor_stops_the_walk_of_a_projects_own_edges
     // The edge walk's other branch: a project's dependencies are read out of its source
     // by the same loop that reads a task's, and are held to the same rule.
     let (engine, _) = from_misbehaving(
-        Misbehaving::new(
-            At::ProjectEdges,
-            Fault::RepeatsTheCursor,
-            Onset::TheFirstRead,
-        )
-        .holding_a_project(),
+        Misbehaving::new(At::ProjectEdges, Fault::RepeatsTheCursor, Onset::FirstRead)
+            .holding_a_project(),
     );
 
     let refused = refusal(
@@ -2221,8 +2259,7 @@ async fn a_source_whose_cursors_cycle_stops_the_walk_of_a_projects_members() {
     // token it was just given, gets the same page again, and would do so for ever. The
     // loop that pages by that token is the only thing that can see it.
     let (engine, _) = from_misbehaving(
-        Misbehaving::new(At::Tasks, Fault::CyclesItsCursors, Onset::TheFirstRead)
-            .holding_a_project(),
+        Misbehaving::new(At::Tasks, Fault::CyclesItsCursors, Onset::FirstRead).holding_a_project(),
     );
 
     let refused = refusal(
@@ -2247,8 +2284,7 @@ async fn a_source_that_overruns_its_page_stops_the_walk_of_a_projects_members() 
     // loop, in the walk that reads the source's page — what matters is that it is refused
     // while a project's members are read, and that the source is named.
     let (engine, _) = from_misbehaving(
-        Misbehaving::new(At::Tasks, Fault::OverrunsThePage, Onset::TheFirstRead)
-            .holding_a_project(),
+        Misbehaving::new(At::Tasks, Fault::OverrunsThePage, Onset::FirstRead).holding_a_project(),
     );
 
     let refused = refusal(
@@ -2266,7 +2302,7 @@ async fn a_source_that_repeats_its_cursor_stops_the_walk_of_the_edges_a_copy_rea
     let (engine, pages) = from_misbehaving(Misbehaving::new(
         At::TaskEdges,
         Fault::RepeatsTheCursor,
-        Onset::TheFirstRead,
+        Onset::FirstRead,
     ));
 
     let refused = refusal(&engine, &one("from:T-1")).await;
@@ -2287,7 +2323,7 @@ async fn a_source_that_overruns_its_page_stops_the_walk_of_the_edges_a_copy_read
     let (engine, pages) = from_misbehaving(Misbehaving::new(
         At::TaskEdges,
         Fault::OverrunsThePage,
-        Onset::TheFirstRead,
+        Onset::FirstRead,
     ));
 
     let refused = refusal(&engine, &one("from:T-1")).await;
@@ -3055,4 +3091,147 @@ async fn a_document_naming_another_document_of_its_project_is_rewritten_too() {
         body(&engine, "into:D-1").await,
         "The runbook is `/srv/into/board/D-2.md`.\n"
     );
+}
+
+/// A document-bearing store whose one document names the project, a task and a second
+/// document — so a copy of it walks the destination at all three levels.
+///
+/// Which level a walk reaches is decided by what the content really names, so a fixture
+/// that named only tasks could not drive the other two arms at all.
+fn naming_every_level() -> Value {
+    json!({
+        "capabilities": {"documents": "native"},
+        "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+        "tasks": [located("A", "Alpha", "/srv/from/plans/P-1/A.md", Some("root:A"))],
+        "documents": [
+            plan_document(
+                "Alpha is `/srv/from/plans/P-1/A.md`, the runbook is \
+                 `/srv/from/plans/P-1/D-2.md`, and it all lives under \
+                 `/srv/from/plans/P-1`.\n",
+            ),
+            {
+                "id": "D-2",
+                "title": "Runbook",
+                "content": "how to read the plan",
+                "project": "P-1",
+                "labels": [],
+                "location": {"path": "/srv/from/plans/P-1/D-2.md"},
+                "metadata": {GlobalId::ORIGIN_KEY: "root:D-2"},
+            },
+        ],
+    })
+}
+
+/// A document copy into a destination that misbehaves, and what it refused with.
+async fn document_refusal(engine: &Engine) -> String {
+    refusal(engine, &many(&["from:D-1"], CopyScope::Documents)).await
+}
+
+#[tokio::test]
+async fn a_destination_that_overruns_its_page_stops_the_walk_for_a_documents_references() {
+    // A document copy asks a destination for a task page in exactly one place — the walk
+    // that finds the counterparts its references name — so this is that walk's own guard.
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Tasks, Fault::OverrunsThePage, Onset::FirstRead).with_documents(),
+    );
+
+    let refused = document_refusal(&engine).await;
+
+    assert!(
+        refused.contains("the source returned 3 rows for a page of at most 2"),
+        "{refused}"
+    );
+    assert!(pages.load(Ordering::Relaxed) <= 3, "the walk stopped early");
+}
+
+#[tokio::test]
+async fn a_destination_that_repeats_its_cursor_stops_the_walk_for_a_documents_references() {
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Tasks, Fault::RepeatsTheCursor, Onset::FirstRead).with_documents(),
+    );
+
+    let refused = document_refusal(&engine).await;
+
+    assert!(
+        refused.contains("the destination was being walked for the records a document's"),
+        "the refusal names what the walk was doing: {refused}"
+    );
+    // One page apiece for the document scan and the project and document arms of the walk,
+    // then the task arm's first page, which is where the repeated cursor is caught. An
+    // unguarded walk would never stop at all.
+    assert!(pages.load(Ordering::Relaxed) <= 4, "the walk stopped early");
+}
+
+#[tokio::test]
+async fn a_destination_that_overruns_its_page_stops_that_walk_at_the_project_level() {
+    // The project arm of the same walk, reached because the content names the project's
+    // own location. It runs before the scan that files the document under a destination
+    // project, so this is the first thing to ask this destination for a project page.
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Projects, Fault::OverrunsThePage, Onset::FirstRead).with_documents(),
+    );
+
+    let refused = document_refusal(&engine).await;
+
+    assert!(
+        refused.contains("the source returned 3 rows for a page of at most 2"),
+        "{refused}"
+    );
+    assert!(pages.load(Ordering::Relaxed) <= 3, "the walk stopped early");
+}
+
+#[tokio::test]
+async fn a_destination_that_overruns_its_page_stops_that_walk_at_the_document_level() {
+    // The document arm, which `Onset::FirstRead` cannot reach: the copy's own scan for
+    // the document's counterpart is the first read of this interface, and the walk is the
+    // second. A fault from the first read would stop at the scan every existing test
+    // already covers, and say nothing about this walk.
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Documents, Fault::OverrunsThePage, Onset::SecondRead).with_documents(),
+    );
+
+    let refused = document_refusal(&engine).await;
+
+    assert!(
+        refused.contains("the source returned 3 rows for a page of at most 2"),
+        "{refused}"
+    );
+    assert!(pages.load(Ordering::Relaxed) <= 4, "the walk stopped early");
+}
+
+#[tokio::test]
+async fn a_source_that_overruns_its_page_stops_the_read_of_a_documents_own_project_members() {
+    // Referent discovery reads the document's project, the tasks filed under it and the
+    // other documents filed under it. A source that misbehaves during any of those has to
+    // stop the copy, not be walked around: this is the task half.
+    let (engine, pages) = from_misbehaving_documentary(
+        Misbehaving::new(At::Tasks, Fault::OverrunsThePage, Onset::FirstRead)
+            .holding_a_project()
+            .with_documents(),
+    );
+
+    let refused = refusal(&engine, &many(&["from:D-1"], CopyScope::Documents)).await;
+
+    assert!(refused.contains("rows for a page of at most"), "{refused}");
+    assert!(pages.load(Ordering::Relaxed) <= 2, "the walk stopped early");
+}
+
+#[tokio::test]
+async fn a_source_that_overruns_its_page_stops_the_read_of_a_documents_own_project_documents() {
+    // And the document half of the same discovery, which is a read this copy did not make
+    // before the references it rewrites existed.
+    let (engine, pages) = from_misbehaving_documentary(
+        Misbehaving::new(At::Documents, Fault::OverrunsThePage, Onset::FirstRead)
+            .holding_a_project()
+            .with_documents(),
+    );
+
+    let refused = refusal(&engine, &many(&["from:D-1"], CopyScope::Documents)).await;
+
+    assert!(refused.contains("rows for a page of at most"), "{refused}");
+    assert!(pages.load(Ordering::Relaxed) <= 3, "the walk stopped early");
 }
