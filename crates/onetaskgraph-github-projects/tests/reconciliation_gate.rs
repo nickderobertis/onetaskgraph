@@ -29,10 +29,10 @@ use onetaskgraph_github_projects::accounting::Mode;
 use onetaskgraph_github_projects::{graphql, worst_case_point_cost};
 use serde_json::json;
 
-// The credentialed lane's own halves again, and the board's shared answers. Most of each is
-// for the drives that reach a board's state or GitHub itself, so what this one does not
-// reach is those drives' rather than dead code.
-#[allow(dead_code)]
+// The board's shared answers, and the credentialed lane's own halves again. What this file
+// reaches of `board` it reaches all of, so that one carries no suppression; most of
+// `journey` and `lane` is for the drives that reach a board's state or GitHub itself, so
+// what this one does not reach is those drives' rather than dead code.
 mod board;
 #[allow(dead_code)]
 mod journey;
