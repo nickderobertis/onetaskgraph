@@ -1,0 +1,63 @@
+{
+  "data": {
+    "node": {
+      "projectItems": {
+        "nodes": [
+          {
+            "id": "PVTI_elsewhere",
+            "project": {
+              "number": 11
+            },
+            "fieldValues": {
+              "nodes": [],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            }
+          },
+          {
+            "id": "PVTI_task",
+            "project": {
+              "number": 7
+            },
+            "fieldValues": {
+              "nodes": [
+                {
+                  "name": "Todo",
+                  "field": {
+                    "id": "FIELD_status",
+                    "name": "Status",
+                    "options": [
+                      {
+                        "id": "OPT_todo",
+                        "name": "Todo"
+                      },
+                      {
+                        "id": "OPT_doing",
+                        "name": "In Progress"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "text": "notes:T-1",
+                  "field": {
+                    "id": "FIELD_origin",
+                    "name": "onetaskgraph.origin"
+                  }
+                }
+              ],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            }
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "Y3Vyc29yOnYyOpHOAAA"
+        }
+      }
+    }
+  }
+}

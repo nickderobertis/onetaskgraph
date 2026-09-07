@@ -152,6 +152,23 @@ MANIFEST = {
         "facets": {},
         "least": 1,
     },
+    "crates/onetaskgraph-github-projects/tests/fixtures/issue-board-items.json": {
+        "items": ["data", "node", "projectItems", "nodes"],
+        "id": ["id"],
+        # A membership is read for its board item id, the board it is on and that board
+        # item's field values — never for a title, which came with the issue this read
+        # resumes the connection of. So rule 1 does not reach this fixture.
+        "title": None,
+        # The board number is the whole of what this read selects by: the walk keeps the
+        # one membership whose project number is the configured board and passes over
+        # every other. With one number here, a walk that returned the first membership it
+        # saw and a walk that matched the board would answer with the same entry — so the
+        # entry for a board this source is not configured for sits ahead of this board's
+        # own, and both numbers are read back below.
+        "facets": {
+            "board": ["project", "number"],
+        },
+    },
 }
 
 # Files under a `tests/fixtures` directory that do not stand in for a store, each with the

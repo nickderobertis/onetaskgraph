@@ -450,12 +450,20 @@ async fn the_estimate_is_derived_from_the_branchs_own_record_of_the_session() {
     assert!(rest_calls > 0 && rest_calls < calls);
 
     // GraphQL is metered in points, and **node count is not that estimate**: the session's
-    // 504,801 worst-case nodes are two orders of magnitude above the points it is sized at,
-    // which is the whole reason the model divides by the smallest page size before it
-    // divides by GitHub's hundred. The margin narrowed when the board read stopped
-    // selecting the board's built-in `Labels` field — that took 1,252,500 nodes out of the
-    // record and 1,253 points off the estimate — and the two orders of magnitude are still
-    // there, because both quantities fell by about the same proportion.
+    // 222,516 worst-case nodes are still more than two orders of magnitude above the 934
+    // points it is sized at, which is the whole reason the model divides by the smallest
+    // page size before it divides by GitHub's hundred.
+    //
+    // That margin has narrowed twice, and the second time in the other direction. The board
+    // read dropping the built-in `Labels` field took 1,252,500 nodes out of the record and
+    // 1,253 points off the estimate, and both quantities fell by about the same proportion.
+    // Shrinking `BOARD_ITEMS_PAGE_SIZE` to three moved them opposite ways: it took the
+    // record from 504,801 nodes to 222,516, and it is also the smallest page size this
+    // source binds, so the divisor fell from 1,000 to 300 and the estimate rose from 702
+    // points to 934. The estimate is *deliberately* loose — it is what refuses a run rather
+    // than what a run spends — so a looser bound is the safe direction and no reason to
+    // choose a page size; what this asserts is only that the two quantities have not
+    // collapsed into each other.
     let graphql = estimate[&Budget::Graphql];
     let nodes: u64 = record
         .lines()
