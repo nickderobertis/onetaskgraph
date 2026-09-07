@@ -123,14 +123,23 @@
 //! | one project's tasks or documents | [`graphql::SUB_ISSUES`] — that issue's own `subIssues` | that project |
 //! | which projects this board holds | [`graphql::SEARCH_ISSUES`] — an issue search scoped to the board | the board's issues, without their board items |
 //! | every task, every document, every label | [`graphql::BOARD`] — the board's own `items` | the board |
+//! | which board item one issue is, past the page that came with it | [`graphql::ISSUE_BOARD_ITEMS`] — that issue's own `projectItems` | one issue's memberships |
 //!
 //! The board half of an issue — its board item's id, its `Status` option and this
 //! source's origin text field — rides along on `Issue.projectItems` in the first three, so
 //! an item reached any of those ways resolves through the same
 //! [`GitHubProjectsSource::resolve`] the board walk uses and reports the same title, the
-//! same status, the same labels and the same qualified id. An issue with no entry for
-//! *this* board is not this source's to report, which is what keeps an id naming another
-//! repository's issue from being answered as an item of this board.
+//! same status, the same labels and the same qualified id. That connection comes back a
+//! *page* at a time, at `BOARD_ITEMS_PAGE_SIZE`, so the entry for this board is looked for
+//! on the page in hand and — only if that page reports more of the connection — in the
+//! last row's read of that one issue's memberships, resumed from the page's own cursor and
+//! walked to exhaustion. An issue with no entry for *this* board is not this source's to
+//! report, which is what keeps an id naming another repository's issue from being answered
+//! as an item of this board; and because the page is where the search starts rather than
+//! where it ends, that answer is one about a connection read to exhaustion and never about
+//! an unread page. Nothing costs the extra read but an issue on more boards than a page
+//! holds: an issue this board really does not hold reports no next page, so its
+//! memberships are already exhausted where they arrived.
 //!
 //! **No document here selects the board's own `Labels` field, and nothing is lost by
 //! that.** An item's labels are read from its content alone, wherever that content is
@@ -181,9 +190,9 @@
 //!
 //! What decides those counts is the page sizes: [`MAX_PAGE_SIZE`] on the outer page,
 //! `NESTED_PAGE_SIZE` on the connections hanging off one item, and
-//! `BOARD_ITEMS_PAGE_SIZE` on an issue's board memberships. `$nestedFirst` is spent twice
-//! down one path of a board read, so that constant is effectively squared there, which is
-//! why it is the one the limit is most sensitive to.
+//! `BOARD_ITEMS_PAGE_SIZE` on the page of an issue's board memberships a read carries.
+//! `$nestedFirst` is spent twice down one path of a board read, so that constant is
+//! effectively squared there, which is why it is the one the limit is most sensitive to.
 //!
 //! **`nodeCount` and `cost` are two numbers against two limits, and none of this is about
 //! the second.** `nodeCount` is the one above: the most nodes one query may return,
@@ -344,11 +353,16 @@ const NESTED_PAGE_SIZE: u32 = 50;
 /// How many of one issue's board memberships are read when an issue is reached directly.
 ///
 /// An issue reached through a search or through its own node id carries its board half in
-/// `Issue.projectItems`, and only the entry for *this* board is read. Ten is deliberately
-/// far smaller than [`NESTED_PAGE_SIZE`]: this connection sits under a page of issues, so
-/// its size multiplies through the whole document, and an issue on ten boards at once is
-/// already well past what a person keeps track of. An issue whose entry for this board sits
-/// past it is refused naming the connection rather than reported as not on the board.
+/// `Issue.projectItems`, and only the entry for *this* board is read. This connection sits
+/// under a page of issues, so every point of it multiplies through the whole document and
+/// is paid for whether or not any issue is on a second board — which is why it is
+/// deliberately far smaller than [`NESTED_PAGE_SIZE`].
+///
+/// Ten is what it has been, and an issue on ten boards at once is already well past what
+/// a person keeps track of. An issue whose entry for this board sits past this page is not
+/// refused and is not reported as absent: it costs one further request —
+/// [`graphql::ISSUE_BOARD_ITEMS`], resumed from that page's own cursor and walked to
+/// exhaustion — and then resolves exactly as it would have on the page.
 const BOARD_ITEMS_PAGE_SIZE: u32 = 10;
 
 pub use github_graphql_node_count::{NodeCountError, Variables};
@@ -422,6 +436,30 @@ pub const DESIGN_TITLE_PREFIX: &str = "DESIGN: ";
 /// independently. No document in this module writes the board itself, and none of them
 /// names `updateProjectV2Field`.
 pub mod graphql {
+    /// The board half of one item: the field values every document here reads it from.
+    ///
+    /// A macro for the same reason [`board_issue!`] below is one, a level further in. This
+    /// selection is needed by that fragment, by [`BOARD`] under the board's own `items`,
+    /// and by [`ISSUE_BOARD_ITEMS`] under a membership walk — and all three have to produce
+    /// *the same value*, because
+    /// [`GitHubProjectsSource::resolve`](super::GitHubProjectsSource) reads them through
+    /// one path. Three spellings of it is what would drift, so there is one.
+    ///
+    /// The `Status` option and this source's own origin text field are the whole of it. It
+    /// selects no `ProjectV2ItemFieldLabelValue`: GitHub derives that field from the item's
+    /// content, so it holds nothing the content's own `labels` do not already say, and it
+    /// would sit a label connection two page sizes deep.
+    macro_rules! board_item_values {
+        () => {
+            r#"fieldValues(first:$nestedFirst){nodes{
+          ... on ProjectV2ItemFieldSingleSelectValue{name field{
+            ... on ProjectV2SingleSelectField{id name options{id name}}
+          }}
+          ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2Field{id name}}}
+        }pageInfo{hasNextPage}}"#
+        };
+    }
+
     /// Everything this source reads about one issue, wherever it reaches that issue.
     ///
     /// A macro rather than a constant so the three documents below can `concat!` it: one
@@ -431,10 +469,15 @@ pub mod graphql {
     /// [`GitHubProjectsSource::resolve_issue`](super::GitHubProjectsSource) relies on.
     ///
     /// `projectItems` is what carries the board half of an issue: the board item's own id
-    /// and the field values — the `Status` option and this source's origin text field —
-    /// that a `ProjectV2.items` read used to carry. It is asked for on the issue rather
-    /// than on the board, which is what makes the cost of a read proportional to what was
-    /// asked for instead of to the board's size.
+    /// and the [`board_item_values!`] above — the `Status` option and this source's origin
+    /// text field — that a `ProjectV2.items` read used to carry. It is asked for on the
+    /// issue rather than on the board, which is what makes the cost of a read proportional
+    /// to what was asked for instead of to the board's size.
+    ///
+    /// It carries a *page* of that connection, at `BOARD_ITEMS_PAGE_SIZE`, and its
+    /// `endCursor` is what [`ISSUE_BOARD_ITEMS`] resumes from when this board's entry is
+    /// not on that page: a page here is where the search for the entry starts rather than
+    /// where it ends.
     ///
     /// It does **not** select the board's `Labels` field value, and that is the whole of
     /// what keeps the three documents below under [`NODE_COUNT_LIMIT`](super::NODE_COUNT_LIMIT):
@@ -447,15 +490,14 @@ pub mod graphql {
     /// module documentation records why nothing it could have held is lost.
     macro_rules! board_issue {
         () => {
-            r#" fragment BoardIssue on Issue{__typename id title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total}
+            concat!(
+                r#" fragment BoardIssue on Issue{__typename id title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total}
       labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}
       projectItems(first:$boardItems){nodes{id project{number}
-        fieldValues(first:$nestedFirst){nodes{
-          ... on ProjectV2ItemFieldSingleSelectValue{name field{
-            ... on ProjectV2SingleSelectField{id name options{id name}}
-          }}
-          ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2Field{id name}}}
-        }pageInfo{hasNextPage}}}pageInfo{hasNextPage}}}"#
+        "#,
+                board_item_values!(),
+                r#"}pageInfo{hasNextPage endCursor}}}"#
+            )
         };
     }
 
@@ -506,7 +548,8 @@ pub mod graphql {
     );
 
     /// Reads the board's fields and one page of its items.
-    pub const BOARD: &str = r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!,$duplicates:Boolean!){
+    pub const BOARD: &str = concat!(
+        r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!,$duplicates:Boolean!){
       owner:repositoryOwner(login:$owner){
         ... on ProjectV2Owner{projectV2(number:$number){...Board}}
       }
@@ -515,17 +558,47 @@ pub mod graphql {
         ... on ProjectV2SingleSelectField{__typename id name options{id name}}
         ... on ProjectV2Field{__typename id name}
       }pageInfo{hasNextPage}}
-      items(first:$first,after:$after){nodes{id fieldValues(first:$nestedFirst){nodes{
-        ... on ProjectV2ItemFieldSingleSelectValue{name field{
-          ... on ProjectV2SingleSelectField{id name options{id name}}
-        }}
-        ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2Field{id name}}}
-      }pageInfo{hasNextPage}} content{
+      items(first:$first,after:$after){nodes{id "#,
+        board_item_values!(),
+        r#" content{
         ... on Issue{__typename id title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
         ... on PullRequest{__typename id}
         ... on DraftIssue{__typename id title body createdAt updatedAt}
       }} pageInfo{hasNextPage endCursor}}
-    }"#;
+    }"#
+    );
+
+    /// One issue's board memberships alone, walked past the page a read of it carried.
+    ///
+    /// The recovery read behind [`GitHubProjectsSource::resolve_issue`](super::GitHubProjectsSource):
+    /// every document above carries a *page* of `Issue.projectItems`, and an issue on more
+    /// boards than that page holds may have this board's entry past its end. This asks that
+    /// one issue for its memberships and nothing else — the caller already holds the issue —
+    /// so an answer of "this board does not hold it" is only ever given about a connection
+    /// read to exhaustion.
+    ///
+    /// It selects the board item's id, its project number and the same
+    /// [`board_item_values!`] the fragment does, because what it produces is handed to the
+    /// very same resolver: an issue recovered this way reports the same title, the same
+    /// status, the same labels and the same qualified id as one whose entry was on the
+    /// page.
+    ///
+    /// `$first` rather than `$boardItems`: this document reads one issue, so nothing
+    /// multiplies through it and the membership connection can be walked at
+    /// [`MAX_PAGE_SIZE`](super::MAX_PAGE_SIZE) — which is what keeps the recovery to one
+    /// further request for any issue a person really keeps.
+    pub const ISSUE_BOARD_ITEMS: &str = concat!(
+        r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){
+      node(id:$id){
+        ... on Issue{projectItems(first:$first,after:$after){
+          nodes{id project{number}
+        "#,
+        board_item_values!(),
+        r#"}
+          pageInfo{hasNextPage endCursor}}}
+      }
+    }"#
+    );
     /// Resolves the configured repository's node id, which creating an issue requires.
     pub const REPOSITORY: &str = r#"query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id nameWithOwner}}"#;
     /// Reads both dependency directions for one issue, with each far end's own kind.
@@ -572,9 +645,13 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 16] = [
+    pub const DOCUMENTS: [(&str, &str); 17] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
+        (
+            ISSUE_BOARD_ITEMS,
+            "reading one issue's board memberships past the page it came with",
+        ),
         (SUB_ISSUES, "reading a project's tasks"),
         (BOARD, "reading the board"),
         (REPOSITORY, "reading the destination repository"),
@@ -1864,8 +1941,11 @@ impl GitHubProjectsSource {
     ///
     /// An issue with no entry for *this* board is not this source's to report, which is
     /// what keeps an id naming some other repository's issue from being answered as an item
-    /// of this board.
-    fn resolve_issue(&self, issue: &Value) -> Result<Option<Resolved>, SourceError> {
+    /// of this board. That answer is given about an **exhausted** connection and never
+    /// about an unread page: the entry is looked for on the page in hand, and only if that
+    /// page reports more of the connection, in [`Self::board_membership`]'s walk of the
+    /// rest of it.
+    async fn resolve_issue(&self, issue: &Value) -> Result<Option<Resolved>, SourceError> {
         if optional_str(issue, "__typename")? != Some("Issue") {
             return Ok(None);
         }
@@ -1880,27 +1960,104 @@ impl GitHubProjectsSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub issue projectItems.nodes is not an array".into(),
             })?;
-        let held = nodes.iter().find(|node| {
-            node.pointer("/project/number").and_then(Value::as_u64)
-                == Some(u64::from(self.project_number))
-        });
-        let Some(held) = held else {
-            // Only now: an issue whose entry for this board sits past the page asked for
-            // would otherwise read as an issue this board does not hold, which is the one
-            // wrong answer available here.
-            complete_connection(
-                memberships,
-                "issue board memberships",
-                BOARD_ITEMS_PAGE_SIZE,
-            )?;
-            return Ok(None);
+        let held = match self.board_entry(nodes) {
+            Some(held) => held.clone(),
+            None => {
+                let info = memberships
+                    .get("pageInfo")
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "GitHub issue projectItems has no pageInfo".into(),
+                    })?;
+                // The page held no entry for this board. Whether that means the issue is
+                // not on it is a question about the rest of the connection, and only a
+                // connection with no rest answers it here.
+                if !required_bool(info, "hasNextPage")? {
+                    return Ok(None);
+                }
+                let cursor = required_str(info, "endCursor")?;
+                validate_cursor_progress(None, cursor)?;
+                let issue_id = required_str(issue, "id")?;
+                match self.board_membership(issue_id, cursor).await? {
+                    Some(held) => held,
+                    None => return Ok(None),
+                }
+            }
         };
         let item = json!({
-            "id": required_str(held, "id")?,
+            "id": required_str(&held, "id")?,
             "fieldValues": held.get("fieldValues"),
             "content": issue,
         });
         self.resolve(&item)
+    }
+
+    /// This board's own entry among one page of an issue's `Issue.projectItems`.
+    ///
+    /// One spelling of *which membership is this board's*, so the page a read carries and
+    /// the pages [`Self::board_membership`] walks are searched by the same rule.
+    fn board_entry<'a>(&self, nodes: &'a [Value]) -> Option<&'a Value> {
+        nodes.iter().find(|node| {
+            node.pointer("/project/number").and_then(Value::as_u64)
+                == Some(u64::from(self.project_number))
+        })
+    }
+
+    /// The rest of one issue's board memberships, from `after`, for this board's entry.
+    ///
+    /// The recovery read: a page of memberships that holds no entry for this board says
+    /// nothing about the memberships past it, so the connection is walked to exhaustion
+    /// before an issue is reported as one this board does not hold. `Ok(None)` is that
+    /// positive answer — the whole connection was read and no entry named this board —
+    /// rather than a failure, and the walk is held to
+    /// [`validate_cursor_progress`] like every other page walk here, so a source answering
+    /// with a cursor that does not advance is refused instead of spun on.
+    async fn board_membership(
+        &self,
+        issue: &str,
+        after: &str,
+    ) -> Result<Option<Value>, SourceError> {
+        let mut after = after.to_owned();
+        loop {
+            let data = self
+                .graphql(
+                    graphql::ISSUE_BOARD_ITEMS,
+                    json!({"id":issue,"first":MAX_PAGE_SIZE,"after":after,
+                           "nestedFirst":NESTED_PAGE_SIZE}),
+                )
+                .await?;
+            let Some(connection) = data
+                .pointer("/node/projectItems")
+                .filter(|value| !value.is_null())
+            else {
+                // The id resolved to nothing, or to something with no memberships to walk —
+                // which is the same answer as a connection holding no entry for this board.
+                return Ok(None);
+            };
+            let nodes = connection
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub issue projectItems.nodes is not an array".into(),
+                })?;
+            if let Some(held) = self.board_entry(nodes) {
+                return Ok(Some(held.clone()));
+            }
+            let info = connection
+                .get("pageInfo")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub issue projectItems has no pageInfo".into(),
+                })?;
+            let next = required_bool(info, "hasNextPage")?
+                .then(|| required_str(info, "endCursor"))
+                .transpose()?;
+            match next {
+                Some(next) => {
+                    validate_cursor_progress(Some(&after), next)?;
+                    after = next.to_owned();
+                }
+                None => return Ok(None),
+            }
+        }
     }
 
     /// One page of a board-scoped issue search, and where the next page resumes.
@@ -1929,7 +2086,7 @@ impl GitHubProjectsSource {
                 message: "GitHub search nodes is not an array".into(),
             })?
         {
-            if let Some(resolved) = self.resolve_issue(node)? {
+            if let Some(resolved) = self.resolve_issue(node).await? {
                 found.push(resolved);
             }
         }
@@ -2020,7 +2177,7 @@ impl GitHubProjectsSource {
         if optional_str(node, "__typename")? == Some("DraftIssue") {
             return Ok(Reached::Draft);
         }
-        Ok(match self.resolve_issue(node)? {
+        Ok(match self.resolve_issue(node).await? {
             Some(item) => Reached::Held(Box::new(item)),
             None => Reached::Nothing,
         })
@@ -2088,7 +2245,7 @@ impl GitHubProjectsSource {
                     message: "GitHub subIssues.nodes is not an array".into(),
                 })?
             {
-                if let Some(resolved) = self.resolve_issue(node)? {
+                if let Some(resolved) = self.resolve_issue(node).await? {
                     children.push(resolved);
                 }
             }

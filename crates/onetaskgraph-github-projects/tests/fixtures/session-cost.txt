@@ -1,5 +1,5 @@
-requests 99
-node count 504801
+requests 100
+node count 509901
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -22,6 +22,7 @@ requests per call
     1   56100  node-count reconciliation while reading a project's tasks
     1     200  node-count reconciliation while reading an issue's dependencies
     1     560  node-count reconciliation while reading one issue
+    1    5100  node-count reconciliation while reading one issue's board memberships past the page it came with
     1   10150  node-count reconciliation while reading the board
     1       0  node-count reconciliation while reading the destination repository
     1   56100  node-count reconciliation while searching this board's issues

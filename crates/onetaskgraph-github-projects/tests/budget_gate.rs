@@ -450,7 +450,7 @@ async fn the_estimate_is_derived_from_the_branchs_own_record_of_the_session() {
     assert!(rest_calls > 0 && rest_calls < calls);
 
     // GraphQL is metered in points, and **node count is not that estimate**: the session's
-    // 504,801 worst-case nodes are two orders of magnitude above the points it is sized at,
+    // 509,901 worst-case nodes are two orders of magnitude above the points it is sized at,
     // which is the whole reason the model divides by the smallest page size before it
     // divides by GitHub's hundred. The margin narrowed when the board read stopped
     // selecting the board's built-in `Labels` field — that took 1,252,500 nodes out of the

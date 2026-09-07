@@ -250,6 +250,11 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         ),
         (graphql::ISSUE, None, None),
         (
+            graphql::ISSUE_BOARD_ITEMS,
+            Some("/data/node"),
+            Some(include_str!("fixtures/issue-board-items.json")),
+        ),
+        (
             graphql::SUB_ISSUES,
             Some("/data/node"),
             Some(include_str!("fixtures/sub-issues.json")),

@@ -49,12 +49,18 @@ fn every_document_this_source_sends_stays_under_githubs_node_limit() {
 /// change that quadruples a count while staying under the limit is visible as a number
 /// moving rather than as a test still passing. The figures are recomputed here from the
 /// production text, never restated from the documentation.
+///
+/// The recovery read is pinned beside them although it reaches one issue rather than a
+/// page of them: it is the document that walks an issue's board memberships at the full
+/// page size, so it is where the cost of making a missed membership recoverable sits, and
+/// a change to that trade shows up here as this number moving.
 #[test]
 fn the_documents_that_reach_an_issue_under_a_page_are_the_ones_with_least_headroom() {
     let count = |document: &str| worst_case_node_count(document).expect("a countable document");
     assert_eq!(count(graphql::SEARCH_ISSUES), 56_100);
     assert_eq!(count(graphql::SUB_ISSUES), 56_100);
     assert_eq!(count(graphql::BOARD), 10_150);
+    assert_eq!(count(graphql::ISSUE_BOARD_ITEMS), 5_100);
     assert_eq!(count(graphql::ISSUE), 560);
     assert_eq!(count(graphql::ISSUE_DEPENDENCIES), 200);
     assert_eq!(count(graphql::REPOSITORY), 0);

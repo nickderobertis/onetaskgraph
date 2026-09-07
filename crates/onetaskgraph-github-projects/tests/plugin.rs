@@ -70,6 +70,18 @@ struct Item {
     labels: Vec<(&'static str, &'static str)>,
     status: Option<String>,
     origin: Option<String>,
+    /// Other boards this issue sits on, ahead of this one in `Issue.projectItems`.
+    ///
+    /// GitHub answers that connection a page at a time and this board is not obliged to be
+    /// on the first one, which is the shape the recovery read exists for: with enough of
+    /// these ahead of it, the entry naming this board sits past the page a read carries.
+    other_boards: Vec<u64>,
+    /// Whether this issue's memberships name this board at all.
+    ///
+    /// An issue GitHub happily resolves that is on other boards and not on this one — which
+    /// is a different answer from an issue whose entry is merely unreached, and the one
+    /// case a walk to exhaustion has to be able to tell apart from it.
+    on_this_board: bool,
     /// A label set this board answers one path with, instead of the one above.
     ///
     /// Nothing GitHub does. It is how the four-way equivalence check is watched failing:
@@ -86,6 +98,15 @@ struct Item {
 struct Asked<'a> {
     /// Which of this source's reads this is, by the name `operation_name` gives it.
     path: &'a str,
+    /// How many board memberships this document asked for, off `$boardItems`.
+    ///
+    /// Read off the request rather than from the source's own constant, so a page of
+    /// memberships here is the page that was really asked for.
+    board_items: usize,
+    /// A cursor this board answers every membership page with, when a case has wedged it.
+    ///
+    /// `None` is the ordinary board. See [`membership_page`].
+    stuck_cursor: Option<&'static str>,
 }
 
 impl Item {
@@ -104,6 +125,8 @@ impl Item {
             labels: vec![],
             status: None,
             origin: None,
+            other_boards: Vec::new(),
+            on_this_board: true,
             path_labels: BTreeMap::new(),
         }
     }
@@ -145,6 +168,20 @@ impl Item {
         self.labels = labels.to_vec();
         self
     }
+    /// Put this issue on `boards` as well, ahead of its entry for the board under test.
+    ///
+    /// Enough of them and the entry for this board sits past the page `board_issue!`
+    /// carries, which is the case the recovery read is for. See [`Item::other_boards`].
+    fn also_on(mut self, boards: &[u64]) -> Self {
+        self.other_boards = boards.to_vec();
+        self
+    }
+    /// Take this issue off the board under test, leaving it on `boards` alone.
+    fn only_on(mut self, boards: &[u64]) -> Self {
+        self.other_boards = boards.to_vec();
+        self.on_this_board = false;
+        self
+    }
     /// Answer `path` with a label set of its own. See [`Item::path_labels`].
     fn labels_on(mut self, path: &'static str, labels: &[(&'static str, &'static str)]) -> Self {
         self.path_labels.insert(path, labels.to_vec());
@@ -178,21 +215,38 @@ impl Item {
         json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}})
     }
 
-    /// The board half of this item, as `Issue.projectItems` carries it.
+    /// Every board this item sits on, in the order `Issue.projectItems` reports them.
     ///
-    /// The same board item id and the same field values a `ProjectV2.items` read gives it,
-    /// reached from the issue instead of from the board. Every fixture item here sits on
-    /// the one board this suite configures, which is project number 7.
-    fn project_items(&self, options: &Value) -> Value {
-        json!({"nodes":[{"id":self.item_id,"project":{"number":7},
-                         "fieldValues":self.field_values(options)}],
-               "pageInfo":{"hasNextPage":false}})
+    /// The entry for the board this suite configures — project number 7 — carries the same
+    /// board item id and the same field values a `ProjectV2.items` read gives it, reached
+    /// from the issue instead of from the board. Anything in [`Item::other_boards`] sits
+    /// ahead of it, which is what pushes it past a page.
+    fn memberships(&self, options: &Value) -> Vec<Value> {
+        let mut nodes = self
+            .other_boards
+            .iter()
+            .map(|number| {
+                json!({"id":format!("PVTI_{number}_{}", self.content_id),
+                       "project":{"number":number},
+                       "fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false}}})
+            })
+            .collect::<Vec<_>>();
+        if self.on_this_board {
+            nodes.push(json!({"id":self.item_id,"project":{"number":7},
+                       "fieldValues":self.field_values(options)}));
+        }
+        nodes
+    }
+
+    /// The board half of this item, as one page of `Issue.projectItems` carries it.
+    fn project_items(&self, options: &Value, asked: Asked) -> Value {
+        membership_page(&self.memberships(options), 0, asked.board_items, asked)
     }
 
     /// This item as a search, a node read or a sub-issue read returns it.
     fn as_issue(&self, options: &Value, asked: Asked) -> Value {
         let mut issue = self.content(asked);
-        issue["projectItems"] = self.project_items(options);
+        issue["projectItems"] = self.project_items(options, asked);
         issue
     }
 
@@ -214,6 +268,26 @@ impl Item {
     }
 }
 
+/// One page of a membership connection, in the order and shape GitHub answers it.
+///
+/// Shared by the page a read of an issue carries and by the pages the recovery read walks,
+/// because the source has to be able to resume the second from the first's own cursor: an
+/// offset here is a row of the same list either way.
+///
+/// [`Asked::stuck_cursor`] is what makes a walk misbehave on purpose — the page reports
+/// another page and answers with that same cursor however far the walk has got, which is
+/// what a source with no pagination guard would spin on for ever.
+fn membership_page(all: &[Value], offset: usize, first: usize, asked: Asked) -> Value {
+    let end = (offset + first).min(all.len());
+    let nodes = &all[offset.min(end)..end];
+    match asked.stuck_cursor {
+        Some(cursor) => json!({"nodes":nodes,"pageInfo":{"hasNextPage":true,
+                                                         "endCursor":cursor}}),
+        None => json!({"nodes":nodes,
+                       "pageInfo":{"hasNextPage":end < all.len(),"endCursor":end.to_string()}}),
+    }
+}
+
 /// Everything the fixture remembers between requests.
 struct State {
     items: Vec<Item>,
@@ -232,6 +306,9 @@ struct State {
     /// is answered out of the source's own record of what it created until the board
     /// catches up — and what that record holds is only observable while it is behind.
     lagging_reads: usize,
+    /// A cursor this board answers every membership page with, instead of one that
+    /// advances. See [`Asked::stuck_cursor`].
+    stuck_membership_cursor: Option<&'static str>,
     seen: Vec<Value>,
     /// Every GraphQL document this board received, in order.
     ///
@@ -485,6 +562,27 @@ impl Fixture {
     fn budget_used(&self) -> u64 {
         self.state.lock().unwrap().limits.budget_used
     }
+    /// Answer every page of every membership connection with `cursor`, saying there is
+    /// more.
+    ///
+    /// Nothing GitHub does: it is how a source's pagination guard is watched refusing. An
+    /// empty cursor and one that does not advance are the two ways a connection can offer
+    /// no progress, and both arrive here as this one knob.
+    fn wedge_membership_cursor(&self, cursor: &'static str) {
+        self.state.lock().unwrap().stuck_membership_cursor = Some(cursor);
+    }
+    /// How many times this board was asked for one issue's memberships on their own.
+    ///
+    /// The recovery read and nothing else, counted from the documents this board really
+    /// received — which is what tells a miss that cost a request from one that cost none.
+    fn membership_walks(&self) -> usize {
+        self.documents()
+            .iter()
+            .filter(|document| {
+                document.contains("on Issue{projectItems(first:$first,after:$after)")
+            })
+            .count()
+    }
     /// Every GraphQL document this board received, in order.
     fn documents(&self) -> Vec<String> {
         self.state.lock().unwrap().documents.clone()
@@ -578,6 +676,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         blocked_by: BTreeMap::new(),
         refuses: BTreeSet::new(),
         lagging_reads: 0,
+        stuck_membership_cursor: None,
         seen: Vec::new(),
         documents: Vec::new(),
         searches: Vec::new(),
@@ -691,6 +790,8 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     // path disagree.
     let asked = Asked {
         path: operation_name(query),
+        board_items: variables["boardItems"].as_u64().unwrap_or_default() as usize,
+        stuck_cursor: state.stuck_membership_cursor,
     };
     let input = variables.get("input").cloned().unwrap_or(Value::Null);
     if !input.is_null() {
@@ -903,6 +1004,33 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         return json!({"node":{"__typename":"Issue",
             "subIssues":{"nodes":nodes,
                 "pageInfo":{"hasNextPage":end < children.len(),"endCursor":end.to_string()}}}});
+    }
+    if query.contains("on Issue{projectItems(first:$first,after:$after)") {
+        let id = variables["id"].as_str().expect("a node id").to_owned();
+        let offset = match &variables["after"] {
+            Value::String(cursor) => cursor.parse::<usize>().unwrap_or_else(|_| {
+                // The one cursor this board answers that is not an offset is the one a case
+                // wedged it with; anything else is the source resuming from somewhere this
+                // board never sent it.
+                assert!(
+                    asked.stuck_cursor.is_some(),
+                    "a membership walk resumed from {cursor:?}, which this board never sent"
+                );
+                0
+            }),
+            other => panic!("a membership walk resumes from a cursor: {other}"),
+        };
+        let first = variables["first"].as_u64().expect("first") as usize;
+        let options = state.options();
+        let Some(item) = state.items.iter().find(|item| item.content_id == id) else {
+            return json!({ "node": null });
+        };
+        if item.typename != "Issue" {
+            // Not an issue, so the `... on Issue` arm selects nothing of it.
+            return json!({ "node": {} });
+        }
+        let page = membership_page(&item.memberships(&options), offset, first, asked);
+        return json!({"node":{"projectItems":page}});
     }
     if query.contains("node(id:$id){__typename ...BoardIssue}") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
@@ -1186,6 +1314,7 @@ fn operation_name(query: &str) -> &str {
     match root {
         "owner" => "board",
         "node" if query.contains("subIssues(") => "projectTasks",
+        "node" if query.contains("projectItems(first:$first") => "issueBoardItems",
         "node" if query.contains("blockedBy(") => "issueDependencies",
         "node" => "issue",
         other => other,
@@ -2008,6 +2137,214 @@ async fn an_item_reports_the_same_labels_title_status_and_id_however_it_is_reach
             .iter()
             .all(|document| !document.contains("ProjectV2ItemFieldLabelValue")),
         "and not one of the documents this session sent asked for the board `Labels` field"
+    );
+}
+
+/// One more board than a read of an issue carries memberships for.
+///
+/// `BOARD_ITEMS_PAGE_SIZE` is what decides how many memberships ride along on a read, and
+/// one more than that ahead of this board's own entry is what puts that entry past the
+/// page — the whole case the recovery read exists for. It is read out of
+/// `largest_page_sizes`, which binds that constant, rather than written down here, so these
+/// cases go on being the case a page really misses however the constant moves. The numbers
+/// are other people's boards; nothing about them but their being ahead matters.
+fn boards_ahead_of_this_one() -> Vec<u64> {
+    let page = u64::from(
+        onetaskgraph_github_projects::largest_page_sizes()
+            .get("boardItems")
+            .copied()
+            .expect("this source binds a board-membership page size"),
+    );
+    (0..=page).map(|offset| 101 + offset).collect()
+}
+
+#[tokio::test]
+async fn an_item_whose_board_entry_sits_past_the_page_is_still_an_item_of_this_board() {
+    // The page of `Issue.projectItems` a read carries is where the search for this board's
+    // entry starts, not where it ends: an issue on several boards can have its entry for
+    // this one past that page, and before the recovery read that was refused outright. What
+    // it has to report now is exactly what every other way of reaching it reports.
+    let fixture = equivalence_board(
+        labelled_plan().also_on(&boards_ahead_of_this_one()),
+        labelled_step().also_on(&boards_ahead_of_this_one()),
+    );
+    let source = source(&fixture);
+
+    let readings = every_way_to_reach(source.as_ref(), "I_plan", "I_step").await;
+
+    assert_eq!(disagreement(&readings), None);
+    assert_eq!(
+        readings
+            .iter()
+            .map(|reading| (reading.path, reading.id.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("search", "I_plan"),
+            ("projectTasks", "I_step"),
+            ("board", "I_step"),
+            ("issue", "I_plan"),
+            ("issue", "I_step"),
+        ],
+        "the board-scoped search, the project's sub-issues and the read by qualified id all \
+         answered, each for an issue another of them also answered for"
+    );
+    assert!(
+        readings
+            .iter()
+            .all(|reading| reading.labels == ["bug", "team"]),
+        "an empty label set would let this check pass while proving nothing: {readings:?}"
+    );
+    assert!(
+        readings.iter().all(|reading| reading.status.category
+            == match reading.id.as_str() {
+                "I_plan" => StatusCategory::InProgress,
+                _ => StatusCategory::Todo,
+            }),
+        "and each reading carries the status its board item holds, which is the field the \
+         recovered membership entry is what carries: {readings:?}"
+    );
+    assert!(
+        fixture.membership_walks() >= 3,
+        "the search, the sub-issue read and the node read each had to recover the entry, \
+         and this board was asked {} times",
+        fixture.membership_walks()
+    );
+}
+
+#[tokio::test]
+async fn an_issue_whose_whole_membership_connection_names_other_boards_is_not_held_here() {
+    // The other half, and the one a walk to exhaustion is what settles: an issue that is
+    // really on four other boards and not on this one. The refusal this replaces could not
+    // tell it from the case above, because both arrive as a page with no entry for this
+    // board and more of the connection to come.
+    let fixture = board(vec![
+        labelled_plan(),
+        labelled_step(),
+        Item::issue("I_theirs", "Another board's plan")
+            .sub_issues(1)
+            .only_on(&boards_ahead_of_this_one()),
+        Item::issue("I_their_step", "Another board's step")
+            .parent("I_plan")
+            .only_on(&boards_ahead_of_this_one()),
+    ]);
+    let source = source(&fixture);
+
+    // By qualified id: a positive absence, not a failure and not an empty stand-in for one.
+    assert_eq!(
+        source
+            .get_task(&NativeId("I_theirs".to_owned()))
+            .await
+            .expect("a board that does not hold an issue answers rather than failing"),
+        None
+    );
+    // Through the board-scoped search, which reaches every issue the board's own search
+    // returns and resolves each of them the same way.
+    let projects = source
+        .query_projects(&ProjectQuery::default(), &page(10))
+        .await
+        .expect("the board lists its projects")
+        .items
+        .iter()
+        .map(|project| project.id.0.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(projects, ["I_plan"]);
+    // And through a project's own sub-issues, the third caller of the same resolver.
+    let tasks = source
+        .query_tasks(
+            &TaskQuery {
+                project: ProjectFilter::Is(NativeId("I_plan".to_owned())),
+                ..TaskQuery::default()
+            },
+            &page(10),
+        )
+        .await
+        .expect("the project lists its own tasks")
+        .items
+        .iter()
+        .map(|task| task.id.0.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(tasks, ["I_step"]);
+
+    assert!(
+        fixture.membership_walks() > 0,
+        "and it really was decided by reading the rest of the connection"
+    );
+}
+
+#[tokio::test]
+async fn an_issue_this_board_does_not_hold_costs_no_further_request() {
+    // The recovery read is only owed to a connection with more of itself to come. An issue
+    // whose memberships fit in the page it arrived with is answered from that page alone,
+    // so the ordinary case of an id naming another board's issue costs nothing extra — and
+    // what proves it is what this board was asked for rather than what came back.
+    let fixture = board(vec![
+        Item::issue("I_theirs", "Another board's plan").only_on(&[101]),
+    ]);
+    let source = source(&fixture);
+
+    assert_eq!(
+        source
+            .get_task(&NativeId("I_theirs".to_owned()))
+            .await
+            .expect("a board that does not hold an issue answers rather than failing"),
+        None
+    );
+
+    assert_eq!(
+        fixture.membership_walks(),
+        0,
+        "this board was asked for one issue's memberships although the page it sent \
+         reported no more of them: {:?}",
+        fixture.documents()
+    );
+}
+
+#[tokio::test]
+async fn a_membership_walk_whose_cursor_does_not_advance_is_refused_rather_than_spun_on() {
+    // The recovery walk is a page walk like every other one here, and is held to the same
+    // guard: a board answering every page with the cursor it was resumed from would
+    // otherwise be walked for ever. The issue is on other boards alone, so the walk keeps
+    // asking for the next page rather than stopping at an entry it found.
+    let fixture = board(vec![
+        Item::issue("I_theirs", "Another board's step").only_on(&boards_ahead_of_this_one()),
+    ]);
+    fixture.wedge_membership_cursor("stuck");
+    let source = source(&fixture);
+
+    let refused = refusal(
+        source
+            .get_task(&NativeId("I_theirs".to_owned()))
+            .await
+            .expect_err("a cursor that does not advance is refused"),
+    );
+
+    assert!(refused.contains("did not advance"), "{refused}");
+    assert!(
+        fixture.membership_walks() > 0,
+        "and the guard caught it on the walk rather than before it: {refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_membership_page_offering_an_empty_cursor_is_refused_before_the_walk_starts() {
+    // The other way a connection offers no progress. This one is caught on the page the
+    // read arrived with, so nothing is sent at all.
+    let fixture = board(vec![labelled_step().also_on(&boards_ahead_of_this_one())]);
+    fixture.wedge_membership_cursor("");
+    let source = source(&fixture);
+
+    let refused = refusal(
+        source
+            .get_task(&NativeId("I_step".to_owned()))
+            .await
+            .expect_err("an empty cursor is refused"),
+    );
+
+    assert!(refused.contains("empty"), "{refused}");
+    assert_eq!(
+        fixture.membership_walks(),
+        0,
+        "and no walk was started from a cursor that goes nowhere"
     );
 }
 

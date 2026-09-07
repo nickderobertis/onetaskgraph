@@ -38,6 +38,17 @@ read from GitHub.com's own published schema artifact
 of `SearchResultItem` to the two members an `ISSUE` search can return is the same deliberate
 reduction the rest of this file carries.
 
+`issue-board-items.json` is the recovery read's own answer: `Issue.projectItems` asked for
+on one issue and nothing else, which is what the source sends when the page of memberships
+that came with an issue held no entry for this board and reported another page. It records
+the shape that recovery exists for — an entry for a board this source is not configured for
+ahead of this board's own entry — and it carries the same board item id and the same field
+values `sub-issues.json` gives that task, because what the walk produces is handed to the
+very same resolver. Its `Issue.projectItems(first:, after:)` arguments and
+`ProjectV2ItemConnection.pageInfo` are the same published `schema.graphql` halves the three
+reads above were validated against, read on 2026-09-01; it is documentation-derived and
+carries no captured response.
+
 One search qualifier is recorded here because its *absence* from the documents is
 deliberate: `-has:parent` is accepted by GitHub's issue search and silently ignored, as
 observed against the real board on 2026-09-01, so the discriminator that tells a project

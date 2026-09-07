@@ -153,6 +153,31 @@ and `ProjectV2FieldValue`, the whole of what `updateProjectV2ItemFieldValue` acc
 no label member, so no item type's value is writable. A draft therefore reports no labels,
 which is what it reported before this change too.
 
+## Making a missed board membership recoverable, and what that document costs
+
+Every document that reaches an issue carries a *page* of `Issue.projectItems` — the board
+half of that issue — and this board's own entry can sit past it. That used to be refused,
+naming the connection, because with no way to read the rest of it an unreached entry could
+not be told from an issue this board really does not hold. `graphql::ISSUE_BOARD_ITEMS` is
+the read that tells them apart: one issue's memberships and nothing else, resumed from the
+page's own cursor and walked to exhaustion.
+
+In the two quantities this file measures offline, in the record's own frame:
+
+|                | before | after  |
+| -------------- | -----: | -----: |
+| **requests**   |     99 |    100 |
+| **node count** | 504801 | 509901 |
+
+**One request more, and 5,100 worst-case nodes.** Both are the same one thing, and it is
+not a read of the board at all: the node-count reconciliation asks GitHub about every query
+document this source sends, so a seventh document is a seventh probe, and 5,100 is that
+document's own worst case as `tests/node_count.rs` pins it. **The session makes no recovery
+read**, and that is the finding rather than an omission — every item on the fixture board
+sits on one board, so its memberships arrive exhausted and there is nothing to recover.
+That is what this costs a deployment whose issues sit on one board: nothing. Every other
+row of the record is byte-for-byte what it was.
+
 ## The estimate the gate is sized from, and what it is not
 
 `tests/journey/budget.rs` derives what this session will cost each of GitHub's two budgets
