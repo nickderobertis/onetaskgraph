@@ -3013,10 +3013,11 @@ impl GitHubProjectsSource {
     /// issue behind: an entry that is not a repository on [`RepositoryTarget::HOST`], an
     /// entry owned by someone other than the owner of the parent issue's repository —
     /// GitHub accepts a sub-issue from another repository of the same owner and from no
-    /// other, so `addSubIssue` would refuse it after the issue existed — and a parent the
-    /// board does not hold, which `addSubIssue` would likewise refuse too late. Whether the
-    /// entry exists and is visible to the token is checked where its node id is resolved,
-    /// still before `createIssue`. The parent is read off `board`, which is completed from
+    /// other, so `addSubIssue` would refuse it after the issue existed — a parent the
+    /// board does not hold, and a parent that is a draft, which GitHub gives no sub-issues,
+    /// both of which `addSubIssue` would likewise refuse too late. Whether the entry exists
+    /// and is visible to the token is checked where its node id is resolved, still before
+    /// `createIssue`. The parent is read off `board`, which is completed from
     /// this process's own record, so a project created moments ago in this command answers
     /// though GitHub's board read has not caught up.
     fn creation_target(
@@ -3051,10 +3052,29 @@ impl GitHubProjectsSource {
             })
             .transpose()?;
         let parents_repository = parent
-            .and_then(|parent| parent.own_repository.as_ref())
-            .map(RepositoryTarget::from_origin)
-            .transpose()
-            .map_err(|message| SourceError::Malformed { message })?;
+            .map(|parent| {
+                // A draft is on the board and so is found, but it has no repository to
+                // place a task in and GitHub gives it no sub-issues, so `addSubIssue`
+                // would refuse the task only once `createIssue` had made it.
+                if parent.content_kind == ContentKind::DraftIssue {
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "GitHub project item {} on the board of source {} is a draft, \
+                             which cannot have sub-issues, so {} cannot be filed under it",
+                            parent.id.0,
+                            self.name,
+                            what(incoming)
+                        ),
+                    });
+                }
+                parent
+                    .own_repository
+                    .as_ref()
+                    .ok_or_else(|| format!("GitHub issue {} reported no repository", parent.id.0))
+                    .and_then(RepositoryTarget::from_origin)
+                    .map_err(|message| SourceError::Malformed { message })
+            })
+            .transpose()?;
         match incoming.repositories {
             [named] => {
                 let target =

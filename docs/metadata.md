@@ -85,6 +85,17 @@ A repository is identified by its **normalized origin as one string**:
 resolve. A list names each origin once; a repeat is refused rather than silently
 collapsed.
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This paragraph is the
+     human-facing statement of a placement rule whose single executable source is
+     `onetaskgraph-github-projects/src/lib.rs` (`GitHubProjectsSource::creation_target`,
+     documented on the module and on `RepositoryTarget`, which is where the refusals are
+     spelled and are deliberately not repeated here). The boundary tests in that crate's
+     `tests/plugin.rs` drive each arm the sentence below states — one entry, none, several,
+     with and without a parent, for a project, a task and a document — against the
+     loopback board and assert on `createIssue`'s own `repositoryId`, so a change to the
+     rule fails there before this prose can drift from it. Generating this paragraph from
+     the code would add no independent source; a rule change updates both in one
+     change, as `docs/local-md.md` does for its plugin. -->
 A source with a native notion of it reads it from there. `github-projects` derives it
 from an issue's own repository, and records the key **only** when the item's list is not
 exactly that one repository. The list also decides **where** that source creates an issue,
@@ -96,11 +107,8 @@ naming the one repository its work changes is filed where a person looks for it,
 read side and the write side agree by construction: one entry that is where the issue
 lives is derived and never written down, none is recorded as `[]`, and several are
 recorded as named. An existing issue is never moved; a list that no longer matches where
-it lives is recorded in the key. An entry that is not a `github.com/owner/name` repository,
-one the token cannot see, or one whose owner differs from the owner of the parent issue's
-repository — GitHub accepts a sub-issue from another repository of the same owner and from
-no other — is refused before the issue is created. Every source reads it from
-`onetaskgraph.repositories` where it has no native slot, so it is reachable everywhere.
+it lives is recorded in the key. Every source reads it from `onetaskgraph.repositories`
+where it has no native slot, so it is reachable everywhere.
 
 ## Dependencies that leave the source
 

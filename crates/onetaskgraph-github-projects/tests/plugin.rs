@@ -3383,7 +3383,7 @@ async fn a_parent_created_earlier_in_the_command_places_its_tasks_from_this_proc
 }
 
 #[tokio::test]
-async fn a_project_and_an_unparented_item_fall_back_to_the_configured_repository() {
+async fn a_project_and_an_unparented_item_go_to_their_one_repository_else_the_configured_one() {
     let fixture = board(vec![]);
     let source = source(&fixture);
 
@@ -3691,6 +3691,46 @@ async fn a_parent_neither_on_the_board_nor_in_this_processs_record_is_refused_be
         document_message.contains("\"Orphaned spec\""),
         "{document_message}"
     );
+    assert!(
+        fixture.seen().is_empty(),
+        "nothing was created: {:?}",
+        fixture.seen()
+    );
+}
+
+#[tokio::test]
+async fn a_parent_that_is_a_draft_is_refused_before_creation_because_a_draft_has_no_sub_issues() {
+    // A draft is on the board, so the parent is found; but a draft has no repository to
+    // place the task in and GitHub gives it no sub-issues, so `addSubIssue` would refuse
+    // the task only after `createIssue` had made it. Refused first, whether the task names
+    // a repository of its own or leaves the choice to its parent.
+    let fixture = board(vec![Item::draft("DI_note", "Sketch")]);
+    let source = source(&fixture);
+
+    let named = refusal(
+        source
+            .write_task(&task_under(
+                Some("DI_note"),
+                "Under a draft",
+                &["acme/tooling"],
+            ))
+            .await
+            .expect_err("a draft cannot have sub-issues"),
+    );
+    assert!(named.contains("DI_note"), "{named}");
+    assert!(named.contains("draft"), "{named}");
+    assert!(named.contains("task"), "{named}");
+    assert!(named.contains("\"Under a draft\""), "{named}");
+    let unnamed = refusal(
+        source
+            .write_document(&document_under(Some("DI_note"), "Draft spec", &[]))
+            .await
+            .expect_err("the same for a document leaving the choice to its parent"),
+    );
+    assert!(unnamed.contains("DI_note"), "{unnamed}");
+    assert!(unnamed.contains("draft"), "{unnamed}");
+    assert!(unnamed.contains("document"), "{unnamed}");
+    assert!(unnamed.contains("\"Draft spec\""), "{unnamed}");
     assert!(
         fixture.seen().is_empty(),
         "nothing was created: {:?}",
