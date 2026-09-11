@@ -85,17 +85,11 @@ A repository is identified by its **normalized origin as one string**:
 resolve. A list names each origin once; a repeat is refused rather than silently
 collapsed.
 
-<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This paragraph is the
-     human-facing statement of a placement rule whose single executable source is
-     `onetaskgraph-github-projects/src/lib.rs` (`GitHubProjectsSource::creation_target`,
-     documented on the module and on `RepositoryTarget`, which is where the refusals are
-     spelled and are deliberately not repeated here). The boundary tests in that crate's
-     `tests/plugin.rs` drive each arm the sentence below states — one entry, none, several,
-     with and without a parent, for a project, a task and a document — against the
-     loopback board and assert on `createIssue`'s own `repositoryId`, so a change to the
-     rule fails there before this prose can drift from it. Generating this paragraph from
-     the code would add no independent source; a rule change updates both in one
-     change, as `docs/local-md.md` does for its plugin. -->
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The human-facing statement
+     of a rule whose one executable source is `GitHubProjectsSource::creation_target` in
+     `onetaskgraph-github-projects`; that crate's `tests/plugin.rs` drives every arm stated
+     here against the loopback board and asserts on `createIssue`'s own `repositoryId`, so
+     the rule cannot change without failing there, and the refusals are not repeated here. -->
 A source with a native notion of it reads it from there. `github-projects` derives it
 from an issue's own repository, and records the key **only** when the item's list is not
 exactly that one repository. The list also decides **where** that source creates an issue,

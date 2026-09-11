@@ -819,11 +819,17 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         return answered;
     }
     if query.contains("repository(owner:$owner,name:$name)") {
-        let slug = format!(
-            "{}/{}",
-            variables["owner"].as_str().unwrap(),
-            variables["name"].as_str().unwrap()
-        );
+        // GitHub declares both arguments `String!`, so a lookup arriving without them is
+        // a malformed request from the source under test, named rather than answered.
+        let argument = |name: &str| {
+            variables[name]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    panic!("a repository lookup without a string {name} argument: {variables}")
+                })
+        };
+        let slug = format!("{}/{}", argument("owner"), argument("name"));
         return if variables["name"] == "missing" {
             json!({ "repository": null })
         } else {

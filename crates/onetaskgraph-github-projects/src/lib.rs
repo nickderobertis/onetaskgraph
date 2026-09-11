@@ -18,7 +18,7 @@
 //! its parent project's issue lives in — read from the board, or from this process's own
 //! record of a project it created earlier in the same command — and a project's issue, or
 //! a task or document written with no parent, is created in the configured `repository:`.
-//! See [`RepositoryTarget`] for what is refused before `createIssue` under that rule. An
+//! What that rule refuses, it refuses before `createIssue`, so no issue is half-created. An
 //! existing issue is never moved: the update path leaves the issue where it is and records
 //! the list in the metadata slot when it differs, so the read side's derivation and the
 //! creation rule agree by construction.
@@ -1455,15 +1455,11 @@ impl StatusMapping {
 
 /// One repository this source can create an issue in, as `owner/name`.
 ///
-/// Every `createIssue` this source sends names one of these, chosen by
-/// [`GitHubProjectsSource::creation_target`]: the item's own single `repositories` entry,
-/// else its parent project issue's repository, else the configured
-/// [`GitHubProjectsConfig::repository`]. An entry the item names is refused before
-/// `createIssue` — so no issue is half-created — when it is not a repository on
-/// [`Self::HOST`], when the token cannot see it, or when its owner differs from the owner
-/// of the repository its parent project's issue is in, which GitHub's sub-issue API
-/// requires of every sub-issue.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Every `createIssue` this source sends names one of these: the item's own single
+/// `repositories` entry, else its parent project issue's repository, else the configured
+/// [`GitHubProjectsConfig::repository`]. [`GitHubProjectsSource::creation_target`] makes
+/// that choice and says what it refuses before `createIssue`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct RepositoryTarget {
     owner: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only after `owner/name` validation in `new`.
     name: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only after `owner/name` validation in `new`.
@@ -1571,7 +1567,7 @@ pub struct GitHubProjectsSource {
     /// board updates the entry here too, so what this holds is the last read plus this
     /// process's own writes rather than a snapshot taken before them.
     board_cache: Mutex<Option<Board>>,
-    /// Each destination repository's node id by `owner/name`, resolved once per repository
+    /// Each destination repository's node id, resolved once per repository
     /// rather than per issue created.
     ///
     /// A repository's node id does not change, and re-reading it for every issue of a copy
@@ -1579,7 +1575,7 @@ pub struct GitHubProjectsSource {
     /// than one entry because a copy files each item in the repository its own
     /// `repositories` field names, so a plan across five repositories asks GitHub five
     /// times and not once per item.
-    repository_cache: Mutex<BTreeMap<String, String>>,
+    repository_cache: Mutex<BTreeMap<RepositoryTarget, String>>,
     /// What every request this source sends is recorded into.
     ///
     /// Ordinary code path, not a mode: [`Self::send_once`] records into it at the one place
@@ -3000,9 +2996,8 @@ impl GitHubProjectsSource {
             })
     }
 
-    /// The repository one new issue is created in, under the rule the module documentation
-    /// states: the item's own single `repositories` entry, else its parent project issue's
-    /// repository, else the configured fallback.
+    /// The repository one new issue is created in, under the rule [`RepositoryTarget`]
+    /// states.
     ///
     /// The fallback is demanded first, whichever arm answers: a write without a configured
     /// repository is refused naming the field exactly as it was before the rule existed,
@@ -3121,7 +3116,7 @@ impl GitHubProjectsSource {
         repository: &RepositoryTarget,
         incoming: &Incoming<'_>,
     ) -> Result<String, SourceError> {
-        if let Some(id) = self.repository_cache()?.get(&repository.slug()).cloned() {
+        if let Some(id) = self.repository_cache()?.get(repository).cloned() {
             return Ok(id);
         }
         let data = self
@@ -3144,13 +3139,13 @@ impl GitHubProjectsSource {
             })?;
         let id = required_str(node, "id")?.to_owned();
         self.repository_cache()?
-            .insert(repository.slug(), id.clone());
+            .insert(repository.clone(), id.clone());
         Ok(id)
     }
 
     fn repository_cache(
         &self,
-    ) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, String>>, SourceError> {
+    ) -> Result<std::sync::MutexGuard<'_, BTreeMap<RepositoryTarget, String>>, SourceError> {
         self.repository_cache
             .lock()
             .map_err(|_| SourceError::Unavailable {
