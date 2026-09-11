@@ -3745,6 +3745,43 @@ async fn a_parent_that_is_a_draft_is_refused_before_creation_because_a_draft_has
 }
 
 #[tokio::test]
+async fn a_parent_in_a_repository_this_source_cannot_spell_is_refused_before_creation() {
+    // The contract's `Repository` accepts any `host/owner/name`, and this source's
+    // `owner/name` grammar is a floor narrower than GitHub's — an Enterprise Managed User's
+    // login carries an underscore no ordinary login may — so a board can report a parent in
+    // a repository this source cannot name for `createIssue` or compare an owner against.
+    // Refused before anything is created, naming the parent and where the board says it
+    // is, whether the task names a repository or leaves the choice to it.
+    let fixture = board(vec![
+        Item::issue("I_odd", "Plan")
+            .sub_issues(1)
+            .in_repository("octocat_acme/work"),
+    ]);
+    let source = source(&fixture);
+
+    for (title, repositories) in [
+        ("Placed by parent", &[][..]),
+        ("Named", &["acme/tooling"][..]),
+    ] {
+        let error = source
+            .write_task(&task_under(Some("I_odd"), title, repositories))
+            .await
+            .expect_err("a parent in a repository this source cannot spell is refused");
+        assert!(matches!(error, SourceError::Malformed { .. }), "{error}");
+        let message = refusal(error);
+        assert!(message.contains("I_odd"), "{message}");
+        assert!(message.contains("octocat_acme/work"), "{message}");
+        assert!(message.contains("task"), "{message}");
+        assert!(message.contains(&format!("{title:?}")), "{message}");
+    }
+    assert!(
+        fixture.seen().is_empty(),
+        "nothing was created: {:?}",
+        fixture.seen()
+    );
+}
+
+#[tokio::test]
 async fn an_existing_issue_is_never_moved_and_a_differing_list_is_recorded() {
     let fixture = board(vec![
         Item::issue("I_1", "Settled").in_repository("acme/tooling"),

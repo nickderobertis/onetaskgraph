@@ -10,6 +10,11 @@
 //! board has none, so a write without [`GitHubProjectsConfig::repository`] is refused
 //! naming the field — but that repository is the *fallback*, not the home of every item.
 //!
+//! <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The rule's one
+//! executable source is `GitHubProjectsSource::creation_target`; this is where a reader of
+//! the module meets it, and `tests/plugin.rs` drives every arm below against the loopback
+//! board and asserts on `createIssue`'s own `repositoryId`, so the prose cannot outlive a
+//! change to the rule. -->
 //! **Which repository an issue is created in is decided by the item's own `repositories`
 //! field, under one rule.** Exactly one entry names the repository the issue is created in:
 //! a task issue is where a person finds the work from the repository it changes, and one
@@ -1117,6 +1122,7 @@ pub struct GitHubProjectsConfig {
     pub owner: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates GitHub's owner grammar before private construction.
     /// The project number shown in the board's GitHub URL.
     pub project_number: u32, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` bounds this to a positive GraphQL Int.
+    // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This doc is the field's schema description, which is what a person configuring the source reads, so it has to say when the field decides an issue's repository and when the item's own field does; the rule's one executable source is `GitHubProjectsSource::creation_target`, and `tests/plugin.rs` drives each case named here against the loopback board.
     /// `owner/name` of the repository this source creates an issue in when the item's own
     /// `repositories` field does not decide it.
     ///
@@ -1453,6 +1459,7 @@ impl StatusMapping {
     }
 }
 
+// llmlint: ignore[comments_earn_their_place] Every `createIssue` names one of these, and which one is the rule — a reader who reaches the type from `create_and_file_issue` gets the rule in one sentence here without the method's refusals, which stay on `creation_target` alone.
 /// One repository this source can create an issue in, as `owner/name`.
 ///
 /// Every `createIssue` this source sends names one of these: the item's own single
@@ -3062,12 +3069,28 @@ impl GitHubProjectsSource {
                         ),
                     });
                 }
+                // An issue's repository is where a sub-issue is placed and whose owner it
+                // is compared against, so a parent whose repository this source cannot
+                // spell as `owner/name` — GitHub's login grammar is wider than this
+                // source's floor — is one nothing can be filed under.
                 parent
                     .own_repository
                     .as_ref()
-                    .ok_or_else(|| format!("GitHub issue {} reported no repository", parent.id.0))
-                    .and_then(RepositoryTarget::from_origin)
-                    .map_err(|message| SourceError::Malformed { message })
+                    .and_then(|origin| RepositoryTarget::from_origin(origin).ok())
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: format!(
+                            "GitHub project issue {} on the board of source {} is in {}, which \
+                             is not a {}/owner/name repository this source can place {} in",
+                            parent.id.0,
+                            self.name,
+                            parent
+                                .own_repository
+                                .as_ref()
+                                .map_or("no repository", Repository::as_str),
+                            RepositoryTarget::HOST,
+                            what(incoming)
+                        ),
+                    })
             })
             .transpose()?;
         match incoming.repositories {
