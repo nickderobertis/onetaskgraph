@@ -520,9 +520,11 @@ pub fn first_call_headers(call: &str) -> String {
 enum Carried {
     /// Figures this session may decide on.
     Allowance(Allowance),
-    /// No allowance this session could read, from a call that should have carried one:
-    /// affords nothing, and the reason says why.
-    Unreadable(String),
+    /// A reading that declines the session outright, and why: a rate-limited refusal,
+    /// whatever figures it carried, or an answer without an allowance this session could
+    /// read. Nothing is decided on it because there is nothing to decide — it affords
+    /// nothing.
+    Declining(String),
     /// Nothing about the budget at all: the call was refused for something other than a
     /// rate limit and carried no figures — it never reached the host, or the host answered
     /// without them — which is a failure of that call's own and no evidence that the
@@ -566,17 +568,17 @@ fn carried_allowance(first: &Request, claimed: Allowance) -> Carried {
         _ => None,
     };
     match (first.outcome(), figures) {
-        (Outcome::RateLimited, Some(figures)) => Carried::Unreadable(format!(
+        (Outcome::RateLimited, Some(figures)) => Carried::Declining(format!(
             "it was refused for a rate limit, its headers reporting {} of {} remaining",
             figures.remaining(),
             figures.limit()
         )),
-        (Outcome::RateLimited, None) => Carried::Unreadable(
+        (Outcome::RateLimited, None) => Carried::Declining(
             "it was refused for a rate limit, and its headers carried no allowance this \
              session could read"
                 .to_owned(),
         ),
-        (Outcome::Answered, None) => Carried::Unreadable(
+        (Outcome::Answered, None) => Carried::Declining(
             "it was answered and its headers carried no allowance this session could read"
                 .to_owned(),
         ),
@@ -631,7 +633,7 @@ pub fn recheck(admitted: &Admitted, into: &Accounting) -> Result<(), Declined> {
     let carried_by = first_call_headers(first.name());
     let carried = match carried_allowance(first, claimed) {
         Carried::Allowance(allowance) => Ok(allowance),
-        Carried::Unreadable(why) => Err(why),
+        Carried::Declining(why) => Err(why),
         Carried::NothingAboutTheBudget(why) => {
             super::say(&format!(
                 "{carried_by} {why}; the session goes on with what {} claimed, {} of {} {} \
