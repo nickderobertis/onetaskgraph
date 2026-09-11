@@ -516,23 +516,48 @@ pub fn first_call_headers(call: &str) -> String {
     format!("the headers of the session's first real call, {call}")
 }
 
-/// What one call's own headers say the budget it drew on holds, or why they say nothing
-/// this session may decide on.
+/// What the session's first real call said about the budget it drew on.
+enum Carried {
+    /// Figures this session may decide on.
+    Allowance(Allowance),
+    /// No allowance this session could read, from a call that should have carried one:
+    /// affords nothing, and the reason says why.
+    Unreadable(String),
+    /// Nothing about the budget at all: the call was refused for something other than a
+    /// rate limit and carried no figures — it never reached the host, or the host answered
+    /// without them — which is a failure of that call's own and no evidence that the
+    /// allowance is other than the endpoint claimed.
+    NothingAboutTheBudget(String),
+}
+
+/// What one call's own headers say the budget it drew on holds, or why they do not decide.
 ///
 /// Three things afford nothing here, and each is named in the reason rather than folded
 /// into one. A call **refused for a rate limit** — whatever its headers carried, because a
 /// refusal naming a limit while the headers still show room is the secondary limiter, which
-/// nothing reports and every further attempt extends. A call whose headers carried
-/// **none of the figures**, or figures the accounting refused to record because they
+/// nothing reports and every further attempt extends. A call **answered** with headers that
+/// carried none of the figures, or figures the accounting refused to record because they
 /// cannot all be true: an allowance this session could not read is not one it may assume,
-/// exactly as the endpoint's own read is held to. And, on the readable figures, a
-/// remainder under the buffer — which is [`still_affordable`]'s to decide, not this one's.
+/// exactly as the endpoint's own read is held to, and GitHub attaches these headers to every
+/// answer it gives — so an answer without them is the observed shape, more used than the
+/// whole allowance beside nothing remaining, or something between here and GitHub stripping
+/// them, and the session cannot say it can afford itself on either. And, on the readable
+/// figures, a remainder under the buffer — which is [`still_affordable`]'s to decide, not
+/// this one's.
+///
+/// One thing is deliberately **not** a reason to decline: a call refused for something
+/// other than a rate limit that carried no figures at all. That is a connection that never
+/// reached the host, an outage answering without headers, a mis-pointed journey — and
+/// each of those is a failure that has to read as one, where a decline says on its face
+/// that the code under test is not at fault. Such a call says nothing about the budget, so
+/// the session goes on with the reading it was admitted on and the refusal surfaces as
+/// itself.
 ///
 /// `reset` is taken from the call's own headers where they carried it and from the
 /// reading the session was admitted on where they did not: it is the same window either
 /// way, and a stand-in that reports a budget without saying when it comes back is not a
 /// budget this session could not read.
-fn carried_allowance(first: &Request, claimed: Allowance) -> Result<Allowance, String> {
+fn carried_allowance(first: &Request, claimed: Allowance) -> Carried {
     let headers = first.rate_limit();
     let figures = match (headers.limit(), headers.remaining()) {
         (Some(limit), Some(remaining)) => {
@@ -541,21 +566,26 @@ fn carried_allowance(first: &Request, claimed: Allowance) -> Result<Allowance, S
         _ => None,
     };
     match (first.outcome(), figures) {
-        (Outcome::RateLimited, Some(figures)) => Err(format!(
+        (Outcome::RateLimited, Some(figures)) => Carried::Unreadable(format!(
             "it was refused for a rate limit, its headers reporting {} of {} remaining",
             figures.remaining(),
             figures.limit()
         )),
-        (Outcome::RateLimited, None) => Err(
+        (Outcome::RateLimited, None) => Carried::Unreadable(
             "it was refused for a rate limit, and its headers carried no allowance this \
              session could read"
                 .to_owned(),
         ),
-        (outcome, None) => Err(format!(
-            "it was {} and its headers carried no allowance this session could read",
-            outcome.name()
-        )),
-        (_, Some(figures)) => Ok(figures),
+        (Outcome::Answered, None) => Carried::Unreadable(
+            "it was answered and its headers carried no allowance this session could read"
+                .to_owned(),
+        ),
+        (Outcome::Refused, None) => Carried::NothingAboutTheBudget(
+            "it was refused for something other than a rate limit and carried no figures, \
+             which says nothing about the budget"
+                .to_owned(),
+        ),
+        (_, Some(figures)) => Carried::Allowance(figures),
     }
 }
 
@@ -575,7 +605,9 @@ fn carried_allowance(first: &Request, claimed: Allowance) -> Result<Allowance, S
 ///
 /// When the second reading does not afford the session the first admitted — a
 /// [`Declined`] naming both readings, which is a run that did not happen. Nothing is
-/// written before this decides, so a session declined here leaves nothing behind.
+/// written before this decides, so a session declined here leaves nothing behind. A call
+/// that said nothing about the budget is not an error here: see [`carried_allowance`] for
+/// which call that is and why it goes on.
 ///
 /// # Panics
 ///
@@ -596,8 +628,22 @@ pub fn recheck(admitted: &Admitted, into: &Accounting) -> Result<(), Declined> {
     let claimed = demand
         .allowance()
         .expect("the pre-check admitted this budget on an allowance it read");
-    let carried = carried_allowance(first, claimed);
     let carried_by = first_call_headers(first.name());
+    let carried = match carried_allowance(first, claimed) {
+        Carried::Allowance(allowance) => Ok(allowance),
+        Carried::Unreadable(why) => Err(why),
+        Carried::NothingAboutTheBudget(why) => {
+            super::say(&format!(
+                "{carried_by} {why}; the session goes on with what {} claimed, {} of {} {} \
+                 remaining, and that call's refusal is reported as itself",
+                allowance_read(),
+                claimed.remaining(),
+                claimed.limit(),
+                demand.unit(),
+            ));
+            return Ok(());
+        }
+    };
     super::say(&format!(
         "{carried_by} {}; {} claimed {} of {} {} remaining",
         match &carried {

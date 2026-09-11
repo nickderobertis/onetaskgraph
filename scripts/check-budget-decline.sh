@@ -63,7 +63,6 @@ declined_red() {
   esac
 }
 
-# One test, followed through: its target, its name, and what it exited with.
 follow_through() {
   local target="$1" test="$2"
   # llmlint: ignore-block[work_goes_through_command_surface] This runs as a command OF the
@@ -74,14 +73,11 @@ follow_through() {
   # llmlint: ignore-end[work_goes_through_command_surface]
 }
 
-# The first reading: the free allowance read refusing the session outright.
 status=0
 output="$(follow_through budget_gate a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_short)" || status=$?
 declined_red "the allowance read" "$status" "$output" \
   "limit is" "remained" "estimated to spend" "retained buffer is" "resets at"
 
-# The second reading: the free read admitted the session, and the headers its own first
-# real call carried refused it. The message names both readings and what each answered.
 status=0
 output="$(follow_through recheck_gate a_journey_whose_first_call_carries_less_than_the_endpoint_claimed_does_not_run)" || status=$?
 declined_red "the headers of its first real call" "$status" "$output" \

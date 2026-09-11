@@ -12,6 +12,8 @@
 //! That recording is what makes each decline below evidence about **artifacts** as well as
 //! about the decision: a session declined on its first real call has made exactly two
 //! requests, the free read and that call, and nothing that could have written anything.
+//! It is also what shows the one refusal that is deliberately *not* a decline — a call that
+//! never reached the host — going on to fail as itself.
 //!
 //! No credential and no third-party API: every allowance and every header below is one this
 //! file wrote. What a stand-in cannot prove is that GitHub really disagrees with itself in
@@ -59,19 +61,25 @@ const HEADERS_RESET_AT: u64 = 1_775_000_777;
 /// The reason GitHub gives for a refused call whose primary budget is spent.
 const ALREADY_EXCEEDED: &str = "API rate limit already exceeded for user ID 1.";
 
-/// What the stand-in answers the session's first real call with.
+/// What the stand-in does with the session's first real call.
 #[derive(Clone)]
-struct FirstCall {
-    status: &'static str,
-    /// The `x-ratelimit-*` lines, complete with their line endings, or none at all.
-    headers: String,
-    body: String,
+enum FirstCall {
+    /// Answer it with this status, these `x-ratelimit-*` lines — complete with their line
+    /// endings, or none at all — and this body.
+    Answer {
+        status: &'static str,
+        headers: String,
+        body: String,
+    },
+    /// Close the connection without answering, which the client reports as a request that
+    /// never reached the host.
+    HangUp,
 }
 
 impl FirstCall {
     /// An answered call whose headers report `remaining` of [`LIMIT`] on the GraphQL budget.
     fn reporting(remaining: u64) -> Self {
-        Self {
+        Self::Answer {
             status: "200 OK",
             headers: graphql_headers(remaining, LIMIT.saturating_sub(remaining)),
             body: json!({"data": {}}).to_string(),
@@ -139,8 +147,14 @@ impl Standin {
                         budget::documented_answer(LIMIT, LIMIT, LIMIT, RESETS_AT).to_string(),
                     ),
                     "POST /graphql" if first_graphql_of_this_run => {
-                        let first = scripted.lock().unwrap().clone();
-                        (first.status, first.headers, first.body)
+                        match scripted.lock().unwrap().clone() {
+                            FirstCall::Answer {
+                                status,
+                                headers,
+                                body,
+                            } => (status, headers, body),
+                            FirstCall::HangUp => continue,
+                        }
                     }
                     _ => (
                         "404 Not Found",
@@ -302,7 +316,7 @@ fn a_journey_whose_first_call_is_refused_for_a_rate_limit_is_declined_rather_tha
     // What was observed on a real account, header for header: refused with the allowance
     // already exceeded, `remaining: 0`, and more used than the whole allowance — a set the
     // accounting refuses to record as figures, so what the re-check has is the refusal.
-    let (drive, _turn) = drive(FirstCall {
+    let (drive, _turn) = drive(FirstCall::Answer {
         status: "403 Forbidden",
         headers: graphql_headers(0, LIMIT + 42),
         body: json!({"message": ALREADY_EXCEEDED}).to_string(),
@@ -340,7 +354,7 @@ fn a_first_call_refused_with_the_budget_still_showing_room_is_declined_as_the_se
     // A refusal naming a rate limit while the headers still show a whole allowance is the
     // secondary limiter, which nothing reports and every further attempt extends: the
     // figures afford the session and the refusal declines it anyway, and it does not retry.
-    let (drive, _turn) = drive(FirstCall {
+    let (drive, _turn) = drive(FirstCall::Answer {
         status: "403 Forbidden",
         headers: graphql_headers(LIMIT - 1, 1),
         body: json!({"message": "You have exceeded a secondary rate limit."}).to_string(),
@@ -358,21 +372,45 @@ fn a_first_call_refused_with_the_budget_still_showing_room_is_declined_as_the_se
 }
 
 #[test]
-fn a_first_call_carrying_no_rate_limit_headers_at_all_declines_rather_than_assuming_the_claim() {
-    let (drive, _turn) = drive(FirstCall {
-        status: "200 OK",
-        headers: String::new(),
-        body: json!({"data": {}}).to_string(),
-    });
+fn an_answered_first_call_carrying_no_readable_allowance_declines_rather_than_assuming_the_claim() {
+    // Two ways an ANSWER can carry no allowance this session may decide on: none of the
+    // headers at all, and the observed shape on a call the budget still allowed — nothing
+    // remaining beside more used than the whole allowance, which the accounting refuses to
+    // record as figures. GitHub attaches these headers to every answer, so neither is an
+    // answer the session can say it affords itself on.
+    for headers in [String::new(), graphql_headers(0, LIMIT + 42)] {
+        let (drive, _turn) = drive(FirstCall::Answer {
+            status: "200 OK",
+            headers: headers.clone(),
+            body: json!({"data": {}}).to_string(),
+        });
+        let message = drive.message();
+        assert!(message.contains("DID NOT RUN"), "{headers:?}: {message}");
+        assert!(
+            message.contains(
+                "it was answered and its headers carried no allowance this session could read"
+            ),
+            "{headers:?}: {message}"
+        );
+        assert!(message.contains("not one it may assume"), "{message}");
+        assert_eq!(drive.asked, the_free_read_and_one_real_call());
+    }
+}
+
+#[test]
+fn a_first_call_that_never_reached_the_host_fails_as_itself_rather_than_declining() {
+    // The connection is closed without an answer, so the call carries no headers and was
+    // not refused for a rate limit: that is no evidence about the budget, and reporting it
+    // as a decline would say the code under test is not at fault about a journey that
+    // could not reach its host. The session goes on with the endpoint's reading, and what
+    // it runs into is the schema verification FAILING on the call that could not be made.
+    let (drive, _turn) = drive(FirstCall::HangUp);
     let message = drive.message();
-    assert!(message.contains("DID NOT RUN"), "{message}");
-    assert!(
-        message.contains(
-            "it was answered and its headers carried no allowance this session could read"
-        ),
-        "{message}"
-    );
-    assert!(message.contains("not one it may assume"), "{message}");
+    assert!(message.contains("mutation schema drifted"), "{message}");
+    assert!(message.contains("could not reach GitHub"), "{message}");
+    assert!(!message.contains("DID NOT RUN"), "{message}");
+    // The stand-in recorded the call before hanging up on it, and the journey did not
+    // retry it: one free read, one real call.
     assert_eq!(drive.asked, the_free_read_and_one_real_call());
 }
 
@@ -488,7 +526,8 @@ fn a_first_call_refused_for_something_other_than_a_rate_limit_is_decided_on_its_
     // A refusal that is not a rate limit — a credential GitHub rejected, an outage — carries
     // the account's headers like any response, and those are what decide. Where they afford
     // the session, the re-check lets the refusal surface as the failure it is rather than
-    // dressing it as a budget the session did not have.
+    // dressing it as a budget the session did not have; where they do not, the session is
+    // declined on them like any other.
     let _turn = take_the_turn();
     let into = Accounting::new();
     let admitted = admitted_on_the_whole_allowance(&into);
@@ -503,4 +542,26 @@ fn a_first_call_refused_for_something_other_than_a_rate_limit_is_decided_on_its_
         ],
     ));
     budget::recheck(&admitted, &into).expect("headers with room let the refusal be a refusal");
+
+    let admitted = admitted_on_the_whole_allowance(&into);
+    into.record(recorded_first_call(
+        Outcome::Refused,
+        &[
+            ("x-ratelimit-limit", &LIMIT.to_string()),
+            ("x-ratelimit-remaining", "0"),
+            ("x-ratelimit-used", &LIMIT.to_string()),
+            ("x-ratelimit-resource", "graphql"),
+        ],
+    ));
+    assert!(
+        budget::recheck(&admitted, &into).is_err(),
+        "headers reporting nothing left decline the session whatever refused the call"
+    );
+
+    // And a refusal carrying no figures at all is no evidence about the budget: the session
+    // goes on, and that refusal is its own failure to report.
+    let admitted = admitted_on_the_whole_allowance(&into);
+    into.record(recorded_first_call(Outcome::Refused, &[]));
+    budget::recheck(&admitted, &into)
+        .expect("a refusal that says nothing about the budget does not decline on it");
 }

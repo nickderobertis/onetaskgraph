@@ -372,9 +372,11 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   `still_affordable` in `onetaskgraph-live` — the same estimate, buffer and arithmetic — and
   a session they refuse is *declined* on them, after that one call and before anything is
   written, with `Unaffordable::Contradicted` naming both readings. A call refused for a rate
-  limit, or carrying no allowance the session could read, declines the same way; the free
-  read stays first, and no call is added. `tests/recheck_gate.rs` drives all of that against
-  a loopback stand-in. `scripts/check-budget-decline.sh`, a command in that plugin's `test`
+  limit, or answered without an allowance the session could read, declines the same way; one
+  refused for anything else and carrying no figures says nothing about the budget, so it
+  goes on and fails as itself — a journey that cannot reach its host is a defect, not a
+  decline. The free read stays first, and no call is added. `tests/recheck_gate.rs` drives
+  all of that against a loopback stand-in. `scripts/check-budget-decline.sh`, a command in that plugin's `test`
   target, follows a decline on each reading through to the conclusion the required check
   reads, because a test that asserts a panic passes and the half worth proving is that the
   check goes red.
