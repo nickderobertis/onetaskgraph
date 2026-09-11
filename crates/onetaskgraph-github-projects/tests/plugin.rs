@@ -170,7 +170,6 @@ impl Item {
         self.sub_issues = total;
         self
     }
-    /// Put this issue in another repository than the board's own.
     fn in_repository(mut self, repository: &str) -> Self {
         self.repository = Some(repository.to_owned());
         self
@@ -3113,6 +3112,16 @@ async fn a_write_without_a_configured_repository_is_refused_naming_the_field() {
     assert!(message.contains("repository"), "{message}");
     assert!(message.contains("owner/name"), "{message}");
     assert!(message.contains("work"), "the instance is named: {message}");
+    // An item whose own single repository would place it is refused the same way: the
+    // configured repository is required for a write exactly as before the item's own
+    // field decided where an issue is created.
+    let placed = refusal(
+        source
+            .write_task(&task_under(None, "Placed", &["acme/tooling"]))
+            .await
+            .expect_err("the configured repository is required whatever the item names"),
+    );
+    assert_eq!(placed, message);
     assert!(
         fixture.seen().is_empty(),
         "nothing is written before the refusal"
@@ -3187,12 +3196,10 @@ async fn repositories_are_derived_from_the_issue_and_recorded_only_when_they_dif
     );
 }
 
-/// A repository origin as an item names one.
 fn repo(slug: &str) -> Repository {
     Repository::try_from(format!("github.com/{slug}")).unwrap()
 }
 
-/// The `owner/name` each `createIssue` this board received named by node id, in order.
 fn created_in(fixture: &Fixture) -> Vec<String> {
     fixture
         .seen()
@@ -3208,7 +3215,6 @@ fn created_in(fixture: &Fixture) -> Vec<String> {
         .collect()
 }
 
-/// A task filed under `parent`, naming `repositories`.
 fn task_under(parent: Option<&str>, title: &str, repositories: &[&str]) -> ItemWrite<Task> {
     write(Task {
         project: parent.map(|id| NativeId(id.to_owned())),
@@ -3217,7 +3223,6 @@ fn task_under(parent: Option<&str>, title: &str, repositories: &[&str]) -> ItemW
     })
 }
 
-/// A document filed under `parent`, naming `repositories`.
 fn document_under(parent: Option<&str>, title: &str, repositories: &[&str]) -> ItemWrite<Document> {
     write(Document {
         project: parent.map(|id| NativeId(id.to_owned())),
@@ -3226,7 +3231,6 @@ fn document_under(parent: Option<&str>, title: &str, repositories: &[&str]) -> I
     })
 }
 
-/// A project naming `repositories`.
 fn project_naming(title: &str, repositories: &[&str]) -> ItemWrite<Project> {
     write(Project {
         repositories: repositories.iter().map(|slug| repo(slug)).collect(),

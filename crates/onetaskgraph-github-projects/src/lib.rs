@@ -1494,8 +1494,6 @@ impl RepositoryTarget {
     /// what [`Self::origin`] renders and what [`Self::from_origin`] accepts.
     const HOST: &str = "github.com";
 
-    /// The [`Repository`] origin of this repository, as the read side derives it from an
-    /// issue's own `repository.nameWithOwner`.
     fn origin(&self) -> String {
         format!("{}/{}/{}", Self::HOST, self.owner, self.name)
     }
@@ -1517,7 +1515,6 @@ impl RepositoryTarget {
         Self::parse(rest).map_err(|_| not_here())
     }
 
-    /// GitHub's own spelling of this repository, which is how a refusal names it.
     fn slug(&self) -> String {
         format!("{}/{}", self.owner, self.name)
     }
@@ -2990,7 +2987,6 @@ impl GitHubProjectsSource {
             .map_err(|message| SourceError::Malformed { message })
     }
 
-    /// The configured fallback repository, or the refusal naming the field it needs.
     fn configured_repository(&self) -> Result<&RepositoryTarget, SourceError> {
         self.repository
             .as_ref()
@@ -3008,6 +3004,11 @@ impl GitHubProjectsSource {
     /// states: the item's own single `repositories` entry, else its parent project issue's
     /// repository, else the configured fallback.
     ///
+    /// The fallback is demanded first, whichever arm answers: a write without a configured
+    /// repository is refused naming the field exactly as it was before the rule existed,
+    /// so a source that could not write before cannot write now, rather than writing for
+    /// the one item whose own field happens to decide it.
+    ///
     /// Everything this refuses is refused before `createIssue`, so a refusal leaves no
     /// issue behind: an entry that is not a repository on [`RepositoryTarget::HOST`], an
     /// entry owned by someone other than the owner of the parent issue's repository —
@@ -3023,6 +3024,7 @@ impl GitHubProjectsSource {
         board: &Board,
         incoming: &Incoming<'_>,
     ) -> Result<RepositoryTarget, SourceError> {
+        let fallback = self.configured_repository()?;
         let what = |incoming: &Incoming<'_>| {
             format!(
                 "{} {:?}",
@@ -3086,10 +3088,7 @@ impl GitHubProjectsSource {
                 }
                 Ok(target)
             }
-            _ => match parents_repository {
-                Some(parents) => Ok(parents),
-                None => self.configured_repository().cloned(),
-            },
+            _ => Ok(parents_repository.unwrap_or_else(|| fallback.clone())),
         }
     }
 
@@ -3129,7 +3128,6 @@ impl GitHubProjectsSource {
         Ok(id)
     }
 
-    /// This process's own record of each destination repository's node id.
     fn repository_cache(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, String>>, SourceError> {
