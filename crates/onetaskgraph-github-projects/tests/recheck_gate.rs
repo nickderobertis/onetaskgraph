@@ -30,6 +30,11 @@ use onetaskgraph_github_projects::accounting::{Accounting, Budget, Outcome, Rate
 use onetaskgraph_live::{Allowance, RETAINED_BUFFER, Unaffordable};
 use serde_json::json;
 
+// The credentialed lane's own halves again: `journey` for the precondition, its second
+// reading and the run under test, and `lane` for the session name a refusal is reported
+// under. Most of each is for the target that drives the journey against GitHub, so what
+// this one does not reach is the other drive's rather than dead code — the same reason
+// `tests/budget_gate.rs` and `tests/plugin.rs` carry these two.
 #[allow(dead_code)]
 mod journey;
 #[allow(dead_code)]
