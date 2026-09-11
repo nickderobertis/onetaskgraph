@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.28](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.27...onetaskgraph-github-projects-v0.2.28) - 2026-09-11
+
+### Added
+
+- *(github-projects)* create each issue in the repository the item's own repositories field names ([#846](https://github.com/nickderobertis/onetaskgraph/pull/846))
+
+### Fixed
+
+- *(live)* re-check the allowance against the headers the session's own call carries ([#821](https://github.com/nickderobertis/onetaskgraph/pull/821))
+
 ## [0.2.26](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.25...onetaskgraph-github-projects-v0.2.26) - 2026-09-07
 
 ### Added
