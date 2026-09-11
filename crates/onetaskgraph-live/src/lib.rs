@@ -57,6 +57,19 @@
 //! the third answer above, carried by [`Declined::unaffordable`], whose cause is readable
 //! as a value through [`Declined::unaffordable_because`] rather than out of its prose.
 //! Nothing here waits for a budget to come back — see [`Unaffordable`].
+//!
+//! **A session is decided twice, and the second decision is the one that stands.** The read
+//! a lane makes before it spends anything is, by choice, a read that spends nothing — and
+//! that read has been observed to disagree with the account's own responses about the same
+//! credential in the same seconds, in the permissive direction: a whole allowance claimed
+//! while the headers on a real call reported none left. A gate that decides on that read
+//! alone starts a session that cannot afford itself, which is the outcome it exists to
+//! prevent. So the lane keeps the free read as its first, then reads the headers its own
+//! first real call carried and puts them to [`still_affordable`]: the same estimate, the
+//! same buffer, the same arithmetic, on the reading the account itself attached to the
+//! session's own request. Where that reading refuses, the session is declined on it —
+//! [`Unaffordable::Contradicted`], naming both readings — after that one call and before
+//! anything is written.
 
 #![deny(missing_docs)]
 
@@ -439,6 +452,41 @@ pub enum Unaffordable {
         /// The UTC epoch second that budget's window resets.
         reset: u64,
     },
+    /// The session was admitted on one reading of this budget and its own first real call
+    /// carried another, on which it cannot afford itself.
+    ///
+    /// Both readings are on the value, because what a reader of this decline needs is to
+    /// tell which one declined the session and what each of them answered — the free read
+    /// that admitted it, and the headers the account attached to the session's own request,
+    /// which outrank it. See [`still_affordable`]. Boxed because this is the `Err` of every
+    /// affordability decision, and two readings with their names inline would make every
+    /// ordinary `Ok` that size too.
+    Contradicted(Box<Contradiction>),
+}
+
+/// The two readings of one budget a session was admitted on and then declined on.
+///
+/// Every field is on the value for the same reason [`Unaffordable::Short`]'s are: a run that
+/// declined has to be told from a run that failed by something reading the outcome rather
+/// than its prose, and here that something also has to be told which of two readings did
+/// the declining.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Contradiction {
+    /// Which budget the two readings disagree about, and what it is metered in.
+    pub metered: Metered,
+    /// What the reading the session was admitted on claimed.
+    pub claimed: Allowance,
+    /// Where that reading was made, as the lane names the read.
+    pub claimed_by: String,
+    /// What the session's own first real call carried instead — or why it carried no
+    /// allowance this session could read, which affords nothing either.
+    pub carried: Result<Allowance, String>,
+    /// Which call carried it, as the lane names the call.
+    pub carried_by: String,
+    /// What this session is estimated to spend against the budget.
+    pub estimated_cost: u64,
+    /// What [`RETAINED_BUFFER`] of the allowance comes to, on the reading decided on.
+    pub retained_buffer: u64,
 }
 
 impl Unaffordable {
@@ -447,6 +495,7 @@ impl Unaffordable {
     pub const fn metered(&self) -> Metered {
         match self {
             Self::Unread { metered, .. } | Self::Short { metered, .. } => *metered,
+            Self::Contradicted(readings) => readings.metered,
         }
     }
     /// Which budget refused the session.
@@ -482,6 +531,46 @@ impl Unaffordable {
                 metered.unit(),
                 remaining.saturating_sub(*estimated_cost),
             ),
+            Self::Contradicted(readings) => {
+                let Contradiction {
+                    metered,
+                    claimed,
+                    claimed_by,
+                    carried,
+                    carried_by,
+                    estimated_cost,
+                    retained_buffer,
+                } = readings.as_ref();
+                let second = match carried {
+                    Ok(carried) => format!(
+                        "reported {} of {} remaining, which leaves {} where {retained_buffer} \
+                         is owed. That budget resets at {} (UTC epoch seconds)",
+                        carried.remaining(),
+                        carried.limit(),
+                        carried.remaining().saturating_sub(*estimated_cost),
+                        carried.reset(),
+                    ),
+                    Err(why) => format!(
+                        "carried no allowance this session could read: {why}. An allowance \
+                         this session could not read is not one it may assume. By the first \
+                         reading that budget resets at {} (UTC epoch seconds)",
+                        claimed.reset(),
+                    ),
+                };
+                format!(
+                    "the {} budget is not what the session was admitted on. {claimed_by} \
+                     claimed {} of {} {} remaining, and {carried_by} {second}. This session \
+                     is estimated to spend {estimated_cost} and the retained buffer is \
+                     {retained_buffer} ({RETAINED_BUFFER} of the allowance). The reading a \
+                     session's own call carries outranks the one an endpoint claimed about \
+                     it, so the session stopped on the second reading after that one call; \
+                     nothing here waits for it, so re-run after that budget resets",
+                    metered.budget(),
+                    claimed.remaining(),
+                    claimed.limit(),
+                    metered.unit(),
+                )
+            }
         }
     }
 }
@@ -527,6 +616,69 @@ pub fn affordable(demands: &[Demand]) -> Result<(), Unaffordable> {
         }
     }
     Ok(())
+}
+
+/// Whether a session admitted on one reading of a budget still affords itself on a second.
+///
+/// `admitted` is the demand the session was admitted on — what [`affordable`] passed — and
+/// `claimed_by` names the read that answered its allowance. `carried` is what the session's
+/// own first real call reported about the same budget, in the headers the account attached
+/// to that very request, and `carried_by` names that call. The second reading is decided
+/// **exactly as the first**: the same estimate, the same [`RETAINED_BUFFER`], the same
+/// arithmetic, and a reading that could not be made affords nothing, just as an unread
+/// allowance affords nothing in [`affordable`].
+///
+/// **Why there is a second decision at all.** The read a lane makes first is, by choice, one
+/// that spends nothing, and it has been observed to disagree with the account's own headers
+/// about the same credential in the same seconds — a whole allowance claimed while a real
+/// call's headers reported none left. Two readings that disagree in *that* direction mean
+/// the first one admitted a session that cannot pay for itself, and the headers on the
+/// session's own request are the account's word about that request rather than a stand-in
+/// for it. So they outrank the claim, and the session is declined on them rather than left
+/// to fail on its next call.
+///
+/// The first call has already spent something by the time its headers are read, so the
+/// second reading is always a little lower than the first; that is not a contradiction and
+/// does not decline anything. What declines is the second reading refusing what the first
+/// admitted, and the refusal names both.
+///
+/// # Errors
+///
+/// [`Unaffordable::Contradicted`] when the carried reading does not afford the session the
+/// claimed one admitted — either because it leaves less than the retained buffer, or because
+/// the call carried no allowance this session could read. [`Unaffordable::Unread`] when
+/// `admitted` itself carries no allowance, which is a demand nothing should have admitted
+/// and is refused here as it is everywhere.
+pub fn still_affordable(
+    admitted: &Demand,
+    claimed_by: &str,
+    carried: Result<Allowance, String>,
+    carried_by: &str,
+) -> Result<(), Unaffordable> {
+    let claimed = admitted.allowance().map_err(|why| Unaffordable::Unread {
+        metered: admitted.metered,
+        why: why.to_owned(),
+    })?;
+    let again = Demand {
+        metered: admitted.metered,
+        estimated_cost: admitted.estimated_cost,
+        allowance: carried.clone(),
+    };
+    affordable(std::slice::from_ref(&again)).map_err(|_| {
+        Unaffordable::Contradicted(Box::new(Contradiction {
+            metered: admitted.metered,
+            claimed,
+            claimed_by: claimed_by.to_owned(),
+            // The buffer of the reading decided on: the carried allowance where there is
+            // one, and the claimed one where the call carried none to compute it from.
+            retained_buffer: RETAINED_BUFFER.of(carried
+                .as_ref()
+                .map_or(claimed.limit(), |carried| carried.limit())),
+            carried,
+            carried_by: carried_by.to_owned(),
+            estimated_cost: admitted.estimated_cost,
+        }))
+    })
 }
 
 /// A session that could have run and did not, and the reason no test result covers it.
@@ -1762,6 +1914,117 @@ mod tests {
             "{message}"
         );
         assert!(message.contains(&short.reason()), "{message}");
+    }
+
+    /// The two readings' names, as a lane would spell them.
+    const CLAIMED_BY: &str = "the allowance read GET /rate_limit";
+    const CARRIED_BY: &str = "the headers of the session's first real call, introspection";
+
+    #[test]
+    fn a_first_call_carrying_the_allowance_the_session_was_admitted_on_lets_it_go_on() {
+        // Admitted on 3,000 of 5,000; the first call carried 2,999, because that call
+        // itself cost a point. A lower second reading is not a contradiction.
+        let admitted = graphql(1_932, 5_000, 3_000);
+        let carried = Allowance::read(5_000, 2_999, 1_775_000_000).expect("under the whole");
+        assert_eq!(
+            still_affordable(&admitted, CLAIMED_BY, Ok(carried), CARRIED_BY),
+            Ok(())
+        );
+        // Landing exactly on the buffer is still affordable on the second reading, as it
+        // is on the first: what is retained may not be dipped into.
+        let on_the_buffer = Allowance::read(5_000, 2_932, 1_775_000_000).expect("under");
+        assert_eq!(
+            still_affordable(&admitted, CLAIMED_BY, Ok(on_the_buffer), CARRIED_BY),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_first_call_carrying_less_than_the_session_needs_declines_it_naming_both_readings() {
+        // The observed shape: the free read claimed the whole allowance, and the headers on
+        // the session's own first call reported none of it left.
+        let admitted = graphql(1_932, 5_000, 5_000);
+        let carried = Allowance::read(5_000, 0, 1_775_000_099).expect("nothing left is under");
+        let contradicted = still_affordable(&admitted, CLAIMED_BY, Ok(carried), CARRIED_BY)
+            .expect_err("a session cannot run on a reading that leaves nothing");
+        assert_eq!(
+            contradicted,
+            Unaffordable::Contradicted(Box::new(Contradiction {
+                metered: GRAPHQL,
+                claimed: Allowance::read(5_000, 5_000, 1_775_000_000).expect("the claim"),
+                claimed_by: CLAIMED_BY.to_owned(),
+                carried: Ok(carried),
+                carried_by: CARRIED_BY.to_owned(),
+                estimated_cost: 1_932,
+                retained_buffer: 1_000,
+            }))
+        );
+        assert_eq!(contradicted.budget(), "graphql");
+        // The reason says which reading declined it and what each answered, with every
+        // figure the decision was made on, and the reset of the reading decided on.
+        let reason = contradicted.reason();
+        for figure in [
+            CLAIMED_BY,
+            CARRIED_BY,
+            "claimed 5000 of 5000 points remaining",
+            "reported 0 of 5000 remaining",
+            "leaves 0 where 1000 is owed",
+            "estimated to spend 1932",
+            "retained buffer is 1000",
+            "resets at 1775000099",
+            "nothing here waits for it",
+        ] {
+            assert!(reason.contains(figure), "{figure} is missing from {reason}");
+        }
+        // One point under the buffer is under it on the second reading too.
+        let just_under = Allowance::read(5_000, 2_931, 1_775_000_000).expect("under");
+        assert!(matches!(
+            still_affordable(&admitted, CLAIMED_BY, Ok(just_under), CARRIED_BY),
+            Err(Unaffordable::Contradicted(_))
+        ));
+    }
+
+    #[test]
+    fn a_first_call_carrying_no_readable_allowance_declines_rather_than_assuming_the_claim() {
+        let admitted = graphql(1_932, 5_000, 5_000);
+        let why = "it was refused for a rate limit, and its headers carried none of the figures";
+        let contradicted = still_affordable(&admitted, CLAIMED_BY, Err(why.to_owned()), CARRIED_BY)
+            .expect_err("a reading that could not be made affords nothing");
+        let Unaffordable::Contradicted(readings) = &contradicted else {
+            panic!("a first call carrying no allowance contradicts the claim: {contradicted:?}");
+        };
+        assert_eq!(readings.carried.as_ref().map_err(String::as_str), Err(why));
+        // With nothing carried to compute it from, the buffer is the claimed reading's.
+        assert_eq!(readings.retained_buffer, 1_000);
+        let reason = contradicted.reason();
+        for figure in [
+            why,
+            "not one it may assume",
+            "claimed 5000 of 5000 points remaining",
+            // The reset a reader is told is the first reading's, and it says so.
+            "By the first reading that budget resets at 1775000000",
+            "nothing here waits for it",
+        ] {
+            assert!(reason.contains(figure), "{figure} is missing from {reason}");
+        }
+        // And it is a decline like any budget decline: readable as a value from the
+        // session that carries it, and led by the run not having happened.
+        let declined = Declined::unaffordable("GitHub Projects", contradicted.clone());
+        assert_eq!(declined.unaffordable_because(), Some(&contradicted));
+        assert!(declined.message().contains("DID NOT RUN"), "{declined}");
+    }
+
+    #[test]
+    fn a_demand_nothing_should_have_admitted_is_refused_as_unread_on_the_second_reading() {
+        let unread = Demand::unread(GRAPHQL, 1_932, "GET /rate_limit failed with HTTP 503");
+        let carried = Allowance::read(5_000, 4_000, 1_775_000_000).expect("under the whole");
+        assert_eq!(
+            still_affordable(&unread, CLAIMED_BY, Ok(carried), CARRIED_BY),
+            Err(Unaffordable::Unread {
+                metered: GRAPHQL,
+                why: "GET /rate_limit failed with HTTP 503".to_owned(),
+            })
+        );
     }
 
     #[test]
