@@ -85,7 +85,7 @@ A repository is identified by its **normalized origin as one string**:
 resolve. A list names each origin once; a repeat is refused rather than silently
 collapsed.
 
-<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The human-facing statement
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The human-facing statement
      of a rule whose one executable source is `GitHubProjectsSource::creation_target` in
      `onetaskgraph-github-projects`; that crate's `tests/plugin.rs` drives every arm stated
      here against the loopback board and asserts on `createIssue`'s own `repositoryId`, so
@@ -103,6 +103,7 @@ lives is derived and never written down, none is recorded as `[]`, and several a
 recorded as named. An existing issue is never moved; a list that no longer matches where
 it lives is recorded in the key. Every source reads it from `onetaskgraph.repositories`
 where it has no native slot, so it is reachable everywhere.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ## Dependencies that leave the source
 

@@ -10,7 +10,7 @@
 //! board has none, so a write without [`GitHubProjectsConfig::repository`] is refused
 //! naming the field — but that repository is the *fallback*, not the home of every item.
 //!
-//! <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The rule's one
+//! <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The rule's one
 //! executable source is `GitHubProjectsSource::creation_target`; this is where a reader of
 //! the module meets it, and `tests/plugin.rs` drives every arm below against the loopback
 //! board and asserts on `createIssue`'s own `repositoryId`, so the prose cannot outlive a
@@ -27,6 +27,7 @@
 //! existing issue is never moved: the update path leaves the issue where it is and records
 //! the list in the metadata slot when it differs, so the read side's derivation and the
 //! creation rule agree by construction.
+//! <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 //!
 //! **A document is an ordinary issue whose title begins [`DESIGN_TITLE_PREFIX`].** A
 //! board has no document type and nothing but issues to hold one in, so the title is the
@@ -1122,7 +1123,7 @@ pub struct GitHubProjectsConfig {
     pub owner: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates GitHub's owner grammar before private construction.
     /// The project number shown in the board's GitHub URL.
     pub project_number: u32, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` bounds this to a positive GraphQL Int.
-    // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This doc is the field's schema description, which is what a person configuring the source reads, so it has to say when the field decides an issue's repository and when the item's own field does; the rule's one executable source is `GitHubProjectsSource::creation_target`, and `tests/plugin.rs` drives each case named here against the loopback board.
+    // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This doc is the field's schema description, which is what a person configuring the source reads, so it has to say when the field decides an issue's repository and when the item's own field does; the rule's one executable source is `GitHubProjectsSource::creation_target`, and `tests/plugin.rs` drives each case named here against the loopback board.
     /// `owner/name` of the repository this source creates an issue in when the item's own
     /// `repositories` field does not decide it.
     ///
@@ -1132,6 +1133,7 @@ pub struct GitHubProjectsConfig {
     /// has no repository of its own and `createIssue` requires one, so a write without
     /// this is refused naming the field. Reads never need it.
     pub repository: Option<String>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates the `owner/name` grammar before private construction.
+    // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
     /// Environment variable containing a fine-grained token with Projects and Issues
     /// read/write plus Pull requests read-only access for every repository represented on
     /// the board.
@@ -1459,13 +1461,14 @@ impl StatusMapping {
     }
 }
 
-// llmlint: ignore[comments_earn_their_place] Every `createIssue` names one of these, and which one is the rule — a reader who reaches the type from `create_and_file_issue` gets the rule in one sentence here without the method's refusals, which stay on `creation_target` alone.
+// llmlint: ignore-block[comments_earn_their_place, contracts_have_one_source_or_a_drift_gate] Every `createIssue` names one of these, and which one is the rule — a reader who reaches the type from `create_and_file_issue` gets the rule in one sentence here without the method's refusals, which stay on `creation_target`, the rule's one executable source; `tests/plugin.rs` drives every arm of it against the loopback board.
 /// One repository this source can create an issue in, as `owner/name`.
 ///
 /// Every `createIssue` this source sends names one of these: the item's own single
 /// `repositories` entry, else its parent project issue's repository, else the configured
 /// [`GitHubProjectsConfig::repository`]. [`GitHubProjectsSource::creation_target`] makes
 /// that choice and says what it refuses before `createIssue`.
+// llmlint: ignore-end[comments_earn_their_place, contracts_have_one_source_or_a_drift_gate]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct RepositoryTarget {
     owner: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only after `owner/name` validation in `new`.
