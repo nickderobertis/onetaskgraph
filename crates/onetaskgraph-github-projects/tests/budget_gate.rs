@@ -111,7 +111,12 @@ impl Standin {
 }
 
 /// Everything the precondition asks for and everything it decided, from one drive of it.
-async fn decide(standin: &Standin) -> (Accounting, Result<(), onetaskgraph_live::Declined>) {
+async fn decide(
+    standin: &Standin,
+) -> (
+    Accounting,
+    Result<budget::Admitted, onetaskgraph_live::Declined>,
+) {
     let into = Accounting::new();
     let decided = budget::precondition("test-token", &standin.host, &into).await;
     (into, decided)
@@ -542,17 +547,6 @@ async fn the_credentialed_lane_records_what_the_allowance_read_reported() {
     );
 }
 
-/// The variable that asks the journey decline below to be followed through to its
-/// conclusion instead of only asserted.
-///
-/// Unset — which is every ordinary run — the test asserts the outcome and passes. Set, it
-/// re-raises the very panic the decline made, so the target fails and `cargo test` exits
-/// non-zero. That is the second half of what this branch owes: a run that declined for want
-/// of budget must leave the required check concluding something branch protection accepts
-/// neither as success nor in place of it. `scripts/check-budget-decline.sh` is what sets it
-/// and reads the conclusion.
-const FOLLOW_THROUGH: &str = "ONETASKGRAPH_BUDGET_DECLINE_FOLLOW_THROUGH";
-
 #[test]
 fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_short() {
     // The whole journey, driven the way both of its drives drive it, against a stand-in
@@ -610,7 +604,7 @@ fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_sh
     // nothing beyond the read it declined on, and it does not retry, poll or wait.
     assert_eq!(standin.asked(), vec!["GET /rate_limit".to_owned()]);
 
-    if std::env::var_os(FOLLOW_THROUGH).is_some() {
+    if std::env::var_os(budget::FOLLOW_THROUGH).is_some() {
         std::panic::resume_unwind(declined);
     }
 }

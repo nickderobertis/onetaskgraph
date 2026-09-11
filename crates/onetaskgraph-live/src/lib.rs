@@ -558,7 +558,7 @@ impl Unaffordable {
                     ),
                 };
                 format!(
-                    "the {} budget is not what the session was admitted on. {claimed_by} \
+                    "the {} budget is not what the session was admitted on — {claimed_by} \
                      claimed {} of {} {} remaining, and {carried_by} {second}. This session \
                      is estimated to spend {estimated_cost} and the retained buffer is \
                      {retained_buffer} ({RETAINED_BUFFER} of the allowance). The reading a \

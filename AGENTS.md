@@ -362,9 +362,22 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   on is derived offline from that plugin's own per-call record of the session and a cost
   model stated once in `tests/journey/budget.rs`, so it needs no credential and moves with
   the session rather than with an edit; node count is **not** that estimate and cannot stand
-  in for it. `scripts/check-budget-decline.sh`, a command in that plugin's `test` target,
-  follows such a decline through to the conclusion the required check reads, because a test
-  that asserts a panic passes and the half worth proving is that the check goes red.
+  in for it. **That read is the first decision and not the last.** It has been observed
+  disagreeing with the `x-ratelimit-*` headers about the same credential in the same
+  seconds — a whole allowance claimed while the headers on a real call reported none left —
+  and a gate deciding on it alone started two sessions that then failed inside the journey
+  with the allowance already exceeded, reported as this repository being broken. So the
+  session is decided again on the headers its own first real call carries, which the
+  accounting records for every request anyway: `budget::recheck` puts them to
+  `still_affordable` in `onetaskgraph-live` — the same estimate, buffer and arithmetic — and
+  a session they refuse is *declined* on them, after that one call and before anything is
+  written, with `Unaffordable::Contradicted` naming both readings. A call refused for a rate
+  limit, or carrying no allowance the session could read, declines the same way; the free
+  read stays first, and no call is added. `tests/recheck_gate.rs` drives all of that against
+  a loopback stand-in. `scripts/check-budget-decline.sh`, a command in that plugin's `test`
+  target, follows a decline on each reading through to the conclusion the required check
+  reads, because a test that asserts a panic passes and the half worth proving is that the
+  check goes red.
 - **A run of one of these journeys deletes another run's work only on positive evidence
   that no live run owns it, and never because the work is old.** Both lanes stamp every
   item, project, document and label they write with the machine and process that wrote it
