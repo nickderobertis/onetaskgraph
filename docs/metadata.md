@@ -85,12 +85,25 @@ A repository is identified by its **normalized origin as one string**:
 resolve. A list names each origin once; a repeat is refused rather than silently
 collapsed.
 
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The human-facing statement
+     of a rule whose one executable source is `GitHubProjectsSource::creation_target` in
+     `onetaskgraph-github-projects`; that crate's `tests/plugin.rs` drives every arm stated
+     here against the loopback board and asserts on `createIssue`'s own `repositoryId`, so
+     the rule cannot change without failing there, and the refusals are not repeated here. -->
 A source with a native notion of it reads it from there. `github-projects` derives it
 from an issue's own repository, and records the key **only** when the item's list is not
-exactly that one repository — which it has to, now that every plan item is an issue in one
-nominated repository and the derivation would otherwise report the plan's repository
-instead of the one a plan node actually names. Every source reads it from
-`onetaskgraph.repositories` where it has no native slot, so it is reachable everywhere.
+exactly that one repository. The list also decides **where** that source creates an issue,
+under one rule: exactly one entry, and the issue is created in that repository; zero
+entries or two or more, and a task's or a document's issue is created in the repository
+its parent project's issue lives in, while a project's issue — or a task's or document's
+written with no parent — is created in the source's configured `repository:`. So a task
+naming the one repository its work changes is filed where a person looks for it, and the
+read side and the write side agree by construction: one entry that is where the issue
+lives is derived and never written down, none is recorded as `[]`, and several are
+recorded as named. An existing issue is never moved; a list that no longer matches where
+it lives is recorded in the key. Every source reads it from `onetaskgraph.repositories`
+where it has no native slot, so it is reachable everywhere.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ## Dependencies that leave the source
 
