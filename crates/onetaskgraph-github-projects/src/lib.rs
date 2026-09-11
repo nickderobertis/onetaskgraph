@@ -7,9 +7,21 @@
 //! **A project is an issue and its tasks are that issue's sub-issues.** GitHub's schema
 //! decides that: `Issue` exposes `parent`, `subIssues` and `subIssuesSummary`, and
 //! `DraftIssue` exposes none of them. Creating an issue needs a `repositoryId`, and a
-//! board has none, so [`GitHubProjectsConfig::repository`] names the one repository this
-//! source creates its project and task issues in; a write without it is refused naming
-//! the field.
+//! board has none, so a write without [`GitHubProjectsConfig::repository`] is refused
+//! naming the field — but that repository is the *fallback*, not the home of every item.
+//!
+//! **Which repository an issue is created in is decided by the item's own `repositories`
+//! field, under one rule.** Exactly one entry names the repository the issue is created in:
+//! a task issue is where a person finds the work from the repository it changes, and one
+//! filed in a board's nominated repository is invisible from every other. Zero entries, or
+//! two or more, name none, so a task's or a document's issue is created in the repository
+//! its parent project's issue lives in — read from the board, or from this process's own
+//! record of a project it created earlier in the same command — and a project's issue, or
+//! a task or document written with no parent, is created in the configured `repository:`.
+//! See [`RepositoryTarget`] for what is refused before `createIssue` under that rule. An
+//! existing issue is never moved: the update path leaves the issue where it is and records
+//! the list in the metadata slot when it differs, so the read side's derivation and the
+//! creation rule agree by construction.
 //!
 //! **A document is an ordinary issue whose title begins [`DESIGN_TITLE_PREFIX`].** A
 //! board has no document type and nothing but issues to hold one in, so the title is the
@@ -1105,10 +1117,14 @@ pub struct GitHubProjectsConfig {
     pub owner: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates GitHub's owner grammar before private construction.
     /// The project number shown in the board's GitHub URL.
     pub project_number: u32, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` bounds this to a positive GraphQL Int.
-    /// `owner/name` of the one repository this source creates its issues in.
+    /// `owner/name` of the repository this source creates an issue in when the item's own
+    /// `repositories` field does not decide it.
     ///
-    /// A board has no repository of its own and `createIssue` requires one, so a write
-    /// without this is refused naming the field. Reads never need it.
+    /// An item naming exactly one repository is created there; a task or a document naming
+    /// none or several is created in its parent project's repository; and a project, or a
+    /// task or document with no parent, naming none or several is created here. A board
+    /// has no repository of its own and `createIssue` requires one, so a write without
+    /// this is refused naming the field. Reads never need it.
     pub repository: Option<String>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates the `owner/name` grammar before private construction.
     /// Environment variable containing a fine-grained token with Projects and Issues
     /// read/write plus Pull requests read-only access for every repository represented on
@@ -1437,8 +1453,17 @@ impl StatusMapping {
     }
 }
 
-/// The one repository this source creates issues in.
-#[derive(Debug, Clone)]
+/// One repository this source can create an issue in, as `owner/name`.
+///
+/// Every `createIssue` this source sends names one of these, chosen by
+/// [`GitHubProjectsSource::creation_target`]: the item's own single `repositories` entry,
+/// else its parent project issue's repository, else the configured
+/// [`GitHubProjectsConfig::repository`]. An entry the item names is refused before
+/// `createIssue` — so no issue is half-created — when it is not a repository on
+/// [`Self::HOST`], when the token cannot see it, or when its owner differs from the owner
+/// of the repository its parent project's issue is in, which GitHub's sub-issue API
+/// requires of every sub-issue.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RepositoryTarget {
     owner: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only after `owner/name` validation in `new`.
     name: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only after `owner/name` validation in `new`.
@@ -1465,8 +1490,36 @@ impl RepositoryTarget {
         })
     }
 
+    /// The one host whose repositories this source creates issues in, spelled once: it is
+    /// what [`Self::origin`] renders and what [`Self::from_origin`] accepts.
+    const HOST: &str = "github.com";
+
+    /// The [`Repository`] origin of this repository, as the read side derives it from an
+    /// issue's own `repository.nameWithOwner`.
     fn origin(&self) -> String {
-        format!("github.com/{}/{}", self.owner, self.name)
+        format!("{}/{}/{}", Self::HOST, self.owner, self.name)
+    }
+
+    /// The repository a normalized origin names, or why it is none this source can create
+    /// an issue in: another host, or more or fewer than `owner/name` under this one.
+    fn from_origin(origin: &Repository) -> Result<Self, String> {
+        let not_here = || {
+            format!(
+                "{} is not a {}/owner/name repository",
+                origin.as_str(),
+                Self::HOST
+            )
+        };
+        let (host, rest) = origin.as_str().split_once('/').ok_or_else(not_here)?;
+        if host != Self::HOST {
+            return Err(not_here());
+        }
+        Self::parse(rest).map_err(|_| not_here())
+    }
+
+    /// GitHub's own spelling of this repository, which is how a refusal names it.
+    fn slug(&self) -> String {
+        format!("{}/{}", self.owner, self.name)
     }
 }
 
@@ -1521,11 +1574,15 @@ pub struct GitHubProjectsSource {
     /// board updates the entry here too, so what this holds is the last read plus this
     /// process's own writes rather than a snapshot taken before them.
     board_cache: Mutex<Option<Board>>,
-    /// The destination repository's node id, resolved once rather than per issue created.
+    /// Each destination repository's node id by `owner/name`, resolved once per repository
+    /// rather than per issue created.
     ///
     /// A repository's node id does not change, and re-reading it for every issue of a copy
-    /// spent one request per item on an answer this source already had.
-    repository_cache: Mutex<Option<String>>,
+    /// spent one request per item on an answer this source already had. It is a map rather
+    /// than one entry because a copy files each item in the repository its own
+    /// `repositories` field names, so a plan across five repositories asks GitHub five
+    /// times and not once per item.
+    repository_cache: Mutex<BTreeMap<String, String>>,
     /// What every request this source sends is recorded into.
     ///
     /// Ordinary code path, not a mode: [`Self::send_once`] records into it at the one place
@@ -1626,7 +1683,7 @@ impl GitHubProjectsSource {
             pacing: Pacing::resolve(config.pacing, name)?,
             last_mutation: Mutex::new(None),
             board_cache: Mutex::new(None),
-            repository_cache: Mutex::new(None),
+            repository_cache: Mutex::new(BTreeMap::new()),
             ledger,
         })
     }
@@ -2561,7 +2618,7 @@ impl GitHubProjectsSource {
         let own_repository = content
             .pointer("/repository/nameWithOwner")
             .and_then(Value::as_str)
-            .map(|origin| Repository::try_from(format!("github.com/{origin}")))
+            .map(|origin| Repository::try_from(format!("{}/{origin}", RepositoryTarget::HOST)))
             .transpose()
             .map_err(|message| SourceError::Malformed { message })?;
         let repositories = if slot.contains_key(Repository::METADATA_KEY) {
@@ -2933,15 +2990,9 @@ impl GitHubProjectsSource {
             .map_err(|message| SourceError::Malformed { message })
     }
 
-    /// The configured repository's node id, or the refusal naming the field it needs.
-    ///
-    /// Resolved once per command; see [`Self::repository_cache`].
-    async fn repository_id(&self) -> Result<String, SourceError> {
-        if let Some(id) = self.repository_cache()?.clone() {
-            return Ok(id);
-        }
-        let repository = self
-            .repository
+    /// The configured fallback repository, or the refusal naming the field it needs.
+    fn configured_repository(&self) -> Result<&RepositoryTarget, SourceError> {
+        self.repository
             .as_ref()
             .ok_or_else(|| SourceError::Refused {
                 message: format!(
@@ -2950,7 +3001,110 @@ impl GitHubProjectsSource {
                  this source",
                     self.name
                 ),
-            })?;
+            })
+    }
+
+    /// The repository one new issue is created in, under the rule the module documentation
+    /// states: the item's own single `repositories` entry, else its parent project issue's
+    /// repository, else the configured fallback.
+    ///
+    /// Everything this refuses is refused before `createIssue`, so a refusal leaves no
+    /// issue behind: an entry that is not a repository on [`RepositoryTarget::HOST`], an
+    /// entry owned by someone other than the owner of the parent issue's repository —
+    /// GitHub accepts a sub-issue from another repository of the same owner and from no
+    /// other, so `addSubIssue` would refuse it after the issue existed — and a parent the
+    /// board does not hold, which `addSubIssue` would likewise refuse too late. Whether the
+    /// entry exists and is visible to the token is checked where its node id is resolved,
+    /// still before `createIssue`. The parent is read off `board`, which is completed from
+    /// this process's own record, so a project created moments ago in this command answers
+    /// though GitHub's board read has not caught up.
+    fn creation_target(
+        &self,
+        board: &Board,
+        incoming: &Incoming<'_>,
+    ) -> Result<RepositoryTarget, SourceError> {
+        let what = |incoming: &Incoming<'_>| {
+            format!(
+                "{} {:?}",
+                incoming.written.kind().describes(),
+                incoming.title
+            )
+        };
+        let parent = incoming
+            .parent
+            .map(|parent| {
+                board
+                    .items
+                    .iter()
+                    .find(|item| item.id == *parent)
+                    .ok_or_else(|| SourceError::Refused {
+                        message: format!(
+                            "GitHub project issue {} was not found on the board of source {}, \
+                             so {} cannot be filed under it",
+                            parent.0,
+                            self.name,
+                            what(incoming)
+                        ),
+                    })
+            })
+            .transpose()?;
+        let parents_repository = parent
+            .and_then(|parent| parent.own_repository.as_ref())
+            .map(RepositoryTarget::from_origin)
+            .transpose()
+            .map_err(|message| SourceError::Malformed { message })?;
+        match incoming.repositories {
+            [named] => {
+                let target =
+                    RepositoryTarget::from_origin(named).map_err(|_| SourceError::Refused {
+                        message: format!(
+                            "{} names repository {}, which is not a {}/owner/name repository \
+                             source {} can create an issue in; name one that is, or name none",
+                            what(incoming),
+                            named.as_str(),
+                            RepositoryTarget::HOST,
+                            self.name
+                        ),
+                    })?;
+                if let Some(parents) = &parents_repository
+                    && parents.owner != target.owner
+                {
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "{} names repository {}, owned by {}, but its project's issue is in \
+                             {}, owned by {}, and GitHub files a sub-issue only in a repository \
+                             of the same owner as its parent issue; name a repository of {}, or \
+                             name none",
+                            what(incoming),
+                            target.slug(),
+                            target.owner,
+                            parents.slug(),
+                            parents.owner,
+                            parents.owner
+                        ),
+                    });
+                }
+                Ok(target)
+            }
+            _ => match parents_repository {
+                Some(parents) => Ok(parents),
+                None => self.configured_repository().cloned(),
+            },
+        }
+    }
+
+    /// The node id of the repository `incoming` is being created in, or the refusal naming
+    /// the item and the repository the token cannot see.
+    ///
+    /// Resolved once per command per repository; see [`Self::repository_cache`].
+    async fn repository_id(
+        &self,
+        repository: &RepositoryTarget,
+        incoming: &Incoming<'_>,
+    ) -> Result<String, SourceError> {
+        if let Some(id) = self.repository_cache()?.get(&repository.slug()).cloned() {
+            return Ok(id);
+        }
         let data = self
             .graphql(
                 graphql::REPOSITORY,
@@ -2962,17 +3116,23 @@ impl GitHubProjectsSource {
             .filter(|value| !value.is_null())
             .ok_or_else(|| SourceError::Refused {
                 message: format!(
-                    "GitHub repository {}/{} was not found or is not visible to the token",
-                    repository.owner, repository.name
+                    "GitHub repository {} was not found or is not visible to the token, so {} \
+                     {:?} cannot be created in it",
+                    repository.slug(),
+                    incoming.written.kind().describes(),
+                    incoming.title
                 ),
             })?;
         let id = required_str(node, "id")?.to_owned();
-        *self.repository_cache()? = Some(id.clone());
+        self.repository_cache()?
+            .insert(repository.slug(), id.clone());
         Ok(id)
     }
 
-    /// This process's own record of the destination repository's node id.
-    fn repository_cache(&self) -> Result<std::sync::MutexGuard<'_, Option<String>>, SourceError> {
+    /// This process's own record of each destination repository's node id.
+    fn repository_cache(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, String>>, SourceError> {
         self.repository_cache
             .lock()
             .map_err(|_| SourceError::Unavailable {
@@ -3065,14 +3225,18 @@ impl GitHubProjectsSource {
             }
         }
 
-        let own_repository = match existing {
-            Some(item) => item.own_repository.clone(),
-            None => self
-                .repository
-                .as_ref()
-                .map(|repository| Repository::try_from(repository.origin()))
-                .transpose()
-                .map_err(|message| SourceError::Config { message })?,
+        // An existing issue is never moved; a new one is created where the rule says. The
+        // repository the issue really lives in is what the slot below is written against,
+        // so a single entry that is where the issue is created travels as no key at all,
+        // and the read side derives it back from the issue.
+        let (own_repository, creation_target) = match existing {
+            Some(item) => (item.own_repository.clone(), None),
+            None => {
+                let target = self.creation_target(&board, incoming)?;
+                let origin = Repository::try_from(target.origin())
+                    .map_err(|message| SourceError::Config { message })?;
+                (Some(origin), Some(target))
+            }
         };
         let (native, fallback) = self
             .partition_edges(&board, incoming.written.kind(), content_kind, depends_on)
@@ -3130,7 +3294,13 @@ impl GitHubProjectsSource {
                 (item.id.clone(), item.item_id.clone(), item.url.clone())
             }
             None => {
-                self.create_and_file_issue(&board, incoming, &body, status_target.as_ref())
+                let target = creation_target
+                    .as_ref()
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "a new item was decided without a repository to create it in"
+                            .into(),
+                    })?;
+                self.create_and_file_issue(&board, target, incoming, &body, status_target.as_ref())
                     .await?
             }
         };
@@ -3435,11 +3605,12 @@ impl GitHubProjectsSource {
     async fn create_and_file_issue(
         &self,
         board: &Board,
+        repository: &RepositoryTarget,
         incoming: &Incoming<'_>,
         body: &Option<String>,
         status_target: Option<&StatusTarget>,
     ) -> Result<(NativeId, String, Option<String>), SourceError> {
-        let repository_id = self.repository_id().await?;
+        let repository_id = self.repository_id(repository, incoming).await?;
         let data = self
             .graphql(
                 graphql::CREATE_ISSUE,

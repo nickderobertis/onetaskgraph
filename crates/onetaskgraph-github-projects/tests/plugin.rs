@@ -75,7 +75,9 @@ struct Item {
     state_reason: Option<String>,
     parent: Option<String>,
     sub_issues: u64,
-    repository: Option<&'static str>,
+    /// `owner/name` of the repository this issue is in — the one the `createIssue` that
+    /// made it named by node id, or the board's own for an issue a case seeded.
+    repository: Option<String>,
     labels: Vec<(&'static str, &'static str)>,
     status: Option<String>,
     origin: Option<String>,
@@ -130,7 +132,7 @@ impl Item {
             state_reason: None,
             parent: None,
             sub_issues: 0,
-            repository: Some("acme/work"),
+            repository: Some("acme/work".to_owned()),
             labels: vec![],
             status: None,
             origin: None,
@@ -166,6 +168,11 @@ impl Item {
     }
     fn sub_issues(mut self, total: u64) -> Self {
         self.sub_issues = total;
+        self
+    }
+    /// Put this issue in another repository than the board's own.
+    fn in_repository(mut self, repository: &str) -> Self {
+        self.repository = Some(repository.to_owned());
         self
     }
     fn closed(mut self, reason: Option<&str>) -> Self {
@@ -269,7 +276,7 @@ impl Item {
                 "url":format!("https://github.example/{}", self.content_id),
                 "createdAt":null,"updatedAt":null,"state":self.state,
                 "stateReason":self.state_reason,
-                "repository":self.repository.map(|r| json!({"nameWithOwner":r})),
+                "repository":self.repository.as_ref().map(|r| json!({"nameWithOwner":r})),
                 "parent":self.parent.as_ref().map(|id| json!({"id":id})),
                 "subIssuesSummary":{"total":self.sub_issues},
                 "labels":self.label_nodes(asked.path)}),
@@ -782,6 +789,17 @@ fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<
     Some(format!("{operation} is refused by this board"))
 }
 
+/// What this board prefixes a repository's `owner/name` with to make its node id.
+///
+/// One distinct id per repository, so a `createIssue` says which repository it named:
+/// under one shared id every lookup answered alike and a created issue could only be
+/// given the board's own repository.
+const REPOSITORY_NODE_PREFIX: &str = "REPO_";
+
+fn repository_node_id(slug: &str) -> String {
+    format!("{REPOSITORY_NODE_PREFIX}{slug}")
+}
+
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     let mut state = state.lock().unwrap();
     // Which read this is, taken from the document itself: every label this board answers
@@ -802,22 +820,44 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         return answered;
     }
     if query.contains("repository(owner:$owner,name:$name)") {
+        let slug = format!(
+            "{}/{}",
+            variables["owner"].as_str().unwrap(),
+            variables["name"].as_str().unwrap()
+        );
         return if variables["name"] == "missing" {
             json!({ "repository": null })
         } else {
-            json!({"repository":{"id":"REPO_1","nameWithOwner":format!("{}/{}", variables["owner"].as_str().unwrap(), variables["name"].as_str().unwrap())}})
+            json!({"repository":{"id":repository_node_id(&slug),"nameWithOwner":slug}})
         };
     }
     if query.contains("deleteIssue(input:$input)") {
         let id = input["issueId"].as_str().expect("an issue id").to_owned();
+        let repository = state
+            .items
+            .iter()
+            .chain(state.pending.iter())
+            .find(|item| item.content_id == id)
+            .and_then(|item| item.repository.clone())
+            .unwrap_or_else(|| "acme/work".to_owned());
         state.items.retain(|item| item.content_id != id);
-        return json!({"deleteIssue":{"repository":{"id":"REPO_1"}}});
+        state.pending.retain(|item| item.content_id != id);
+        return json!({"deleteIssue":{"repository":{"id":repository_node_id(&repository)}}});
     }
     if query.contains("createIssue(input:$input)") {
         state.next += 1;
         let id = format!("I_new{}", state.next);
         let mut created = Item::issue(&id, input["title"].as_str().unwrap_or_default());
         created.body = input["body"].as_str().map(str::to_owned);
+        // The issue is in the repository whose node id the input carried, which is how a
+        // read of it derives the repository the source chose rather than the board's own.
+        created.repository = Some(
+            input["repositoryId"]
+                .as_str()
+                .and_then(|id| id.strip_prefix(REPOSITORY_NODE_PREFIX))
+                .expect("createIssue names a repository this board resolved")
+                .to_owned(),
+        );
         state.pending.push(created);
         return json!({"createIssue":{"issue":{"id":id,
             "url":format!("https://github.example/{id}")}}});
@@ -3144,6 +3184,596 @@ async fn repositories_are_derived_from_the_issue_and_recorded_only_when_they_dif
             .repositories,
         vec![elsewhere, own],
         "a plan node naming its own repositories is reported as it named them"
+    );
+}
+
+/// A repository origin as an item names one.
+fn repo(slug: &str) -> Repository {
+    Repository::try_from(format!("github.com/{slug}")).unwrap()
+}
+
+/// The `owner/name` each `createIssue` this board received named by node id, in order.
+fn created_in(fixture: &Fixture) -> Vec<String> {
+    fixture
+        .seen()
+        .into_iter()
+        .filter(|call| call[0] == "createIssue")
+        .map(|call| {
+            call[1]["repositoryId"]
+                .as_str()
+                .and_then(|id| id.strip_prefix(REPOSITORY_NODE_PREFIX))
+                .expect("createIssue names a repository this board resolved")
+                .to_owned()
+        })
+        .collect()
+}
+
+/// A task filed under `parent`, naming `repositories`.
+fn task_under(parent: Option<&str>, title: &str, repositories: &[&str]) -> ItemWrite<Task> {
+    write(Task {
+        project: parent.map(|id| NativeId(id.to_owned())),
+        repositories: repositories.iter().map(|slug| repo(slug)).collect(),
+        ..task("ignored", title, status(StatusCategory::Todo, "Todo"))
+    })
+}
+
+/// A document filed under `parent`, naming `repositories`.
+fn document_under(parent: Option<&str>, title: &str, repositories: &[&str]) -> ItemWrite<Document> {
+    write(Document {
+        project: parent.map(|id| NativeId(id.to_owned())),
+        repositories: repositories.iter().map(|slug| repo(slug)).collect(),
+        ..document("ignored", title)
+    })
+}
+
+/// A project naming `repositories`.
+fn project_naming(title: &str, repositories: &[&str]) -> ItemWrite<Project> {
+    write(Project {
+        repositories: repositories.iter().map(|slug| repo(slug)).collect(),
+        ..project("ignored", title, status(StatusCategory::Todo, "Todo"))
+    })
+}
+
+#[tokio::test]
+async fn a_task_naming_one_repository_is_created_there_as_a_sub_issue_of_its_project() {
+    // The configured repository is acme/work and so is the project issue's; the task names
+    // acme/tooling, another repository of the same owner, which is where a person changing
+    // that repository looks for it.
+    let fixture = board(vec![Item::issue("I_plan", "Plan").sub_issues(1)]);
+    let source = source(&fixture);
+
+    let filed = source
+        .write_task(&task_under(
+            Some("I_plan"),
+            "Change tooling",
+            &["acme/tooling"],
+        ))
+        .await
+        .expect("a task naming one repository of the same owner is created there");
+
+    assert_eq!(created_in(&fixture), ["acme/tooling"]);
+    assert!(
+        fixture.seen().iter().any(|call| call[0] == "addSubIssue"
+            && call[1]["issueId"] == "I_plan"
+            && call[1]["subIssueId"] == filed.0.as_str()),
+        "and it is filed as a sub-issue of its project: {:?}",
+        fixture.seen()
+    );
+    let held = fixture.item(&filed.0);
+    assert_eq!(held.repository.as_deref(), Some("acme/tooling"));
+    assert!(
+        !held
+            .body
+            .unwrap_or_default()
+            .contains(Repository::METADATA_KEY),
+        "the one repository is where the issue lives, so it is derived rather than recorded"
+    );
+    let read = source.get_task(&filed).await.unwrap().unwrap();
+    assert_eq!(read.repositories, vec![repo("acme/tooling")]);
+    assert_eq!(read.project, Some(NativeId("I_plan".to_owned())));
+}
+
+#[tokio::test]
+async fn a_task_naming_none_or_several_is_created_in_its_projects_repository() {
+    // The project issue is in acme/tooling — not the configured acme/work — as its own
+    // single entry would have put it, so where the task lands is the parent's repository
+    // and not the fallback.
+    let fixture = board(vec![
+        Item::issue("I_plan", "Plan")
+            .sub_issues(1)
+            .in_repository("acme/tooling"),
+    ]);
+    let source = source(&fixture);
+
+    let none = source
+        .write_task(&task_under(Some("I_plan"), "Unplaced", &[]))
+        .await
+        .expect("a task naming no repository is created in its project's");
+    let several = source
+        .write_task(&task_under(
+            Some("I_plan"),
+            "Spanning",
+            &["acme/work", "acme/tooling"],
+        ))
+        .await
+        .expect("a task naming several is created in its project's");
+
+    assert_eq!(created_in(&fixture), ["acme/tooling", "acme/tooling"]);
+    let none_held = fixture.item(&none.0);
+    assert_eq!(none_held.repository.as_deref(), Some("acme/tooling"));
+    assert!(
+        none_held
+            .body
+            .unwrap()
+            .contains(&format!("{:?}:[]", Repository::METADATA_KEY)),
+        "an empty list is recorded, or the read would derive the project's repository"
+    );
+    assert_eq!(
+        source.get_task(&none).await.unwrap().unwrap().repositories,
+        Vec::<Repository>::new()
+    );
+    assert!(
+        fixture
+            .item(&several.0)
+            .body
+            .unwrap()
+            .contains(Repository::METADATA_KEY)
+    );
+    assert_eq!(
+        source
+            .get_task(&several)
+            .await
+            .unwrap()
+            .unwrap()
+            .repositories,
+        vec![repo("acme/work"), repo("acme/tooling")],
+        "several are recorded in the order they were named"
+    );
+}
+
+#[tokio::test]
+async fn a_parent_created_earlier_in_the_command_places_its_tasks_from_this_processs_own_record() {
+    // GitHub's board read is eventually consistent, so the project this command just
+    // created is not on the board it reads back; the parent's repository comes from what
+    // this process remembers creating.
+    let fixture = board(vec![]);
+    let source = source(&fixture);
+    let plan = source
+        .write_project(&project_naming("Tooling plan", &["acme/tooling"]))
+        .await
+        .expect("a project naming one repository is created there");
+    fixture.read_behind(1);
+
+    let none = source
+        .write_task(&task_under(Some(&plan.0), "Unplaced", &[]))
+        .await
+        .expect("the parent is known from this process's own record");
+    fixture.read_behind(2);
+    let several = source
+        .write_task(&task_under(
+            Some(&plan.0),
+            "Spanning",
+            &["acme/work", "acme/tooling"],
+        ))
+        .await
+        .expect("the parent is still known");
+
+    assert_eq!(
+        created_in(&fixture),
+        ["acme/tooling", "acme/tooling", "acme/tooling"],
+        "the project went where its one entry said, and both tasks followed it"
+    );
+    assert_eq!(
+        source.get_task(&none).await.unwrap().unwrap().repositories,
+        Vec::<Repository>::new()
+    );
+    assert_eq!(
+        source
+            .get_task(&several)
+            .await
+            .unwrap()
+            .unwrap()
+            .repositories,
+        vec![repo("acme/work"), repo("acme/tooling")]
+    );
+}
+
+#[tokio::test]
+async fn a_project_and_an_unparented_item_fall_back_to_the_configured_repository() {
+    let fixture = board(vec![]);
+    let source = source(&fixture);
+
+    source
+        .write_project(&project_naming("One", &["acme/tooling"]))
+        .await
+        .expect("a project naming one repository is created there");
+    source
+        .write_project(&project_naming("None", &[]))
+        .await
+        .expect("a project naming none is created in the configured repository");
+    source
+        .write_project(&project_naming("Several", &["acme/tooling", "acme/other"]))
+        .await
+        .expect("a project naming several is created in the configured repository");
+    source
+        .write_task(&task_under(None, "Orphan one", &["acme/tooling"]))
+        .await
+        .expect("a task with no parent naming one repository is created there");
+    source
+        .write_task(&task_under(None, "Orphan none", &[]))
+        .await
+        .expect("a task with no parent naming none falls back");
+    source
+        .write_task(&task_under(
+            None,
+            "Orphan several",
+            &["acme/tooling", "acme/other"],
+        ))
+        .await
+        .expect("a task with no parent naming several falls back");
+    source
+        .write_document(&document_under(None, "Loose one", &["acme/tooling"]))
+        .await
+        .expect("a document with no parent naming one repository is created there");
+    source
+        .write_document(&document_under(None, "Loose none", &[]))
+        .await
+        .expect("a document with no parent naming none falls back");
+
+    assert_eq!(
+        created_in(&fixture),
+        [
+            "acme/tooling",
+            "acme/work",
+            "acme/work",
+            "acme/tooling",
+            "acme/work",
+            "acme/work",
+            "acme/tooling",
+            "acme/work",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_document_follows_the_task_rule() {
+    let fixture = board(vec![
+        Item::issue("I_plan", "Plan")
+            .sub_issues(1)
+            .in_repository("acme/tooling"),
+    ]);
+    let source = source(&fixture);
+
+    let one = source
+        .write_document(&document_under(Some("I_plan"), "Design", &["acme/other"]))
+        .await
+        .expect("a document naming one repository is created there");
+    let none = source
+        .write_document(&document_under(Some("I_plan"), "Notes", &[]))
+        .await
+        .expect("a document naming none is created in its project's repository");
+    let several = source
+        .write_document(&document_under(
+            Some("I_plan"),
+            "Survey",
+            &["acme/work", "acme/other"],
+        ))
+        .await
+        .expect("a document naming several is created in its project's repository");
+
+    assert_eq!(
+        created_in(&fixture),
+        ["acme/other", "acme/tooling", "acme/tooling"]
+    );
+    assert_eq!(
+        source
+            .get_document(&one)
+            .await
+            .unwrap()
+            .unwrap()
+            .repositories,
+        vec![repo("acme/other")]
+    );
+    assert_eq!(
+        source
+            .get_document(&none)
+            .await
+            .unwrap()
+            .unwrap()
+            .repositories,
+        Vec::<Repository>::new()
+    );
+    assert_eq!(
+        source
+            .get_document(&several)
+            .await
+            .unwrap()
+            .unwrap()
+            .repositories,
+        vec![repo("acme/work"), repo("acme/other")]
+    );
+}
+
+#[tokio::test]
+async fn a_repository_under_another_owner_than_the_parents_is_refused_before_anything_is_created() {
+    let fixture = board(vec![
+        Item::issue("I_plan", "Plan").sub_issues(1),
+        design("I_design", "Spec").parent("I_plan"),
+    ]);
+    let source = source(&fixture);
+
+    let task_refusal = refusal(
+        source
+            .write_task(&task_under(Some("I_plan"), "Elsewhere", &["contoso/work"]))
+            .await
+            .expect_err("GitHub files a sub-issue only under the same owner as its parent"),
+    );
+    let document_refusal = refusal(
+        source
+            .write_document(&document_under(
+                Some("I_plan"),
+                "Far spec",
+                &["contoso/work"],
+            ))
+            .await
+            .expect_err("a document is a sub-issue too"),
+    );
+    for (message, kind, title) in [
+        (&task_refusal, "task", "\"Elsewhere\""),
+        (&document_refusal, "document", "\"Far spec\""),
+    ] {
+        assert!(message.contains(kind), "{message}");
+        assert!(message.contains(title), "{message}");
+        assert!(message.contains("contoso/work"), "{message}");
+        assert!(message.contains("acme"), "both owners are named: {message}");
+        assert!(
+            message.contains("contoso"),
+            "both owners are named: {message}"
+        );
+        assert!(message.contains("acme/work"), "{message}");
+    }
+    assert!(
+        fixture.seen().is_empty(),
+        "nothing was created before either refusal: {:?}",
+        fixture.seen()
+    );
+
+    // A project's own issue has no parent, so no owner check reaches it: an unparented
+    // project under another owner is simply created there.
+    source
+        .write_project(&project_naming("Contoso plan", &["contoso/work"]))
+        .await
+        .expect("a project has no parent to agree with");
+    assert_eq!(created_in(&fixture), ["contoso/work"]);
+}
+
+#[tokio::test]
+async fn a_named_repository_the_token_cannot_see_is_refused_naming_the_item() {
+    let fixture = board(vec![Item::issue("I_plan", "Plan").sub_issues(1)]);
+    let source = source(&fixture);
+
+    let message = refusal(
+        source
+            .write_task(&task_under(Some("I_plan"), "Unseen", &["acme/missing"]))
+            .await
+            .expect_err("a repository nothing resolves is refused"),
+    );
+    assert!(message.contains("task"), "{message}");
+    assert!(message.contains("\"Unseen\""), "{message}");
+    assert!(message.contains("acme/missing"), "{message}");
+    let project_message = refusal(
+        source
+            .write_project(&project_naming("Unseen plan", &["acme/missing"]))
+            .await
+            .expect_err("the same for a project"),
+    );
+    assert!(project_message.contains("project"), "{project_message}");
+    assert!(
+        project_message.contains("\"Unseen plan\""),
+        "{project_message}"
+    );
+    assert!(
+        project_message.contains("acme/missing"),
+        "{project_message}"
+    );
+    assert!(
+        fixture.seen().is_empty(),
+        "no issue is created for an item its repository refuses: {:?}",
+        fixture.seen()
+    );
+}
+
+#[tokio::test]
+async fn a_repository_that_is_not_on_github_is_refused_naming_the_item() {
+    let fixture = board(vec![Item::issue("I_plan", "Plan").sub_issues(1)]);
+    let source = source(&fixture);
+
+    for (write, kind, title) in [
+        (
+            source
+                .write_task(&write(Task {
+                    project: Some(NativeId("I_plan".to_owned())),
+                    repositories: vec![
+                        Repository::try_from("gitlab.com/acme/work".to_owned()).unwrap(),
+                    ],
+                    ..task(
+                        "ignored",
+                        "Hosted elsewhere",
+                        status(StatusCategory::Todo, "Todo"),
+                    )
+                }))
+                .await,
+            "task",
+            "\"Hosted elsewhere\"",
+        ),
+        (
+            source
+                .write_task(&write(Task {
+                    repositories: vec![
+                        Repository::try_from("github.com/acme/work/nested".to_owned()).unwrap(),
+                    ],
+                    ..task("ignored", "Too deep", status(StatusCategory::Todo, "Todo"))
+                }))
+                .await,
+            "task",
+            "\"Too deep\"",
+        ),
+    ] {
+        let message =
+            refusal(write.expect_err("not a GitHub repository this source can create in"));
+        assert!(message.contains(kind), "{message}");
+        assert!(message.contains(title), "{message}");
+        assert!(
+            message.contains("gitlab.com/acme/work")
+                || message.contains("github.com/acme/work/nested"),
+            "{message}"
+        );
+        assert!(message.contains("github.com"), "{message}");
+    }
+    let project_message = refusal(
+        source
+            .write_project(&write(Project {
+                repositories: vec![
+                    Repository::try_from("gitlab.com/acme/work".to_owned()).unwrap(),
+                ],
+                ..project(
+                    "ignored",
+                    "Elsewhere plan",
+                    status(StatusCategory::Todo, "Todo"),
+                )
+            }))
+            .await
+            .expect_err("the same for a project"),
+    );
+    assert!(project_message.contains("project"), "{project_message}");
+    assert!(
+        project_message.contains("\"Elsewhere plan\""),
+        "{project_message}"
+    );
+    assert!(
+        project_message.contains("gitlab.com/acme/work"),
+        "{project_message}"
+    );
+    assert!(
+        fixture.seen().is_empty(),
+        "nothing was created: {:?}",
+        fixture.seen()
+    );
+}
+
+#[tokio::test]
+async fn a_parent_neither_on_the_board_nor_in_this_processs_record_is_refused_before_creation() {
+    let fixture = board(vec![]);
+    let source = source(&fixture);
+
+    let message = refusal(
+        source
+            .write_task(&task_under(Some("I_gone"), "Orphaned", &["acme/tooling"]))
+            .await
+            .expect_err("a parent nothing holds cannot be filed under"),
+    );
+    assert!(message.contains("I_gone"), "{message}");
+    assert!(message.contains("task"), "{message}");
+    assert!(message.contains("\"Orphaned\""), "{message}");
+    let document_message = refusal(
+        source
+            .write_document(&document_under(Some("I_gone"), "Orphaned spec", &[]))
+            .await
+            .expect_err("the same for a document naming no repository"),
+    );
+    assert!(document_message.contains("I_gone"), "{document_message}");
+    assert!(document_message.contains("document"), "{document_message}");
+    assert!(
+        document_message.contains("\"Orphaned spec\""),
+        "{document_message}"
+    );
+    assert!(
+        fixture.seen().is_empty(),
+        "nothing was created: {:?}",
+        fixture.seen()
+    );
+}
+
+#[tokio::test]
+async fn an_existing_issue_is_never_moved_and_a_differing_list_is_recorded() {
+    let fixture = board(vec![
+        Item::issue("I_1", "Settled").in_repository("acme/tooling"),
+    ]);
+    let source = source(&fixture);
+
+    let mut revised = task("ignored", "Settled", status(StatusCategory::Todo, "Todo"));
+    revised.repositories = vec![repo("acme/other")];
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_1".to_owned())),
+            item: revised,
+            depends_on: vec![],
+        })
+        .await
+        .expect("an update of an existing issue");
+
+    assert!(created_in(&fixture).is_empty(), "no issue was created");
+    assert!(
+        !fixture.seen().iter().any(|call| call[0] == "deleteIssue"),
+        "and none deleted"
+    );
+    let held = fixture.item("I_1");
+    assert_eq!(
+        held.repository.as_deref(),
+        Some("acme/tooling"),
+        "the issue stays put"
+    );
+    assert!(held.body.unwrap().contains(Repository::METADATA_KEY));
+    assert_eq!(
+        source
+            .get_task(&NativeId("I_1".to_owned()))
+            .await
+            .unwrap()
+            .unwrap()
+            .repositories,
+        vec![repo("acme/other")],
+        "the list is reported as written"
+    );
+}
+
+#[tokio::test]
+async fn each_distinct_repository_is_looked_up_once_per_command() {
+    let fixture = board(vec![]);
+    let source = source(&fixture);
+    let plan = source
+        .write_project(&project_naming("Plan", &[]))
+        .await
+        .expect("a project in the configured repository");
+    for (title, slug) in [
+        ("First", "acme/one"),
+        ("Second", "acme/two"),
+        ("Third", "acme/three"),
+        ("First again", "acme/one"),
+        ("Second again", "acme/two"),
+        ("Unplaced", "acme/work"),
+    ] {
+        source
+            .write_task(&task_under(Some(&plan.0), title, &[slug]))
+            .await
+            .expect("a task of the plan");
+    }
+    assert_eq!(
+        fixture.requests("repository"),
+        4,
+        "acme/work, acme/one, acme/two and acme/three, each once: {:?}",
+        fixture.documents()
+    );
+    assert_eq!(
+        created_in(&fixture),
+        [
+            "acme/work",
+            "acme/one",
+            "acme/two",
+            "acme/three",
+            "acme/one",
+            "acme/two",
+            "acme/work",
+        ]
     );
 }
 
@@ -6955,7 +7585,6 @@ async fn an_item_this_run_created_reads_back_whole_while_the_board_is_still_behi
     // behind here so the record is what answers, which is the only state it is visible in.
     let fixture = board(vec![Item::issue("I_plan", "Engine").sub_issues(1)]);
     let source = source(&fixture);
-    fixture.read_behind(1);
 
     let mut design = document("D-1", "Alpha design");
     design.content = Some("the engine core, reviewed".to_owned());
@@ -6965,6 +7594,10 @@ async fn an_item_this_run_created_reads_back_whole_while_the_board_is_still_behi
         .write_document(&write(design))
         .await
         .expect("a document copies onto this board");
+    // Held behind once the document exists, so it is the document the board has not
+    // caught up on: held behind before the write, the board would have hidden the project
+    // it is filed under instead, which a write refuses rather than files blind.
+    fixture.read_behind(1);
 
     let read = source
         .get_document(&created)
