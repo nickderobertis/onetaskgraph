@@ -17,7 +17,7 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use onetaskgraph_github_projects::accounting::{Accounting, Budget, Method, RateLimit};
+use onetaskgraph_github_projects::accounting::{Accounting, Budget, Method, Outcome, RateLimit};
 use onetaskgraph_live::{RETAINED_BUFFER, Unaffordable};
 use serde_json::{Value, json};
 
@@ -53,6 +53,17 @@ struct Standin {
 
 impl Standin {
     fn serving(answer: (&'static str, String)) -> Self {
+        Self::serving_with_headers(
+            answer,
+            format!(
+                "x-ratelimit-limit: {LIMIT}\r\nx-ratelimit-used: 0\r\n\
+                 x-ratelimit-remaining: {LIMIT}\r\nx-ratelimit-resource: core\r\n"
+            ),
+        )
+    }
+    /// A stand-in whose every response carries `headers` — the `x-ratelimit-*` lines,
+    /// complete with their line endings — rather than an untouched `core` budget.
+    fn serving_with_headers(answer: (&'static str, String), headers: String) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a stand-in listener");
         let host = format!("http://{}", listener.local_addr().unwrap());
         let asked = Arc::new(Mutex::new(Vec::new()));
@@ -81,9 +92,7 @@ impl Standin {
                     )
                 };
                 let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
-                     x-ratelimit-limit: {LIMIT}\r\nx-ratelimit-used: 0\r\n\
-                     x-ratelimit-remaining: {LIMIT}\r\nx-ratelimit-resource: core\r\n\
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{headers}\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
@@ -111,7 +120,12 @@ impl Standin {
 }
 
 /// Everything the precondition asks for and everything it decided, from one drive of it.
-async fn decide(standin: &Standin) -> (Accounting, Result<(), onetaskgraph_live::Declined>) {
+async fn decide(
+    standin: &Standin,
+) -> (
+    Accounting,
+    Result<budget::Admitted, onetaskgraph_live::Declined>,
+) {
     let into = Accounting::new();
     let decided = budget::precondition("test-token", &standin.host, &into).await;
     (into, decided)
@@ -260,6 +274,42 @@ async fn an_allowance_read_the_stand_in_refuses_does_not_start_and_says_which_re
         // The read that failed is still recorded, so a session report says the gate asked.
         assert_eq!(into.snapshot().total_requests(), 1);
     }
+}
+
+#[tokio::test]
+async fn an_allowance_read_refused_for_a_rate_limit_is_recorded_as_one_whatever_its_figures_say() {
+    // The shape observed on a real account, on a REST refusal: nothing remaining beside
+    // more used than the whole allowance. The accounting refuses to record that triple as
+    // figures, so a session reading exhaustion off the record would see none and file the
+    // refusal as an ordinary one. Exhaustion is read off the raw header instead, the way
+    // the source's own limiter reads it, and the refusal is recorded as the rate-limited
+    // one it was — which is also why it is attributed nothing.
+    let standin = Standin::serving_with_headers(
+        (
+            "403 Forbidden",
+            json!({"message": "API rate limit exceeded for user ID 1."}).to_string(),
+        ),
+        format!(
+            "x-ratelimit-limit: {LIMIT}\r\nx-ratelimit-used: {}\r\n\
+             x-ratelimit-remaining: 0\r\nx-ratelimit-resource: core\r\n",
+            LIMIT + 42
+        ),
+    );
+    let (into, decided) = decide(&standin).await;
+    decided.expect_err("a refused allowance read leaves the budget unread");
+    let session = into.snapshot();
+    let read = &session.requests()[0];
+    assert_eq!(read.outcome(), Outcome::RateLimited);
+    assert_eq!(
+        read.rate_limit().remaining(),
+        None,
+        "the triple is not recorded as figures"
+    );
+    assert_eq!(
+        session.attributed(Budget::Rest),
+        0,
+        "a request that did not run costs nothing"
+    );
 }
 
 #[tokio::test]
@@ -542,17 +592,6 @@ async fn the_credentialed_lane_records_what_the_allowance_read_reported() {
     );
 }
 
-/// The variable that asks the journey decline below to be followed through to its
-/// conclusion instead of only asserted.
-///
-/// Unset — which is every ordinary run — the test asserts the outcome and passes. Set, it
-/// re-raises the very panic the decline made, so the target fails and `cargo test` exits
-/// non-zero. That is the second half of what this branch owes: a run that declined for want
-/// of budget must leave the required check concluding something branch protection accepts
-/// neither as success nor in place of it. `scripts/check-budget-decline.sh` is what sets it
-/// and reads the conclusion.
-const FOLLOW_THROUGH: &str = "ONETASKGRAPH_BUDGET_DECLINE_FOLLOW_THROUGH";
-
 #[test]
 fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_short() {
     // The whole journey, driven the way both of its drives drive it, against a stand-in
@@ -610,7 +649,7 @@ fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_sh
     // nothing beyond the read it declined on, and it does not retry, poll or wait.
     assert_eq!(standin.asked(), vec!["GET /rate_limit".to_owned()]);
 
-    if std::env::var_os(FOLLOW_THROUGH).is_some() {
+    if std::env::var_os(budget::FOLLOW_THROUGH).is_some() {
         std::panic::resume_unwind(declined);
     }
 }

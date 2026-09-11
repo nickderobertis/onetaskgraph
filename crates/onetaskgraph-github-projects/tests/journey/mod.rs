@@ -176,13 +176,8 @@ async fn graphql_variables(
         }
     };
     let status = response.status();
-    let limits = RateLimit::read(|name| {
-        response
-            .headers()
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned)
-    });
+    let limits = rate_limit_headers(&response);
+    let exhausted = budget_exhausted(&response);
     let outcome = |outcome: Outcome| sending(None).finished(outcome, limits.clone());
     let body = match response.text().await {
         Ok(body) => body,
@@ -193,7 +188,7 @@ async fn graphql_variables(
             ));
         }
     };
-    let ended = Outcome::of_response(status, limits.exhausted(), &body);
+    let ended = Outcome::of_response(status, exhausted, &body);
     if !status.is_success() {
         SESSION.record(outcome(ended));
         return Err(format!("{query_name} query failed: HTTP {status}"));
@@ -223,6 +218,35 @@ async fn graphql_variables(
         .flatten();
     SESSION.record(sending(reported_cost).finished(ended, limits));
     Ok(response)
+}
+
+/// The rate-limit facts one response's own headers carried, as the accounting records them.
+fn rate_limit_headers(response: &reqwest::Response) -> RateLimit {
+    RateLimit::read(|name| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    })
+}
+
+/// Whether a response's own `x-ratelimit-remaining` says the budget is exactly spent, read
+/// off the raw header the way the source's own limiter reads it.
+///
+/// Raw rather than [`RateLimit::exhausted`] on the record above, and the difference is not
+/// academic: the accounting drops the three allowance figures together when they cannot all
+/// be true, and GitHub has been observed refusing a call with `x-ratelimit-remaining: 0`
+/// beside an `x-ratelimit-used` above the whole allowance. Read off the record, that refusal
+/// has no exhausted budget to explain it and is recorded as an ordinary refusal; read off
+/// the header, it is the rate-limited refusal it was, which is what `budget::recheck` has to
+/// see to decline the session rather than let it fail.
+fn budget_exhausted(response: &reqwest::Response) -> bool {
+    response
+        .headers()
+        .get("x-ratelimit-remaining")
+        .and_then(|value| value.to_str().ok())
+        == Some("0")
 }
 
 /// GitHub's own node count and price for every document this source sends, against this
@@ -790,13 +814,8 @@ pub async fn record_rest_response(
         }
     };
     let status = response.status();
-    let limits = RateLimit::read(|name| {
-        response
-            .headers()
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned)
-    });
+    let limits = rate_limit_headers(&response);
+    let exhausted = budget_exhausted(&response);
     let outcome = |outcome: Outcome| sending().finished(outcome, limits.clone());
     let text = match response.text().await {
         Ok(text) => text,
@@ -814,7 +833,7 @@ pub async fn record_rest_response(
     };
     into.record(outcome(rest_outcome(
         status,
-        limits.exhausted(),
+        exhausted,
         &text,
         decoded.is_ok(),
     )));
@@ -1273,10 +1292,23 @@ pub fn mutation_schema_documents() -> Vec<String> {
     }
 }
 
-async fn verify_mutation_schema(token: &str) -> Result<(), String> {
+/// `after_the_first_call` runs once the first introspection document has been answered or
+/// refused and before its result is acted on. That first document is the session's first
+/// real call, and this is where `budget::recheck` reads its headers: a session the account
+/// cannot afford is declined there, on that one call, rather than reported here as a schema
+/// that drifted because GitHub refused to answer it.
+async fn verify_mutation_schema(
+    token: &str,
+    after_the_first_call: impl FnOnce(),
+) -> Result<(), String> {
     let mut answered = serde_json::Map::new();
+    let mut after_the_first_call = Some(after_the_first_call);
     for document in mutation_schema_documents() {
-        let response = graphql(token, &document, "mutation schema introspection").await?;
+        let response = graphql(token, &document, "mutation schema introspection").await;
+        if let Some(recheck) = after_the_first_call.take() {
+            recheck();
+        }
+        let response = response?;
         let data = response
             .pointer("/data")
             .and_then(Value::as_object)
@@ -2309,12 +2341,19 @@ pub async fn run(nomination: Nomination) {
     // account can pay for this session and still keep the share it may never touch. A
     // session that cannot is DECLINED — it did not run, so it is neither a pass nor a
     // failing assertion — and nothing below has reached GitHub by the time it is.
-    budget::precondition(&token, &endpoints().rest_host, &SESSION)
+    let admitted = budget::precondition(&token, &endpoints().rest_host, &SESSION)
         .await
         .unwrap_or_else(|declined| declined.refuse());
-    verify_mutation_schema(&token)
-        .await
-        .unwrap_or_else(|error| panic!("GitHub mutation schema drifted: {error}"));
+    // Decided again on the session's own first real call, whose headers are the account's
+    // word about this very request where the endpoint above was a claim about it. The two
+    // have been observed to disagree, and a session the headers cannot afford is DECLINED
+    // on them here — after that one call, before anything is written — rather than left to
+    // fail on its next one.
+    verify_mutation_schema(&token, || {
+        budget::recheck(&admitted, &SESSION).unwrap_or_else(|declined| declined.refuse());
+    })
+    .await
+    .unwrap_or_else(|error| panic!("GitHub mutation schema drifted: {error}"));
     // GitHub, not this workspace, is the authority on both what a document may return and
     // what it costs. It runs here rather than
     // in the offline gate because it needs the credential this lane already has, and it runs

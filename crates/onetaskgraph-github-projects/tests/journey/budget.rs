@@ -38,6 +38,28 @@
 //! sentence up against GitHub's own figures. It is one read rather than two compared, and
 //! it draws no conclusion: what a run prints is what that run saw.
 //!
+//! # The second reading, and why the first is not decided on alone
+//!
+//! That endpoint and the `x-ratelimit-*` headers have been observed to **disagree about the
+//! same credential in the same seconds**: `GET /rate_limit` reported the whole GraphQL
+//! allowance remaining while the headers on a real GraphQL call, moments later, reported
+//! none remaining and more used than the allowance — and earlier the same day the other
+//! way round. GitHub's own guidance already says which to prefer: *"When possible, you
+//! should use the rate limit response headers instead of querying the API to check your
+//! rate limit."* A gate deciding on the endpoint alone started, twice, a session that could
+//! not afford itself, which then failed inside the journey with the allowance already
+//! exceeded — reported as a defect in this repository rather than as a budget it did not
+//! have.
+//!
+//! So the free read stays the first, and the headers the session's own first real call
+//! carries are the second: [`recheck`] reads them out of the accounting, which records
+//! them for every request anyway, and puts them to [`still_affordable`] — the same
+//! estimate, the same buffer, the same arithmetic. Where that reading refuses, the session
+//! is **declined** on it, after that one call and before anything is written, naming both
+//! readings; a decline is the gate working, where a failure on the next call reads as this
+//! repository being broken. It is still one free read and no extra call: the second reading
+//! is taken off a request the session was making regardless.
+//!
 //! # The cost model, and the rule it rests on
 //!
 //! GitHub publishes, on *Rate limits and query limits for the GraphQL API*:
@@ -92,9 +114,13 @@
 
 use std::collections::BTreeMap;
 
-use onetaskgraph_github_projects::accounting::{Accounting, Budget, Endpoint, Method, RateLimit};
+use onetaskgraph_github_projects::accounting::{
+    Accounting, Budget, Endpoint, Method, Outcome, RateLimit, Request,
+};
 use onetaskgraph_github_projects::largest_page_sizes;
-use onetaskgraph_live::{Allowance, Declined, Demand, Metered, Unaffordable, affordable};
+use onetaskgraph_live::{
+    Allowance, Declined, Demand, Metered, Unaffordable, affordable, still_affordable,
+};
 use serde_json::{Value, json};
 
 use crate::lane::SESSION_NAME;
@@ -131,6 +157,19 @@ pub fn allowance_read() -> String {
         ALLOWANCE_METHOD.name()
     )
 }
+
+/// The variable that asks a test asserting a journey's decline to follow it through to its
+/// conclusion instead of only asserting it.
+///
+/// Unset — which is every ordinary run — such a test asserts the outcome and passes. Set, it
+/// re-raises the very panic the decline made, so the target fails and `cargo test` exits
+/// non-zero. That is the second half of what a decline owes: a run that declined for want
+/// of budget must leave the required check concluding something branch protection accepts
+/// neither as success nor in place of it. `scripts/check-budget-decline.sh` is what sets it
+/// and reads the conclusion, for the decline on the first reading in `tests/budget_gate.rs`
+/// and for the decline on the second in `tests/recheck_gate.rs` alike — one spelling here,
+/// so the two targets and the script cannot come to disagree about which variable it is.
+pub const FOLLOW_THROUGH: &str = "ONETASKGRAPH_BUDGET_DECLINE_FOLLOW_THROUGH";
 
 /// The branch's own per-call record of the reduced session.
 ///
@@ -399,6 +438,21 @@ pub fn observation(answered: &Result<Value, String>, carried: &RateLimit) -> Str
     )
 }
 
+/// What the pre-check admitted the session on, held for the second reading.
+///
+/// Only [`precondition`] makes one, so holding an `Admitted` means the free read was made
+/// and every budget passed on it; [`recheck`] is what it is for.
+#[derive(Debug)]
+pub struct Admitted {
+    /// One per budget, as the endpoint answered it.
+    demands: Vec<Demand>,
+    /// How many requests the accounting held once the allowance read was recorded, so the
+    /// request recorded next is the session's first real call — whichever runs of this
+    /// journey the same accounting has seen before, which a stand-in driving it several
+    /// times in one test binary makes real.
+    before: usize,
+}
+
 /// Ask GitHub what the account has left, and decide whether this session may start.
 ///
 /// **This is a session's first request and its only one before the decision**: one
@@ -410,12 +464,19 @@ pub fn observation(answered: &Result<Value, String>, carried: &RateLimit) -> Str
 /// The estimates are recorded into `into` before the read, so the report of a session that
 /// does start carries them beside what it really spent.
 ///
+/// What it returns is what it admitted the session on, for [`recheck`] to hold the session's
+/// own first real call against: a session admitted here is not yet a session decided.
+///
 /// # Errors
 ///
 /// When any budget's allowance could not be read, or when starting would dip into that
 /// budget's retained buffer. Both are a [`Declined`]: a run that did not happen, which is
 /// neither a pass nor a failing assertion. Nothing here sleeps, polls or retries.
-pub async fn precondition(token: &str, rest_host: &str, into: &Accounting) -> Result<(), Declined> {
+pub async fn precondition(
+    token: &str,
+    rest_host: &str,
+    into: &Accounting,
+) -> Result<Admitted, Declined> {
     let estimated = estimate();
     for (budget, cost) in &estimated {
         into.estimate(*budget, *cost);
@@ -424,8 +485,8 @@ pub async fn precondition(token: &str, rest_host: &str, into: &Accounting) -> Re
     // Printed whichever way the decision goes, because a run that declined is the run whose
     // allowance a reader most wants to see. The read is the last request recorded, since
     // nothing else has been sent yet.
-    let carried = into
-        .snapshot()
+    let recorded = into.snapshot();
+    let carried = recorded
         .requests()
         .last()
         .map_or_else(RateLimit::default, |read| read.rate_limit().clone());
@@ -437,9 +498,169 @@ pub async fn precondition(token: &str, rest_host: &str, into: &Accounting) -> Re
             Err(why) => Demand::unread(metered(budget), cost, why),
         }
     };
-    affordable(&[
+    let demands = vec![
         demand(Budget::Graphql, resource_of(Budget::Graphql)),
         demand(Budget::Rest, resource_of(Budget::Rest)),
-    ])
-    .map_err(|cause: Unaffordable| Declined::unaffordable(SESSION_NAME, cause))
+    ];
+    affordable(&demands)
+        .map_err(|cause: Unaffordable| Declined::unaffordable(SESSION_NAME, cause))?;
+    Ok(Admitted {
+        demands,
+        before: recorded.total_requests(),
+    })
+}
+
+/// How the session's first real call is named as a reading, beside [`allowance_read`].
+#[must_use]
+pub fn first_call_headers(call: &str) -> String {
+    format!("the headers of the session's first real call, {call}")
+}
+
+/// What the session's first real call said about the budget it drew on.
+enum Carried {
+    /// Figures this session may decide on.
+    Allowance(Allowance),
+    /// A reading that declines the session outright, and why: a rate-limited refusal,
+    /// whatever figures it carried, or an answer without an allowance this session could
+    /// read. Nothing is decided on it because there is nothing to decide — it affords
+    /// nothing.
+    Declining(String),
+    /// Nothing about the budget at all: the call was refused for something other than a
+    /// rate limit and carried no figures — it never reached the host, or the host answered
+    /// without them — which is a failure of that call's own and no evidence that the
+    /// allowance is other than the endpoint claimed.
+    NothingAboutTheBudget(String),
+}
+
+/// What one call's own headers say the budget it drew on holds, or why they do not decide.
+///
+/// Three things afford nothing here, and each is named in the reason rather than folded
+/// into one. A call **refused for a rate limit** — whatever its headers carried, because a
+/// refusal naming a limit while the headers still show room is the secondary limiter, which
+/// nothing reports and every further attempt extends. A call **answered** with headers that
+/// carried none of the figures, or figures the accounting refused to record because they
+/// cannot all be true: an allowance this session could not read is not one it may assume,
+/// exactly as the endpoint's own read is held to, and GitHub attaches these headers to every
+/// answer it gives — so an answer without them is the observed shape, more used than the
+/// whole allowance beside nothing remaining, or something between here and GitHub stripping
+/// them, and the session cannot say it can afford itself on either. And, on the readable
+/// figures, a remainder under the buffer — which is [`still_affordable`]'s to decide, not
+/// this one's.
+///
+/// One thing is deliberately **not** a reason to decline: a call refused for something
+/// other than a rate limit that carried no figures at all. That is a connection that never
+/// reached the host, an outage answering without headers, a mis-pointed journey — and
+/// each of those is a failure that has to read as one, where a decline says on its face
+/// that the code under test is not at fault. Such a call says nothing about the budget, so
+/// the session goes on with the reading it was admitted on and the refusal surfaces as
+/// itself.
+///
+/// `reset` is taken from the call's own headers where they carried it and from the
+/// reading the session was admitted on where they did not: it is the same window either
+/// way, and a stand-in that reports a budget without saying when it comes back is not a
+/// budget this session could not read.
+fn carried_allowance(first: &Request, claimed: Allowance) -> Carried {
+    let headers = first.rate_limit();
+    let figures = match (headers.limit(), headers.remaining()) {
+        (Some(limit), Some(remaining)) => {
+            Allowance::read(limit, remaining, headers.reset().unwrap_or(claimed.reset()))
+        }
+        _ => None,
+    };
+    match (first.outcome(), figures) {
+        (Outcome::RateLimited, Some(figures)) => Carried::Declining(format!(
+            "it was refused for a rate limit, its headers reporting {} of {} remaining",
+            figures.remaining(),
+            figures.limit()
+        )),
+        (Outcome::RateLimited, None) => Carried::Declining(
+            "it was refused for a rate limit, and its headers carried no allowance this \
+             session could read"
+                .to_owned(),
+        ),
+        (Outcome::Answered, None) => Carried::Declining(
+            "it was answered and its headers carried no allowance this session could read"
+                .to_owned(),
+        ),
+        (Outcome::Refused, None) => Carried::NothingAboutTheBudget(
+            "it was refused for something other than a rate limit and carried no figures, \
+             which says nothing about the budget"
+                .to_owned(),
+        ),
+        (_, Some(figures)) => Carried::Allowance(figures),
+    }
+}
+
+/// Decide the session again, on the headers its own first real call carried.
+///
+/// The first real call is the request `into` recorded right after the allowance read —
+/// the journey's own accounting reads every response's `x-ratelimit-*` headers and records
+/// them, so nothing here reads a response; it reads the record. The budget decided on is
+/// the one that call drew on, which is the GraphQL budget for every call this journey makes
+/// first, and what was admitted for that budget is held against what the call carried by
+/// [`still_affordable`]: the same estimate, the same retained buffer, the same arithmetic.
+///
+/// Printed either way, as the first reading is, so a run says what its own request carried
+/// beside what the endpoint claimed.
+///
+/// # Errors
+///
+/// When the second reading does not afford the session the first admitted — a
+/// [`Declined`] naming both readings, which is a run that did not happen. Nothing is
+/// written before this decides, so a session declined here leaves nothing behind. A call
+/// that said nothing about the budget is not an error here: see [`carried_allowance`] for
+/// which call that is and why it goes on.
+///
+/// # Panics
+///
+/// When no request was recorded after the allowance read: the re-check follows the
+/// session's first real call, and asking before it is a defect in the journey rather than
+/// a budget.
+pub fn recheck(admitted: &Admitted, into: &Accounting) -> Result<(), Declined> {
+    let recorded = into.snapshot();
+    let first = recorded
+        .requests()
+        .get(admitted.before)
+        .expect("the re-check follows the session's first real call, and one was recorded");
+    let demand = admitted
+        .demands
+        .iter()
+        .find(|demand| demand.metered() == metered(first.budget()))
+        .expect("the pre-check admitted every budget this session draws on");
+    let claimed = demand
+        .allowance()
+        .expect("the pre-check admitted this budget on an allowance it read");
+    let carried_by = first_call_headers(first.name());
+    let carried = match carried_allowance(first, claimed) {
+        Carried::Allowance(allowance) => Ok(allowance),
+        Carried::Declining(why) => Err(why),
+        Carried::NothingAboutTheBudget(why) => {
+            super::say(&format!(
+                "{carried_by} {why}; the session goes on with what {} claimed, {} of {} {} \
+                 remaining, and that call's refusal is reported as itself",
+                allowance_read(),
+                claimed.remaining(),
+                claimed.limit(),
+                demand.unit(),
+            ));
+            return Ok(());
+        }
+    };
+    super::say(&format!(
+        "{carried_by} {}; {} claimed {} of {} {} remaining",
+        match &carried {
+            Ok(carried) => format!(
+                "reported {} of {} remaining",
+                carried.remaining(),
+                carried.limit()
+            ),
+            Err(why) => format!("carried no allowance to decide on: {why}"),
+        },
+        allowance_read(),
+        claimed.remaining(),
+        claimed.limit(),
+        demand.unit(),
+    ));
+    still_affordable(demand, &allowance_read(), carried, &carried_by)
+        .map_err(|cause| Declined::unaffordable(SESSION_NAME, cause))
 }
