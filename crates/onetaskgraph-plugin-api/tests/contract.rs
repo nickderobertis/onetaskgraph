@@ -29,6 +29,7 @@ impl TaskSource for Silent {
         Capabilities {
             projects: Support::Native,
             documents: Support::Unsupported,
+            comments: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Unsupported,
             filter_by_status: Support::Native,

@@ -5,9 +5,9 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Capabilities, DependencyEdge, Direction, Document, DocumentQuery, ItemWrite, Label, NativeId,
-    Page, PageRequest, Project, ProjectQuery, SourceError, SourceName, Task, TaskQuery,
-    WriteSupport, documentless, unwritable,
+    Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery,
+    ItemWrite, Label, NativeId, NewComment, Page, PageRequest, Project, ProjectQuery, SourceError,
+    SourceName, Task, TaskQuery, WriteSupport, commentless, documentless, unwritable,
 };
 
 /// Whether a source is answering right now.
@@ -275,6 +275,92 @@ pub trait TaskSource: Send + Sync {
     async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
         let _ = id;
         Err(unwritable(self.kind()))
+    }
+
+    /// One page of the comments on `task`, oldest first, or `None` when this source holds
+    /// no such task.
+    ///
+    /// Defaulted to [`commentless`], which is what keeps comments an addition rather than a
+    /// break: a source with none needs no edit and keeps working. A source whose tasks have
+    /// comments declares [`Support::Native`](crate::Support::Native) for
+    /// [`Capabilities::comments`] and owes a real implementation of all four comment methods,
+    /// because that declaration is what makes the engine ask.
+    ///
+    /// "No such task" is `None` rather than an error, exactly as it is for
+    /// [`get_task`](Self::get_task); a task that exists and has no comments is an empty page.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source has no comments, and whatever else
+    /// the source could not answer for.
+    async fn task_comments(
+        &self,
+        task: &NativeId,
+        page: &PageRequest,
+    ) -> Result<Option<Page<Comment>>, SourceError> {
+        let _ = (task, page);
+        Err(commentless(self.kind()))
+    }
+
+    /// Add one comment to `task`, answering with the comment as the source now holds it, or
+    /// `None` when this source holds no such task.
+    ///
+    /// The body is stored byte for byte. A source that records the author itself refuses a
+    /// [`NewComment::author`] rather than dropping it, naming why; a source that cannot
+    /// represent the body refuses it, naming why, rather than escaping it into something
+    /// else.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source has no comments or cannot be
+    /// written, when it cannot record what it was given, and whatever else it could not do
+    /// the write for.
+    async fn add_comment(
+        &self,
+        task: &NativeId,
+        comment: &NewComment,
+    ) -> Result<Option<Comment>, SourceError> {
+        let _ = (task, comment);
+        Err(commentless(self.kind()))
+    }
+
+    /// Replace the body of the comment `comment` on `task`, answering with the comment as the
+    /// source now holds it, or `None` when this source holds no such task or that task has no
+    /// such comment.
+    ///
+    /// Only the body and the time it last changed move: the id, the author and the time it
+    /// was written are the comment's own.
+    ///
+    /// # Errors
+    ///
+    /// As [`add_comment`](Self::add_comment).
+    async fn edit_comment(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+        body: &CommentBody,
+    ) -> Result<Option<Comment>, SourceError> {
+        let _ = (task, comment, body);
+        Err(commentless(self.kind()))
+    }
+
+    /// Remove the comment `comment` from `task`, answering with the id it removed, or `None`
+    /// when this source holds no such task or that task has no such comment.
+    ///
+    /// Unlike [`delete_task`](Self::delete_task), this *is* a verb of the product — a person
+    /// removes a comment they posted — so a comment that is not there is reported as `None`
+    /// for the engine to refuse by name, rather than treated as already gone.
+    ///
+    /// # Errors
+    ///
+    /// As [`add_comment`](Self::add_comment).
+    async fn delete_comment(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+    ) -> Result<Option<NativeId>, SourceError> {
+        let _ = (task, comment);
+        Err(commentless(self.kind()))
     }
 }
 

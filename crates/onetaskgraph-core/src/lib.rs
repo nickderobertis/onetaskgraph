@@ -42,11 +42,11 @@ pub mod subprocess;
 
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
 pub use engine::{
-    ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyReport, CopyRequest, CopyScope,
-    DependencyRequest, DocumentFilters, DocumentRequest, Engine, EngineError, Filters,
-    LabelRequest, LeftBehind, MatchBy, Paging, ProjectRequest, ProjectSelector, Qualified,
-    QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind, SearchRequest, SourceListing,
-    SourceState, TaskRequest,
+    CommentList, ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyReport, CopyRequest,
+    CopyScope, DeletedComment, DependencyRequest, DocumentFilters, DocumentRequest, Engine,
+    EngineError, Filters, LabelRequest, LeftBehind, MatchBy, Paging, ProjectRequest,
+    ProjectSelector, Qualified, QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind,
+    SearchRequest, SourceListing, SourceState, TaskDetail, TaskRequest,
 };
 pub use environment::Environment;
 pub use global_id::GlobalId;

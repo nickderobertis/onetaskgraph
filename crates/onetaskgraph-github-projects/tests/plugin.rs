@@ -4912,6 +4912,7 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
         Capabilities {
             projects: Support::Native,
             documents: Support::Native,
+            comments: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

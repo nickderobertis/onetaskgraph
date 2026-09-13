@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
-    DocumentQuery, Health, ItemKind, Label, Location, Page, PageRequest, Project, ProjectQuery,
-    Repository, SourceError, Status, StatusCategory, Task, TaskQuery, TextFields,
+    Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
+    DocumentQuery, Health, ItemKind, Label, Location, NewComment, Page, PageRequest, Project,
+    ProjectQuery, Repository, SourceError, Status, StatusCategory, Task, TaskQuery, TextFields,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
@@ -18,9 +18,9 @@ use crate::config::{EffectiveConfig, Origin, OutputFormat, Setting};
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::{
-    CopyAction, CopyOutcome, CopyReport, GlobalId, PageToken, Predicate, Qualified, QualifiedEdge,
-    QualifiedEndpoint, QueryPlan, QueryResponse, SearchHit, SearchKind, SourceFailure,
-    SourceListing, SourcePlan,
+    CommentList, CopyAction, CopyOutcome, CopyReport, DeletedComment, GlobalId, PageToken,
+    Predicate, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, SearchHit,
+    SearchKind, SourceFailure, SourceListing, SourcePlan, TaskDetail,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -36,7 +36,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 10;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 11;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -121,6 +121,15 @@ pub fn schema_bundle() -> Value {
         "QueryResponseOfSearchHit",
         schema_for!(QueryResponse<SearchHit>),
     );
+
+    // The comment roots: the contract's own `Comment` and `NewComment`, which cross the
+    // plugin protocol, and the three shapes the comment verbs and `task show` answer with.
+    roots.insert("Comment", schema_for!(Comment));
+    roots.insert("NewComment", schema_for!(NewComment));
+    roots.insert("PageOfComment", schema_for!(Page<Comment>));
+    roots.insert("CommentList", schema_for!(CommentList));
+    roots.insert("DeletedComment", schema_for!(DeletedComment));
+    roots.insert("TaskDetail", schema_for!(TaskDetail));
 
     roots.insert("CopyReport", schema_for!(CopyReport));
     roots.insert("CopyOutcome", schema_for!(CopyOutcome));

@@ -14,8 +14,9 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Direction, Document, DocumentQuery, ItemWrite, NativeId, PageRequest, Project,
-    ProjectQuery, SourceError, Task, TaskQuery, WriteSupport,
+    Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite, NativeId,
+    NewComment, Page, PageRequest, Project, ProjectQuery, SourceError, Task, TaskQuery,
+    WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -276,6 +277,70 @@ pub(crate) struct DocumentWriteParams {
 pub(crate) struct DeleteParams {
     /// The destination item to remove.
     pub(crate) id: NativeId,
+}
+
+/// `task_comments` parameters (§4.14).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CommentsParams {
+    /// The task whose comments are wanted.
+    pub(crate) task: NativeId,
+    /// Where to resume and how much to return.
+    pub(crate) page: PageRequest,
+}
+
+/// The `task_comments` result (§4.14): a page, or `null` when there is no such task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CommentsResult {
+    /// The page, or `null`.
+    #[serde(default)]
+    pub(crate) page: Option<Page<Comment>>,
+}
+
+/// `add_comment` parameters (§4.15).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AddCommentParams {
+    /// The task to comment on.
+    pub(crate) task: NativeId,
+    /// What to add.
+    pub(crate) comment: NewComment,
+}
+
+/// `edit_comment` parameters (§4.15).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct EditCommentParams {
+    /// The task the comment is on.
+    pub(crate) task: NativeId,
+    /// The comment to edit.
+    pub(crate) comment: NativeId,
+    /// Its new body.
+    pub(crate) body: CommentBody,
+}
+
+/// `delete_comment` parameters (§4.15).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DeleteCommentParams {
+    /// The task the comment is on.
+    pub(crate) task: NativeId,
+    /// The comment to remove.
+    pub(crate) comment: NativeId,
+}
+
+/// The `add_comment` and `edit_comment` result (§4.15): the comment as the source now holds
+/// it, or `null` when there is no such task or no such comment on it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CommentResult {
+    /// The comment, or `null`.
+    #[serde(default)]
+    pub(crate) comment: Option<Comment>,
+}
+
+/// The `delete_comment` result (§4.15): the id removed, or `null` when there was nothing
+/// under it to remove.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DeletedCommentResult {
+    /// The removed comment's id, or `null`.
+    #[serde(default)]
+    pub(crate) deleted: Option<NativeId>,
 }
 
 /// The result of any write method (§4.9, §4.12): the id the destination holds the item

@@ -274,6 +274,10 @@ its `result`; the JSON shape of every contract type in them is what
 | `query_documents` | `TaskSource::query_documents` |
 | `write_document` | `TaskSource::write_document` |
 | `delete_document` | `TaskSource::delete_document` |
+| `task_comments` | `TaskSource::task_comments` |
+| `add_comment` | `TaskSource::add_comment` |
+| `edit_comment` | `TaskSource::edit_comment` |
+| `delete_comment` | `TaskSource::delete_comment` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -304,16 +308,17 @@ returning fewer items than `limit` is not thereby saying there are no more: only
 
 ### 4.2 `Capabilities`
 
-`projects`, `documents`, `orphan_tasks`, `filter_by_label`, `filter_by_status`,
+`projects`, `documents`, `comments`, `orphan_tasks`, `filter_by_label`, `filter_by_status`,
 `search_title` and `search_content` are each `"native"` or `"unsupported"`.
 `task_dependencies` and `project_dependencies` are each `"both-directions"` or
 `"forward-only"` — there is deliberately **no** unsupported value for these two.
 `max_page_size` is a positive integer.
 
-`documents` is the one member of this object that is **optional**, and an absent one means
-`"unsupported"`. That is §2.1 doing its job, exactly as it does for the write-support member
-§3.3 specifies: a plugin written before there were documents says nothing here and is read
-as the document-free source it is, with no version bump on either side.
+`documents` and `comments` are the two members of this object that are **optional**, and an
+absent one means `"unsupported"`. That is §2.1 doing its job, exactly as it does for the
+write-support member §3.3 specifies: a plugin written before there were documents or
+comments says nothing here and is read as the source without them it is, with no version
+bump on either side.
 
 `documents` is also not a *predicate*, and the rules below do not reach it. It says whether
 this source has documents at all, in the shape `projects` uses, so there is no wider result
@@ -321,6 +326,11 @@ set to return and nothing for the engine to narrow. The engine reads it once at 
 handshake and never sends a document method to a plugin that answered `"unsupported"` — see
 §4.11, which is also where a plugin is told to refuse rather than answer an empty page if
 one arrives anyway.
+
+`comments` is not a predicate either, on exactly those terms: it says whether this source's
+tasks have comments at all. The engine never sends a comment method to a plugin that
+answered `"unsupported"` — see §4.14 — and sends the three that write (§4.15) only to a
+plugin whose write-support member (§3.3) also says it can be written.
 
 Three rules bind every plugin, and the engine's compensation is only correct while
 all three hold:
@@ -332,8 +342,9 @@ all three hold:
    a source can only *half* apply — a `title-or-content` search where only titles are
    searchable — must be declared unsupported and ignored outright, because half
    applying it narrows.
-3. This reaches the six `"native"`/`"unsupported"` predicates alone — not `documents`,
-   which is not one of them. A dependency read is never ignored and never silently empty.
+3. This reaches the six `"native"`/`"unsupported"` predicates alone — not `documents` or
+   `comments`, which are not among them. A dependency read is never ignored and never
+   silently empty.
    A `"forward-only"` plugin still answers `depended-on-by` — see §4.8.
 
 ### 4.3 `health`
@@ -660,6 +671,73 @@ This is not the `url` field those three entities already carry, does not replace
 not derived from it. A plugin that reported a web address there goes on reporting exactly
 what it reported before, whether or not it also says where the entity is.
 
+### 4.14 `task_comments`
+
+Only a plugin that declared `comments` `"native"` in §4.2 is ever sent this.
+
+```json
+{ "id": "12", "method": "task_comments", "params": { "task": "ENG-1", "page": { "cursor": null, "limit": 50 } } }
+{ "id": "12", "result": { "page": { "items": [], "next": null } } }
+```
+
+`task` is the `NativeId` of a task at **this** source and `page` is a `PageRequest` (§4.1).
+`result.page` is a `Page<Comment>` holding that task's comments **oldest first**, or `null`
+when this source holds no such task — "no such task" is `null` and not an error, exactly as
+it is in §4.4, and a task that exists with no comments is a page with no items.
+
+A `Comment` is an object with exactly these members:
+
+| Member | Type | Meaning |
+| --- | --- | --- |
+| `id` | string | The comment's own id, as this source issued it. Never qualified (§3.2). |
+| `author` | string or `null` | Who wrote it, in this source's own spelling of a person. |
+| `created_at` | RFC 3339 string or `null` | When it was written. |
+| `updated_at` | RFC 3339 string or `null` | When it last changed. |
+| `body` | string | What it says, byte for byte — a trailing newline included. |
+| `url` | string or `null` | Where a person can open it. |
+
+`null` says this source did not give that member. `id` and `body` are always present.
+
+**A plugin whose tasks have no comments refuses rather than answering an empty page**, for
+the reason §4.11 gives about documents: it declared `comments` `"unsupported"`, so the engine
+never sends it one, and a plugin should still implement the case defensively with a
+`{"kind": "refused"}` naming itself.
+
+### 4.15 `add_comment`, `edit_comment` and `delete_comment`
+
+Only a plugin that declared `comments` `"native"` in §4.2 **and** answered `"supported"` to
+§3.3 is ever sent any of these. Unlike §4.10, all three are verbs of the product: a person
+adds, edits and removes a comment through them, and nothing a copy does sends one.
+
+```json
+{ "id": "13", "method": "add_comment", "params": { "task": "ENG-1", "comment": { "body": "Seen again on main.\n", "author": null } } }
+{ "id": "14", "method": "edit_comment", "params": { "task": "ENG-1", "comment": "C-7", "body": "Seen again on main, twice.\n" } }
+{ "id": "15", "method": "delete_comment", "params": { "task": "ENG-1", "comment": "C-7" } }
+```
+
+For `add_comment`, `comment` is a `NewComment`: a `body` string, which is **never empty**,
+and an `author` string or `null`. `result.comment` is the `Comment` this source now holds —
+with the id it issued and the times it recorded — or `null` when this source holds no such
+task.
+
+For `edit_comment`, `comment` is the `NativeId` of the comment to change and `body` its new
+body, never empty. Only the body and `updated_at` move; `id`, `author` and `created_at` are
+the comment's own. `result.comment` is the edited `Comment`, or `null` when this source holds
+no such task **or** that task has no comment under that id.
+
+For `delete_comment`, `comment` is the `NativeId` of the comment to remove, and
+`result.deleted` is the `NativeId` it removed, or `null` on exactly the terms `edit_comment`
+answers `null`. A comment that is not there is **not** already gone the way an item of §4.10
+is: a person named it, and the engine refuses by name what `null` reports.
+
+A body is stored **byte for byte**, and nothing is silently dropped. A plugin that records the
+author itself — a hosted service that knows which account is signed in — answers a
+`NewComment` carrying an `author` with a `{"kind": "refused"}` saying why, rather than posting
+under a name other than the one given. A plugin that cannot represent a body refuses it the
+same way, naming why, rather than escaping it into something else. A comment id that names a
+comment on a *different* task of this source is a comment this task does not have, and is
+answered `null`.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every
@@ -725,6 +803,11 @@ reads the omission as `"unsupported"`, and it is never sent one. A delete had no
 version 1 plugin could be sent one halfway through undoing a copy. Adding a method behind a
 declaration its peer cannot accidentally make is the "method a peer may decline" case below;
 adding one a peer has already implicitly opted into is not.
+
+The comments of §4.14 and §4.15 were added **without** a bump, for exactly the reason the
+documents were: the engine sends a comment method only to a plugin that declared `comments`
+`"native"` in its handshake, and a plugin written before there were comments cannot have
+declared that. The three that write are gated twice, on that declaration and on §3.3.
 
 A version is bumped when a change is **not** safe under §2.1 — a member removed, a
 type narrowed, a meaning changed, a method removed or renamed. Adding an optional

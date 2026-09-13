@@ -1,8 +1,8 @@
 //! The configuration block this plugin builds a source from.
 
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Document,
-    ItemKind, Label, NativeId, Project, Support, Task, WriteSupport,
+    Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
+    Document, ItemKind, Label, NativeId, Project, Support, Task, WriteSupport,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, de::Error as _};
@@ -26,6 +26,13 @@ pub struct InMemoryConfig {
     /// at all — and a document listed under a source that declares it has none is refused
     /// by [`InMemoryConfig::validate`] rather than held where nothing may ask for it.
     pub documents: Vec<Document>,
+    /// The comments this source's tasks start with, each beside the task it is on, in the
+    /// order they were written.
+    ///
+    /// Read only when [`CapabilityConfig::comments`] declares this source's tasks have
+    /// comments at all, and refused by [`InMemoryConfig::validate`] otherwise — for the
+    /// reason a document listed under a source declaring none is.
+    pub comments: Vec<HeldComment>,
     /// Every label this source knows.
     pub labels: Vec<Label>,
     /// Forward task dependency edges: `from` depends on `to`.
@@ -41,6 +48,20 @@ pub struct InMemoryConfig {
     /// local Markdown document's `depends_on` takes its level from the document.
     #[serde(deserialize_with = "project_edges")]
     pub project_dependencies: Vec<DependencyEdge>,
+}
+
+/// One comment, and the task it is on.
+///
+/// Two members rather than the task's id folded into the comment: a [`Comment`] is the
+/// contract's own shape, spelled exactly as the plugin protocol carries it, and the task it
+/// belongs to is where this source keeps it rather than part of what it says.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HeldComment {
+    /// The task this comment is on.
+    pub task: NativeId,
+    /// The comment itself.
+    pub comment: Comment,
 }
 
 fn task_edges<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<DependencyEdge>, D::Error> {
@@ -189,6 +210,32 @@ impl InMemoryConfig {
             ));
         }
 
+        // Comments add two incoherences of their own: a comment on a task nothing holds, and
+        // one listed under a source that declares its tasks have none — the second for the
+        // reason a document listed under a document-free source is refused above.
+        for held in &self.comments {
+            if !task_ids.contains(&held.task) {
+                problems.push(format!(
+                    "comment {} is on task {}, which this source does not hold",
+                    held.comment.id, held.task
+                ));
+            }
+        }
+        if let Some(id) = duplicate_ids(self.comments.iter().map(|held| &held.comment.id)).first() {
+            problems.push(format!(
+                "two or more comments share the id {id}; a comment id addresses one comment, so \
+                 a duplicate makes which one an edit or a delete reaches arbitrary"
+            ));
+        }
+        if !self.comments.is_empty() && !self.capabilities.comments.is_native() {
+            problems.push(format!(
+                "{} comment(s) are configured under a source that declares its tasks have none; \
+                 set `capabilities.comments: native`, or remove them — a source declaring no \
+                 comments is never asked for one, so these could never be read",
+                self.comments.len()
+            ));
+        }
+
         for (noun, edges, known) in [
             ("task", &self.task_dependencies, &task_ids),
             ("project", &self.project_dependencies, &project_ids),
@@ -251,6 +298,15 @@ pub struct CapabilityConfig {
     /// [`InMemoryConfig::validate`](crate::InMemoryConfig::validate) refuses the one
     /// incoherent pairing: documents listed under a source that declares it has none.
     pub documents: Support,
+    /// Whether this source's tasks have comments at all.
+    ///
+    /// Not a predicate, for the reason [`Self::documents`] is not: it says what this source
+    /// *holds*, and a source declaring [`Support::Unsupported`] is never sent a comment call.
+    /// Defaults to `Unsupported`, so an in-memory source says it has comments only when a
+    /// document asks it to — which is what lets the shared journeys drive both the answer
+    /// and the refusal against the same plugin. Whether they can be added to, edited and
+    /// removed is [`Self::writes`], the one write declaration every write here reads.
+    pub comments: Support,
     /// Whether this source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether this source filters by label itself.
@@ -346,6 +402,7 @@ impl Default for CapabilityConfig {
         Self {
             projects: Support::Native,
             documents: Support::Unsupported,
+            comments: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -368,6 +425,7 @@ impl From<&CapabilityConfig> for Capabilities {
         Self {
             projects: value.projects,
             documents: value.documents,
+            comments: value.comments,
             orphan_tasks: value.orphan_tasks,
             filter_by_label: value.filter_by_label,
             filter_by_status: value.filter_by_status,

@@ -3,15 +3,17 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
+use chrono::Utc;
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencySupport, Direction,
-    Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, NativeId, Page, PageRequest,
-    Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Task, TaskQuery, TaskSource, TextFields, TextQuery, WriteSupport, documentless, unwritable,
+    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
+    DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
+    NativeId, NewComment, Page, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver,
+    SourceError, SourceName, SourcePlugin, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    WriteSupport, commentless, documentless, unwritable,
 };
 use schemars::{Schema, schema_for};
 
-use crate::config::{CapabilityConfig, InMemoryConfig};
+use crate::config::{CapabilityConfig, HeldComment, InMemoryConfig};
 use crate::filter::{labels_match, status_matches, text_matches};
 
 /// The plugin kind an `in-memory` source's `plugin:` field names.
@@ -64,6 +66,8 @@ struct Held {
     tasks: Vec<Task>,
     projects: Vec<Project>,
     documents: Vec<Document>,
+    /// Every task's comments, in the order they were written, each beside its task.
+    comments: Vec<HeldComment>,
     labels: Vec<Label>,
     task_dependencies: Vec<DependencyEdge>,
     project_dependencies: Vec<DependencyEdge>,
@@ -97,6 +101,7 @@ impl InMemorySource {
                 tasks: config.tasks,
                 projects: config.projects,
                 documents: config.documents,
+                comments: config.comments,
                 labels: config.labels,
                 task_dependencies: config.task_dependencies,
                 project_dependencies: config.project_dependencies,
@@ -551,7 +556,103 @@ impl TaskSource for InMemorySource {
         held.tasks.retain(|task| &task.id != id);
         held.task_dependencies
             .retain(|edge| edge.from.id() != id.0 && edge.to.id() != id.0);
+        // A comment is on its task, so a task that is gone takes them with it: leaving them
+        // would hand a later task created under the same id comments nobody wrote on it.
+        held.comments.retain(|comment| &comment.task != id);
         Ok(())
+    }
+
+    async fn task_comments(
+        &self,
+        task: &NativeId,
+        page: &PageRequest,
+    ) -> Result<Option<Page<Comment>>, SourceError> {
+        self.commented()?;
+        let on_task: Vec<Comment> = {
+            let held = self.held()?;
+            if !held.tasks.iter().any(|held_task| &held_task.id == task) {
+                return Ok(None);
+            }
+            held.comments
+                .iter()
+                .filter(|comment| &comment.task == task)
+                .map(|comment| comment.comment.clone())
+                .collect()
+        };
+        // An empty list has no row for a cursor to point at, so a task with no comments is
+        // one empty last page rather than a refusal of the first cursor.
+        if on_task.is_empty() && page.cursor.is_none() {
+            return Ok(Some(Page::last(Vec::new())));
+        }
+        self.paginate(&on_task, page).map(Some)
+    }
+
+    async fn add_comment(
+        &self,
+        task: &NativeId,
+        comment: &NewComment,
+    ) -> Result<Option<Comment>, SourceError> {
+        self.commented()?;
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let mut held = self.held()?;
+        if !held.tasks.iter().any(|held_task| &held_task.id == task) {
+            return Ok(None);
+        }
+        let now = Utc::now();
+        let added = Comment {
+            id: held.unused_comment_id(),
+            author: comment.author.clone(),
+            created_at: Some(now),
+            updated_at: Some(now),
+            body: comment.body.as_str().to_owned(),
+            url: None,
+        };
+        held.comments.push(HeldComment {
+            task: task.clone(),
+            comment: added.clone(),
+        });
+        Ok(Some(added))
+    }
+
+    async fn edit_comment(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+        body: &CommentBody,
+    ) -> Result<Option<Comment>, SourceError> {
+        self.commented()?;
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let mut held = self.held()?;
+        let Some(found) = held
+            .comments
+            .iter_mut()
+            .find(|held| &held.task == task && &held.comment.id == comment)
+        else {
+            return Ok(None);
+        };
+        found.comment.body = body.as_str().to_owned();
+        found.comment.updated_at = Some(Utc::now());
+        Ok(Some(found.comment.clone()))
+    }
+
+    async fn delete_comment(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+    ) -> Result<Option<NativeId>, SourceError> {
+        self.commented()?;
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let mut held = self.held()?;
+        let before = held.comments.len();
+        held.comments
+            .retain(|held| !(&held.task == task && &held.comment.id == comment));
+        Ok((held.comments.len() < before).then(|| comment.clone()))
     }
 
     async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
@@ -584,6 +685,16 @@ impl InMemorySource {
             return Ok(());
         }
         Err(documentless(KIND))
+    }
+
+    /// Refuse every comment call when this source's configuration says its tasks have none,
+    /// in the contract's own words for the reason [`documentary`](Self::documentary) uses
+    /// them.
+    fn commented(&self) -> Result<(), SourceError> {
+        if self.declared().comments.is_native() {
+            return Ok(());
+        }
+        Err(commentless(KIND))
     }
 
     /// Refuse a write this source's configuration says it cannot take.
@@ -745,6 +856,17 @@ fn replace_edges(held: &mut Vec<DependencyEdge>, near: &NativeId, edges: Vec<Dep
 }
 
 impl Held {
+    /// `C-<n>` for the smallest positive `n` no comment of this source already answers to.
+    ///
+    /// Unique across the whole source rather than per task, so a comment id pasted against
+    /// the wrong task names nothing there instead of naming a different comment.
+    fn unused_comment_id(&self) -> NativeId {
+        (1_u64..)
+            .map(|n| NativeId(format!("C-{n}")))
+            .find(|candidate| !self.comments.iter().any(|held| &held.comment.id == candidate))
+            .expect("an unbounded counter eventually clears a finite set of ids")
+    }
+
     /// Learn any label a written item carries that this source did not already know.
     ///
     /// Keyed by id, because that is what `labels` answers with and what a duplicate would

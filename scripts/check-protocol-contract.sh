@@ -96,6 +96,10 @@ METHOD_SECTIONS = {
     "query_documents": "### 4.11 `get_document` and `query_documents`",
     "write_document": "### 4.12 `write_document` and `delete_document`",
     "delete_document": "### 4.12 `write_document` and `delete_document`",
+    "task_comments": "### 4.14 `task_comments`",
+    "add_comment": "### 4.15 `add_comment`, `edit_comment` and `delete_comment`",
+    "edit_comment": "### 4.15 `add_comment`, `edit_comment` and `delete_comment`",
+    "delete_comment": "### 4.15 `add_comment`, `edit_comment` and `delete_comment`",
 }
 
 ENUM_SECTIONS = {

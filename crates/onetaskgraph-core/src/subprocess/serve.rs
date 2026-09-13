@@ -21,9 +21,10 @@ use serde_json::{Value, json};
 
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
-    DeleteParams, DependencyParams, DocumentQueryParams, DocumentWriteParams, HandshakePluginKind,
-    IdParams, InitializeParams, InitializeResult, LabelParams, PROTOCOL_VERSION,
-    ProjectQueryParams, ProjectWriteParams, Request, Response, TaskQueryParams, TaskWriteParams,
+    AddCommentParams, CommentsParams, DeleteCommentParams, DeleteParams, DependencyParams,
+    DocumentQueryParams, DocumentWriteParams, EditCommentParams, HandshakePluginKind, IdParams,
+    InitializeParams, InitializeResult, LabelParams, PROTOCOL_VERSION, ProjectQueryParams,
+    ProjectWriteParams, Request, Response, TaskQueryParams, TaskWriteParams,
 };
 use crate::registry::PluginKind;
 
@@ -363,6 +364,28 @@ async fn dispatch(
             let params: DeleteParams = decode(method, params)?;
             source.delete_document(&params.id).await?;
             encode(json!({}))
+        }
+        "task_comments" => {
+            let params: CommentsParams = decode(method, params)?;
+            encode(json!({ "page": source.task_comments(&params.task, &params.page).await? }))
+        }
+        "add_comment" => {
+            let params: AddCommentParams = decode(method, params)?;
+            encode(json!({ "comment": source.add_comment(&params.task, &params.comment).await? }))
+        }
+        "edit_comment" => {
+            let params: EditCommentParams = decode(method, params)?;
+            encode(json!({
+                "comment": source
+                    .edit_comment(&params.task, &params.comment, &params.body)
+                    .await?
+            }))
+        }
+        "delete_comment" => {
+            let params: DeleteCommentParams = decode(method, params)?;
+            encode(json!({
+                "deleted": source.delete_comment(&params.task, &params.comment).await?
+            }))
         }
         other => Err(SourceError::Malformed {
             message: format!("protocol version {PROTOCOL_VERSION} has no method called {other:?}"),

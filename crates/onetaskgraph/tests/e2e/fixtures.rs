@@ -128,6 +128,11 @@ pub struct Declared {
     /// journeys drive the answer and the honest refusal against real difference rather than
     /// against a mock.
     pub documents: Support,
+    /// Whether the source's tasks have comments at all.
+    ///
+    /// Not a predicate either, on exactly the terms [`Self::documents`] is not: it says what
+    /// the source holds, and a source declaring it unsupported is never sent a comment call.
+    pub comments: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether the source filters by label itself.
@@ -156,6 +161,7 @@ impl Declared {
         Capabilities {
             projects: self.projects,
             documents: self.documents,
+            comments: self.comments,
             orphan_tasks: self.orphan_tasks,
             filter_by_label: self.filter_by_label,
             filter_by_status: self.filter_by_status,
@@ -189,6 +195,7 @@ impl Declared {
         [
             support("projects", claimed.projects, reported.projects),
             support("documents", claimed.documents, reported.documents),
+            support("comments", claimed.comments, reported.comments),
             support("orphan_tasks", claimed.orphan_tasks, reported.orphan_tasks),
             support(
                 "filter_by_label",
@@ -385,6 +392,7 @@ pub const ROWS: &[Row] = &[
                 // no document rows at all — which would leave the engine's document
                 // compensation with no coverage, not less of it.
                 documents: Support::Native,
+                comments: Support::Unsupported,
                 orphan_tasks: Support::Unsupported,
                 filter_by_label: Support::Unsupported,
                 filter_by_status: Support::Unsupported,
@@ -530,6 +538,10 @@ const EVERY_PREDICATE_NATIVE: Declared = Declared {
     // keeps this constant's name true. The rows whose source really does hold documents
     // override it; docs/follow-ups.md tracks the two plugins that do not.
     documents: Support::Unsupported,
+    // Unsupported here for the reason `documents` is: not a predicate, so "every predicate
+    // native" says nothing about whether a source's tasks have comments. The rows whose
+    // source really does hold them override it.
+    comments: Support::Unsupported,
     orphan_tasks: Support::Native,
     filter_by_label: Support::Native,
     filter_by_status: Support::Native,
