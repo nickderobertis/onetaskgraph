@@ -1127,6 +1127,140 @@ async fn a_second_copy_updates_every_counterpart_and_repairs_the_edges_among_the
     );
 }
 
+/// One project of three tasks, authored the way a write-back authors its shadow: the
+/// project and `T-1` record the destination item each corresponds to, and `T-3` records
+/// none. `T-2` depends on `T-1`, or on `T-3` when `on_unrecorded` says so.
+fn shadow(on_unrecorded: bool) -> Value {
+    let recorded = |id: &str, title: &str, origin: Option<&str>| {
+        let mut task = json!({"id": id, "title": title,
+            "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"});
+        if let Some(origin) = origin {
+            task["metadata"] = json!({GlobalId::ORIGIN_KEY: origin});
+        }
+        task
+    };
+    json!({"plugin": "in-memory", "config": {
+        "projects": [
+            {"id": "P-1", "title": "Engine", "status": {"category": "todo", "name": "Todo"},
+             "labels": [], "metadata": {GlobalId::ORIGIN_KEY: "into:D-P1"}},
+        ],
+        "tasks": [
+            recorded("T-1", "Alpha engine", Some("into:D-T1")),
+            recorded("T-2", "Beta", None),
+            recorded("T-3", "Gamma", None),
+        ],
+        "task_dependencies": [
+            {"from": "T-2", "to": if on_unrecorded { "T-3" } else { "T-1" }, "kind": "blocks"},
+        ],
+    }})
+}
+
+/// A destination holding a counterpart of the project, `T-1` and `T-3` — each reading
+/// differently from the source, so a copy that reached one would write it.
+fn holding_the_shadow() -> Value {
+    json!({
+        "projects": [counterpart("D-P1", "from:P-1", None)],
+        "tasks": [
+            counterpart("D-T1", "from:T-1", Some("D-P1")),
+            counterpart("D-T3", "from:T-3", Some("D-P1")),
+        ],
+    })
+}
+
+/// A member copy of `from:P-1` naming these members.
+fn members(named: &[&str]) -> CopyRequest {
+    many(
+        &["from:P-1"],
+        CopyScope::Members(
+            CopyItems::new(named.iter().map(|member| id(member)).collect())
+                .expect("a member copy names a member"),
+        ),
+    )
+}
+
+#[tokio::test]
+async fn a_rust_caller_copies_a_project_and_exactly_the_members_it_names() {
+    let engine = engine_over(json!({
+        "from": shadow(false),
+        "into": {"plugin": "in-memory", "config": holding_the_shadow()},
+    }));
+
+    let report = engine
+        .copy(&members(&["from:T-2"]))
+        .await
+        .expect("the member copy runs");
+    assert_eq!(
+        report.items.iter().map(landed).collect::<Vec<_>>(),
+        vec![
+            (Some("into:D-P1".to_owned()), "updated".to_owned()),
+            (Some("into:T-2".to_owned()), "created".to_owned()),
+        ],
+        "the project, then the one member named — created, because nothing held it"
+    );
+    assert_eq!(
+        depends_on(&engine, "into:T-2").await,
+        vec!["into:D-T1 Task".to_owned()],
+        "the edge to a member the copy does not carry names the id that member records"
+    );
+    let held = held(&engine, "into").await;
+    for untouched in ["into:D-T1 D-T1 as it was", "into:D-T3 D-T3 as it was"] {
+        assert!(
+            held.contains(&untouched.to_owned()),
+            "a member the copy was not told about was written: {held:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_rust_caller_is_refused_a_member_copy_before_anything_is_written() {
+    let refused_with = |engine: Engine, request: CopyRequest| async move {
+        let before = held(&engine, "into").await;
+        let error = engine
+            .copy(&request)
+            .await
+            .expect_err("the member copy is refused");
+        assert_eq!(
+            held(&engine, "into").await,
+            before,
+            "a refused member copy wrote something"
+        );
+        error
+    };
+
+    let error = refused_with(
+        engine_over(json!({
+            "from": shadow(false),
+            "into": {"plugin": "in-memory", "config": holding_the_shadow()},
+        })),
+        members(&["from:T-2", "from:T-9"]),
+    )
+    .await;
+    assert_eq!(
+        error,
+        EngineError::NotAMember {
+            id: "from:T-9".to_owned(),
+            project: "from:P-1".to_owned(),
+        }
+    );
+
+    let error = refused_with(
+        engine_over(json!({
+            "from": shadow(true),
+            "into": {"plugin": "in-memory", "config": holding_the_shadow()},
+        })),
+        members(&["from:T-2"]),
+    )
+    .await;
+    assert_eq!(
+        error,
+        EngineError::UnrecordedMember {
+            item: "from:T-2".to_owned(),
+            member: "from:T-3".to_owned(),
+            destination: "into".to_owned(),
+        }
+    );
+}
+
 #[tokio::test]
 async fn a_copy_that_cannot_finish_puts_back_the_items_it_overwrote() {
     // Undoing is not only about the items a copy created. The four counterparts here were
