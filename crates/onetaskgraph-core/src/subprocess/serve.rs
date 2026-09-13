@@ -230,6 +230,7 @@ async fn initialize(
                 meters: matches!(built.metering().await, Ok(Some(_))),
             };
             *source = Some(built);
+            // An `InitializeResult` is a string, an integer and a `Capabilities`.
             Response::ok(
                 id,
                 serde_json::to_value(&result).expect("a result is plain data"),
