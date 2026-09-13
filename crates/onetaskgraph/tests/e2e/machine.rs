@@ -751,4 +751,16 @@ fn a_document_asking_for_json_gets_a_failure_document_whether_or_not_it_loads() 
     assert_eq!(failure["class"], "refused", "{failure}");
     assert_eq!(failure["kind"], "config-syntax", "{failure}");
     assert_eq!(failure["source"], Value::Null, "{failure}");
+
+    // And beneath a project document that cannot be read at all — a directory where the
+    // file should be. The read that fails is the project's alone, so the user's document
+    // beside it still says what the caller reads.
+    let obstructed = Sandbox::new();
+    obstructed.user_document("output: json\n");
+    obstructed.subdirectory("onetaskgraph.yaml");
+    let unread = run(&obstructed, &["task", "list"]);
+    let failure = failure_document(&bundle, &unread, "task list beside an unreadable document");
+    assert_eq!(failure["class"], "refused", "{failure}");
+    assert_eq!(failure["kind"], "config-read", "{failure}");
+    assert_eq!(failure["source"], Value::Null, "{failure}");
 }

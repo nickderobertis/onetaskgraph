@@ -1133,7 +1133,9 @@ fn github_projects_board_at(
     )
 }
 
-/// The `github-projects` block every fixture board is configured with, at `endpoint`.
+/// One block shared by the working, rate-limited and unreachable boards, so a failure
+/// journey's board differs from the working one only in what that journey sets: the class
+/// it asserts then comes from the endpoint's answer, never from a configuration drifting.
 fn github_projects_block_at(endpoint: &str) -> Value {
     json!({
         "owner": "fixture-owner",
