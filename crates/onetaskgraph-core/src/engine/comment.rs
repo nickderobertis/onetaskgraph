@@ -52,10 +52,11 @@ pub struct TaskDetail {
     pub response: QueryResponse<Qualified<Task>>,
     /// The task's comments, oldest first, for a source whose tasks have comments.
     ///
-    /// **Absent** rather than empty for a source declaring none, and for a task that was not
-    /// found or whose comments could not be read — the last of those with the failure in the
-    /// response's `errors`. An empty list says the source has comments and this task holds
-    /// none, which is a different thing to tell a reader.
+    /// **Absent** rather than empty for a source declaring none, for a task that was not
+    /// found, for a task its source refuses to read comments on — a GitHub draft, which has
+    /// none — and for a task whose comments could not be read, the last of those with the
+    /// failure in the response's `errors`. An empty list says the source has comments and this
+    /// task holds none, which is a different thing to tell a reader.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comments: Option<Vec<Comment>>,
 }
@@ -65,6 +66,11 @@ impl Engine {
     ///
     /// The task is read exactly as [`task`](Self::task) reads it, and the comments are read
     /// only once the task was found — a source declaring no comments is never asked.
+    ///
+    /// A comment read the source *refuses* is a task that carries none to show, and is left
+    /// out without a failure: the task itself was read, and a source that understood the
+    /// request and declined it for this item — a GitHub draft, which GitHub gives no
+    /// comments — has not failed to answer. Every other failure is reported.
     ///
     /// # Errors
     ///
@@ -88,6 +94,7 @@ impl Engine {
         };
         let comments = match walk(source, &id.native).await {
             Ok(comments) => comments,
+            Err(SourceError::Refused { .. }) => None,
             Err(error) => {
                 response.errors.push(SourceFailure {
                     source: source.name().clone(),

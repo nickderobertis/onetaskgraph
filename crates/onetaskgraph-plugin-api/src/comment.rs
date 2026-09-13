@@ -57,8 +57,7 @@ impl CommentBody {
         let text = text.into();
         if text.is_empty() {
             return Err(SourceError::Refused {
-                message: "a comment body cannot be empty; write what the comment says"
-                    .to_owned(),
+                message: "a comment body cannot be empty; write what the comment says".to_owned(),
             });
         }
         Ok(Self(text))
