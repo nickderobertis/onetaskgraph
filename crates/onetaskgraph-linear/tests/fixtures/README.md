@@ -114,6 +114,33 @@ types nothing checked. `pinned_schema_names_every_write_operation_the_plugin_sen
 walks those literals against the pinned input types, and refuses exactly the pair Linear
 refused, naming the variable and the location.
 
+## The comment contract, and the two things in it that are not observed
+
+The comment contract carries a fifth date. `Query.comment(id: String): Comment!`,
+`Issue.comments(before: String, last: Int): CommentConnection!`, `Comment`,
+`CommentConnection`, `CommentPayload`, `CommentCreateInput`, `CommentUpdateInput`, the three
+mutations `commentCreate`, `commentUpdate` and `commentDelete(id: String!): DeletePayload!`,
+`User.displayName` and `PageInfo`'s backward pair `hasPreviousPage`/`startCursor` were pinned
+on **2026-09-13** from Linear's published SDK schema — `packages/sdk/src/schema.graphql` in
+the `linear/linear` repository, at commit `23f11eb41ef63ba219ec582911079c19d1abbf62`, that
+file's last change, dated 2026-09-09 — with the nullability it states. Nothing here was
+captured from the real API, and two readings the plugin depends on are not in any schema:
+
+- **The order a connection lists in.** `Issue.comments` takes `orderBy` — `createdAt` (the
+  default) or `updatedAt` — and no direction. Linear's pagination documentation says only that
+  results are "ordered by `createdAt`" and that "to get most recently updated resources, you
+  can alternatively order by `updatedAt`", which reads the order as newest first. The plugin
+  owes oldest first, so it walks the connection backwards with `last`/`before` and reverses
+  each page. That direction is inferred from the wording, not observed; a live run is what
+  would confirm it.
+- **What an unknown comment id answers.** `comment(id:)` is declared `Comment!`, so like
+  `document(id:)` it likely answers an id naming nothing with an errored response rather than
+  a null. The plugin reads a null or a trashed comment as no such comment, exactly as it reads
+  a document, and an errored response as the refusal Linear gave — never as a mutation.
+
+`comments.json` covers the `comments` connection of an issue, `Comment`, its `user` and the
+backward `PageInfo`. It is documentation-derived, with invented identifiers and content.
+
 ## The 2026-09-04 audit, and why it was not five more round trips
 
 Five contract drifts had been found here one at a time, each by pushing and waiting for

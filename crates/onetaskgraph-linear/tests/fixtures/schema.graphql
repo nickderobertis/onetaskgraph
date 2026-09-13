@@ -43,10 +43,23 @@
 # `WorkflowStateFilter.team` is a `NullableTeamFilter`, whose `id` is an `IDComparator`,
 # whose `eq` is an `ID` — and `ISSUE_STATE` declares `$team: ID!`, which is the non-null
 # form of the location's own type and is therefore accepted.
+#
+# The comment contract carries a fifth date. `Query.comment`, `Issue.comments`, `Comment`,
+# `CommentConnection`, `CommentPayload`, `CommentCreateInput`, `CommentUpdateInput`, the three
+# mutations `commentCreate`, `commentUpdate` and `commentDelete`, `User.displayName`, and the
+# backward half of `PageInfo` — `hasPreviousPage` and `startCursor` — are pinned 2026-09-13
+# from Linear's published SDK schema, `packages/sdk/src/schema.graphql` in the `linear/linear`
+# repository at commit 23f11eb41ef63ba219ec582911079c19d1abbf62 (its last change to that file,
+# 2026-09-09), with the nullability that file states. `Query.comment` really does take a
+# nullable `id: String` beside a `hash`, and `commentDelete` really does answer the
+# `DeletePayload` the relation deletes answer. As everywhere else here, only the arguments,
+# fields and input members the plugin sends or selects are kept: `Issue.comments` keeps
+# `before` and `last` of its seven arguments, and the two inputs keep `body` and `issueId`.
 # Only the read/write contract exercised by this plugin is retained.
 type Query {
   viewer: User!
   issue(id: String!): Issue
+  comment(id: String): Comment!
   issues(first: Int!, after: String, filter: IssueFilter): IssueConnection!
   project(id: String!): Project
   projects(first: Int!, after: String, filter: ProjectFilter): ProjectConnection!
@@ -72,10 +85,14 @@ type Mutation {
   documentCreate(input: DocumentCreateInput!): DocumentPayload!
   documentUpdate(id: String!, input: DocumentUpdateInput!): DocumentPayload!
   documentDelete(id: String!): DocumentArchivePayload!
+  commentCreate(input: CommentCreateInput!): CommentPayload!
+  commentUpdate(id: String!, input: CommentUpdateInput!): CommentPayload!
+  commentDelete(id: String!): DeletePayload!
 }
 
 type User {
   id: ID!
+  displayName: String!
 }
 type Issue {
   id: ID!
@@ -90,6 +107,7 @@ type Issue {
   project: Project
   relations(first: Int!, after: String): IssueRelationConnection!
   inverseRelations(first: Int!, after: String): IssueRelationConnection!
+  comments(before: String, last: Int): CommentConnection!
 }
 type Project {
   id: ID!
@@ -117,6 +135,18 @@ type Document {
   updatedAt: DateTime!
   archivedAt: DateTime
   project: Project
+}
+# `user` is null for a comment an integration or a bot wrote, which the published schema says
+# in as many words; `issue` is null for a comment on something other than an issue.
+type Comment {
+  id: ID!
+  body: String!
+  url: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  archivedAt: DateTime
+  issue: Issue
+  user: User
 }
 type WorkflowState {
   id: ID!
@@ -156,6 +186,10 @@ type ProjectLabelConnection {
 }
 type DocumentConnection {
   nodes: [Document!]!
+  pageInfo: PageInfo!
+}
+type CommentConnection {
+  nodes: [Comment!]!
   pageInfo: PageInfo!
 }
 type IssueRelationConnection {
@@ -210,6 +244,10 @@ type DocumentPayload {
   success: Boolean!
   document: Document!
 }
+type CommentPayload {
+  success: Boolean!
+  comment: Comment!
+}
 type DeletePayload {
   success: Boolean!
 }
@@ -219,9 +257,13 @@ type DocumentArchivePayload {
 type ProjectArchivePayload {
   success: Boolean!
 }
+# The backward pair is read by one connection alone, an issue's comments, which is walked from
+# its far end because Linear lists it newest first.
 type PageInfo {
   hasNextPage: Boolean!
   endCursor: String
+  hasPreviousPage: Boolean!
+  startCursor: String
 }
 # `and` and `or` are members of every one of Linear's filter inputs, and this source uses
 # `or` to spell "carries at least one of these labels" — see `StringComparator` below for
@@ -380,6 +422,17 @@ input DocumentUpdateInput {
   title: String
   content: String
   projectId: String
+}
+# Both members optional as published. Nothing sent here names an author: the input's only
+# way to, `createAsUser`, is documented as "only available to OAuth applications creating
+# comments in `actor=app` mode", which an API key is not — so it stays out with every other
+# unsent member.
+input CommentCreateInput {
+  body: String
+  issueId: String
+}
+input CommentUpdateInput {
+  body: String
 }
 input IssueRelationCreateInput {
   issueId: String!

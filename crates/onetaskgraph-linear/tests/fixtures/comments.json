@@ -1,0 +1,28 @@
+{
+  "data": {
+    "issue": {
+      "archivedAt": null,
+      "comments": {
+        "nodes": [
+          {
+            "id": "c2",
+            "body": "Second, and the newer of this page.",
+            "url": "https://linear.app/acme/issue/ENG-1/fixture-issue#comment-c2",
+            "createdAt": "2026-08-02T12:00:00Z",
+            "updatedAt": "2026-08-03T09:30:00Z",
+            "user": { "displayName": "ada" }
+          },
+          {
+            "id": "c1",
+            "body": "First, written by an integration.\n",
+            "url": "https://linear.app/acme/issue/ENG-1/fixture-issue#comment-c1",
+            "createdAt": "2026-08-01T12:00:00Z",
+            "updatedAt": "2026-08-01T12:00:00Z",
+            "user": null
+          }
+        ],
+        "pageInfo": { "hasPreviousPage": true, "startCursor": "cursor-c2" }
+      }
+    }
+  }
+}

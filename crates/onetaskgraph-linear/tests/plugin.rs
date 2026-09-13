@@ -1,10 +1,10 @@
 //! Public factory and real-HTTP fixture journeys.
 
 use onetaskgraph_plugin_api::{
-    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId, PageRequest, Project,
-    ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin,
-    StatusCategory, Task, TaskQuery, TaskSource,
+    Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction,
+    Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId,
+    NewComment, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
+    SourceName, SourcePlugin, StatusCategory, Task, TaskQuery, TaskSource,
 };
 use secrecy::SecretString;
 use std::{
@@ -191,6 +191,8 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
             "DocumentUpdateInput",
             &["title", "content", "projectId"][..],
         ),
+        ("CommentCreateInput", &["body", "issueId"][..]),
+        ("CommentUpdateInput", &["body"][..]),
     ] {
         let actual = inputs[name]
             .fields
@@ -277,6 +279,11 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
             graphql::DOCUMENTS,
             Some(include_str!("fixtures/documents.json")),
         ),
+        (
+            graphql::ISSUE_COMMENTS,
+            Some(include_str!("fixtures/comments.json")),
+        ),
+        (graphql::COMMENT, None),
     ] {
         let document = query::parse_query::<String>(operation).unwrap();
         let fixture =
@@ -491,6 +498,11 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::DOCUMENT_CREATE, true),
         (graphql::DOCUMENT_UPDATE, true),
         (graphql::DOCUMENT_DELETE, true),
+        (graphql::ISSUE_COMMENTS, false),
+        (graphql::COMMENT, false),
+        (graphql::COMMENT_CREATE, true),
+        (graphql::COMMENT_UPDATE, true),
+        (graphql::COMMENT_DELETE, true),
     ] {
         let parsed = query::parse_query::<String>(document).unwrap();
         let (selection_set, variables) = match &parsed.definitions[0] {
@@ -584,7 +596,18 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
                   "updatedAt":null,"state":{"name":"Todo","type":"unstarted"},
                   "labels":{"nodes":[]},"project":null,
                   "relations":relations("blocks","relatedIssue","issue","IR"),
-                  "inverseRelations":relations("blocks","relatedIssue","issue","IR2")},
+                  "inverseRelations":relations("blocks","relatedIssue","issue","IR2"),
+                  "comments":{"nodes":[{"id":"C","body":"comment","url":"u","createdAt":null,
+                                        "updatedAt":null,"user":null}],
+                              "pageInfo":{"hasPreviousPage":false,"startCursor":null}}},
+        // On the issue above, so an edit and a removal get past placing the comment and reach
+        // the two mutations: an operation this never provokes is an operation this never checks.
+        "comment": {"id":"C","archivedAt":null,"issue":{"id":"I"}},
+        "commentCreate": {"success":true,"comment":{"id":"C","body":"comment","url":"u",
+                          "createdAt":null,"updatedAt":null,"user":{"displayName":"ada"}}},
+        "commentUpdate": {"success":true,"comment":{"id":"C","body":"comment","url":"u",
+                          "createdAt":null,"updatedAt":null,"user":{"displayName":"ada"}}},
+        "commentDelete": {"success":true},
         "project": {"id":"P","name":"project","description":null,"url":null,"createdAt":null,
                     "updatedAt":null,"status":{"name":"Todo","type":"planned"},
                     "labels":{"nodes":[]},
@@ -776,6 +799,36 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
             .await
             .unwrap();
     }
+    source
+        .task_comments(&"I".into(), &request)
+        .await
+        .unwrap()
+        .expect("the superset holds the issue");
+    source
+        .add_comment(
+            &"I".into(),
+            &NewComment {
+                body: CommentBody::new("comment\n").unwrap(),
+                author: None,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("the superset holds the issue");
+    source
+        .edit_comment(
+            &"I".into(),
+            &"C".into(),
+            &CommentBody::new("edited").unwrap(),
+        )
+        .await
+        .unwrap()
+        .expect("the superset places the comment on the issue");
+    source
+        .delete_comment(&"I".into(), &"C".into())
+        .await
+        .unwrap()
+        .expect("the superset places the comment on the issue");
     source.delete_task(&"I".into()).await.unwrap();
     source.delete_project(&"P".into()).await.unwrap();
     source.delete_document(&"D".into()).await.unwrap();
@@ -964,6 +1017,11 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
         onetaskgraph_linear::graphql::DOCUMENT_CREATE,
         onetaskgraph_linear::graphql::DOCUMENT_UPDATE,
         onetaskgraph_linear::graphql::DOCUMENT_DELETE,
+        onetaskgraph_linear::graphql::ISSUE_COMMENTS,
+        onetaskgraph_linear::graphql::COMMENT,
+        onetaskgraph_linear::graphql::COMMENT_CREATE,
+        onetaskgraph_linear::graphql::COMMENT_UPDATE,
+        onetaskgraph_linear::graphql::COMMENT_DELETE,
     ] {
         let parsed = query::parse_query::<String>(document).unwrap();
         let selection = match &parsed.definitions[0] {
@@ -3828,6 +3886,609 @@ async fn malformed_document_shapes_are_rejected_rather_than_read_past() {
                     cursor: None,
                     limit: 5,
                 },
+            )
+            .await
+            .expect_err(description);
+        assert!(
+            matches!(failure, SourceError::Malformed { .. }),
+            "{description}: {failure:?}"
+        );
+    }
+}
+
+/// The JSON body of one request the loopback server recorded.
+fn sent(request: &str) -> serde_json::Value {
+    let body = request
+        .split_once("\r\n\r\n")
+        .expect("the recorded request carries a body")
+        .1;
+    serde_json::from_str(body).expect("the body is JSON")
+}
+
+/// What `issue(id:)` answers for an issue this workspace holds under the backend id `id`.
+///
+/// Every comment write resolves its task through `get_task` first, so every one of them
+/// begins with this answer.
+fn held_issue(id: &str) -> serde_json::Value {
+    serde_json::json!({"issue":{"id":id,"title":"Fixture issue","description":null,"url":null,
+        "createdAt":null,"updatedAt":null,"archivedAt":null,
+        "state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}})
+}
+
+/// One comment as Linear's `Comment` selection answers it, written by the user `ada`.
+fn comment_node(id: &str, body: &str, updated_at: &str) -> serde_json::Value {
+    serde_json::json!({"id":id,"body":body,
+        "url":format!("https://linear.app/acme/issue/ENG-1/fixture-issue#comment-{id}"),
+        "createdAt":"2026-08-01T12:00:00Z","updatedAt":updated_at,
+        "user":{"displayName":"ada"}})
+}
+
+fn at(timestamp: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    Some(timestamp.parse().expect("a fixture timestamp"))
+}
+
+/// Oldest first across pages, walked from the far end of a connection Linear lists newest
+/// first — which is the only way the order holds past the first page: reversing each page of
+/// a forward walk would put the newest page first.
+#[tokio::test]
+async fn comments_are_read_oldest_first_across_pages_over_real_http() {
+    let first_page =
+        serde_json::from_str::<serde_json::Value>(include_str!("fixtures/comments.json")).unwrap()
+            ["data"]
+            .clone();
+    let (endpoint, wire) = response_server(vec![
+        first_page,
+        serde_json::json!({"issue":{"archivedAt":null,"comments":{
+            "nodes":[comment_node("c3","Third, and newest.","2026-08-04T12:00:00Z")],
+            "pageInfo":{"hasPreviousPage":false,"startCursor":"cursor-c3"}}}}),
+    ]);
+    let source = source(&endpoint);
+    let first = source
+        .task_comments(
+            &"i1".into(),
+            &PageRequest {
+                cursor: None,
+                limit: 2,
+            },
+        )
+        .await
+        .expect("the comments read")
+        .expect("the task is there");
+    assert_eq!(
+        first.items,
+        vec![
+            Comment {
+                id: "c1".into(),
+                // An integration wrote it, and Linear names no user for one.
+                author: None,
+                created_at: at("2026-08-01T12:00:00Z"),
+                updated_at: at("2026-08-01T12:00:00Z"),
+                body: "First, written by an integration.\n".into(),
+                url: Some("https://linear.app/acme/issue/ENG-1/fixture-issue#comment-c1".into()),
+            },
+            Comment {
+                id: "c2".into(),
+                author: Some("ada".into()),
+                created_at: at("2026-08-02T12:00:00Z"),
+                updated_at: at("2026-08-03T09:30:00Z"),
+                body: "Second, and the newer of this page.".into(),
+                url: Some("https://linear.app/acme/issue/ENG-1/fixture-issue#comment-c2".into()),
+            },
+        ],
+        "Linear answered the page newest first, and it is reported oldest first"
+    );
+    assert_eq!(
+        first.next,
+        Some(Cursor("cursor-c2".into())),
+        "the next page is the one behind this one"
+    );
+    let request = sent(&wire.recv().unwrap());
+    assert_eq!(
+        request["query"],
+        onetaskgraph_linear::graphql::ISSUE_COMMENTS
+    );
+    assert_eq!(
+        request["variables"],
+        serde_json::json!({"id":"i1","last":2,"before":null})
+    );
+
+    let second = source
+        .task_comments(
+            &"i1".into(),
+            &PageRequest {
+                cursor: first.next.clone(),
+                limit: 2,
+            },
+        )
+        .await
+        .expect("the older page reads")
+        .expect("the task is still there");
+    assert_eq!(
+        sent(&wire.recv().unwrap())["variables"],
+        serde_json::json!({"id":"i1","last":2,"before":"cursor-c2"})
+    );
+    assert_eq!(second.next, None, "nothing is older than the last page");
+    let walked = first
+        .items
+        .iter()
+        .chain(&second.items)
+        .map(|comment| comment.id.0.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        walked,
+        ["c1", "c2", "c3"],
+        "oldest first across the whole walk"
+    );
+}
+
+#[tokio::test]
+async fn a_comment_read_answers_for_the_issue_as_linear_holds_it() {
+    let empty = serde_json::json!({"issue":{"archivedAt":null,"comments":{"nodes":[],
+        "pageInfo":{"hasPreviousPage":false,"startCursor":null}}}});
+    let (endpoint, wire) = response_server(vec![
+        empty,
+        serde_json::json!({ "issue": serde_json::Value::Null }),
+        serde_json::json!({"issue":{"archivedAt":"2026-09-04T00:00:00Z","comments":{"nodes":[],
+            "pageInfo":{"hasPreviousPage":false,"startCursor":null}}}}),
+    ]);
+    let source = source(&endpoint);
+    let page = PageRequest {
+        cursor: None,
+        limit: 500,
+    };
+
+    let none_yet = source
+        .task_comments(&"i1".into(), &page)
+        .await
+        .expect("an issue with no comments reads")
+        .expect("and is an issue this source holds");
+    assert!(none_yet.items.is_empty() && none_yet.next.is_none());
+    assert_eq!(
+        sent(&wire.recv().unwrap())["variables"]["last"],
+        onetaskgraph_linear::MAX_PAGE_SIZE,
+        "a page is never asked for past the declared maximum"
+    );
+
+    assert!(
+        source
+            .task_comments(&"never-there".into(), &page)
+            .await
+            .expect("an id naming nothing is an answer")
+            .is_none(),
+        "no such task is no page at all, not an empty one"
+    );
+    assert!(
+        source
+            .task_comments(&"trashed".into(), &page)
+            .await
+            .expect("a trashed issue is an answer")
+            .is_none(),
+        "a trashed issue is not one this source holds, as it is not for `get_task`"
+    );
+}
+
+#[tokio::test]
+async fn a_comment_is_added_edited_and_removed_over_real_http() {
+    // A body quoting a stack trace, ending in a newline: only useful byte for byte.
+    let body = "Seen again on main.\n\n    at engine::copy (copy.rs:42)\n";
+    let (endpoint, wire) = response_server(vec![
+        held_issue("i1-backend"),
+        serde_json::json!({"commentCreate":{"success":true,
+            "comment":comment_node("c7", body, "2026-08-01T12:00:00Z")}}),
+    ]);
+    let added = writable_source(&endpoint)
+        .add_comment(
+            &"ENG-1".into(),
+            &NewComment {
+                body: CommentBody::new(body).unwrap(),
+                author: None,
+            },
+        )
+        .await
+        .expect("the comment is added")
+        .expect("on a task this source holds");
+    assert_eq!(added.id, NativeId::from("c7"));
+    assert_eq!(added.body, body);
+    assert_eq!(added.author.as_deref(), Some("ada"));
+    let lookup = sent(&wire.recv().unwrap());
+    assert_eq!(lookup["query"], onetaskgraph_linear::graphql::ISSUE);
+    assert_eq!(lookup["variables"], serde_json::json!({"id":"ENG-1"}));
+    let create = sent(&wire.recv().unwrap());
+    assert_eq!(
+        create["query"],
+        onetaskgraph_linear::graphql::COMMENT_CREATE
+    );
+    assert_eq!(
+        create["variables"],
+        serde_json::json!({"input":{"issueId":"i1-backend","body":body}}),
+        "created on the backend id Linear resolved, with the body exactly as given and nothing \
+         else — no author member at all"
+    );
+
+    let revised = "Seen again on main, twice.\n";
+    let (endpoint, wire) = response_server(vec![
+        held_issue("i1-backend"),
+        serde_json::json!({"comment":{"id":"c7","archivedAt":null,"issue":{"id":"i1-backend"}}}),
+        serde_json::json!({"commentUpdate":{"success":true,
+            "comment":comment_node("c7", revised, "2026-08-05T08:00:00Z")}}),
+    ]);
+    let edited = writable_source(&endpoint)
+        .edit_comment(
+            &"ENG-1".into(),
+            &"c7".into(),
+            &CommentBody::new(revised).unwrap(),
+        )
+        .await
+        .expect("the comment is edited")
+        .expect("it is on this task");
+    assert_eq!(
+        (&edited.id, &edited.author, edited.created_at),
+        (&added.id, &added.author, added.created_at),
+        "the id, the author and the time it was written are the comment's own"
+    );
+    assert_eq!(edited.body, revised);
+    assert_ne!(edited.updated_at, added.updated_at);
+    assert_eq!(
+        sent(&wire.recv().unwrap())["query"],
+        onetaskgraph_linear::graphql::ISSUE
+    );
+    let placed = sent(&wire.recv().unwrap());
+    assert_eq!(placed["query"], onetaskgraph_linear::graphql::COMMENT);
+    assert_eq!(placed["variables"], serde_json::json!({"id":"c7"}));
+    let update = sent(&wire.recv().unwrap());
+    assert_eq!(
+        update["query"],
+        onetaskgraph_linear::graphql::COMMENT_UPDATE
+    );
+    assert_eq!(
+        update["variables"],
+        serde_json::json!({"id":"c7","input":{"body":revised}}),
+        "only the body is sent, so nothing else is Linear's to move"
+    );
+
+    let (endpoint, wire) = response_server(vec![
+        held_issue("i1-backend"),
+        serde_json::json!({"comment":{"id":"c7","archivedAt":null,"issue":{"id":"i1-backend"}}}),
+        serde_json::json!({"commentDelete":{"success":true}}),
+    ]);
+    let removed = writable_source(&endpoint)
+        .delete_comment(&"ENG-1".into(), &"c7".into())
+        .await
+        .expect("the comment is removed");
+    assert_eq!(removed, Some(NativeId::from("c7")));
+    wire.recv().unwrap();
+    wire.recv().unwrap();
+    let delete = sent(&wire.recv().unwrap());
+    assert_eq!(
+        delete["query"],
+        onetaskgraph_linear::graphql::COMMENT_DELETE
+    );
+    assert_eq!(delete["variables"], serde_json::json!({"id":"c7"}));
+}
+
+/// Nothing Linear does not hold on this task is edited or removed — and no mutation is sent
+/// to find that out, because `commentUpdate` and `commentDelete` address a comment by its id
+/// alone and would change a comment on any issue.
+#[tokio::test]
+async fn a_comment_this_task_does_not_have_answers_none_and_nothing_is_written() {
+    let quiet = |wire: &mpsc::Receiver<String>, what: &str| {
+        assert!(
+            wire.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "{what}: nothing was sent past the lookups"
+        );
+    };
+    let body = || CommentBody::new("text").unwrap();
+
+    // No such task: each call stops at the issue lookup.
+    for call in ["add", "edit", "delete"] {
+        let (endpoint, wire) = response_server(vec![
+            serde_json::json!({ "issue": serde_json::Value::Null }),
+        ]);
+        let source = writable_source(&endpoint);
+        let answered = match call {
+            "add" => source
+                .add_comment(
+                    &"never-there".into(),
+                    &NewComment {
+                        body: body(),
+                        author: None,
+                    },
+                )
+                .await
+                .map(|comment| comment.is_none()),
+            "edit" => source
+                .edit_comment(&"never-there".into(), &"c1".into(), &body())
+                .await
+                .map(|comment| comment.is_none()),
+            _ => source
+                .delete_comment(&"never-there".into(), &"c1".into())
+                .await
+                .map(|comment| comment.is_none()),
+        };
+        assert!(
+            answered.expect("an id naming nothing is an answer"),
+            "{call}"
+        );
+        assert_eq!(
+            sent(&wire.recv().unwrap())["query"],
+            onetaskgraph_linear::graphql::ISSUE
+        );
+        quiet(&wire, call);
+    }
+
+    // A task that is there, and a comment id that is not one of its comments.
+    for (case, placed) in [
+        ("no such comment", serde_json::Value::Null),
+        (
+            "a comment on another issue",
+            serde_json::json!({"id":"c9","archivedAt":null,"issue":{"id":"i2"}}),
+        ),
+        (
+            "a comment on no issue at all",
+            serde_json::json!({"id":"c9","archivedAt":null,"issue":null}),
+        ),
+        (
+            "a trashed comment",
+            serde_json::json!({"id":"c9","archivedAt":"2026-09-04T00:00:00Z","issue":{"id":"i1"}}),
+        ),
+    ] {
+        for delete in [false, true] {
+            let (endpoint, wire) = response_server(vec![
+                held_issue("i1"),
+                serde_json::json!({ "comment": placed }),
+            ]);
+            let source = writable_source(&endpoint);
+            let none = if delete {
+                source
+                    .delete_comment(&"i1".into(), &"c9".into())
+                    .await
+                    .expect(case)
+                    .is_none()
+            } else {
+                source
+                    .edit_comment(&"i1".into(), &"c9".into(), &body())
+                    .await
+                    .expect(case)
+                    .is_none()
+            };
+            assert!(none, "{case}: this task has no such comment");
+            wire.recv().unwrap();
+            assert_eq!(
+                sent(&wire.recv().unwrap())["query"],
+                onetaskgraph_linear::graphql::COMMENT
+            );
+            quiet(&wire, case);
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_author_is_refused_before_any_request_is_sent() {
+    let (endpoint, wire) = response_server(Vec::new());
+    let refusal = writable_source(&endpoint)
+        .add_comment(
+            &"i1".into(),
+            &NewComment {
+                body: CommentBody::new("text").unwrap(),
+                author: Some("grace".into()),
+            },
+        )
+        .await
+        .expect_err("an author Linear cannot record is refused rather than dropped");
+    assert!(
+        matches!(&refusal, SourceError::Refused { message }
+            if message.contains("work")
+                && message.contains("grace")
+                && message.contains("API key")
+                && message.contains("--author")),
+        "the refusal names the source, the author, why, and what to do instead: {refusal:?}"
+    );
+    assert!(
+        wire.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "nothing reached Linear"
+    );
+}
+
+#[tokio::test]
+async fn comment_failures_cross_the_http_boundary() {
+    // Linear's own refusal comes back as this source's usual refusal, carrying what it said.
+    let (endpoint, _) = server(
+        "200 OK",
+        "",
+        r#"{"errors":[{"message":"Linear could not answer that"}]}"#,
+    );
+    let failure = source(&endpoint)
+        .task_comments(
+            &"i1".into(),
+            &PageRequest {
+                cursor: None,
+                limit: 5,
+            },
+        )
+        .await
+        .expect_err("an errored response is not a page");
+    assert!(
+        matches!(&failure, SourceError::Refused { message }
+            if message.contains("Linear could not answer that")),
+        "{failure:?}"
+    );
+    let (endpoint, wire) = server(
+        "200 OK",
+        "",
+        r#"{"errors":[{"message":"Linear could not answer that"}]}"#,
+    );
+    let failure = writable_source(&endpoint)
+        .delete_comment(&"i1".into(), &"c1".into())
+        .await
+        .expect_err("an errored lookup is not a removal");
+    assert!(
+        matches!(failure, SourceError::Refused { .. }),
+        "{failure:?}"
+    );
+    wire.recv().unwrap();
+
+    // A mutation Linear reports unsuccessful is refused, at both ends it can happen.
+    let (endpoint, _) = response_server(vec![
+        held_issue("i1"),
+        serde_json::json!({"commentCreate":{"success":false,"comment":null}}),
+    ]);
+    let failure = writable_source(&endpoint)
+        .add_comment(
+            &"i1".into(),
+            &NewComment {
+                body: CommentBody::new("text").unwrap(),
+                author: None,
+            },
+        )
+        .await
+        .expect_err("an unsuccessful create is not a comment");
+    assert!(
+        matches!(&failure, SourceError::Refused { message } if message.contains("commentCreate")),
+        "{failure:?}"
+    );
+    let (endpoint, _) = response_server(vec![
+        held_issue("i1"),
+        serde_json::json!({"comment":{"id":"c1","archivedAt":null,"issue":{"id":"i1"}}}),
+        serde_json::json!({"commentDelete":{"success":false}}),
+    ]);
+    let failure = writable_source(&endpoint)
+        .delete_comment(&"i1".into(), &"c1".into())
+        .await
+        .expect_err("an unsuccessful removal is not a removal");
+    assert!(
+        matches!(&failure, SourceError::Refused { message } if message.contains("commentDelete")),
+        "{failure:?}"
+    );
+}
+
+#[tokio::test]
+async fn malformed_comment_shapes_are_rejected_rather_than_read_past() {
+    let page = |nodes: serde_json::Value, info: serde_json::Value| serde_json::json!({"issue":{"archivedAt":null,"comments":{"nodes":nodes,"pageInfo":info}}});
+    let last = serde_json::json!({"hasPreviousPage":false,"startCursor":null});
+    let node = comment_node("c1", "text", "2026-08-01T12:00:00Z");
+    let without = |key: &str| {
+        let mut node = node.clone();
+        node.as_object_mut().unwrap().remove(key);
+        node
+    };
+    for (description, body) in [
+        (
+            "a node with no body",
+            page(serde_json::json!([without("body")]), last.clone()),
+        ),
+        (
+            "a node with no user field",
+            page(serde_json::json!([without("user")]), last.clone()),
+        ),
+        (
+            "a user with no display name",
+            page(
+                serde_json::json!([{"user":{},"id":"c1","body":"text","url":null,
+                "createdAt":null,"updatedAt":null}]),
+                last.clone(),
+            ),
+        ),
+        (
+            "an empty comment id",
+            page(
+                serde_json::json!([{"id":"","body":"text","url":null,"createdAt":null,
+                "updatedAt":null,"user":null}]),
+                last.clone(),
+            ),
+        ),
+        (
+            "a timestamp that is not one",
+            page(
+                serde_json::json!([{"id":"c1","body":"text","url":null,"createdAt":"yesterday",
+                "updatedAt":null,"user":null}]),
+                last.clone(),
+            ),
+        ),
+        (
+            "no comments connection",
+            serde_json::json!({"issue":{"archivedAt":null}}),
+        ),
+        (
+            "no comment nodes",
+            serde_json::json!({"issue":{"archivedAt":null,"comments":{"pageInfo":last}}}),
+        ),
+        (
+            "no pageInfo",
+            serde_json::json!({"issue":{"archivedAt":null,"comments":{"nodes":[]}}}),
+        ),
+        (
+            "no hasPreviousPage",
+            page(
+                serde_json::json!([]),
+                serde_json::json!({"startCursor":null}),
+            ),
+        ),
+        (
+            "an older page with no cursor to reach it by",
+            page(
+                serde_json::json!([]),
+                serde_json::json!({"hasPreviousPage":true,"startCursor":null}),
+            ),
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![body]);
+        let failure = source(&endpoint)
+            .task_comments(
+                &"i1".into(),
+                &PageRequest {
+                    cursor: None,
+                    limit: 5,
+                },
+            )
+            .await
+            .expect_err(description);
+        assert!(
+            matches!(failure, SourceError::Malformed { .. }),
+            "{description}: {failure:?}"
+        );
+    }
+
+    // The two write-side shapes: a payload with no comment, and a comment lookup that does
+    // not say which issue it is on.
+    let (endpoint, _) = response_server(vec![
+        held_issue("i1"),
+        serde_json::json!({"commentCreate":{"success":true}}),
+    ]);
+    let failure = writable_source(&endpoint)
+        .add_comment(
+            &"i1".into(),
+            &NewComment {
+                body: CommentBody::new("text").unwrap(),
+                author: None,
+            },
+        )
+        .await
+        .expect_err("a create answering no comment");
+    assert!(
+        matches!(failure, SourceError::Malformed { .. }),
+        "{failure:?}"
+    );
+    for (description, placed) in [
+        (
+            "no issue field",
+            serde_json::json!({"id":"c1","archivedAt":null}),
+        ),
+        (
+            "an issue with an empty id",
+            serde_json::json!({"id":"c1","archivedAt":null,"issue":{"id":""}}),
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![
+            held_issue("i1"),
+            serde_json::json!({ "comment": placed }),
+        ]);
+        let failure = writable_source(&endpoint)
+            .edit_comment(
+                &"i1".into(),
+                &"c1".into(),
+                &CommentBody::new("text").unwrap(),
             )
             .await
             .expect_err(description);

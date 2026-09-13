@@ -27,6 +27,7 @@
 //! | --- | --- |
 //! | `projects` | **Supported and proven.** `issues(filter:{project:{id:{eq:…}}})`. |
 //! | `documents` | **Supported and proven.** Linear's own first-class `Document`, read through `documents(first:,after:,filter:)` and `document(id:)`, written through `documentCreate`/`documentUpdate` and taken back by `documentDelete`. See the ruling below on what a Linear document cannot hold. |
+//! | `comments` | **Supported and proven,** as the issue's own comments: read oldest first through `issue(id:){comments(last:,before:)}`, added with `commentCreate`, edited with `commentUpdate` and removed with `commentDelete` — each of the last two only once `comment(id:)` has placed the comment on that very issue. See the ruling below on the order and on the author. |
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
 //! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{eqIgnoreCase:…}}}` for what an item must carry — one per label, gathered under `or:` where any one of them will do — and `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. Linear's `StringComparator` has no case-insensitive list operator; see the note beside `filter`. |
 //! | `filter_by_status` | **Supported and proven,** and spelled twice. An issue narrows with `state:{type:{in:[…]}}` over `WorkflowState.type`; a project narrows with `status:{type:{in:[…]}}` over `ProjectStatusType`, a different member of a different filter over a different vocabulary. See the ruling below. |
@@ -69,6 +70,37 @@
 //! asked for the documents belonging to no project. The page-by-page walk asks for only
 //! what is still owed, so neither predicate can make a read return more than the caller
 //! asked for, and neither can drop a document the walk already fetched.
+//!
+//! ## Ruling: a comment is read backwards, and its author is Linear's to record
+//!
+//! **The order.** The contract owes a task's comments oldest first, across pages, and Linear's
+//! `Issue.comments` takes no sort direction — only `orderBy`, whose members are `createdAt`
+//! (the default) and `updatedAt`. Linear's pagination documentation says results are "ordered
+//! by `createdAt`" and that "to get most recently updated resources, you can alternatively
+//! order by `updatedAt`", which reads that ordering as newest first. So this source walks the
+//! connection from its far end: `last` with `before`, each page reversed, the next page's
+//! cursor being `startCursor` while `hasPreviousPage` holds. Reversing within a page and
+//! walking backwards across them is what makes the whole walk oldest first rather than each
+//! page alone. **That direction is inferred from the documentation's wording rather than
+//! observed against the real API,** which is the one reading here a live run has not yet
+//! confirmed; if Linear is found to list oldest first, the correction is this walk's
+//! direction and nothing else.
+//!
+//! **The author.** Linear records the user whose credential made the request as a comment's
+//! author, and this source authenticates with an API key. `CommentCreateInput.createAsUser`
+//! exists but is, in Linear's own words, "only available to OAuth applications creating
+//! comments in `actor=app` mode", which a key is not. So a comment carrying an author is
+//! **refused before any request is sent**, naming why and what to do instead, rather than
+//! posted under a name other than the one it was given. An author read back is the user's
+//! `displayName`, which Linear keeps unique within a workspace, and is absent when Linear
+//! names no user — a comment an integration or a bot wrote.
+//!
+//! **What "no such comment" means.** An edit or a removal first asks `comment(id:)` which
+//! issue the comment is on, and answers "no such comment" — no mutation sent — unless it is
+//! the task's own issue: a comment on another issue, on no issue at all, or trashed, is not a
+//! comment this task has. The body is Linear's `body`, which its schema describes as markdown
+//! derived from a rich-text document, so what an add or an edit answers with is what Linear
+//! now holds rather than an echo of what was sent.
 //!
 //! ## Ruling: a project's filter is not an issue's, and neither is its status
 //!
@@ -139,11 +171,11 @@
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location,
-    NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
-    TaskSource, WriteSupport,
+    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
+    DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
+    LabelFilter, Location, NativeId, NewComment, Page, PageRequest, Project, ProjectFilter,
+    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
+    StatusCategory, Support, Task, TaskQuery, TaskSource, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -286,6 +318,25 @@ pub mod graphql {
     pub const DOCUMENT_UPDATE: &str = "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success document{id}} }";
     /// Delete a document, so a copy that could not finish can take back what it created.
     pub const DOCUMENT_DELETE: &str = "mutation($id:String!){ documentDelete(id:$id){success} }";
+    /// One page of an issue's comments, walked backwards.
+    ///
+    /// `last`/`before` rather than `first`/`after`, and `pageInfo{hasPreviousPage
+    /// startCursor}` rather than its forward pair, because Linear lists a connection newest
+    /// first and the contract owes the oldest first — see the ruling on comments in this
+    /// crate's module documentation. `archivedAt` is selected for the reason every by-id read
+    /// here selects it: a trashed issue is not an issue this source holds.
+    pub const ISSUE_COMMENTS: &str = "query($id:String!,$last:Int,$before:String){ issue(id:$id){ archivedAt comments(last:$last,before:$before){ nodes{id body url createdAt updatedAt user{displayName}} pageInfo{hasPreviousPage startCursor} } } }";
+    /// Place one comment: which issue it is on, if any.
+    ///
+    /// `$id` is a nullable `String` because that is what `Query.comment` declares — it also
+    /// takes a `hash` instead — and a variable has to be exactly its argument's type.
+    pub const COMMENT: &str = "query($id:String){ comment(id:$id){ id archivedAt issue{id} } }";
+    /// Add a comment to an issue.
+    pub const COMMENT_CREATE: &str = "mutation($input:CommentCreateInput!){ commentCreate(input:$input){success comment{id body url createdAt updatedAt user{displayName}}} }";
+    /// Replace a comment's body.
+    pub const COMMENT_UPDATE: &str = "mutation($id:String!,$input:CommentUpdateInput!){ commentUpdate(id:$id,input:$input){success comment{id body url createdAt updatedAt user{displayName}}} }";
+    /// Remove a comment.
+    pub const COMMENT_DELETE: &str = "mutation($id:String!){ commentDelete(id:$id){success} }";
 }
 
 use graphql::{
@@ -483,6 +534,9 @@ enum MutationRoot {
     DocumentCreate,
     DocumentUpdate,
     DocumentDelete,
+    CommentCreate,
+    CommentUpdate,
+    CommentDelete,
 }
 impl MutationRoot {
     fn as_str(self) -> &'static str {
@@ -500,6 +554,9 @@ impl MutationRoot {
             Self::DocumentCreate => "documentCreate",
             Self::DocumentUpdate => "documentUpdate",
             Self::DocumentDelete => "documentDelete",
+            Self::CommentCreate => "commentCreate",
+            Self::CommentUpdate => "commentUpdate",
+            Self::CommentDelete => "commentDelete",
         }
     }
 }
@@ -1196,7 +1253,7 @@ impl TaskSource for LinearSource {
         Capabilities {
             projects: Support::Native,
             documents: Support::Native,
-            comments: Support::Unsupported,
+            comments: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -1560,6 +1617,193 @@ impl TaskSource for LinearSource {
             .await?;
         mutation_payload(&data, MutationRoot::DocumentDelete)?;
         Ok(())
+    }
+    async fn task_comments(
+        &self,
+        task: &NativeId,
+        page: &PageRequest,
+    ) -> Result<Option<Page<Comment>>, SourceError> {
+        // One request rather than a task lookup and then a read: the issue the comments
+        // hang off answers "no such task" by itself, on exactly the terms `get_task` reads
+        // it — null, or trashed.
+        let d = self
+            .send(
+                graphql::ISSUE_COMMENTS,
+                json!({"id":task.0,"last":page.limit.min(MAX_PAGE_SIZE),"before":page.cursor.as_ref().map(|c|&c.0)}),
+            )
+            .await?;
+        optional(&d, "issue", comment_page)
+    }
+    async fn add_comment(
+        &self,
+        task: &NativeId,
+        comment: &NewComment,
+    ) -> Result<Option<Comment>, SourceError> {
+        // Before anything is sent, because nothing Linear could answer changes it: see the
+        // ruling on the author in this crate's module documentation.
+        if let Some(author) = &comment.author {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "source {} cannot post a comment as {author:?}, because Linear records the \
+                     user whose API key makes the request as the author of every comment; \
+                     leave --author out to post as that user",
+                    self.name
+                ),
+            });
+        }
+        let Some(issue) = self.commented_issue(task).await? else {
+            return Ok(None);
+        };
+        let data = self
+            .send(
+                graphql::COMMENT_CREATE,
+                json!({"input":{"issueId":issue.0,"body":comment.body.as_str()}}),
+            )
+            .await?;
+        written_comment(&data, MutationRoot::CommentCreate).map(Some)
+    }
+    async fn edit_comment(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+        body: &CommentBody,
+    ) -> Result<Option<Comment>, SourceError> {
+        if !self.comment_is_on(task, comment).await? {
+            return Ok(None);
+        }
+        // `body` alone: the id, the author and the time it was written are the comment's
+        // own, so nothing else is sent that Linear could move.
+        let data = self
+            .send(
+                graphql::COMMENT_UPDATE,
+                json!({"id":comment.0,"input":{"body":body.as_str()}}),
+            )
+            .await?;
+        written_comment(&data, MutationRoot::CommentUpdate).map(Some)
+    }
+    async fn delete_comment(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+    ) -> Result<Option<NativeId>, SourceError> {
+        if !self.comment_is_on(task, comment).await? {
+            return Ok(None);
+        }
+        let data = self
+            .send(graphql::COMMENT_DELETE, json!({"id":comment.0}))
+            .await?;
+        mutation_payload(&data, MutationRoot::CommentDelete)?;
+        Ok(Some(comment.clone()))
+    }
+}
+
+impl LinearSource {
+    /// The backend id of the issue `task` names, or `None` when this source holds no such
+    /// task — resolved by `get_task` itself, so a comment call and a task read cannot
+    /// disagree about whether a task is there.
+    ///
+    /// The id Linear answers with rather than the one asked for, because `issue(id:)` also
+    /// takes an identifier such as `ENG-1`, and the comment's own `issue{id}` is compared
+    /// against — and a comment is created on — the backend id.
+    async fn commented_issue(&self, task: &NativeId) -> Result<Option<NativeId>, SourceError> {
+        Ok(self.get_task(task).await?.map(|task| task.id))
+    }
+
+    /// Whether `comment` is a comment on the issue `task` names.
+    ///
+    /// Asked before any edit or removal, so an id belonging to another issue — or to no
+    /// issue, or to nothing — is answered as no such comment without a mutation reaching
+    /// Linear. `commentUpdate` and `commentDelete` address a comment by its id alone, so
+    /// without this a task named in error would edit or remove somebody else's comment.
+    async fn comment_is_on(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+    ) -> Result<bool, SourceError> {
+        let Some(issue) = self.commented_issue(task).await? else {
+            return Ok(false);
+        };
+        let data = self.send(graphql::COMMENT, json!({"id":comment.0})).await?;
+        Ok(optional(&data, "comment", comment_issue)?.flatten() == Some(issue))
+    }
+}
+
+/// One page of an issue's comments, oldest first.
+///
+/// Linear answered newest first, walking backwards from `before`, so the page is reversed
+/// and the next cursor is the one *behind* it; see the ruling on comments in this crate's
+/// module documentation for why the walk runs that way.
+fn comment_page(v: &Value) -> Result<Page<Comment>, SourceError> {
+    let c = v.get("comments").ok_or_else(|| SourceError::Malformed {
+        message: "missing comments connection".into(),
+    })?;
+    let mut items = c
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "missing comment nodes".into(),
+        })?
+        .iter()
+        .map(map_comment)
+        .collect::<Result<Vec<_>, _>>()?;
+    items.reverse();
+    let info = c.get("pageInfo").ok_or_else(|| SourceError::Malformed {
+        message: "missing pageInfo".into(),
+    })?;
+    let older = info
+        .get("hasPreviousPage")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "missing boolean pageInfo.hasPreviousPage".into(),
+        })?;
+    let next = if older {
+        Some(Cursor(str_at(info, "startCursor")?.into()))
+    } else {
+        None
+    };
+    Ok(Page { items, next })
+}
+
+fn map_comment(v: &Value) -> Result<Comment, SourceError> {
+    let author = match v.get("user") {
+        None => {
+            return Err(SourceError::Malformed {
+                message: "missing comment user field".into(),
+            });
+        }
+        // An integration or a bot: Linear names no user, and this source invents none.
+        Some(Value::Null) => None,
+        Some(user) => Some(str_at(user, "displayName")?.to_owned()),
+    };
+    Ok(Comment {
+        id: NativeId(backend_id(v, "id")?.into()),
+        author,
+        created_at: time(v, "createdAt")?,
+        updated_at: time(v, "updatedAt")?,
+        body: str_at(v, "body")?.into(),
+        url: optional_string(v, "url")?,
+    })
+}
+
+/// The comment a `commentCreate` or `commentUpdate` answered with, as Linear now holds it.
+fn written_comment(data: &Value, root: MutationRoot) -> Result<Comment, SourceError> {
+    let comment = mutation_payload(data, root)?
+        .get("comment")
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("missing {}.comment", root.as_str()),
+        })?;
+    map_comment(comment)
+}
+
+/// The issue a comment is on, or `None` for a comment on something else — a project, a
+/// document, an update — which is a comment no task of this source has.
+fn comment_issue(v: &Value) -> Result<Option<NativeId>, SourceError> {
+    match v.get("issue") {
+        None => Err(SourceError::Malformed {
+            message: "missing comment issue field".into(),
+        }),
+        Some(Value::Null) => Ok(None),
+        Some(issue) => Ok(Some(NativeId(backend_id(issue, "id")?.into()))),
     }
 }
 
