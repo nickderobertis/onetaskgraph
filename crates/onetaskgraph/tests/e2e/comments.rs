@@ -811,22 +811,52 @@ fn a_github_draft_issue_is_refused_for_every_comment_verb_and_by_task_show() {
     }
 }
 
-/// The documents a GitHub board is sent when a comment is read or written, as the plugin
-/// itself spells them — so a copy that reached a comment at either end cannot hide it behind
-/// a differently spelled request.
-const GITHUB_COMMENT_DOCUMENTS: [&str; 5] = [
-    onetaskgraph_github_projects::graphql::ISSUE_COMMENTS,
-    onetaskgraph_github_projects::graphql::COMMENT_ISSUE,
-    onetaskgraph_github_projects::graphql::ADD_COMMENT,
-    onetaskgraph_github_projects::graphql::UPDATE_COMMENT,
-    onetaskgraph_github_projects::graphql::DELETE_COMMENT,
-];
+/// The members of GitHub's schema a document names when it reaches a comment: an issue's
+/// `comments` connection, the `IssueComment` type its read and its two mutations name, and the
+/// `addComment` mutation, which names neither.
+const GITHUB_COMMENT_SCHEMA: [&str; 3] = ["comments(", "IssueComment", "addComment("];
+
+/// The documents a GitHub board is sent when a comment is read or written.
+///
+/// Taken out of the plugin's own inventory of every document it sends — which the plugin's
+/// `documents_are_all_inventoried` holds complete — by what each one names, rather than listed
+/// here: a comment document the plugin gains later is selected without an edit to this file,
+/// so a copy that sends it cannot slip past the assertion. The plugin's five named comment
+/// documents are then held to be among them, so a narrowing of the selection fails here
+/// rather than quietly proving less.
+fn github_comment_documents() -> Vec<&'static str> {
+    use onetaskgraph_github_projects::graphql;
+
+    let selected: Vec<&'static str> = graphql::DOCUMENTS
+        .iter()
+        .map(|(document, _)| *document)
+        .filter(|document| {
+            GITHUB_COMMENT_SCHEMA
+                .iter()
+                .any(|name| document.contains(name))
+        })
+        .collect();
+    for named in [
+        graphql::ISSUE_COMMENTS,
+        graphql::COMMENT_ISSUE,
+        graphql::ADD_COMMENT,
+        graphql::UPDATE_COMMENT,
+        graphql::DELETE_COMMENT,
+    ] {
+        assert!(
+            selected.contains(&named),
+            "a comment document the plugin sends is not selected out of its inventory:\n{named}"
+        );
+    }
+    selected
+}
 
 /// The comment documents `board` received after its first `since` documents.
 fn comment_calls(board: &GitHubBoardFields, since: usize) -> Vec<String> {
+    let comment_documents = github_comment_documents();
     board.documents()[since..]
         .iter()
-        .filter(|document| GITHUB_COMMENT_DOCUMENTS.contains(&document.as_str()))
+        .filter(|document| comment_documents.contains(&document.as_str()))
         .cloned()
         .collect()
 }
