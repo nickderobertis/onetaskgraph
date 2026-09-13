@@ -1114,14 +1114,24 @@ fn a_copy_says_in_words_what_it_spent_and_nothing_where_nothing_meters() {
     let before = board.served().len();
     let said = ok(
         &sandbox,
-        &["project", "copy", "plans:P-1", "--to", "board", "--no-tasks"],
+        &[
+            "project",
+            "copy",
+            "plans:P-1",
+            "--to",
+            "board",
+            "--no-tasks",
+        ],
     );
     let served = board.served().len() - before;
     // Every call this board answered, counted by the board rather than by the binary, and
     // the GraphQL figure named as the lower bound it is.
     let expected =
         format!("spent: {served} requests; graphql {served} points at least, rest 0 requests");
-    assert!(said.lines().any(|line| line == expected), "{expected}\n{said}");
+    assert!(
+        said.lines().any(|line| line == expected),
+        "{expected}\n{said}"
+    );
 
     let folders_sandbox = Sandbox::new();
     folders(&folders_sandbox);

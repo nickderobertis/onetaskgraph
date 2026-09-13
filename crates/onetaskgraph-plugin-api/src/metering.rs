@@ -32,8 +32,10 @@ pub struct Metering {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Metered {
     /// The budget, as the backend names it — `graphql`, `rest`.
+    // llmlint: ignore[invalid_states_unrepresentable] An open vocabulary the engine interprets none of, and the contract this lands states it as a plain string (`budget`, `unit`: strings), restated by a consumer repository; a newtype here would move the api crate every plugin re-tests against and the plugin protocol's wire shape for no value it could refuse but the empty name, which the engine refuses where a reading enters it (`difference` in onetaskgraph-core's copy.rs), reporting that source as not metering.
     pub budget: String,
     /// What the budget is metered in — `points`, `requests`.
+    // llmlint: ignore[invalid_states_unrepresentable] As `budget` above: open vocabulary, a plain string by the stated contract, and the empty name refused where the engine reads it.
     pub unit: String,
     /// How much was spent against it that the backend reported, or that is a count of
     /// requests against a budget metered in requests.

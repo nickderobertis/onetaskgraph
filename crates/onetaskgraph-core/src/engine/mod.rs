@@ -380,13 +380,14 @@ pub enum EngineError {
     #[error(
         "{id} is not a task of {project}, so it cannot be copied as one of its members\n\
          next: name a task `onetaskgraph task list --project {project}` reports, or copy \
-         {id} on its own with `onetaskgraph task copy`."
+         {id} on its own with `onetaskgraph task copy`.",
+        project = .projects.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
     )]
     NotAMember {
         /// The id that was named as a member.
-        id: String,
-        /// The project, or the projects, it is not a member of.
-        project: String,
+        id: GlobalId,
+        /// The projects the copy carries, none of which it is a member of.
+        projects: Vec<GlobalId>,
     },
 
     /// A member copy's item depends on a member it was not told to carry, and that member
@@ -405,11 +406,11 @@ pub enum EngineError {
     )]
     UnrecordedMember {
         /// The item whose edge could not be resolved.
-        item: String,
+        item: GlobalId,
         /// The member that edge points at.
-        member: String,
+        member: GlobalId,
         /// The destination it records no origin in.
-        destination: String,
+        destination: SourceName,
     },
 
     /// A source refused something the copy asked of it.

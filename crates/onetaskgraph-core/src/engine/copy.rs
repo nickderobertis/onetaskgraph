@@ -233,8 +233,10 @@ pub struct Spent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BudgetSpent {
     /// The budget, as the source names it — `graphql`, `rest`.
+    // llmlint: ignore[invalid_states_unrepresentable] The contract this report lands states `budget` and `unit` as strings in an open vocabulary the engine interprets none of, and both SDKs are generated from this type's schema; the one value such a vocabulary can refuse, the empty name, never reaches here, because `difference` below treats a source reporting one as not metering.
     pub budget: String,
     /// What it is metered in — `points`, `requests`.
+    // llmlint: ignore[invalid_states_unrepresentable] As `budget` above.
     pub unit: String,
     /// How much was spent against it, in that unit.
     pub amount: u64,
@@ -1180,12 +1182,8 @@ impl Engine {
             .find(|id| !carried.iter().any(|(_, members)| members.contains(id)))
         {
             return Err(EngineError::NotAMember {
-                id: stray.to_string(),
-                project: projects
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                id: stray.clone(),
+                projects: projects.to_vec(),
             });
         }
         Ok((carried, unrecorded))
@@ -2182,7 +2180,8 @@ const PROJECT_PAGE: std::num::NonZeroU32 = std::num::NonZeroU32::new(50).expect(
 ///
 /// A reading a source could not take is read as that source not metering: what a command
 /// spent is a report about the work, and a failed reading must not become a failure of the
-/// work itself.
+/// work itself. That holds when only one of a source's two readings failed as well, since
+/// a difference needs both ends.
 async fn readings(sources: &[&ResolvedSource]) -> Vec<Option<Metering>> {
     let mut read = Vec::with_capacity(sources.len());
     for source in sources {
@@ -2197,31 +2196,25 @@ async fn readings(sources: &[&ResolvedSource]) -> Vec<Option<Metering>> {
 /// command whose sources all declined reports that it cannot say, not that it spent nothing.
 /// A budget is keyed by its name and unit together, so two sources naming one budget add up
 /// and two units of one budget stay apart.
+///
+/// A source's two readings are a plugin's word, so they are held to [`Metering`]'s contract
+/// before either is believed, and a pair that breaks it is that source not metering — see
+/// [`difference`].
 fn spent_between(before: &[Option<Metering>], after: &[Option<Metering>]) -> Option<Spent> {
     let mut metered = false;
     let mut requests = 0_u64;
     let mut budgets: BTreeMap<(String, String), (u64, u64)> = BTreeMap::new();
     for (before, after) in before.iter().zip(after) {
-        let Some(after) = after else {
+        let (Some(before), Some(after)) = (before, after) else {
+            continue;
+        };
+        let Some((sent, spent)) = difference(before, after) else {
             continue;
         };
         metered = true;
-        let before = before.clone().unwrap_or_default();
-        requests = requests.saturating_add(after.requests.saturating_sub(before.requests));
-        for budget in &after.budgets {
-            let earlier = before
-                .budgets
-                .iter()
-                .find(|held| held.budget == budget.budget && held.unit == budget.unit);
-            let measured = budget
-                .measured
-                .saturating_sub(earlier.map_or(0, |held| held.measured));
-            let modelled = budget
-                .modelled
-                .saturating_sub(earlier.map_or(0, |held| held.modelled));
-            let total = budgets
-                .entry((budget.budget.clone(), budget.unit.clone()))
-                .or_default();
+        requests = requests.saturating_add(sent);
+        for (key, measured, modelled) in spent {
+            let total = budgets.entry(key).or_default();
             total.0 = total.0.saturating_add(measured).saturating_add(modelled);
             total.1 = total.1.saturating_add(modelled);
         }
@@ -2238,6 +2231,55 @@ fn spent_between(before: &[Option<Metering>], after: &[Option<Metering>]) -> Opt
             })
             .collect(),
     })
+}
+
+/// One budget's name and unit, and the measured and modelled amounts spent against it.
+type BudgetDifference = ((String, String), u64, u64);
+
+/// What one source sent and spent between two of its readings, or `None` when the pair
+/// cannot be a running total's.
+///
+/// A running total never falls, never drops a budget it has named, and names every budget
+/// it keeps; a pair that breaks any of that is a source that reset its figures or reported
+/// something else, and a difference taken over it would be a number that measures nothing.
+/// Such a source is reported as not metering rather than as having spent a clamped zero.
+fn difference(before: &Metering, after: &Metering) -> Option<(u64, Vec<BudgetDifference>)> {
+    let sent = after.requests.checked_sub(before.requests)?;
+    let unnamed = |budget: &onetaskgraph_plugin_api::Metered| {
+        budget.budget.is_empty() || budget.unit.is_empty()
+    };
+    if before.budgets.iter().chain(&after.budgets).any(unnamed) {
+        return None;
+    }
+    let held = |from: &Metering, budget: &onetaskgraph_plugin_api::Metered| {
+        from.budgets
+            .iter()
+            .find(|held| held.budget == budget.budget && held.unit == budget.unit)
+            .cloned()
+    };
+    if before
+        .budgets
+        .iter()
+        .any(|budget| held(after, budget).is_none())
+    {
+        return None;
+    }
+    let mut spent = Vec::with_capacity(after.budgets.len());
+    for budget in &after.budgets {
+        let earlier = held(before, budget);
+        let measured = budget
+            .measured
+            .checked_sub(earlier.as_ref().map_or(0, |held| held.measured))?;
+        let modelled = budget
+            .modelled
+            .checked_sub(earlier.as_ref().map_or(0, |held| held.modelled))?;
+        spent.push((
+            (budget.budget.clone(), budget.unit.clone()),
+            measured,
+            modelled,
+        ));
+    }
+    Some((sent, spent))
 }
 
 /// One page request against `source`, at the largest page it will serve.
@@ -2785,9 +2827,9 @@ fn unrecorded_far_end(
         );
         if unrecorded.contains(&far) {
             return Err(EngineError::UnrecordedMember {
-                item: item.source.to_string(),
-                member: far.to_string(),
-                destination: destination.name().to_string(),
+                item: item.source.clone(),
+                member: far,
+                destination: destination.name().clone(),
             });
         }
     }
