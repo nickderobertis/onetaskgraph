@@ -66,13 +66,18 @@ SUITE_OUTPUT=""
 SUITE_STATUS=0
 
 run_suite() {
+  # This distribution guard runs after the affected test target, which is the one place a
+  # hosted plugin's live journey belongs. Do not let credentials inherited from that lane
+  # open a second GitHub session merely to establish this mutation test's clean baseline.
+  # The demand travels with the credentials or the deliberate skip would fail instead.
   # llmlint: ignore[work_goes_through_command_surface] the suite has to run inside the
   # scratch copy, against its own target directory — `just test` there would need an Nx
   # this copy deliberately never installs, and running it here would displace the build
   # of the repository under test. The same reason cargo is invoked directly in
   # scripts/check-isolation-enforced.sh and scripts/check-real-release-preparation.sh.
   SUITE_OUTPUT="$(cd "$scratch/repo" \
-    && CARGO_TARGET_DIR="$scratch/target" cargo test -q -p "$CRATE" 2>&1)" \
+    && env -u GH_PROJECTS_TOKEN -u LINEAR_API_KEY -u ONETASKGRAPH_LIVE_REQUIRED \
+      CARGO_TARGET_DIR="$scratch/target" cargo test -q -p "$CRATE" 2>&1)" \
     && SUITE_STATUS=0 || SUITE_STATUS=$?
 }
 
