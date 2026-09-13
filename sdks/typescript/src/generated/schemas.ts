@@ -1059,6 +1059,174 @@ export const runtimeSchemas = {
     "title": "EffectiveConfig",
     "type": "object"
   },
+  "Failure": {
+    "$defs": {
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+    "properties": {
+      "class": {
+        "$ref": "#/$defs/FailureClass",
+        "description": "Whether repeating the request unchanged could change the answer."
+      },
+      "kind": {
+        "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+        "type": "string"
+      },
+      "message": {
+        "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+        "type": "string"
+      },
+      "retry_after_seconds": {
+        "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "source": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SourceName"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The configured source the failure came from, or `null` when none did."
+      }
+    },
+    "required": [
+      "class",
+      "kind",
+      "message",
+      "retry_after_seconds",
+      "source"
+    ],
+    "title": "Failure",
+    "type": "object"
+  },
+  "FailureClass": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+    "oneOf": [
+      {
+        "const": "refused",
+        "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+        "type": "string"
+      },
+      {
+        "const": "transient",
+        "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+        "type": "string"
+      }
+    ],
+    "title": "FailureClass"
+  },
+  "FailureDocument": {
+    "$defs": {
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The document a command writes to standard output when it exits `1` under machine\noutput: one object whose single member is the [`Failure`].\n\nAn object around the failure rather than the failure itself, so a reader can tell\nthis document from every answer document by its one key before reading anything else.",
+    "properties": {
+      "failure": {
+        "$ref": "#/$defs/Failure",
+        "description": "Why the command failed."
+      }
+    },
+    "required": [
+      "failure"
+    ],
+    "title": "FailureDocument",
+    "type": "object"
+  },
   "GlobalId": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
@@ -3616,6 +3784,21 @@ export const runtimeSchemas = {
         ],
         "type": "object"
       },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
@@ -3889,6 +4072,10 @@ export const runtimeSchemas = {
       "SourceFailure": {
         "description": "One source's failure, kept beside the results the other sources returned.",
         "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change this source's answer."
+          },
           "error": {
             "$ref": "#/$defs/SourceError",
             "description": "Why."
@@ -3900,7 +4087,8 @@ export const runtimeSchemas = {
         },
         "required": [
           "source",
-          "error"
+          "error",
+          "class"
         ],
         "type": "object"
       },
@@ -4021,6 +4209,21 @@ export const runtimeSchemas = {
           {
             "const": "related",
             "description": "`from` and `to` are linked without an ordering.",
+            "type": "string"
+          }
+        ]
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
             "type": "string"
           }
         ]
@@ -4272,6 +4475,10 @@ export const runtimeSchemas = {
       "SourceFailure": {
         "description": "One source's failure, kept beside the results the other sources returned.",
         "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change this source's answer."
+          },
           "error": {
             "$ref": "#/$defs/SourceError",
             "description": "Why."
@@ -4283,7 +4490,8 @@ export const runtimeSchemas = {
         },
         "required": [
           "source",
-          "error"
+          "error",
+          "class"
         ],
         "type": "object"
       },
@@ -4393,6 +4601,21 @@ export const runtimeSchemas = {
   },
   "QueryResponseOfQualifiedLabel": {
     "$defs": {
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
@@ -4631,6 +4854,10 @@ export const runtimeSchemas = {
       "SourceFailure": {
         "description": "One source's failure, kept beside the results the other sources returned.",
         "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change this source's answer."
+          },
           "error": {
             "$ref": "#/$defs/SourceError",
             "description": "Why."
@@ -4642,7 +4869,8 @@ export const runtimeSchemas = {
         },
         "required": [
           "source",
-          "error"
+          "error",
+          "class"
         ],
         "type": "object"
       },
@@ -4752,6 +4980,21 @@ export const runtimeSchemas = {
   },
   "QueryResponseOfQualifiedProject": {
     "$defs": {
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
@@ -5112,6 +5355,10 @@ export const runtimeSchemas = {
       "SourceFailure": {
         "description": "One source's failure, kept beside the results the other sources returned.",
         "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change this source's answer."
+          },
           "error": {
             "$ref": "#/$defs/SourceError",
             "description": "Why."
@@ -5123,7 +5370,8 @@ export const runtimeSchemas = {
         },
         "required": [
           "source",
-          "error"
+          "error",
+          "class"
         ],
         "type": "object"
       },
@@ -5291,6 +5539,21 @@ export const runtimeSchemas = {
   },
   "QueryResponseOfQualifiedTask": {
     "$defs": {
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
@@ -5564,6 +5827,10 @@ export const runtimeSchemas = {
       "SourceFailure": {
         "description": "One source's failure, kept beside the results the other sources returned.",
         "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change this source's answer."
+          },
           "error": {
             "$ref": "#/$defs/SourceError",
             "description": "Why."
@@ -5575,7 +5842,8 @@ export const runtimeSchemas = {
         },
         "required": [
           "source",
-          "error"
+          "error",
+          "class"
         ],
         "type": "object"
       },
@@ -5841,6 +6109,21 @@ export const runtimeSchemas = {
   },
   "QueryResponseOfSearchHit": {
     "$defs": {
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
@@ -6252,6 +6535,10 @@ export const runtimeSchemas = {
       "SourceFailure": {
         "description": "One source's failure, kept beside the results the other sources returned.",
         "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change this source's answer."
+          },
           "error": {
             "$ref": "#/$defs/SourceError",
             "description": "Why."
@@ -6263,7 +6550,8 @@ export const runtimeSchemas = {
         },
         "required": [
           "source",
-          "error"
+          "error",
+          "class"
         ],
         "type": "object"
       },
@@ -7274,6 +7562,21 @@ export const runtimeSchemas = {
   },
   "SourceFailure": {
     "$defs": {
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
       "SourceError": {
         "description": "Why a source could not answer.\n\nEvery variant carries owned data only, so an error survives the JSON-over-stdio\nboundary a subprocess-hosted plugin crosses without losing anything.",
         "oneOf": [
@@ -7407,6 +7710,10 @@ export const runtimeSchemas = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "One source's failure, kept beside the results the other sources returned.",
     "properties": {
+      "class": {
+        "$ref": "#/$defs/FailureClass",
+        "description": "Whether repeating the request unchanged could change this source's answer."
+      },
       "error": {
         "$ref": "#/$defs/SourceError",
         "description": "Why."
@@ -7418,7 +7725,8 @@ export const runtimeSchemas = {
     },
     "required": [
       "source",
-      "error"
+      "error",
+      "class"
     ],
     "title": "SourceFailure",
     "type": "object"

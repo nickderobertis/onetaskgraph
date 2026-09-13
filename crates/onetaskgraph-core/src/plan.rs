@@ -10,6 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{Owed, Resumption, StreamState};
+use crate::failure::{FailureClass, classify};
 
 /// One page of engine output, with the plan that produced it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -106,12 +107,57 @@ pub enum Predicate {
 }
 
 /// One source's failure, kept beside the results the other sources returned.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+///
+/// Written with a `class` beside the error, which is not a field here: it is computed by
+/// [`classify`](crate::failure::classify) as the entry is written, so it cannot disagree
+/// with the error it classifies, and a document read back in has it recomputed rather than
+/// trusted.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SourceFailure {
     /// The source that failed.
     pub source: SourceName,
     /// Why.
     pub error: SourceError,
+}
+
+// A `SourceFailure` as it is written: the failure, and its class. Its doc comment is the
+// schema's description, which is why it is `SourceFailure`'s own sentence.
+/// One source's failure, kept beside the results the other sources returned.
+#[derive(Serialize, JsonSchema)]
+#[schemars(rename = "SourceFailure")]
+struct ClassifiedSourceFailure<'a> {
+    /// The source that failed.
+    source: &'a SourceName,
+    /// Why.
+    error: &'a SourceError,
+    /// Whether repeating the request unchanged could change this source's answer.
+    class: FailureClass,
+}
+
+impl<'a> From<&'a SourceFailure> for ClassifiedSourceFailure<'a> {
+    fn from(failure: &'a SourceFailure) -> Self {
+        Self {
+            source: &failure.source,
+            error: &failure.error,
+            class: classify(Some(&failure.error)),
+        }
+    }
+}
+
+impl Serialize for SourceFailure {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        ClassifiedSourceFailure::from(self).serialize(serializer)
+    }
+}
+
+impl JsonSchema for SourceFailure {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        ClassifiedSourceFailure::schema_name()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        ClassifiedSourceFailure::json_schema(generator)
+    }
 }
 
 /// The engine's own resume token: one plugin cursor per source stream, opaque to the

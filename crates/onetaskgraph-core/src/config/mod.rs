@@ -330,6 +330,39 @@ pub struct Loaded {
     pub effective: EffectiveConfig,
 }
 
+/// The output format a run asked for, read from whichever layers can still be read.
+///
+/// For a run whose configuration did not load, which still owes its failure in the format
+/// it asked for: `--json` on a command line beside a document that will not parse asks
+/// for machine output as plainly as it does beside one that will. The same layers in the
+/// same precedence as [`load`], each skipped when it cannot be read, so a layer that is
+/// itself the failure contributes nothing rather than hiding the ones above it.
+/// `working_directory` is `None` when there is none to search from, and then no project
+/// document is read. Text when no readable layer sets a usable format.
+#[must_use]
+pub fn requested_output(
+    working_directory: Option<&Path>,
+    environment: &Environment,
+    flags: &Layer,
+) -> OutputFormat {
+    let mut layers: Vec<Layer> = working_directory
+        .and_then(|directory| documents(directory, environment).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|document| {
+            let parsed: Value = serde_norway::from_str(&document.text).ok()?;
+            Layer::from_document(document.path, &parsed).ok()
+        })
+        .collect();
+    layers.extend(environment_layer::layer(environment).ok());
+    layers.push(flags.clone());
+    merge(&layers)
+        .values()
+        .find(|setting| setting.key.segments() == ["output"])
+        .and_then(|setting| serde_json::from_value(setting.value.clone()).ok())
+        .unwrap_or_default()
+}
+
 /// Load the configuration: documents, then the environment, then `flags`.
 ///
 /// Each source's `config` block is checked against its plugin's declared schema

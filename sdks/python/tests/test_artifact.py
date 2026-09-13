@@ -261,7 +261,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 10
+    assert emitted_bundle["version"] == 11
     for root in ("Document", "DocumentQuery", "Location", "PageOfDocument"):
         assert root in bundle["roots"], root
         assert root in generate.CONTRACT_ROOTS, root
