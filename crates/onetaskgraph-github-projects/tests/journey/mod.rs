@@ -1112,7 +1112,7 @@ fn type_signature(value: &Value) -> Option<String> {
 /// journey believes GitHub's mutation surface to be: the credentialed drive holds GitHub to
 /// it, and the fixture drive answers introspection *from* it, so the stand-in cannot answer
 /// a contract the real check is not making.
-pub const MUTATION_CONTRACT: [(&str, &str, &str); 13] = [
+pub const MUTATION_CONTRACT: [(&str, &str, &str); 16] = [
     ("createIssue", "CreateIssueInput", "CreateIssuePayload"),
     (
         "addProjectV2ItemById",
@@ -1158,13 +1158,24 @@ pub const MUTATION_CONTRACT: [(&str, &str, &str); 13] = [
         "UpdateProjectV2ItemFieldValueInput",
         "UpdateProjectV2ItemFieldValuePayload",
     ),
+    ("addComment", "AddCommentInput", "AddCommentPayload"),
+    (
+        "updateIssueComment",
+        "UpdateIssueCommentInput",
+        "UpdateIssueCommentPayload",
+    ),
+    (
+        "deleteIssueComment",
+        "DeleteIssueCommentInput",
+        "DeleteIssueCommentPayload",
+    ),
 ];
 
 /// Every input and payload type those mutations reach, and the fields each must carry.
 ///
 /// The `bool` is whether the type is an input — GitHub spells an input type's members
 /// `inputFields` and an output type's `fields`, and asking for the wrong one answers null.
-pub const MUTATION_TYPES: [(&str, bool, &[&str]); 28] = [
+pub const MUTATION_TYPES: [(&str, bool, &[&str]); 34] = [
     ("CreateIssueInput", true, &["repositoryId", "title", "body"]),
     (
         "AddProjectV2ItemByIdInput",
@@ -1208,6 +1219,9 @@ pub const MUTATION_TYPES: [(&str, bool, &[&str]); 28] = [
         &["projectId", "dataType", "name"],
     ),
     ("DeleteProjectV2FieldInput", true, &["fieldId"]),
+    ("AddCommentInput", true, &["subjectId", "body"]),
+    ("UpdateIssueCommentInput", true, &["id", "body"]),
+    ("DeleteIssueCommentInput", true, &["id"]),
     ("CreateIssuePayload", false, &["issue"]),
     ("AddProjectV2ItemByIdPayload", false, &["item"]),
     ("AddSubIssuePayload", false, &["issue", "subIssue"]),
@@ -1225,6 +1239,9 @@ pub const MUTATION_TYPES: [(&str, bool, &[&str]); 28] = [
     ("DeleteIssuePayload", false, &["repository"]),
     ("CreateProjectV2FieldPayload", false, &["projectV2Field"]),
     ("DeleteProjectV2FieldPayload", false, &["projectV2Field"]),
+    ("AddCommentPayload", false, &["commentEdge", "subject"]),
+    ("UpdateIssueCommentPayload", false, &["issueComment"]),
+    ("DeleteIssueCommentPayload", false, &["clientMutationId"]),
 ];
 
 /// How many times one document may select a given introspection field.
@@ -1247,9 +1264,9 @@ pub const INTROSPECTION_FIELD_LIMIT: usize = 2;
 ///
 /// **Batched rather than one request per type, and the reason is what a session costs.**
 /// GitHub allows any number of aliased root fields on one query, and `__type` is not a
-/// connection, so a document here adds nothing to the node count. Twenty-eight types and
-/// the `Mutation` root — fifteen `inputFields` selections and fourteen `fields` ones —
-/// become eight documents instead of twenty-nine requests. Nothing is narrowed: every name,
+/// connection, so a document here adds nothing to the node count. Thirty-four types and
+/// the `Mutation` root — eighteen `inputFields` selections and seventeen `fields` ones —
+/// become nine documents instead of thirty-five requests. Nothing is narrowed: every name,
 /// input, payload, member and type signature the checks below hold GitHub to is still asked
 /// for, from the same two tables, and [`verify_mutation_schema`] answers from all eight as
 /// though they were one.
@@ -1430,6 +1447,12 @@ pub fn mutation_field_types(type_name: &str) -> &'static [(&'static str, &'stati
             ("name", "String!"),
         ],
         "DeleteProjectV2FieldInput" => &[("fieldId", "ID!")],
+        "AddCommentInput" => &[("subjectId", "ID!"), ("body", "String!")],
+        "UpdateIssueCommentInput" => &[("id", "ID!"), ("body", "String!")],
+        "DeleteIssueCommentInput" => &[("id", "ID!")],
+        "AddCommentPayload" => &[("commentEdge", "IssueCommentEdge"), ("subject", "Node")],
+        "UpdateIssueCommentPayload" => &[("issueComment", "IssueComment")],
+        "DeleteIssueCommentPayload" => &[("clientMutationId", "String")],
         "CreateIssuePayload" | "UpdateIssuePayload" => &[("issue", "Issue")],
         "AddProjectV2ItemByIdPayload" => &[("item", "ProjectV2Item")],
         "AddSubIssuePayload" | "RemoveSubIssuePayload" => {
@@ -2392,7 +2415,7 @@ pub async fn run(nomination: Nomination) {
         Capabilities {
             projects: Support::Native,
             documents: Support::Native,
-            comments: Support::Unsupported,
+            comments: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

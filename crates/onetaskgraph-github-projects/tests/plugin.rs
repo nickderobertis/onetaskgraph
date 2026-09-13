@@ -14,11 +14,11 @@ use std::{
 };
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location,
-    NativeId, PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
-    TaskSource, TextFields, TextQuery, WriteSupport,
+    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
+    DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter,
+    Location, NativeId, NewComment, PageRequest, Project, ProjectFilter, ProjectQuery, Repository,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
+    TaskQuery, TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -303,9 +303,41 @@ fn membership_page(all: &[Value], offset: usize, first: usize, asked: Asked) -> 
     }
 }
 
+/// The login this board signs a comment added through it with.
+///
+/// The account the token belongs to, which is who GitHub records as the author of every
+/// comment — so a comment that comes back naming anybody else was not signed by this board.
+const COMMENTER: &str = "onetaskgraph-bot";
+
+/// One issue comment as the fixture holds it, in the order it was written.
+#[derive(Clone, Debug)]
+struct HeldComment {
+    id: String,
+    issue: String,
+    /// `None` is an account GitHub no longer has, which it answers `author: null` for.
+    author: Option<String>,
+    body: String,
+    created_at: String,
+    updated_at: String,
+}
+
+impl HeldComment {
+    /// This comment as every comment document selects it.
+    fn as_node(&self) -> Value {
+        json!({"id":self.id,"author":self.author.as_ref().map(|login| json!({"login":login})),
+               "createdAt":self.created_at,"updatedAt":self.updated_at,"body":self.body,
+               "url":format!("https://github.example/{}#{}", self.issue, self.id)})
+    }
+}
+
 /// Everything the fixture remembers between requests.
 struct State {
     items: Vec<Item>,
+    /// Every comment on every issue this board holds, oldest first.
+    comments: Vec<HeldComment>,
+    /// How many comment timestamps this board has handed out, which is what makes each one
+    /// later than the last — and a comment's id, so no two are ever alike.
+    comment_ticks: u64,
     /// Issues created but not yet added to the board.
     pending: Vec<Item>,
     options: Vec<(&'static str, &'static str)>,
@@ -471,6 +503,29 @@ impl State {
         }
         json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}})
     }
+    /// The next moment this board stamps a comment with, a second after the one before.
+    fn tick(&mut self) -> String {
+        self.comment_ticks += 1;
+        format!(
+            "2026-09-01T00:{:02}:{:02}Z",
+            self.comment_ticks / 60,
+            self.comment_ticks % 60
+        )
+    }
+    /// Put a comment on `issue`, as `author` wrote it.
+    fn comment(&mut self, issue: &str, author: Option<&str>, body: &str) -> HeldComment {
+        let at = self.tick();
+        let held = HeldComment {
+            id: format!("IC_{}", self.comment_ticks),
+            issue: issue.to_owned(),
+            author: author.map(str::to_owned),
+            body: body.to_owned(),
+            created_at: at.clone(),
+            updated_at: at,
+        };
+        self.comments.push(held.clone());
+        held
+    }
     fn find(&mut self, content_id: &Value) -> &mut Item {
         let wanted = content_id.as_str().expect("a content id");
         self.items
@@ -490,6 +545,22 @@ impl Fixture {
     /// The mutation inputs the source sent, in order, as `[operation, input]` pairs.
     fn seen(&self) -> Vec<Value> {
         self.state.lock().unwrap().seen.clone()
+    }
+    /// Put a comment on `issue` the way somebody else writing on GitHub would, answering its
+    /// id.
+    fn commented(&self, issue: &str, author: Option<&str>, body: &str) -> String {
+        self.state.lock().unwrap().comment(issue, author, body).id
+    }
+    /// The comments this board holds on `issue`, oldest first.
+    fn comments_on(&self, issue: &str) -> Vec<HeldComment> {
+        self.state
+            .lock()
+            .unwrap()
+            .comments
+            .iter()
+            .filter(|held| held.issue == issue)
+            .cloned()
+            .collect()
     }
     fn item(&self, content_id: &str) -> Item {
         self.state
@@ -669,6 +740,8 @@ fn board(items: Vec<Item>) -> Fixture {
 fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixture {
     let state = Arc::new(Mutex::new(State {
         items,
+        comments: Vec::new(),
+        comment_ticks: 0,
         pending: Vec::new(),
         options: vec![
             ("OPT_backlog", "Backlog"),
@@ -777,6 +850,20 @@ fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<
         ));
     }
     let mut state = state.lock().unwrap();
+    // GitHub answers a node read of an id that names nothing with an error rather than with a
+    // null node alone, and a comment id is read this way before anything is changed — so
+    // that read is answered the way GitHub answers it. A `rateLimit(dryRun: true)` probe of
+    // the same document is not executed, so nothing in it is resolved and nothing refuses.
+    if query.contains("on IssueComment{id issue{id}}") && board::strip_probe(query).is_none() {
+        let id = variables["id"].as_str().expect("a node id");
+        if !state.comments.iter().any(|held| held.id == id)
+            && !state.items.iter().any(|item| item.content_id == id)
+        {
+            return Some(format!(
+                "Could not resolve to a node with the global id of '{id}'."
+            ));
+        }
+    }
     let operation = operation_name(query);
     if !state.refuses.contains(operation) {
         return None;
@@ -817,6 +904,87 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     }
     if let Some(answered) = answer_a_session_call(&mut state, query, variables, &input) {
         return answered;
+    }
+    if query.contains("addComment(input:$input)") {
+        let subject = input["subjectId"]
+            .as_str()
+            .expect("a subject id")
+            .to_owned();
+        assert!(
+            state
+                .items
+                .iter()
+                .any(|item| item.content_id == subject && item.typename == "Issue"),
+            "addComment names {subject}, which is no issue this board holds"
+        );
+        let body = input["body"].as_str().expect("a comment body").to_owned();
+        // Signed as the token's account whatever the input said, because GitHub's input has
+        // nowhere to say anything else.
+        let added = state.comment(&subject, Some(COMMENTER), &body);
+        return json!({"addComment":{"subject":{"id":subject},
+                                    "commentEdge":{"node":added.as_node()}}});
+    }
+    if query.contains("updateIssueComment(input:$input)") {
+        let at = state.tick();
+        let held = state
+            .comments
+            .iter_mut()
+            .find(|held| input["id"] == held.id.as_str())
+            .expect("updateIssueComment names a comment this board holds");
+        held.body = input["body"].as_str().expect("a comment body").to_owned();
+        held.updated_at = at;
+        return json!({"updateIssueComment":{"issueComment":held.as_node()}});
+    }
+    if query.contains("deleteIssueComment(input:$input)") {
+        let id = input["id"].as_str().expect("a comment id").to_owned();
+        assert!(
+            state.comments.iter().any(|held| held.id == id),
+            "deleteIssueComment names {id}, which this board does not hold"
+        );
+        state.comments.retain(|held| held.id != id);
+        return json!({"deleteIssueComment":{"clientMutationId":null}});
+    }
+    if query.contains("on IssueComment{id issue{id}}") {
+        let id = variables["id"].as_str().expect("a node id");
+        if let Some(held) = state.comments.iter().find(|held| held.id == id) {
+            return json!({"node":{"__typename":"IssueComment","id":id,
+                                  "issue":{"id":held.issue}}});
+        }
+        // `refused` has already answered an id naming nothing, so this one names an item.
+        let item = state
+            .items
+            .iter()
+            .find(|item| item.content_id == id)
+            .expect("an id this board holds");
+        return json!({"node":{"__typename":item.typename}});
+    }
+    if query.contains("comments(first:$first,after:$after)") {
+        let id = variables["id"].as_str().expect("a node id").to_owned();
+        let Some(item) = state.items.iter().find(|item| item.content_id == id) else {
+            return json!({ "node": null });
+        };
+        if item.typename != "Issue" {
+            return json!({"node":{"__typename":item.typename}});
+        }
+        let offset = match &variables["after"] {
+            Value::Null => 0,
+            Value::String(cursor) => cursor.parse::<usize>().expect("a numeric cursor"),
+            other => panic!("after must be null or a string: {other}"),
+        };
+        let first = variables["first"].as_u64().expect("first") as usize;
+        let on = state
+            .comments
+            .iter()
+            .filter(|held| held.issue == id)
+            .collect::<Vec<_>>();
+        let end = (offset + first).min(on.len());
+        let nodes = on[offset.min(end)..end]
+            .iter()
+            .map(|held| held.as_node())
+            .collect::<Vec<_>>();
+        return json!({"node":{"__typename":"Issue","comments":{"nodes":nodes,
+            "pageInfo":{"hasNextPage":end < on.len(),
+                        "endCursor":(end > offset).then(|| end.to_string())}}}});
     }
     if query.contains("repository(owner:$owner,name:$name)") {
         // GitHub declares both arguments `String!`, so a lookup arriving without them is
@@ -1284,6 +1452,8 @@ fn operation_name(query: &str) -> &str {
         "node" if query.contains("subIssues(") => "projectTasks",
         "node" if query.contains("projectItems(first:$first") => "issueBoardItems",
         "node" if query.contains("blockedBy(") => "issueDependencies",
+        "node" if query.contains("comments(first:") => "issueComments",
+        "node" if query.contains("on IssueComment{") => "comment",
         "node" => "issue",
         other => other,
     }
@@ -4912,7 +5082,7 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
         Capabilities {
             projects: Support::Native,
             documents: Support::Native,
-            comments: Support::Unsupported,
+            comments: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -8841,4 +9011,728 @@ fn session_cost(session: &Session) -> String {
         rendered.push_str(&format!("  {requests:>3}  {nodes:>6}  {name}\n"));
     }
     rendered
+}
+
+/// A board holding every kind of thing an id handed to a comment verb might name.
+///
+/// A task under a project, a task nobody has commented on, another task with comments of its
+/// own, the project itself, a document and a draft — so each case below can tell the item it
+/// is about from every item it must not touch.
+fn comment_board() -> Fixture {
+    board(vec![
+        Item::issue("I_plan", "the plan").sub_issues(1),
+        Item::issue("I_task", "a step")
+            .parent("I_plan")
+            .status("Todo"),
+        Item::issue("I_quiet", "a step nobody has commented on").status("Todo"),
+        Item::issue("I_other", "another step").status("Todo"),
+        design("I_doc", "the design"),
+        Item::draft("DI_sketch", "a sketch").status("Todo"),
+    ])
+}
+
+fn native(id: &str) -> NativeId {
+    NativeId(id.to_owned())
+}
+
+fn comment_body(text: &str) -> CommentBody {
+    CommentBody::new(text).expect("a non-empty comment body")
+}
+
+fn commenting(text: &str) -> NewComment {
+    NewComment {
+        body: comment_body(text),
+        author: None,
+    }
+}
+
+fn comment_ids(comments: &[Comment]) -> Vec<String> {
+    comments
+        .iter()
+        .map(|comment| comment.id.0.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_tasks_comments_are_its_issues_own_oldest_first_walked_in_pages_to_exhaustion() {
+    let fixture = comment_board();
+    let first = fixture.commented("I_task", Some("octocat"), "Seen on main.\n");
+    let elsewhere = fixture.commented("I_other", Some("octocat"), "not this task's");
+    let second = fixture.commented("I_task", None, "from an account since deleted");
+    let third = fixture.commented("I_task", Some("hubot"), "fixed by #12");
+    let source = source(&fixture);
+    let task = native("I_task");
+
+    let opening = source
+        .task_comments(&task, &page(2))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+    assert_eq!(comment_ids(&opening.items), [first.clone(), second.clone()]);
+    let cursor = opening
+        .next
+        .clone()
+        .expect("a third comment is still to come");
+    let rest = source
+        .task_comments(&task, &resume(&cursor.0, 2))
+        .await
+        .unwrap()
+        .expect("the same task");
+    assert_eq!(comment_ids(&rest.items), [third]);
+    assert!(rest.next.is_none(), "the walk ends at the last comment");
+    assert!(
+        !comment_ids(&opening.items).contains(&elsewhere)
+            && !comment_ids(&rest.items).contains(&elsewhere),
+        "another issue's comment was reported on this task"
+    );
+    // One request per page: the caller's limit is the page GitHub is asked for, rather than
+    // every comment read and then cut.
+    assert_eq!(fixture.requests("issueComments"), 2);
+
+    // Every member is read off what GitHub said, the author's login and a deleted account's
+    // `null` alike, and the body keeps its trailing newline.
+    let written = &opening.items[0];
+    assert_eq!(written.author.as_deref(), Some("octocat"));
+    assert_eq!(written.body, "Seen on main.\n");
+    assert_eq!(
+        written.created_at,
+        Some("2026-09-01T00:00:01Z".parse().unwrap())
+    );
+    assert_eq!(written.updated_at, written.created_at);
+    assert_eq!(
+        written.url.as_deref(),
+        Some(format!("https://github.example/I_task#{first}").as_str())
+    );
+    assert_eq!(opening.items[1].author, None);
+    assert_eq!(rest.items[0].author.as_deref(), Some("hubot"));
+
+    // A task nobody has commented on is one empty last page: neither no such task nor a
+    // refusal.
+    let quiet = source
+        .task_comments(&native("I_quiet"), &page(50))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+    assert!(quiet.items.is_empty() && quiet.next.is_none());
+}
+
+#[tokio::test]
+async fn adding_a_comment_keeps_its_body_byte_for_byte_and_reports_the_account_github_signed_it_with()
+ {
+    let fixture = comment_board();
+    let source = source(&fixture);
+    let text = "Seen again on main.\n\n```\npanicked at src/lib.rs:1\n```\n";
+
+    let added = source
+        .add_comment(&native("I_task"), &commenting(text))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+    assert_eq!(added.body, text);
+    assert_eq!(added.author.as_deref(), Some(COMMENTER));
+    assert!(added.created_at.is_some());
+    assert_eq!(added.updated_at, added.created_at);
+    assert!(
+        added
+            .url
+            .as_deref()
+            .is_some_and(|url| url.contains(&added.id.0)),
+        "{added:?}"
+    );
+
+    // What GitHub was sent is the task's own issue and the body exactly, and what it now
+    // holds is that one comment.
+    assert!(
+        fixture.seen().iter().any(|call| call[0] == "addComment"
+            && call[1]["subjectId"] == "I_task"
+            && call[1]["body"] == text),
+        "{:?}",
+        fixture.seen()
+    );
+    let held = fixture.comments_on("I_task");
+    assert_eq!(held.len(), 1);
+    assert_eq!(
+        (held[0].id.as_str(), held[0].body.as_str()),
+        (added.id.0.as_str(), text)
+    );
+
+    // And a read of the task reports it exactly as the write answered it.
+    let listed = source
+        .task_comments(&native("I_task"), &page(50))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+    assert_eq!(listed.items, vec![added]);
+}
+
+#[tokio::test]
+async fn editing_a_comment_moves_its_body_and_when_it_last_changed_and_nothing_else() {
+    let fixture = comment_board();
+    let id = fixture.commented("I_task", Some("octocat"), "first thoughts");
+    let source = source(&fixture);
+    let before = source
+        .task_comments(&native("I_task"), &page(50))
+        .await
+        .unwrap()
+        .expect("a task this board holds")
+        .items
+        .remove(0);
+
+    let edited = source
+        .edit_comment(
+            &native("I_task"),
+            &native(&id),
+            &comment_body("second thoughts\n"),
+        )
+        .await
+        .unwrap()
+        .expect("a comment of that task");
+    assert_eq!(edited.body, "second thoughts\n");
+    assert!(
+        edited.updated_at > before.updated_at,
+        "{edited:?} against {before:?}"
+    );
+    assert_eq!(
+        Comment {
+            body: before.body.clone(),
+            updated_at: before.updated_at,
+            ..edited.clone()
+        },
+        before,
+        "an edit moved something other than the body and when it last changed"
+    );
+    assert_eq!(fixture.comments_on("I_task")[0].body, "second thoughts\n");
+
+    // Which issue the comment is on was read before the edit was sent, not after.
+    let documents = fixture.documents();
+    let asked = documents
+        .iter()
+        .position(|document| document == graphql::COMMENT_ISSUE)
+        .expect("the comment's issue was read");
+    let changed = documents
+        .iter()
+        .position(|document| document == graphql::UPDATE_COMMENT)
+        .expect("the edit was sent");
+    assert!(
+        asked < changed,
+        "the edit was sent before its issue was read"
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_comment_removes_that_comment_alone_and_answers_its_id() {
+    let fixture = comment_board();
+    let kept = fixture.commented("I_task", Some("octocat"), "keep me");
+    let gone = fixture.commented("I_task", Some("octocat"), "remove me");
+    let source = source(&fixture);
+
+    let removed = source
+        .delete_comment(&native("I_task"), &native(&gone))
+        .await
+        .unwrap();
+    assert_eq!(removed, Some(native(&gone)));
+    assert_eq!(
+        fixture
+            .comments_on("I_task")
+            .iter()
+            .map(|held| held.id.clone())
+            .collect::<Vec<_>>(),
+        [kept]
+    );
+    assert!(
+        fixture
+            .seen()
+            .iter()
+            .any(|call| call[0] == "deleteIssueComment" && call[1]["id"] == gone.as_str())
+    );
+}
+
+#[tokio::test]
+async fn a_comment_call_naming_no_task_of_this_board_answers_none_and_changes_nothing() {
+    let fixture = comment_board();
+    let on_plan = fixture.commented("I_plan", Some("octocat"), "on the project's issue");
+    let on_doc = fixture.commented("I_doc", Some("octocat"), "on the document's issue");
+    let source = source(&fixture);
+    // A project and a document are issues with comments of their own on GitHub, and still no
+    // task of this board — which is what `get_task` answers about them too.
+    for (named, comment, what) in [
+        ("I_missing", on_plan.as_str(), "an id naming nothing"),
+        ("I_plan", on_plan.as_str(), "a project"),
+        ("I_doc", on_doc.as_str(), "a document"),
+    ] {
+        let task = native(named);
+        assert!(source.get_task(&task).await.unwrap().is_none(), "{what}");
+        assert!(
+            source
+                .task_comments(&task, &page(50))
+                .await
+                .unwrap()
+                .is_none(),
+            "{what}"
+        );
+        assert!(
+            source
+                .add_comment(&task, &commenting("hello"))
+                .await
+                .unwrap()
+                .is_none(),
+            "{what}"
+        );
+        assert!(
+            source
+                .edit_comment(&task, &native(comment), &comment_body("changed"))
+                .await
+                .unwrap()
+                .is_none(),
+            "{what}"
+        );
+        assert!(
+            source
+                .delete_comment(&task, &native(comment))
+                .await
+                .unwrap()
+                .is_none(),
+            "{what}"
+        );
+    }
+    for operation in [
+        "issueComments",
+        "comment",
+        "addComment",
+        "updateIssueComment",
+        "deleteIssueComment",
+    ] {
+        assert_eq!(
+            fixture.requests(operation),
+            0,
+            "{operation} was sent for no task"
+        );
+    }
+    assert_eq!(
+        fixture.comments_on("I_plan")[0].body,
+        "on the project's issue"
+    );
+    assert_eq!(
+        fixture.comments_on("I_doc")[0].body,
+        "on the document's issue"
+    );
+}
+
+#[tokio::test]
+async fn a_comment_that_is_not_on_this_task_answers_none_and_no_mutation_is_sent() {
+    let fixture = comment_board();
+    let theirs = fixture.commented("I_other", Some("octocat"), "on another issue");
+    let source = source(&fixture);
+    let task = native("I_task");
+    for (comment, what) in [
+        (theirs.as_str(), "a comment on another issue"),
+        ("IC_nothing", "an id GitHub cannot resolve"),
+        ("I_other", "an id naming an issue rather than a comment"),
+    ] {
+        assert!(
+            source
+                .edit_comment(&task, &native(comment), &comment_body("hijacked"))
+                .await
+                .unwrap()
+                .is_none(),
+            "{what}"
+        );
+        assert!(
+            source
+                .delete_comment(&task, &native(comment))
+                .await
+                .unwrap()
+                .is_none(),
+            "{what}"
+        );
+    }
+    assert_eq!(fixture.requests("updateIssueComment"), 0);
+    assert_eq!(fixture.requests("deleteIssueComment"), 0);
+    assert_eq!(
+        fixture.requests("comment"),
+        6,
+        "each call asked which issue its comment is on before deciding"
+    );
+    let held = fixture.comments_on("I_other");
+    assert_eq!((held.len(), held[0].body.as_str()), (1, "on another issue"));
+}
+
+#[tokio::test]
+async fn every_comment_call_on_a_draft_item_is_refused_naming_what_to_do_instead() {
+    let fixture = comment_board();
+    let source = source(&fixture);
+    let draft = native("DI_sketch");
+    // A draft is a task of this board, so the refusal is about the draft rather than about
+    // an id this board does not hold.
+    assert!(source.get_task(&draft).await.unwrap().is_some());
+    let outcomes = [
+        source.task_comments(&draft, &page(50)).await.map(|_| ()),
+        source
+            .add_comment(&draft, &commenting("hello"))
+            .await
+            .map(|_| ()),
+        source
+            .edit_comment(&draft, &native("IC_1"), &comment_body("changed"))
+            .await
+            .map(|_| ()),
+        source
+            .delete_comment(&draft, &native("IC_1"))
+            .await
+            .map(|_| ()),
+    ];
+    for outcome in outcomes {
+        let Err(SourceError::Refused { message }) = &outcome else {
+            panic!("a comment call on a draft answered {outcome:?}");
+        };
+        assert!(
+            message.contains("DI_sketch") && message.contains("draft"),
+            "{message}"
+        );
+        assert!(
+            message.contains("next: convert the draft to an issue"),
+            "{message}"
+        );
+    }
+    for operation in [
+        "issueComments",
+        "comment",
+        "addComment",
+        "updateIssueComment",
+        "deleteIssueComment",
+    ] {
+        assert_eq!(
+            fixture.requests(operation),
+            0,
+            "{operation} was sent for a draft"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_comment_handed_an_author_is_refused_before_anything_is_sent() {
+    let fixture = comment_board();
+    let source = source(&fixture);
+    let error = source
+        .add_comment(
+            &native("I_task"),
+            &NewComment {
+                body: comment_body("hello"),
+                author: Some("Ada".to_owned()),
+            },
+        )
+        .await
+        .expect_err("GitHub signs every comment as the token's own account");
+    let SourceError::Refused { message } = &error else {
+        panic!("an author was answered with {error:?}");
+    };
+    assert!(message.contains("\"Ada\""), "{message}");
+    assert!(
+        message.contains("GitHub records the account the token signs in as the author"),
+        "{message}"
+    );
+    assert!(message.contains("next: leave --author out"), "{message}");
+    assert!(
+        fixture.documents().is_empty(),
+        "a request was sent for a comment already refused: {:?}",
+        fixture.documents()
+    );
+    assert!(fixture.comments_on("I_task").is_empty());
+}
+
+#[tokio::test]
+async fn a_graphql_error_on_any_comment_call_reaches_the_caller_as_the_refusal_github_sent() {
+    for operation in [
+        "issueComments",
+        "comment",
+        "addComment",
+        "updateIssueComment",
+        "deleteIssueComment",
+    ] {
+        let fixture = comment_board();
+        let id = fixture.commented("I_task", Some("octocat"), "already here");
+        fixture.refuse(operation);
+        let source = source(&fixture);
+        let task = native("I_task");
+        let outcome = match operation {
+            "issueComments" => source.task_comments(&task, &page(50)).await.map(|_| ()),
+            "addComment" => source
+                .add_comment(&task, &commenting("hello"))
+                .await
+                .map(|_| ()),
+            "deleteIssueComment" => source.delete_comment(&task, &native(&id)).await.map(|_| ()),
+            // `comment` is the read an edit makes first, so an edit reaches either refusal.
+            _ => source
+                .edit_comment(&task, &native(&id), &comment_body("changed"))
+                .await
+                .map(|_| ()),
+        };
+        let Err(SourceError::Refused { message }) = &outcome else {
+            panic!("{operation} refused by GitHub answered {outcome:?}");
+        };
+        assert!(
+            message.contains(&format!("{operation} is refused by this board")),
+            "{message}"
+        );
+        assert_eq!(fixture.comments_on("I_task")[0].body, "already here");
+        assert_eq!(fixture.comments_on("I_task").len(), 1);
+    }
+}
+
+/// What one issue read answers for the task `id`, for a stand-in that answers in sequence.
+fn issue_read(id: &str) -> Value {
+    let asked = Asked {
+        path: "issue",
+        board_items: 3,
+        stuck_cursor: None,
+    };
+    json!({"data":{"node":Item::issue(id, "a step").as_issue(&json!([]), asked)}})
+}
+
+/// Which comment verb a malformed-answer case drives.
+enum CommentCall {
+    List,
+    ListFrom(&'static str),
+    Add,
+    Edit,
+    Delete,
+}
+
+#[tokio::test]
+async fn a_comment_answer_this_source_cannot_read_is_refused_as_malformed_rather_than_guessed_at() {
+    let comment = |id: &str| {
+        json!({"id":id,"author":{"login":"octocat"},"createdAt":"2026-09-01T00:00:01Z",
+               "updatedAt":"2026-09-01T00:00:01Z","body":"said","url":null})
+    };
+    let owned = json!({"data":{"node":{"__typename":"IssueComment","id":"IC_1",
+                                       "issue":{"id":"I_1"}}}});
+    let cases: Vec<(Vec<Value>, CommentCall, &str)> = vec![
+        (
+            vec![
+                issue_read("I_1"),
+                json!({"data":{"node":{"__typename":"Issue"}}}),
+            ],
+            CommentCall::List,
+            "answered with no comments connection",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                json!({"data":{"node":{"__typename":"Issue","comments":{
+                    "nodes":[{"id":"IC_1","body":"said","createdAt":"yesterday"}],
+                    "pageInfo":{"hasNextPage":false}}}}}),
+            ],
+            CommentCall::List,
+            "createdAt is not a timestamp",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                json!({"data":{"node":{"__typename":"Issue","comments":{
+                    "nodes":[comment("IC_1")],
+                    "pageInfo":{"hasNextPage":true,"endCursor":"C1"}}}}}),
+            ],
+            CommentCall::ListFrom("C1"),
+            "cursor is empty or did not advance",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                json!({"data":{"addComment":{"commentEdge":{"node":comment("IC_1")}}}}),
+            ],
+            CommentCall::Add,
+            "comment addition returned no subject",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                json!({"data":{"addComment":{"subject":{"id":"I_else"},
+                                             "commentEdge":{"node":comment("IC_1")}}}}),
+            ],
+            CommentCall::Add,
+            "comment addition answered about another issue",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                json!({"data":{"addComment":{"subject":{"id":"I_1"},"commentEdge":{"node":null}}}}),
+            ],
+            CommentCall::Add,
+            "comment addition returned no comment",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                json!({"data":{"node":{"__typename":"IssueComment","id":"IC_1"}}}),
+            ],
+            CommentCall::Edit,
+            "issue comment IC_1 names no issue",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                owned.clone(),
+                json!({"data":{"updateIssueComment":{"issueComment":null}}}),
+            ],
+            CommentCall::Edit,
+            "comment update returned no comment",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                owned.clone(),
+                json!({"data":{"updateIssueComment":{"issueComment":comment("IC_else")}}}),
+            ],
+            CommentCall::Edit,
+            "comment update returned the wrong comment",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                owned.clone(),
+                json!({"data":{"deleteIssueComment":null}}),
+            ],
+            CommentCall::Delete,
+            "comment deletion returned no payload",
+        ),
+    ];
+    for (bodies, call, expected) in cases {
+        let source = configured(&sequence_server(bodies), json!({}));
+        let task = native("I_1");
+        let outcome = match call {
+            CommentCall::List => source.task_comments(&task, &page(50)).await.map(|_| ()),
+            CommentCall::ListFrom(cursor) => source
+                .task_comments(&task, &resume(cursor, 50))
+                .await
+                .map(|_| ()),
+            CommentCall::Add => source
+                .add_comment(&task, &commenting("hello"))
+                .await
+                .map(|_| ()),
+            CommentCall::Edit => source
+                .edit_comment(&task, &native("IC_1"), &comment_body("changed"))
+                .await
+                .map(|_| ()),
+            CommentCall::Delete => source
+                .delete_comment(&task, &native("IC_1"))
+                .await
+                .map(|_| ()),
+        };
+        let Err(SourceError::Malformed { message }) = &outcome else {
+            panic!("expected a malformed answer naming {expected:?}, got {outcome:?}");
+        };
+        assert!(
+            message.contains(expected),
+            "expected {expected} in {message}"
+        );
+    }
+
+    // An issue that is gone by the time its comments are read, and a comment whose node is
+    // gone by the time its issue is read, are no such task and no such comment.
+    let gone = configured(
+        &sequence_server(vec![issue_read("I_1"), json!({"data":{"node":null}})]),
+        json!({}),
+    );
+    assert!(
+        gone.task_comments(&native("I_1"), &page(50))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let gone = configured(
+        &sequence_server(vec![issue_read("I_1"), json!({"data":{"node":null}})]),
+        json!({}),
+    );
+    assert!(
+        gone.edit_comment(&native("I_1"), &native("IC_1"), &comment_body("changed"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let zero = configured(&sequence_server(vec![]), json!({}));
+    assert!(matches!(
+        zero.task_comments(&native("I_1"), &page(0)).await,
+        Err(SourceError::Config { .. })
+    ));
+}
+
+#[tokio::test]
+async fn comment_calls_are_paced_waited_out_and_named_like_every_other_call() {
+    // A limiter catching any comment call names that call, rather than whatever came first.
+    for (operation, doing) in [
+        ("issueComments", "reading a task's comments"),
+        ("comment", "reading which issue a comment is on"),
+        ("addComment", "adding a comment"),
+        ("updateIssueComment", "editing a comment"),
+        ("deleteIssueComment", "deleting a comment"),
+    ] {
+        let fixture = comment_board();
+        let id = fixture.commented("I_task", Some("octocat"), "already here");
+        fixture.script_for(operation, vec![Refusal::secondary_forbidden()]);
+        let source = paced(&fixture.endpoint, no_waiting());
+        let task = native("I_task");
+        let outcome = match operation {
+            "issueComments" => source.task_comments(&task, &page(50)).await.map(|_| ()),
+            "addComment" => source
+                .add_comment(&task, &commenting("hello"))
+                .await
+                .map(|_| ()),
+            "deleteIssueComment" => source.delete_comment(&task, &native(&id)).await.map(|_| ()),
+            _ => source
+                .edit_comment(&task, &native(&id), &comment_body("changed"))
+                .await
+                .map(|_| ()),
+        };
+        let Err(SourceError::RateLimited {
+            message: Some(said),
+            ..
+        }) = &outcome
+        else {
+            panic!("{operation} refused for a rate limit answered {outcome:?}");
+        };
+        assert!(said.contains(doing), "{said:?} does not name {doing:?}");
+    }
+
+    // A refused comment is waited out and sent again, and lands once: a request GitHub
+    // refused for a rate limit did not run.
+    let fixture = comment_board();
+    fixture.script_for("addComment", vec![Refusal::secondary_forbidden().after(0)]);
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":1,"retry_budget_ms":1000}),
+    );
+    source
+        .add_comment(&native("I_task"), &commenting("once"))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+    assert_eq!(fixture.requests("addComment"), 2);
+    assert_eq!(fixture.comments_on("I_task").len(), 1);
+
+    // And the three comment mutations leave this source no faster than its interval, which
+    // is measured from each one's completion like every other mutation's.
+    let fixture = comment_board();
+    let interval = Duration::from_millis(150);
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":150,"retry_budget_ms":0}),
+    );
+    let task = native("I_task");
+    let added = source
+        .add_comment(&task, &commenting("paced"))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+    source
+        .edit_comment(&task, &added.id, &comment_body("still paced"))
+        .await
+        .unwrap()
+        .expect("the comment just added");
+    source
+        .delete_comment(&task, &added.id)
+        .await
+        .unwrap()
+        .expect("the comment just edited");
+    let gaps = fixture.mutation_gaps();
+    assert_eq!(gaps.len(), 2, "{gaps:?}");
+    assert!(gaps.iter().all(|gap| *gap >= interval), "{gaps:?}");
 }

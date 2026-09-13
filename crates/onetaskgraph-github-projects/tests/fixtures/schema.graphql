@@ -49,9 +49,38 @@ type Mutation {
   addBlockedBy(input: AddBlockedByInput!): AddBlockedByPayload
   removeBlockedBy(input: RemoveBlockedByInput!): RemoveBlockedByPayload
   deleteIssue(input: DeleteIssueInput!): DeleteIssuePayload
+  addComment(input: AddCommentInput!): AddCommentPayload
+  updateIssueComment(input: UpdateIssueCommentInput!): UpdateIssueCommentPayload
+  deleteIssueComment(input: DeleteIssueCommentInput!): DeleteIssueCommentPayload
 }
 input DeleteIssueInput {
   issueId: ID!
+}
+input AddCommentInput {
+  subjectId: ID!
+  body: String!
+  clientMutationId: String
+}
+input UpdateIssueCommentInput {
+  id: ID!
+  body: String!
+  clientMutationId: String
+}
+input DeleteIssueCommentInput {
+  id: ID!
+  clientMutationId: String
+}
+type AddCommentPayload {
+  clientMutationId: String
+  commentEdge: IssueCommentEdge
+  subject: Node
+}
+type UpdateIssueCommentPayload {
+  clientMutationId: String
+  issueComment: IssueComment
+}
+type DeleteIssueCommentPayload {
+  clientMutationId: String
 }
 input CreateIssueInput {
   repositoryId: ID!
@@ -232,6 +261,38 @@ type Issue implements Node {
   labels(first: Int, after: String): LabelConnection
   blockedBy(first: Int, after: String): IssueConnection!
   blocking(first: Int, after: String): IssueConnection!
+  comments(first: Int, after: String, orderBy: IssueCommentOrder): IssueCommentConnection!
+}
+interface Actor {
+  login: String!
+}
+type IssueComment implements Node {
+  id: ID!
+  author: Actor
+  body: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  url: URI!
+  issue: Issue!
+}
+type IssueCommentConnection {
+  nodes: [IssueComment]
+  pageInfo: PageInfo!
+}
+type IssueCommentEdge {
+  cursor: String!
+  node: IssueComment
+}
+input IssueCommentOrder {
+  direction: OrderDirection!
+  field: IssueCommentOrderField!
+}
+enum IssueCommentOrderField {
+  UPDATED_AT
+}
+enum OrderDirection {
+  ASC
+  DESC
 }
 type SubIssuesSummary {
   total: Int!

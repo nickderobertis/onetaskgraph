@@ -274,6 +274,16 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         (graphql::REMOVE_SUB_ISSUE, None, None),
         (graphql::ADD_BLOCKED_BY, None, None),
         (graphql::REMOVE_BLOCKED_BY, None, None),
+        (graphql::DELETE_ISSUE, None, None),
+        (
+            graphql::ISSUE_COMMENTS,
+            Some("/data/node"),
+            Some(include_str!("fixtures/comments.json")),
+        ),
+        (graphql::COMMENT_ISSUE, None, None),
+        (graphql::ADD_COMMENT, None, None),
+        (graphql::UPDATE_COMMENT, None, None),
+        (graphql::DELETE_COMMENT, None, None),
     ] {
         let document = query::parse_query::<String>(operation).unwrap();
         let fragments = document
