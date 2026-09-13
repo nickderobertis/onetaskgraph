@@ -44,6 +44,23 @@ const SURFACE: &[(&[&str], &[&str])] = &[
         ],
     ),
     (&["help", "task", "show"], &["<ID>"]),
+    (
+        &["help", "task", "comment"],
+        &["add", "list", "edit", "delete"],
+    ),
+    (
+        &["help", "task", "comment", "add"],
+        &["<ID>", "--body-file", "--author", "--json"],
+    ),
+    (&["help", "task", "comment", "list"], &["<ID>", "--json"]),
+    (
+        &["help", "task", "comment", "edit"],
+        &["<ID>", "<COMMENT-ID>", "--body-file", "--json"],
+    ),
+    (
+        &["help", "task", "comment", "delete"],
+        &["<ID>", "<COMMENT-ID>", "--json"],
+    ),
     (&["help", "task", "deps"], &["--direction", "<ID>"]),
     (
         &["help", "project", "list"],
@@ -140,7 +157,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 10);
+    assert_eq!(bundle["version"], 11);
     assert_eq!(
         bundle["commands"],
         serde_json::json!([
@@ -151,6 +168,10 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task show",
             "task deps",
             "task copy",
+            "task comment add",
+            "task comment list",
+            "task comment edit",
+            "task comment delete",
             "project list",
             "project show",
             "project deps",

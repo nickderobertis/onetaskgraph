@@ -366,6 +366,7 @@ pub const ROWS: &[Row] = &[
             place: dataset_place,
             declared: Declared {
                 documents: Support::Native,
+                comments: Support::Native,
                 ..EVERY_PREDICATE_NATIVE
             },
         },
@@ -392,7 +393,7 @@ pub const ROWS: &[Row] = &[
                 // no document rows at all — which would leave the engine's document
                 // compensation with no coverage, not less of it.
                 documents: Support::Native,
-                comments: Support::Unsupported,
+                comments: Support::Native,
                 orphan_tasks: Support::Unsupported,
                 filter_by_label: Support::Unsupported,
                 filter_by_status: Support::Unsupported,
@@ -414,6 +415,7 @@ pub const ROWS: &[Row] = &[
             place: dataset_place,
             declared: Declared {
                 documents: Support::Native,
+                comments: Support::Native,
                 ..EVERY_PREDICATE_NATIVE
             },
         },
@@ -434,6 +436,8 @@ pub const ROWS: &[Row] = &[
                 // A third folder beside `tasks/` and `projects/`: this source holds
                 // documents, and reads, filters and writes them on the same terms.
                 documents: Support::Native,
+                // A trailing section of each task's own file.
+                comments: Support::Native,
                 max_page_size: 200,
                 ..EVERY_PREDICATE_NATIVE
             },
@@ -466,6 +470,8 @@ pub const ROWS: &[Row] = &[
                 // Linear's own first-class `Document`, read through `documents(…)` and
                 // written through `documentCreate`/`documentUpdate`.
                 documents: Support::Native,
+                // A Linear issue's own comments.
+                comments: Support::Native,
                 search_title: Support::Unsupported,
                 search_content: Support::Unsupported,
                 max_page_size: onetaskgraph_linear::MAX_PAGE_SIZE,
@@ -500,6 +506,8 @@ pub const ROWS: &[Row] = &[
             // three `D-*` items of the fixture board above are.
             declared: Declared {
                 documents: Support::Native,
+                // An issue's own comments; a draft has none, and says so.
+                comments: Support::Native,
                 max_page_size: 100,
                 ..EVERY_PREDICATE_NATIVE
             },
@@ -780,6 +788,14 @@ fn github_blockers() -> Vec<(String, Vec<String>)> {
 /// The board this fixture keeps, and everything a request may change on it.
 struct GitHubBoard {
     items: Vec<Value>,
+    /// Every comment on every issue this board holds, oldest first.
+    ///
+    /// Held here rather than per request because the server outlives one invocation of the
+    /// binary, so a comment one command adds is what the next command lists, edits or removes.
+    comments: Vec<Value>,
+    /// How many comment timestamps this board has handed out, which makes each one later than
+    /// the last and gives every comment an id no other comment has had.
+    comment_ticks: u64,
     /// Issues `createIssue` made which `addProjectV2ItemById` has not filed yet.
     pending: Vec<Value>,
     blocked_by: Vec<(String, Vec<String>)>,
@@ -904,7 +920,47 @@ impl GitHubBoard {
             .expect("the fixture holds the item being written")
     }
 
+    /// Whether this item is a board draft rather than an issue.
+    fn is_draft(item: &Value) -> bool {
+        item["type"] == "DraftIssue"
+    }
+
+    /// The next moment this board stamps a comment with, a second after the one before.
+    fn tick(&mut self) -> String {
+        self.comment_ticks += 1;
+        format!(
+            "2026-09-01T00:{:02}:{:02}Z",
+            self.comment_ticks / 60,
+            self.comment_ticks % 60
+        )
+    }
+
+    /// Put a comment on `issue`, signed as [`GITHUB_COMMENTER`] — the account this board's
+    /// token belongs to, which is who GitHub records as the author of every comment.
+    fn comment(&mut self, issue: &str, body: &str) -> Value {
+        let at = self.tick();
+        let held = json!({"id":format!("COMMENT-{}", self.comment_ticks),"issue":issue,
+                          "author":GITHUB_COMMENTER,"body":body,"createdAt":at,"updatedAt":at});
+        self.comments.push(held.clone());
+        held
+    }
+
+    /// One held comment as every comment document selects it.
+    fn comment_node(held: &Value) -> Value {
+        json!({"id":held["id"],"author":{"login":held["author"]},"createdAt":held["createdAt"],
+               "updatedAt":held["updatedAt"],"body":held["body"],
+               "url":format!("https://example.invalid/{}#{}",
+                             held["issue"].as_str().expect("a comment's issue"),
+                             held["id"].as_str().expect("a comment's id"))})
+    }
+
     fn content(&self, item: &Value) -> Value {
+        if Self::is_draft(item) {
+            // A draft has no url, state, repository, parent, sub-issues or labels on GitHub,
+            // which is what a board read of one selects nothing of.
+            return json!({"__typename":"DraftIssue","id":item["id"],"title":item["title"],
+                          "body":item["body"],"createdAt":null,"updatedAt":null});
+        }
         json!({"__typename":"Issue","id":item["id"],"title":item["title"],"body":item["body"],
                "url":format!("https://example.invalid/{}", item["id"].as_str().unwrap()),
                "createdAt":null,"updatedAt":null,"state":item["state"],
@@ -979,6 +1035,30 @@ impl GitHubBoard {
 
 fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
     github_projects_board(sandbox, recorded, &[]).0
+}
+
+/// The login every comment added through a GitHub fixture board is signed with.
+///
+/// GitHub records the account a token belongs to as the author of every comment made with
+/// it, and this board's token is its owner's.
+pub const GITHUB_COMMENTER: &str = "fixture-owner";
+
+/// The id of the one draft item [`github_projects_with_draft`] adds to the shared board.
+pub const GITHUB_DRAFT_TASK: &str = "DRAFT-1";
+
+/// The shared board plus one **draft** item, [`GITHUB_DRAFT_TASK`], filed under no project.
+///
+/// A draft is a task of a board and not an issue, so `task show` reports it and every comment
+/// verb on it is refused — GitHub keeps comments on issues alone. It is a board of its own
+/// rather than a ninth item of the shared one because the shared journeys count what that
+/// board holds, and a draft is a task every one of those counts would then have to know
+/// about.
+pub fn github_projects_with_draft(sandbox: &Sandbox) -> Value {
+    let draft = json!({"item":format!("ITEM-{GITHUB_DRAFT_TASK}"),"id":GITHUB_DRAFT_TASK,
+        "type":"DraftIssue","title":"Sketch the next plan","body":"a draft nobody has converted",
+        "state":"OPEN","reason":null,"parent":null,"repo":null,"status":"Todo","origin":"",
+        "labels":[]});
+    github_projects_board_at(sandbox, None, &[], 0, vec![draft]).0
 }
 
 /// The same board, with a handle on the fields this source must never write.
@@ -1061,20 +1141,22 @@ fn github_projects_board(
     recorded: Option<Value>,
     fail_first: &'static [&'static str],
 ) -> (Value, GitHubBoardFields) {
-    github_projects_board_at(sandbox, recorded, fail_first, 0)
+    github_projects_board_at(sandbox, recorded, fail_first, 0, Vec::new())
 }
 
 fn github_projects_board_lagging(sandbox: &Sandbox, lagging_reads: usize) -> Value {
-    github_projects_board_at(sandbox, None, &[], lagging_reads).0
+    github_projects_board_at(sandbox, None, &[], lagging_reads, Vec::new()).0
 }
 
 /// `fail_first` names the operations this board refuses, each once — so a retry, and the
-/// tidy-up that follows a refusal, meet the board answering normally again.
+/// tidy-up that follows a refusal, meet the board answering normally again. `extra` is put on
+/// the board after the shared dataset, so every id that dataset holds is where it always was.
 fn github_projects_board_at(
     sandbox: &Sandbox,
     recorded: Option<Value>,
     fail_first: &'static [&'static str],
     lagging_reads: usize,
+    extra: Vec<Value>,
 ) -> (Value, GitHubBoardFields) {
     sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
@@ -1082,8 +1164,12 @@ fn github_projects_board_at(
         "http://{}/graphql",
         listener.local_addr().expect("fixture address")
     );
+    let mut items = github_dataset(recorded.as_ref());
+    items.extend(extra);
     let board = Arc::new(Mutex::new(GitHubBoard {
-        items: github_dataset(recorded.as_ref()),
+        items,
+        comments: Vec::new(),
+        comment_ticks: 0,
         pending: Vec::new(),
         blocked_by: github_blockers(),
         created: 0,
@@ -1165,6 +1251,94 @@ fn github_projects_board_at(
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
     let mut board = board.lock().unwrap();
     let input = variables.get("input").cloned().unwrap_or(Value::Null);
+    if query.contains("addComment(input:$input)") {
+        let subject = input["subjectId"]
+            .as_str()
+            .expect("addComment names its subject")
+            .to_owned();
+        assert!(
+            board
+                .items
+                .iter()
+                .any(|item| item["id"] == json!(subject) && !GitHubBoard::is_draft(item)),
+            "addComment names {subject}, which is no issue on this board"
+        );
+        let body = input["body"].as_str().expect("addComment carries a body");
+        assert!(
+            !body.is_empty(),
+            "GitHub refuses a comment with an empty body"
+        );
+        let added = board.comment(&subject, body);
+        return json!({"addComment":{"subject":{"id":subject},
+                                    "commentEdge":{"node":GitHubBoard::comment_node(&added)}}});
+    }
+    if query.contains("updateIssueComment(input:$input)") {
+        let at = board.tick();
+        let held = board
+            .comments
+            .iter_mut()
+            .find(|held| held["id"] == input["id"])
+            .unwrap_or_else(|| {
+                panic!("updateIssueComment names no comment this board holds: {input}")
+            });
+        held["body"] = input["body"].clone();
+        held["updatedAt"] = json!(at);
+        return json!({"updateIssueComment":{"issueComment":GitHubBoard::comment_node(held)}});
+    }
+    if query.contains("deleteIssueComment(input:$input)") {
+        assert!(
+            board.comments.iter().any(|held| held["id"] == input["id"]),
+            "deleteIssueComment names no comment this board holds: {input}"
+        );
+        board.comments.retain(|held| held["id"] != input["id"]);
+        return json!({"deleteIssueComment":{"clientMutationId":null}});
+    }
+    if query.contains("on IssueComment{id issue{id}}") {
+        let id = variables["id"].clone();
+        if let Some(held) = board.comments.iter().find(|held| held["id"] == id) {
+            return json!({"node":{"__typename":"IssueComment","id":id,
+                                  "issue":{"id":held["issue"]}}});
+        }
+        return match board.items.iter().find(|item| item["id"] == id) {
+            Some(item) => json!({"node":{"__typename":board.content(item)["__typename"]}}),
+            None => json!({ "node": null }),
+        };
+    }
+    if query.contains("comments(first:$first,after:$after)") {
+        let id = variables["id"].clone();
+        let Some(item) = board.items.iter().find(|item| item["id"] == id) else {
+            return json!({ "node": null });
+        };
+        if GitHubBoard::is_draft(item) {
+            return json!({"node":{"__typename":"DraftIssue"}});
+        }
+        let offset = match &variables["after"] {
+            Value::Null => 0,
+            Value::String(cursor) => cursor.parse::<usize>().expect("numeric after cursor"),
+            other => panic!("GraphQL after must be null or a numeric string: {other}"),
+        };
+        let first = usize::try_from(
+            variables["first"]
+                .as_u64()
+                .expect("GraphQL first must be an unsigned integer"),
+        )
+        .expect("GraphQL first fits usize");
+        assert!((1..=100).contains(&first), "comments first is out of range");
+        let on = board
+            .comments
+            .iter()
+            .filter(|held| held["issue"] == id)
+            .collect::<Vec<_>>();
+        let end = (offset + first).min(on.len());
+        let nodes = on[offset.min(end)..end]
+            .iter()
+            .copied()
+            .map(GitHubBoard::comment_node)
+            .collect::<Vec<_>>();
+        return json!({"node":{"__typename":"Issue","comments":{"nodes":nodes,
+            "pageInfo":{"hasNextPage":end < on.len(),
+                        "endCursor":(end > offset).then(|| end.to_string())}}}});
+    }
     if query.contains("repository(owner:$owner,name:$name)") {
         assert_eq!(variables["owner"], "nickderobertis");
         return json!({"repository":{"id":"REPO-1","nameWithOwner":"nickderobertis/onetaskgraph"}});
@@ -1262,6 +1436,8 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let id = input["issueId"].clone();
         board.items.retain(|item| item["id"] != id);
         board.pending.retain(|item| item["id"] != id);
+        // An issue's comments go with it on GitHub.
+        board.comments.retain(|held| held["issue"] != id);
         let id = id.as_str().expect("an issue id").to_owned();
         board.blocked_by.retain(|(near, _)| *near != id);
         for (_, blockers) in &mut board.blocked_by {
@@ -1341,6 +1517,8 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let visible = board.items.len().saturating_sub(board.lagging_reads);
         let matched = board.items[..visible]
             .iter()
+            // An issue search returns issues, and a draft is not one.
+            .filter(|item| !GitHubBoard::is_draft(item))
             .filter(|item| {
                 title
                     .as_ref()
@@ -1358,8 +1536,12 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     }
     if query.contains("subIssues(first:$first") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
-        if !board.items.iter().any(|item| item["id"] == json!(id)) {
+        let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
             return json!({ "node": null });
+        };
+        // A draft has no sub-issues to select, so the `... on Issue` arm selects nothing.
+        if GitHubBoard::is_draft(item) {
+            return json!({"node":{"__typename":"DraftIssue"}});
         }
         let offset = match &variables["after"] {
             Value::Null => 0,
@@ -1392,6 +1574,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
             return json!({ "node": null });
         };
+        // A draft resolves as a node of its own type, and the fragment on `Issue` selects
+        // nothing of it: its board half lives on the board's item connection alone.
+        if GitHubBoard::is_draft(item) {
+            return json!({"node":{"__typename":"DraftIssue"}});
+        }
         return json!({ "node": board.as_issue(item) });
     }
     if query.contains("node(id:$id)") {
@@ -1407,8 +1594,12 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             variables["after"].is_null() || variables["after"].is_string(),
             "dependency after must be null or a string"
         );
-        if !board.items.iter().any(|item| item["id"] == json!(id)) {
+        let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
             return json!({ "node": null });
+        };
+        // A draft has neither `blockedBy` nor `blocking`.
+        if GitHubBoard::is_draft(item) {
+            return json!({"node":{"__typename":"DraftIssue"}});
         }
         return json!({"node":{"__typename":"Issue",
             "blockedBy":{"nodes":board.related(&id, false),
@@ -1570,7 +1761,7 @@ fn linear_server_over(
     sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
-    let state = Arc::new(Mutex::new(held));
+    let state = Arc::new(Mutex::new(linear_with_comments(held)));
     let failing: Vec<String> = failing
         .iter()
         .map(|operation| (*operation).into())
@@ -1742,13 +1933,46 @@ struct RelationVariables {
     after: Option<String>,
 }
 
+/// An issue's comments are walked backwards, so their page is `last`/`before` rather than
+/// the `first`/`after` of every other connection here.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommentPageVariables {
+    id: String,
+    last: usize,
+    #[serde(default)]
+    before: Option<String>,
+}
+
 fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &'static str> {
     use onetaskgraph_linear::graphql;
     let valid = match operation {
         graphql::VIEWER => serde_json::from_value::<NoVariables>(variables.clone()).is_ok(),
-        graphql::ISSUE | graphql::PROJECT | graphql::DOCUMENT => {
+        graphql::ISSUE | graphql::PROJECT | graphql::DOCUMENT | graphql::COMMENT => {
             serde_json::from_value::<ItemVariables>(variables.clone())
                 .is_ok_and(|variables| !variables.id.is_empty())
+        }
+        graphql::ISSUE_COMMENTS => serde_json::from_value::<CommentPageVariables>(
+            variables.clone(),
+        )
+        .is_ok_and(|variables| {
+            !variables.id.is_empty()
+                && variables.last > 0
+                && variables.before.as_deref() != Some("")
+        }),
+        // An issue and a body, and nothing else — in particular no `createAsUser`, which Linear
+        // takes only from an OAuth application, so a plugin that sent one would be refused.
+        graphql::COMMENT_CREATE => {
+            exact_linear_variable_keys(variables, &["input"])
+                && valid_linear_write_input(variables.get("input"), &["issueId", "body"], &[])
+        }
+        graphql::COMMENT_UPDATE => {
+            exact_linear_variable_keys(variables, &["id", "input"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+                && valid_linear_write_input(variables.get("input"), &["body"], &[])
         }
         graphql::LABELS => serde_json::from_value::<PageVariables>(variables.clone())
             .is_ok_and(|variables| variables.first > 0 && variables.after.as_deref() != Some("")),
@@ -1870,7 +2094,8 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
         | graphql::PROJECT_RELATION_DELETE
         | graphql::ISSUE_DELETE
         | graphql::PROJECT_DELETE
-        | graphql::DOCUMENT_DELETE => {
+        | graphql::DOCUMENT_DELETE
+        | graphql::COMMENT_DELETE => {
             exact_linear_variable_keys(variables, &["id"])
                 && variables
                     .get("id")
@@ -2026,6 +2251,11 @@ fn linear_response(
         graphql::DOCUMENT_CREATE,
         graphql::DOCUMENT_UPDATE,
         graphql::DOCUMENT_DELETE,
+        graphql::ISSUE_COMMENTS,
+        graphql::COMMENT,
+        graphql::COMMENT_CREATE,
+        graphql::COMMENT_UPDATE,
+        graphql::COMMENT_DELETE,
     ]
     .contains(&operation)
     {
@@ -2033,6 +2263,9 @@ fn linear_response(
     }
     let vars = Value::Object(request.variables);
     validate_linear_variables(operation, &vars)?;
+    if let Some(answer) = linear_comment_response(data, &vars, operation) {
+        return answer;
+    }
     if operation == graphql::TEAM {
         return Ok(json!({"teams":{"nodes":[{"id":"TEAM-1"}]}}));
     }
@@ -2299,6 +2532,183 @@ fn linear_write_document(
     })
 }
 
+/// The workspace, with its comments held the way Linear holds them.
+///
+/// Seeded from the shared dataset's `comments` when it carries any, in the order they were
+/// written, so a comment the dataset gives is one this workspace answers with too; a
+/// workspace whose dataset carries none starts with none. Held in the responder's own state,
+/// which outlives one invocation of the binary, so a comment one command adds is one a later
+/// command lists, edits and removes.
+fn linear_with_comments(mut held: Value) -> Value {
+    let seeded = held
+        .get("comments")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|seeded| {
+            let comment = &seeded["comment"];
+            json!({
+                "id": comment["id"],
+                "issue": seeded["task"],
+                "body": comment["body"],
+                "createdAt": comment.get("created_at").cloned().unwrap_or(Value::Null),
+                "updatedAt": comment.get("updated_at").cloned().unwrap_or(Value::Null),
+                "user": comment
+                    .get("author")
+                    .and_then(Value::as_str)
+                    .map(|name| json!({"displayName": name})),
+            })
+        })
+        .collect::<Vec<_>>();
+    held["_linear_comments"] = Value::Array(seeded);
+    held["_linear_clock"] = json!(0);
+    held
+}
+
+/// The next instant of this workspace's clock, as Linear spells a `DateTime`.
+///
+/// A counter rather than the wall clock, so two writes in the same second still read back
+/// in the order they were made, and an edit's `updatedAt` always moves.
+fn linear_tick(data: &mut Value) -> (u64, String) {
+    let tick = data["_linear_clock"].as_u64().unwrap_or(0) + 1;
+    data["_linear_clock"] = json!(tick);
+    let stamp = format!(
+        "2026-09-01T{:02}:{:02}:{:02}Z",
+        tick / 3600 % 24,
+        tick / 60 % 60,
+        tick % 60
+    );
+    (tick, stamp)
+}
+
+/// One held comment as Linear's `Comment` selection answers it.
+fn linear_comment_node(row: &Value, data: &Value) -> Value {
+    let issue = row["issue"].as_str().unwrap_or_default();
+    let page = data["tasks"]
+        .as_array()
+        .and_then(|tasks| tasks.iter().find(|task| task["id"] == issue))
+        .map(|task| linear_web_address(task, "issue"))
+        .and_then(|url| url.as_str().map(str::to_owned))
+        .unwrap_or_else(|| linear_address("issue", issue));
+    json!({
+        "id": row["id"],
+        "body": row["body"],
+        "url": format!("{page}#comment-{}", row["id"].as_str().unwrap_or_default()),
+        "createdAt": row["createdAt"],
+        "updatedAt": row["updatedAt"],
+        "user": row["user"],
+    })
+}
+
+/// The answer to one comment document, or `None` for any other operation.
+fn linear_comment_response(
+    data: &mut Value,
+    vars: &Value,
+    operation: &str,
+) -> Option<Result<Value, &'static str>> {
+    use onetaskgraph_linear::graphql;
+    let holds_issue = |data: &Value, id: &str| {
+        data["tasks"]
+            .as_array()
+            .is_some_and(|tasks| tasks.iter().any(|task| task["id"] == id))
+    };
+    Some(match operation {
+        graphql::ISSUE_COMMENTS => (|| {
+            let id = vars["id"]
+                .as_str()
+                .ok_or("comment page id must be a string")?;
+            if !holds_issue(data, id) {
+                return Ok(json!({ "issue": null }));
+            }
+            // Newest first, because that is the order Linear lists a connection in — so a
+            // plugin that walked it forwards would report the newest comment first here, as
+            // it would against Linear, rather than passing against a fake in the other order.
+            let newest_first = data["_linear_comments"]
+                .as_array()
+                .ok_or("fixture comments are not an array")?
+                .iter()
+                .rev()
+                .filter(|row| row["issue"] == id)
+                .map(|row| linear_comment_node(row, data))
+                .collect::<Vec<_>>();
+            // A cursor is a comment's own id rather than a position, as Linear's are opaque
+            // and stable: a comment added between two pages must not shift the second one.
+            let end = match vars["before"].as_str() {
+                Some(cursor) => newest_first
+                    .iter()
+                    .position(|node| node["id"] == cursor)
+                    .ok_or("unknown comment cursor")?,
+                None => newest_first.len(),
+            };
+            let last = vars["last"].as_u64().ok_or("last must be a number")? as usize;
+            let start = end.saturating_sub(last);
+            let nodes = newest_first[start..end].to_vec();
+            let start_cursor = nodes.first().map(|node| node["id"].clone());
+            Ok(json!({"issue":{"archivedAt":null,"comments":{"nodes":nodes,
+                "pageInfo":{"hasPreviousPage":start > 0,"startCursor":start_cursor}}}}))
+        })(),
+        graphql::COMMENT => (|| {
+            let id = vars["id"].as_str().ok_or("comment id must be a string")?;
+            let placed = data["_linear_comments"]
+                .as_array()
+                .ok_or("fixture comments are not an array")?
+                .iter()
+                .find(|row| row["id"] == id)
+                .map(|row| json!({"id":row["id"],"archivedAt":null,"issue":{"id":row["issue"]}}));
+            Ok(json!({ "comment": placed }))
+        })(),
+        graphql::COMMENT_CREATE => (|| {
+            let input = &vars["input"];
+            let issue = input["issueId"]
+                .as_str()
+                .ok_or("issueId must be a string")?;
+            if !holds_issue(data, issue) {
+                return Err("comment issue does not exist");
+            }
+            let (tick, stamp) = linear_tick(data);
+            // Linear records the user whose key made the request, which is this workspace's
+            // viewer.
+            let row = json!({"id":format!("C-W{tick}"),"issue":issue,"body":input["body"],
+                "createdAt":stamp,"updatedAt":stamp,"user":{"displayName":"fixture-user"}});
+            let node = linear_comment_node(&row, data);
+            data["_linear_comments"]
+                .as_array_mut()
+                .ok_or("fixture comments are not an array")?
+                .push(row);
+            Ok(json!({"commentCreate":{"success":true,"comment":node}}))
+        })(),
+        graphql::COMMENT_UPDATE => (|| {
+            let id = vars["id"].as_str().ok_or("update id must be a string")?;
+            let (_, stamp) = linear_tick(data);
+            let rows = data["_linear_comments"]
+                .as_array_mut()
+                .ok_or("fixture comments are not an array")?;
+            let row = rows
+                .iter_mut()
+                .find(|row| row["id"] == id)
+                .ok_or("update target does not exist")?;
+            row["body"] = vars["input"]["body"].clone();
+            row["updatedAt"] = json!(stamp);
+            let row = row.clone();
+            Ok(json!({"commentUpdate":{"success":true,"comment":linear_comment_node(&row, data)}}))
+        })(),
+        graphql::COMMENT_DELETE => (|| {
+            let id = vars["id"].as_str().ok_or("delete id must be a string")?;
+            let rows = data["_linear_comments"]
+                .as_array_mut()
+                .ok_or("fixture comments are not an array")?;
+            let at = rows
+                .iter()
+                .position(|row| row["id"] == id)
+                .ok_or("delete target does not exist")?;
+            rows.remove(at);
+            Ok(json!({"commentDelete":{"success":true}}))
+        })(),
+        _ => return None,
+    })
+}
+
 fn linear_write_relation(
     data: &mut Value,
     vars: &Value,
@@ -2386,6 +2796,11 @@ fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
         json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":{"state":{"type":{"in":7}}}}}),
         json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":{"and":"invalid"}}}),
         json!({"query":onetaskgraph_linear::graphql::ISSUES,"variables":{"first":2,"after":null,"filter":{"project":{"null":"true"}}}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUE_COMMENTS,"variables":{"id":"T-1","last":0,"before":null}}),
+        json!({"query":onetaskgraph_linear::graphql::ISSUE_COMMENTS,"variables":{"id":"T-1","first":2,"after":null}}),
+        json!({"query":onetaskgraph_linear::graphql::COMMENT_CREATE,"variables":{"input":{"issueId":"T-1","body":"text","createAsUser":"grace"}}}),
+        json!({"query":onetaskgraph_linear::graphql::COMMENT_UPDATE,"variables":{"id":"C-1","input":{"body":""}}}),
+        json!({"query":onetaskgraph_linear::graphql::COMMENT_DELETE,"variables":{"id":""}}),
     ] {
         let body = serde_json::to_string(&body).unwrap();
         let mut stream = std::net::TcpStream::connect(address).unwrap();
@@ -2789,7 +3204,7 @@ fn native_block(_sandbox: &Sandbox) -> Value {
 /// dataset holds documents, and a source declaring it has none while holding some is
 /// refused where its configuration is read.
 pub fn native_capabilities() -> Value {
-    json!({"documents": "native", "max_page_size": 50})
+    json!({"documents": "native", "comments": "native", "max_page_size": 50})
 }
 
 /// The row that runs the same dataset in a second process, over the stdio protocol.
@@ -2822,6 +3237,9 @@ fn compensated_block(_sandbox: &Sandbox) -> Value {
         // does. Declaring it unsupported here would contribute no document rows at all and
         // leave the engine's document compensation with no coverage rather than less of it.
         "documents": "native",
+        // Not a predicate either, for the same reason: it says this source's tasks hold
+        // comments, and the comment journeys drive this row as well as the native one.
+        "comments": "native",
         "filter_by_label": "unsupported",
         "filter_by_status": "unsupported",
         "search_title": "unsupported",

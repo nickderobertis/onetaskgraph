@@ -112,7 +112,10 @@ fn store_at(store: &Path, log: Option<&Path>, documents: &str) -> Value {
 }
 
 /// This file's peer, beside it in the source tree.
-fn peer() -> PathBuf {
+///
+/// Visible to the comment journeys too, which drive it as the stdio plugin whose handshake
+/// was written before there were comments and so says nothing about them.
+pub(crate) fn peer() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/document_store.py")
 }
 
@@ -123,7 +126,7 @@ fn peer() -> PathBuf {
 /// resolve a bare command against. Found here, where there is still an environment to look
 /// in, rather than assumed — and a host without one fails saying so, because `python3` is
 /// what every guard under `workspace:lint` already runs.
-fn interpreter() -> PathBuf {
+pub(crate) fn interpreter() -> PathBuf {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let names = if cfg!(windows) {
         ["python3.exe", "python.exe"].as_slice()

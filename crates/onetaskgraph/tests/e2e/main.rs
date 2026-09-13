@@ -24,6 +24,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod comments;
 mod copy;
 mod document_store;
 mod failures;

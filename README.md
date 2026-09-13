@@ -47,6 +47,10 @@ onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
 onetaskgraph task show <ID>
 onetaskgraph task deps <ID> [--direction depends-on|depended-on-by]
 onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dry-run]
+onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME]
+onetaskgraph task comment list   <ID>
+onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH]
+onetaskgraph task comment delete <ID> <COMMENT-ID>
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
 onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks] [--match-by KEY] [--recreate]
@@ -76,6 +80,17 @@ path on the machine its source runs on (`path …`). `task show`, `project show`
 `{"url": …}` or `{"path": …}` — so a program branches on which key is present. Not every
 source has documents; one that says it has none is reported as holding none rather than as
 having failed, and a copy naming it is refused before anything is read.
+
+A **comment** is added to a task after the task exists, without rewriting it — evidence
+appended to an issue somebody else opened. `task comment add` and `edit` read the body from
+`--body-file`, or from standard input when that flag is absent, and never from a word of the
+command line, so a body quoting a command never passes through a shell; it is stored and
+returned byte for byte, and an empty one is refused. `--author` is for a source that records
+what it is given, such as a folder of Markdown; GitHub and Linear record the signed-in
+account themselves and refuse it rather than drop it. `task show` prints a task's comments
+after its body, and its `--json` carries them as a top-level `comments` list for a source
+whose tasks have comments — absent, rather than empty, for one whose tasks have none. A
+`task copy`, `project copy` or `document copy` never reads or writes a comment at either end.
 
 How a source *spells* a document is its own business. A GitHub Projects board has no
 document type, so `github-projects` reads one as an ordinary issue whose title begins
