@@ -566,7 +566,7 @@ pub mod graphql {
             concat!(
                 r#" fragment BoardIssue on Issue{__typename id title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total}
       labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}
-      projectItems(first:$boardItems){nodes{id project{number}
+      projectItems(first:$boardItems){nodes{id project{id number}
         "#,
                 board_item_values!(),
                 r#"}pageInfo{hasNextPage endCursor}}}"#
@@ -664,7 +664,7 @@ pub mod graphql {
         r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){
       node(id:$id){
         ... on Issue{projectItems(first:$first,after:$after){
-          nodes{id project{number}
+          nodes{id project{id number}
         "#,
         board_item_values!(),
         r#"}
@@ -674,9 +674,11 @@ pub mod graphql {
     );
     /// Resolves the configured repository's node id, which creating an issue requires.
     pub const REPOSITORY: &str = r#"query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id nameWithOwner}}"#;
-    /// Reads both dependency directions for one issue, with each far end's own kind.
+    /// Reads both dependency directions for one issue, with each far end's own kind — and
+    /// the issue's own body, which is where an edge to another source is recorded, so that
+    /// half of a dependency read needs no second read of the issue or of the board.
     pub const ISSUE_DEPENDENCIES: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){__typename
-      ... on Issue{
+      ... on Issue{body
         blockedBy(first:$first,after:$after){nodes{...Related}pageInfo{hasNextPage endCursor}}
         blocking(first:$first,after:$after){nodes{...Related}pageInfo{hasNextPage endCursor}}
       }}} fragment Related on Issue{id title body parent{id} subIssuesSummary{total}}"#;
@@ -2100,6 +2102,7 @@ impl GitHubProjectsSource {
         };
         let item = json!({
             "id": required_str(&held, "id")?,
+            "project": held.get("project"),
             "fieldValues": held.get("fieldValues"),
             "content": issue,
         });
@@ -2647,6 +2650,13 @@ impl GitHubProjectsSource {
             own_repository,
             repositories,
             slot,
+            // Present when the item was reached through its own issue, whose board entry
+            // names the board; a read of the board's own items has the board already.
+            board_id: item
+                .pointer("/project/id")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            fields: field_definitions(nodes),
         }))
     }
 
@@ -2896,7 +2906,7 @@ impl GitHubProjectsSource {
         let natively_names = (required_str(node, "__typename")? == "Issue").then_some(near_kind);
         if let Some(offset) = recorded {
             return Ok(recorded_page(
-                self.recorded_edges(id, near_kind, direction, natively_names)
+                self.recorded_edges(id, near_kind, direction, natively_names, node)
                     .await?,
                 offset,
                 limit,
@@ -2904,7 +2914,7 @@ impl GitHubProjectsSource {
         }
         if natively_names.is_none() {
             return Ok(recorded_page(
-                self.recorded_edges(id, near_kind, direction, natively_names)
+                self.recorded_edges(id, near_kind, direction, natively_names, node)
                     .await?,
                 0,
                 limit,
@@ -2952,7 +2962,7 @@ impl GitHubProjectsSource {
         }
         if next.is_none()
             && !self
-                .recorded_edges(id, near_kind, direction, natively_names)
+                .recorded_edges(id, near_kind, direction, natively_names, node)
                 .await?
                 .is_empty()
         {
@@ -2967,29 +2977,40 @@ impl GitHubProjectsSource {
     /// Only forwards. The reverse of a recorded edge is derived from the far end, and this
     /// source never writes one down.
     ///
-    /// The metadata lives in the item's own body slot, so reading it costs one board scan.
-    /// That is why it happens once the native connection is spent rather than on every
-    /// page.
+    /// The metadata lives in the item's own body slot, and `node` is the dependency read's
+    /// own answer, which carries an issue's body — so an issue's recorded edges cost no
+    /// request beyond the read already made, and reading the board for them would be a
+    /// walk of every item for one field of one. A draft has no body in that answer, because
+    /// a draft lives only inside the board, so a draft's are read off the board as before.
     async fn recorded_edges(
         &self,
         id: &NativeId,
         near_kind: ItemKind,
         direction: Direction,
         natively_names: Option<ItemKind>,
+        node: &Value,
     ) -> Result<Vec<DependencyEdge>, SourceError> {
         if direction != Direction::DependsOn {
             return Ok(Vec::new());
         }
-        let Some(item) = self
-            .board()
-            .await?
-            .items
-            .into_iter()
-            .find(|item| item.id == *id)
-        else {
-            return Ok(Vec::new());
+        let slot = match node.get("body") {
+            Some(body) if natively_names.is_some() => {
+                metadata_body(body.as_str().map(str::to_owned))?.1
+            }
+            _ => {
+                let Some(item) = self
+                    .board()
+                    .await?
+                    .items
+                    .into_iter()
+                    .find(|item| item.id == *id)
+                else {
+                    return Ok(Vec::new());
+                };
+                item.slot
+            }
         };
-        DependencyEdge::recorded(&item.slot, id, near_kind, &self.name, natively_names)
+        DependencyEdge::recorded(&slot, id, near_kind, &self.name, natively_names)
             .map_err(|message| SourceError::Malformed { message })
     }
 
@@ -3206,7 +3227,13 @@ impl GitHubProjectsSource {
                 ),
             });
         }
-        let board = self.board().await?;
+        let board = match target {
+            Some(target) => match self.board_for_update(target, incoming, depends_on).await? {
+                Some(board) => board,
+                None => self.board().await?,
+            },
+            None => self.board().await?,
+        };
         let status_target = incoming
             .written
             .status()
@@ -3408,9 +3435,94 @@ impl GitHubProjectsSource {
             own_repository,
             repositories: incoming.repositories.to_vec(),
             slot,
+            board_id: Some(board.id.clone()),
+            fields: board
+                .fields
+                .get("nodes")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
         };
         self.remember_written(remembered, existing.is_none())?;
         Ok(content_id)
+    }
+
+    /// What an update of an item this board already holds needs of the board, read off that
+    /// item rather than off the board — or `None` when the item cannot say enough, and the
+    /// board has to be read after all.
+    ///
+    /// An update needs the item it updates, the board's own id for a field write, the
+    /// definitions of the `Status` and origin fields it writes, and every same-source far end
+    /// its edges name. The first three ride along on the item's own node read — its board
+    /// entry names the board's id, and each field value on it carries the definition of the
+    /// field it is a value of — and each far end is read by its own node id. So updating one
+    /// item costs a read of that item rather than every page of the board, which is what a
+    /// copy naming one member out of many is for.
+    ///
+    /// **Nothing the item does not say is guessed.** A field this item holds no value of may
+    /// still be on the board, and a view that read it as absent would refuse a write the
+    /// board can take, or skip a field write the board needs. So a board this command has
+    /// already read is used as it is, and an item that does not name its board, holds no
+    /// value of the origin field, or holds no `Status` value when the write carries a status,
+    /// sends the write back to reading the board — exactly as every update read it before.
+    async fn board_for_update(
+        &self,
+        target: &NativeId,
+        incoming: &Incoming<'_>,
+        depends_on: &[DependencyEdge],
+    ) -> Result<Option<Board>, SourceError> {
+        if self.board_cache()?.is_some() {
+            return Ok(None);
+        }
+        let Some(existing) = self.item_by_id(target).await? else {
+            return Ok(None);
+        };
+        let Some(board_id) = existing.board_id.clone() else {
+            return Ok(None);
+        };
+        let defines = |name: &str| {
+            existing
+                .fields
+                .iter()
+                .any(|field| field.get("name").and_then(Value::as_str) == Some(name))
+        };
+        if !defines(ORIGIN_FIELD) || (incoming.written.status().is_some() && !defines("Status")) {
+            return Ok(None);
+        }
+        let fields = json!({"nodes": existing.fields, "pageInfo": {"hasNextPage": false}});
+        let mut items = vec![existing];
+        for edge in depends_on {
+            if !edge
+                .to
+                .source()
+                .is_none_or(|source| source == self.name.as_str())
+            {
+                continue;
+            }
+            // The first colon, for the reason `partition_edges` gives.
+            let far = NativeId(if edge.to.is_qualified() {
+                edge.to
+                    .id()
+                    .split_once(':')
+                    .map_or(edge.to.id(), |(_, native)| native)
+                    .to_owned()
+            } else {
+                edge.to.id().to_owned()
+            });
+            if items.iter().any(|item| item.id == far) {
+                continue;
+            }
+            match self.item_by_id(&far).await? {
+                Some(item) => items.push(item),
+                // Refused against the whole board, in the words that refusal has always had.
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(Board {
+            id: board_id,
+            fields,
+            items,
+        }))
     }
 
     /// Everything a write does after the item exists: its board fields, its parent, and
@@ -3892,6 +4004,14 @@ struct Resolved {
     own_repository: Option<Repository>,
     repositories: Vec<Repository>,
     slot: BTreeMap<String, Value>,
+    /// The node id of the board this item sits on, when the read that reached it said.
+    board_id: Option<String>,
+    /// The definition of every board field this item holds a value of, in the shape a read
+    /// of the board's own `fields` gives one.
+    ///
+    /// Only the fields this item has a value in: a field it holds nothing of is not here,
+    /// which says nothing about whether the board has it.
+    fields: Vec<Value>,
 }
 
 impl Resolved {
@@ -4625,6 +4745,33 @@ fn labels(content: &Value) -> Result<Vec<Label>, SourceError> {
                 name: required_str(v, "name")?.to_owned(),
                 color: optional_str(v, "color")?.map(str::to_owned),
             })
+        })
+        .collect()
+}
+
+/// The definition of each board field one item's values are values of, in the shape a read
+/// of the board's own `fields` gives one.
+///
+/// A value names its field through a fragment on that field's own type, so the type is
+/// known from which kind of value it is: a single-select value's field is a
+/// `ProjectV2SingleSelectField`, options and all, and a text value's is a `ProjectV2Field`.
+/// A value whose field carried no id says nothing usable and is left out.
+fn field_definitions(field_values: &[Value]) -> Vec<Value> {
+    field_values
+        .iter()
+        .filter_map(|value| {
+            let field = value.get("field")?.as_object()?;
+            field.get("id")?.as_str()?;
+            let typename = if value.get("text").is_some() {
+                "ProjectV2Field"
+            } else if value.get("name").is_some() {
+                "ProjectV2SingleSelectField"
+            } else {
+                return None;
+            };
+            let mut defined = field.clone();
+            defined.insert("__typename".to_owned(), json!(typename));
+            Some(Value::Object(defined))
         })
         .collect()
 }

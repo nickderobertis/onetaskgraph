@@ -170,6 +170,62 @@ fn rendered(heading: &str, session: &Session) -> String {
     out
 }
 
+/// What the same two whole copies sent before a command resolved each item's target once,
+/// measured on this harness against the engine as it stood at onetaskgraph 0.2.28.
+const BEFORE: (usize, usize) = (69, 47);
+
+/// The documents a member copy may send: reads and writes of one issue and its board item,
+/// and nothing that walks the board, searches its issues or reads a project's sub-issues.
+///
+/// Named by the document itself from `graphql::DOCUMENTS` rather than by the label a
+/// record prints, so renaming a row cannot let a board walk through.
+fn per_node(document: &str) -> bool {
+    use onetaskgraph_github_projects::graphql;
+    [
+        graphql::ISSUE,
+        graphql::ISSUE_BOARD_ITEMS,
+        graphql::ISSUE_DEPENDENCIES,
+        graphql::UPDATE_ISSUE,
+        graphql::UPDATE_DRAFT,
+        graphql::UPDATE_FIELD,
+        graphql::ADD_SUB_ISSUE,
+        graphql::REMOVE_SUB_ISSUE,
+        graphql::ADD_BLOCKED_BY,
+        graphql::REMOVE_BLOCKED_BY,
+    ]
+    .contains(&document)
+}
+
+/// Whether a document reads one issue by the node id its `id` variable carries.
+fn reads_one_issue(document: &str) -> bool {
+    use onetaskgraph_github_projects::graphql;
+    [
+        graphql::ISSUE,
+        graphql::ISSUE_BOARD_ITEMS,
+        graphql::ISSUE_DEPENDENCIES,
+    ]
+    .contains(&document)
+}
+
+/// The native id a qualified destination id in a copy report names.
+fn native(destination: &Value) -> String {
+    destination
+        .as_str()
+        .and_then(|id| id.strip_prefix("board:"))
+        .unwrap_or_else(|| panic!("a board id: {destination}"))
+        .to_owned()
+}
+
+/// A plan of `tasks` tasks the board already holds, each recording its origin, with the
+/// task at `changed` moved to `Doing` — and the one-member copy naming it.
+fn one_member_copy(tasks: usize, changed: usize) -> (Session, Vec<(String, Value)>, Value) {
+    let plan = Plan::of(tasks);
+    let (_, _, first) = plan.copy(&[]);
+    plan.author(&landed(&first), Some(changed));
+    let member = format!("plans:T-{changed}");
+    plan.copy(&["--member", &member])
+}
+
 #[test]
 fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_says() {
     let ten = Plan::of(10);
@@ -178,13 +234,89 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
     // way the consumer's write-back records them.
     let origins = landed(&first);
     ten.author(&origins, None);
-    let (repeat, _, _) = ten.copy(&[]);
+    let (repeat, repeat_served, _) = ten.copy(&[]);
+    let (of_ten, of_ten_served, of_ten_report) = one_member_copy(10, 3);
+    let (of_three, of_three_served, _) = one_member_copy(3, 1);
+
+    // (a) and (b) cost less than they did, and (b) — where every item already has a
+    // counterpart — reads no issue by its node id twice.
+    assert!(
+        whole.total_requests() < BEFORE.0 && repeat.total_requests() < BEFORE.1,
+        "the whole copies sent {} and {} requests, and before this change they sent {} and {}",
+        whole.total_requests(),
+        repeat.total_requests(),
+        BEFORE.0,
+        BEFORE.1
+    );
+    let mut read: Vec<&Value> = repeat_served
+        .iter()
+        .filter(|(document, _)| document == onetaskgraph_github_projects::graphql::ISSUE)
+        .map(|(_, variables)| &variables["id"])
+        .collect();
+    let reads = read.len();
+    read.sort_by_key(|id| id.to_string());
+    read.dedup();
+    assert_eq!(
+        reads,
+        read.len(),
+        "(b) read one issue twice: {repeat_served:#?}"
+    );
+
+    // (c) and (d): the same number of requests, whatever the project holds besides the one
+    // member named, and every one of them about one issue and its board item.
+    assert_eq!(
+        of_ten.total_requests(),
+        of_three.total_requests(),
+        "a one-member copy grew with the members it was not told about"
+    );
+    for (what, served) in [("(c)", &of_ten_served), ("(d)", &of_three_served)] {
+        let walked: Vec<&(String, Value)> = served
+            .iter()
+            .filter(|(document, _)| !per_node(document))
+            .collect();
+        assert!(
+            walked.is_empty(),
+            "{what} sent a request that is not a read or a write of one issue: {walked:#?}"
+        );
+    }
+    let reached: Vec<String> = of_ten_report["items"]
+        .as_array()
+        .expect("a copy report carries items")
+        .iter()
+        .map(|item| native(&item["destination"]))
+        .collect();
+    assert_eq!(
+        of_ten_report["items"].as_array().map(|items| items
+            .iter()
+            .map(|item| item["action"].clone())
+            .collect::<Vec<_>>()),
+        Some(vec![json!("unchanged"), json!("updated")]),
+        "{of_ten_report:#}"
+    );
+    for (document, variables) in &of_ten_served {
+        if reads_one_issue(document) {
+            let id = variables["id"].as_str().expect("a node id").to_owned();
+            assert!(
+                reached.contains(&id),
+                "(c) read issue {id}, which is neither the project's nor the named member's \
+                 ({reached:?})"
+            );
+        }
+    }
 
     let measured = [
         rendered("(a) a whole copy of a project of 10 tasks", &whole),
         rendered(
             "(b) a repeat whole copy of the same project, unchanged, each item recording its origin",
             &repeat,
+        ),
+        rendered(
+            "(c) a member copy naming 1 of those 10 tasks, its status changed, every task recording its origin",
+            &of_ten,
+        ),
+        rendered(
+            "(d) the same one-member copy of a project of 3 tasks",
+            &of_three,
         ),
     ]
     .join("\n");

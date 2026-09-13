@@ -933,7 +933,7 @@ impl GitHubBoard {
         let board_item = self.rendered(item);
         let mut issue = self.content(item);
         issue["projectItems"] = json!({"nodes":[{"id":board_item["id"],
-                                                 "project":{"number":7},
+                                                 "project":{"id":"PVT-board","number":7},
                                                  "fieldValues":board_item["fieldValues"]}],
                                        "pageInfo":{"hasNextPage":false}});
         issue
@@ -1418,10 +1418,10 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             variables["after"].is_null() || variables["after"].is_string(),
             "dependency after must be null or a string"
         );
-        if !board.items.iter().any(|item| item["id"] == json!(id)) {
+        let Some(near) = board.items.iter().find(|item| item["id"] == json!(id)) else {
             return json!({ "node": null });
-        }
-        return json!({"node":{"__typename":"Issue",
+        };
+        return json!({"node":{"__typename":"Issue","body":near["body"].clone(),
             "blockedBy":{"nodes":board.related(&id, false),
                          "pageInfo":{"hasNextPage":false,"endCursor":null}},
             "blocking":{"nodes":board.related(&id, true),
