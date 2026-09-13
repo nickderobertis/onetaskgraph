@@ -69,7 +69,7 @@ pub struct FailureDocument {
 ///
 /// Every member is always written, `source` and `retry_after_seconds` as `null` when they
 /// have nothing to say, so a caller reads a fixed shape.
-// Built only from an engine error, a configuration error or `Failure::store`, so `class`
+// Built only from an engine error, a configuration error or `Failure::decided`, so `class`
 // always follows `classify` and `message` is always the failure's own rendering.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[schemars(transform = every_member_required)]
@@ -112,7 +112,7 @@ fn every_member_required(schema: &mut schemars::Schema) {
 impl Failure {
     /// A failure this product decided on its own, with no source behind it.
     #[must_use]
-    pub fn store(kind: &str, message: impl Into<String>) -> Self {
+    pub fn decided(kind: &str, message: impl Into<String>) -> Self {
         Self::caused(kind.to_owned(), None, None, message.into())
     }
 
@@ -202,6 +202,6 @@ impl From<&ConfigError> for Failure {
             ConfigError::Syntax { .. } => "config-syntax",
             ConfigError::Setting { .. } => "config-setting",
         };
-        Self::store(kind, error.to_string())
+        Self::decided(kind, error.to_string())
     }
 }

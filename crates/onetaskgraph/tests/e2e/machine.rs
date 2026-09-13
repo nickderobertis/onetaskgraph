@@ -715,3 +715,40 @@ fn a_partial_answer_classes_each_source_that_did_not_answer() {
         .expect("the board's entry");
     assert_eq!(board["error"]["retry_after_seconds"], 30, "{board}");
 }
+
+#[test]
+fn a_document_asking_for_json_gets_a_failure_document_whether_or_not_it_loads() {
+    // The configuration's own `output` setting, written in a document that loads: nothing
+    // on the command line asks for JSON, and the failure still answers in it.
+    let sandbox = Sandbox::new();
+    let bundle = bundle(&sandbox);
+    sandbox.project_document(
+        &serde_json::to_string(&json!({
+            "output": "json",
+            "sources": {"work": {"plugin": "in-memory", "config": {}}}
+        }))
+        .expect("a document renders"),
+    );
+    let missing = qualified("work", "NOPE");
+    let machine = run(&sandbox, &["task", "show", &missing]);
+    let failure = failure_document(&bundle, &machine, "task show under `output: json`");
+    assert_eq!(failure["class"], "refused", "{failure}");
+    assert_eq!(failure["kind"], "no-such-item", "{failure}");
+    // And a flag over that document still wins, in the other direction.
+    unchanged_as_text(
+        &run(&sandbox, &["task", "show", &missing, "--output", "text"]),
+        &machine,
+        "task show --output text",
+    );
+
+    // A user-level document asking for JSON beneath a project document that will not
+    // parse: the configuration does not load, and the layer that still reads still asks.
+    let broken = Sandbox::new();
+    broken.user_document("output: json\n");
+    broken.project_document("sources:\n  work:\n   plugin: [this is not a plugin name\n");
+    let unloaded = run(&broken, &["task", "list"]);
+    let failure = failure_document(&bundle, &unloaded, "task list under a user document");
+    assert_eq!(failure["class"], "refused", "{failure}");
+    assert_eq!(failure["kind"], "config-syntax", "{failure}");
+    assert_eq!(failure["source"], Value::Null, "{failure}");
+}

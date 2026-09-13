@@ -435,7 +435,7 @@ fn show<T: Serialize>(
     what: &str,
 ) -> Result<u8, Failure> {
     match (response.items.first(), response.errors.is_empty()) {
-        (None, true) => Err(Failure::store(
+        (None, true) => Err(Failure::decided(
             "no-such-item",
             format!(
                 "no {what} with that id\n\
@@ -488,7 +488,7 @@ fn copy_request<'a>(
     let items = ids.map(qualified).collect::<Result<Vec<_>, _>>()?;
     Ok(CopyRequest {
         items: CopyItems::new(items).ok_or_else(|| {
-            Failure::store(
+            Failure::decided(
                 "no-id",
                 "no id to copy\n\
                  next: name at least one qualified id — `onetaskgraph task list` reports them.",
@@ -496,7 +496,7 @@ fn copy_request<'a>(
         })?,
         scope,
         destination: SourceName::new(args.to.clone()).map_err(|error| {
-            Failure::store(
+            Failure::decided(
                 "invalid-source-name",
                 format!(
                     "--to {}: {error}\n\
@@ -544,7 +544,7 @@ fn selection(args: &SelectionArgs) -> Result<Vec<SourceName>, Failure> {
         .iter()
         .map(|name| {
             SourceName::new(name.clone()).map_err(|error| {
-                Failure::store(
+                Failure::decided(
                     "invalid-source-name",
                     format!(
                         "--source {name}: {error}\n\
@@ -617,7 +617,7 @@ fn selector(engine: &Engine, project: Option<&str>, orphans: bool) -> ProjectSel
 /// One qualified id, as a verb that takes one reads it.
 fn qualified(id: &str) -> Result<GlobalId, Failure> {
     GlobalId::from_str(id).map_err(|error| {
-        Failure::store(
+        Failure::decided(
             "invalid-id",
             format!(
                 "{error}\n\
@@ -636,7 +636,7 @@ fn paging(loaded: &Loaded, args: &PageArgs) -> Result<Paging, Failure> {
         .as_ref()
         .map(|raw| {
             PageToken::parse(raw.clone()).map_err(|error| {
-                Failure::store(
+                Failure::decided(
                     "page-token",
                     format!(
                         "--page: {error}\n\
@@ -665,14 +665,14 @@ fn dependency_request(
 /// One value as pretty-printed JSON.
 fn json(value: &impl Serialize, what: &str) -> Result<String, Failure> {
     serde_json::to_string_pretty(value)
-        .map_err(|error| Failure::store("render", format!("could not render {what}: {error}")))
+        .map_err(|error| Failure::decided("render", format!("could not render {what}: {error}")))
 }
 
 /// The schema bundle as pretty-printed JSON.
 fn schema_bundle() -> Result<String, Failure> {
     let mut bundle = onetaskgraph_core::schema_bundle();
     bundle["commands"] = serde_json::to_value(public_commands()?).map_err(|error| {
-        Failure::store(
+        Failure::decided(
             "render",
             format!("could not render the command surface: {error}"),
         )
@@ -688,7 +688,7 @@ struct PublicCommand(String);
 impl PublicCommand {
     fn try_new(path: String) -> Result<Self, Failure> {
         if path.is_empty() || path.split(' ').any(|part| part.is_empty()) {
-            return Err(Failure::store(
+            return Err(Failure::decided(
                 "render",
                 format!("invalid public command path {path:?}"),
             ));
@@ -740,7 +740,7 @@ fn effective_config(loaded: &Loaded) -> Result<String, Failure> {
 /// Load the configuration: documents, then the environment, then these flags.
 fn load(flags: &Layer, environment: &Environment) -> Result<Loaded, Failure> {
     let working_directory = std::env::current_dir().map_err(|error| {
-        Failure::store(
+        Failure::decided(
             "working-directory",
             format!(
                 "could not read the working directory: {error}\n\
@@ -758,7 +758,7 @@ fn load(flags: &Layer, environment: &Environment) -> Result<Loaded, Failure> {
 /// document that a generator would then happily consume.
 fn emit(out: &mut impl Write, rendered: &str, what: &str) -> Result<(), Failure> {
     let unwritten =
-        |error: io::Error| Failure::store("write", format!("could not write {what}: {error}"));
+        |error: io::Error| Failure::decided("write", format!("could not write {what}: {error}"));
     writeln!(out, "{rendered}").map_err(unwritten)?;
     out.flush().map_err(unwritten)
 }

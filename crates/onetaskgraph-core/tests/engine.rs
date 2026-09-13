@@ -1268,7 +1268,7 @@ fn a_failure_document_names_what_failed_where_and_takes_a_wrapped_failures_class
                    "message": error.to_string(), "retry_after_seconds": null})
         );
     }
-    let decided = Failure::store("invalid-id", "not qualified");
+    let decided = Failure::decided("invalid-id", "not qualified");
     assert_eq!(decided.message(), "not qualified");
     assert_eq!(document(decided)["failure"]["kind"], "invalid-id");
 }
