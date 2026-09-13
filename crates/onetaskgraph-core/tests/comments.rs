@@ -77,8 +77,7 @@ fn engine() -> Engine {
             "tasks": [task_value("T-1"), task_value("T-1")],
         }},
     });
-    let config =
-        Config::from_document(json!({"sources": sources})).expect("a valid configuration");
+    let config = Config::from_document(json!({"sources": sources})).expect("a valid configuration");
     Engine::build(&config, &NoSecrets)
 }
 
@@ -178,7 +177,12 @@ async fn a_task_detail_carries_comments_only_for_a_task_found_on_a_source_that_h
     let rendered = serde_json::to_value(&none).unwrap();
     assert_eq!(rendered["comments"], json!([]));
     assert!(rendered["items"].is_array());
-    assert!(serde_json::to_value(&bare).unwrap().get("comments").is_none());
+    assert!(
+        serde_json::to_value(&bare)
+            .unwrap()
+            .get("comments")
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -194,7 +198,10 @@ async fn every_refusal_names_what_was_not_there_and_says_what_to_do_next() {
             "source bare has no comments: its plugin is in-memory",
         ),
         (
-            engine.add_comment(&id("bare:T-1"), &new()).await.unwrap_err(),
+            engine
+                .add_comment(&id("bare:T-1"), &new())
+                .await
+                .unwrap_err(),
             "source bare has no comments",
         ),
         (

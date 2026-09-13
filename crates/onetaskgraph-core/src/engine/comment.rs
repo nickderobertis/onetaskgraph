@@ -224,7 +224,10 @@ impl Engine {
 /// Each page is asked at the source's own ceiling, and each is held to the two refusals every
 /// pagination loop of this engine owes: a page longer than the one asked for, and a cursor
 /// handed back unchanged. What the walk accumulates is the caller's answer and nothing else.
-async fn walk(source: &ResolvedSource, task: &NativeId) -> Result<Option<Vec<Comment>>, SourceError> {
+async fn walk(
+    source: &ResolvedSource,
+    task: &NativeId,
+) -> Result<Option<Vec<Comment>>, SourceError> {
     let limit = source.source().capabilities().max_page_size.max(1);
     let mut comments = Vec::new();
     let mut cursor: Option<Cursor> = None;
