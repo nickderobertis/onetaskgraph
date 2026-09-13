@@ -12,6 +12,7 @@ use onetaskgraph_plugin_api::{
     SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
     TaskSource, TextFields, TextQuery, WriteSupport,
 };
+use onetaskgraph_plugin_api::{Comment, CommentBody, NewComment, commentless, unwritable};
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret as _, SecretString};
 
@@ -1658,4 +1659,112 @@ async fn a_source_with_no_documents_refuses_a_document_read_rather_than_answerin
         };
         assert_eq!(message, "the read-only plugin cannot be written");
     }
+}
+
+#[tokio::test]
+async fn a_source_that_says_nothing_of_comments_or_deletes_refuses_them_in_the_contracts_words() {
+    // `Silent` implements none of the comment methods and no delete, so each answers with the
+    // default: one refusal, spelled once, naming the plugin kind rather than guessing an answer.
+    let source: Box<dyn TaskSource> = Box::new(Silent("silent"));
+    let task = NativeId::from("t-1");
+    let comment = NativeId::from("c-1");
+    let page = PageRequest {
+        cursor: None,
+        limit: 5,
+    };
+    let body = CommentBody::new("x").expect("a body");
+    let new = NewComment {
+        body: body.clone(),
+        author: None,
+    };
+
+    assert_eq!(
+        source.task_comments(&task, &page).await,
+        Err(commentless("silent"))
+    );
+    assert_eq!(
+        source.add_comment(&task, &new).await,
+        Err(commentless("silent"))
+    );
+    assert_eq!(
+        source.edit_comment(&task, &comment, &body).await,
+        Err(commentless("silent"))
+    );
+    assert_eq!(
+        source.delete_comment(&task, &comment).await,
+        Err(commentless("silent"))
+    );
+    assert_eq!(
+        commentless("silent").to_string(),
+        "the source refused the request: the silent plugin has no comments"
+    );
+
+    assert_eq!(source.delete_task(&task).await, Err(unwritable("silent")));
+    assert_eq!(
+        source.delete_project(&task).await,
+        Err(unwritable("silent"))
+    );
+}
+
+#[test]
+fn a_comment_body_is_kept_byte_for_byte_and_refused_only_when_empty() {
+    let Err(SourceError::Refused { message }) = CommentBody::new("") else {
+        panic!("an empty body is refused where it is made");
+    };
+    assert!(message.contains("cannot be empty"), "{message}");
+
+    let text = "Seen again on main:\n\n## Evidence\n";
+    let body = CommentBody::new(text).expect("a body with something in it");
+    assert_eq!(body.as_str(), text);
+    assert_eq!(String::from(body.clone()), text);
+
+    // The same rule at the serde boundary a comment crosses the plugin protocol at.
+    assert_eq!(
+        serde_json::to_string(&body).expect("encodes"),
+        serde_json::to_string(text).unwrap()
+    );
+    assert_eq!(
+        serde_json::from_str::<CommentBody>(&serde_json::to_string(text).unwrap())
+            .expect("decodes"),
+        body
+    );
+    let refused = serde_json::from_str::<CommentBody>("\"\"").expect_err("an empty body");
+    assert!(refused.to_string().contains("cannot be empty"), "{refused}");
+
+    // An author is optional on the wire, and absent reads as none.
+    let bare: NewComment = serde_json::from_str(r#"{"body":"x"}"#).expect("no author");
+    assert_eq!(bare.author, None);
+    let signed: NewComment =
+        serde_json::from_str(r#"{"body":"x","author":"ada"}"#).expect("an author");
+    assert_eq!(signed.author.as_deref(), Some("ada"));
+    assert!(serde_json::from_str::<NewComment>(r#"{"body":""}"#).is_err());
+}
+
+#[test]
+fn a_comment_carries_exactly_its_six_members_and_absent_ones_read_as_null() {
+    let written = Comment {
+        id: NativeId::from("c-1"),
+        author: Some("ada".to_owned()),
+        created_at: Some(Utc.with_ymd_and_hms(2026, 9, 13, 15, 11, 7).unwrap()),
+        updated_at: None,
+        body: "evidence\n".to_owned(),
+        url: None,
+    };
+    let encoded = serde_json::to_value(&written).expect("encodes");
+    assert_eq!(
+        encoded,
+        serde_json::json!({"id": "c-1", "author": "ada", "created_at": "2026-09-13T15:11:07Z",
+                           "updated_at": null, "body": "evidence\n", "url": null})
+    );
+    assert_eq!(
+        serde_json::from_value::<Comment>(encoded).expect("decodes"),
+        written
+    );
+
+    // A plugin written before there were comments says nothing of them at the handshake,
+    // and that silence reads as a source without them.
+    let mut declared = serde_json::to_value(Silent("silent").capabilities()).unwrap();
+    declared.as_object_mut().unwrap().remove("comments");
+    let read: Capabilities = serde_json::from_value(declared).expect("decodes");
+    assert_eq!(read.comments, Support::Unsupported);
 }
