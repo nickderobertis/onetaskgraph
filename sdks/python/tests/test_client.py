@@ -275,7 +275,7 @@ def test_project_copy_drives_the_binary(binary: Path, tmp_path: Path) -> None:
 
     # The project and exactly the members named. Two folders of Markdown count nothing they
     # send, so the report carries no `spent` rather than a zero.
-    narrowed = run(client.project_copy(id="from:P-1", to="into", member=["from:T-1"]))
+    narrowed = run(client.project_copy(id="from:P-1", to="into", member=[GlobalId("from:T-1")]))
     assert [(item.root.source.root, item.root.action) for item in narrowed.items] == [
         ("from:P-1", "unchanged"),
         ("from:T-1", "unchanged"),

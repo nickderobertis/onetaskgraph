@@ -62,7 +62,7 @@ OPTION_TYPES = {
     "label": "list[str] | tuple[str, ...]",
     "limit": "int",
     "match_by": "str",
-    "member": "list[str] | tuple[str, ...]",
+    "member": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
     "no_project": "bool",
     "no_tasks": "bool",
     "not_label": "list[str] | tuple[str, ...]",

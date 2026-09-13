@@ -1101,6 +1101,41 @@ fn a_member_copy_into_a_board_files_a_member_it_creates_under_the_projects_issue
 }
 
 #[test]
+fn a_copy_says_in_words_what_it_spent_and_nothing_where_nothing_meters() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("projects")).unwrap();
+    std::fs::write(
+        root.join("projects/P-1.md"),
+        "---\ntitle: Published roadmap\nstatus: Doing\n---\nthe plan\n",
+    )
+    .unwrap();
+    let board = board_with_plans(&sandbox, "plans");
+    let before = board.served().len();
+    let said = ok(
+        &sandbox,
+        &["project", "copy", "plans:P-1", "--to", "board", "--no-tasks"],
+    );
+    let served = board.served().len() - before;
+    // Every call this board answered, counted by the board rather than by the binary, and
+    // the GraphQL figure named as the lower bound it is.
+    let expected =
+        format!("spent: {served} requests; graphql {served} points at least, rest 0 requests");
+    assert!(said.lines().any(|line| line == expected), "{expected}\n{said}");
+
+    let folders_sandbox = Sandbox::new();
+    folders(&folders_sandbox);
+    let said = ok(
+        &folders_sandbox,
+        &["task", "copy", "remote:ENG-1", "--to", NOTES],
+    );
+    assert!(
+        said.contains("references:") && !said.contains("spent:"),
+        "a copy whose sources count nothing says nothing about what it spent:\n{said}"
+    );
+}
+
+#[test]
 fn a_board_that_fails_between_creating_an_issue_and_filing_it_says_so_and_recovers() {
     // Landing an item on a board is two calls — `createIssue`, then
     // `addProjectV2ItemById` — so GitHub can fail between them, and what happens then is
@@ -2122,7 +2157,6 @@ fn a_member_copy_carries_the_project_and_exactly_the_members_it_names() {
         ]
     );
 
-    // The destination's own records, read back.
     assert_eq!(
         shown(&sandbox, "task", "notes:T-5")["project"],
         json!("P-1"),

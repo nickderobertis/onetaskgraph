@@ -25,6 +25,12 @@
 mod common;
 
 mod copy;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: it drives the binary against a loopback fixture board with no
+// credential and no network and finishes in under a second, and because a copy is the
+// engine's it cannot sit behind `onetaskgraph-github-projects`' own edge — AGENTS.md forbids
+// a plugin crate depending on the engine at any depth. Every other journey against that same
+// fixture board already runs in this target.
 mod copy_cost;
 mod document_store;
 mod failures;

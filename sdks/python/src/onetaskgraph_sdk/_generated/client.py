@@ -178,7 +178,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         match_by: str | None = None,
-        member: list[str] | tuple[str, ...] | None = None,
+        member: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         no_tasks: bool | None = None,
         page_size: int | None = None,
         recreate: bool | None = None,
