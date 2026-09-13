@@ -28,8 +28,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use onetaskgraph_plugin_api::{
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Location, NativeId, Page, PageRequest, Project, ProjectQuery, Repository,
-    SourceError, SourceName, Task, TaskQuery,
+    ItemKind, ItemWrite, Location, Metering, NativeId, Page, PageRequest, Project, ProjectQuery,
+    Repository, SourceError, SourceName, Task, TaskQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -196,6 +196,13 @@ pub struct CopyReport {
     // it is `substitute`: `Resolution` has no variant that counts an occurrence ambiguous
     // without counting it unresolved.
     pub references_ambiguous: u64,
+    /// What this copy spent, summed over the sources in the command that meter their own
+    /// requests — and absent, never zero, when none of them does.
+    ///
+    /// Omitted from the wire when absent, like the three figures above, so a consumer
+    /// written against the output before it existed reads the same document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent: Option<Spent>,
 }
 
 /// Whether one of [`CopyReport`]'s reference figures has anything to say.
@@ -206,6 +213,35 @@ pub struct CopyReport {
 /// because a reader there needs to be told the copy looked.
 fn nothing_to_report(figure: &u64) -> bool {
     *figure == 0
+}
+
+/// What one command spent, summed over the sources in it that meter their own requests.
+///
+/// **Source-owned.** Every figure is what a source said it sent and spent while the command
+/// ran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)
+/// before the command and again after it. The engine adds the differences up by name and
+/// interprets none of them, which is why the budget and unit names are open vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Spent {
+    /// How many HTTP requests those sources sent for this command.
+    pub requests: u64,
+    /// What those requests spent, one entry per budget and unit, ordered by budget name.
+    pub budgets: Vec<BudgetSpent>,
+}
+
+/// What one command spent against one budget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BudgetSpent {
+    /// The budget, as the source names it — `graphql`, `rest`.
+    pub budget: String,
+    /// What it is metered in — `points`, `requests`.
+    pub unit: String,
+    /// How much was spent against it, in that unit.
+    pub amount: u64,
+    /// Whether any part of `amount` was modelled by a source rather than reported by its
+    /// backend or counted, which makes `amount` a lower bound on what the backend charged
+    /// rather than a measurement of it.
+    pub lower_bound: bool,
 }
 
 /// One document's reference figures, before they are folded into the invocation's.
@@ -732,9 +768,23 @@ impl Engine {
         if request.scope == CopyScope::Documents {
             documentary(destination)?;
         }
+        // The sources this command names, each read once before and once after, so what it
+        // spent is the difference between two of each one's own running totals.
+        let mut metered = vec![destination];
+        for id in request.items.as_slice() {
+            if let Some(source) = self.ready().find(|source| source.name() == &id.source)
+                && !metered.iter().any(|held| held.name() == source.name())
+            {
+                metered.push(source);
+            }
+        }
+        let before = readings(&metered).await;
         let mut journal = Journal::default();
         match self.copy_all(destination, request, &mut journal).await {
-            Ok(report) => Ok(report),
+            Ok(mut report) => {
+                report.spent = spent_between(&before, &readings(&metered).await);
+                Ok(report)
+            }
             Err(error) => Err(self.undo(destination, journal, error).await),
         }
     }
@@ -811,6 +861,8 @@ impl Engine {
             references_rewritten: references.rewritten,
             references_unresolved: references.unresolved,
             references_ambiguous: references.ambiguous,
+            // Filled in by `copy`, which is the one place both readings are taken.
+            spent: None,
         })
     }
 
@@ -2125,6 +2177,68 @@ impl Engine {
 
 /// How many tasks of a project are read at once while walking it.
 const PROJECT_PAGE: std::num::NonZeroU32 = std::num::NonZeroU32::new(50).expect("50 is not zero");
+
+/// Each source's own running totals, in the order the sources were given.
+///
+/// A reading a source could not take is read as that source not metering: what a command
+/// spent is a report about the work, and a failed reading must not become a failure of the
+/// work itself.
+async fn readings(sources: &[&ResolvedSource]) -> Vec<Option<Metering>> {
+    let mut read = Vec::with_capacity(sources.len());
+    for source in sources {
+        read.push(source.source().metering().await.ok().flatten());
+    }
+    read
+}
+
+/// What the sources spent between two readings of them, or `None` when none of them meters.
+///
+/// A source that does not meter contributes nothing and does not make the total zero: a
+/// command whose sources all declined reports that it cannot say, not that it spent nothing.
+/// A budget is keyed by its name and unit together, so two sources naming one budget add up
+/// and two units of one budget stay apart.
+fn spent_between(before: &[Option<Metering>], after: &[Option<Metering>]) -> Option<Spent> {
+    let mut metered = false;
+    let mut requests = 0_u64;
+    let mut budgets: BTreeMap<(String, String), (u64, u64)> = BTreeMap::new();
+    for (before, after) in before.iter().zip(after) {
+        let Some(after) = after else {
+            continue;
+        };
+        metered = true;
+        let before = before.clone().unwrap_or_default();
+        requests = requests.saturating_add(after.requests.saturating_sub(before.requests));
+        for budget in &after.budgets {
+            let earlier = before
+                .budgets
+                .iter()
+                .find(|held| held.budget == budget.budget && held.unit == budget.unit);
+            let measured = budget
+                .measured
+                .saturating_sub(earlier.map_or(0, |held| held.measured));
+            let modelled = budget
+                .modelled
+                .saturating_sub(earlier.map_or(0, |held| held.modelled));
+            let total = budgets
+                .entry((budget.budget.clone(), budget.unit.clone()))
+                .or_default();
+            total.0 = total.0.saturating_add(measured).saturating_add(modelled);
+            total.1 = total.1.saturating_add(modelled);
+        }
+    }
+    metered.then(|| Spent {
+        requests,
+        budgets: budgets
+            .into_iter()
+            .map(|((budget, unit), (amount, modelled))| BudgetSpent {
+                budget,
+                unit,
+                amount,
+                lower_bound: modelled > 0,
+            })
+            .collect(),
+    })
+}
 
 /// One page request against `source`, at the largest page it will serve.
 fn request_for(source: &ResolvedSource, cursor: Option<Cursor>) -> PageRequest {

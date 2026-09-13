@@ -6,10 +6,13 @@
 //! disagree, an SDK generated from the bundle is a generator emitting models the binary
 //! never sends — which is a failure nothing else here would notice.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::common::{SOURCE_BOUNDARIES, Sandbox, stdout};
-use crate::fixtures::{NATIVE, SCANNED, empty_document_store, empty_folder, pair_at, qualified};
+use crate::fixtures::{
+    NATIVE, SCANNED, document, empty_document_store, empty_folder, github_projects_with_board,
+    pair_at, qualified,
+};
 
 /// The capability pair, plus the two destinations a copy needs.
 ///
@@ -55,6 +58,102 @@ fn validates(bundle: &Value, root: &str, document: &Value, what: &str) {
         problems.join("\n"),
         serde_json::to_string_pretty(document).expect("renders")
     );
+}
+
+#[test]
+fn a_copy_says_what_its_metering_sources_spent_and_nothing_where_none_meters() {
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        let root = sandbox.subdirectory("plans");
+        std::fs::create_dir_all(root.join("projects")).expect("the project folder");
+        std::fs::create_dir_all(root.join("tasks")).expect("the task folder");
+        std::fs::write(
+            root.join("projects/P-1.md"),
+            "---\ntitle: Measured plan\nstatus: Doing\n---\nthe plan\n",
+        )
+        .expect("the project");
+        std::fs::write(
+            root.join("tasks/A.md"),
+            "---\ntitle: First step\nstatus: Todo\nproject: P-1\n---\nfirst\n",
+        )
+        .expect("a task");
+        let (config, board) = github_projects_with_board(&sandbox);
+        sandbox.project_document(&document(&json!({
+            "plans": {"plugin": "local-md", "config": {
+                "root": root, "status_mapping": {"Todo": "todo", "Doing": "in-progress"}}},
+            "notes": {"plugin": "local-md", "config": empty_folder(&sandbox, "notes")},
+            "board": boundary.source_with_secrets(
+                "github-projects", config, &["GITHUB_PROJECTS_FIXTURE_TOKEN"]),
+        })));
+        let bundle = bundle(&sandbox);
+
+        // Into the board: the board is a socket this test holds, so what it served for the
+        // command is counted independently of anything the binary says about itself.
+        let before = board.served().len();
+        let copied: Value = serde_json::from_str(&stdout(
+            sandbox
+                .command()
+                .args(["project", "copy", "plans:P-1", "--to", "board", "--json"])
+                .assert()
+                .success()
+                .get_output(),
+        ))
+        .expect("a copy emits JSON");
+        let served = board.served().len() - before;
+        validates(
+            &bundle,
+            "CopyReport",
+            &copied,
+            "project copy --to board --json",
+        );
+        assert!(served > 0, "the copy reached the board");
+        assert_eq!(
+            copied["spent"]["requests"],
+            json!(served),
+            "{boundary:?}: `spent` names every request the board served for the command: \
+             {copied:#}"
+        );
+        let budgets = copied["spent"]["budgets"]
+            .as_array()
+            .expect("a spent carries its budgets");
+        let graphql = budgets
+            .iter()
+            .find(|budget| budget["budget"] == "graphql")
+            .unwrap_or_else(|| panic!("{boundary:?}: no graphql budget: {copied:#}"));
+        assert_eq!(graphql["unit"], "points");
+        // No document this source sends asks GitHub what it cost, so every call is the
+        // one-point minimum — a lower bound, and flagged as one.
+        assert_eq!(graphql["amount"], json!(served));
+        assert_eq!(graphql["lower_bound"], json!(true));
+
+        // Between two folders of Markdown, neither of which counts what it sends: absent,
+        // not zero.
+        let local: Value = serde_json::from_str(&stdout(
+            sandbox
+                .command()
+                .args(["project", "copy", "plans:P-1", "--to", "notes", "--json"])
+                .assert()
+                .success()
+                .get_output(),
+        ))
+        .expect("a copy emits JSON");
+        validates(
+            &bundle,
+            "CopyReport",
+            &local,
+            "project copy --to notes --json",
+        );
+        assert!(
+            local["items"]
+                .as_array()
+                .is_some_and(|items| items.len() == 2),
+            "{local:#}"
+        );
+        assert!(
+            local.get("spent").is_none(),
+            "a copy whose sources meter nothing says nothing about what it spent: {local:#}"
+        );
+    }
 }
 
 #[test]

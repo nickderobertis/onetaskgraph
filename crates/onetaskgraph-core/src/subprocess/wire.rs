@@ -14,8 +14,8 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Direction, Document, DocumentQuery, ItemWrite, NativeId, PageRequest, Project,
-    ProjectQuery, SourceError, Task, TaskQuery, WriteSupport,
+    Capabilities, Direction, Document, DocumentQuery, ItemWrite, Metering, NativeId, PageRequest,
+    Project, ProjectQuery, SourceError, Task, TaskQuery, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -136,6 +136,20 @@ pub(crate) struct InitializeResult {
     /// source it is.
     #[serde(default)]
     pub(crate) writes: Option<WriteSupport>,
+    /// Whether this plugin answers `metering` (§3.4).
+    ///
+    /// Optional, and absent means it does not: a plugin written before there was metering
+    /// says nothing here, is never sent the method, and is reported as not metering.
+    #[serde(default)]
+    pub(crate) meters: bool,
+}
+
+/// The `metering` result (§4.14).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct MeteringResult {
+    /// The plugin's running totals, or `null` when it has none to give.
+    #[serde(default)]
+    pub(crate) metering: Option<Metering>,
 }
 
 /// A plugin's non-empty, open-vocabulary kind from the handshake.

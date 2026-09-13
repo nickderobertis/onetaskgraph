@@ -58,6 +58,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Mutex;
 
+use onetaskgraph_plugin_api::{Metered, Metering};
 use serde_json::Value;
 
 pub use reqwest::StatusCode;
@@ -940,6 +941,43 @@ impl Session {
                 .record(request);
         }
         touched.into_values().collect()
+    }
+    /// This session as the plugin interface's [`Metering`]: every request it holds, and
+    /// what each of GitHub's two budgets was attributed, split by basis.
+    ///
+    /// Both budgets are always named, a budget this session never drew on at zero, so a
+    /// reading taken before a session's first request lines up with one taken after it.
+    /// What [`Basis::Modelled`] attributed is `modelled` and everything else is `measured`
+    /// — a request a rate limiter refused is attributed nothing either way.
+    #[must_use]
+    pub fn metering(&self) -> Metering {
+        Metering {
+            requests: u64::try_from(self.total_requests()).unwrap_or(u64::MAX),
+            budgets: [Budget::Graphql, Budget::Rest]
+                .into_iter()
+                .map(|budget| {
+                    let (measured, modelled) = self
+                        .requests
+                        .iter()
+                        .filter(|request| request.budget() == budget)
+                        .fold(
+                            (0_u64, 0_u64),
+                            |(measured, modelled), request| match request.spend.basis {
+                                Basis::Modelled => {
+                                    (measured, modelled.saturating_add(request.spend.amount))
+                                }
+                                _ => (measured.saturating_add(request.spend.amount), modelled),
+                            },
+                        );
+                    Metered {
+                        budget: budget.name().to_owned(),
+                        unit: budget.unit().to_owned(),
+                        measured,
+                        modelled,
+                    }
+                })
+                .collect(),
+        }
     }
     /// The session report: what a person puts two runs of side by side.
     #[must_use]

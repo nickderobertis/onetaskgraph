@@ -3442,6 +3442,7 @@ async fn the_reference_figures_are_absent_when_zero_and_read_back_as_zero_when_a
         references_rewritten: 3,
         references_unresolved: 2,
         references_ambiguous: 1,
+        spent: None,
     };
     let wire = serde_json::to_value(&reported).expect("a copy report serialises");
     assert_eq!(
@@ -3464,6 +3465,7 @@ async fn the_reference_figures_are_absent_when_zero_and_read_back_as_zero_when_a
         references_rewritten: 2,
         references_unresolved: 0,
         references_ambiguous: 0,
+        spent: None,
     };
     assert_eq!(
         serde_json::to_value(&partial).expect("it serialises"),

@@ -273,6 +273,19 @@ def test_project_copy_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     assert [item.root.action for item in second.items] == ["unchanged", "unchanged"]
     assert [item.id.root for item in run(client.task_list(source=["into"])).items] == ["into:T-1"]
 
+    # The project and exactly the members named. Two folders of Markdown count nothing they
+    # send, so the report carries no `spent` rather than a zero.
+    narrowed = run(client.project_copy(id="from:P-1", to="into", member=["from:T-1"]))
+    assert [(item.root.source.root, item.root.action) for item in narrowed.items] == [
+        ("from:P-1", "unchanged"),
+        ("from:T-1", "unchanged"),
+    ]
+    assert narrowed.spent is None
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.project_copy(id="from:P-1", to="into", member=["from:T-9"]))
+    assert refused.value.exit_code == 1
+    assert "from:T-9 is not a task of from:P-1" in str(refused.value)
+
 
 def test_document_copy_drives_the_binary_and_refuses_a_destination_with_no_documents(
     binary: Path, tmp_path: Path

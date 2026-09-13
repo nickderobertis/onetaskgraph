@@ -346,9 +346,9 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
     Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location,
-    NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
-    TaskSource, TextFields, TextQuery, WriteSupport,
+    Metering, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, Repository,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
+    TaskQuery, TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -4421,6 +4421,13 @@ impl TaskSource for GitHubProjectsSource {
 
     async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
         self.delete_item(id).await
+    }
+
+    /// Every request this source has recorded, and what each of GitHub's two budgets was
+    /// attributed — read off the same accounting the session report is rendered from, so
+    /// the two cannot count one request two ways.
+    async fn metering(&self) -> Result<Option<Metering>, SourceError> {
+        Ok(Some(self.ledger.snapshot().metering()))
     }
 }
 

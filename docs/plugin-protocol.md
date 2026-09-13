@@ -194,6 +194,7 @@ the source can do natively, and what configuration it is being built with.
 | `kind` | string | The plugin kind, matching the `plugin:` field a configuration names it by. |
 | `capabilities` | object | A `Capabilities` (§4.2). Read **once**; the engine does not ask again. |
 | `writes` | string | Whether this plugin can be written through. Optional; see §3.3. |
+| `meters` | boolean | Whether this plugin answers `metering`. Optional; see §3.4. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -249,6 +250,16 @@ naming a plugin that answered `"unsupported"` as its destination is refused befo
 anything is read, naming the configured source and this plugin kind — so a plugin never
 receives a write it would only have to refuse.
 
+### 3.4 `meters`
+
+A boolean: `true` when this plugin counts the requests it sends to its own backend and
+answers `metering` (§4.14) with them, and `false` when it does not.
+
+The member is **optional**, and an absent one means `false`. A plugin written before there
+was metering says nothing here, is never sent `metering`, and is reported as not metering —
+which a command reports by leaving what it spent out, never by reporting that nothing was
+spent.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -274,6 +285,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `query_documents` | `TaskSource::query_documents` |
 | `write_document` | `TaskSource::write_document` |
 | `delete_document` | `TaskSource::delete_document` |
+| `metering` | `TaskSource::metering` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -660,6 +672,41 @@ This is not the `url` field those three entities already carry, does not replace
 not derived from it. A plugin that reported a web address there goes on reporting exactly
 what it reported before, whether or not it also says where the entity is.
 
+### 4.14 `metering`
+
+Sent only to a plugin that answered `meters: true` at the handshake (§3.4), and never to one
+that did not.
+
+```json
+{ "id": "12", "method": "metering", "params": {} }
+```
+
+```json
+{
+  "id": "12",
+  "result": {
+    "metering": {
+      "requests": 7,
+      "budgets": [
+        { "budget": "graphql", "unit": "points", "measured": 0, "modelled": 6 },
+        { "budget": "rest", "unit": "requests", "measured": 1, "modelled": 0 }
+      ]
+    }
+  }
+}
+```
+
+`metering` is a `Metering`: how many requests this plugin has sent to its own backend since
+the handshake, and what those spent against each budget that backend meters it by. `budget`
+and `unit` are the plugin's own open vocabulary. `measured` is what the backend reported, or a
+count of requests against a budget metered in requests; `modelled` is what the plugin
+estimated instead. Both are **running totals** and never a figure for one call: the engine
+reads them before and after a command and reports the difference, so a plugin must not reset
+them. `null` is read exactly as a plugin that does not meter.
+
+A plugin that answers `metering` with an error is reported as not metering for that command.
+The command does not fail over what it cost.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every
@@ -725,6 +772,11 @@ reads the omission as `"unsupported"`, and it is never sent one. A delete had no
 version 1 plugin could be sent one halfway through undoing a copy. Adding a method behind a
 declaration its peer cannot accidentally make is the "method a peer may decline" case below;
 adding one a peer has already implicitly opted into is not.
+
+`metering` (§4.14) and the `meters` member of §3.4 were added **without** a bump, for the
+same reason the documents were: the engine sends `metering` only to a plugin that answered
+`meters: true`, and a plugin written before there was metering omits the member, is read as
+not metering, and is never sent it.
 
 A version is bumped when a change is **not** safe under §2.1 — a member removed, a
 type narrowed, a meaning changed, a method removed or renamed. Adding an optional
