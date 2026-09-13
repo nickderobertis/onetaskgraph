@@ -493,7 +493,7 @@ async fn comment(
             let body = body(args.body_file.as_deref())?;
             let task = qualified(&args.id)?;
             let edited = engine(loaded)
-                .edit_comment(&task, &NativeId::from(args.comment_id.as_str()), &body)
+                .edit_comment(&task, &args.comment_id, &body)
                 .await
                 .map_err(|error| error.to_string())?;
             rendering(loaded, &edited, render::comment, "the comment")?
@@ -501,7 +501,7 @@ async fn comment(
         CommentCommand::Delete(args) => {
             let task = qualified(&args.id)?;
             let deleted = engine(loaded)
-                .delete_comment(&task, &NativeId::from(args.comment_id.as_str()))
+                .delete_comment(&task, &args.comment_id)
                 .await
                 .map_err(|error| error.to_string())?;
             rendering(loaded, &deleted, render::deleted, "the deletion")?

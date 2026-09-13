@@ -4065,6 +4065,33 @@ async fn a_comment_read_answers_for_the_issue_as_linear_holds_it() {
             .is_none(),
         "a trashed issue is not one this source holds, as it is not for `get_task`"
     );
+
+    // The two reads above each sent their one request; taken off the wire here so that what
+    // is left on it afterwards is only what the refusal below would have sent.
+    for _ in 0..2 {
+        wire.recv().expect("each read above sent its request");
+    }
+
+    // A page of no rows is refused where it arrives, and Linear is never asked for one: an
+    // empty page back would read as an issue with no comments.
+    let refused = source
+        .task_comments(
+            &"i1".into(),
+            &PageRequest {
+                cursor: None,
+                limit: 0,
+            },
+        )
+        .await
+        .expect_err("a page limit of zero is not a page");
+    assert!(
+        matches!(&refused, SourceError::Config { message } if message.contains("limit of 0")),
+        "{refused:?}"
+    );
+    assert!(
+        wire.try_recv().is_err(),
+        "nothing was sent for a page of no rows"
+    );
 }
 
 #[tokio::test]

@@ -141,6 +141,13 @@ async fn an_edit_moves_only_that_body_and_its_time_and_deleting_the_last_removes
         "a comment without an author is headed `comment`"
     );
 
+    // The section writes a time to the second, so the edit waits for the clock to pass the
+    // second the comment was written in: an edit inside that same second would leave the time
+    // where it was and prove nothing about it moving.
+    let written = first.updated_at.expect("the time it was written");
+    while Utc::now().timestamp() <= written.timestamp() {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     let edited = source
         .edit_comment(&id("release"), &first.id, &body("first, corrected\n"))
         .await
@@ -150,7 +157,12 @@ async fn an_edit_moves_only_that_body_and_its_time_and_deleting_the_last_removes
     assert_eq!(edited.author, first.author);
     assert_eq!(edited.created_at, first.created_at);
     assert_eq!(edited.body, "first, corrected\n");
-    assert!(edited.updated_at >= first.updated_at);
+    assert!(
+        edited.updated_at > first.updated_at,
+        "an edit moves the time: {:?} after {:?}",
+        edited.updated_at,
+        first.updated_at
+    );
     assert_eq!(
         listed(source.as_ref(), "release").await,
         vec![edited.clone(), second.clone()]

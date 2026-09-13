@@ -30,6 +30,7 @@ pub struct Comment {
     /// When the source says it last changed.
     pub updated_at: Option<DateTime<Utc>>,
     /// What it says, byte for byte as it was written — a trailing newline included.
+    // llmlint: ignore[invalid_states_unrepresentable] `CommentBody` is the invariant on what this product *writes*, and this is what a source already *holds*: a Linear comment that is only an attachment, or one a person cleared on the service's own page, has an empty body, and refusing it here would fail the whole of a task's comment list over one comment nobody here wrote. The read reports what the source holds; the write is what refuses nothing.
     pub body: String,
     /// Where a person can open it.
     // llmlint: ignore[invalid_states_unrepresentable, boundary_inputs_validated] the reason recorded at `Task::url` in work.rs, at a new site: every entity of this contract carries its web address as `Option<String>`, parsing one would add a URL dependency to the crate AGENTS.md says to keep still, and a comment's address narrowed here alone would describe one thing in two types.

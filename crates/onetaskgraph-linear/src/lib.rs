@@ -1623,6 +1623,13 @@ impl TaskSource for LinearSource {
         task: &NativeId,
         page: &PageRequest,
     ) -> Result<Option<Page<Comment>>, SourceError> {
+        // A page of no rows is not a page: refused here rather than sent as `last: 0`, which
+        // would answer an empty page that reads as a task with no comments.
+        if page.limit == 0 {
+            return Err(SourceError::Config {
+                message: "a page limit of 0 is not a page; ask for at least 1 comment".to_owned(),
+            });
+        }
         // One request rather than a task lookup and then a read: the issue the comments
         // hang off answers "no such task" by itself, on exactly the terms `get_task` reads
         // it — null, or trashed.

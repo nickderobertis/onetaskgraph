@@ -10,7 +10,7 @@ use std::num::NonZeroU32;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use onetaskgraph_core::config::{Layer, Origin, Setting, SettingPath, value_from_text};
 use onetaskgraph_core::{OutputFormat, PluginKind, SearchKind};
-use onetaskgraph_plugin_api::{Direction, StatusCategory, TextFields};
+use onetaskgraph_plugin_api::{Direction, NativeId, StatusCategory, TextFields};
 use serde_json::Value;
 
 /// One interface over the ticketing systems your work lives in.
@@ -185,8 +185,8 @@ pub struct CommentEditArgs {
     pub id: String,
 
     /// The comment's own id, exactly as `list` or `add` reported it.
-    #[arg(value_name = "COMMENT-ID")]
-    pub comment_id: String,
+    #[arg(value_name = "COMMENT-ID", value_parser = native_id)]
+    pub comment_id: NativeId,
 
     /// Read the new body from this file rather than from standard input, byte for byte.
     #[arg(long = "body-file", value_name = "PATH")]
@@ -203,8 +203,16 @@ pub struct CommentDeleteArgs {
     pub id: String,
 
     /// The comment's own id, exactly as `list` or `add` reported it.
-    #[arg(value_name = "COMMENT-ID")]
-    pub comment_id: String,
+    #[arg(value_name = "COMMENT-ID", value_parser = native_id)]
+    pub comment_id: NativeId,
+}
+
+/// A source's own id, as a command line hands one over.
+///
+/// Never refused: a native id is whatever its source issued, so the one thing this does is
+/// give the value the contract's own type where it enters.
+fn native_id(value: &str) -> Result<NativeId, std::convert::Infallible> {
+    Ok(NativeId::from(value))
 }
 
 /// What `onetaskgraph project` can do.
