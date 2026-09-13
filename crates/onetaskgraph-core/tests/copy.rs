@@ -1479,7 +1479,14 @@ async fn a_source_whose_readings_are_not_a_running_total_is_reported_as_not_mete
             vec![unreadable(), total(3, &[("graphql", "points", 3, 0)])],
         ),
         ("second reading failed", vec![total(3, &[]), unreadable()]),
-        ("requests fell", vec![total(10, &[]), total(3, &[])]),
+        // Its budget rose, so a clamped difference would still add to the total.
+        (
+            "requests fell",
+            vec![
+                total(10, &[("graphql", "points", 1, 0)]),
+                total(3, &[("graphql", "points", 2, 0)]),
+            ],
+        ),
         (
             "budget fell",
             vec![
