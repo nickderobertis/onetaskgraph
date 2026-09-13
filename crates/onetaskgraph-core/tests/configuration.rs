@@ -1122,6 +1122,21 @@ fn the_output_a_run_asked_for_is_read_from_every_layer_that_still_reads() {
         OutputFormat::Text
     );
 
+    // A project document that cannot be read at all — a directory where the file should
+    // be — drops that document alone, never the readable user document beside it.
+    let obstructed = project.join(PROJECT_DOCUMENT_NAME);
+    std::fs::remove_file(&obstructed).expect("the unparseable project document");
+    std::fs::create_dir(&obstructed).expect("a directory in the document's place");
+    assert_eq!(
+        config::requested_output(Some(&project), &host.environment(), &Layer::default()),
+        OutputFormat::Json
+    );
+    // And the user document needs no working directory to be found.
+    assert_eq!(
+        config::requested_output(None, &host.environment(), &Layer::default()),
+        OutputFormat::Json
+    );
+
     // The environment, over the documents and under the flags — and with no working
     // directory to search from, the layers that need none still answer.
     let exported = Environment::from_pairs([("ONETASKGRAPH_OUTPUT", "json")]);
