@@ -747,7 +747,7 @@ fn comments_a_source_can_read_but_not_write_are_listed_and_every_write_is_refuse
 }
 
 #[test]
-fn a_github_draft_issue_is_refused_for_every_comment_verb_and_still_shows() {
+fn a_github_draft_issue_is_refused_for_every_comment_verb_and_by_task_show() {
     for boundary in SOURCE_BOUNDARIES {
         let who = format!("github-projects draft across the {boundary:?} boundary");
         let sandbox = Sandbox::new();
@@ -775,15 +775,39 @@ fn a_github_draft_issue_is_refused_for_every_comment_verb_and_still_shows() {
             );
         }
 
-        // A draft is still a task a person can read: it carries no comments to show, which
-        // is not a source failing.
-        let shown = parsed(
-            &who,
-            &ok(&who, &sandbox, &["task", "show", &draft, "--json"], None),
-        );
-        assert_eq!(shown["items"][0]["id"], json!(draft), "{who}");
-        assert!(shown.get("comments").is_none(), "{who}: {shown}");
-        assert_eq!(shown["errors"], json!([]), "{who}: {shown}");
+        // Showing the draft answers the task and refuses its comments by name: the command
+        // fails non-zero with the problem and a next action rather than leaving the list out,
+        // which would read exactly like a source without comments.
+        for json_flag in [false, true] {
+            let mut arguments = vec!["task", "show", draft.as_str()];
+            if json_flag {
+                arguments.push("--json");
+            }
+            let output = run(&sandbox, &arguments, None);
+            let said = stderr(&output);
+            assert_eq!(
+                output.status.code(),
+                Some(4),
+                "{who}: `{}` is a partial answer:\n{said}",
+                arguments.join(" ")
+            );
+            assert!(said.contains("draft"), "{who}: names the draft:\n{said}");
+            assert!(
+                said.contains("next:"),
+                "{who}: names a next action:\n{said}"
+            );
+            if json_flag {
+                let shown = parsed(&who, &stdout(&output));
+                assert_eq!(shown["items"][0]["id"], json!(draft), "{who}");
+                assert!(shown.get("comments").is_none(), "{who}: {shown}");
+                assert!(
+                    shown["errors"][0]["error"]["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("draft")),
+                    "{who}: {shown}"
+                );
+            }
+        }
     }
 }
 

@@ -9262,7 +9262,7 @@ export const runtimeSchemas = {
     "description": "One task as `task show` reports it: the response every show verb answers with, and the\ntask's comments beside it.\n\nThe response is flattened rather than nested, so a reader of `task show --json` written\nbefore comments existed reads exactly the members it read before.",
     "properties": {
       "comments": {
-        "description": "The task's comments, oldest first, for a source whose tasks have comments.\n\n**Absent** rather than empty for a source declaring none, for a task that was not\nfound, for a task its source refuses to read comments on — a GitHub draft, which has\nnone — and for a task whose comments could not be read, the last of those with the\nfailure in the response's `errors`. An empty list says the source has comments and this\ntask holds none, which is a different thing to tell a reader.",
+        "description": "The task's comments, oldest first, for a source whose tasks have comments.\n\n**Absent** rather than empty for a source declaring none, for a task that was not\nfound, and for a task whose comments could not be read — the last with the failure in\nthe response's `errors`, a source refusing the read (a GitHub draft, which has none)\nincluded, so showing such a task is a partial answer that says why. An empty list says\nthe source has comments and this task holds none, which is a different thing to tell a\nreader.",
         "items": {
           "$ref": "#/$defs/Comment"
         },

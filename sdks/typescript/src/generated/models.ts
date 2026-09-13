@@ -4752,10 +4752,11 @@ export interface TaskDetail {
  * The task's comments, oldest first, for a source whose tasks have comments.
  *
  * **Absent** rather than empty for a source declaring none, for a task that was not
- * found, for a task its source refuses to read comments on — a GitHub draft, which has
- * none — and for a task whose comments could not be read, the last of those with the
- * failure in the response's `errors`. An empty list says the source has comments and this
- * task holds none, which is a different thing to tell a reader.
+ * found, and for a task whose comments could not be read — the last with the failure in
+ * the response's `errors`, a source refusing the read (a GitHub draft, which has none)
+ * included, so showing such a task is a partial answer that says why. An empty list says
+ * the source has comments and this task holds none, which is a different thing to tell a
+ * reader.
  */
 comments?: (Comment[] | null)
 /**

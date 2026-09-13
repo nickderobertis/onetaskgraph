@@ -393,7 +393,7 @@ const ELEVENTH_BUNDLE_SHAPE: [(&str, u64); 64] = [
     ("Status", 0xd14c325a52e464f6),
     ("StatusCategory", 0xc866ba4d0d422da0),
     ("Task", 0xe39a3442bae8ceda),
-    ("TaskDetail", 0x8d8d4d56623ca2b8),
+    ("TaskDetail", 0xb254bda33ac983e2),
     ("TaskQuery", 0x963c214c94159671),
     ("TextFields", 0x7240bd05f9beff93),
 ];

@@ -535,7 +535,7 @@ async fn a_source_that_fails_a_comment_call_is_named_and_a_task_detail_keeps_the
 }
 
 #[tokio::test]
-async fn a_task_detail_leaves_out_comments_its_source_refuses_to_read_without_a_failure() {
+async fn a_task_detail_reports_a_comment_read_its_source_refuses_as_that_sources_failure() {
     let engine = misbehaving(Answer::Refusal);
     let task = id("odd:T-1");
 
@@ -543,14 +543,17 @@ async fn a_task_detail_leaves_out_comments_its_source_refuses_to_read_without_a_
     let refused = engine.comments(&task).await.unwrap_err().to_string();
     assert!(refused.contains("which has no comments"), "{refused}");
 
-    // Asked for beside the task, it is a task that carries none to show — not a source
-    // failing, which would turn an ordinary `task show` into a partial answer.
+    // Asked for beside the task, the task is still reported and the refusal is a failure of
+    // that source rather than an absence nobody explains: an omitted list would read exactly
+    // like a source without comments.
     let detail = engine.task_detail(&task).await.unwrap();
     assert_eq!(detail.response.items.len(), 1);
     assert_eq!(detail.comments, None);
+    assert_eq!(detail.response.errors.len(), 1);
     assert!(
-        detail.response.errors.is_empty(),
-        "{:?}",
-        detail.response.errors
+        detail.response.errors[0]
+            .error
+            .to_string()
+            .contains("which has no comments")
     );
 }
