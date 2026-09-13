@@ -14,8 +14,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use onetaskgraph_core::{
-    Config, ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyRequest, CopyScope,
-    DependencyRequest, Engine, EngineError, GlobalId, MatchBy, Paging, ResolvedSource, TaskRequest,
+    BudgetSpent, Config, ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyReport,
+    CopyRequest, CopyScope, DependencyRequest, Engine, EngineError, GlobalId, MatchBy, Paging,
+    ResolvedSource, Spent, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
@@ -1465,6 +1466,41 @@ async fn a_rust_caller_reads_what_a_copy_spent_summed_over_the_sources_that_mete
         "one budget two sources name adds up, measured and modelled together, and is a lower \
          bound because part of it was modelled; a budget nothing modelled is not"
     );
+}
+
+#[test]
+fn what_a_copy_spent_survives_the_public_reports_wire_round_trip() {
+    let report = CopyReport {
+        items: Vec::new(),
+        references_rewritten: 0,
+        references_unresolved: 0,
+        references_ambiguous: 0,
+        spent: Some(Spent {
+            requests: 7,
+            budgets: vec![BudgetSpent {
+                budget: "graphql".to_owned(),
+                unit: "points".to_owned(),
+                amount: 12,
+                lower_bound: true,
+            }],
+        }),
+    };
+
+    let wire = serde_json::to_value(&report).expect("a populated copy report serialises");
+    assert_eq!(
+        wire["spent"],
+        json!({
+            "requests": 7,
+            "budgets": [{
+                "budget": "graphql",
+                "unit": "points",
+                "amount": 12,
+                "lower_bound": true,
+            }],
+        })
+    );
+    let read: CopyReport = serde_json::from_value(wire).expect("the report reads back");
+    assert_eq!(read, report);
 }
 
 #[tokio::test]
