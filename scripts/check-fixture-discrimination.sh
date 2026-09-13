@@ -66,12 +66,20 @@ SUITE_OUTPUT=""
 SUITE_STATUS=0
 
 run_suite() {
-  # llmlint: ignore[work_goes_through_command_surface] the suite has to run inside the
-  # scratch copy, against its own target directory — `just test` there would need an Nx
-  # this copy deliberately never installs, and running it here would displace the build
-  # of the repository under test. The same reason cargo is invoked directly in
-  # scripts/check-isolation-enforced.sh and scripts/check-real-release-preparation.sh.
+  # This guard proves the checked-in fixture suite distinguishes an item's title from its
+  # id. A publishing environment may carry the hosted lane's credential, but opening that
+  # unrelated live session here makes the guard's baseline depend on the account's current
+  # allowance and can make an otherwise valid publication fail before the mutation runs.
+  # The ordinary affected test target remains the one place that runs the credentialed
+  # journey; this scratch suite is deliberately offline, as coverage is for the same reason.
+  # The suite has to run inside the scratch copy, against its own target directory — `just
+  # test` there would need an Nx this copy deliberately never installs, and running it here
+  # would displace the build of the repository under test. The same reason cargo is invoked
+  # directly in scripts/check-isolation-enforced.sh and scripts/check-real-release-preparation.sh.
+  # llmlint: ignore[work_goes_through_command_surface] the scratch clone cannot use the
+  # repository's Nx-backed command surface, and this command must test the mutated clone.
   SUITE_OUTPUT="$(cd "$scratch/repo" \
+    && unset GH_PROJECTS_TOKEN ONETASKGRAPH_LIVE_REQUIRED \
     && CARGO_TARGET_DIR="$scratch/target" cargo test -q -p "$CRATE" 2>&1)" \
     && SUITE_STATUS=0 || SUITE_STATUS=$?
 }
