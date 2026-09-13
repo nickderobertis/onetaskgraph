@@ -19,6 +19,7 @@
 //! | --- | --- |
 //! | `projects` | **Supported and proven.** `projects/` is a folder of its own, and a task's `project:` key is what files it under one. |
 //! | `documents` | **Supported and proven.** `documents/` is a folder of its own beside the other two, read on the same terms: recursively, with a file's path under it and without `.md` as its identifier. A document's front matter is a task's minus the two things a document is not — no `status` and no `depends_on` — and both are refused rather than ignored. |
+//! | `comments` | **Supported and proven.** A task's comments are an optional trailing `## Comments` section of the task's own file — human-readable, full fidelity, never JSON — in exactly the shape [`COMMENTS_HEADING`] documents. The section is not the task's content, and nothing a copy writes into the file adds, changes or removes it. |
 //! | `orphan_tasks` | **Supported and proven.** A task document with no `project:` key belongs to none. |
 //! | `filter_by_label` | **Supported and proven,** over the `labels:` key, requiring every label asked for and excluding every label refused. |
 //! | `filter_by_status` | **Supported and proven,** over `status:` through this instance's own `status_mapping`. |
@@ -44,12 +45,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location,
-    NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
-    TaskSource, TextFields, TextQuery, WriteSupport,
+    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
+    DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
+    LabelFilter, Location, NativeId, NewComment, Page, PageRequest, Project, ProjectFilter,
+    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
+    StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -463,19 +465,9 @@ impl LocalMdSource {
         let text = fs::read_to_string(path).map_err(|e| SourceError::Malformed {
             message: format!("{}: {e}", path.display()),
         })?;
-        text.strip_prefix("---\n")
-            .and_then(|rest| rest.split_once("\n---\n"))
-            .or_else(|| {
-                text.strip_prefix("---\r\n")
-                    .and_then(|rest| rest.split_once("\r\n---\r\n"))
-            })
-            .map(|(yaml, body)| (yaml.to_owned(), body.to_owned()))
-            .ok_or_else(|| SourceError::Malformed {
-                message: format!(
-                    "{}: expected YAML front matter delimited by ---",
-                    path.display()
-                ),
-            })
+        front_matter(&text)
+            .map(|(yaml, body_at)| (yaml.to_owned(), text[body_at..].to_owned()))
+            .ok_or_else(|| unfronted(path))
     }
 
     /// Everything a task, a project and a document all carry, read out of one file.
@@ -549,7 +541,14 @@ impl LocalMdSource {
                 message: format!("{}: {e}", path.display()),
             })?;
         let (shared, status, depends_on) = front.split();
-        let common = self.common(kind.kind(), path, &body, shared)?;
+        // A task's comments section is not its content: what a query searches, a copy reads
+        // and `task show` prints as the body is everything above it. A project has no
+        // comments, so a `## Comments` heading in one is ordinary content.
+        let content = match kind {
+            WorkKind::Task => sectioned(&body).0,
+            WorkKind::Project => body.as_str(),
+        };
+        let common = self.common(kind.kind(), path, content, shared)?;
         let status = Status {
             category: self
                 .statuses
@@ -750,7 +749,7 @@ impl TaskSource for LocalMdSource {
         Capabilities {
             projects: Support::Native,
             documents: Support::Native,
-            comments: Support::Unsupported,
+            comments: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -956,6 +955,463 @@ impl TaskSource for LocalMdSource {
     async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
         self.delete_entry(Kind::Document, id)
     }
+    async fn task_comments(
+        &self,
+        task: &NativeId,
+        page: &PageRequest,
+    ) -> Result<Option<Page<Comment>>, SourceError> {
+        let Some(file) = self.task_file(task)? else {
+            return Ok(None);
+        };
+        self.paginate(file.comments, page).map(Some)
+    }
+    async fn add_comment(
+        &self,
+        task: &NativeId,
+        comment: &NewComment,
+    ) -> Result<Option<Comment>, SourceError> {
+        if let Some(author) = &comment.author {
+            representable_author(author)?;
+        }
+        representable_body(&comment.body)?;
+        let Some(mut file) = self.task_file(task)? else {
+            return Ok(None);
+        };
+        let now = this_second();
+        let added = Comment {
+            id: minted_comment_id(now, &file.comments),
+            author: comment.author.clone(),
+            created_at: Some(now),
+            updated_at: Some(now),
+            body: comment.body.as_str().to_owned(),
+            url: None,
+        };
+        file.comments.push(added.clone());
+        file.rewrite()?;
+        Ok(Some(added))
+    }
+    async fn edit_comment(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+        body: &CommentBody,
+    ) -> Result<Option<Comment>, SourceError> {
+        representable_body(body)?;
+        let Some(mut file) = self.task_file(task)? else {
+            return Ok(None);
+        };
+        let Some(edited) = file.comments.iter_mut().find(|held| &held.id == comment) else {
+            return Ok(None);
+        };
+        edited.body = body.as_str().to_owned();
+        edited.updated_at = Some(this_second());
+        let edited = edited.clone();
+        file.rewrite()?;
+        Ok(Some(edited))
+    }
+    async fn delete_comment(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+    ) -> Result<Option<NativeId>, SourceError> {
+        let Some(mut file) = self.task_file(task)? else {
+            return Ok(None);
+        };
+        let Some(at) = file.comments.iter().position(|held| &held.id == comment) else {
+            return Ok(None);
+        };
+        file.comments.remove(at);
+        file.rewrite()?;
+        Ok(Some(comment.clone()))
+    }
+}
+
+/// The heading line that opens a task file's comments section.
+///
+/// # The comments section, rule by rule
+///
+/// A task's comments are an **optional trailing section of the task's own file**, after its
+/// body, human-readable and at full fidelity:
+///
+/// ```markdown
+/// ## Comments
+///
+/// <!-- onetaskgraph:comment id="20260913T151107Z-1" author="ada" created_at="2026-09-13T15:11:07Z" updated_at="2026-09-13T15:11:07Z" -->
+/// ### ada — 2026-09-13T15:11:07Z
+///
+/// The body, byte-for-byte: any Markdown, including its own `##` headings.
+///
+/// <!-- /onetaskgraph:comment -->
+/// ```
+///
+/// - The section is this heading line followed by one or more comment blocks, and nothing but
+///   blank lines between and after them to the end of the file. A `## Comments` heading
+///   anywhere else, or one followed by anything that is not a comment block, is ordinary task
+///   content. A task with no comments has no section: removing the last removes the heading.
+/// - A block opens with the marker line [`COMMENT_OPEN`] carrying `id`, `author` when one was
+///   given, `created_at` and `updated_at`, each double-quoted with `&`, `"`, `<` and `>`
+///   written as the four XML entities. A human heading follows — `### <author> — <created_at>`,
+///   or `### comment — <created_at>` without an author — then a blank line, the body verbatim,
+///   a blank line, and [`COMMENT_CLOSE`] on a line of its own. The marker is the source of
+///   truth; the heading is for a person and is regenerated on every write.
+/// - A body containing a line that is exactly [`COMMENT_CLOSE`] is refused rather than
+///   escaped, because escaping it would store a body other than the one written.
+/// - A comment id is minted as `<created_at in UTC as YYYYMMDDTHHMMSSZ>-<n>`, with `n` the
+///   smallest positive integer not already an id in that file, and is never renumbered.
+/// - The section is not the task's content: every read reports content as the body above it,
+///   so a content search never matches a comment. A copy written into the file keeps its
+///   existing section byte for byte, and content that would itself read as a section is
+///   refused rather than turned into comments nobody wrote.
+///
+/// `docs/local-md.md` describes the same section for a person; this is its one executable
+/// source.
+pub const COMMENTS_HEADING: &str = "## Comments";
+
+/// The start of the marker line that opens one comment block.
+pub const COMMENT_OPEN: &str = "<!-- onetaskgraph:comment ";
+
+/// The line that closes one comment block.
+pub const COMMENT_CLOSE: &str = "<!-- /onetaskgraph:comment -->";
+
+/// The end of the marker line that opens one comment block.
+const MARKER_END: &str = " -->";
+
+/// One task file, read for its comments: where its content ends and what its section holds.
+struct TaskFile {
+    path: PathBuf,
+    /// The whole file, exactly as it was read.
+    text: String,
+    /// Where the body begins: everything before this is the front matter and its delimiters.
+    body_at: usize,
+    /// Where the comments section begins, or the end of the file when there is none.
+    section_at: usize,
+    comments: Vec<Comment>,
+}
+
+impl TaskFile {
+    /// Write the file back with `comments` as its section, touching nothing above it.
+    ///
+    /// The one blank line that separates a section from the content is added with the section
+    /// and removed with it, so a task that gains and then loses its only comment reads back
+    /// with the content it had.
+    fn rewrite(&self) -> Result<(), SourceError> {
+        let content = &self.text[self.body_at..self.section_at];
+        let mut written = String::with_capacity(self.text.len() + 256);
+        written.push_str(&self.text[..self.body_at]);
+        if self.comments.is_empty() {
+            match content.strip_suffix("\n\n") {
+                Some(above) => {
+                    written.push_str(above);
+                    written.push('\n');
+                }
+                None => written.push_str(content),
+            }
+        } else {
+            written.push_str(content);
+            while !written.ends_with("\n\n") {
+                written.push('\n');
+            }
+            written.push_str(&rendered_section(&self.comments));
+        }
+        fs::write(&self.path, written).map_err(|e| SourceError::Unavailable {
+            message: format!("cannot write {}: {e}", self.path.display()),
+        })
+    }
+}
+
+impl LocalMdSource {
+    /// The task file `id` names, read for its comments, or `None` when there is no such task.
+    ///
+    /// The task is read exactly as [`get_task`](TaskSource::get_task) reads it first, so a
+    /// file that is not a readable task is refused for the reason that read gives rather than
+    /// written into.
+    fn task_file(&self, id: &NativeId) -> Result<Option<TaskFile>, SourceError> {
+        let Some(path) = self.locate(Kind::Task, id)? else {
+            return Ok(None);
+        };
+        self.parse(WorkKind::Task, &path)?;
+        let text = fs::read_to_string(&path).map_err(|e| SourceError::Malformed {
+            message: format!("{}: {e}", path.display()),
+        })?;
+        let (_, body_at) = front_matter(&text).ok_or_else(|| unfronted(&path))?;
+        let (content, comments) = sectioned(&text[body_at..]);
+        let section_at = body_at + content.len();
+        let comments = comments.unwrap_or_default();
+        let mut seen = BTreeSet::new();
+        if let Some(repeated) = comments.iter().find(|held| !seen.insert(&held.id)) {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "{}: two comments share the id {}; next: give one of them an id of its own \
+                     in its marker line, so an edit or a delete names one comment",
+                    path.display(),
+                    repeated.id
+                ),
+            });
+        }
+        Ok(Some(TaskFile {
+            path,
+            text,
+            body_at,
+            section_at,
+            comments,
+        }))
+    }
+}
+
+/// Where one file's YAML front matter is, and the byte its body begins at.
+fn front_matter(text: &str) -> Option<(&str, usize)> {
+    for (open, close) in [("---\n", "\n---\n"), ("---\r\n", "\r\n---\r\n")] {
+        if let Some(rest) = text.strip_prefix(open) {
+            return rest
+                .find(close)
+                .map(|at| (&rest[..at], open.len() + at + close.len()));
+        }
+    }
+    None
+}
+
+/// The refusal for a file with no front matter this source can find.
+fn unfronted(path: &Path) -> SourceError {
+    SourceError::Malformed {
+        message: format!(
+            "{}: expected YAML front matter delimited by ---",
+            path.display()
+        ),
+    }
+}
+
+/// A task body split into its content and its trailing comments section, when it has one.
+///
+/// Every line that is exactly [`COMMENTS_HEADING`] is a candidate, earliest first, and the
+/// first from which the rest of the body reads as comment blocks to its end is the section.
+/// Earliest first is what keeps a body's own `## Comments` line — inside a comment, or in
+/// content followed by prose — from being read as the section: a comment's body is consumed
+/// whole up to its closing line, and a heading followed by prose is not a run of blocks.
+fn sectioned(body: &str) -> (&str, Option<Vec<Comment>>) {
+    let mut at = 0;
+    while at <= body.len() {
+        let line_end = body[at..].find('\n').map_or(body.len(), |end| at + end);
+        if &body[at..line_end] == COMMENTS_HEADING
+            && let Some(comments) = section(&body[at..])
+        {
+            return (&body[..at], Some(comments));
+        }
+        if line_end == body.len() {
+            break;
+        }
+        at = line_end + 1;
+    }
+    (body, None)
+}
+
+/// The comments `text` holds when it is exactly a section, or `None` when it is not one.
+fn section(text: &str) -> Option<Vec<Comment>> {
+    let mut rest = text.strip_prefix(COMMENTS_HEADING)?.strip_prefix('\n')?;
+    let mut comments = Vec::new();
+    loop {
+        rest = rest.trim_start_matches('\n');
+        if rest.is_empty() {
+            return (!comments.is_empty()).then_some(comments);
+        }
+        let (comment, after) = block(rest)?;
+        comments.push(comment);
+        rest = after;
+    }
+}
+
+/// One comment block at the start of `text`, and what follows it.
+fn block(text: &str) -> Option<(Comment, &str)> {
+    let (marker, rest) = text.split_once('\n')?;
+    let attributes = attributes(
+        marker
+            .strip_prefix(COMMENT_OPEN)?
+            .strip_suffix(MARKER_END)?,
+    )?;
+    let (heading, rest) = rest.split_once('\n')?;
+    heading.strip_prefix("### ")?;
+    let rest = rest.strip_prefix('\n')?;
+    let closing = closing_line(rest)?;
+    let body = rest[..closing].strip_suffix("\n\n")?;
+    let after = &rest[closing + COMMENT_CLOSE.len()..];
+    let after = match after.strip_prefix('\n') {
+        Some(after) => after,
+        None if after.is_empty() => after,
+        None => return None,
+    };
+    if body.is_empty() {
+        return None;
+    }
+    let mut id = None;
+    let mut author = None;
+    let mut created_at = None;
+    let mut updated_at = None;
+    for (name, value) in attributes {
+        let slot = match name {
+            "id" => &mut id,
+            "author" => &mut author,
+            "created_at" => &mut created_at,
+            "updated_at" => &mut updated_at,
+            _ => return None,
+        };
+        if slot.replace(value).is_some() {
+            return None;
+        }
+    }
+    let timestamp = |value: String| {
+        DateTime::parse_from_rfc3339(&value)
+            .ok()
+            .map(|at| at.with_timezone(&Utc))
+    };
+    let id = id.filter(|id| !id.is_empty())?;
+    Some((
+        Comment {
+            id: NativeId(id),
+            author,
+            created_at: Some(timestamp(created_at?)?),
+            updated_at: Some(timestamp(updated_at?)?),
+            body: body.to_owned(),
+            url: None,
+        },
+        after,
+    ))
+}
+
+/// The byte a line that is exactly [`COMMENT_CLOSE`] starts at, if `text` has one.
+fn closing_line(text: &str) -> Option<usize> {
+    let mut at = 0;
+    loop {
+        let found = at + text[at..].find(COMMENT_CLOSE)?;
+        let starts_line = found == 0 || text.as_bytes()[found - 1] == b'\n';
+        let end = found + COMMENT_CLOSE.len();
+        let ends_line = end == text.len() || text.as_bytes()[end] == b'\n';
+        if starts_line && ends_line {
+            return Some(found);
+        }
+        at = found + 1;
+    }
+}
+
+/// A marker line's `name="value"` pairs, unescaped, or `None` when it is not a list of them.
+fn attributes(text: &str) -> Option<Vec<(&str, String)>> {
+    let mut pairs = Vec::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        let (name, after) = rest.split_once("=\"")?;
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+        {
+            return None;
+        }
+        let (value, after) = after.split_once('"')?;
+        pairs.push((name, unescaped(value)));
+        rest = match after.strip_prefix(' ') {
+            Some(after) if !after.is_empty() => after,
+            Some(_) => return None,
+            None if after.is_empty() => after,
+            None => return None,
+        };
+    }
+    Some(pairs)
+}
+
+/// An attribute value as a marker line writes it.
+fn escaped(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// An attribute value as a marker line wrote it, read back.
+fn unescaped(value: &str) -> String {
+    value
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// A timestamp as the section spells one: RFC 3339 in UTC, to the second.
+fn stamped(at: &DateTime<Utc>) -> String {
+    at.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+/// The section holding `comments`, in the order given.
+fn rendered_section(comments: &[Comment]) -> String {
+    let mut section = format!("{COMMENTS_HEADING}\n");
+    for comment in comments {
+        section.push('\n');
+        section.push_str(&rendered_block(comment));
+    }
+    section
+}
+
+/// One comment block, marker first and closing line last.
+fn rendered_block(comment: &Comment) -> String {
+    let mut marker = format!("{COMMENT_OPEN}id=\"{}\"", escaped(comment.id.as_str()));
+    if let Some(author) = &comment.author {
+        marker.push_str(&format!(" author=\"{}\"", escaped(author)));
+    }
+    let created = comment.created_at.as_ref().map(stamped).unwrap_or_default();
+    let updated = comment.updated_at.as_ref().map(stamped).unwrap_or_default();
+    marker.push_str(&format!(
+        " created_at=\"{}\" updated_at=\"{}\"{MARKER_END}",
+        escaped(&created),
+        escaped(&updated)
+    ));
+    let who = comment.author.as_deref().unwrap_or("comment");
+    format!(
+        "{marker}\n### {who} — {created}\n\n{}\n\n{COMMENT_CLOSE}\n",
+        comment.body
+    )
+}
+
+/// `<created_at in UTC as YYYYMMDDTHHMMSSZ>-<n>`, for the smallest positive `n` not already an
+/// id among `comments`.
+fn minted_comment_id(at: DateTime<Utc>, comments: &[Comment]) -> NativeId {
+    let stamp = at.format("%Y%m%dT%H%M%SZ");
+    (1_u64..)
+        .map(|n| NativeId(format!("{stamp}-{n}")))
+        .find(|candidate| !comments.iter().any(|held| &held.id == candidate))
+        .expect("an unbounded counter eventually clears a finite set of ids")
+}
+
+/// Now, to the second — the precision the section writes a time down in, so a comment reads
+/// back with exactly the times it was written with.
+fn this_second() -> DateTime<Utc> {
+    let now = Utc::now();
+    DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now)
+}
+
+/// Refuse a body the section cannot hold byte for byte.
+fn representable_body(body: &CommentBody) -> Result<(), SourceError> {
+    if body.as_str().split('\n').any(|line| line == COMMENT_CLOSE) {
+        return Err(SourceError::Refused {
+            message: format!(
+                "cannot represent this comment body: it contains a line that is exactly \
+                 {COMMENT_CLOSE}, which closes a comment in a task file and would end this one \
+                 early; next: change that line"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Refuse an author the section cannot hold on one heading line.
+fn representable_author(author: &str) -> Result<(), SourceError> {
+    if author.trim().is_empty() || author.chars().any(char::is_control) {
+        return Err(SourceError::Refused {
+            message: format!(
+                "cannot represent the author {author:?}: an author here is written on one \
+                 heading line, so it must say something and hold no line break or control \
+                 character; next: give the name on one line"
+            ),
+        });
+    }
+    Ok(())
 }
 impl LocalMdSource {
     fn edges(
@@ -1154,7 +1610,30 @@ impl LocalMdSource {
             Some(target) => (target.clone(), self.existing(kind, target)?),
             None => self.unused(kind, outgoing.fields().id)?,
         };
-        let document = self.render(outgoing)?;
+        let mut document = self.render(outgoing)?;
+        // An update of a task keeps the comments section the file already has, byte for byte:
+        // a copy writes the task, and nothing a copy does adds, changes or removes a comment.
+        // Only a file can hold a section: anything else at that path is left for the write
+        // below to report. A file that cannot be read is refused rather than overwritten,
+        // because overwriting it would drop whatever comments it holds unread.
+        if let (Some(_), Kind::Task) = (target, kind)
+            && path.is_file()
+        {
+            let existing = fs::read_to_string(&path).map_err(|e| SourceError::Unavailable {
+                message: format!(
+                    "cannot read {} to keep its comments before writing it: {e}",
+                    path.display()
+                ),
+            })?;
+            if let Some((_, body_at)) = front_matter(&existing) {
+                let body = &existing[body_at..];
+                let (content, comments) = sectioned(body);
+                if comments.is_some() {
+                    document.push('\n');
+                    document.push_str(&body[content.len()..]);
+                }
+            }
+        }
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| SourceError::Unavailable {
                 message: format!("cannot create {}: {e}", parent.display()),
@@ -1236,6 +1715,13 @@ impl LocalMdSource {
 
     /// One file's whole text, or a refusal naming the field this source cannot hold.
     fn render(&self, outgoing: &Outgoing<'_>) -> Result<String, SourceError> {
+        let is_task = matches!(
+            outgoing,
+            Outgoing::Work {
+                kind: WorkKind::Task,
+                ..
+            }
+        );
         let (status, depends_on) = match outgoing {
             Outgoing::Work {
                 status, depends_on, ..
@@ -1301,6 +1787,20 @@ impl LocalMdSource {
             message: format!("cannot render front matter for {}: {e}", outgoing.id),
         })?;
         let body = outgoing.content.unwrap_or_default().trim();
+        // Content that would itself read back as a comments section is refused: writing it
+        // would turn part of a task's content into comments nobody wrote, which is the one
+        // thing a copy may never do to a comment.
+        if is_task && sectioned(&format!("{body}\n")).1.is_some() {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "cannot represent the field `content` of {}: it ends in a `{COMMENTS_HEADING}` \
+                     section of comment blocks, which this source reads as the task's comments \
+                     rather than its content; next: change that heading in the content being \
+                     copied",
+                    outgoing.id
+                ),
+            });
+        }
         Ok(format!("---\n{}\n---\n{body}\n", yaml.trim_end()))
     }
 }

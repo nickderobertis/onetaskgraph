@@ -863,7 +863,12 @@ impl Held {
     fn unused_comment_id(&self) -> NativeId {
         (1_u64..)
             .map(|n| NativeId(format!("C-{n}")))
-            .find(|candidate| !self.comments.iter().any(|held| &held.comment.id == candidate))
+            .find(|candidate| {
+                !self
+                    .comments
+                    .iter()
+                    .any(|held| &held.comment.id == candidate)
+            })
             .expect("an unbounded counter eventually clears a finite set of ids")
     }
 

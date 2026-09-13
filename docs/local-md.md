@@ -120,6 +120,60 @@ the path with `.md` removed, so a second extension either makes that rule untrue
 `design.md` and `design.mdx` both claim the identifier `design`. The folder keeps one rule
 for all three kinds.
 
+## Comments
+
+A task's comments are an **optional trailing section of the task's own file**, after its
+body — readable by a person at full fidelity, and never JSON:
+
+```markdown
+---
+title: Ship the release
+status: todo
+---
+Long-form task content.
+
+## Comments
+
+<!-- onetaskgraph:comment id="20260913T151107Z-1" author="ada" created_at="2026-09-13T15:11:07Z" updated_at="2026-09-13T15:11:07Z" -->
+### ada — 2026-09-13T15:11:07Z
+
+The body, byte-for-byte: any Markdown, including its own `##` headings.
+
+<!-- /onetaskgraph:comment -->
+```
+
+`onetaskgraph task comment add|list|edit|delete` read and write this section; so can you, by
+hand. The rules, all of which the plugin enforces:
+
+- **The section** is the heading line `## Comments` followed by one or more comment blocks
+  separated by blank lines, and nothing else to the end of the file. A `## Comments` heading
+  anywhere else, or one followed by anything that is not a comment block, is ordinary task
+  content. A task with no comments has no section: deleting the last comment removes the
+  heading too.
+- **A block** opens with the marker line `<!-- onetaskgraph:comment ... -->`, carrying `id`,
+  `author` when one was given, `created_at` and `updated_at`. Each value is double-quoted,
+  with `&`, `"`, `<` and `>` written as `&amp;`, `&quot;`, `&lt;` and `&gt;`. A heading line
+  for a person follows — `### <author> — <created_at>`, or `### comment — <created_at>` when
+  there is no author — then a blank line, the body exactly as written, a blank line, and the
+  closing line `<!-- /onetaskgraph:comment -->`. The marker line is what the plugin reads;
+  the heading is regenerated whenever the section is written.
+- **The body** is stored byte for byte, its own headings and a trailing newline included. A
+  body with a line that is exactly the closing line is refused on `add` and `edit`, saying
+  why, rather than escaped — an escaped body would not be the one you wrote.
+- **A comment id** is minted as the comment's creation time in UTC as `YYYYMMDDTHHMMSSZ`,
+  a dash, and the smallest positive integer not already an id in that file:
+  `20260913T151107Z-1`, then `20260913T151107Z-2` for a second comment in the same second.
+  Ids are never renumbered.
+- **The section is not the task's content.** `task show` and every query report the content
+  as the body above the section, so `search --in content` never matches a comment's text.
+- **A copy never touches it.** Copying a task into this folder over an existing file keeps
+  that file's section byte for byte, and no comment of the task being copied is written into
+  it. Content that would itself read back as a section is refused rather than turned into
+  comments nobody wrote.
+
+`--author` is recorded here as given — this folder has no signed-in account to record
+instead — and must be one line with no control characters.
+
 ## Where this source says an entity is
 
 Every task, project and document this source reports carries a **location**: the
