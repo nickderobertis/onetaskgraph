@@ -426,6 +426,92 @@ test("a document copy drives the real binary and is refused by a source with non
   }
 });
 
+test(
+  "comments are added, listed, edited and deleted through the real binary",
+  async () => {
+    // `notes` is a folder of Markdown, whose comments are a section of the task's own file, so
+    // what one client call writes the next one reads back. `plain` is an in-memory source that
+    // does not say its tasks have comments, so the verbs are refused against it.
+    const commentRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-comment-"));
+    mkdirSync(resolve(commentRoot, "notes/tasks"), { recursive: true });
+    writeFileSync(
+      resolve(commentRoot, "notes/tasks/T-1.md"),
+      "---\ntitle: Ship the release\nstatus: todo\n---\nLong-form task content.\n",
+    );
+    writeFileSync(
+      resolve(commentRoot, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          notes: { plugin: "local-md", config: { root: resolve(commentRoot, "notes") } },
+          plain: {
+            plugin: "in-memory",
+            config: {
+              tasks: [
+                {
+                  id: "T-1",
+                  title: "Plain",
+                  status: { category: "todo", name: "Todo" },
+                  labels: [],
+                },
+              ],
+            },
+          },
+        },
+      }),
+    );
+    try {
+      const commentClient = new OnetaskgraphClient({ binaryPath: binary, cwd: commentRoot });
+
+      // Text handed over as a body reaches the binary on standard input, byte for byte.
+      const first = await commentClient.taskCommentAdd("notes:T-1", {
+        body: "Seen again on main:\n\n## Evidence\n",
+        author: "ada",
+      });
+      expect([first.body, first.author]).toEqual(["Seen again on main:\n\n## Evidence\n", "ada"]);
+      writeFileSync(resolve(commentRoot, "second.md"), "from a file\n");
+      const second = await commentClient.taskCommentAdd("notes:T-1", {
+        bodyFile: resolve(commentRoot, "second.md"),
+      });
+      expect(second.body).toBe("from a file\n");
+
+      const listed = await commentClient.taskCommentList("notes:T-1");
+      expect(listed.comments.map((comment) => comment.id)).toEqual([first.id, second.id]);
+
+      const edited = await commentClient.taskCommentEdit("notes:T-1", first.id, {
+        body: "corrected\n",
+      });
+      expect(edited).toMatchObject({
+        id: first.id,
+        author: first.author,
+        created_at: first.created_at,
+        body: "corrected\n",
+      });
+      writeFileSync(resolve(commentRoot, "edit.md"), "corrected again\n");
+      const editedFromFile = await commentClient.taskCommentEdit("notes:T-1", first.id, {
+        bodyFile: resolve(commentRoot, "edit.md"),
+      });
+      expect(editedFromFile.body).toBe("corrected again\n");
+
+      expect(await commentClient.taskCommentDelete("notes:T-1", second.id)).toEqual({
+        deleted: second.id,
+      });
+      const shown = await commentClient.taskShow("notes:T-1");
+      expect(shown.comments?.map((comment) => comment.body)).toEqual(["corrected again\n"]);
+      expect(shown.items[0]?.item.content).toBe("Long-form task content.");
+
+      // A source whose tasks have none carries no comments key, and refuses the verbs.
+      expect("comments" in (await commentClient.taskShow("plain:T-1"))).toBe(false);
+      await expect(commentClient.taskCommentList("plain:T-1")).rejects.toThrow("has no comments");
+      await expect(commentClient.taskCommentAdd("notes:T-1", { body: "" })).rejects.toBeInstanceOf(
+        OnetaskgraphExecutionError,
+      );
+    } finally {
+      rmSync(commentRoot, { recursive: true, force: true });
+    }
+  },
+  SUBPROCESS_SUITE_TIMEOUT_MS,
+);
+
 test("a source failure remains typed for partial and accepted-partial exits", async () => {
   const failureRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-failure-"));
   writeFileSync(

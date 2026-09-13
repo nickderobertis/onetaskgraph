@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import Literal
 
 from .models import (
+    Comment,
+    CommentList,
     CopyReport,
+    DeletedComment,
     EffectiveConfig,
     GlobalId,
     QueryResponseOfQualifiedDocument,
@@ -15,20 +18,25 @@ from .models import (
     QueryResponseOfQualifiedTask,
     QueryResponseOfSearchHit,
     SourceListing,
+    TaskDetail,
 )
 
-POSITIONALS: dict[tuple[str, ...], str] = {
-    ("document", "copy"): "ids",
-    ("document", "show"): "id",
-    ("project", "copy"): "id",
-    ("project", "deps"): "id",
-    ("project", "show"): "id",
-    ("search",): "text",
-    ("task", "copy"): "ids",
-    ("task", "deps"): "id",
-    ("task", "show"): "id",
+POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
+    ("document", "copy"): ("ids",),
+    ("document", "show"): ("id",),
+    ("project", "copy"): ("id",),
+    ("project", "deps"): ("id",),
+    ("project", "show"): ("id",),
+    ("search",): ("text",),
+    ("task", "comment", "add"): ("id",),
+    ("task", "comment", "delete"): ("id", "comment_id"),
+    ("task", "comment", "edit"): ("id", "comment_id"),
+    ("task", "comment", "list"): ("id",),
+    ("task", "copy"): ("ids",),
+    ("task", "deps"): ("id",),
+    ("task", "show"): ("id",),
 }
-"""The operand each command takes ahead of its options, by command.
+"""The operands each command takes ahead of its options, in order, by command.
 
 The runtime client builds the argument vector from this rather than from a second
 table of its own: a verb whose operand was named in one place and forgotten in the
@@ -40,7 +48,14 @@ so until the binary refused the invocation.
 class GeneratedClient:
     """Methods generated from the binary command surface."""
 
-    async def _invoke[T](self, command: list[str], model: object, **options: object) -> T:
+    async def _invoke[T](
+        self,
+        command: list[str],
+        model: object,
+        *,
+        stdin: str | None = None,
+        **options: object,
+    ) -> T:
         raise NotImplementedError
 
     async def config_show(
@@ -339,6 +354,92 @@ class GeneratedClient:
             set=set,
         )
 
+    async def task_comment_add(
+        self,
+        id: GlobalId | str,
+        *,
+        author: str | None = None,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+    ) -> Comment:
+        """Run ``onetaskgraph task comment add``."""
+        return await self._invoke(
+            ["task", "comment", "add"],
+            Comment,
+            id=id,
+            author=author,
+            body_file=body_file,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+            stdin=body,
+        )
+
+    async def task_comment_delete(
+        self,
+        id: GlobalId | str,
+        comment_id: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> DeletedComment:
+        """Run ``onetaskgraph task comment delete``."""
+        return await self._invoke(
+            ["task", "comment", "delete"],
+            DeletedComment,
+            id=id,
+            comment_id=comment_id,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
+
+    async def task_comment_edit(
+        self,
+        id: GlobalId | str,
+        comment_id: str,
+        *,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+    ) -> Comment:
+        """Run ``onetaskgraph task comment edit``."""
+        return await self._invoke(
+            ["task", "comment", "edit"],
+            Comment,
+            id=id,
+            comment_id=comment_id,
+            body_file=body_file,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+            stdin=body,
+        )
+
+    async def task_comment_list(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> CommentList:
+        """Run ``onetaskgraph task comment list``."""
+        return await self._invoke(
+            ["task", "comment", "list"],
+            CommentList,
+            id=id,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
+
     async def task_copy(
         self,
         ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
@@ -448,11 +549,11 @@ class GeneratedClient:
         explain: bool | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> QueryResponseOfQualifiedTask:
+    ) -> TaskDetail:
         """Run ``onetaskgraph task show``."""
         return await self._invoke(
             ["task", "show"],
-            QueryResponseOfQualifiedTask,
+            TaskDetail,
             id=id,
             allow_partial=allow_partial,
             default_sources=default_sources,

@@ -4,7 +4,10 @@ import { dirname, resolve } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
 import { binaryCommands } from "./generated/commands.ts";
 import type {
+  Comment,
+  CommentList,
   CopyReport,
+  DeletedComment,
   EffectiveConfig,
   QueryResponseOfQualifiedDocument,
   QueryResponseOfQualifiedEdge,
@@ -13,6 +16,7 @@ import type {
   QueryResponseOfQualifiedTask,
   QueryResponseOfSearchHit,
   SourceListings,
+  TaskDetail,
 } from "./generated/models.ts";
 import { runtimeSchemas } from "./generated/schemas.ts";
 import { SCHEMA_BUNDLE_VERSION } from "./generated/models.ts";
@@ -41,6 +45,10 @@ export type CopyOptions = {
   recreate?: boolean;
   dryRun?: boolean;
 };
+// A comment's body, given as text the client writes to the binary's standard input or as a
+// file the binary reads byte for byte — never as a word of the command line.
+export type CommentBodyOptions = { body: string } | { bodyFile: string };
+export type CommentAddOptions = CommentBodyOptions & { author?: string };
 export type ClientOptions = {
   binaryPath?: string;
   cwd?: string;
@@ -75,9 +83,13 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   "config show": "EffectiveConfig",
   "sources list": "SourceListings",
   "task list": "QueryResponseOfQualifiedTask",
-  "task show": "QueryResponseOfQualifiedTask",
+  "task show": "TaskDetail",
   "task deps": "QueryResponseOfQualifiedEdge",
   "task copy": "CopyReport",
+  "task comment add": "Comment",
+  "task comment list": "CommentList",
+  "task comment edit": "Comment",
+  "task comment delete": "DeletedComment",
   "project list": "QueryResponseOfQualifiedProject",
   "project show": "QueryResponseOfQualifiedProject",
   "project deps": "QueryResponseOfQualifiedEdge",
@@ -89,8 +101,9 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   search: "QueryResponseOfSearchHit",
 };
 
-// A copy is one write into one destination, so exit 4 — some sources answered and some
-// did not — is not a code it can produce and not one this client accepts from it.
+// A copy is one write into one destination, and a comment verb one call to one source, so
+// exit 4 — some sources answered and some did not — is not a code either can produce and not
+// one this client accepts from them.
 const partialResponseCommands = new Set(
   Object.keys(responseRoots).filter(
     (command) =>
@@ -98,9 +111,16 @@ const partialResponseCommands = new Set(
       command !== "sources list" &&
       command !== "task copy" &&
       command !== "project copy" &&
-      command !== "document copy",
+      command !== "document copy" &&
+      !command.startsWith("task comment "),
   ),
 );
+
+function bodyArguments(options: CommentBodyOptions): { args: string[]; input?: string } {
+  return "bodyFile" in options
+    ? { args: ["--body-file", options.bodyFile] }
+    : { args: [], input: options.body };
+}
 
 export const clientCommands: readonly string[] = binaryCommands;
 
@@ -185,11 +205,23 @@ export class OnetaskgraphClient {
     if (options.noProject) args.push("--no-project");
     return this.run("task list", args);
   }
-  taskShow(
-    id: string,
-    options: Pick<QueryOptions, "allowPartial"> = {},
-  ): Promise<QueryResponseOfQualifiedTask> {
+  taskShow(id: string, options: Pick<QueryOptions, "allowPartial"> = {}): Promise<TaskDetail> {
     return this.run("task show", [id, ...(options.allowPartial ? ["--allow-partial"] : [])]);
+  }
+  taskCommentAdd(id: string, options: CommentAddOptions): Promise<Comment> {
+    const { args, input } = bodyArguments(options);
+    if (options.author !== undefined) args.push("--author", options.author);
+    return this.run("task comment add", [id, ...args], input);
+  }
+  taskCommentList(id: string): Promise<CommentList> {
+    return this.run("task comment list", [id]);
+  }
+  taskCommentEdit(id: string, commentId: string, options: CommentBodyOptions): Promise<Comment> {
+    const { args, input } = bodyArguments(options);
+    return this.run("task comment edit", [id, commentId, ...args], input);
+  }
+  taskCommentDelete(id: string, commentId: string): Promise<DeletedComment> {
+    return this.run("task comment delete", [id, commentId]);
   }
   taskDeps(id: string, options: DependencyOptions = {}): Promise<QueryResponseOfQualifiedEdge> {
     const args = [id];
@@ -263,14 +295,19 @@ export class OnetaskgraphClient {
     return this.run("search", args);
   }
 
-  private run<T>(command: string, args: string[]): Promise<T> {
+  private run<T>(command: string, args: string[], input?: string): Promise<T> {
     const commandArgs = [...command.split(" "), ...args, "--json"];
     return new Promise((resolvePromise, reject) => {
+      // Standard input is always a pipe, written with the body when there is one and closed
+      // at once either way: a command that reads a body there must never wait on this
+      // process's own input, and one given none reads an empty body and says so.
       const child = spawn(this.binaryPath, commandArgs, {
         cwd: this.cwd,
         env: this.env,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
       });
+      child.stdin.on("error", () => {});
+      child.stdin.end(input ?? "");
       let stdout = "";
       let stderr = "";
       child.stdout.setEncoding("utf8").on("data", (chunk: string) => {

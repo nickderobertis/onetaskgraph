@@ -1,5 +1,8 @@
 # ruff: noqa: F401, I001  # Generated public re-exports are used by consumers.
+from .comment import Comment as Comment
+from .comment_list import CommentList as CommentList
 from .copy_report import CopyReport as CopyReport
+from .deleted_comment import DeletedComment as DeletedComment
 from .document import Document as Document
 from .document_query import DocumentQuery as DocumentQuery
 from .effective_config import EffectiveConfig as EffectiveConfig
@@ -16,3 +19,4 @@ from .query_response_of_search_hit import QueryResponse as QueryResponseOfSearch
 from .source_failure import SourceFailure as SourceFailure
 from .source_listing import SourceListing as SourceListing
 from .status_category import StatusCategory as StatusCategory
+from .task_detail import TaskDetail as TaskDetail
