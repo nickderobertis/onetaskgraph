@@ -704,6 +704,12 @@ estimated instead. Both are **running totals** and never a figure for one call: 
 reads them before and after a command and reports the difference, so a plugin must not reset
 them. `null` is read exactly as a plugin that does not meter.
 
+The engine holds each pair of readings to that before it believes either: `requests` and
+every `measured` and `modelled` may only grow, a budget named once stays named, and each
+`budget` and `unit` pair is named at most once and with neither empty. A pair that breaks
+any of it is reported as a plugin not metering for that command, never as a difference
+clamped to zero.
+
 A plugin that answers `metering` with an error is reported as not metering for that command.
 The command does not fail over what it cost.
 

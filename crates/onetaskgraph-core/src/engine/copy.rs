@@ -2240,16 +2240,22 @@ type BudgetDifference = ((String, String), u64, u64);
 /// cannot be a running total's.
 ///
 /// A running total never falls, never drops a budget it has named, and names every budget
-/// it keeps; a pair that breaks any of that is a source that reset its figures or reported
-/// something else, and a difference taken over it would be a number that measures nothing.
-/// Such a source is reported as not metering rather than as having spent a clamped zero.
+/// it keeps, once; a pair that breaks any of that is a source that reset its figures or
+/// reported something else, and a difference taken over it would be a number that measures
+/// nothing. Such a source is reported as not metering rather than as having spent a clamped
+/// zero.
 fn difference(before: &Metering, after: &Metering) -> Option<(u64, Vec<BudgetDifference>)> {
     let sent = after.requests.checked_sub(before.requests)?;
-    let unnamed = |budget: &onetaskgraph_plugin_api::Metered| {
-        budget.budget.is_empty() || budget.unit.is_empty()
-    };
-    if before.budgets.iter().chain(&after.budgets).any(unnamed) {
-        return None;
+    for reading in [before, after] {
+        let mut named = BTreeSet::new();
+        for budget in &reading.budgets {
+            if budget.budget.is_empty()
+                || budget.unit.is_empty()
+                || !named.insert((&budget.budget, &budget.unit))
+            {
+                return None;
+            }
+        }
     }
     let held = |from: &Metering, budget: &onetaskgraph_plugin_api::Metered| {
         from.budgets

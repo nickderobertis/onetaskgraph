@@ -1499,6 +1499,16 @@ async fn a_source_whose_readings_are_not_a_running_total_is_reported_as_not_mete
             vec![total(1, &[("rest", "requests", 1, 0)]), total(2, &[])],
         ),
         (
+            "budget was named twice",
+            vec![
+                total(1, &[]),
+                total(
+                    2,
+                    &[("graphql", "points", 1, 0), ("graphql", "points", 1, 0)],
+                ),
+            ],
+        ),
+        (
             "budget had no name",
             vec![total(1, &[]), total(2, &[("", "points", 1, 0)])],
         ),
