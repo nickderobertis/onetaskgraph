@@ -369,6 +369,46 @@ pub enum EngineError {
         origin: String,
     },
 
+    /// A member copy named a task that is not a member of the project being copied.
+    ///
+    /// Refused before anything is written, because a copy that names members names the
+    /// part of one project it carries: a task of some other project, or of no project, is
+    /// not a narrower version of that copy but a different one.
+    #[error(
+        "{id} is not a task of {project}, so it cannot be copied as one of its members\n\
+         next: name a task `onetaskgraph task list --project {project}` reports, or copy \
+         {id} on its own with `onetaskgraph task copy`."
+    )]
+    NotAMember {
+        /// The id that was named as a member.
+        id: String,
+        /// The project, or the projects, it is not a member of.
+        project: String,
+    },
+
+    /// A member copy's item depends on a member it was not told to carry, and that member
+    /// records no origin naming the destination.
+    ///
+    /// Refused before anything is written. The destination id of a member the copy does
+    /// not carry comes from that member's own recorded origin and from nowhere else — not
+    /// from a walk of the destination, which is the read a member copy exists to avoid —
+    /// and writing the edge without it would either drop it silently or point it at the
+    /// id the member has at its source, which the destination has never heard of.
+    #[error(
+        "{item} depends on {member}, which this copy was not told to carry and which records \
+         no origin in {destination}\n\
+         next: name {member} with --member as well, record its {destination} id at \
+         onetaskgraph.origin, or copy the whole project without --member."
+    )]
+    UnrecordedMember {
+        /// The item whose edge could not be resolved.
+        item: String,
+        /// The member that edge points at.
+        member: String,
+        /// The destination it records no origin in.
+        destination: String,
+    },
+
     /// A source refused something the copy asked of it.
     ///
     /// Distinct from a [`SourceFailure`], which leaves the other sources' results

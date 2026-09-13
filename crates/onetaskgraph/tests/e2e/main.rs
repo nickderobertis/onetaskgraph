@@ -25,6 +25,7 @@
 mod common;
 
 mod copy;
+mod copy_cost;
 mod document_store;
 mod failures;
 mod fixtures;

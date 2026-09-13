@@ -187,13 +187,18 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
         Command::Project {
             command: ProjectCommand::Copy(args),
         } => {
-            let request = copy_request(
-                std::iter::once(args.id.as_str()),
-                CopyScope::Projects {
+            let members = args
+                .member
+                .iter()
+                .map(|member| qualified(member))
+                .collect::<Result<Vec<_>, _>>()?;
+            let scope = match CopyItems::new(members) {
+                Some(members) => CopyScope::Members(members),
+                None => CopyScope::Projects {
                     tasks: !args.no_tasks,
                 },
-                &args.copy,
-            )?;
+            };
+            let request = copy_request(std::iter::once(args.id.as_str()), scope, &args.copy)?;
             copy(out, loaded, &request).await
         }
 
