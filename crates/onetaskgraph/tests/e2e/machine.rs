@@ -656,7 +656,11 @@ fn a_member_copy_refused_under_json_is_a_failure_document_too() {
             .is_some_and(|message| message.contains("plans:B is not a task of plans:P-1")),
         "{failure}"
     );
-    unchanged_as_text(&run(&sandbox, &copy), &machine, "project copy --member plans:B");
+    unchanged_as_text(
+        &run(&sandbox, &copy),
+        &machine,
+        "project copy --member plans:B",
+    );
 }
 
 #[test]
