@@ -508,16 +508,18 @@ impl Journal {
 /// to answer a later query.
 #[derive(Default)]
 struct Running {
-    /// Every item whose destination id this command knows or will learn: the ids named,
-    /// what travels with them, and — for a member copy — each member the copy does not
-    /// carry whose own recorded origin already names its destination item.
+    /// Every item an edge of this command resolves to a destination id rather than writing as
+    /// it was read: the ids named, what travels with them, and — for a member copy — each
+    /// member the copy does not carry whose own recorded origin already names its
+    /// destination item. That last kind is resolvable without being copied.
+    resolvable: Vec<GlobalId>,
+    /// The destination item each of those corresponds to, as soon as it is known — whether
+    /// this command found it, landed it, or read it off a member's recorded origin.
     ///
-    /// Keyed by the qualified id's own rendering where it is a map key, which is what a
-    /// recorded origin holds anyway — making `GlobalId` orderable for a local map would put
-    /// an ordering on a contract type for a reason no caller of it has.
-    copied: Vec<GlobalId>,
-    /// The destination id each of those lands on, as soon as it is known.
-    written: BTreeMap<String, NativeId>,
+    /// Keyed by the qualified id's own rendering, which is what a recorded origin holds
+    /// anyway — making `GlobalId` orderable for a local map would put an ordering on a
+    /// contract type for a reason no caller of it has.
+    counterparts: BTreeMap<String, NativeId>,
     /// The items held back for [`Engine::repair`], across the whole request.
     deferred: Vec<Deferred>,
     /// The reference figures, one total for the whole invocation rather than one per
@@ -817,7 +819,7 @@ impl Engine {
                     Level::Task
                 };
                 running
-                    .copied
+                    .resolvable
                     .extend(request.items.as_slice().iter().cloned());
                 let mut planned = Vec::new();
                 for id in request.items.as_slice() {
@@ -834,8 +836,8 @@ impl Engine {
                     } else {
                         Vec::new()
                     };
-                    running.copied.push(id.clone());
-                    running.copied.extend(members.iter().cloned());
+                    running.resolvable.push(id.clone());
+                    running.resolvable.extend(members.iter().cloned());
                     projects.push((id.clone(), members));
                 }
                 self.copy_projects(destination, request, &projects, &[], &mut running, journal)
@@ -886,8 +888,8 @@ impl Engine {
             return Ok(());
         }
         let Running {
-            copied,
-            written,
+            resolvable,
+            counterparts,
             deferred,
             ..
         } = running;
@@ -896,8 +898,8 @@ impl Engine {
                 &entry.item.edges,
                 &entry.item.source.source,
                 destination,
-                &copied,
-                &written,
+                &resolvable,
+                &counterparts,
             );
             self.write(
                 destination,
@@ -1053,14 +1055,14 @@ impl Engine {
         // before its own members' were, unless every edge resolves and nothing differs.
         // Reading it any other way would move the word a repeat copy reports for a project
         // whose only difference is an edge, which is not this change's to move.
-        let mut before_members = running.written.clone();
+        let mut before_members = running.counterparts.clone();
         if let Target::Update { id: target, .. } = &project.target {
             before_members.insert(id.to_string(), target.clone());
         }
         for item in std::iter::once(&project).chain(&tasks) {
             if let Target::Update { id: target, .. } = &item.target {
                 running
-                    .written
+                    .counterparts
                     .insert(item.source.to_string(), target.clone());
             }
         }
@@ -1070,14 +1072,14 @@ impl Engine {
                     &project.edges,
                     &id.source,
                     destination,
-                    &running.copied,
-                    &running.written,
+                    &running.resolvable,
+                    &running.counterparts,
                 );
                 let first = mapped_edges(
                     &project.edges,
                     &id.source,
                     destination,
-                    &running.copied,
+                    &running.resolvable,
                     &before_members,
                 );
                 let held = project.held.as_ref();
@@ -1166,14 +1168,16 @@ impl Engine {
                     .filter(|origin| &origin.source == destination.name())
                 {
                     Some(origin) => {
-                        running.written.insert(task.id.to_string(), origin.native);
-                        running.copied.push(task.id);
+                        running
+                            .counterparts
+                            .insert(task.id.to_string(), origin.native);
+                        running.resolvable.push(task.id);
                     }
                     None => unrecorded.push(task.id),
                 }
             }
-            running.copied.push(project.clone());
-            running.copied.extend(members.iter().cloned());
+            running.resolvable.push(project.clone());
+            running.resolvable.extend(members.iter().cloned());
             carried.push((project.clone(), members));
         }
         if let Some(stray) = named
@@ -1640,7 +1644,9 @@ impl Engine {
 
         for item in &planned {
             if let Target::Update { id, .. } = &item.target {
-                running.written.insert(item.source.to_string(), id.clone());
+                running
+                    .counterparts
+                    .insert(item.source.to_string(), id.clone());
             }
         }
 
@@ -1662,8 +1668,8 @@ impl Engine {
                 &item.edges,
                 &item.source.source,
                 destination,
-                &running.copied,
-                &running.written,
+                &running.resolvable,
+                &running.counterparts,
             );
             if edges.iter().any(Option::is_none) {
                 unresolved.push(index);
@@ -1680,7 +1686,7 @@ impl Engine {
                 .await?;
             if let Some(id) = outcome.destination() {
                 running
-                    .written
+                    .counterparts
                     .insert(item.source.to_string(), id.native.clone());
             }
             outcomes.push(outcome);
@@ -2025,7 +2031,7 @@ impl Engine {
             return Ok(None);
         };
         let qualified = GlobalId::new(item.source.source.clone(), project.clone()).to_string();
-        if let Some(landed) = running.written.get(&qualified) {
+        if let Some(landed) = running.counterparts.get(&qualified) {
             return Ok(Some(landed.clone()));
         }
         if let Some(looked) = running.filings.get(&qualified) {
