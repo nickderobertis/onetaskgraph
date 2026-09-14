@@ -160,7 +160,7 @@ async fn answer(
                     message: "this connection was already initialized".to_owned(),
                 },
             ),
-            None => initialize(source, id, params, kind),
+            None => initialize(source, id, params, kind).await,
         };
     }
     let Some(built) = source.as_deref() else {
@@ -178,7 +178,7 @@ async fn answer(
 }
 
 /// The handshake (§3), including the version refusal §6.2 spells out.
-fn initialize(
+async fn initialize(
     source: &mut Option<Box<dyn TaskSource>>,
     id: String,
     params: Value,
@@ -225,9 +225,11 @@ fn initialize(
                 kind,
                 capabilities: built.capabilities(),
                 writes: Some(built.writes()),
+                // Asked once, here, for the same reason `writes` is: the engine is then
+                // never sent a method this plugin would only have to decline.
+                meters: matches!(built.metering().await, Ok(Some(_))),
             };
             *source = Some(built);
-            // An `InitializeResult` is a string, an integer and a `Capabilities`.
             Response::ok(
                 id,
                 serde_json::to_value(&result).expect("a result is plain data"),
@@ -364,6 +366,7 @@ async fn dispatch(
             source.delete_document(&params.id).await?;
             encode(json!({}))
         }
+        "metering" => encode(json!({ "metering": source.metering().await? })),
         other => Err(SourceError::Malformed {
             message: format!("protocol version {PROTOCOL_VERSION} has no method called {other:?}"),
         }),

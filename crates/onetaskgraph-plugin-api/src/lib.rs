@@ -17,6 +17,7 @@
 mod capability;
 mod error;
 mod id;
+mod metering;
 mod query;
 mod source;
 mod work;
@@ -25,6 +26,7 @@ mod write;
 pub use capability::{Capabilities, DependencySupport, Support};
 pub use error::SourceError;
 pub use id::{NativeId, SOURCE_NAME_PATTERN, SourceName};
+pub use metering::{Metered, Metering};
 pub use query::{
     Cursor, DocumentQuery, LabelFilter, Page, PageRequest, ProjectFilter, ProjectQuery, TaskQuery,
     TextFields, TextQuery,

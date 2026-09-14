@@ -7,11 +7,42 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, RootModel
 
 
+class BudgetSpent(BaseModel):
+    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
+    budget: Annotated[
+        str,
+        Field(description="The budget, as the source names it — `graphql`, `rest`."),
+    ]
+    lower_bound: Annotated[
+        bool,
+        Field(
+            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
+        ),
+    ]
+    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
+
+
 class GlobalId(RootModel[str]):
     root: Annotated[
         str,
         Field(
             description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
+        ),
+    ]
+
+
+class Spent(BaseModel):
+    budgets: Annotated[
+        list[BudgetSpent],
+        Field(
+            description="What those requests spent, one entry per budget and unit, ordered by budget name."
+        ),
+    ]
+    requests: Annotated[
+        int,
+        Field(
+            description="How many HTTP requests those sources sent for this command.",
+            ge=0,
         ),
     ]
 
@@ -92,3 +123,9 @@ class CopyReport(BaseModel):
             ge=0,
         ),
     ] = 0
+    spent: Annotated[
+        Spent | None,
+        Field(
+            description="What this copy spent, summed over the sources in the command that meter their own\nrequests — and absent, never zero, when none of them does.\n\nOmitted from the wire when absent, like the three figures above, so a consumer\nwritten against the output before it existed reads the same document."
+        ),
+    ] = None

@@ -63,6 +63,102 @@ fn validates(bundle: &Value, root: &str, document: &Value, what: &str) {
 }
 
 #[test]
+fn a_copy_says_what_its_metering_sources_spent_and_nothing_where_none_meters() {
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        let root = sandbox.subdirectory("plans");
+        std::fs::create_dir_all(root.join("projects")).expect("the project folder");
+        std::fs::create_dir_all(root.join("tasks")).expect("the task folder");
+        std::fs::write(
+            root.join("projects/P-1.md"),
+            "---\ntitle: Measured plan\nstatus: Doing\n---\nthe plan\n",
+        )
+        .expect("the project");
+        std::fs::write(
+            root.join("tasks/A.md"),
+            "---\ntitle: First step\nstatus: Todo\nproject: P-1\n---\nfirst\n",
+        )
+        .expect("a task");
+        let (config, board) = github_projects_with_board(&sandbox);
+        sandbox.project_document(&document(&json!({
+            "plans": {"plugin": "local-md", "config": {
+                "root": root, "status_mapping": {"Todo": "todo", "Doing": "in-progress"}}},
+            "notes": {"plugin": "local-md", "config": empty_folder(&sandbox, "notes")},
+            "board": boundary.source_with_secrets(
+                "github-projects", config, &["GITHUB_PROJECTS_FIXTURE_TOKEN"]),
+        })));
+        let bundle = bundle(&sandbox);
+
+        // Into the board: the board is a socket this test holds, so what it served for the
+        // command is counted independently of anything the binary says about itself.
+        let before = board.served().len();
+        let copied: Value = serde_json::from_str(&stdout(
+            sandbox
+                .command()
+                .args(["project", "copy", "plans:P-1", "--to", "board", "--json"])
+                .assert()
+                .success()
+                .get_output(),
+        ))
+        .expect("a copy emits JSON");
+        let served = board.served().len() - before;
+        validates(
+            &bundle,
+            "CopyReport",
+            &copied,
+            "project copy --to board --json",
+        );
+        assert!(served > 0, "the copy reached the board");
+        assert_eq!(
+            copied["spent"]["requests"],
+            json!(served),
+            "{boundary:?}: `spent` names every request the board served for the command: \
+             {copied:#}"
+        );
+        let budgets = copied["spent"]["budgets"]
+            .as_array()
+            .expect("a spent carries its budgets");
+        let graphql = budgets
+            .iter()
+            .find(|budget| budget["budget"] == "graphql")
+            .unwrap_or_else(|| panic!("{boundary:?}: no graphql budget: {copied:#}"));
+        assert_eq!(graphql["unit"], "points");
+        // No document this source sends asks GitHub what it cost, so every call is the
+        // one-point minimum — a lower bound, and flagged as one.
+        assert_eq!(graphql["amount"], json!(served));
+        assert_eq!(graphql["lower_bound"], json!(true));
+
+        // Between two folders of Markdown, neither of which counts what it sends: absent,
+        // not zero.
+        let local: Value = serde_json::from_str(&stdout(
+            sandbox
+                .command()
+                .args(["project", "copy", "plans:P-1", "--to", "notes", "--json"])
+                .assert()
+                .success()
+                .get_output(),
+        ))
+        .expect("a copy emits JSON");
+        validates(
+            &bundle,
+            "CopyReport",
+            &local,
+            "project copy --to notes --json",
+        );
+        assert!(
+            local["items"]
+                .as_array()
+                .is_some_and(|items| items.len() == 2),
+            "{local:#}"
+        );
+        assert!(
+            local.get("spent").is_none(),
+            "a copy whose sources meter nothing says nothing about what it spent: {local:#}"
+        );
+    }
+}
+
+#[test]
 fn every_verbs_machine_readable_output_validates_against_the_emitted_schema() {
     for boundary in SOURCE_BOUNDARIES {
         let sandbox = Sandbox::new();
@@ -501,6 +597,70 @@ fn a_refusal_from_a_real_source_is_a_failure_document_classed_refused() {
     );
 
     unchanged_as_text(&run(&sandbox, &copy), &machine, "project copy");
+}
+
+#[test]
+fn a_member_copy_refused_under_json_is_a_failure_document_too() {
+    // A member copy is the shape a settlement write-back takes, so its refusals — the
+    // board's own, and the two the engine decides before it writes — reach a caller as the
+    // same document a whole copy's do, not as a prose line it cannot branch on.
+    let sandbox = Sandbox::new();
+    let (mut board, _) = github_projects_with_board(&sandbox);
+    board["status_mapping"]["todo"] = Value::Null;
+    plans_beside(&sandbox, &board);
+    let bundle = bundle(&sandbox);
+
+    let copy = [
+        "project",
+        "copy",
+        "plans:P-1",
+        "--to",
+        "board",
+        "--member",
+        "plans:A",
+    ];
+    let machine = run(&sandbox, &[&copy[..], &["--json"]].concat());
+    let failure = failure_document(&bundle, &machine, "project copy --member --json");
+    assert_eq!(
+        (&failure["class"], &failure["kind"], &failure["source"]),
+        (&json!("refused"), &json!("refused"), &json!("board")),
+        "{failure}"
+    );
+    assert!(
+        failure["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("status todo is disabled for source board")),
+        "the board's own reason is what the caller is told: {failure}"
+    );
+    unchanged_as_text(&run(&sandbox, &copy), &machine, "project copy --member");
+
+    let copy = [
+        "project",
+        "copy",
+        "plans:P-1",
+        "--to",
+        "board",
+        "--member",
+        "plans:B",
+    ];
+    let machine = run(&sandbox, &[&copy[..], &["--json"]].concat());
+    let failure = failure_document(&bundle, &machine, "project copy --member plans:B --json");
+    assert_eq!(
+        failure,
+        json!({"class": "refused", "kind": "not-a-member", "source": null,
+               "message": failure["message"], "retry_after_seconds": null})
+    );
+    assert!(
+        failure["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("plans:B is not a task of plans:P-1")),
+        "{failure}"
+    );
+    unchanged_as_text(
+        &run(&sandbox, &copy),
+        &machine,
+        "project copy --member plans:B",
+    );
 }
 
 #[test]

@@ -289,6 +289,36 @@ export const runtimeSchemas = {
   },
   "CopyReport": {
     "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
       "CopyOutcome": {
         "description": "What happened to one item.\n\n`action` and `destination` are one value rather than two fields side by side: an\nupdated item without a destination id, or an orphan without one, are states this type\nmust not be able to say — the id *is* what those outcomes are about. The one outcome\nthat legitimately has none is a dry run that would create, because nothing was\ncreated and there is no id to report.",
         "oneOf": [
@@ -385,6 +415,29 @@ export const runtimeSchemas = {
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
+      },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -417,6 +470,17 @@ export const runtimeSchemas = {
         "format": "uint64",
         "minimum": 0,
         "type": "integer"
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What this copy spent, summed over the sources in the command that meter their own\nrequests — and absent, never zero, when none of them does.\n\nOmitted from the wire when absent, like the three figures above, so a consumer\nwritten against the output before it existed reads the same document."
       }
     },
     "required": [

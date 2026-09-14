@@ -220,10 +220,11 @@ export class OnetaskgraphClient {
   projectCopy(
     id: string,
     to: string,
-    options: CopyOptions & { noTasks?: boolean } = {},
+    options: CopyOptions & { noTasks?: boolean; members?: string[] } = {},
   ): Promise<CopyReport> {
     const args = [id, "--to", to, ...copyFlags(options)];
     if (options.noTasks) args.push("--no-tasks");
+    for (const member of options.members ?? []) args.push("--member", member);
     return this.run("project copy", args);
   }
   documentList(

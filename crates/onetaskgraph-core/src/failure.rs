@@ -178,6 +178,8 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         }
         EngineError::NoSuchItem { .. } => ("no-such-item".to_owned(), None, None),
         EngineError::StaleOrigin { .. } => ("stale-origin".to_owned(), None, None),
+        EngineError::NotAMember { .. } => ("not-a-member".to_owned(), None, None),
+        EngineError::UnrecordedMember { .. } => ("unrecorded-member".to_owned(), None, None),
         EngineError::DestinationUnavailable { name, error }
         | EngineError::SourceRefused { name, error } => {
             (source_kind(error), configured(name), Some(error))

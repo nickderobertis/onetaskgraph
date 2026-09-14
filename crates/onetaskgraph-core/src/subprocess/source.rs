@@ -15,8 +15,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, Direction, Document, DocumentQuery, Health, ItemWrite, Label,
-    NativeId, Page, PageRequest, Project, ProjectQuery, SourceError, SourceName, Task, TaskQuery,
-    TaskSource, WriteSupport,
+    Metering, NativeId, Page, PageRequest, Project, ProjectQuery, SourceError, SourceName, Task,
+    TaskQuery, TaskSource, WriteSupport,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,9 +24,9 @@ use serde_json::{Value, json};
 use super::connection::{Connection, Peer};
 use super::wire::{
     DeleteParams, DependencyParams, DocumentQueryParams, DocumentResult, DocumentWriteParams,
-    EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams, PROTOCOL_VERSION,
-    ProjectQueryParams, ProjectResult, ProjectWriteParams, Request, TaskQueryParams, TaskResult,
-    TaskWriteParams, WriteResult,
+    EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams, MeteringResult,
+    PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request,
+    TaskQueryParams, TaskResult, TaskWriteParams, WriteResult,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -77,6 +77,11 @@ pub struct SubprocessSource {
     /// absent member mean and what every version-1 plugin written before there was a
     /// write side is.
     writes: WriteSupport,
+    /// Whether the plugin said it answers `metering`, read at the same handshake.
+    ///
+    /// A plugin that said nothing is never sent the method and is reported as not metering,
+    /// which is what §3.4 makes an absent member mean.
+    meters: bool,
     /// The live process.
     connection: Connection,
 }
@@ -199,6 +204,7 @@ impl SubprocessSource {
             kind,
             capabilities,
             writes,
+            meters,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -224,6 +230,7 @@ impl SubprocessSource {
             kind: String::leak(kind),
             capabilities,
             writes: writes.unwrap_or(WriteSupport::Unsupported),
+            meters,
             connection: Connection::adopt(peer),
         })
     }
@@ -506,6 +513,16 @@ impl TaskSource for SubprocessSource {
             .ask("delete_document", params(&DeleteParams { id: id.clone() }))
             .await?;
         Ok(())
+    }
+
+    async fn metering(&self) -> Result<Option<Metering>, SourceError> {
+        // Never sent to a plugin that did not declare it (§3.4), which is what lets a
+        // plugin written before there was metering go on working without an edit.
+        if !self.meters {
+            return Ok(None);
+        }
+        let result: MeteringResult = self.ask("metering", json!({})).await?;
+        Ok(result.metering)
     }
 }
 

@@ -416,6 +416,14 @@ pub struct ProjectCopyArgs {
     #[arg(long = "no-tasks")]
     pub no_tasks: bool,
 
+    /// Copy the project and exactly this task of it, `<source>:<native-id>`; repeat it to
+    /// name more. A task not named is not read at the destination, not written and not
+    /// reported, and nothing is reported orphaned.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCopyArgs::id`.
+    #[arg(long = "member", value_name = "TASK-ID", conflicts_with = "no_tasks")]
+    pub member: Vec<String>,
+
     #[command(flatten)]
     pub copy: CopyArgs,
 }

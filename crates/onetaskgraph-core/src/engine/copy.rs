@@ -28,8 +28,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use onetaskgraph_plugin_api::{
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Location, NativeId, Page, PageRequest, Project, ProjectQuery, Repository,
-    SourceError, SourceName, Task, TaskQuery,
+    ItemKind, ItemWrite, Location, Metering, NativeId, Page, PageRequest, Project, ProjectQuery,
+    Repository, SourceError, SourceName, Task, TaskQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -90,8 +90,9 @@ impl CopyItems {
 ///
 /// One value rather than a kind beside a flag, because three of the four combinations
 /// those two would make are real and the fourth — tasks, with the tasks of each also
-/// copied — means nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// copied — means nothing. The member list is a variant for the same reason: it narrows a
+/// project copy that carries its tasks, and it has nothing to say to the other three.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CopyScope {
     /// The ids name tasks, and only those tasks are copied.
     Tasks,
@@ -100,6 +101,18 @@ pub enum CopyScope {
         /// Whether the tasks in each project are copied too.
         tasks: bool,
     },
+    /// The ids name projects, and of the tasks in them exactly these are copied.
+    ///
+    /// A member the list does not name is not read at the destination, not compared, not
+    /// written and not reported, and no walk for what the copy left behind runs. A named
+    /// member with no counterpart there is still created: the list narrows which members
+    /// are read and written, never which outcomes are possible.
+    ///
+    /// An edge from a copied item to a member the list does not name resolves to the
+    /// destination id that member's own [`GlobalId::ORIGIN_KEY`] records at the source,
+    /// without reading the destination for it. When that member records none, the copy is
+    /// refused before anything is written.
+    Members(CopyItems),
     /// The ids name documents, and only those documents are copied.
     ///
     /// Nothing travels with a document: it takes part in no dependency graph, and it holds
@@ -183,6 +196,13 @@ pub struct CopyReport {
     // it is `substitute`: `Resolution` has no variant that counts an occurrence ambiguous
     // without counting it unresolved.
     pub references_ambiguous: u64,
+    /// What this copy spent, summed over the sources in the command that meter their own
+    /// requests — and absent, never zero, when none of them does.
+    ///
+    /// Omitted from the wire when absent, like the three figures above, so a consumer
+    /// written against the output before it existed reads the same document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent: Option<Spent>,
 }
 
 /// Whether one of [`CopyReport`]'s reference figures has anything to say.
@@ -193,6 +213,37 @@ pub struct CopyReport {
 /// because a reader there needs to be told the copy looked.
 fn nothing_to_report(figure: &u64) -> bool {
     *figure == 0
+}
+
+/// What one command spent, summed over the sources in it that meter their own requests.
+///
+/// **Source-owned.** Every figure is what a source said it sent and spent while the command
+/// ran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)
+/// before the command and again after it. The engine adds the differences up by name and
+/// interprets none of them, which is why the budget and unit names are open vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Spent {
+    /// How many HTTP requests those sources sent for this command.
+    pub requests: u64,
+    /// What those requests spent, one entry per budget and unit, ordered by budget name.
+    pub budgets: Vec<BudgetSpent>,
+}
+
+/// What one command spent against one budget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BudgetSpent {
+    /// The budget, as the source names it — `graphql`, `rest`.
+    // llmlint: ignore[invalid_states_unrepresentable] The contract this report lands states `budget` and `unit` as strings in an open vocabulary the engine interprets none of, and both SDKs are generated from this type's schema; the one value such a vocabulary can refuse, the empty name, never reaches here, because `difference` below treats a source reporting one as not metering.
+    pub budget: String,
+    /// What it is metered in — `points`, `requests`.
+    // llmlint: ignore[invalid_states_unrepresentable] As `budget` above.
+    pub unit: String,
+    /// How much was spent against it, in that unit.
+    pub amount: u64,
+    /// Whether any part of `amount` was modelled by a source rather than reported by its
+    /// backend or counted, which makes `amount` a lower bound on what the backend charged
+    /// rather than a measurement of it.
+    pub lower_bound: bool,
 }
 
 /// One document's reference figures, before they are folded into the invocation's.
@@ -450,6 +501,36 @@ impl Journal {
     }
 }
 
+/// What one copy invocation carries from the item it lands to the next.
+///
+/// Like the [`Journal`] beside it, this lives for the length of one `copy` call and is
+/// dropped with it: nothing here is state the engine keeps, and nothing in it is read back
+/// to answer a later query.
+#[derive(Default)]
+struct Running {
+    /// Every item an edge of this command resolves to a destination id rather than writing as
+    /// it was read: the ids named, what travels with them, and — for a member copy — each
+    /// member the copy does not carry whose own recorded origin already names its
+    /// destination item. That last kind is resolvable without being copied.
+    resolvable: Vec<GlobalId>,
+    /// The destination item each of those corresponds to, as soon as it is known — whether
+    /// this command found it, landed it, or read it off a member's recorded origin.
+    ///
+    /// Keyed by the qualified id's own rendering, which is what a recorded origin holds
+    /// anyway — making `GlobalId` orderable for a local map would put an ordering on a
+    /// contract type for a reason no caller of it has.
+    counterparts: BTreeMap<String, NativeId>,
+    /// The items held back for [`Engine::repair`], across the whole request.
+    deferred: Vec<Deferred>,
+    /// The reference figures, one total for the whole invocation rather than one per
+    /// document.
+    references: Counted,
+    /// The destination project each source project corresponds to, once this command has
+    /// looked for it — so a second task filed under the same project does not walk the
+    /// destination for it again.
+    filings: BTreeMap<String, Option<NativeId>>,
+}
+
 /// One item, read and resolved, on its way into the destination.
 struct Planned {
     /// Where it came from.
@@ -460,6 +541,11 @@ struct Planned {
     edges: Vec<DependencyEdge>,
     /// Where it is going.
     target: Target,
+    /// What the destination held at that target, read once where the target was found.
+    ///
+    /// The read that decided an item exists is the read of what it holds, so the two are
+    /// one round trip rather than two against a hosted destination.
+    held: Option<Prior>,
 }
 
 /// A task, a project or a document, so the copy path is written once.
@@ -686,9 +772,23 @@ impl Engine {
         if request.scope == CopyScope::Documents {
             documentary(destination)?;
         }
+        // The sources this command names, each read once before and once after, so what it
+        // spent is the difference between two of each one's own running totals.
+        let mut metered = vec![destination];
+        for id in request.items.as_slice() {
+            if let Some(source) = self.ready().find(|source| source.name() == &id.source)
+                && !metered.iter().any(|held| held.name() == source.name())
+            {
+                metered.push(source);
+            }
+        }
+        let before = readings(&metered).await;
         let mut journal = Journal::default();
         match self.copy_all(destination, request, &mut journal).await {
-            Ok(report) => Ok(report),
+            Ok(mut report) => {
+                report.spent = spent_between(&before, &readings(&metered).await);
+                Ok(report)
+            }
             Err(error) => Err(self.undo(destination, journal, error).await),
         }
     }
@@ -707,83 +807,66 @@ impl Engine {
         request: &CopyRequest,
         journal: &mut Journal,
     ) -> Result<CopyReport, EngineError> {
-        // Keyed by the qualified id's own rendering, which is what a recorded origin holds
-        // anyway — making `GlobalId` orderable for one local map would put an ordering on
-        // a contract type for a reason no caller of it has.
-        let mut written: BTreeMap<String, NativeId> = BTreeMap::new();
-        let mut deferred: Vec<Deferred> = Vec::new();
-        // One total for the whole invocation rather than one per document.
-        let mut references = Counted::default();
+        let mut running = Running::default();
         // The whole copied set, established before anything is written. For a project
         // copy that means reading every named project's membership first: the set is the
         // whole request rather than one project of it.
-        let mut membership = Vec::new();
-        let mut copied = Vec::new();
-        match request.scope {
+        let items = match &request.scope {
             CopyScope::Tasks | CopyScope::Documents => {
-                copied.extend(request.items.as_slice().iter().cloned());
+                let kind = if request.scope == CopyScope::Documents {
+                    Level::Document
+                } else {
+                    Level::Task
+                };
+                running
+                    .resolvable
+                    .extend(request.items.as_slice().iter().cloned());
+                let mut planned = Vec::new();
+                for id in request.items.as_slice() {
+                    planned.push(self.plan(destination, request, kind, id).await?);
+                }
+                self.copy_items(destination, request, planned, None, &mut running, journal)
+                    .await?
             }
             CopyScope::Projects { tasks } => {
+                let mut projects = Vec::new();
                 for id in request.items.as_slice() {
-                    let members = if tasks {
+                    let members = if *tasks {
                         self.project_members(id).await?
                     } else {
                         Vec::new()
                     };
-                    copied.push(id.clone());
-                    copied.extend(members.iter().cloned());
-                    membership.push((id.clone(), members));
+                    running.resolvable.push(id.clone());
+                    running.resolvable.extend(members.iter().cloned());
+                    projects.push((id.clone(), members));
                 }
+                self.copy_projects(destination, request, &projects, &[], &mut running, journal)
+                    .await?
             }
-        }
-        let items = match request.scope {
-            CopyScope::Tasks | CopyScope::Documents => {
-                self.copy_items(
+            CopyScope::Members(named) => {
+                let (projects, unrecorded) = self
+                    .named_members(destination, request.items.as_slice(), named, &mut running)
+                    .await?;
+                self.copy_projects(
                     destination,
                     request,
-                    match request.scope {
-                        CopyScope::Documents => Level::Document,
-                        _ => Level::Task,
-                    },
-                    request.items.as_slice(),
-                    None,
-                    &copied,
-                    &mut written,
-                    &mut deferred,
+                    &projects,
+                    &unrecorded,
+                    &mut running,
                     journal,
-                    &mut references,
                 )
                 .await?
             }
-            CopyScope::Projects { tasks } => {
-                let mut items = Vec::new();
-                for (id, members) in &membership {
-                    items.extend(
-                        self.copy_project(
-                            destination,
-                            request,
-                            id,
-                            members,
-                            tasks,
-                            &copied,
-                            &mut written,
-                            &mut deferred,
-                            journal,
-                            &mut references,
-                        )
-                        .await?,
-                    );
-                }
-                items
-            }
         };
-        self.repair(destination, request, &copied, &written, deferred, journal)
-            .await?;
+        let references = running.references;
+        self.repair(destination, request, running, journal).await?;
         Ok(CopyReport {
             items,
             references_rewritten: references.rewritten,
             references_unresolved: references.unresolved,
             references_ambiguous: references.ambiguous,
+            // Filled in by `copy`, which is the one place both readings are taken.
+            spent: None,
         })
     }
 
@@ -798,21 +881,25 @@ impl Engine {
         &self,
         destination: &ResolvedSource,
         request: &CopyRequest,
-        copied: &[GlobalId],
-        written: &BTreeMap<String, NativeId>,
-        deferred: Vec<Deferred>,
+        running: Running,
         journal: &mut Journal,
     ) -> Result<(), EngineError> {
         if request.dry_run {
             return Ok(());
         }
+        let Running {
+            resolvable,
+            counterparts,
+            deferred,
+            ..
+        } = running;
         for entry in deferred {
             let edges = mapped_edges(
                 &entry.item.edges,
                 &entry.item.source.source,
                 destination,
-                copied,
-                written,
+                &resolvable,
+                &counterparts,
             );
             self.write(
                 destination,
@@ -903,104 +990,207 @@ impl Engine {
         Ok(source)
     }
 
-    /// Copy one project and, unless they are excluded, every task in it.
-    // llmlint: ignore[suppressions_justified] Five of these are the copy's own running
-    // state — the copied set, the ids written so far, the items held back for repair and
-    // the undo journal — and every one of them is shared across the whole request rather
-    // than per project, which is the defect this signature exists to close. Bundling them
-    // into a context struct would put a lifetime and a borrow split around state that is
-    // threaded through three call sites and read nowhere else.
-    #[allow(clippy::too_many_arguments)]
+    /// Copy each project and what travels with it: every task in it, the members a member
+    /// copy names, or nothing at all.
+    ///
+    /// Every item of every project is read and its target decided **before any of them is
+    /// written, and each exactly once.** That is what lets a member copy refuse an edge it
+    /// cannot resolve while the destination is still as it was found, and what stops a
+    /// whole copy resolving one target twice — once to learn the ids the project's own
+    /// edges name, and again to land it — which against a hosted destination is a read per
+    /// item spent on an answer the command already had.
+    async fn copy_projects(
+        &self,
+        destination: &ResolvedSource,
+        request: &CopyRequest,
+        projects: &[(GlobalId, Vec<GlobalId>)],
+        unrecorded: &[GlobalId],
+        running: &mut Running,
+        journal: &mut Journal,
+    ) -> Result<Vec<CopyOutcome>, EngineError> {
+        let mut plans = Vec::new();
+        for (id, members) in projects {
+            let project = self.plan(destination, request, Level::Project, id).await?;
+            let mut tasks = Vec::new();
+            for member in members {
+                tasks.push(self.plan(destination, request, Level::Task, member).await?);
+            }
+            plans.push((project, tasks));
+        }
+        for (project, tasks) in &plans {
+            for item in std::iter::once(project).chain(tasks) {
+                unrecorded_far_end(item, destination, unrecorded)?;
+            }
+        }
+        let mut outcomes = Vec::new();
+        for (project, tasks) in plans {
+            outcomes.extend(
+                self.copy_project(destination, request, project, tasks, running, journal)
+                    .await?,
+            );
+        }
+        Ok(outcomes)
+    }
+
+    /// Land one planned project, then the tasks planned beside it.
     async fn copy_project(
         &self,
         destination: &ResolvedSource,
         request: &CopyRequest,
-        id: &GlobalId,
-        members: &[GlobalId],
-        tasks: bool,
-        copied: &[GlobalId],
-        written: &mut BTreeMap<String, NativeId>,
-        deferred: &mut Vec<Deferred>,
+        project: Planned,
+        tasks: Vec<Planned>,
+        running: &mut Running,
         journal: &mut Journal,
-        references: &mut Counted,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
-        // On a repeat copy, compare the project with its final remapped edges before the
-        // first pass temporarily rewrites it. This preserves an `unchanged` outcome when
-        // the project and every copied member already have counterparts.
-        let project_plan = self.plan(destination, request, Level::Project, id).await?;
-        let mut known = BTreeMap::new();
-        if let Target::Update { id: target, .. } = &project_plan.target {
-            known.insert(id.to_string(), target.clone());
+        let (carries_tasks, walks_orphans) = match request.scope {
+            CopyScope::Projects { tasks } => (tasks, tasks),
+            CopyScope::Members(_) => (true, false),
+            CopyScope::Tasks | CopyScope::Documents => (false, false),
+        };
+        let id = project.source.clone();
+        let members: Vec<GlobalId> = tasks.iter().map(|task| task.source.clone()).collect();
+        // The project lands with every edge it can already resolve — its members' targets
+        // are known from their plans — so a project that has not changed is not written at
+        // all. What it *reports* is read the way it always has been: against the ids known
+        // before its own members' were, unless every edge resolves and nothing differs.
+        // Reading it any other way would move the word a repeat copy reports for a project
+        // whose only difference is an edge, which is not this change's to move.
+        let mut before_members = running.counterparts.clone();
+        if let Target::Update { id: target, .. } = &project.target {
+            before_members.insert(id.to_string(), target.clone());
         }
-        for member in members {
-            let member_plan = self.plan(destination, request, Level::Task, member).await?;
-            if let Target::Update { id: target, .. } = member_plan.target {
-                known.insert(member.to_string(), target);
+        for item in std::iter::once(&project).chain(&tasks) {
+            if let Target::Update { id: target, .. } = &item.target {
+                running
+                    .counterparts
+                    .insert(item.source.to_string(), target.clone());
             }
         }
-        let project_was_unchanged = if let Target::Update { id: target, .. } = &project_plan.target
-        {
-            let edges = mapped_edges(&project_plan.edges, &id.source, destination, copied, &known);
-            let held = self.prior(destination, Level::Project, target).await?;
-            !edges.iter().any(Option::is_none)
-                && !changes(
-                    held.as_ref(),
-                    &project_plan,
-                    target,
-                    &None,
-                    &resolved(&edges),
+        let unchanged = match &project.target {
+            Target::Update { id: target, .. } => {
+                let settled = mapped_edges(
+                    &project.edges,
+                    &id.source,
+                    destination,
+                    &running.resolvable,
+                    &running.counterparts,
+                );
+                let first = mapped_edges(
+                    &project.edges,
+                    &id.source,
+                    destination,
+                    &running.resolvable,
+                    &before_members,
+                );
+                let held = project.held.as_ref();
+                Some(
+                    (!settled.iter().any(Option::is_none)
+                        && !changes(held, &project, target, &None, &resolved(&settled)))
+                        || !changes(held, &project, target, &None, &resolved(&first)),
                 )
-        } else {
-            false
+            }
+            Target::Create => None,
         };
         let mut outcomes = self
-            .copy_items(
-                destination,
-                request,
-                Level::Project,
-                std::slice::from_ref(id),
-                None,
-                copied,
-                written,
-                deferred,
-                journal,
-                references,
-            )
+            .copy_items(destination, request, vec![project], None, running, journal)
             .await?;
-        if !tasks {
+        if let (Some(unchanged), Some(landed)) = (unchanged, outcomes[0].destination().cloned()) {
+            outcomes[0].action = if unchanged {
+                CopyAction::Unchanged {
+                    destination: landed,
+                }
+            } else {
+                CopyAction::Updated {
+                    destination: landed,
+                }
+            };
+        }
+        if !carries_tasks {
             return Ok(outcomes);
         }
         // `None` when a dry run would have created the project: nothing was written, so
         // there is no destination project id to file the tasks under. Every task is still
         // read and still reported, because that is what a dry run is for.
-        let project = outcomes.first().and_then(CopyOutcome::destination).cloned();
-        let task_outcomes = self
-            .copy_items(
+        let filed = outcomes.first().and_then(CopyOutcome::destination).cloned();
+        outcomes.extend(
+            self.copy_items(
                 destination,
                 request,
-                Level::Task,
-                members,
-                project.as_ref().map(|project| project.native.clone()),
-                copied,
-                written,
-                deferred,
+                tasks,
+                filed.as_ref().map(|project| project.native.clone()),
+                running,
                 journal,
-                references,
             )
-            .await?;
-        outcomes.extend(task_outcomes);
-        if let Some(project) = project {
-            if project_was_unchanged {
-                outcomes[0].action = CopyAction::Unchanged {
-                    destination: project.clone(),
-                };
-            }
+            .await?,
+        );
+        // A member copy was told which members it carries, so it cannot tell a member it
+        // left out from one the source no longer holds, and does not walk for either.
+        if walks_orphans && let Some(filed) = filed {
             outcomes.extend(
-                self.orphans(destination, id, &project.native, members)
+                self.orphans(destination, &id, &filed.native, &members)
                     .await?,
             );
         }
         Ok(outcomes)
+    }
+
+    /// The members a member copy names, per project and in the order they were named, and
+    /// every member it does not name that records no destination id.
+    ///
+    /// Settled before anything is read at the destination. A named id that is a member of
+    /// none of the projects is refused here, naming it. An unnamed member whose recorded
+    /// origin names the destination joins the copied set with that id already known, so an
+    /// edge to it resolves exactly as an edge to a copied item does, and costs no read. An
+    /// unnamed member recording none is returned, so an edge to it is refused before
+    /// anything is written — see [`unrecorded_far_end`].
+    async fn named_members(
+        &self,
+        destination: &ResolvedSource,
+        projects: &[GlobalId],
+        named: &CopyItems,
+        running: &mut Running,
+    ) -> Result<(Vec<(GlobalId, Vec<GlobalId>)>, Vec<GlobalId>), EngineError> {
+        let mut carried = Vec::new();
+        let mut unrecorded = Vec::new();
+        for project in projects {
+            let held = self.project_member_tasks(project).await?;
+            let mut members: Vec<GlobalId> = Vec::new();
+            for id in named.as_slice() {
+                if held.iter().any(|task| &task.id == id) && !members.contains(id) {
+                    members.push(id.clone());
+                }
+            }
+            for task in held {
+                if members.contains(&task.id) {
+                    continue;
+                }
+                match origin_of(&task.item.metadata)
+                    .filter(|origin| &origin.source == destination.name())
+                {
+                    Some(origin) => {
+                        running
+                            .counterparts
+                            .insert(task.id.to_string(), origin.native);
+                        running.resolvable.push(task.id);
+                    }
+                    None => unrecorded.push(task.id),
+                }
+            }
+            running.resolvable.push(project.clone());
+            running.resolvable.extend(members.iter().cloned());
+            carried.push((project.clone(), members));
+        }
+        if let Some(stray) = named
+            .as_slice()
+            .iter()
+            .find(|id| !carried.iter().any(|(_, members)| members.contains(id)))
+        {
+            return Err(EngineError::NotAMember {
+                id: stray.clone(),
+                projects: projects.to_vec(),
+            });
+        }
+        Ok((carried, unrecorded))
     }
 
     /// Every task the source holds in `project`, by qualified id.
@@ -1423,48 +1613,40 @@ impl Engine {
         }
     }
 
-    /// Read, resolve and write every item named, holding back the ones whose edges are
-    /// not resolvable yet.
+    /// Resolve and write every item planned, holding back the ones whose edges are not
+    /// resolvable yet.
     ///
     /// An edge between two items of one copy can point at a member whose destination id
     /// does not exist until it has been created, so the item that points at it lands
     /// without that edge and is handed to `deferred`. [`Engine::repair`] finishes it once
     /// the *whole* request has landed — not once this call has, because the far end may
     /// be in another project of the same command.
-    // llmlint: ignore[suppressions_justified] The same running state `copy_project` threads,
-    // for the same reason: it belongs to one `copy` call and is shared across every item of
-    // it, and a struct around it would add a borrow split for no reader's benefit.
-    #[allow(clippy::too_many_arguments)]
     async fn copy_items(
         &self,
         destination: &ResolvedSource,
         request: &CopyRequest,
-        kind: Level,
-        items: &[GlobalId],
+        mut planned: Vec<Planned>,
         project: Option<NativeId>,
-        copied: &[GlobalId],
-        written: &mut BTreeMap<String, NativeId>,
-        deferred: &mut Vec<Deferred>,
+        running: &mut Running,
         journal: &mut Journal,
-        references: &mut Counted,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
-        let mut planned = Vec::new();
-        for id in items {
-            planned.push(self.plan(destination, request, kind, id).await?);
-        }
-
         // Only a document's own content names other records, and only once every document
         // of this call has been read: the destination is walked once for all of them, and
         // the content the rest of this call lands is the rewritten one — which is what
         // makes a repeat copy of an already-rewritten document report `unchanged`.
-        if kind == Level::Document {
-            self.rewrite_references(destination, &mut planned, references)
+        if planned
+            .iter()
+            .any(|item| item.item.level() == Level::Document)
+        {
+            self.rewrite_references(destination, &mut planned, &mut running.references)
                 .await?;
         }
 
         for item in &planned {
             if let Target::Update { id, .. } = &item.target {
-                written.insert(item.source.to_string(), id.clone());
+                running
+                    .counterparts
+                    .insert(item.source.to_string(), id.clone());
             }
         }
 
@@ -1472,7 +1654,10 @@ impl Engine {
         // same item again, and re-deriving this there could file it somewhere else.
         let mut filed = Vec::new();
         for item in &planned {
-            filed.push(self.filed(destination, item, project.clone()).await?);
+            filed.push(
+                self.filed(destination, item, project.clone(), running)
+                    .await?,
+            );
         }
 
         let mut outcomes = Vec::new();
@@ -1483,8 +1668,8 @@ impl Engine {
                 &item.edges,
                 &item.source.source,
                 destination,
-                copied,
-                written,
+                &running.resolvable,
+                &running.counterparts,
             );
             if edges.iter().any(Option::is_none) {
                 unresolved.push(index);
@@ -1500,7 +1685,9 @@ impl Engine {
                 )
                 .await?;
             if let Some(id) = outcome.destination() {
-                written.insert(item.source.to_string(), id.native.clone());
+                running
+                    .counterparts
+                    .insert(item.source.to_string(), id.native.clone());
             }
             outcomes.push(outcome);
             priors.push(prior);
@@ -1518,7 +1705,7 @@ impl Engine {
                     .destination()
                     .expect("a copy that writes lands every item it planned")
                     .clone();
-                deferred.push(Deferred {
+                running.deferred.push(Deferred {
                     item,
                     filed: filed[index].clone(),
                     destination: id.native,
@@ -1563,33 +1750,42 @@ impl Engine {
         }
         .ok_or_else(|| EngineError::NoSuchItem { id: id.to_string() })?;
         let edges = forward_edges(source, &id.native, item.level()).await?;
-        let target = self.target(destination, request, id, &item).await?;
+        let (target, held) = self.target(destination, request, id, &item).await?;
         Ok(Planned {
             source: id.clone(),
             item,
             edges,
             target,
+            held,
         })
     }
 
     /// Which destination item this one corresponds to, by the two origin rules and the
-    /// caller's escape.
+    /// caller's escape, and what the destination holds there.
     async fn target(
         &self,
         destination: &ResolvedSource,
         request: &CopyRequest,
         id: &GlobalId,
         item: &Item,
-    ) -> Result<Target, EngineError> {
+    ) -> Result<(Target, Option<Prior>), EngineError> {
         let (title, metadata) = described(item);
         if let Some(origin) = origin_of(metadata)
             && &origin.source == destination.name()
         {
-            if exists(destination, &origin.native, item.level()).await? {
-                return Ok(Target::Update {
-                    id: origin.native,
-                    found: Found::Origin,
-                });
+            // The read that says the origin still names something is the read of what it
+            // holds, so rule 1 costs one round trip rather than two.
+            if let Some(held) = self
+                .prior(destination, item.level(), &origin.native)
+                .await?
+            {
+                return Ok((
+                    Target::Update {
+                        id: origin.native,
+                        found: Found::Origin,
+                    },
+                    Some(held),
+                ));
             }
             if !request.recreate {
                 return Err(EngineError::StaleOrigin {
@@ -1602,10 +1798,14 @@ impl Engine {
             .scan(destination, item.level(), &Wanted::Origin(id.to_string()))
             .await?
         {
-            return Ok(Target::Update {
-                id: found,
-                found: Found::Search,
-            });
+            let held = self.prior(destination, item.level(), &found).await?;
+            return Ok((
+                Target::Update {
+                    id: found,
+                    found: Found::Search,
+                },
+                held,
+            ));
         }
         let wanted = match &request.match_by {
             Some(MatchBy::Title) => Some(Wanted::Title(title.to_owned())),
@@ -1617,12 +1817,16 @@ impl Engine {
         if let Some(wanted) = wanted
             && let Some(found) = self.scan(destination, item.level(), &wanted).await?
         {
-            return Ok(Target::Update {
-                id: found,
-                found: Found::Search,
-            });
+            let held = self.prior(destination, item.level(), &found).await?;
+            return Ok((
+                Target::Update {
+                    id: found,
+                    found: Found::Search,
+                },
+                held,
+            ));
         }
-        Ok(Target::Create)
+        Ok((Target::Create, None))
     }
 
     /// Walk the destination one page at a time, looking for `wanted`.
@@ -1717,12 +1921,10 @@ impl Engine {
             Target::Update { id, .. } => Some(id.clone()),
             Target::Create => None,
         };
-        // One read of the destination item, used to decide whether the write changes
-        // anything and — if the copy cannot finish — to put that item back.
-        let prior = match &target {
-            Some(id) => self.prior(destination, item.item.level(), id).await?,
-            None => None,
-        };
+        // The one read of the destination item, made where its target was found, used to
+        // decide whether the write changes anything and — if the copy cannot finish — to
+        // put that item back.
+        let prior = item.held.clone();
         let edges = resolved(edges);
         let qualified = |native: NativeId| GlobalId::new(destination.name().clone(), native);
         if let Some(id) = &target
@@ -1792,14 +1994,15 @@ impl Engine {
         destination: &ResolvedSource,
         item: &Planned,
         project: Option<NativeId>,
+        running: &mut Running,
     ) -> Result<Option<NativeId>, EngineError> {
         match (&item.item, project) {
             (Item::Task(task), None) => {
-                self.counterpart(destination, item, task.project.as_ref())
+                self.counterpart(destination, item, task.project.as_ref(), running)
                     .await
             }
             (Item::Document(document), None) => {
-                self.counterpart(destination, item, document.project.as_ref())
+                self.counterpart(destination, item, document.project.as_ref(), running)
                     .await
             }
             (Item::Task(_) | Item::Document(_), filed) => Ok(filed),
@@ -1812,24 +2015,38 @@ impl Engine {
     /// A task copied on its own keeps its source's project id when the destination holds
     /// no counterpart: the field is opaque to this engine, and dropping it would lose
     /// what the source said.
+    ///
+    /// Looked for once per source project per command. A project this command itself
+    /// copied is already known, and one an earlier task of this command was filed under
+    /// was already looked for; walking the destination again for either would spend a
+    /// scan per task on an answer the command holds.
     async fn counterpart(
         &self,
         destination: &ResolvedSource,
         item: &Planned,
         project: Option<&NativeId>,
+        running: &mut Running,
     ) -> Result<Option<NativeId>, EngineError> {
         let Some(project) = project else {
             return Ok(None);
         };
-        let qualified = GlobalId::new(item.source.source.clone(), project.clone());
+        let qualified = GlobalId::new(item.source.source.clone(), project.clone()).to_string();
+        if let Some(landed) = running.counterparts.get(&qualified) {
+            return Ok(Some(landed.clone()));
+        }
+        if let Some(looked) = running.filings.get(&qualified) {
+            return Ok(looked.clone());
+        }
         let found = self
             .scan(
                 destination,
                 Level::Project,
-                &Wanted::Origin(qualified.to_string()),
+                &Wanted::Origin(qualified.clone()),
             )
             .await?;
-        Ok(Some(found.unwrap_or_else(|| project.clone())))
+        let filed = Some(found.unwrap_or_else(|| project.clone()));
+        running.filings.insert(qualified, filed.clone());
+        Ok(filed)
     }
 
     /// What the destination holds at one id, item and forward edges together.
@@ -1964,6 +2181,118 @@ impl Engine {
 
 /// How many tasks of a project are read at once while walking it.
 const PROJECT_PAGE: std::num::NonZeroU32 = std::num::NonZeroU32::new(50).expect("50 is not zero");
+
+/// Each source's own running totals, in the order the sources were given.
+///
+/// A reading a source could not take is read as that source not metering: what a command
+/// spent is a report about the work, and a failed reading must not become a failure of the
+/// work itself. That holds when only one of a source's two readings failed as well, since
+/// a difference needs both ends.
+async fn readings(sources: &[&ResolvedSource]) -> Vec<Option<Metering>> {
+    let mut read = Vec::with_capacity(sources.len());
+    for source in sources {
+        read.push(source.source().metering().await.ok().flatten());
+    }
+    read
+}
+
+/// What the sources spent between two readings of them, or `None` when none of them meters.
+///
+/// A source that does not meter contributes nothing and does not make the total zero: a
+/// command whose sources all declined reports that it cannot say, not that it spent nothing.
+/// A budget is keyed by its name and unit together, so two sources naming one budget add up
+/// and two units of one budget stay apart.
+///
+/// A source's two readings are a plugin's word, so they are held to [`Metering`]'s contract
+/// before either is believed, and a pair that breaks it is that source not metering — see
+/// [`difference`].
+fn spent_between(before: &[Option<Metering>], after: &[Option<Metering>]) -> Option<Spent> {
+    let mut metered = false;
+    let mut requests = 0_u64;
+    let mut budgets: BTreeMap<(String, String), (u64, u64)> = BTreeMap::new();
+    for (before, after) in before.iter().zip(after) {
+        let (Some(before), Some(after)) = (before, after) else {
+            continue;
+        };
+        let Some((sent, spent)) = difference(before, after) else {
+            continue;
+        };
+        metered = true;
+        requests = requests.saturating_add(sent);
+        for (key, measured, modelled) in spent {
+            let total = budgets.entry(key).or_default();
+            total.0 = total.0.saturating_add(measured).saturating_add(modelled);
+            total.1 = total.1.saturating_add(modelled);
+        }
+    }
+    metered.then(|| Spent {
+        requests,
+        budgets: budgets
+            .into_iter()
+            .map(|((budget, unit), (amount, modelled))| BudgetSpent {
+                budget,
+                unit,
+                amount,
+                lower_bound: modelled > 0,
+            })
+            .collect(),
+    })
+}
+
+/// One budget's name and unit, and the measured and modelled amounts spent against it.
+type BudgetDifference = ((String, String), u64, u64);
+
+/// What one source sent and spent between two of its readings, or `None` when the pair
+/// cannot be a running total's.
+///
+/// A running total never falls, never drops a budget it has named, and names every budget
+/// it keeps, once; a pair that breaks any of that is a source that reset its figures or
+/// reported something else, and a difference taken over it would be a number that measures
+/// nothing. Such a source is reported as not metering rather than as having spent a clamped
+/// zero.
+fn difference(before: &Metering, after: &Metering) -> Option<(u64, Vec<BudgetDifference>)> {
+    let sent = after.requests.checked_sub(before.requests)?;
+    for reading in [before, after] {
+        let mut named = BTreeSet::new();
+        for budget in &reading.budgets {
+            if budget.budget.is_empty()
+                || budget.unit.is_empty()
+                || !named.insert((&budget.budget, &budget.unit))
+            {
+                return None;
+            }
+        }
+    }
+    let held = |from: &Metering, budget: &onetaskgraph_plugin_api::Metered| {
+        from.budgets
+            .iter()
+            .find(|held| held.budget == budget.budget && held.unit == budget.unit)
+            .cloned()
+    };
+    if before
+        .budgets
+        .iter()
+        .any(|budget| held(after, budget).is_none())
+    {
+        return None;
+    }
+    let mut spent = Vec::with_capacity(after.budgets.len());
+    for budget in &after.budgets {
+        let earlier = held(before, budget);
+        let measured = budget
+            .measured
+            .checked_sub(earlier.as_ref().map_or(0, |held| held.measured))?;
+        let modelled = budget
+            .modelled
+            .checked_sub(earlier.as_ref().map_or(0, |held| held.modelled))?;
+        spent.push((
+            (budget.budget.clone(), budget.unit.clone()),
+            measured,
+            modelled,
+        ));
+    }
+    Some((sent, spent))
+}
 
 /// One page request against `source`, at the largest page it will serve.
 fn request_for(source: &ResolvedSource, cursor: Option<Cursor>) -> PageRequest {
@@ -2486,31 +2815,35 @@ fn resolved(edges: &[Option<DependencyEdge>]) -> Vec<DependencyEdge> {
     edges.iter().flatten().cloned().collect()
 }
 
-/// Whether the destination holds an item with this id.
-async fn exists(
+/// Refuse an item of a member copy whose edge names a member that copy does not carry
+/// and whose destination id nothing records.
+///
+/// `unrecorded` is empty for every other copy, which is what makes this a no-op there. An
+/// edge already naming a source of its own, and every edge of a copy inside one source,
+/// is written as it was read by [`mapped_edges`], so neither can need a recorded origin.
+fn unrecorded_far_end(
+    item: &Planned,
     destination: &ResolvedSource,
-    id: &NativeId,
-    kind: Level,
-) -> Result<bool, EngineError> {
-    let found = match kind {
-        Level::Task => destination
-            .source()
-            .get_task(id)
-            .await
-            .map_err(|error| refused(destination, error))?
-            .is_some(),
-        Level::Project => destination
-            .source()
-            .get_project(id)
-            .await
-            .map_err(|error| refused(destination, error))?
-            .is_some(),
-        Level::Document => destination
-            .source()
-            .get_document(id)
-            .await
-            .map_err(|error| refused(destination, error))?
-            .is_some(),
-    };
-    Ok(found)
+    unrecorded: &[GlobalId],
+) -> Result<(), EngineError> {
+    if &item.source.source == destination.name() {
+        return Ok(());
+    }
+    for edge in &item.edges {
+        if edge.to.is_qualified() {
+            continue;
+        }
+        let far = GlobalId::new(
+            item.source.source.clone(),
+            NativeId(edge.to.id().to_owned()),
+        );
+        if unrecorded.contains(&far) {
+            return Err(EngineError::UnrecordedMember {
+                item: item.source.clone(),
+                member: far,
+                destination: destination.name().clone(),
+            });
+        }
+    }
+    Ok(())
 }

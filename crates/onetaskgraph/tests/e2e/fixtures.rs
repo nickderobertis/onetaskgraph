@@ -781,6 +781,8 @@ struct GitHubBoard {
     lagging_reads: usize,
     /// Every GraphQL document this board has received, in order.
     documents: Vec<String>,
+    /// The variables each of those documents was sent with, at the same index.
+    variables: Vec<Value>,
     /// The board's **own** title, description and readme — a person's, not this
     /// product's. `updateProjectV2` is answered here rather than refused so that a
     /// journey asserting these are byte-identical after a copy fails when something
@@ -804,6 +806,22 @@ impl GitHubBoardFields {
     #[must_use]
     pub fn documents(&self) -> Vec<String> {
         self.board.lock().unwrap().documents.clone()
+    }
+
+    /// Every GraphQL request this board has served, in order: the document and the
+    /// variables it was sent with.
+    ///
+    /// The variables are what name the node a per-issue read reached, which is what a
+    /// journey needs to say that a copy read *these* issues and no others.
+    #[must_use]
+    pub fn served(&self) -> Vec<(String, Value)> {
+        let board = self.board.lock().unwrap();
+        board
+            .documents
+            .iter()
+            .cloned()
+            .zip(board.variables.iter().cloned())
+            .collect()
     }
 
     /// Which of the documents this board received selected the board's own item
@@ -915,7 +933,7 @@ impl GitHubBoard {
         let board_item = self.rendered(item);
         let mut issue = self.content(item);
         issue["projectItems"] = json!({"nodes":[{"id":board_item["id"],
-                                                 "project":{"number":7},
+                                                 "project":{"id":"PVT-board","number":7},
                                                  "fieldValues":board_item["fieldValues"]}],
                                        "pageInfo":{"hasNextPage":false}});
         issue
@@ -1077,6 +1095,7 @@ fn github_projects_board_at(
         created: 0,
         lagging_reads,
         documents: Vec::new(),
+        variables: Vec::new(),
         own: json!({"title":"Fixture board",
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
@@ -1099,7 +1118,11 @@ fn github_projects_board_at(
                 panic!("GraphQL request carries no variables object: {request}")
             });
             let variables = Value::Object(variables.clone());
-            board.lock().unwrap().documents.push(query.to_owned());
+            {
+                let mut served = board.lock().unwrap();
+                served.documents.push(query.to_owned());
+                served.variables.push(variables.clone());
+            }
             let owed = owed_failures
                 .iter()
                 .position(|operation| query.contains(operation));
@@ -1452,10 +1475,10 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             variables["after"].is_null() || variables["after"].is_string(),
             "dependency after must be null or a string"
         );
-        if !board.items.iter().any(|item| item["id"] == json!(id)) {
+        let Some(near) = board.items.iter().find(|item| item["id"] == json!(id)) else {
             return json!({ "node": null });
-        }
-        return json!({"node":{"__typename":"Issue",
+        };
+        return json!({"node":{"__typename":"Issue","body":near["body"].clone(),
             "blockedBy":{"nodes":board.related(&id, false),
                          "pageInfo":{"hasNextPage":false,"endCursor":null}},
             "blocking":{"nodes":board.related(&id, true),
