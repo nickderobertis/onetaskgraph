@@ -546,6 +546,55 @@ fn a_source_that_cannot_be_reached_is_transient() {
 }
 
 #[test]
+fn a_local_md_root_that_is_missing_is_refused_as_its_configuration() {
+    // A store whose folder has gone: `local-md` canonicalizes its root when the source is
+    // built, so a root that is not there is a configuration the source will not run on. It
+    // answers the same until someone restores the folder or the configuration, so both the
+    // failure document and a partial answer's entry class it refused, not transient.
+    let sandbox = Sandbox::new();
+    let root = plans(&sandbox);
+    let gone = root.join("no-such-folder");
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin": "local-md", "config": {
+            "root": root, "status_mapping": {"Todo": "todo", "Doing": "in-progress"}}},
+        "archive": {"plugin": "local-md", "config": {"root": gone}}
+    })));
+    let bundle = bundle(&sandbox);
+
+    let copy = ["project", "copy", "plans:P-1", "--to", "archive"];
+    let machine = run(&sandbox, &[&copy[..], &["--json"]].concat());
+    let failure = failure_document(&bundle, &machine, "project copy --json");
+    assert_eq!(
+        failure,
+        json!({"class": "refused", "kind": "config", "source": "archive",
+               "message": failure["message"], "retry_after_seconds": null})
+    );
+    unchanged_as_text(&run(&sandbox, &copy), &machine, "project copy");
+
+    let partial = run(&sandbox, &["task", "list", "--json"]);
+    assert_eq!(partial.status.code(), Some(4), "{}", stderr(&partial));
+    let response: Value =
+        serde_json::from_str(&stdout(&partial)).expect("a partial answer is JSON");
+    validates(
+        &bundle,
+        "QueryResponseOfQualifiedTask",
+        &response,
+        "task list --json",
+    );
+    let errors = response["errors"].as_array().expect("errors is an array");
+    assert_eq!(errors.len(), 1, "{response}");
+    assert_eq!(
+        (
+            &errors[0]["source"],
+            &errors[0]["error"]["kind"],
+            &errors[0]["class"]
+        ),
+        (&json!("archive"), &json!("config"), &json!("refused")),
+        "{response}"
+    );
+}
+
+#[test]
 fn a_failure_no_source_caused_is_refused_under_every_way_of_asking_for_json() {
     let sandbox = Sandbox::new();
     sandbox.project_document(&document(
