@@ -2651,10 +2651,13 @@ impl GitHubProjectsSource {
             repositories,
             slot,
             // Present when the item was reached through its own issue, whose board entry
-            // names the board; a read of the board's own items has the board already.
+            // names the board; a read of the board's own items has the board already. An
+            // empty id names nothing a field write could address, so it is read as absent and
+            // the write goes back to reading the board.
             board_id: item
                 .pointer("/project/id")
                 .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
                 .map(str::to_owned),
             fields: field_definitions(nodes),
         }))
@@ -4755,13 +4758,13 @@ fn labels(content: &Value) -> Result<Vec<Label>, SourceError> {
 /// A value names its field through a fragment on that field's own type, so the type is
 /// known from which kind of value it is: a single-select value's field is a
 /// `ProjectV2SingleSelectField`, options and all, and a text value's is a `ProjectV2Field`.
-/// A value whose field carried no id says nothing usable and is left out.
+/// A value whose field carried no id, or an empty one, says nothing usable and is left out.
 fn field_definitions(field_values: &[Value]) -> Vec<Value> {
     field_values
         .iter()
         .filter_map(|value| {
             let field = value.get("field")?.as_object()?;
-            field.get("id")?.as_str()?;
+            field.get("id")?.as_str().filter(|id| !id.is_empty())?;
             let typename = if value.get("text").is_some() {
                 "ProjectV2Field"
             } else if value.get("name").is_some() {

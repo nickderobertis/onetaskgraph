@@ -93,6 +93,11 @@ struct Item {
     /// is a different answer from an issue whose entry is merely unreached, and the one
     /// case a walk to exhaustion has to be able to tell apart from it.
     on_this_board: bool,
+    /// The board's node id as this issue's own entry for the board under test names it.
+    ///
+    /// The board's real id unless a case has made the entry name something no write could
+    /// address, which is what an update reading its board off the item has to refuse.
+    board_entry_id: &'static str,
     /// A label set this board answers one path with, instead of the one above.
     ///
     /// Nothing GitHub does. It is how the four-way equivalence check is watched failing:
@@ -138,6 +143,7 @@ impl Item {
             origin: None,
             other_boards: Vec::new(),
             on_this_board: true,
+            board_entry_id: "PVT_board",
             path_labels: BTreeMap::new(),
         }
     }
@@ -197,6 +203,11 @@ impl Item {
         self.on_this_board = false;
         self
     }
+    /// Make this issue's entry for the board under test name `id` as the board's node id.
+    fn board_entry_names(mut self, id: &'static str) -> Self {
+        self.board_entry_id = id;
+        self
+    }
     /// Answer `path` with a label set of its own. See [`Item::path_labels`].
     fn labels_on(mut self, path: &'static str, labels: &[(&'static str, &'static str)]) -> Self {
         self.path_labels.insert(path, labels.to_vec());
@@ -248,7 +259,7 @@ impl Item {
             .collect::<Vec<_>>();
         if self.on_this_board {
             nodes.push(
-                json!({"id":self.item_id,"project":{"id":"PVT_board","number":7},
+                json!({"id":self.item_id,"project":{"id":self.board_entry_id,"number":7},
                        "fieldValues":self.field_values(options)}),
             );
         }
@@ -6407,6 +6418,25 @@ async fn an_update_its_own_item_cannot_describe_still_reads_the_board() {
     let fixture = board(vec![Item::issue("I_1", "one")]);
     move_to_in_progress(source(&fixture).as_ref()).await;
     assert_eq!(fixture.requests("board"), 1);
+    assert_eq!(fixture.item("I_1").status.as_deref(), Some("In Progress"));
+}
+
+#[tokio::test]
+async fn an_update_whose_item_names_an_empty_board_id_still_reads_the_board() {
+    // The board id an update writes its fields against comes from a third party's answer,
+    // and an empty one addresses no board. Taken as given, every field write of the update
+    // would go out against it; read as absent, the write reads the board for its real id.
+    let fixture = board(vec![
+        Item::issue("I_1", "one")
+            .status("Todo")
+            .board_entry_names(""),
+    ]);
+    move_to_in_progress(source(&fixture).as_ref()).await;
+    assert_eq!(
+        fixture.requests("board"),
+        1,
+        "an update took an empty board id from its item instead of reading the board"
+    );
     assert_eq!(fixture.item("I_1").status.as_deref(), Some("In Progress"));
 }
 
