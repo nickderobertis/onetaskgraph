@@ -387,7 +387,9 @@ def test_comment_methods_drive_the_binary(binary: Path, tmp_path: Path) -> None:
     )
     assert (first.body, first.author) == ("Seen again on main:\n\n## Evidence\n", "ada")
     body_file = tmp_path / "second.md"
-    body_file.write_text("from a file\n", encoding="utf-8")
+    # Written as bytes: text mode would translate the newline on Windows, and the
+    # binary hands the file back byte for byte.
+    body_file.write_bytes(b"from a file\n")
     second = run(client.task_comment_add(id=GlobalId(root="notes:T-1"), body_file=str(body_file)))
     assert second.body == "from a file\n"
 
