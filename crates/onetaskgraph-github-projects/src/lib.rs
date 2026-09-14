@@ -49,6 +49,16 @@
 //! exactly the state that rule exists to catch. Pull requests are neither a project nor a
 //! task nor a document and are ignored.
 //!
+//! **A task's comments are its issue's comments.** They are read off `Issue.comments` and
+//! written with `addComment`, `updateIssueComment` and `deleteIssueComment`, and a comment's
+//! id is GitHub's own node id for the `IssueComment`. Two things GitHub decides are refused
+//! rather than papered over: a board **draft** is not an issue and has no comments at all, so
+//! a comment call on one is refused rather than answered with an empty page; and GitHub signs
+//! every comment as the account the token belongs to, so a comment handed an author of its
+//! own is refused rather than posted under another name. GitHub's comment mutations take the
+//! comment's id and nothing else, so an edit or a delete first reads which issue that comment
+//! is on, and a comment on some other issue is one this task does not have.
+//!
 //! **Where an entity is, is a link.** Every project, task and document this source reports
 //! carries a [`Location::Url`] naming the issue's own web address — the same address the
 //! `url` field already reports, in the shape that says a reader can open it. That is the
@@ -97,6 +107,7 @@
 //! | --- | --- |
 //! | `projects` | **Supported and proven,** and the one predicate here that is pushed down rather than applied in process: a task's project is the issue it is a sub-issue of, so a listing scoped to one *asks that issue* for its own sub-issues. This is the field that was declared and then not applied, which silently returned another project's tasks. |
 //! | `documents` | **Supported and proven.** A board holds issues, so a document is one: the issue whose title begins [`DESIGN_TITLE_PREFIX`]. Reads, filters and paging answer on exactly the terms a task read does, and a write puts the prefix back. |
+//! | `comments` | **Supported and proven,** over the task issue's own comment connection, oldest first and paged by GitHub's own cursor; added, edited and removed through GitHub's comment mutations, paced as every other mutation is. A draft item has no comments on GitHub and is refused, and so is an author, because GitHub records the signed-in account as every comment's author. |
 //! | `orphan_tasks` | **Supported and proven.** A task issue with no `parent` is in no project. |
 //! | `filter_by_label` | **Supported and proven,** over the issue's own labels. |
 //! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping`. |
@@ -106,8 +117,9 @@
 //! | `project_dependencies` | **Supported and proven,** in both directions, over the same two connections, because a project here is an issue. |
 //! | `max_page_size` | **Supported and proven.** [`MAX_PAGE_SIZE`], GitHub's own connection maximum. |
 //!
-//! Nothing here is unsupported. `documents` is not a predicate — it says this source has
-//! documents, which it does — and the three facts behind the uniform `Native` on the
+//! Nothing here is unsupported. `documents` and `comments` are not predicates — they say this
+//! source has documents and that its tasks have comments, both of which hold — and the three
+//! facts behind the uniform `Native` on the
 //! predicates beside it are recorded below rather than re-derived, because a reader who
 //! takes `Native` to mean *the remote service filters* will read that uniformity as a
 //! lie.
@@ -352,11 +364,12 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location,
-    Metering, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, Repository,
-    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
-    TaskQuery, TaskSource, TextFields, TextQuery, WriteSupport,
+    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
+    DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
+    LabelFilter, Location, Metering, NativeId, NewComment, Page, PageRequest, Project,
+    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -719,6 +732,52 @@ pub mod graphql {
     pub const DELETE_ISSUE: &str =
         r#"mutation($input:DeleteIssueInput!){deleteIssue(input:$input){repository{id}}}"#;
 
+    /// Everything this source reads about one issue comment, wherever it reaches one.
+    ///
+    /// A macro for the reason [`board_issue!`] is one: a comment listed, a comment just added
+    /// and a comment just edited are handed to one mapper, so they are selected by one
+    /// spelling. `author` is `Actor`, which GitHub answers `null` for an account that no
+    /// longer exists, and `login` is the one member every kind of actor carries.
+    macro_rules! issue_comment {
+        () => {
+            "id author{login} createdAt updatedAt body url"
+        };
+    }
+
+    /// One task's comments: a page of its issue's own `comments` connection.
+    ///
+    /// **No `orderBy`, and that is what makes the page oldest first.** GitHub's only
+    /// `IssueCommentOrder` field is `UPDATED_AT`, which would move a comment to the end of the
+    /// list every time somebody edited it; left unordered the connection answers in the order
+    /// the comments were written, which is the order GitHub documents for the same collection
+    /// over REST — ascending id. Nothing multiplies through it, so `$first` is the whole of its
+    /// node count and the caller's own page size is pushed straight down.
+    pub const ISSUE_COMMENTS: &str = concat!(
+        r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){__typename ... on Issue{comments(first:$first,after:$after){nodes{"#,
+        issue_comment!(),
+        r#"}pageInfo{hasNextPage endCursor}}}}}"#
+    );
+    /// Which issue one comment is on, read before that comment is edited or removed.
+    ///
+    /// GitHub's comment mutations take the comment's id and nothing else, so without this a
+    /// comment id given against the wrong task would change a comment on another issue.
+    pub const COMMENT_ISSUE: &str =
+        r#"query($id:ID!){node(id:$id){__typename ... on IssueComment{id issue{id}}}}"#;
+    /// Adds one comment to an issue, signed as the account the token belongs to.
+    pub const ADD_COMMENT: &str = concat!(
+        r#"mutation($input:AddCommentInput!){addComment(input:$input){subject{id} commentEdge{node{"#,
+        issue_comment!(),
+        r#"}}}}"#
+    );
+    /// Replaces the body of one issue comment.
+    pub const UPDATE_COMMENT: &str = concat!(
+        r#"mutation($input:UpdateIssueCommentInput!){updateIssueComment(input:$input){issueComment{"#,
+        issue_comment!(),
+        r#"}}}"#
+    );
+    /// Removes one issue comment. Its payload carries nothing about the comment it removed.
+    pub const DELETE_COMMENT: &str = r#"mutation($input:DeleteIssueCommentInput!){deleteIssueComment(input:$input){clientMutationId}}"#;
+
     /// Every document above, with what this source is doing when it sends one.
     ///
     /// One list rather than a `match` beside the constants: a rate-limit diagnostic has to
@@ -728,7 +787,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 17] = [
+    pub const DOCUMENTS: [(&str, &str); 22] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -749,6 +808,11 @@ pub mod graphql {
         (ADD_BLOCKED_BY, "recording a dependency"),
         (REMOVE_BLOCKED_BY, "removing a dependency"),
         (DELETE_ISSUE, "deleting an issue"),
+        (ISSUE_COMMENTS, "reading a task's comments"),
+        (COMMENT_ISSUE, "reading which issue a comment is on"),
+        (ADD_COMMENT, "adding a comment"),
+        (UPDATE_COMMENT, "editing a comment"),
+        (DELETE_COMMENT, "deleting a comment"),
     ];
 }
 
@@ -998,9 +1062,11 @@ fn whole_seconds(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
 }
 
 /// Every mutation this source sends creates content — an issue, a board item, a field of
-/// one, a sub-issue link, a dependency — and no query in [`graphql::DOCUMENTS`] does, so
-/// what the secondary limiter counts and what the keyword says are the same set. That is
-/// what makes the keyword a sound test rather than a convenient one.
+/// one, a sub-issue link, a dependency, a comment — or edits or removes content of that
+/// kind, and no query in [`graphql::DOCUMENTS`] does, so what the secondary limiter counts
+/// and what the keyword says are the same set. That is what makes the keyword a sound test
+/// rather than a convenient one: pacing an edit or a removal the limiter might not have
+/// counted costs a wait, and not pacing one it did count costs the next fifty minutes.
 fn is_mutation(query: &str) -> bool {
     query.trim_start().starts_with("mutation")
 }
@@ -3669,6 +3735,70 @@ impl GitHubProjectsSource {
         Ok(())
     }
 
+    /// The issue a comment call on `task` is about, or `None` when this board holds no such
+    /// task.
+    ///
+    /// Resolved exactly as [`TaskSource::get_task`] resolves it, so the comment verbs and a
+    /// read of the task cannot disagree about which ids name one: a project or a document of
+    /// this board is not a task here either.
+    ///
+    /// A **draft** is a task with nowhere to keep a comment, because GitHub keeps comments on
+    /// issues and a draft is not one. It is refused rather than answered with an empty page,
+    /// which would read as a task nobody has commented on yet.
+    async fn commented_issue(&self, task: &NativeId) -> Result<Option<NativeId>, SourceError> {
+        let Some(item) = self
+            .item_by_id(task)
+            .await?
+            .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
+        else {
+            return Ok(None);
+        };
+        if item.content_kind == ContentKind::DraftIssue {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "task {} of source {} is a draft item on the board, and GitHub keeps \
+                     comments on issues alone, so a draft has none to read or write; next: \
+                     convert the draft to an issue on the board, then comment on the issue it \
+                     becomes",
+                    task.0, self.name
+                ),
+            });
+        }
+        Ok(Some(item.id))
+    }
+
+    /// Whether the comment `comment` is one of `issue`'s own.
+    ///
+    /// Read before an edit or a removal is sent, because GitHub's comment mutations take the
+    /// comment's id and nothing else: a comment id given against the wrong task would
+    /// otherwise change a comment on some other issue entirely. An id that names nothing, or
+    /// names something that is not an issue comment, is a comment this task does not have —
+    /// which is what GitHub refusing to resolve it means too.
+    async fn comment_is_on(
+        &self,
+        issue: &NativeId,
+        comment: &NativeId,
+    ) -> Result<bool, SourceError> {
+        let asked = self
+            .graphql(graphql::COMMENT_ISSUE, json!({"id":comment.0}))
+            .await;
+        let data = match asked {
+            Ok(data) => data,
+            Err(error) if unresolvable_node(&error) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let Some(node) = data.get("node").filter(|value| !value.is_null()) else {
+            return Ok(false);
+        };
+        if optional_str(node, "__typename")? != Some("IssueComment") {
+            return Ok(false);
+        }
+        let on = node.get("issue").ok_or_else(|| SourceError::Malformed {
+            message: format!("GitHub issue comment {} names no issue", comment.0),
+        })?;
+        Ok(required_str(on, "id")? == issue.0)
+    }
+
     /// Which far ends this item's own `blockedBy` relationship holds, and which it cannot.
     async fn partition_edges(
         &self,
@@ -4322,6 +4452,7 @@ impl TaskSource for GitHubProjectsSource {
         Capabilities {
             projects: Support::Native,
             documents: Support::Native,
+            comments: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -4583,12 +4714,180 @@ impl TaskSource for GitHubProjectsSource {
         self.delete_item(id).await
     }
 
+    /// One page of the task issue's own comments, walked by GitHub's own cursor.
+    ///
+    /// Nothing here filters, so nothing has to be read ahead of the page: the caller's limit is
+    /// the page GitHub is asked for and GitHub's `endCursor` is the cursor handed back.
+    async fn task_comments(
+        &self,
+        task: &NativeId,
+        page: &PageRequest,
+    ) -> Result<Option<Page<Comment>>, SourceError> {
+        validate_page(page)?;
+        let Some(issue) = self.commented_issue(task).await? else {
+            return Ok(None);
+        };
+        let after = page.cursor.as_ref().map(|cursor| cursor.0.as_str());
+        let data = self
+            .graphql(
+                graphql::ISSUE_COMMENTS,
+                json!({"id":issue.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":after}),
+            )
+            .await?;
+        // The issue was there a moment ago; one removed since is no longer a task here.
+        let Some(node) = data.get("node").filter(|value| !value.is_null()) else {
+            return Ok(None);
+        };
+        let connection = node
+            .get("comments")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!(
+                    "GitHub issue {} answered with no comments connection",
+                    issue.0
+                ),
+            })?;
+        let items = optional_nodes(Some(connection), "issue comments")?
+            .into_iter()
+            .flatten()
+            .map(comment_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        let next = next_cursor(connection)?;
+        if let Some(next) = &next {
+            validate_cursor_progress(after, &next.0)?;
+        }
+        Ok(Some(Page { items, next }))
+    }
+
+    /// Add one comment to the task's issue, as the account the token belongs to.
+    ///
+    /// The author is refused before anything is sent — not even the task is read — because
+    /// no answer GitHub could give would make posting under another name than the one asked
+    /// for the right outcome.
+    async fn add_comment(
+        &self,
+        task: &NativeId,
+        comment: &NewComment,
+    ) -> Result<Option<Comment>, SourceError> {
+        if let Some(author) = &comment.author {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "source {} cannot post a comment as {author:?}: GitHub records the account \
+                     the token signs in as the author of every comment; next: leave --author \
+                     out, and the comment is posted as that account",
+                    self.name
+                ),
+            });
+        }
+        let Some(issue) = self.commented_issue(task).await? else {
+            return Ok(None);
+        };
+        let data = self
+            .graphql(
+                graphql::ADD_COMMENT,
+                json!({"input":{"subjectId":issue.0,"body":comment.body.as_str()}}),
+            )
+            .await?;
+        let subject = data
+            .pointer("/addComment/subject")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub comment addition returned no subject".into(),
+            })?;
+        if required_str(subject, "id")? != issue.0 {
+            return Err(SourceError::Malformed {
+                message: "GitHub comment addition answered about another issue".into(),
+            });
+        }
+        let added = data
+            .pointer("/addComment/commentEdge/node")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub comment addition returned no comment".into(),
+            })?;
+        comment_from(added).map(Some)
+    }
+
+    async fn edit_comment(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+        body: &CommentBody,
+    ) -> Result<Option<Comment>, SourceError> {
+        let Some(issue) = self.commented_issue(task).await? else {
+            return Ok(None);
+        };
+        if !self.comment_is_on(&issue, comment).await? {
+            return Ok(None);
+        }
+        let data = self
+            .graphql(
+                graphql::UPDATE_COMMENT,
+                json!({"input":{"id":comment.0,"body":body.as_str()}}),
+            )
+            .await?;
+        let edited = data
+            .pointer("/updateIssueComment/issueComment")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub comment update returned no comment".into(),
+            })?;
+        let edited = comment_from(edited)?;
+        if edited.id != *comment {
+            return Err(SourceError::Malformed {
+                message: "GitHub comment update returned the wrong comment".into(),
+            });
+        }
+        Ok(Some(edited))
+    }
+
+    async fn delete_comment(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+    ) -> Result<Option<NativeId>, SourceError> {
+        let Some(issue) = self.commented_issue(task).await? else {
+            return Ok(None);
+        };
+        if !self.comment_is_on(&issue, comment).await? {
+            return Ok(None);
+        }
+        let data = self
+            .graphql(graphql::DELETE_COMMENT, json!({"input":{"id":comment.0}}))
+            .await?;
+        // The payload says nothing about the comment it removed, so what is checked is that
+        // GitHub answered the mutation at all rather than leaving it unanswered.
+        data.get("deleteIssueComment")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub comment deletion returned no payload".into(),
+            })?;
+        Ok(Some(comment.clone()))
+    }
+
     /// Every request this source has recorded, and what each of GitHub's two budgets was
     /// attributed — read off the same accounting the session report is rendered from, so
     /// the two cannot count one request two ways.
     async fn metering(&self) -> Result<Option<Metering>, SourceError> {
         Ok(Some(self.ledger.snapshot().metering()))
     }
+}
+
+/// One issue comment as the contract carries it.
+///
+/// `author` is absent both when GitHub answers `null` for an account that no longer exists
+/// and when it answers an actor with no login, because either way the source did not say who
+/// wrote it — which is what an absent author means, rather than an author called nothing.
+fn comment_from(value: &Value) -> Result<Comment, SourceError> {
+    Ok(Comment {
+        id: NativeId(required_str(value, "id")?.to_owned()),
+        author: optional_str(value.get("author").unwrap_or(&Value::Null), "login")?
+            .map(str::to_owned),
+        created_at: optional_time(value, "createdAt")?,
+        updated_at: optional_time(value, "updatedAt")?,
+        body: required_str(value, "body")?.to_owned(),
+        url: optional_str(value, "url")?.map(str::to_owned),
+    })
 }
 
 /// Where the recorded tail of a dependency walk resumes; see

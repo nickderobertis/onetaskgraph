@@ -1,0 +1,33 @@
+{
+  "data": {
+    "node": {
+      "__typename": "Issue",
+      "comments": {
+        "nodes": [
+          {
+            "id": "IC_kwDOAAAAAc1",
+            "author": {
+              "login": "octocat"
+            },
+            "createdAt": "2026-09-01T09:00:00Z",
+            "updatedAt": "2026-09-01T09:00:00Z",
+            "body": "Seen again on main.\n",
+            "url": "https://github.com/acme/work/issues/1#issuecomment-1"
+          },
+          {
+            "id": "IC_kwDOAAAAAc2",
+            "author": null,
+            "createdAt": "2026-09-01T10:00:00Z",
+            "updatedAt": "2026-09-02T08:30:00Z",
+            "body": "Written by an account that has since been deleted.",
+            "url": "https://github.com/acme/work/issues/1#issuecomment-2"
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": true,
+          "endCursor": "Y3Vyc29yOnYyOpHOAAAAAg=="
+        }
+      }
+    }
+  }
+}

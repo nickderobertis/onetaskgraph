@@ -17,9 +17,14 @@ ROOT = Path(__file__).parent
 GENERATED = ROOT / "src" / "onetaskgraph_sdk" / "_generated"
 RESPONSE_ROOTS = {
     "task_list": "QueryResponseOfQualifiedTask",
-    "task_show": "QueryResponseOfQualifiedTask",
+    # The task response with the task's comments beside it, for a source that has them.
+    "task_show": "TaskDetail",
     "task_deps": "QueryResponseOfQualifiedEdge",
     "task_copy": "CopyReport",
+    "task_comment_add": "Comment",
+    "task_comment_list": "CommentList",
+    "task_comment_edit": "Comment",
+    "task_comment_delete": "DeletedComment",
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
     "project_deps": "QueryResponseOfQualifiedEdge",
@@ -55,6 +60,8 @@ CONTRACT_ROOTS = {
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
     "allow_partial": "bool",
+    "author": "str",
+    "body_file": "str",
     "dry_run": "bool",
     "default_sources": "list[str] | tuple[str, ...]",
     "direction": "choices",
@@ -80,6 +87,8 @@ OPTION_TYPES = {
 }
 OPTION_PLACEHOLDERS = {
     "allow_partial": None,
+    "author": "NAME",
+    "body_file": "PATH",
     "dry_run": None,
     "default_sources": "NAMES",
     "direction": "DIRECTION",
@@ -399,17 +408,27 @@ def camel_to_snake(value: str) -> str:
     return "".join(chars)
 
 
-def operand(command: tuple[str, ...]) -> str | None:
-    """Name the positional one command takes ahead of its options, if it takes one."""
+def operands(command: tuple[str, ...]) -> tuple[str, ...]:
+    """Name the positionals one command takes ahead of its options, in the order it takes them."""
     match command:
         case ("search",):
-            return "text"
+            return ("text",)
         case ("task" | "document", "copy"):
-            return "ids"
+            return ("ids",)
+        case ("task", "comment", "add" | "list"):
+            return ("id",)
+        case ("task", "comment", "edit" | "delete"):
+            return ("id", "comment_id")
         case ("task" | "project" | "document", "show" | "deps" | "copy"):
-            return "id"
+            return ("id",)
         case _:
-            return None
+            return ()
+
+
+# The commands that read a body from standard input when `--body-file` is absent, which
+# generated methods expose as a `body` the client writes there — a body is never a word of
+# the command line, so a caller holding text needs no file to pass it.
+BODY_COMMANDS = {("task", "comment", "add"), ("task", "comment", "edit")}
 
 
 def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
@@ -421,7 +440,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
             "client has no method for command: "
             + ", ".join(name.replace("_", " ") for name in missing)
         )
-    positionals = {command: operand(command) for command in commands if operand(command)}
+    positionals = {command: operands(command) for command in commands if operands(command)}
     lines = [
         '"""Generated typed client methods. Do not edit."""',
         "from __future__ import annotations",
@@ -435,13 +454,13 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         ],
         ")",
         "",
-        "POSITIONALS: dict[tuple[str, ...], str] = {",
+        "POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {",
         *[
             f"    {command!r}: {positional!r},"
             for command, positional in sorted(positionals.items())
         ],
         "}",
-        '"""The operand each command takes ahead of its options, by command.',
+        '"""The operands each command takes ahead of its options, in order, by command.',
         "",
         "The runtime client builds the argument vector from this rather than from a second",
         "table of its own: a verb whose operand was named in one place and forgotten in the",
@@ -453,30 +472,39 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         '    """Methods generated from the binary command surface."""',
         "",
         "    async def _invoke[T](",
-        "        self, command: list[str], model: object, **options: object",
+        "        self,",
+        "        command: list[str],",
+        "        model: object,",
+        "        *,",
+        "        stdin: str | None = None,",
+        "        **options: object,",
         "    ) -> T:",
         "        raise NotImplementedError",
         "",
     ]
+    positional_types = {
+        "id": "GlobalId | str",
+        # `task copy` and `document copy` take one or more ids, which are the variadic
+        # positionals the command surface has; the client passes each of them through.
+        "ids": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
+    }
     for name, command in sorted(names.items()):
         root = RESPONSE_ROOTS[name]
         return_type = RETURN_TYPES.get(name, root)
-        positional = positionals.get(command)
-        keywords = [item for item in option_names(command) if item != positional]
-        positional_type = {
-            "id": "GlobalId | str",
-            # `task copy` and `document copy` take one or more ids, which are the variadic
-            # positionals the command surface has; the client passes each of them through.
-            "ids": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
-        }.get(positional, "str")
+        taken = positionals.get(command, ())
+        keywords = [item for item in option_names(command) if item not in taken]
+        body = ["body: str | None = None"] if command in BODY_COMMANDS else []
         parameters = (
-            ([f"{positional}: {positional_type}"] if positional else [])
+            [f"{positional}: {positional_types.get(positional, 'str')}" for positional in taken]
             + ["*"]
             + [f"{item}: {option_type(command, item)} | None = None" for item in keywords]
+            + body
         )
         if parameters[-1] == "*":
             parameters.pop()
-        passed = [f"{item}={item}" for item in ([positional] if positional else []) + keywords]
+        passed = [f"{item}={item}" for item in [*taken, *keywords]]
+        if body:
+            passed.append("stdin=body")
         lines.extend(
             [
                 f"    async def {name}(self, {', '.join(parameters)}) -> {return_type}:",

@@ -29,6 +29,15 @@ than left to be rediscovered:
   asked for the documents belonging to no project, and this source applies that one
   predicate to a fetched page itself.
 
+A third was not in that schema and was captured from the real API on **2026-09-14**, the
+first time the credentialed journey read a document back inside the required check:
+**Linear stores a document's `content` as Markdown and escapes the metadata slot's close.**
+The slot written as `…\n-->` came back as `…\n\-->`, and the reader refused it as
+unterminated. An issue's and a project's `description` come back as written. So the reader
+accepts either close, the write side keeps its one encoding, and
+`a_document_reads_back_the_slot_linear_escaped_when_it_stored_the_content` serves the
+captured shape.
+
 `ProjectRelationCreateInput` carries a fourth date. Linear added two required fields to it
 — `anchorType: String!` and `relatedAnchorType: String!` — and the live journey's project
 write began failing with `Field "anchorType" of required type "String!" was not provided.`
@@ -113,6 +122,33 @@ in this plugin whose variables sit inside a literal was the one document whose v
 types nothing checked. `pinned_schema_names_every_write_operation_the_plugin_sends` now
 walks those literals against the pinned input types, and refuses exactly the pair Linear
 refused, naming the variable and the location.
+
+## The comment contract, and the two things in it that are not observed
+
+The comment contract carries a fifth date. `Query.comment(id: String): Comment!`,
+`Issue.comments(before: String, last: Int): CommentConnection!`, `Comment`,
+`CommentConnection`, `CommentPayload`, `CommentCreateInput`, `CommentUpdateInput`, the three
+mutations `commentCreate`, `commentUpdate` and `commentDelete(id: String!): DeletePayload!`,
+`User.displayName` and `PageInfo`'s backward pair `hasPreviousPage`/`startCursor` were pinned
+on **2026-09-13** from Linear's published SDK schema — `packages/sdk/src/schema.graphql` in
+the `linear/linear` repository, at commit `23f11eb41ef63ba219ec582911079c19d1abbf62`, that
+file's last change, dated 2026-09-09 — with the nullability it states. Nothing here was
+captured from the real API, and two readings the plugin depends on are not in any schema:
+
+- **The order a connection lists in.** `Issue.comments` takes `orderBy` — `createdAt` (the
+  default) or `updatedAt` — and no direction. Linear's pagination documentation says only that
+  results are "ordered by `createdAt`" and that "to get most recently updated resources, you
+  can alternatively order by `updatedAt`", which reads the order as newest first. The plugin
+  owes oldest first, so it walks the connection backwards with `last`/`before` and reverses
+  each page. That direction is inferred from the wording, not observed; a live run is what
+  would confirm it.
+- **What an unknown comment id answers.** `comment(id:)` is declared `Comment!`, so like
+  `document(id:)` it likely answers an id naming nothing with an errored response rather than
+  a null. The plugin reads a null or a trashed comment as no such comment, exactly as it reads
+  a document, and an errored response as the refusal Linear gave — never as a mutation.
+
+`comments.json` covers the `comments` connection of an issue, `Comment`, its `user` and the
+backward `PageInfo`. It is documentation-derived, with invented identifiers and content.
 
 ## The 2026-09-04 audit, and why it was not five more round trips
 

@@ -80,6 +80,23 @@ API for them on every credentialed run. The source sends it in one situation onl
 a copy that could not finish, over the items that same copy created — and deleting the
 issue takes its board item with it, which is why no `deleteProjectV2Item` is here beside it.
 
+The comment surface — `Issue.comments(first:, after:, orderBy:)`, `IssueCommentConnection`,
+`IssueCommentEdge`, `IssueComment` reduced to `id`, `author`, `body`, `createdAt`,
+`updatedAt`, `url` and `issue`, `Actor.login`, `IssueCommentOrder` with its one field
+`UPDATED_AT`, and `addComment`, `updateIssueComment` and `deleteIssueComment` with their
+inputs and payloads — was read from GitHub.com's own published schema artifact
+<https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-09-13. `orderBy` is pinned
+although no document sends it, because its absence is the decision: its only field is
+`UPDATED_AT`, which would move a comment to the end of the list each time it was edited. The
+schema documents no default order for the connection; the order a task's comments are
+reported in — oldest first — rests on GitHub's REST reference for the same collection,
+<https://docs.github.com/en/rest/issues/comments?apiVersion=2022-11-28>, which says *"By
+default, issue comments are ordered by ascending ID"*, read the same day. `comments.json` is
+that read's answer, documentation-derived and carrying no captured response: one comment by
+a login and one whose author GitHub answers `null` for, a body ending in a newline, and a page
+that reports another behind it. The live lane's mutation-freshness check introspects the three
+mutations and their six input and payload types on every credentialed run.
+
 Two absences in `schema.graphql` are load-bearing rather than incidental.
 `ProjectV2.shortDescription` and `ProjectV2.readme` are not there, and neither is
 `updateProjectV2`: a board is a container of projects and this source never writes the

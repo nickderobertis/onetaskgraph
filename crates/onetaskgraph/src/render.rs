@@ -12,10 +12,12 @@
 //! to drift from the one a filter compares against.
 
 use onetaskgraph_core::{
-    CopyReport, Predicate, Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing,
-    SourceState,
+    CommentList, CopyReport, DeletedComment, Predicate, Qualified, QualifiedEdge, QueryPlan,
+    SearchHit, SourceListing, SourceState,
 };
-use onetaskgraph_plugin_api::{Capabilities, Document, Label, Location, Project, Support, Task};
+use onetaskgraph_plugin_api::{
+    Capabilities, Comment, Document, Label, Location, Project, Support, Task,
+};
 use serde::Serialize;
 
 /// One value as the wire spells it — `in-progress`, `search-title`, `blocks`.
@@ -282,6 +284,76 @@ pub fn task_detail(task: &Qualified<Task>) -> String {
         item.location.as_ref(),
     );
     body(&fields, item.content.as_deref())
+}
+
+/// One task in full, body last, and then its comments when its source has them.
+///
+/// `None` is a source whose tasks have no comments, and says nothing about them: a line
+/// reading "no comments" there would claim the source holds comments and this task has none.
+pub fn task_with_comments(task: &Qualified<Task>, comments: Option<&[Comment]>) -> String {
+    let mut rendered = task_detail(task);
+    let Some(comments) = comments else {
+        return rendered;
+    };
+    rendered.push('\n');
+    if comments.is_empty() {
+        rendered.push_str("comments: none\n");
+        return rendered;
+    }
+    rendered.push_str(&format!("comments: {}\n", comments.len()));
+    for held in comments {
+        rendered.push('\n');
+        rendered.push_str(&comment(held));
+    }
+    rendered
+}
+
+/// One comment in full: the fields a person reads it by, then what it says, unaltered.
+///
+/// A field the source did not give is left out rather than printed empty, as a task's are.
+pub fn comment(comment: &Comment) -> String {
+    let mut fields = vec![("comment", comment.id.to_string())];
+    if let Some(author) = &comment.author {
+        fields.push(("author", author.clone()));
+    }
+    if let Some(created) = &comment.created_at {
+        fields.push(("created", wire(created)));
+    }
+    if let Some(updated) = &comment.updated_at {
+        fields.push(("updated", wire(updated)));
+    }
+    if let Some(url) = &comment.url {
+        fields.push(("url", url.clone()));
+    }
+    let mut rendered = columns(
+        &fields
+            .iter()
+            .map(|(name, value)| vec![format!("{name}:"), value.clone()])
+            .collect::<Vec<_>>(),
+    );
+    rendered.push('\n');
+    rendered.push_str(&comment.body);
+    if !comment.body.ends_with('\n') {
+        rendered.push('\n');
+    }
+    rendered
+}
+
+/// Every comment on a task, oldest first, each in full with a blank line between.
+pub fn comments(list: &CommentList) -> String {
+    if list.comments.is_empty() {
+        return "no comments\n".to_owned();
+    }
+    list.comments
+        .iter()
+        .map(comment)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// What a delete removed.
+pub fn deleted(deleted: &DeletedComment) -> String {
+    format!("deleted comment {}\n", deleted.deleted)
 }
 
 /// One document in full, body last.

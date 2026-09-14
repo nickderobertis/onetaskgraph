@@ -103,6 +103,12 @@ class SourceListingUnavailable(BaseModel):
 
 
 class Capabilities(BaseModel):
+    comments: Annotated[
+        Support | None,
+        Field(
+            description="Whether the source's tasks have comments at all.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*,\nnot which predicate it applies, so the second capability rule does not reach it. A\nsource declaring `Unsupported` is never sent a comment call — the engine reads this\nonce at the handshake and refuses such a call before anything is read, naming the\nsource and its plugin. Adding, editing and removing a comment is a write, so a source\ndeclaring `Native` is written through only when\n[`TaskSource::writes`](crate::TaskSource::writes) says it can be written at all.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates comments says nothing here and is read as the comment-free source it is."
+        ),
+    ] = Support.SupportUnsupported
     documents: Annotated[
         Support | None,
         Field(

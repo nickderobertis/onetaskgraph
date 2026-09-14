@@ -54,6 +54,11 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::ADD_BLOCKED_BY, 1),
     (graphql::REMOVE_BLOCKED_BY, 1),
     (graphql::DELETE_ISSUE, 1),
+    (graphql::ISSUE_COMMENTS, 1),
+    (graphql::COMMENT_ISSUE, 1),
+    (graphql::ADD_COMMENT, 1),
+    (graphql::UPDATE_COMMENT, 1),
+    (graphql::DELETE_COMMENT, 1),
 ];
 
 /// What this source's own text says `document` costs against what [`PRICES`] records, or

@@ -176,12 +176,21 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::NoDocuments { name, .. } => {
             ("no-documents".to_owned(), configured(name), None)
         }
-        EngineError::NoSuchItem { .. } => ("no-such-item".to_owned(), None, None),
+        EngineError::NoComments { name, .. } => ("no-comments".to_owned(), configured(name), None),
+        EngineError::CommentsNotWritable { name, .. } => {
+            ("not-writable".to_owned(), configured(name), None)
+        }
+        EngineError::NoSuchItem { .. } | EngineError::NoSuchTask { .. } => {
+            ("no-such-item".to_owned(), None, None)
+        }
+        EngineError::NoSuchComment { .. } => ("no-such-comment".to_owned(), None, None),
         EngineError::StaleOrigin { .. } => ("stale-origin".to_owned(), None, None),
         EngineError::NotAMember { .. } => ("not-a-member".to_owned(), None, None),
         EngineError::UnrecordedMember { .. } => ("unrecorded-member".to_owned(), None, None),
         EngineError::DestinationUnavailable { name, error }
-        | EngineError::SourceRefused { name, error } => {
+        | EngineError::SourceRefused { name, error }
+        | EngineError::SourceUnavailable { name, error }
+        | EngineError::SourceFailed { name, error } => {
             (source_kind(error), configured(name), Some(error))
         }
         EngineError::CopyNotUndone { error, .. } => cause(error),

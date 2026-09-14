@@ -2317,6 +2317,7 @@ impl TaskSource for Misbehaving {
             } else {
                 Support::Unsupported
             },
+            comments: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

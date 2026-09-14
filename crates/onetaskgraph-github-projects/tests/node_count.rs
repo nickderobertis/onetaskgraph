@@ -65,6 +65,10 @@ fn the_documents_that_reach_an_issue_under_a_page_are_the_ones_with_least_headro
     assert_eq!(count(graphql::ISSUE_BOARD_ITEMS), 5_100);
     assert_eq!(count(graphql::ISSUE), 203);
     assert_eq!(count(graphql::ISSUE_DEPENDENCIES), 200);
+    // A task's comments hang off one issue rather than off a page of them, so nothing
+    // multiplies through the read and its whole count is the page GitHub is asked for.
+    assert_eq!(count(graphql::ISSUE_COMMENTS), 100);
+    assert_eq!(count(graphql::COMMENT_ISSUE), 0);
     assert_eq!(count(graphql::REPOSITORY), 0);
 }
 

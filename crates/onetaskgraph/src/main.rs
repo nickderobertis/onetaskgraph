@@ -20,13 +20,15 @@ use onetaskgraph_core::{
     OutputFormat, PageToken, Paging, ProjectRequest, ProjectSelector, QueryResponse, SearchRequest,
     SourceFailure, TaskRequest,
 };
-use onetaskgraph_plugin_api::{LabelFilter, NativeId, SourceName, TextQuery};
+use onetaskgraph_plugin_api::{
+    CommentBody, LabelFilter, NativeId, NewComment, SourceName, TextQuery,
+};
 use serde::Serialize;
 
 use crate::cli::{
-    Cli, Command, ConfigCommand, CopyArgs, DependencyArgs, DocumentCommand, DocumentFilterArgs,
-    FilterArgs, LabelCommand, PageArgs, ProjectCommand, SelectionArgs, ShowArgs, SourcesCommand,
-    TaskCommand,
+    Cli, Command, CommentCommand, ConfigCommand, CopyArgs, DependencyArgs, DocumentCommand,
+    DocumentFilterArgs, FilterArgs, LabelCommand, PageArgs, ProjectCommand, SelectionArgs,
+    ShowArgs, SourcesCommand, TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`.
@@ -180,12 +182,27 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Show(args),
         } => {
-            let response = engine(loaded)
-                .task(&qualified(&args.id)?)
+            let detail = engine(loaded)
+                .task_detail(&qualified(&args.id)?)
                 .await
                 .map_err(|error| Failure::from(&error))?;
-            show(out, loaded, response, render::task_detail, args, "task")
+            // The comments ride beside the task in the machine rendering, and after its body
+            // in the human one — and not at all for a source whose tasks have none.
+            let comments = detail.comments.as_deref();
+            show_rendered(
+                out,
+                loaded,
+                &detail.response,
+                &detail,
+                |task| render::task_with_comments(task, comments),
+                args,
+                "task",
+            )
         }
+
+        Command::Task {
+            command: TaskCommand::Comment { command },
+        } => comment(out, loaded, command).await,
 
         Command::Task {
             command: TaskCommand::Deps(args),
@@ -439,6 +456,20 @@ fn show<T: Serialize>(
     args: &ShowArgs,
     what: &str,
 ) -> Result<u8, Failure> {
+    show_rendered(out, loaded, &response, &response, text, args, what)
+}
+
+/// [`show`], where the machine rendering is a document that carries the response rather than
+/// the response itself — `task show`, whose document carries the task's comments beside it.
+fn show_rendered<T>(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    response: &QueryResponse<T>,
+    machine: &impl Serialize,
+    text: impl FnOnce(&T) -> String,
+    args: &ShowArgs,
+    what: &str,
+) -> Result<u8, Failure> {
     match (response.items.first(), response.errors.is_empty()) {
         (None, true) => Err(Failure::decided(
             "no-such-item",
@@ -458,12 +489,134 @@ fn show<T: Serialize>(
                     }
                     rendered
                 }
-                OutputFormat::Json => json(&response, what)?,
+                OutputFormat::Json => json(machine, what)?,
             };
             emit(out, rendered.trim_end(), what)?;
             Ok(report(&response.errors, args.allow_partial))
         }
     }
+}
+
+/// Drive one comment verb and write what it answered.
+///
+/// Each is one call to one source, so there is no partial answer to report: a refusal is
+/// the command failing, with the engine's own problem and next action.
+async fn comment(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    command: &CommentCommand,
+) -> Result<u8, Failure> {
+    let rendered = match command {
+        CommentCommand::Add(args) => {
+            // The body is read and refused before anything is built or read, so an empty
+            // one never reaches a source.
+            let comment = NewComment {
+                body: body(args.body_file.as_deref())?,
+                author: args.author.clone(),
+            };
+            let task = qualified(&args.id)?;
+            let added = engine(loaded)
+                .add_comment(&task, &comment)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            rendering(loaded, &added, render::comment, "the comment")?
+        }
+        CommentCommand::List(args) => {
+            let task = qualified(&args.id)?;
+            let listed = engine(loaded)
+                .comments(&task)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            rendering(loaded, &listed, render::comments, "the comments")?
+        }
+        CommentCommand::Edit(args) => {
+            let body = body(args.body_file.as_deref())?;
+            let task = qualified(&args.id)?;
+            let edited = engine(loaded)
+                .edit_comment(&task, &args.comment_id, &body)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            rendering(loaded, &edited, render::comment, "the comment")?
+        }
+        CommentCommand::Delete(args) => {
+            let task = qualified(&args.id)?;
+            let deleted = engine(loaded)
+                .delete_comment(&task, &args.comment_id)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            rendering(loaded, &deleted, render::deleted, "the deletion")?
+        }
+    };
+    emit(out, rendered.trim_end(), "the comment")?;
+    Ok(EXIT_OK)
+}
+
+/// One answer, in the format the configuration asks for.
+fn rendering<T: Serialize>(
+    loaded: &Loaded,
+    value: &T,
+    text: impl FnOnce(&T) -> String,
+    what: &str,
+) -> Result<String, Failure> {
+    match loaded.config.output() {
+        OutputFormat::Text => Ok(text(value)),
+        OutputFormat::Json => json(value, what),
+    }
+}
+
+/// A comment's body, read byte for byte from `path`, or from standard input without one.
+///
+/// Never trimmed and never normalised: a trailing newline is part of what was written. Text
+/// that is not UTF-8 is refused rather than repaired, because a repaired body is not the one
+/// the caller wrote.
+fn body(path: Option<&std::path::Path>) -> Result<CommentBody, Failure> {
+    let (bytes, from) = match path {
+        Some(path) => (
+            std::fs::read(path).map_err(|error| {
+                Failure::decided(
+                    "comment-body",
+                    format!(
+                        "--body-file {}: could not read it: {error}\n\
+                        next: name a readable file, or leave --body-file out and pass the body on \
+                        standard input.",
+                        path.display()
+                    ),
+                )
+            })?,
+            format!("--body-file {}", path.display()),
+        ),
+        None => {
+            let mut bytes = Vec::new();
+            io::Read::read_to_end(&mut io::stdin().lock(), &mut bytes).map_err(|error| {
+                Failure::decided(
+                    "comment-body",
+                    format!(
+                        "could not read the comment body from standard input: {error}\n\
+                        next: pass the body with --body-file PATH instead."
+                    ),
+                )
+            })?;
+            (bytes, "standard input".to_owned())
+        }
+    };
+    let text = String::from_utf8(bytes).map_err(|error| {
+        Failure::decided(
+            "comment-body",
+            format!(
+                "the comment body on {from} is not UTF-8 text: {error}\n\
+                next: save the body as UTF-8 and pass it again."
+            ),
+        )
+    })?;
+    CommentBody::new(text).map_err(|_| {
+        Failure::decided(
+            "comment-body",
+            format!(
+                "the comment body on {from} is empty, and a comment has to say something\n\
+                next: write the comment's text to {from} and run the command again."
+            ),
+        )
+    })
 }
 
 /// Drive the engine's own copy API and write what it did.
@@ -803,6 +956,10 @@ mod tests {
                 "task show",
                 "task deps",
                 "task copy",
+                "task comment add",
+                "task comment list",
+                "task comment edit",
+                "task comment delete",
                 "project list",
                 "project show",
                 "project deps",

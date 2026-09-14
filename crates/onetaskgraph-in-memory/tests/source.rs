@@ -1107,6 +1107,7 @@ async fn every_declared_capability_is_applied_to_the_held_work() {
         onetaskgraph_plugin_api::Capabilities {
             projects: Support::Native,
             documents: Support::Unsupported,
+            comments: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

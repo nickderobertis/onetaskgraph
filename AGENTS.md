@@ -63,7 +63,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,
   `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
   `Support`, `DependencySupport`; the write types `ItemWrite` and `WriteSupport`; the
-  metering types `Metering` and `Metered`; and `SourceError`.
+  comment types `Comment`, `CommentBody` and `NewComment`; the metering types `Metering` and
+  `Metered`; and `SourceError`.
   **It depends on no other crate of this workspace.**
 - **`onetaskgraph-core`** — the engine, plus the reporting types `QueryResponse`,
   `QueryPlan`, `SourcePlan`, `Predicate`, `PageToken`, `SourceFailure` and `GlobalId`.
@@ -579,6 +580,25 @@ them do; this is the inventory of what is owed, not a status board.
     location-like string is left alone, every copy reports what it rewrote, what it left
     unresolved and how many of those were ambiguous, and a dry run reports the same figures
     and writes nothing.
+38. A comment is added to a task, listed, edited and deleted through the binary on every
+    source that keeps what it is given — a folder of Markdown, a GitHub board, a Linear
+    workspace — over the in-process boundary and the stdio plugin protocol alike: its body
+    comes from a file or from standard input and comes back byte for byte, an edit moves that
+    comment's body and time and nothing else, a delete removes that comment alone, and
+    `task show` carries what is left — top-level in its machine output, after the body in its
+    human one, and absent for a source whose tasks have none. An in-memory source, whose work
+    dies with its process, is driven against comments seeded in its configuration instead, and
+    its add-then-list is proven as a library call.
+39. Every refusal a comment verb owes exits non-zero with the problem and a next action: an
+    unknown task, an unknown comment, a source without comments — a stdio plugin whose
+    handshake predates them is refused before it is sent anything — a source whose comments
+    cannot be written, a GitHub draft issue, an author given to a source that records its own,
+    and an empty or unreadable body.
+40. A task copy, a project copy and a document copy each neither read nor write a comment at
+    either end: neither board is sent a comment request, both ends' comments are as they
+    were, and nothing the copy wrote carries a comment of what it was copied from.
+41. A copy into a Markdown task keeps that file's comments section byte for byte, and no
+    comment of the copy's source enters it.
 
 ## What a copied document's references are pointed at
 

@@ -1336,6 +1336,7 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
         onetaskgraph_plugin_api::Capabilities {
             projects: onetaskgraph_plugin_api::Support::Native,
             documents: onetaskgraph_plugin_api::Support::Native,
+            comments: onetaskgraph_plugin_api::Support::Native,
             orphan_tasks: onetaskgraph_plugin_api::Support::Native,
             filter_by_label: onetaskgraph_plugin_api::Support::Native,
             filter_by_status: onetaskgraph_plugin_api::Support::Native,

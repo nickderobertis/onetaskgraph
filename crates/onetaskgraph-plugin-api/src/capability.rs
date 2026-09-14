@@ -26,6 +26,21 @@ pub struct Capabilities {
     // llmlint: ignore[invalid_states_unrepresentable] the unrepresentable state named — "has documents, but some document predicate needs compensation" — is not a state this contract has: a `DocumentQuery`'s predicates are the same `text`/`labels`/`project` the task and project queries carry, and `filter_by_label`, `search_title` and `search_content` already declare how the source applies each of them, over whichever entity it is asked for. Adding a per-entity predicate axis is a contract change with no caller yet, and it would have to reach `projects` in the same breath. Recorded in AGENTS.md, "The three capability rules".
     #[serde(default = "no_documents")]
     pub documents: Support,
+    /// Whether the source's tasks have comments at all.
+    ///
+    /// Read exactly as [`documents`](Self::documents) is: it says what the source *holds*,
+    /// not which predicate it applies, so the second capability rule does not reach it. A
+    /// source declaring `Unsupported` is never sent a comment call — the engine reads this
+    /// once at the handshake and refuses such a call before anything is read, naming the
+    /// source and its plugin. Adding, editing and removing a comment is a write, so a source
+    /// declaring `Native` is written through only when
+    /// [`TaskSource::writes`](crate::TaskSource::writes) says it can be written at all.
+    ///
+    /// Defaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that
+    /// predates comments says nothing here and is read as the comment-free source it is.
+    // llmlint: ignore[names_match_behavior, invalid_states_unrepresentable] the reason recorded at `documents` above, at a new field: the contract says whether a source holds a kind of thing in the shape `projects` and `documents` already use, and a second enum here would say the same thing three ways for three sibling fields. Whether comments can be *written* is `TaskSource::writes`, the one write declaration every write of this contract already reads, so a read-only pairing is a source declaring `Native` here and `Unsupported` there rather than a third variant.
+    #[serde(default = "no_comments")]
+    pub comments: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether the source filters by label itself.
@@ -53,6 +68,12 @@ pub struct Capabilities {
 /// of its own: an absent *predicate* declaration is a plugin that did not answer, while an
 /// absent document declaration is a plugin written before there were any.
 fn no_documents() -> Support {
+    Support::Unsupported
+}
+
+/// What [`Capabilities::comments`] means when a wire value does not carry it: a plugin
+/// written before there were comments, on the terms [`no_documents`] gives.
+fn no_comments() -> Support {
     Support::Unsupported
 }
 

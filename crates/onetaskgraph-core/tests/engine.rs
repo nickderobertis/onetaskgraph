@@ -212,6 +212,7 @@ const PUBLISHED_BUNDLES: &[(u32, Published)] = &[
     (10, Published::Shapes(&TENTH_BUNDLE_SHAPE)),
     (11, Published::Shapes(&ELEVENTH_BUNDLE_SHAPE)),
     (12, Published::Shapes(&TWELFTH_BUNDLE_SHAPE)),
+    (13, Published::Shapes(&THIRTEENTH_BUNDLE_SHAPE)),
 ];
 
 /// One root's schema rendered so that two equal documents render equally.
@@ -461,6 +462,82 @@ const TWELFTH_BUNDLE_SHAPE: [(&str, u64); 61] = [
     ("Status", 0xd14c325a52e464f6),
     ("StatusCategory", 0xc866ba4d0d422da0),
     ("Task", 0xe39a3442bae8ceda),
+    ("TaskQuery", 0x963c214c94159671),
+    ("TextFields", 0x7240bd05f9beff93),
+];
+
+/// The shape version 13 of the bundle publishes.
+///
+/// Comments on a task: the contract's `Comment` and `NewComment`, the page a plugin answers
+/// `task_comments` with, `CommentList` and `DeletedComment` for the comment verbs, and
+/// `TaskDetail` for `task show`. `Capabilities` gains `comments`, which moves every root that
+/// reaches it — `SourceListing` and `SourceListings` among them.
+const THIRTEENTH_BUNDLE_SHAPE: [(&str, u64); 67] = [
+    ("Capabilities", 0xd878f8de45b30af0),
+    ("Comment", 0xfc9fab5a2266887e),
+    ("CommentList", 0xcd30d5deff29948d),
+    ("CopyAction", 0x92821be0daa46894),
+    ("CopyOutcome", 0xefcf23cfbd5dde3b),
+    ("CopyReport", 0xcdc14138fa92e9c4),
+    ("CredentialLayer", 0x54cdffe467a3b7f1),
+    ("DeletedComment", 0xaa757b7907bb38f8),
+    ("DependencyEdge", 0x965fcb2880071dcc),
+    ("DependencyEndpoint", 0x52371a0138569604),
+    ("DependencyKind", 0x62a3106e8479701a),
+    ("Direction", 0x497cbce272a8a5bb),
+    ("Document", 0x43f55b02791ea15b),
+    ("DocumentQuery", 0xab8ca467012e1a12),
+    ("EffectiveConfig", 0xa41a3361af17368f),
+    ("Failure", 0x19dbdae11bff9082),
+    ("FailureClass", 0x7fcbfc34989aa444),
+    ("FailureDocument", 0xbcf04caf4ce10fc0),
+    ("GlobalId", 0xe692661021d9c53e),
+    ("Health", 0x4a65ae032f76c6ca),
+    ("ItemKind", 0x75db1aa08ed04b2f),
+    ("Label", 0x07555503d77a90c7),
+    ("Location", 0x0690620b049c989a),
+    ("NewComment", 0xda981b6b61244e61),
+    ("Origin", 0x653235a0d0c3576e),
+    ("OutputFormat", 0xa8a85cfd04d98684),
+    ("PageOfComment", 0xcb7f0e8d73adb0b4),
+    ("PageOfDependencyEdge", 0x529f3ea40c6b71c9),
+    ("PageOfDocument", 0x985c78b3f3c93eeb),
+    ("PageOfLabel", 0xd6110ddeeaaa78e8),
+    ("PageOfProject", 0x41abc46f0e84e0d7),
+    ("PageOfTask", 0x0921303f42a6cb4e),
+    ("PageRequest", 0x6c7be3975028b78c),
+    ("PageToken", 0xc685683af2c78c39),
+    ("Predicate", 0x2c7629f85d039fc6),
+    ("Project", 0x27060ceb590bd2d1),
+    ("ProjectQuery", 0x4ab0fa6b012cc9bd),
+    ("QualifiedDocument", 0x4e539a8ce7b72c47),
+    ("QualifiedEdge", 0xe24f9b34b618df17),
+    ("QualifiedEndpoint", 0x7bc0f5163c4c8594),
+    ("QualifiedLabel", 0x7ac91fcfd8f41e30),
+    ("QualifiedProject", 0x78c2101cd2a90b0d),
+    ("QualifiedTask", 0xb6c4cf33ff76e1b2),
+    ("QueryPlan", 0x5cd046eed149f89b),
+    ("QueryResponseOfQualifiedDocument", 0x1d9b28a5b989e218),
+    ("QueryResponseOfQualifiedEdge", 0x9338c43bad99c95b),
+    ("QueryResponseOfQualifiedLabel", 0xb94991dc4cfafb1b),
+    ("QueryResponseOfQualifiedProject", 0x7968032f79a9420c),
+    ("QueryResponseOfQualifiedTask", 0xa472eeadd66bcaf3),
+    ("QueryResponseOfSearchHit", 0xad628b6a103df0c8),
+    ("Repository", 0x98147ade92ced0f0),
+    ("ResolvedCredential", 0x14a23b081a4e8d10),
+    ("SearchHit", 0xb3b5470d71a6d866),
+    ("SearchKind", 0xc4d2cd105ad4b849),
+    ("SecretsReport", 0x245d50b08721b73d),
+    ("Setting", 0xf593f9ae902cba68),
+    ("SourceError", 0x33872c91770f86da),
+    ("SourceFailure", 0xb30fd488e61b4def),
+    ("SourceListing", 0x0d6f0a9b23705c87),
+    ("SourceListings", 0x08a1adfdfeafaa8c),
+    ("SourcePlan", 0xd0c5548abc7d7223),
+    ("Status", 0xd14c325a52e464f6),
+    ("StatusCategory", 0xc866ba4d0d422da0),
+    ("Task", 0xe39a3442bae8ceda),
+    ("TaskDetail", 0xcf8b702bd5689449),
     ("TaskQuery", 0x963c214c94159671),
     ("TextFields", 0x7240bd05f9beff93),
 ];
@@ -1271,6 +1348,25 @@ fn a_failure_document_names_what_failed_where_and_takes_a_wrapped_failures_class
     assert_eq!(unbuilt_failure["failure"]["kind"], "unavailable");
     assert_eq!(unbuilt_failure["failure"]["source"], "notes");
 
+    // A comment verb is one call to one source, and what that source said is what it failed of.
+    let limited_comment = EngineError::SourceFailed {
+        name: "board".to_owned(),
+        error: SourceError::RateLimited {
+            retry_after_seconds: Some(30),
+            message: None,
+        },
+    };
+    assert_eq!(
+        document(Failure::from(&limited_comment))["failure"],
+        json!({"class": "transient", "kind": "rate-limited", "source": "board",
+               "message": limited_comment.to_string(), "retry_after_seconds": 30})
+    );
+    let uncommentable = document(Failure::from(&EngineError::NoComments {
+        name: "notes".to_owned(),
+        kind: "local-md".to_owned(),
+    }));
+    assert_eq!(uncommentable["failure"]["source"], "notes");
+
     // Every engine failure no source caused, by the name a caller sees.
     for (error, kind) in [
         (
@@ -1293,6 +1389,33 @@ fn a_failure_document_names_what_failed_where_and_takes_a_wrapped_failures_class
                 kind: "local-md".to_owned(),
             },
             "no-documents",
+        ),
+        (
+            EngineError::NoComments {
+                name: "notes".to_owned(),
+                kind: "local-md".to_owned(),
+            },
+            "no-comments",
+        ),
+        (
+            EngineError::CommentsNotWritable {
+                name: "notes".to_owned(),
+                kind: "in-memory".to_owned(),
+            },
+            "not-writable",
+        ),
+        (
+            EngineError::NoSuchTask {
+                id: "notes:T-9".to_owned(),
+            },
+            "no-such-item",
+        ),
+        (
+            EngineError::NoSuchComment {
+                task: "notes:T-1".to_owned(),
+                comment: "C-9".to_owned(),
+            },
+            "no-such-comment",
         ),
         (
             EngineError::StaleOrigin {

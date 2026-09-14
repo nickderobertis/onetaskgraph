@@ -886,6 +886,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         Capabilities {
             projects: Support::Native,
             documents: Support::Native,
+            comments: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

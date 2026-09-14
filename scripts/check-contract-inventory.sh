@@ -37,6 +37,12 @@ EXCEPTIONS = {
         "`Capabilities.documents: Support::Unsupported` obliges every document-free source "
         "to answer a document read with"
     ),
+    "commentless": (
+        "a free function, not one of the contract's types — the inventory enumerates the "
+        "traits and types a plugin author implements against, and this is the one refusal "
+        "`Capabilities.comments: Support::Unsupported` obliges every comment-free source "
+        "to answer a comment call with"
+    ),
     "SOURCE_NAME_PATTERN": (
         "a const, not one of the contract's types — the inventory enumerates the traits "
         "and types a plugin author implements against"

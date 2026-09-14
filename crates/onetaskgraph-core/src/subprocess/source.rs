@@ -14,19 +14,21 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, Direction, Document, DocumentQuery, Health, ItemWrite, Label,
-    Metering, NativeId, Page, PageRequest, Project, ProjectQuery, SourceError, SourceName, Task,
-    TaskQuery, TaskSource, WriteSupport,
+    Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery, Health,
+    ItemWrite, Label, Metering, NativeId, NewComment, Page, PageRequest, Project, ProjectQuery,
+    SourceError, SourceName, Task, TaskQuery, TaskSource, WriteSupport,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::connection::{Connection, Peer};
 use super::wire::{
-    DeleteParams, DependencyParams, DocumentQueryParams, DocumentResult, DocumentWriteParams,
-    EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams, MeteringResult,
-    PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request,
-    TaskQueryParams, TaskResult, TaskWriteParams, WriteResult,
+    AddCommentParams, CommentResult, CommentsParams, CommentsResult, DeleteCommentParams,
+    DeleteParams, DeletedCommentResult, DependencyParams, DocumentQueryParams, DocumentResult,
+    DocumentWriteParams, EditCommentParams, EngineIdentity, IdParams, InitializeParams,
+    InitializeResult, LabelParams, MeteringResult, PROTOCOL_VERSION, ProjectQueryParams,
+    ProjectResult, ProjectWriteParams, Request, TaskQueryParams, TaskResult, TaskWriteParams,
+    WriteResult,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -513,6 +515,76 @@ impl TaskSource for SubprocessSource {
             .ask("delete_document", params(&DeleteParams { id: id.clone() }))
             .await?;
         Ok(())
+    }
+
+    async fn task_comments(
+        &self,
+        task: &NativeId,
+        page: &PageRequest,
+    ) -> Result<Option<Page<Comment>>, SourceError> {
+        let result: CommentsResult = self
+            .ask(
+                "task_comments",
+                params(&CommentsParams {
+                    task: task.clone(),
+                    page: page.clone(),
+                }),
+            )
+            .await?;
+        Ok(result.page)
+    }
+
+    async fn add_comment(
+        &self,
+        task: &NativeId,
+        comment: &NewComment,
+    ) -> Result<Option<Comment>, SourceError> {
+        let result: CommentResult = self
+            .ask(
+                "add_comment",
+                params(&AddCommentParams {
+                    task: task.clone(),
+                    comment: comment.clone(),
+                }),
+            )
+            .await?;
+        Ok(result.comment)
+    }
+
+    async fn edit_comment(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+        body: &CommentBody,
+    ) -> Result<Option<Comment>, SourceError> {
+        let result: CommentResult = self
+            .ask(
+                "edit_comment",
+                params(&EditCommentParams {
+                    task: task.clone(),
+                    comment: comment.clone(),
+                    body: body.clone(),
+                }),
+            )
+            .await?;
+        Ok(result.comment)
+    }
+
+    async fn delete_comment(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+    ) -> Result<Option<NativeId>, SourceError> {
+        let result: DeletedCommentResult = self
+            .ask(
+                "delete_comment",
+                params(&DeleteCommentParams {
+                    task: task.clone(),
+                    comment: comment.clone(),
+                }),
+            )
+            .await?;
+        Ok(result.deleted)
     }
 
     async fn metering(&self) -> Result<Option<Metering>, SourceError> {

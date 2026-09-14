@@ -347,6 +347,91 @@ def test_document_copy_drives_the_binary_and_refuses_a_destination_with_no_docum
     assert "has no documents" in str(refused.value)
 
 
+def test_comment_methods_drive_the_binary(binary: Path, tmp_path: Path) -> None:
+    """Add, list, edit and delete a task's comments through the real binary.
+
+    `notes` is a folder of Markdown, whose comments are a section of the task's own file, so
+    what one call writes the next one reads back. `plain` is an in-memory source that does not
+    say its tasks have comments, so every comment call against it is refused before anything
+    is read.
+    """
+    (tmp_path / "notes" / "tasks").mkdir(parents=True)
+    (tmp_path / "notes" / "tasks" / "T-1.md").write_text(
+        "---\ntitle: Ship the release\nstatus: todo\n---\nLong-form task content.\n",
+        encoding="utf-8",
+    )
+    plain_task = {
+        "id": "T-1",
+        "title": "Plain",
+        "status": {"category": "todo", "name": "Todo"},
+        "labels": [],
+    }
+    (tmp_path / "onetaskgraph.yaml").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "notes": {"plugin": "local-md", "config": {"root": str(tmp_path / "notes")}},
+                    "plain": {"plugin": "in-memory", "config": {"tasks": [plain_task]}},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = Client(binary, cwd=tmp_path)
+
+    # A body handed over as text reaches the binary on standard input, byte for byte.
+    first = run(
+        client.task_comment_add(
+            id="notes:T-1", body="Seen again on main:\n\n## Evidence\n", author="ada"
+        )
+    )
+    assert (first.body, first.author) == ("Seen again on main:\n\n## Evidence\n", "ada")
+    body_file = tmp_path / "second.md"
+    # Written as bytes: text mode would translate the newline on Windows, and the
+    # binary hands the file back byte for byte.
+    body_file.write_bytes(b"from a file\n")
+    second = run(client.task_comment_add(id=GlobalId(root="notes:T-1"), body_file=str(body_file)))
+    assert second.body == "from a file\n"
+
+    listed = run(client.task_comment_list(id="notes:T-1"))
+    assert [comment.id.root for comment in listed.comments] == [first.id.root, second.id.root]
+
+    edited = run(
+        client.task_comment_edit(id="notes:T-1", comment_id=first.id.root, body="corrected\n")
+    )
+    assert (edited.id, edited.author, edited.created_at, edited.body) == (
+        first.id,
+        first.author,
+        first.created_at,
+        "corrected\n",
+    )
+
+    deleted = run(client.task_comment_delete(id="notes:T-1", comment_id=second.id.root))
+    assert deleted.deleted.root == second.id.root
+    shown = run(client.task_show(id="notes:T-1"))
+    assert shown.comments is not None
+    assert [comment.body for comment in shown.comments] == ["corrected\n"]
+    assert shown.items[0].item.content == "Long-form task content."
+
+    # A source whose tasks have none carries no comments key, and refuses the verbs.
+    assert run(client.task_show(id="plain:T-1")).comments is None
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.task_comment_list(id="plain:T-1"))
+    assert refused.value.exit_code == 1
+    assert "has no comments" in str(refused.value)
+
+    # No body at all is refused rather than waiting on this process's own standard input.
+    with pytest.raises(OnetaskgraphError) as empty:
+        run(client.task_comment_add(id="notes:T-1"))
+    assert empty.value.exit_code == 1
+    assert "is empty" in str(empty.value)
+    assert [comment.body for comment in run(client.task_comment_list(id="notes:T-1")).comments] == [
+        "corrected\n"
+    ]
+    with pytest.raises(TypeError, match="comment_id"):
+        run(client._invoke(["task", "comment", "delete"], object, id="notes:T-1"))
+
+
 def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
     """Use environment before the packaged PATH fallback and reject no executable."""
     config = configured(tmp_path)

@@ -41,14 +41,20 @@ class Client(GeneratedClient):
         self.environment = dict(environment if environment is not None else os.environ)
         self.environment.pop("ONETASKGRAPH_SDK_BINARY", None)
 
-    async def _invoke[T](self, command: list[str], model: object, **options: object) -> T:
+    async def _invoke[T](
+        self,
+        command: list[str],
+        model: object,
+        *,
+        stdin: str | None = None,
+        **options: object,
+    ) -> T:
         arguments = [self.binary, *command]
         # Read from the generated table rather than matched again here: the generated
-        # methods and this argument vector have to name the same operand, and while each
+        # methods and this argument vector have to name the same operands, and while each
         # kept its own copy a verb added to one and forgotten in the other produced a
         # method that could not do what it was named for.
-        positional = POSITIONALS.get(tuple(command))
-        if positional is not None:
+        for positional in POSITIONALS.get(tuple(command), ()):
             try:
                 value = options.pop(positional)
             except KeyError as error:
@@ -74,7 +80,7 @@ class Client(GeneratedClient):
                 case _:
                     arguments.extend((flag, str(value)))
         arguments.append("--json")
-        completed = await self._invoke_process(arguments)
+        completed = await self._invoke_process(arguments, stdin)
         if completed.returncode not in {0, 4}:
             raise OnetaskgraphError(completed.stderr.strip(), exit_code=completed.returncode)
         try:
@@ -86,16 +92,24 @@ class Client(GeneratedClient):
                 exit_code=completed.returncode,
             ) from error
 
-    async def _invoke_process(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
-        """Cross the process boundary without blocking the event-loop IO layer."""
+    async def _invoke_process(
+        self, arguments: list[str], stdin: str | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        """Cross the process boundary without blocking the event-loop IO layer.
+
+        Standard input is always a pipe, written with `stdin` and closed: a command that reads
+        a body there must never block on the caller's own terminal, and one given no body reads
+        an empty one and says so rather than waiting.
+        """
         process = await asyncio.create_subprocess_exec(
             *arguments,
             cwd=self.cwd,
             env=self.environment,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await process.communicate()
+        stdout, stderr = await process.communicate((stdin or "").encode())
         return subprocess.CompletedProcess(
             arguments, process.returncode or 0, stdout.decode(), stderr.decode()
         )

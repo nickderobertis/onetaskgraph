@@ -15,6 +15,7 @@
 //!
 //! Nothing here writes anything down. See [`fetch`] for the walk that makes that true.
 
+mod comment;
 mod copy;
 mod fetch;
 mod join;
@@ -44,6 +45,7 @@ use local::{LocalDocuments, LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
+pub use comment::{CommentList, DeletedComment, TaskDetail};
 pub use copy::{
     BudgetSpent, CopyAction, CopyItems, CopyOutcome, CopyReport, CopyRequest, CopyScope, MatchBy,
     Spent,
@@ -330,6 +332,93 @@ pub enum EngineError {
         name: String,
         /// The plugin behind it.
         kind: String,
+    },
+
+    /// A comment verb named a task of a source whose plugin has no comments.
+    ///
+    /// The shape [`NoDocuments`](Self::NoDocuments) has, for its reason: the declaration is
+    /// read once at the handshake, so the source is refused before anything is read.
+    #[error(
+        "source {name} has no comments: its plugin is {kind}, whose tasks hold none\n\
+         next: name a task of a source whose plugin has comments — `onetaskgraph sources \
+         list` reports each one's plugin."
+    )]
+    NoComments {
+        /// The configured name of the source.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+    },
+
+    /// A comment verb that writes named a source whose comments can be read but not written.
+    #[error(
+        "source {name} cannot be written: its plugin is {kind}, whose comments can be read \
+         but not added to, edited or removed\n\
+         next: list them with `onetaskgraph task comment list`, or comment on a task of a \
+         source whose plugin can be written — `onetaskgraph sources list` reports each \
+         one's plugin."
+    )]
+    CommentsNotWritable {
+        /// The configured name of the source.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+    },
+
+    /// A comment verb named a task its source does not hold.
+    #[error(
+        "no task with the id {id}\n\
+         next: check the id, or list what is there — `onetaskgraph task list` reports every \
+         task the configured sources hold."
+    )]
+    NoSuchTask {
+        /// The qualified id that named nothing.
+        id: String,
+    },
+
+    /// A comment verb named a comment the task does not have.
+    #[error(
+        "task {task} has no comment with the id {comment}\n\
+         next: list its comments — `onetaskgraph task comment list {task}` reports each \
+         one's id."
+    )]
+    NoSuchComment {
+        /// The qualified id of the task.
+        task: String,
+        /// The comment id that named nothing on it.
+        comment: String,
+    },
+
+    /// A source the verb reads or writes one item of is configured but could not be built.
+    ///
+    /// Distinct from [`DestinationUnavailable`](Self::DestinationUnavailable), whose next
+    /// action is about a copy.
+    #[error(
+        "source {name} could not be built: {error}\n\
+         next: fix that source — `onetaskgraph sources list` reports its state — then run the \
+         command again."
+    )]
+    SourceUnavailable {
+        /// The configured name of the source.
+        name: String,
+        /// Why it did not build.
+        error: SourceError,
+    },
+
+    /// A source refused, or failed, the one call a verb made of it.
+    ///
+    /// Distinct from [`SourceRefused`](Self::SourceRefused), whose next action is about a
+    /// copy, and from a [`SourceFailure`], which leaves other sources' results standing: a
+    /// comment is one call to one source, so there is nothing else to report beside it.
+    #[error(
+        "source {name} could not do it: {error}\n\
+         next: fix what the source named above, then run the command again."
+    )]
+    SourceFailed {
+        /// The source that failed.
+        name: String,
+        /// What it said.
+        error: SourceError,
     },
 
     /// A copy named a destination that is configured but could not be built.

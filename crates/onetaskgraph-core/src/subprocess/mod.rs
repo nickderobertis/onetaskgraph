@@ -23,6 +23,7 @@
 //! | --- | --- |
 //! | `projects` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `documents` | **Supported and proven** — the hosted source's own, forwarded. |
+//! | `comments` | **Supported and proven** — the hosted source's own, forwarded, and the four comment methods carried over the pipe as §4.15 and §4.16 specify. |
 //! | `orphan_tasks` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `filter_by_label` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `filter_by_status` | **Supported and proven** — the hosted source's own, forwarded. |

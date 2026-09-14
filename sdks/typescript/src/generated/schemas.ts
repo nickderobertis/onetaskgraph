@@ -37,6 +37,11 @@ export const runtimeSchemas = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "One source's declared abilities.",
     "properties": {
+      "comments": {
+        "$ref": "#/$defs/Support",
+        "default": "unsupported",
+        "description": "Whether the source's tasks have comments at all.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*,\nnot which predicate it applies, so the second capability rule does not reach it. A\nsource declaring `Unsupported` is never sent a comment call — the engine reads this\nonce at the handshake and refuses such a call before anything is read, naming the\nsource and its plugin. Adding, editing and removing a comment is a write, so a source\ndeclaring `Native` is written through only when\n[`TaskSource::writes`](crate::TaskSource::writes) says it can be written at all.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates comments says nothing here and is read as the comment-free source it is."
+      },
       "documents": {
         "$ref": "#/$defs/Support",
         "default": "unsupported",
@@ -93,6 +98,134 @@ export const runtimeSchemas = {
       "max_page_size"
     ],
     "title": "Capabilities",
+    "type": "object"
+  },
+  "Comment": {
+    "$defs": {
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One comment on a task, as its source holds it.\n\n`id` and `body` are always there; every other member is `None` when the source did not\ngive it, which is not the same as the source saying it is empty.",
+    "properties": {
+      "author": {
+        "description": "Who wrote it, in the source's own spelling of a person.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "body": {
+        "description": "What it says, byte for byte as it was written — a trailing newline included.",
+        "type": "string"
+      },
+      "created_at": {
+        "description": "When the source says it was written.",
+        "format": "date-time",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "id": {
+        "$ref": "#/$defs/NativeId",
+        "description": "The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
+      },
+      "updated_at": {
+        "description": "When the source says it last changed.",
+        "format": "date-time",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "url": {
+        "description": "Where a person can open it.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "body"
+    ],
+    "title": "Comment",
+    "type": "object"
+  },
+  "CommentList": {
+    "$defs": {
+      "Comment": {
+        "description": "One comment on a task, as its source holds it.\n\n`id` and `body` are always there; every other member is `None` when the source did not\ngive it, which is not the same as the source saying it is empty.",
+        "properties": {
+          "author": {
+            "description": "Who wrote it, in the source's own spelling of a person.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body": {
+            "description": "What it says, byte for byte as it was written — a trailing newline included.",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "When the source says it was written.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
+          },
+          "updated_at": {
+            "description": "When the source says it last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a person can open it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "body"
+        ],
+        "type": "object"
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every comment on one task, oldest first: what `task comment list` answers with.\n\nAn object rather than a bare list, so a later member — a total, say — is an addition a\nreader already written against this shape can ignore.",
+    "properties": {
+      "comments": {
+        "description": "The task's comments in the order they were written. Empty when it has none.",
+        "items": {
+          "$ref": "#/$defs/Comment"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "comments"
+    ],
+    "title": "CommentList",
     "type": "object"
   },
   "CopyAction": {
@@ -505,6 +638,27 @@ export const runtimeSchemas = {
       }
     ],
     "title": "CredentialLayer"
+  },
+  "DeletedComment": {
+    "$defs": {
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task comment delete` answers with: the id of the comment it removed.",
+    "properties": {
+      "deleted": {
+        "$ref": "#/$defs/NativeId",
+        "description": "The id the comment was removed under, exactly as `list` reported it."
+      }
+    },
+    "required": [
+      "deleted"
+    ],
+    "title": "DeletedComment",
+    "type": "object"
   },
   "DependencyEdge": {
     "$defs": {
@@ -1402,6 +1556,35 @@ export const runtimeSchemas = {
     ],
     "title": "Location"
   },
+  "NewComment": {
+    "$defs": {
+      "CommentBody": {
+        "description": "What a comment says: anything at all, except nothing.\n\nA newtype rather than a `String` checked by whoever happens to read it, because an empty\ncomment is refused by every source this product drives and by the command line before\nany of them: a value of this type is one a source can be handed without asking again.\nEverything else about the text is kept exactly — no trimming, no newline normalisation —\nbecause a body quoting a command or a stack trace is only useful byte for byte.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One comment to add to a task.",
+    "properties": {
+      "author": {
+        "default": null,
+        "description": "Who wrote it, when the caller says.\n\nA source that records the author itself — a hosted service that knows which account\nis signed in — refuses a comment carrying one rather than dropping it, naming why:\nquietly posting under another name than the one asked for is the one wrong answer\nhere.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "body": {
+        "$ref": "#/$defs/CommentBody",
+        "description": "What it says."
+      }
+    },
+    "required": [
+      "body"
+    ],
+    "title": "NewComment",
+    "type": "object"
+  },
   "Origin": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "Where one setting's value came from.\n\nThis is what makes precedence provable rather than asserted: `config show`\nrenders it per setting, so a user sees the same answer a test does.",
@@ -1492,6 +1675,93 @@ export const runtimeSchemas = {
       }
     ],
     "title": "OutputFormat"
+  },
+  "PageOfComment": {
+    "$defs": {
+      "Comment": {
+        "description": "One comment on a task, as its source holds it.\n\n`id` and `body` are always there; every other member is `None` when the source did not\ngive it, which is not the same as the source saying it is empty.",
+        "properties": {
+          "author": {
+            "description": "Who wrote it, in the source's own spelling of a person.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body": {
+            "description": "What it says, byte for byte as it was written — a trailing newline included.",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "When the source says it was written.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
+          },
+          "updated_at": {
+            "description": "When the source says it last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a person can open it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "body"
+        ],
+        "type": "object"
+      },
+      "Cursor": {
+        "description": "A plugin-defined resume token. The engine stores and returns one; it never\ninterprets one.",
+        "type": "string"
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One page of results, and where to pick up.",
+    "properties": {
+      "items": {
+        "description": "This page's items, in the source's stable order.",
+        "items": {
+          "$ref": "#/$defs/Comment"
+        },
+        "type": "array"
+      },
+      "next": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Cursor"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The cursor for the next page, or `None` when the walk is exhausted."
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "title": "Page",
+    "type": "object"
   },
   "PageOfDependencyEdge": {
     "$defs": {
@@ -7800,6 +8070,11 @@ export const runtimeSchemas = {
       "Capabilities": {
         "description": "One source's declared abilities.",
         "properties": {
+          "comments": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source's tasks have comments at all.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*,\nnot which predicate it applies, so the second capability rule does not reach it. A\nsource declaring `Unsupported` is never sent a comment call — the engine reads this\nonce at the handshake and refuses such a call before anything is read, naming the\nsource and its plugin. Adding, editing and removing a comment is a write, so a source\ndeclaring `Native` is written through only when\n[`TaskSource::writes`](crate::TaskSource::writes) says it can be written at all.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates comments says nothing here and is read as the comment-free source it is."
+          },
           "documents": {
             "$ref": "#/$defs/Support",
             "default": "unsupported",
@@ -8079,6 +8354,11 @@ export const runtimeSchemas = {
       "Capabilities": {
         "description": "One source's declared abilities.",
         "properties": {
+          "comments": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source's tasks have comments at all.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*,\nnot which predicate it applies, so the second capability rule does not reach it. A\nsource declaring `Unsupported` is never sent a comment call — the engine reads this\nonce at the handshake and refuses such a call before anything is read, naming the\nsource and its plugin. Adding, editing and removing a comment is a write, so a source\ndeclaring `Native` is written through only when\n[`TaskSource::writes`](crate::TaskSource::writes) says it can be written at all.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates comments says nothing here and is read as the comment-free source it is."
+          },
           "documents": {
             "$ref": "#/$defs/Support",
             "default": "unsupported",
@@ -8791,6 +9071,634 @@ export const runtimeSchemas = {
       "labels"
     ],
     "title": "Task",
+    "type": "object"
+  },
+  "TaskDetail": {
+    "$defs": {
+      "Comment": {
+        "description": "One comment on a task, as its source holds it.\n\n`id` and `body` are always there; every other member is `None` when the source did not\ngive it, which is not the same as the source saying it is empty.",
+        "properties": {
+          "author": {
+            "description": "Who wrote it, in the source's own spelling of a person.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body": {
+            "description": "What it says, byte for byte as it was written — a trailing newline included.",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "When the source says it was written.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
+          },
+          "updated_at": {
+            "description": "When the source says it last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a person can open it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "body"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "Label": {
+        "description": "A tag a source attaches to work.",
+        "properties": {
+          "color": {
+            "description": "The source's own colour for the label, when it has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The source's own opaque identifier."
+          },
+          "name": {
+            "description": "What a user filtering across sources actually types.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "Location": {
+        "description": "Where an entity is, in the one form a consumer can act on without knowing the backend.\n\nExternally tagged with exactly two variants, so the JSON is `{\"url\": \"https://…\"}` or\n`{\"path\": \"/home/…\"}` and a consumer tells them apart by which key is present. A reader\nhanded one of these knows what to *do* with it — open a link, or print a path and read\nthe file out — which is what a bare string could not have said.\n\nIt carries no third case on purpose. `None` on the field is the third case, and it\nmeans the source did not say where the entity is, which is not the same as saying it is\nnowhere.\n\nThis does **not** redefine, replace or derive from the `url` field of [`Task`],\n[`Project`] or [`Document`]: a source that reports a web URL there goes on reporting\nit, and every existing consumer sees exactly what it saw.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "The entity lives at an external website, and this is a link a reader can open.",
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "The entity is a file on the machine the source runs on, and this is that file's\nabsolute path, so a reader can print the path or read the contents out.",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "PageToken": {
+        "description": "The engine's own resume token: one plugin cursor per source stream, opaque to the\ncaller exactly as a plugin's cursor is opaque to the engine.\n\nRendered as lower-case hex, which is not obfuscation — the inside is not a secret —\nbut the one property a token a person copies off a terminal has to have: it survives\na shell. The document underneath holds a plugin's own cursor, and a cursor may hold\nanything at all, so a token spelled as the raw JSON would carry quotes, braces and\nspaces straight into the next command line. Hex has no character a shell reads.\n\n# What a token is and is not checked for\n\nBoth ways in go through [`parse`](Self::parse) — including deserialising one — and\nwhat that establishes is **structural**: the string is hex, the bytes are this\nengine's own resume document, and every state in it is well formed. It does not, and\ncannot, establish that this engine is the one that wrote it. A token is not a\ncredential and carries nothing secret; forging one buys a caller nothing they could\nnot have asked for outright, since every cursor inside is handed straight back to the\nsource that issued it and is validated there.\n\nWhat a forged token *could* do is name a stream this configuration has no source for,\nor resume further into a page than the engine ever pages. Both are refused where the\ntoken meets the query it is resuming, by\n[`Engine`](crate::Engine) — see `EngineError::Token` — because only the engine knows\nwhich sources are configured and what page ceiling each declares.",
+        "type": "string"
+      },
+      "Predicate": {
+        "description": "One thing a query can ask of a source.",
+        "oneOf": [
+          {
+            "const": "label",
+            "description": "Filter by label name.",
+            "type": "string"
+          },
+          {
+            "const": "status",
+            "description": "Filter by status category.",
+            "type": "string"
+          },
+          {
+            "const": "search-title",
+            "description": "Search titles.",
+            "type": "string"
+          },
+          {
+            "const": "search-content",
+            "description": "Search bodies.",
+            "type": "string"
+          },
+          {
+            "const": "project",
+            "description": "Filter by owning project.",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "description": "Read the source's documents.\n\nNot a filter, and reported only as [`unavailable`](SourcePlan::unavailable): a\nsource declaring it has no documents contributes no document rows and there is\nnothing for the engine to narrow, which is the same shape `Project` takes for a\nsource with no project table.",
+            "type": "string"
+          },
+          {
+            "const": "reverse-dependencies",
+            "description": "Walk dependency edges backwards.",
+            "type": "string"
+          }
+        ]
+      },
+      "Qualified": {
+        "description": "One item, under the qualified id the engine addresses it by.\n\nA plugin only ever deals in its own [`NativeId`]; qualifying one is the engine's job,\nso this type is the engine's and a plugin never constructs one.",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "`<source>:<native>`, the form a user types back at the command line."
+          },
+          "item": {
+            "$ref": "#/$defs/Task",
+            "description": "The item as its source reported it, unchanged."
+          }
+        },
+        "required": [
+          "id",
+          "item"
+        ],
+        "type": "object"
+      },
+      "QueryPlan": {
+        "description": "What the engine did, per source.",
+        "properties": {
+          "per_source": {
+            "description": "One entry per source the query reached.",
+            "items": {
+              "$ref": "#/$defs/SourcePlan"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "per_source"
+        ],
+        "type": "object"
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      },
+      "SourceError": {
+        "description": "Why a source could not answer.\n\nEvery variant carries owned data only, so an error survives the JSON-over-stdio\nboundary a subprocess-hosted plugin crosses without losing anything.",
+        "oneOf": [
+          {
+            "description": "The source's configuration block is wrong, or names something absent.",
+            "properties": {
+              "kind": {
+                "const": "config",
+                "type": "string"
+              },
+              "message": {
+                "description": "What is wrong, in a form a user can act on.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The credential was missing, malformed, or rejected.",
+            "properties": {
+              "kind": {
+                "const": "auth",
+                "type": "string"
+              },
+              "message": {
+                "description": "What failed. Never contains the credential itself.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source understood the request and declined it.",
+            "properties": {
+              "kind": {
+                "const": "refused",
+                "type": "string"
+              },
+              "message": {
+                "description": "The source's own reason.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source asked the caller to slow down.\n\nA rate limit is the one refusal whose *reason* an operator cannot guess from the\nkind alone. A hosted service typically has more than one limiter, only some of\nthem are reported by the endpoint an operator would go and check, and the right\nnext step differs between them — so a source that knows which one refused it, and\nwhat it was doing when it did, says so in [`message`](Self::RateLimited::message)\nrather than leaving the operator to infer it and infer it wrong.",
+            "properties": {
+              "kind": {
+                "const": "rate-limited",
+                "type": "string"
+              },
+              "message": {
+                "description": "What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "retry_after_seconds": {
+                "description": "How long the source asked us to wait, when it said.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source could not be reached at all.",
+            "properties": {
+              "kind": {
+                "const": "unavailable",
+                "type": "string"
+              },
+              "message": {
+                "description": "What went wrong reaching it.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source answered with something this interface cannot represent.",
+            "properties": {
+              "kind": {
+                "const": "malformed",
+                "type": "string"
+              },
+              "message": {
+                "description": "What could not be represented.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SourceFailure": {
+        "description": "One source's failure, kept beside the results the other sources returned.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change this source's answer."
+          },
+          "error": {
+            "$ref": "#/$defs/SourceError",
+            "description": "Why."
+          },
+          "source": {
+            "$ref": "#/$defs/SourceName",
+            "description": "The source that failed."
+          }
+        },
+        "required": [
+          "source",
+          "error",
+          "class"
+        ],
+        "type": "object"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "SourcePlan": {
+        "description": "What one source was asked for, and what happened to each predicate.",
+        "properties": {
+          "applied_locally": {
+            "description": "Predicates the engine applied in memory over a wider result set.",
+            "items": {
+              "$ref": "#/$defs/Predicate"
+            },
+            "type": "array"
+          },
+          "emulated": {
+            "description": "Predicates the engine answered by a bounded scan of the source.",
+            "items": {
+              "$ref": "#/$defs/Predicate"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "description": "The plugin kind behind it.",
+            "type": "string"
+          },
+          "pages_fetched": {
+            "description": "How many pages the engine pulled from this source to answer.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pushed_down": {
+            "description": "Predicates the source applied itself.\n\nThe four predicate vectors below partition one set of outcomes, and nothing in\nthe type says so: a `Predicate` could appear in two of them at once, or in none.\nOne `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that\nunrepresentable. See the directive below for why it stays as it is.",
+            "items": {
+              "$ref": "#/$defs/Predicate"
+            },
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/$defs/SourceName",
+            "description": "The configured source this describes."
+          },
+          "unavailable": {
+            "description": "Predicates neither side could answer, so the result is unconstrained.\n\nNever [`Predicate::ReverseDependencies`]: `DependencySupport` has no\nunsupported variant, so a reverse-dependency read is answered natively or\nemulated by the engine's bounded scan, never abandoned. The type cannot say\nso — see the directive below.",
+            "items": {
+              "$ref": "#/$defs/Predicate"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "source",
+          "kind",
+          "pushed_down",
+          "applied_locally",
+          "emulated",
+          "unavailable",
+          "pages_fetched"
+        ],
+        "type": "object"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet queued.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Queued, not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      },
+      "Task": {
+        "description": "One unit of work as a source reports it.",
+        "properties": {
+          "content": {
+            "description": "The long-form body, when the source has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When the source says the task was created.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The source's own opaque identifier."
+          },
+          "labels": {
+            "description": "Inline rather than by id: a source returning a task already knows them.",
+            "items": {
+              "$ref": "#/$defs/Label"
+            },
+            "type": "array"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Location"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Where this task is, when the source says (see [`Location`]).\n\nAbsent by default, so a source that predates this field — and every source that\nsimply does not say — reads as `None`, which means *the source did not say where\nthis is* rather than *this is nowhere*. It neither replaces nor derives from\n[`url`](Self::url), which goes on meaning exactly what it always did."
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "default": {},
+            "description": "Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it.",
+            "type": "object"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NativeId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`None` is a first-class case — an orphan task — not an edge case."
+          },
+          "repositories": {
+            "default": [],
+            "description": "Normalized repository origins this task concerns, in source order and without\nrepeats.",
+            "items": {
+              "$ref": "#/$defs/Repository"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/$defs/Status",
+            "description": "The source's status, normalised and preserved."
+          },
+          "title": {
+            "description": "The one-line summary a user recognises the task by.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the source says the task last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a human can open this task.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "labels"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One task as `task show` reports it: the response every show verb answers with, and the\ntask's comments beside it.\n\nThe response is flattened rather than nested, so a reader of `task show --json` written\nbefore comments existed reads exactly the members it read before.",
+    "properties": {
+      "comments": {
+        "description": "The task's comments, oldest first, for a source whose tasks have comments.\n\n**Absent** rather than empty for a source declaring none, for a task that was not\nfound, and for a task whose comments could not be read — the last with the failure in\nthe response's `errors`, a source refusing the read (a GitHub draft, which has none)\nincluded, so showing such a task is a partial answer that says why. An empty list says\nthe source has comments and this task holds none, which is a different thing to tell a\nreader.",
+        "items": {
+          "$ref": "#/$defs/Comment"
+        },
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "errors": {
+        "description": "Sources that failed. One failure never fails the whole query.",
+        "items": {
+          "$ref": "#/$defs/SourceFailure"
+        },
+        "type": "array"
+      },
+      "items": {
+        "description": "This page's items, already qualified and merged across sources.",
+        "items": {
+          "$ref": "#/$defs/Qualified"
+        },
+        "type": "array"
+      },
+      "next": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PageToken"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Where to resume, or `None` when every source is exhausted."
+      },
+      "plan": {
+        "$ref": "#/$defs/QueryPlan",
+        "description": "What each source was asked to do, and what the engine did instead."
+      }
+    },
+    "required": [
+      "items",
+      "plan",
+      "errors"
+    ],
+    "title": "TaskDetail",
     "type": "object"
   },
   "TaskQuery": {

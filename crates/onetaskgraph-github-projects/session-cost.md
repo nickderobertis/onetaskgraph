@@ -236,6 +236,34 @@ and it is recorded here as an observation. It is **not** what chose the value �
 deliberately sized high, whose job is to refuse a run rather than to describe one, must not
 be what picks a production constant.
 
+## Comments on a task, and what the five documents behind them moved
+
+A task's comments are its issue's comments, so this source now sends five documents it did
+not: `graphql::ISSUE_COMMENTS` and `graphql::COMMENT_ISSUE`, which are queries, and
+`ADD_COMMENT`, `UPDATE_COMMENT` and `DELETE_COMMENT`, which are mutations. The journey drives
+none of them against the board — nothing it proves reaches a comment — so what moved is the
+two things the journey does for **every** document this source sends.
+
+In the two quantities this file measures offline, in the record's own frame:
+
+|                | before | after  |
+| -------------- | -----: | -----: |
+| **requests**   |    100 |    103 |
+| **node count** | 222516 | 222616 |
+
+**Three requests more, and 100 worst-case nodes.** Two of the requests are the node-count and
+point-cost reconciliation asking GitHub about the two new query documents —
+`reading a task's comments` at 100 nodes, which is its one `comments(first:)` connection and
+nothing multiplied through it, and `reading which issue a comment is on` at none. The third is
+the mutation schema introspection: three mutations bring three input and three payload types,
+thirty-four types in all, and at GitHub's cap of two capped selections a document that is
+**nine** documents rather than eight. The three mutations are not reconciled, because
+`rateLimit` cannot be asked about a mutation; `tests/point_cost.rs` pins each of the five at
+one point. Every other row of the record is byte-for-byte what it was.
+
+The estimate in `tests/journey/budget.rs` moves with the record, as it is built to: **934
+points to 941** against the GraphQL budget, and the REST estimate unchanged at 5 requests.
+
 ## The estimate the gate is sized from, and what it is not
 
 `tests/journey/budget.rs` derives what this session will cost each of GitHub's two budgets

@@ -184,6 +184,22 @@ NOT_A_STORE = {
         "this check exists to force is already forced there — by an exact set equality "
         "rather than by two rows differing."
     ),
+    "crates/onetaskgraph-github-projects/tests/fixtures/comments.json": (
+        "Not a store: no query filters or titles what it holds. It pins the shape GitHub answers "
+        "an issue's `comments` connection in — a comment has an id and a body and no title, and "
+        "a comment read selects by the task it is on alone — and `tests/schema.rs` validates it "
+        "against the pinned schema beside every other response this plugin reads, while "
+        "`tests/plugin.rs` drives the plugin's own comment walk over a two-page board whose "
+        "comments differ in author, times and body."
+    ),
+    "crates/onetaskgraph-linear/tests/fixtures/comments.json": (
+        "Not a store: no query filters or titles what it holds. It pins the shape Linear answers "
+        "an issue's `comments` connection in — a comment has an id and a body and no title, and "
+        "a comment read selects by the issue it is on alone — and "
+        "`pinned_schema_checks_selected_fields_arguments_and_fixture_keys` holds its keys to the "
+        "pinned schema, while `tests/plugin.rs` reads it back through the plugin's own parsing "
+        "and drives the walk over two pages whose comments differ in author, times and body."
+    ),
 }
 
 root = pathlib.Path(".")

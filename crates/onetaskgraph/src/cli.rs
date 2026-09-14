@@ -10,7 +10,7 @@ use std::num::NonZeroU32;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use onetaskgraph_core::config::{Layer, Origin, Setting, SettingPath, value_from_text};
 use onetaskgraph_core::{OutputFormat, PluginKind, SearchKind};
-use onetaskgraph_plugin_api::{Direction, StatusCategory, TextFields};
+use onetaskgraph_plugin_api::{Direction, NativeId, StatusCategory, TextFields};
 use serde_json::Value;
 
 /// One interface over the ticketing systems your work lives in.
@@ -114,6 +114,105 @@ pub enum TaskCommand {
     Deps(DependencyArgs),
     /// Copy tasks into another configured source, by qualified id.
     Copy(TaskCopyArgs),
+    /// Add, list, edit and delete one task's comments.
+    ///
+    /// A copy never reads or writes a comment, at either end: these verbs are the only way
+    /// one is written.
+    Comment {
+        #[command(subcommand)]
+        command: CommentCommand,
+    },
+}
+
+/// What `onetaskgraph task comment` can do.
+///
+/// A body is read from `--body-file`, or from standard input when that flag is absent, and
+/// never from a word of the command line: a comment quoting a command must not pass through
+/// a shell to reach the source.
+#[derive(Debug, Subcommand)]
+pub enum CommentCommand {
+    /// Add a comment to a task. The body comes from --body-file, or from standard input.
+    Add(CommentAddArgs),
+    /// List a task's comments, oldest first.
+    List(CommentListArgs),
+    /// Replace one comment's body. The body comes from --body-file, or from standard input.
+    Edit(CommentEditArgs),
+    /// Delete one comment from a task.
+    Delete(CommentDeleteArgs),
+}
+
+/// `onetaskgraph task comment add`.
+#[derive(Debug, Args)]
+pub struct CommentAddArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `ShowArgs::id`: a `GlobalId`
+    /// here would refuse an unqualified id as a bad invocation under clap's wording, and
+    /// `qualified` in `main` converts it immediately with the next action a user needs.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// Read the body from this file rather than from standard input, byte for byte.
+    #[arg(long = "body-file", value_name = "PATH")]
+    pub body_file: Option<std::path::PathBuf>,
+
+    /// Who wrote it. A source that records the author itself refuses this, saying why.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — an author is each source's own
+    /// spelling of a person, so there is no narrower type every source agrees on; the
+    /// source refuses what it cannot record, naming why, as `NewComment::author` records.
+    #[arg(long, value_name = "NAME")]
+    pub author: Option<String>,
+}
+
+/// `onetaskgraph task comment list`.
+#[derive(Debug, Args)]
+pub struct CommentListArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `CommentAddArgs::id`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+}
+
+/// `onetaskgraph task comment edit`.
+#[derive(Debug, Args)]
+pub struct CommentEditArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `CommentAddArgs::id`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// The comment's own id, exactly as `list` or `add` reported it.
+    #[arg(value_name = "COMMENT-ID", value_parser = native_id)]
+    pub comment_id: NativeId,
+
+    /// Read the new body from this file rather than from standard input, byte for byte.
+    #[arg(long = "body-file", value_name = "PATH")]
+    pub body_file: Option<std::path::PathBuf>,
+}
+
+/// `onetaskgraph task comment delete`.
+#[derive(Debug, Args)]
+pub struct CommentDeleteArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `CommentAddArgs::id`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// The comment's own id, exactly as `list` or `add` reported it.
+    #[arg(value_name = "COMMENT-ID", value_parser = native_id)]
+    pub comment_id: NativeId,
+}
+
+/// A source's own id, as a command line hands one over.
+///
+/// Never refused: a native id is whatever its source issued, so the one thing this does is
+/// give the value the contract's own type where it enters.
+fn native_id(value: &str) -> Result<NativeId, std::convert::Infallible> {
+    Ok(NativeId::from(value))
 }
 
 /// What `onetaskgraph project` can do.

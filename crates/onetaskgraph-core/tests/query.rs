@@ -587,6 +587,7 @@ impl TaskSource for Rendezvous {
         Capabilities {
             projects: Support::Native,
             documents: Support::Unsupported,
+            comments: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -718,6 +719,7 @@ impl TaskSource for Stuck {
         Capabilities {
             projects: Support::Native,
             documents: Support::Unsupported,
+            comments: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -840,6 +842,7 @@ impl TaskSource for StuckEdges {
         Capabilities {
             projects: Support::Native,
             documents: Support::Unsupported,
+            comments: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -1309,6 +1312,7 @@ impl TaskSource for Recording {
         Capabilities {
             projects: Support::Native,
             documents: Support::Unsupported,
+            comments: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

@@ -24,6 +24,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod comments;
 mod copy;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: it drives the binary against a loopback fixture board with no
