@@ -335,10 +335,6 @@ export class OnetaskgraphClient {
             return;
           }
         }
-        if (code !== 0 && (code !== 4 || !partialResponseCommands.has(command))) {
-          reject(new OnetaskgraphExecutionError(code, stderr));
-          return;
-        }
         // The command-specific runtime schema has established T before this boundary returns it.
         resolvePromise(value as T);
       });
