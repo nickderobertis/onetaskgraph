@@ -39,8 +39,10 @@ RESPONSE_ROOTS = {
 # named: a document read answers with one, and acting on it means switching on which of its
 # two keys is present. `DocumentQuery` and `PageOfDocument` are the plugin-facing halves of
 # the same contract, which the SDK owes a caller a model for whether or not a verb returns
-# one directly.
+# one directly. `FailureDocument` is what any verb writes to stdout when it exits 1 under
+# `--json`, which no verb's response root describes.
 CONTRACT_ROOTS = {
+    "FailureDocument",
     "SourceFailure",
     "QueryPlan",
     "GlobalId",

@@ -2,14 +2,15 @@
 //! the schema bundle both SDKs are generated from.
 
 use onetaskgraph_core::{
-    GlobalId, PageToken, Predicate, QueryPlan, QueryResponse, SCHEMA_BUNDLE_VERSION, SourceFailure,
-    SourcePlan, plugin_for, plugin_kinds, registry, schema_bundle,
+    ConfigError, EngineError, Failure, FailureClass, FailureDocument, GlobalId, LeftBehind,
+    PageToken, Predicate, QueryPlan, QueryResponse, SCHEMA_BUNDLE_VERSION, SourceFailure,
+    SourcePlan, classify, plugin_for, plugin_kinds, registry, schema_bundle,
 };
 use onetaskgraph_plugin_api::{
     NativeId, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
 };
 use secrecy::SecretString;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// No source in this crate's tests needs a credential.
 struct NoSecrets;
@@ -210,6 +211,7 @@ const PUBLISHED_BUNDLES: &[(u32, Published)] = &[
     (9, Published::Names(&NINTH_BUNDLE_ROOTS)),
     (10, Published::Shapes(&TENTH_BUNDLE_SHAPE)),
     (11, Published::Shapes(&ELEVENTH_BUNDLE_SHAPE)),
+    (12, Published::Shapes(&TWELFTH_BUNDLE_SHAPE)),
 ];
 
 /// One root's schema rendered so that two equal documents render equally.
@@ -327,14 +329,14 @@ const TENTH_BUNDLE_SHAPE: [(&str, u64); 58] = [
 
 /// The shape version 11 of the bundle publishes.
 ///
-/// The one root that moved is `CopyReport`, which gained `spent`: what a copy spent,
-/// summed over the sources in the command that meter their own requests, and absent when
-/// none does. Every other root is byte-for-byte version 10's.
-const ELEVENTH_BUNDLE_SHAPE: [(&str, u64); 58] = [
+/// A failed command's machine-readable answer: `FailureDocument`, and the `Failure` and
+/// `FailureClass` inside it, are new roots, and every `SourceFailure` — so every query
+/// response carrying one — gains the `class` a caller branches on.
+const ELEVENTH_BUNDLE_SHAPE: [(&str, u64); 61] = [
     ("Capabilities", 0xa10633f78133cd5f),
     ("CopyAction", 0x92821be0daa46894),
     ("CopyOutcome", 0xefcf23cfbd5dde3b),
-    ("CopyReport", 0xcdc14138fa92e9c4),
+    ("CopyReport", 0xd45b707b51401c93),
     ("CredentialLayer", 0x54cdffe467a3b7f1),
     ("DependencyEdge", 0x965fcb2880071dcc),
     ("DependencyEndpoint", 0x52371a0138569604),
@@ -343,6 +345,9 @@ const ELEVENTH_BUNDLE_SHAPE: [(&str, u64); 58] = [
     ("Document", 0x43f55b02791ea15b),
     ("DocumentQuery", 0xab8ca467012e1a12),
     ("EffectiveConfig", 0xa41a3361af17368f),
+    ("Failure", 0x19dbdae11bff9082),
+    ("FailureClass", 0x7fcbfc34989aa444),
+    ("FailureDocument", 0xbcf04caf4ce10fc0),
     ("GlobalId", 0xe692661021d9c53e),
     ("Health", 0x4a65ae032f76c6ca),
     ("ItemKind", 0x75db1aa08ed04b2f),
@@ -367,12 +372,12 @@ const ELEVENTH_BUNDLE_SHAPE: [(&str, u64); 58] = [
     ("QualifiedProject", 0x78c2101cd2a90b0d),
     ("QualifiedTask", 0xb6c4cf33ff76e1b2),
     ("QueryPlan", 0x5cd046eed149f89b),
-    ("QueryResponseOfQualifiedDocument", 0xea3687e0592dde61),
-    ("QueryResponseOfQualifiedEdge", 0x747c236f676fa46a),
-    ("QueryResponseOfQualifiedLabel", 0x634a582d4af1fad0),
-    ("QueryResponseOfQualifiedProject", 0xd6017091147e11c7),
-    ("QueryResponseOfQualifiedTask", 0x2640335859efe43e),
-    ("QueryResponseOfSearchHit", 0x6d7372360674cc65),
+    ("QueryResponseOfQualifiedDocument", 0x1d9b28a5b989e218),
+    ("QueryResponseOfQualifiedEdge", 0x9338c43bad99c95b),
+    ("QueryResponseOfQualifiedLabel", 0xb94991dc4cfafb1b),
+    ("QueryResponseOfQualifiedProject", 0x7968032f79a9420c),
+    ("QueryResponseOfQualifiedTask", 0xa472eeadd66bcaf3),
+    ("QueryResponseOfSearchHit", 0xad628b6a103df0c8),
     ("Repository", 0x98147ade92ced0f0),
     ("ResolvedCredential", 0x14a23b081a4e8d10),
     ("SearchHit", 0xb3b5470d71a6d866),
@@ -380,7 +385,76 @@ const ELEVENTH_BUNDLE_SHAPE: [(&str, u64); 58] = [
     ("SecretsReport", 0x245d50b08721b73d),
     ("Setting", 0xf593f9ae902cba68),
     ("SourceError", 0x33872c91770f86da),
-    ("SourceFailure", 0x452bd4b53ef4d74c),
+    ("SourceFailure", 0xb30fd488e61b4def),
+    ("SourceListing", 0x006592f26f65b8b6),
+    ("SourceListings", 0x67cd161375100dcb),
+    ("SourcePlan", 0xd0c5548abc7d7223),
+    ("Status", 0xd14c325a52e464f6),
+    ("StatusCategory", 0xc866ba4d0d422da0),
+    ("Task", 0xe39a3442bae8ceda),
+    ("TaskQuery", 0x963c214c94159671),
+    ("TextFields", 0x7240bd05f9beff93),
+];
+
+/// The shape version 12 of the bundle publishes.
+///
+/// `CopyReport` gained `spent`: what a copy spent, summed over the sources in the command
+/// that meter their own requests, and absent when none does. Every other root is
+/// byte-for-byte version 11's.
+const TWELFTH_BUNDLE_SHAPE: [(&str, u64); 61] = [
+    ("Capabilities", 0xa10633f78133cd5f),
+    ("CopyAction", 0x92821be0daa46894),
+    ("CopyOutcome", 0xefcf23cfbd5dde3b),
+    ("CopyReport", 0xcdc14138fa92e9c4),
+    ("CredentialLayer", 0x54cdffe467a3b7f1),
+    ("DependencyEdge", 0x965fcb2880071dcc),
+    ("DependencyEndpoint", 0x52371a0138569604),
+    ("DependencyKind", 0x62a3106e8479701a),
+    ("Direction", 0x497cbce272a8a5bb),
+    ("Document", 0x43f55b02791ea15b),
+    ("DocumentQuery", 0xab8ca467012e1a12),
+    ("EffectiveConfig", 0xa41a3361af17368f),
+    ("Failure", 0x19dbdae11bff9082),
+    ("FailureClass", 0x7fcbfc34989aa444),
+    ("FailureDocument", 0xbcf04caf4ce10fc0),
+    ("GlobalId", 0xe692661021d9c53e),
+    ("Health", 0x4a65ae032f76c6ca),
+    ("ItemKind", 0x75db1aa08ed04b2f),
+    ("Label", 0x07555503d77a90c7),
+    ("Location", 0x0690620b049c989a),
+    ("Origin", 0x653235a0d0c3576e),
+    ("OutputFormat", 0xa8a85cfd04d98684),
+    ("PageOfDependencyEdge", 0x529f3ea40c6b71c9),
+    ("PageOfDocument", 0x985c78b3f3c93eeb),
+    ("PageOfLabel", 0xd6110ddeeaaa78e8),
+    ("PageOfProject", 0x41abc46f0e84e0d7),
+    ("PageOfTask", 0x0921303f42a6cb4e),
+    ("PageRequest", 0x6c7be3975028b78c),
+    ("PageToken", 0xc685683af2c78c39),
+    ("Predicate", 0x2c7629f85d039fc6),
+    ("Project", 0x27060ceb590bd2d1),
+    ("ProjectQuery", 0x4ab0fa6b012cc9bd),
+    ("QualifiedDocument", 0x4e539a8ce7b72c47),
+    ("QualifiedEdge", 0xe24f9b34b618df17),
+    ("QualifiedEndpoint", 0x7bc0f5163c4c8594),
+    ("QualifiedLabel", 0x7ac91fcfd8f41e30),
+    ("QualifiedProject", 0x78c2101cd2a90b0d),
+    ("QualifiedTask", 0xb6c4cf33ff76e1b2),
+    ("QueryPlan", 0x5cd046eed149f89b),
+    ("QueryResponseOfQualifiedDocument", 0x1d9b28a5b989e218),
+    ("QueryResponseOfQualifiedEdge", 0x9338c43bad99c95b),
+    ("QueryResponseOfQualifiedLabel", 0xb94991dc4cfafb1b),
+    ("QueryResponseOfQualifiedProject", 0x7968032f79a9420c),
+    ("QueryResponseOfQualifiedTask", 0xa472eeadd66bcaf3),
+    ("QueryResponseOfSearchHit", 0xad628b6a103df0c8),
+    ("Repository", 0x98147ade92ced0f0),
+    ("ResolvedCredential", 0x14a23b081a4e8d10),
+    ("SearchHit", 0xb3b5470d71a6d866),
+    ("SearchKind", 0xc4d2cd105ad4b849),
+    ("SecretsReport", 0x245d50b08721b73d),
+    ("Setting", 0xf593f9ae902cba68),
+    ("SourceError", 0x33872c91770f86da),
+    ("SourceFailure", 0xb30fd488e61b4def),
     ("SourceListing", 0x006592f26f65b8b6),
     ("SourceListings", 0x67cd161375100dcb),
     ("SourcePlan", 0xd0c5548abc7d7223),
@@ -1076,4 +1150,210 @@ fn every_predicate_serialises_as_kebab_case_so_explain_output_is_stable() {
             predicate
         );
     }
+}
+
+#[test]
+fn a_failure_is_refused_unless_waiting_could_change_the_answer() {
+    let message = || "said so".to_owned();
+    for (error, class) in [
+        (
+            SourceError::RateLimited {
+                retry_after_seconds: Some(30),
+                message: None,
+            },
+            FailureClass::Transient,
+        ),
+        (
+            SourceError::Unavailable { message: message() },
+            FailureClass::Transient,
+        ),
+        (
+            SourceError::Refused { message: message() },
+            FailureClass::Refused,
+        ),
+        (
+            SourceError::Config { message: message() },
+            FailureClass::Refused,
+        ),
+        (
+            SourceError::Auth { message: message() },
+            FailureClass::Refused,
+        ),
+        (
+            SourceError::Malformed { message: message() },
+            FailureClass::Refused,
+        ),
+    ] {
+        assert_eq!(classify(Some(&error)), class, "{error:?}");
+
+        // A partial answer's entry carries the class the one mapping gives, beside the
+        // error itself — and a document read back in has it recomputed, not trusted.
+        let failure = SourceFailure {
+            source: source("work"),
+            error: error.clone(),
+        };
+        let written = serde_json::to_value(&failure).expect("an entry renders");
+        assert_eq!(written["class"], json!(class), "{written}");
+        let mut forged = written.clone();
+        forged["class"] = json!(if class == FailureClass::Refused {
+            "transient"
+        } else {
+            "refused"
+        });
+        let read: SourceFailure = serde_json::from_value(forged).expect("an entry reads");
+        assert_eq!(
+            serde_json::to_value(&read).expect("renders"),
+            written,
+            "a class read in is recomputed from the error it classifies"
+        );
+    }
+    // No source caused it: the engine decided, and it will decide the same way again.
+    assert_eq!(classify(None), FailureClass::Refused);
+}
+
+#[test]
+fn a_failure_document_names_what_failed_where_and_takes_a_wrapped_failures_class() {
+    let document = |failure: Failure| {
+        serde_json::to_value(FailureDocument { failure }).expect("a failure document renders")
+    };
+
+    // Nothing a source said: refused, with the engine's own name for it and no source.
+    let missing = EngineError::NoSuchItem {
+        id: "work:NOPE".to_owned(),
+    };
+    assert_eq!(
+        document(Failure::from(&missing)),
+        json!({"failure": {"class": "refused", "kind": "no-such-item", "source": null,
+                           "message": missing.to_string(), "retry_after_seconds": null}})
+    );
+
+    // A failure about one configured source names it, although no source error caused it.
+    let unwritable = EngineError::NotWritable {
+        name: "board".to_owned(),
+        kind: "in-memory".to_owned(),
+    };
+    assert_eq!(
+        document(Failure::from(&unwritable))["failure"],
+        json!({"class": "refused", "kind": "not-writable", "source": "board",
+               "message": unwritable.to_string(), "retry_after_seconds": null})
+    );
+
+    // A wrapper takes the class and kind of what it wraps, however deep — here a copy that
+    // could not be undone, around a source refusing it for a rate limit that named a wait.
+    // The message is still the whole failure's, which is what the stderr line carries.
+    let limited = EngineError::CopyNotUndone {
+        error: Box::new(EngineError::SourceRefused {
+            name: "board".to_owned(),
+            error: SourceError::RateLimited {
+                retry_after_seconds: Some(90),
+                message: Some("the primary limit".to_owned()),
+            },
+        }),
+        left_behind: LeftBehind::new("board:ITEM-1".parse().expect("a qualified id")),
+        refusal: SourceError::Refused {
+            message: "not yours to delete".to_owned(),
+        },
+    };
+    assert_eq!(
+        document(Failure::from(&limited))["failure"],
+        json!({"class": "transient", "kind": "rate-limited", "source": "board",
+               "message": limited.to_string(), "retry_after_seconds": 90})
+    );
+
+    let unbuilt = EngineError::DestinationUnavailable {
+        name: "notes".to_owned(),
+        error: SourceError::Unavailable {
+            message: "connection refused".to_owned(),
+        },
+    };
+    let unbuilt_failure = document(Failure::from(&unbuilt));
+    assert_eq!(unbuilt_failure["failure"]["class"], "transient");
+    assert_eq!(unbuilt_failure["failure"]["kind"], "unavailable");
+    assert_eq!(unbuilt_failure["failure"]["source"], "notes");
+
+    // Every engine failure no source caused, by the name a caller sees.
+    for (error, kind) in [
+        (
+            EngineError::UnknownSource {
+                name: "elsewhere".to_owned(),
+                configured: "work".to_owned(),
+            },
+            "unknown-source",
+        ),
+        (
+            EngineError::Token {
+                message: "not this query's".to_owned(),
+            },
+            "page-token",
+        ),
+        (EngineError::NoSources, "no-sources"),
+        (
+            EngineError::NoDocuments {
+                name: "notes".to_owned(),
+                kind: "local-md".to_owned(),
+            },
+            "no-documents",
+        ),
+        (
+            EngineError::StaleOrigin {
+                item: "plans:A".to_owned(),
+                origin: "board:ITEM-1".to_owned(),
+            },
+            "stale-origin",
+        ),
+        (
+            EngineError::NotAMember {
+                id: "plans:T-9".parse().expect("a qualified id"),
+                projects: vec!["plans:P-1".parse().expect("a qualified id")],
+            },
+            "not-a-member",
+        ),
+        (
+            EngineError::UnrecordedMember {
+                item: "plans:T-2".parse().expect("a qualified id"),
+                member: "plans:T-1".parse().expect("a qualified id"),
+                destination: source("board"),
+            },
+            "unrecorded-member",
+        ),
+    ] {
+        let rendered = document(Failure::from(&error));
+        assert_eq!(rendered["failure"]["class"], "refused", "{error:?}");
+        assert_eq!(rendered["failure"]["kind"], kind, "{error:?}");
+    }
+
+    // A configuration this product will not run on, and a failure the command decided.
+    for (error, kind) in [
+        (
+            ConfigError::Syntax {
+                path: "onetaskgraph.yaml".into(),
+                message: "bad".to_owned(),
+            },
+            "config-syntax",
+        ),
+        (
+            ConfigError::Read {
+                path: "onetaskgraph.yaml".into(),
+                message: "denied".to_owned(),
+            },
+            "config-read",
+        ),
+        (
+            ConfigError::Setting {
+                key: "page_size".to_owned(),
+                message: "not a number".to_owned(),
+                next: "use one".to_owned(),
+            },
+            "config-setting",
+        ),
+    ] {
+        assert_eq!(
+            document(Failure::from(&error))["failure"],
+            json!({"class": "refused", "kind": kind, "source": null,
+                   "message": error.to_string(), "retry_after_seconds": null})
+        );
+    }
+    let decided = Failure::decided("invalid-id", "not qualified");
+    assert_eq!(decided.message(), "not qualified");
+    assert_eq!(document(decided)["failure"]["kind"], "invalid-id");
 }

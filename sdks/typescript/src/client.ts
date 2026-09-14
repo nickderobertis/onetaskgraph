@@ -282,7 +282,13 @@ export class OnetaskgraphClient {
       });
       child.on("error", () => reject(new OnetaskgraphExecutionError(null)));
       child.on("close", (code) => {
-        if (stdout.length === 0) {
+        // An exit this command does not answer with is an execution failure whatever
+        // stdout holds: under `--json` a failed command also writes its failure document
+        // there, which is not the response this command's schema describes.
+        if (
+          stdout.length === 0 ||
+          (code !== 0 && (code !== 4 || !partialResponseCommands.has(command)))
+        ) {
           reject(new OnetaskgraphExecutionError(code, stderr));
           return;
         }
@@ -329,10 +335,6 @@ export class OnetaskgraphClient {
             reject(new OnetaskgraphValidationError(command, validate.errors));
             return;
           }
-        }
-        if (code !== 0 && (code !== 4 || !partialResponseCommands.has(command))) {
-          reject(new OnetaskgraphExecutionError(code, stderr));
-          return;
         }
         // The command-specific runtime schema has established T before this boundary returns it.
         resolvePromise(value as T);

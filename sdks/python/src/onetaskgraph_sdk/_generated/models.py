@@ -3,6 +3,7 @@ from .copy_report import CopyReport as CopyReport
 from .document import Document as Document
 from .document_query import DocumentQuery as DocumentQuery
 from .effective_config import EffectiveConfig as EffectiveConfig
+from .failure_document import FailureDocument as FailureDocument
 from .global_id import GlobalId as GlobalId
 from .location import Location as Location
 from .page_of_document import Page as PageOfDocument

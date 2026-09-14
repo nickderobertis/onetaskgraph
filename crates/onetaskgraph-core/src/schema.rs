@@ -18,9 +18,9 @@ use crate::config::{EffectiveConfig, Origin, OutputFormat, Setting};
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::{
-    CopyAction, CopyOutcome, CopyReport, GlobalId, PageToken, Predicate, Qualified, QualifiedEdge,
-    QualifiedEndpoint, QueryPlan, QueryResponse, SearchHit, SearchKind, SourceFailure,
-    SourceListing, SourcePlan,
+    CopyAction, CopyOutcome, CopyReport, Failure, FailureClass, FailureDocument, GlobalId,
+    PageToken, Predicate, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse,
+    SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -36,7 +36,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 11;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 12;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -89,6 +89,11 @@ pub fn schema_bundle() -> Value {
     roots.insert("SourcePlan", schema_for!(SourcePlan));
     roots.insert("Predicate", schema_for!(Predicate));
     roots.insert("SourceFailure", schema_for!(SourceFailure));
+    // What a command writes to standard output when it exits `1` under machine output,
+    // and the two types inside it a caller branches on by name.
+    roots.insert("FailureDocument", schema_for!(FailureDocument));
+    roots.insert("Failure", schema_for!(Failure));
+    roots.insert("FailureClass", schema_for!(FailureClass));
     roots.insert("QualifiedTask", schema_for!(Qualified<Task>));
     roots.insert("QualifiedProject", schema_for!(Qualified<Project>));
     roots.insert("QualifiedDocument", schema_for!(Qualified<Document>));

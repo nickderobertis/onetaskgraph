@@ -1310,6 +1310,97 @@ fn a_status_this_integration_cannot_hold_is_refused_naming_it_and_the_source() {
     assert!(complaint.contains("sub-issue"), "{complaint}");
 }
 
+// llmlint: ignore-block[e2e_not_mocked, expensive_tests_stay_behind_their_own_edge] This
+// contract explicitly requires each case through the compiled onetaskgraph binary against
+// the repository's loopback board. The binary boundary lives in this application project,
+// and the loopback board is the real subprocess double this repository uses for GitHub
+// Projects journeys without spending a credential or reaching a third party.
+#[test]
+fn an_unknown_status_needs_one_board_option_and_round_trips_through_it() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    for word in ["failed", "provider-failed", "parked", "skipped"] {
+        std::fs::write(
+            root.join(format!("tasks/{word}.md")),
+            format!("---\ntitle: {word}\nstatus: {word}\n---\n{word}\n"),
+        )
+        .unwrap();
+    }
+    let (mut config, _) = github_projects_with_board(&sandbox);
+    config["status_mapping"]["unknown"] = json!("Shipped");
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{"root":root}},
+        "board": {"plugin":"github-projects","config":config}
+    })));
+
+    for word in ["failed", "provider-failed", "parked", "skipped"] {
+        let copied = reported(&ok(
+            &sandbox,
+            &[
+                "task",
+                "copy",
+                &format!("plans:{word}"),
+                "--to",
+                "board",
+                "--json",
+            ],
+        ));
+        let id = copied[0].1.as_str().expect("a destination id");
+        assert_eq!(
+            shown(&sandbox, "task", id)["status"],
+            json!({"category":"unknown","name":"Shipped"}),
+            "{word} lands on the configured option and reads back under that option's name"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_status_disabled_by_default_names_its_only_settling_remedy() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plans");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    std::fs::write(
+        root.join("tasks/failed.md"),
+        "---\ntitle: Failed deployment\nstatus: failed\n---\nfailed\n",
+    )
+    .unwrap();
+    let (config, _) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{"root":root}},
+        "board": {"plugin":"github-projects","config":config}
+    })));
+
+    let complaint = refused(
+        &sandbox,
+        &["task", "copy", "plans:failed", "--to", "board"],
+        1,
+    );
+    assert!(complaint.contains("board Status option"), "{complaint}");
+    assert!(
+        complaint.contains("every word classified unknown"),
+        "{complaint}"
+    );
+    assert!(!complaint.contains("closed state"), "{complaint}");
+}
+
+#[test]
+fn an_unknown_status_cannot_be_configured_as_a_closed_state() {
+    for (closed, read_back) in [("completed", "done"), ("not-planned", "cancelled")] {
+        let sandbox = Sandbox::new();
+        let (mut config, _) = github_projects_with_board(&sandbox);
+        config["status_mapping"]["unknown"] = json!({"closed":closed});
+        sandbox.project_document(&document(&json!({
+            "board": {"plugin":"github-projects","config":config}
+        })));
+
+        let complaint = refused(&sandbox, &["task", "list", "--source", "board"], 4);
+        assert!(complaint.contains("status_mapping.unknown"), "{complaint}");
+        assert!(complaint.contains(read_back), "{complaint}");
+    }
+}
+// llmlint: ignore-end[e2e_not_mocked, expensive_tests_stay_behind_their_own_edge]
+
 #[test]
 fn a_copy_into_a_board_settles_instead_of_reporting_a_change_on_every_run() {
     // Writing `done` closes the issue, and writing a non-terminal status over a closed one

@@ -4116,6 +4116,18 @@ async fn an_unknown_status_category_key_names_the_instance() {
 }
 
 #[tokio::test]
+async fn unknown_cannot_target_a_closed_state_that_reads_back_as_another_category() {
+    for (closed, read_back) in [("completed", "done"), ("not-planned", "cancelled")] {
+        let message = build_refusal(json!({"owner":"octo-org","project_number":7,
+            "endpoint":"https://api.github.com/graphql",
+            "status_mapping":{"unknown":{"closed":closed}}}));
+        assert!(message.contains("status_mapping.unknown"), "{message}");
+        assert!(message.contains(read_back), "{message}");
+        assert!(message.contains("board Status option"), "{message}");
+    }
+}
+
+#[tokio::test]
 async fn two_categories_cannot_share_one_board_option() {
     let message = build_refusal(json!({"owner":"octo-org","project_number":7,
         "endpoint":"https://api.github.com/graphql",

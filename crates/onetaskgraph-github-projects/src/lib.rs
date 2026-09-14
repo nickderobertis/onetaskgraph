@@ -73,6 +73,14 @@
 //! and a mistake destroys every item's status. A status this board cannot represent is a
 //! refusal naming the status and the instance instead.
 //!
+//! `unknown` is disabled by default because this source cannot preserve an open-ended
+//! status word: it writes an existing board option or the issue's closed state and never
+//! creates an option. An operator may map `unknown` to one existing option, in which case
+//! every unknown word lands on that option and reads back as `unknown` under the option's
+//! name. Mapping it to a closed state is refused because GitHub reads that state back as
+//! `done` or `cancelled`, changing the category on every copy. This differs from
+//! `local-md`, which writes and reads the original word itself.
+//!
 //! `done` closes the issue by default because GitHub derives `subIssuesSummary.completed`
 //! and the board's own `Sub-issues progress` field from closed sub-issues: a plan whose
 //! finished tasks were only moved to a "Done" column would read 0% complete forever.
@@ -1149,7 +1157,10 @@ pub struct GitHubProjectsConfig {
     /// A category this does not mention keeps its shipped default: `backlog` to
     /// "Backlog", `todo` to "Todo", `in-progress` to "In Progress", `done` to closed as
     /// completed, `cancelled` to closed as not planned, and `draft` and `unknown`
-    /// disabled.
+    /// disabled. `unknown` may name one existing board option; every unknown word then
+    /// lands on that option and reads back as `unknown` under its name. It cannot name a
+    /// closed state because that reads back as `done` or `cancelled`. Unlike `local-md`,
+    /// this source cannot keep each unknown word because it never creates board options.
     #[serde(default)]
     pub status_mapping: BTreeMap<String, Option<StatusTargetConfig>>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` parses each key into a `StatusCategory` and reports an unknown one against this instance.
     /// How fast this source writes, and how long it waits out a rate-limit refusal.
@@ -1418,6 +1429,23 @@ impl StatusMapping {
                     ),
                 })?;
             overrides.insert(category_name(*category), value);
+        }
+        if let Some(Some(StatusTargetConfig::Closed { closed })) =
+            overrides.get(category_name(StatusCategory::Unknown))
+        {
+            let read_back = match closed {
+                ClosedState::Completed => StatusCategory::Done,
+                ClosedState::NotPlanned => StatusCategory::Cancelled,
+            };
+            return Err(SourceError::Config {
+                message: format!(
+                    "status_mapping.unknown of source {instance} cannot target the closed state \
+                     {} because a copy reads that item back as {}; map unknown to one existing \
+                     board Status option instead",
+                    closed.reason().to_ascii_lowercase().replace('_', "-"),
+                    category_name(read_back)
+                ),
+            });
         }
         // `CATEGORIES[position] == category` for every category — the crate's suite
         // asserts it — so mapping the list in order fills each category's own slot.
@@ -2790,6 +2818,15 @@ impl GitHubProjectsSource {
                      integration because GitHub draft issues cannot have sub-issues, and this \
                      source stores a project's tasks as its issue's sub-issues",
                     self.name
+                )
+            } else if category == StatusCategory::Unknown {
+                format!(
+                    "status {} is disabled for source {}; set status_mapping.{} of this source \
+                     to one board Status option name; every word classified unknown is written \
+                     to that one option",
+                    category_name(category),
+                    self.name,
+                    category_name(category)
                 )
             } else {
                 format!(

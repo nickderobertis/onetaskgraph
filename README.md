@@ -219,6 +219,19 @@ zero. Its shape is the `spent` property of the `CopyReport` root of `onetaskgrap
 `--allow-partial` says a partial answer is acceptable and turns `4` into `0`. Nothing else
 does: a run that lost a source never exits `0` unless you asked for that.
 
+With machine output selected — `--json`, `--output json`, or `output: json` set in a
+document, by `--set` or by `ONETASKGRAPH_OUTPUT` — a command that exits `1` also writes
+exactly one document to standard output, and nothing else goes there. Its shape is
+published rather than restated here: it is the `FailureDocument` root of `onetaskgraph
+schema`, which describes every member and is what both SDKs are generated from and what
+the journeys validate this output against.
+
+Its `class` is the member to branch on: `refused` means asking again unchanged gets the
+same answer, and `transient` — a rate limit, or a source that could not be reached — means
+it may not. The standard error line and the exit code are the same with
+or without it, and exit `2` writes no document. A partial answer at exit `4` carries the
+same `class` on each entry of its `errors`.
+
 ### Paging
 
 `--limit N` gives you a page and, when there is more, the token for the next one:
