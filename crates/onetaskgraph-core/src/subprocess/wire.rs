@@ -14,8 +14,8 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite, NativeId,
-    NewComment, Page, PageRequest, Project, ProjectQuery, SourceError, Task, TaskQuery,
+    Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite, Metering,
+    NativeId, NewComment, Page, PageRequest, Project, ProjectQuery, SourceError, Task, TaskQuery,
     WriteSupport,
 };
 use serde::{Deserialize, Serialize};
@@ -137,6 +137,20 @@ pub(crate) struct InitializeResult {
     /// source it is.
     #[serde(default)]
     pub(crate) writes: Option<WriteSupport>,
+    /// Whether this plugin answers `metering` (§3.4).
+    ///
+    /// Optional, and absent means it does not: a plugin written before there was metering
+    /// says nothing here, is never sent the method, and is reported as not metering.
+    #[serde(default)]
+    pub(crate) meters: bool,
+}
+
+/// The `metering` result (§4.14).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct MeteringResult {
+    /// The plugin's running totals, or `null` when it has none to give.
+    #[serde(default)]
+    pub(crate) metering: Option<Metering>,
 }
 
 /// A plugin's non-empty, open-vocabulary kind from the handshake.
@@ -279,7 +293,7 @@ pub(crate) struct DeleteParams {
     pub(crate) id: NativeId,
 }
 
-/// `task_comments` parameters (§4.14).
+/// `task_comments` parameters (§4.15).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CommentsParams {
     /// The task whose comments are wanted.
@@ -288,7 +302,7 @@ pub(crate) struct CommentsParams {
     pub(crate) page: PageRequest,
 }
 
-/// The `task_comments` result (§4.14): a page, or `null` when there is no such task.
+/// The `task_comments` result (§4.15): a page, or `null` when there is no such task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CommentsResult {
     /// The page, or `null`.
@@ -296,7 +310,7 @@ pub(crate) struct CommentsResult {
     pub(crate) page: Option<Page<Comment>>,
 }
 
-/// `add_comment` parameters (§4.15).
+/// `add_comment` parameters (§4.16).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AddCommentParams {
     /// The task to comment on.
@@ -305,7 +319,7 @@ pub(crate) struct AddCommentParams {
     pub(crate) comment: NewComment,
 }
 
-/// `edit_comment` parameters (§4.15).
+/// `edit_comment` parameters (§4.16).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct EditCommentParams {
     /// The task the comment is on.
@@ -316,7 +330,7 @@ pub(crate) struct EditCommentParams {
     pub(crate) body: CommentBody,
 }
 
-/// `delete_comment` parameters (§4.15).
+/// `delete_comment` parameters (§4.16).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DeleteCommentParams {
     /// The task the comment is on.
@@ -325,7 +339,7 @@ pub(crate) struct DeleteCommentParams {
     pub(crate) comment: NativeId,
 }
 
-/// The `add_comment` and `edit_comment` result (§4.15): the comment as the source now holds
+/// The `add_comment` and `edit_comment` result (§4.16): the comment as the source now holds
 /// it, or `null` when there is no such task or no such comment on it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CommentResult {
@@ -334,7 +348,7 @@ pub(crate) struct CommentResult {
     pub(crate) comment: Option<Comment>,
 }
 
-/// The `delete_comment` result (§4.15): the id removed, or `null` when there was nothing
+/// The `delete_comment` result (§4.16): the id removed, or `null` when there was nothing
 /// under it to remove.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DeletedCommentResult {

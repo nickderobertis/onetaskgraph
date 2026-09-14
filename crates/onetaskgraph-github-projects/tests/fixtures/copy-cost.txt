@@ -1,0 +1,42 @@
+(a) a whole copy of a project of 10 tasks
+requests 68
+node count 32750
+
+requests per call
+   11       0  adding an issue to the board
+   11       0  creating an issue
+   10       0  filing an issue under its project
+   11    2200  reading an issue's dependencies
+    1   10150  reading the board
+    1       0  reading the destination repository
+    1   20400  searching this board's issues
+   22       0  writing a board field
+
+(b) a repeat whole copy of the same project, unchanged, each item recording its origin
+requests 23
+node count 14583
+
+requests per call
+   11    2200  reading an issue's dependencies
+   11    2233  reading one issue
+    1   10150  reading the board
+
+(c) a member copy naming 1 of those 10 tasks, its status changed, every task recording its origin
+requests 9
+node count 1209
+
+requests per call
+    3     600  reading an issue's dependencies
+    3     609  reading one issue
+    1       0  updating an issue
+    2       0  writing a board field
+
+(d) the same one-member copy of a project of 3 tasks
+requests 9
+node count 1209
+
+requests per call
+    3     600  reading an issue's dependencies
+    3     609  reading one issue
+    1       0  updating an issue
+    2       0  writing a board field

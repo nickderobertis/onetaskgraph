@@ -14,8 +14,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use onetaskgraph_core::{
-    Config, ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyRequest, CopyScope,
-    DependencyRequest, Engine, EngineError, GlobalId, MatchBy, Paging, ResolvedSource, TaskRequest,
+    BudgetSpent, Config, ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyReport,
+    CopyRequest, CopyScope, DependencyRequest, Engine, EngineError, GlobalId, MatchBy, Paging,
+    ResolvedSource, Spent, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
@@ -1124,6 +1125,444 @@ async fn a_second_copy_updates_every_counterpart_and_repairs_the_edges_among_the
     assert_eq!(
         depends_on(&engine, "into:D-T1").await,
         vec!["into:D-T2 Task".to_owned(), "into:T-3 Task".to_owned()]
+    );
+}
+
+/// One project of three tasks, authored the way a write-back authors its shadow: the
+/// project and `T-1` record the destination item each corresponds to, and `T-3` records
+/// none. `T-2` depends on `T-1`, or on `T-3` when `on_unrecorded` says so.
+fn shadow(on_unrecorded: bool) -> Value {
+    let recorded = |id: &str, title: &str, origin: Option<&str>| {
+        let mut task = json!({"id": id, "title": title,
+            "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P-1"});
+        if let Some(origin) = origin {
+            task["metadata"] = json!({GlobalId::ORIGIN_KEY: origin});
+        }
+        task
+    };
+    json!({"plugin": "in-memory", "config": {
+        "projects": [
+            {"id": "P-1", "title": "Engine", "status": {"category": "todo", "name": "Todo"},
+             "labels": [], "metadata": {GlobalId::ORIGIN_KEY: "into:D-P1"}},
+        ],
+        "tasks": [
+            recorded("T-1", "Alpha engine", Some("into:D-T1")),
+            recorded("T-2", "Beta", None),
+            recorded("T-3", "Gamma", None),
+        ],
+        "task_dependencies": [
+            {"from": "T-2", "to": if on_unrecorded { "T-3" } else { "T-1" }, "kind": "blocks"},
+        ],
+    }})
+}
+
+/// A destination holding a counterpart of the project, `T-1` and `T-3` — each reading
+/// differently from the source, so a copy that reached one would write it.
+fn holding_the_shadow() -> Value {
+    json!({
+        "projects": [counterpart("D-P1", "from:P-1", None)],
+        "tasks": [
+            counterpart("D-T1", "from:T-1", Some("D-P1")),
+            counterpart("D-T3", "from:T-3", Some("D-P1")),
+        ],
+    })
+}
+
+/// A member copy of `from:P-1` naming these members.
+fn members(named: &[&str]) -> CopyRequest {
+    many(
+        &["from:P-1"],
+        CopyScope::Members(
+            CopyItems::new(named.iter().map(|member| id(member)).collect())
+                .expect("a member copy names a member"),
+        ),
+    )
+}
+
+#[tokio::test]
+async fn a_rust_caller_copies_a_project_and_exactly_the_members_it_names() {
+    let engine = engine_over(json!({
+        "from": shadow(false),
+        "into": {"plugin": "in-memory", "config": holding_the_shadow()},
+    }));
+
+    let report = engine
+        .copy(&members(&["from:T-2"]))
+        .await
+        .expect("the member copy runs");
+    assert_eq!(
+        report.items.iter().map(landed).collect::<Vec<_>>(),
+        vec![
+            (Some("into:D-P1".to_owned()), "updated".to_owned()),
+            (Some("into:T-2".to_owned()), "created".to_owned()),
+        ],
+        "the project, then the one member named — created, because nothing held it"
+    );
+    assert_eq!(
+        depends_on(&engine, "into:T-2").await,
+        vec!["into:D-T1 Task".to_owned()],
+        "the edge to a member the copy does not carry names the id that member records"
+    );
+    let held = held(&engine, "into").await;
+    for untouched in ["into:D-T1 D-T1 as it was", "into:D-T3 D-T3 as it was"] {
+        assert!(
+            held.contains(&untouched.to_owned()),
+            "a member the copy was not told about was written: {held:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_rust_caller_is_refused_a_member_copy_before_anything_is_written() {
+    let refused_with = |engine: Engine, request: CopyRequest| async move {
+        let before = held(&engine, "into").await;
+        let error = engine
+            .copy(&request)
+            .await
+            .expect_err("the member copy is refused");
+        assert_eq!(
+            held(&engine, "into").await,
+            before,
+            "a refused member copy wrote something"
+        );
+        error
+    };
+
+    let error = refused_with(
+        engine_over(json!({
+            "from": shadow(false),
+            "into": {"plugin": "in-memory", "config": holding_the_shadow()},
+        })),
+        members(&["from:T-2", "from:T-9"]),
+    )
+    .await;
+    assert_eq!(
+        error,
+        EngineError::NotAMember {
+            id: id("from:T-9"),
+            projects: vec![id("from:P-1")],
+        }
+    );
+
+    let error = refused_with(
+        engine_over(json!({
+            "from": shadow(true),
+            "into": {"plugin": "in-memory", "config": holding_the_shadow()},
+        })),
+        members(&["from:T-2"]),
+    )
+    .await;
+    assert_eq!(
+        error,
+        EngineError::UnrecordedMember {
+            item: id("from:T-2"),
+            member: id("from:T-3"),
+            destination: name("into"),
+        }
+    );
+}
+
+/// One reading a [`Reporting`] source gives, in the order it is asked for them.
+type Reading = Result<Option<onetaskgraph_plugin_api::Metering>, SourceError>;
+
+/// A source that answers exactly as the `in-memory` source it wraps, and says it metered
+/// whatever its script says — one reading each time it is asked, then none.
+struct Reporting {
+    inner: Box<dyn TaskSource>,
+    script: std::sync::Mutex<std::collections::VecDeque<Reading>>,
+}
+
+#[async_trait::async_trait]
+impl TaskSource for Reporting {
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn writes(&self) -> WriteSupport {
+        self.inner.writes()
+    }
+
+    async fn health(&self) -> Result<Health, SourceError> {
+        self.inner.health().await
+    }
+
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        self.inner.get_task(id).await
+    }
+
+    async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+        self.inner.get_project(id).await
+    }
+
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        self.inner.get_document(id).await
+    }
+
+    async fn query_tasks(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        self.inner.query_tasks(query, page).await
+    }
+
+    async fn query_projects(
+        &self,
+        query: &ProjectQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        self.inner.query_projects(query, page).await
+    }
+
+    async fn query_documents(
+        &self,
+        query: &DocumentQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        self.inner.query_documents(query, page).await
+    }
+
+    async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        self.inner.labels(page).await
+    }
+
+    async fn task_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.task_dependencies(id, direction, page).await
+    }
+
+    async fn project_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.project_dependencies(id, direction, page).await
+    }
+
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        self.inner.write_task(write).await
+    }
+
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        self.inner.write_project(write).await
+    }
+
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        self.inner.write_document(write).await
+    }
+
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_task(id).await
+    }
+
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_project(id).await
+    }
+
+    async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_document(id).await
+    }
+
+    async fn metering(&self) -> Reading {
+        self.script
+            .lock()
+            .expect("an unpoisoned script")
+            .pop_front()
+            .unwrap_or(Ok(None))
+    }
+}
+
+/// A running total of `requests`, having spent `(budget, unit, measured, modelled)`.
+fn total(requests: u64, budgets: &[(&str, &str, u64, u64)]) -> Reading {
+    Ok(Some(onetaskgraph_plugin_api::Metering {
+        requests,
+        budgets: budgets
+            .iter()
+            .map(
+                |&(budget, unit, measured, modelled)| onetaskgraph_plugin_api::Metered {
+                    budget: budget.to_owned(),
+                    unit: unit.to_owned(),
+                    measured,
+                    modelled,
+                },
+            )
+            .collect(),
+    }))
+}
+
+/// A reading the source could not take.
+fn unreadable() -> Reading {
+    Err(SourceError::Malformed {
+        message: "the reading could not be taken".to_owned(),
+    })
+}
+
+/// What a copy of `from:T-1` into `into` says it spent, as JSON, with each source giving the
+/// two readings its script holds — the one before the copy and the one after it.
+async fn spent_with(from: Vec<Reading>, into: Vec<Reading>) -> Value {
+    let reporting = |source: &str, config: Value, script: Vec<Reading>| {
+        let inner = onetaskgraph_in_memory::Plugin
+            .build(&name(source), &config, &NoSecrets)
+            .expect("the in-memory plugin builds");
+        ConfiguredSource::Ready(ResolvedSource::adopt(
+            name(source),
+            Box::new(Reporting {
+                inner,
+                script: std::sync::Mutex::new(script.into()),
+            }),
+        ))
+    };
+    let engine = Engine::new(
+        vec![
+            reporting(
+                "from",
+                json!({"tasks": [task("T-1", "Alpha engine")]}),
+                from,
+            ),
+            reporting("into", json!({}), into),
+        ],
+        vec![name("from"), name("into")],
+    );
+    let report = engine.copy(&one("from:T-1")).await.expect("the copy runs");
+    assert_eq!(
+        report.items.iter().map(landed).collect::<Vec<_>>(),
+        vec![(Some("into:T-1".to_owned()), "created".to_owned())],
+        "what a copy spent never changes what it does"
+    );
+    serde_json::to_value(&report.spent).expect("a copy report serialises")
+}
+
+#[tokio::test]
+async fn a_rust_caller_reads_what_a_copy_spent_summed_over_the_sources_that_meter() {
+    let spent = spent_with(
+        vec![
+            total(
+                10,
+                &[("graphql", "points", 5, 0), ("rest", "requests", 2, 0)],
+            ),
+            total(
+                13,
+                &[("graphql", "points", 5, 3), ("rest", "requests", 4, 0)],
+            ),
+        ],
+        vec![total(0, &[]), total(4, &[("graphql", "points", 7, 0)])],
+    )
+    .await;
+    assert_eq!(
+        spent,
+        json!({"requests": 7, "budgets": [
+            {"budget": "graphql", "unit": "points", "amount": 10, "lower_bound": true},
+            {"budget": "rest", "unit": "requests", "amount": 2, "lower_bound": false},
+        ]}),
+        "one budget two sources name adds up, measured and modelled together, and is a lower \
+         bound because part of it was modelled; a budget nothing modelled is not"
+    );
+}
+
+#[test]
+fn what_a_copy_spent_survives_the_public_reports_wire_round_trip() {
+    let report = CopyReport {
+        items: Vec::new(),
+        references_rewritten: 0,
+        references_unresolved: 0,
+        references_ambiguous: 0,
+        spent: Some(Spent {
+            requests: 7,
+            budgets: vec![BudgetSpent {
+                budget: "graphql".to_owned(),
+                unit: "points".to_owned(),
+                amount: 12,
+                lower_bound: true,
+            }],
+        }),
+    };
+
+    let wire = serde_json::to_value(&report).expect("a populated copy report serialises");
+    assert_eq!(
+        wire["spent"],
+        json!({
+            "requests": 7,
+            "budgets": [{
+                "budget": "graphql",
+                "unit": "points",
+                "amount": 12,
+                "lower_bound": true,
+            }],
+        })
+    );
+    let read: CopyReport = serde_json::from_value(wire).expect("the report reads back");
+    assert_eq!(read, report);
+}
+
+#[tokio::test]
+async fn a_source_whose_readings_are_not_a_running_total_is_reported_as_not_metering() {
+    let counted = || vec![total(0, &[]), total(4, &[("graphql", "points", 7, 0)])];
+    let the_destination_alone = json!({"requests": 4, "budgets": [
+        {"budget": "graphql", "unit": "points", "amount": 7, "lower_bound": false},
+    ]});
+    for (what, from) in [
+        (
+            "first reading failed",
+            vec![unreadable(), total(3, &[("graphql", "points", 3, 0)])],
+        ),
+        ("second reading failed", vec![total(3, &[]), unreadable()]),
+        // Its budget rose, so a clamped difference would still add to the total.
+        (
+            "requests fell",
+            vec![
+                total(10, &[("graphql", "points", 1, 0)]),
+                total(3, &[("graphql", "points", 2, 0)]),
+            ],
+        ),
+        (
+            "budget fell",
+            vec![
+                total(1, &[("graphql", "points", 9, 0)]),
+                total(2, &[("graphql", "points", 4, 0)]),
+            ],
+        ),
+        (
+            "budget vanished",
+            vec![total(1, &[("rest", "requests", 1, 0)]), total(2, &[])],
+        ),
+        (
+            "budget was named twice",
+            vec![
+                total(1, &[]),
+                total(
+                    2,
+                    &[("graphql", "points", 1, 0), ("graphql", "points", 1, 0)],
+                ),
+            ],
+        ),
+        (
+            "budget had no name",
+            vec![total(1, &[]), total(2, &[("", "points", 1, 0)])],
+        ),
+    ] {
+        assert_eq!(
+            spent_with(from, counted()).await,
+            the_destination_alone,
+            "a source whose {what} was added to what the copy spent"
+        );
+    }
+    assert_eq!(
+        spent_with(
+            vec![unreadable(), total(1, &[])],
+            vec![total(5, &[]), total(2, &[])]
+        )
+        .await,
+        Value::Null,
+        "a copy none of whose sources gave two readings that stand says nothing it spent"
     );
 }
 
@@ -3309,6 +3748,7 @@ async fn the_reference_figures_are_absent_when_zero_and_read_back_as_zero_when_a
         references_rewritten: 3,
         references_unresolved: 2,
         references_ambiguous: 1,
+        spent: None,
     };
     let wire = serde_json::to_value(&reported).expect("a copy report serialises");
     assert_eq!(
@@ -3331,6 +3771,7 @@ async fn the_reference_figures_are_absent_when_zero_and_read_back_as_zero_when_a
         references_rewritten: 2,
         references_unresolved: 0,
         references_ambiguous: 0,
+        spent: None,
     };
     assert_eq!(
         serde_json::to_value(&partial).expect("it serialises"),

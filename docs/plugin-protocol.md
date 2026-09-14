@@ -194,6 +194,7 @@ the source can do natively, and what configuration it is being built with.
 | `kind` | string | The plugin kind, matching the `plugin:` field a configuration names it by. |
 | `capabilities` | object | A `Capabilities` (§4.2). Read **once**; the engine does not ask again. |
 | `writes` | string | Whether this plugin can be written through. Optional; see §3.3. |
+| `meters` | boolean | Whether this plugin answers `metering`. Optional; see §3.4. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -249,6 +250,16 @@ naming a plugin that answered `"unsupported"` as its destination is refused befo
 anything is read, naming the configured source and this plugin kind — so a plugin never
 receives a write it would only have to refuse.
 
+### 3.4 `meters`
+
+A boolean: `true` when this plugin counts the requests it sends to its own backend and
+answers `metering` (§4.14) with them, and `false` when it does not.
+
+The member is **optional**, and an absent one means `false`. A plugin written before there
+was metering says nothing here, is never sent `metering`, and is reported as not metering —
+which a command reports by leaving what it spent out, never by reporting that nothing was
+spent.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -274,6 +285,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `query_documents` | `TaskSource::query_documents` |
 | `write_document` | `TaskSource::write_document` |
 | `delete_document` | `TaskSource::delete_document` |
+| `metering` | `TaskSource::metering` |
 | `task_comments` | `TaskSource::task_comments` |
 | `add_comment` | `TaskSource::add_comment` |
 | `edit_comment` | `TaskSource::edit_comment` |
@@ -329,7 +341,7 @@ one arrives anyway.
 
 `comments` is not a predicate either, on exactly those terms: it says whether this source's
 tasks have comments at all. The engine never sends a comment method to a plugin that
-answered `"unsupported"` — see §4.14 — and sends the three that write (§4.15) only to a
+answered `"unsupported"` — see §4.15 — and sends the three that write (§4.16) only to a
 plugin whose write-support member (§3.3) also says it can be written.
 
 Three rules bind every plugin, and the engine's compensation is only correct while
@@ -671,7 +683,48 @@ This is not the `url` field those three entities already carry, does not replace
 not derived from it. A plugin that reported a web address there goes on reporting exactly
 what it reported before, whether or not it also says where the entity is.
 
-### 4.14 `task_comments`
+### 4.14 `metering`
+
+Sent only to a plugin that answered `meters: true` at the handshake (§3.4), and never to one
+that did not.
+
+```json
+{ "id": "12", "method": "metering", "params": {} }
+```
+
+```json
+{
+  "id": "12",
+  "result": {
+    "metering": {
+      "requests": 7,
+      "budgets": [
+        { "budget": "graphql", "unit": "points", "measured": 0, "modelled": 6 },
+        { "budget": "rest", "unit": "requests", "measured": 1, "modelled": 0 }
+      ]
+    }
+  }
+}
+```
+
+`metering` is a `Metering`: how many requests this plugin has sent to its own backend since
+the handshake, and what those spent against each budget that backend meters it by. `budget`
+and `unit` are the plugin's own open vocabulary. `measured` is what the backend reported, or a
+count of requests against a budget metered in requests; `modelled` is what the plugin
+estimated instead. Both are **running totals** and never a figure for one call: the engine
+reads them before and after a command and reports the difference, so a plugin must not reset
+them. `null` is read exactly as a plugin that does not meter.
+
+The engine holds each pair of readings to that before it believes either: `requests` and
+every `measured` and `modelled` may only grow, a budget named once stays named, and each
+`budget` and `unit` pair is named at most once and with neither empty. A pair that breaks
+any of it is reported as a plugin not metering for that command, never as a difference
+clamped to zero.
+
+A plugin that answers `metering` with an error is reported as not metering for that command.
+The command does not fail over what it cost.
+
+### 4.15 `task_comments`
 
 Only a plugin that declared `comments` `"native"` in §4.2 is ever sent this.
 
@@ -703,7 +756,7 @@ the reason §4.11 gives about documents: it declared `comments` `"unsupported"`,
 never sends it one, and a plugin should still implement the case defensively with a
 `{"kind": "refused"}` naming itself.
 
-### 4.15 `add_comment`, `edit_comment` and `delete_comment`
+### 4.16 `add_comment`, `edit_comment` and `delete_comment`
 
 Only a plugin that declared `comments` `"native"` in §4.2 **and** answered `"supported"` to
 §3.3 is ever sent any of these. Unlike §4.10, all three are verbs of the product: a person
@@ -804,7 +857,12 @@ version 1 plugin could be sent one halfway through undoing a copy. Adding a meth
 declaration its peer cannot accidentally make is the "method a peer may decline" case below;
 adding one a peer has already implicitly opted into is not.
 
-The comments of §4.14 and §4.15 were added **without** a bump, for exactly the reason the
+`metering` (§4.14) and the `meters` member of §3.4 were added **without** a bump, for the
+same reason the documents were: the engine sends `metering` only to a plugin that answered
+`meters: true`, and a plugin written before there was metering omits the member, is read as
+not metering, and is never sent it.
+
+The comments of §4.15 and §4.16 were added **without** a bump, for exactly the reason the
 documents were: the engine sends a comment method only to a plugin that declared `comments`
 `"native"` in its handshake, and a plugin written before there were comments cannot have
 declared that. The three that write are gated twice, on that declaration and on §3.3.

@@ -74,7 +74,9 @@ class Client(GeneratedClient):
                     arguments.append(flag)
                 case list() | tuple():
                     for item in value:
-                        arguments.extend((flag, str(item)))
+                        # A repeated id option takes a `GlobalId` as its positional does.
+                        text = item.root if isinstance(item, RootModel) else item
+                        arguments.extend((flag, str(text)))
                 case _:
                     arguments.extend((flag, str(value)))
         arguments.append("--json")

@@ -200,7 +200,7 @@ fn a_document_copy_creates_at_a_persistent_destination_and_a_second_copy_updates
     sandbox.project_document(&planted(source_document(json!({})), &store));
 
     // One invocation writes.
-    let created = reported(&ok(
+    let copied = ok(
         &sandbox,
         &[
             "document",
@@ -210,7 +210,12 @@ fn a_document_copy_creates_at_a_persistent_destination_and_a_second_copy_updates
             STORE,
             "--json",
         ],
-    ));
+    );
+    // This peer was written against the protocol document and never says it meters, so
+    // it is never asked and the report says nothing about what the copy spent.
+    let report: Value = serde_json::from_str(&copied).expect("a copy emits JSON");
+    assert!(report.get("spent").is_none(), "{report:#}");
+    let created = reported(&copied);
     assert_eq!(
         created,
         vec![(

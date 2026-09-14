@@ -32,6 +32,7 @@ pub mod config;
 mod engine;
 
 mod environment;
+mod failure;
 mod global_id;
 mod plan;
 mod registry;
@@ -42,13 +43,14 @@ pub mod subprocess;
 
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
 pub use engine::{
-    CommentList, ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyReport, CopyRequest,
-    CopyScope, DeletedComment, DependencyRequest, DocumentFilters, DocumentRequest, Engine,
-    EngineError, Filters, LabelRequest, LeftBehind, MatchBy, Paging, ProjectRequest,
+    BudgetSpent, CommentList, ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyReport,
+    CopyRequest, CopyScope, DeletedComment, DependencyRequest, DocumentFilters, DocumentRequest,
+    Engine, EngineError, Filters, LabelRequest, LeftBehind, MatchBy, Paging, ProjectRequest,
     ProjectSelector, Qualified, QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind,
-    SearchRequest, SourceListing, SourceState, TaskDetail, TaskRequest,
+    SearchRequest, SourceListing, SourceState, Spent, TaskDetail, TaskRequest,
 };
 pub use environment::Environment;
+pub use failure::{Failure, FailureClass, FailureDocument, classify};
 pub use global_id::GlobalId;
 pub use plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
 pub use registry::{PluginKind, plugin_for, plugin_kinds, registry};

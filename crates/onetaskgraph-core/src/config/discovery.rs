@@ -60,6 +60,30 @@ pub fn documents(
     Ok(found)
 }
 
+/// The documents [`documents`] would return that can still be read, each on its own.
+///
+/// For a run whose configuration already failed to load, and so is past stopping: a
+/// document that cannot be read — or a walk upward that cannot finish — drops that one
+/// document, never the readable one beside it. `working_directory` is `None` when there is
+/// none to search from, and then only the user-level document is looked for. Never a
+/// substitute for [`documents`], which is right to stop on exactly those failures.
+#[must_use]
+pub fn readable_documents(
+    working_directory: Option<&Path>,
+    environment: &Environment,
+) -> Vec<Document> {
+    let project =
+        working_directory.and_then(|directory| nearest_project_document(directory).ok().flatten());
+    [user_document_path(environment), project]
+        .into_iter()
+        .flatten()
+        .filter_map(|path| {
+            let text = read_optional(&path).ok().flatten()?;
+            Some(Document { path, text })
+        })
+        .collect()
+}
+
 /// Where the user-level document lives, when this host says where that is.
 #[must_use]
 pub fn user_document_path(environment: &Environment) -> Option<PathBuf> {

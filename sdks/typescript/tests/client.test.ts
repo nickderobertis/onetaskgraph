@@ -314,6 +314,17 @@ test("copy drives the real binary and reports what it did to each item", async (
     expect(alone.items).toEqual([
       { source: "from:P-1", action: "unchanged", destination: "into:P-1" },
     ]);
+    // The project and exactly the members named; a folder of Markdown meters nothing, so
+    // the report says nothing about what the copy spent.
+    const narrowed = await copyClient.projectCopy("from:P-1", "into", { members: ["from:T-1"] });
+    expect(narrowed.items.map((item) => [item.source, item.action])).toEqual([
+      ["from:P-1", "unchanged"],
+      ["from:T-1", "unchanged"],
+    ]);
+    expect(narrowed.spent).toBeUndefined();
+    await expect(
+      copyClient.projectCopy("from:P-1", "into", { members: ["from:T-9"] }),
+    ).rejects.toThrow("from:T-9 is not a task of from:P-1");
 
     // A destination with no write side is refused, naming the source and its plugin.
     writeFileSync(

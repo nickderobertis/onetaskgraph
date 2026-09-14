@@ -44,8 +44,10 @@ RESPONSE_ROOTS = {
 # named: a document read answers with one, and acting on it means switching on which of its
 # two keys is present. `DocumentQuery` and `PageOfDocument` are the plugin-facing halves of
 # the same contract, which the SDK owes a caller a model for whether or not a verb returns
-# one directly.
+# one directly. `FailureDocument` is what any verb writes to stdout when it exits 1 under
+# `--json`, which no verb's response root describes.
 CONTRACT_ROOTS = {
+    "FailureDocument",
     "SourceFailure",
     "QueryPlan",
     "GlobalId",
@@ -69,6 +71,7 @@ OPTION_TYPES = {
     "label": "list[str] | tuple[str, ...]",
     "limit": "int",
     "match_by": "str",
+    "member": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
     "no_project": "bool",
     "no_tasks": "bool",
     "not_label": "list[str] | tuple[str, ...]",
@@ -95,6 +98,7 @@ OPTION_PLACEHOLDERS = {
     "label": "L",
     "limit": "N",
     "match_by": "KEY",
+    "member": "TASK-ID",
     "no_project": None,
     "no_tasks": None,
     "not_label": "L",

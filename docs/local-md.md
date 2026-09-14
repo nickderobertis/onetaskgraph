@@ -65,7 +65,11 @@ it is a command of your own against that qualified id.
 Status names are preserved for display and mapped case-insensitively to normalized
 categories. The default mapping is `draft` → draft, `backlog` → backlog, `todo` → todo,
 `in progress` and `doing` → in-progress, `done` → done, and `cancelled`/`canceled` →
-cancelled. Other words map to unknown. Replace the mapping with `status_mapping` in the source configuration:
+cancelled. Other words map to unknown, and this source writes the original word into the
+Markdown so it round-trips by name. That differs from `github-projects`, which can only
+write an existing board option or a closed state: its unknown category is disabled by
+default, and mapping it to one option folds every unknown word into that option. Replace
+the mapping with `status_mapping` in the source configuration:
 
 ```yaml
 sources:

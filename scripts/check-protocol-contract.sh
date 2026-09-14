@@ -60,7 +60,14 @@ def api(module):
 document = read(os.environ["DOCUMENT"], "the protocol document")
 source_rs = api("source.rs")
 error_rs = api("error.rs")
-contract_rs = error_rs + api("capability.rs") + api("query.rs") + api("work.rs") + api("write.rs")
+contract_rs = (
+    error_rs
+    + api("capability.rs")
+    + api("query.rs")
+    + api("work.rs")
+    + api("write.rs")
+    + api("metering.rs")
+)
 
 # Trait methods the protocol deliberately does not carry as methods of its own, each with
 # the reason. A method missing from BOTH this map and the document's table is drift.
@@ -96,10 +103,11 @@ METHOD_SECTIONS = {
     "query_documents": "### 4.11 `get_document` and `query_documents`",
     "write_document": "### 4.12 `write_document` and `delete_document`",
     "delete_document": "### 4.12 `write_document` and `delete_document`",
-    "task_comments": "### 4.14 `task_comments`",
-    "add_comment": "### 4.15 `add_comment`, `edit_comment` and `delete_comment`",
-    "edit_comment": "### 4.15 `add_comment`, `edit_comment` and `delete_comment`",
-    "delete_comment": "### 4.15 `add_comment`, `edit_comment` and `delete_comment`",
+    "metering": "### 4.14 `metering`",
+    "task_comments": "### 4.15 `task_comments`",
+    "add_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
+    "edit_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
+    "delete_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
 }
 
 ENUM_SECTIONS = {
@@ -161,15 +169,19 @@ def section(heading):
     return "\n".join(lines[start:end])
 
 
-def first_column(header):
+def first_column(header, after=()):
     """The backticked name in the first column of every row under `header`.
 
     The header line is the anchor, so a reshaped or deleted table fails loudly here
-    rather than silently reducing the set this check compares to nothing.
+    rather than silently reducing the set this check compares to nothing. Where one header
+    heads more than one table, `after` names the lines, in order, that the table follows.
     """
     lines = document.splitlines()
     try:
-        start = lines.index(header)
+        start = 0
+        for anchor in after:
+            start = lines.index(anchor, start)
+        start = lines.index(header, start)
     except ValueError:
         refuse(
             f"could not find the table headed `{header}` in docs/plugin-protocol.md.",
@@ -244,6 +256,32 @@ if declared.group(1) != specified.group(1):
         "matches versions exactly, so a plugin written from that document would be refused "
         "by this engine. Bump both, in the same change."
     )
+
+# The handshake response's members, both ways. `InitializeResult` is the engine's reading of
+# them, so it lives beside the wire rather than in the api crate: a member it reads that the
+# table omits — `writes`, `meters` — is one no plugin written from the document would send,
+# and a member the table names that it does not read is one such a plugin sends for nothing.
+# The request's table has the same header, so the response's is the one after its heading.
+initialize = re.search(r"pub\(crate\) struct InitializeResult \{(.*?)\n\}", wire, re.DOTALL)
+if initialize is None:
+    refuse(
+        "could not read `InitializeResult` from "
+        "crates/onetaskgraph-core/src/subprocess/wire.rs.",
+        "restore it, or teach this script the shape it has now.",
+    )
+answered = set(re.findall(r"^    pub\(crate\) (\w+):", initialize.group(1), re.MULTILINE))
+if not answered:
+    refuse(
+        "read no members from `InitializeResult`.",
+        "restore its fields, or teach this script the shape they have now.",
+    )
+compare(
+    "handshake response member",
+    answered,
+    first_column("| Field | Type | Meaning |", after=("## 3. The handshake", "**Response.**")),
+    {},
+    "`InitializeResult`",
+)
 
 trait = re.search(r"pub trait TaskSource: Send \+ Sync \{(.*?)\n\}", source_rs, re.DOTALL)
 if trait is None:
@@ -534,6 +572,8 @@ STRUCT_SECTIONS = {
     "ItemWrite": "### 4.9 `write_task` and `write_project`",
     "DocumentQuery": "### 4.11 `get_document` and `query_documents`",
     "Document": "### 4.11 `get_document` and `query_documents`",
+    "Metering": "### 4.14 `metering`",
+    "Metered": "### 4.14 `metering`",
 }
 
 def wire_members(struct):

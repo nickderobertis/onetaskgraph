@@ -386,3 +386,96 @@ lowering it looks free here only because this fixture board holds fewer rows tha
 the round trip a smaller page buys appears on a board with more rows than the limit, which
 is the half of the trade this instrument cannot see. `MAX_PAGE_SIZE` itself is out of
 scope — making the source read less is a different decision from making it affordable.
+
+## What a project copy costs, and what moved it
+
+The live journey above is one kind of session. The one that spends this account's GraphQL
+allowance day to day is different: an engine projecting a run onto a board copies the
+project again on every node's status change, and until this change every such copy read
+the whole project to find out what had changed. What a copy costs now has a record of its
+own, `tests/fixtures/copy-cost.txt`, in the same two quantities and the same per-call shape
+as this file's — requests, and each GraphQL request's worst-case node count under the
+variables it really sent — **and no figure in it is points either.**
+
+It is taken by `a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_says`
+in `crates/onetaskgraph/tests/e2e/copy_cost.rs`, which drives the compiled binary against
+the loopback fixture board the copy journeys use, with pacing off. It lives in the binary's
+crate rather than beside its record because a copy is the engine's and no plugin crate may
+depend on the engine; every request the board served is named and counted through this
+crate's own `accounting`, so the two records cannot count one document two ways. The four
+copies it measures are:
+
+- **(a)** a whole copy of a project of 10 tasks the board does not hold yet;
+- **(b)** the same whole copy again, unchanged, with every item recording the destination
+  item it landed on at `onetaskgraph.origin` — the shape a write-back's shadow project has;
+- **(c)** a member copy of that project naming one task whose status changed;
+- **(d)** the same one-member copy of a project of 3 tasks.
+
+|                         | before (a) | after (a) | before (b) | after (b) | (c)  | (d)  |
+| ----------------------- | ---------: | --------: | ---------: | --------: | ---: | ---: |
+| **requests**            |         69 |        68 |         47 |        23 |    9 |    9 |
+| **node count**          |      53150 |     32750 |      19452 |     14583 | 1209 | 1209 |
+
+Per call, before, measured on the same harness against the engine as it stood at 0.2.28:
+
+```
+(a)
+   11       0  adding an issue to the board
+   11       0  creating an issue
+   10       0  filing an issue under its project
+   11    2200  reading an issue's dependencies
+    1   10150  reading the board
+    1       0  reading the destination repository
+    2   40800  searching this board's issues
+   22       0  writing a board field
+
+(b)
+   12    2400  reading an issue's dependencies
+   34    6902  reading one issue
+    1   10150  reading the board
+```
+
+After: `tests/fixtures/copy-cost.txt`, which the test above holds every copy to.
+
+**(a) 69 → 68, and (b) 47 → 23: each item's target resolved once.** A project copy planned
+the project and every member to learn their destination ids, then planned each of them again
+to land it, and compared each against a third read of the same destination item — and read
+the project a fourth time to decide whether it had settled. Now every item is read and its
+target decided once, before anything is written, and the read that found the target is the
+read the comparison uses. In (b) that is the whole move: `reading one issue` falls from 34
+to 11, one per item, and `reading an issue's dependencies` from 12 to 11. In (a), where no
+item has a target yet, it is the second board-scoped search for the project's counterpart.
+The one `reading the board` left in (b) is the walk for items the source no longer holds,
+which a whole copy keeps because it was not told which members it carries.
+
+**(c) and (d): 9 requests each, and the same 9.** A member copy reads, compares and writes
+the project and the members it names and nothing else, runs no walk for orphans, and so does
+not grow with the members it leaves alone. Its 9 are all reads and writes of one issue:
+the project's issue and the member's issue, each read once for its target and its edges;
+the member's issue read once more by the write, which takes the board's id and the
+definitions of the `Status` and origin fields from that issue's own board entry instead of
+from every page of the board; the member's blockers read before they are reconciled; the
+update; and its two field writes. The test holds that by the documents sent — none is the
+board read, the board-scoped search or a project's sub-issue walk — and by the node ids its
+issue reads carry.
+
+Two changes in this crate are what took the board out of (c) and (d), and both cost nothing
+in the quantities above: neither adds a request or a node to any document.
+
+- **`graphql::ISSUE_DEPENDENCIES` selects the issue's own `body`.** An issue's edges into
+  other sources are recorded in its body, and reading them used to walk the board for that
+  one field of one item. They now come out of the dependency read already made. A draft,
+  whose body that read cannot carry, still reads the board.
+- **The board entry every issue read carries names the board's `id`.** With it and the
+  field definitions each value names, an update of an item this board holds reads that item
+  rather than the board. An item that cannot say enough — one with no board entry naming
+  the board, no value of the origin field, or no `Status` value when the write carries a
+  status — is not guessed at: the write reads the board exactly as before. **That fallback
+  costs one request more than it did** when the command has not already read the board —
+  the item read that could not describe it — and nothing more once it has, because a board
+  this command read is used as it is. A copy whose items were written by a copy, as a
+  projection's are, does not take it.
+
+What stays as it was: a member the copy names that records no origin is still looked for
+by origin before it is created — that is correctness, not slack — and creating an item
+still reads the board, which a create needs for the repository it files the issue in.

@@ -1082,3 +1082,80 @@ fn a_resolved_source_debug_prints_its_name_and_kind_and_none_of_its_work() {
         "a source's Debug is not a rendering of the work it holds: {rendered}"
     );
 }
+
+#[test]
+fn the_output_a_run_asked_for_is_read_from_every_layer_that_still_reads() {
+    // What a run whose configuration did not load owes its failure in: the format the
+    // layers that can still be read ask for, in the precedence `load` gives them.
+    let host = Host::new();
+    let project = host.root.path().join("project");
+    let json_flag = Layer::new(vec![flag("output", json!("json"))]);
+    let text_flag = Layer::new(vec![flag("output", json!("text"))]);
+
+    // Nothing asks: text, whatever else fails.
+    assert_eq!(
+        config::requested_output(Some(&project), &host.environment(), &Layer::default()),
+        OutputFormat::Text
+    );
+
+    // A project document that will not parse contributes nothing, and hides nothing above it.
+    host.write(
+        &format!("project/{PROJECT_DOCUMENT_NAME}"),
+        "sources:\n  work:\n   plugin: [not a plugin\n",
+    );
+    assert_eq!(
+        config::requested_output(Some(&project), &host.environment(), &json_flag),
+        OutputFormat::Json
+    );
+
+    // A readable user document below it still counts, and a flag still beats it.
+    host.write(
+        &format!("home/{USER_DOCUMENT_RELATIVE_PATH}"),
+        "output: json\nsources: 7\n",
+    );
+    assert_eq!(
+        config::requested_output(Some(&project), &host.environment(), &Layer::default()),
+        OutputFormat::Json
+    );
+    assert_eq!(
+        config::requested_output(Some(&project), &host.environment(), &text_flag),
+        OutputFormat::Text
+    );
+
+    // A project document that cannot be read at all — a directory where the file should
+    // be — drops that document alone, never the readable user document beside it.
+    let obstructed = project.join(PROJECT_DOCUMENT_NAME);
+    std::fs::remove_file(&obstructed).expect("the unparseable project document");
+    std::fs::create_dir(&obstructed).expect("a directory in the document's place");
+    assert_eq!(
+        config::requested_output(Some(&project), &host.environment(), &Layer::default()),
+        OutputFormat::Json
+    );
+    // And the user document needs no working directory to be found.
+    assert_eq!(
+        config::requested_output(None, &host.environment(), &Layer::default()),
+        OutputFormat::Json
+    );
+
+    // The environment, over the documents and under the flags — and with no working
+    // directory to search from, the layers that need none still answer.
+    let exported = Environment::from_pairs([("ONETASKGRAPH_OUTPUT", "json")]);
+    assert_eq!(
+        config::requested_output(None, &exported, &Layer::default()),
+        OutputFormat::Json
+    );
+    assert_eq!(
+        config::requested_output(None, &exported, &text_flag),
+        OutputFormat::Text
+    );
+
+    // A value no format answers to is not a format asked for.
+    assert_eq!(
+        config::requested_output(
+            None,
+            &Environment::default(),
+            &Layer::new(vec![flag("output", json!("xml"))])
+        ),
+        OutputFormat::Text
+    );
+}

@@ -169,7 +169,33 @@ pub fn copied(report: &CopyReport) -> String {
             .collect::<Vec<_>>(),
     );
     rendered.push_str(&references(report));
+    rendered.push_str(&spent(report));
     rendered
+}
+
+/// The one line a copy says about what it spent, when a source in it metered its requests.
+///
+/// No line at all when none did, for the reason the machine output leaves the member out:
+/// a source that does not count what it sends has not sent nothing.
+fn spent(report: &CopyReport) -> String {
+    let Some(spent) = &report.spent else {
+        return String::new();
+    };
+    let budgets = spent
+        .budgets
+        .iter()
+        .map(|budget| {
+            format!(
+                "{} {} {}{}",
+                budget.budget,
+                budget.amount,
+                budget.unit,
+                if budget.lower_bound { " at least" } else { "" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("spent: {} requests; {budgets}\n", spent.requests)
 }
 
 /// The one line a copy says about the references its documents hold.

@@ -13,11 +13,12 @@ use std::process::ExitCode;
 use std::str::FromStr as _;
 
 use clap::{CommandFactory as _, Parser};
-use onetaskgraph_core::config::Layer;
+use onetaskgraph_core::config::{self, Layer};
 use onetaskgraph_core::{
     CopyItems, CopyRequest, CopyScope, DependencyRequest, DocumentFilters, DocumentRequest, Engine,
-    Environment, Filters, GlobalId, LabelRequest, Loaded, MatchBy, OutputFormat, PageToken, Paging,
-    ProjectRequest, ProjectSelector, QueryResponse, SearchRequest, SourceFailure, TaskRequest,
+    Environment, Failure, FailureDocument, Filters, GlobalId, LabelRequest, Loaded, MatchBy,
+    OutputFormat, PageToken, Paging, ProjectRequest, ProjectSelector, QueryResponse, SearchRequest,
+    SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, NativeId, NewComment, SourceName, TextQuery,
@@ -69,9 +70,26 @@ async fn main() -> ExitCode {
         Ok(flags) => flags,
         Err(message) => return fail(&message, EXIT_USAGE),
     };
-    match run(&cli.command, &flags, &mut io::stdout().lock()).await {
+    let environment = Environment::from_process();
+    // Every verb validates the configuration it was handed, including the verbs that do
+    // not read it. An unknown field, an unusable value, a plugin this build does not
+    // have and a source name that breaks the pattern are mistakes wherever they were
+    // written, and a verb that answered anyway would drop them in silence — which is the
+    // one outcome this configuration layer is not allowed to have.
+    let loaded = match load(&flags, &environment) {
+        Ok(loaded) => loaded,
+        Err(failure) => {
+            let asked = config::requested_output(
+                std::env::current_dir().ok().as_deref(),
+                &environment,
+                &flags,
+            );
+            return failed(&failure, asked);
+        }
+    };
+    match run(&cli.command, &loaded, &mut io::stdout().lock()).await {
         Ok(code) => ExitCode::from(code),
-        Err(message) => fail(&message, EXIT_FAILURE),
+        Err(failure) => failed(&failure, loaded.config.output()),
     }
 }
 
@@ -81,20 +99,34 @@ fn fail(message: &str, code: u8) -> ExitCode {
     ExitCode::from(code)
 }
 
+/// Report a failed command, and exit [`EXIT_FAILURE`].
+///
+/// The stderr line is the same whatever the output format. Under machine output the
+/// failure is also written to stdout as the one [`FailureDocument`] a caller branches on —
+/// and as nothing else, because stdout is where a caller reads an answer and one document
+/// is what it parses. A usage failure never reaches here: it is the invocation that was
+/// wrong, and [`fail`] reports it at [`EXIT_USAGE`] with no document.
+fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
+    let code = fail(failure.message(), EXIT_FAILURE);
+    if output == OutputFormat::Json {
+        let document = FailureDocument {
+            failure: failure.clone(),
+        };
+        // Best effort, and deliberately silent: the stderr line above already said why the
+        // command failed, and a reader that has gone away cannot be told anything more.
+        if let Ok(rendered) = json(&document, "the failure") {
+            let _ = emit(&mut io::stdout().lock(), &rendered, "the failure");
+        }
+    }
+    code
+}
+
 /// Render what one command answers with and write it to `out`.
 ///
 /// Rendering and writing are separate on purpose, and every verb shares the one write:
 /// a closed reader is the same failure whichever verb was writing, and one path is one
 /// path to get right.
-async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u8, String> {
-    // Every verb validates the configuration it was handed, including the verbs that do
-    // not read it. An unknown field, an unusable value, a plugin this build does not
-    // have and a source name that breaks the pattern are mistakes wherever they were
-    // written, and a verb that answered anyway would drop them in silence — which is the
-    // one outcome this configuration layer is not allowed to have.
-    let loaded = load(flags)?;
-    let loaded = &loaded;
-
+async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result<u8, Failure> {
     // One match over every verb rather than a pre-dispatch and a second match: two
     // matches over one enum means one of them owes an answer for arms it never receives,
     // and an arm nothing can reach is an arm nothing checks. The engine is built inside
@@ -143,7 +175,7 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
             let response = engine
                 .tasks(&request)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             respond(out, loaded, response, render::tasks, &args.paging, "tasks")
         }
 
@@ -153,7 +185,7 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
             let detail = engine(loaded)
                 .task_detail(&qualified(&args.id)?)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             // The comments ride beside the task in the machine rendering, and after its body
             // in the human one — and not at all for a source whose tasks have none.
             let comments = detail.comments.as_deref();
@@ -179,7 +211,7 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
             let response = engine(loaded)
                 .task_dependencies(&request)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             respond(
                 out,
                 loaded,
@@ -204,13 +236,18 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
         Command::Project {
             command: ProjectCommand::Copy(args),
         } => {
-            let request = copy_request(
-                std::iter::once(args.id.as_str()),
-                CopyScope::Projects {
+            let members = args
+                .member
+                .iter()
+                .map(|member| qualified(member))
+                .collect::<Result<Vec<_>, _>>()?;
+            let scope = match CopyItems::new(members) {
+                Some(members) => CopyScope::Members(members),
+                None => CopyScope::Projects {
                     tasks: !args.no_tasks,
                 },
-                &args.copy,
-            )?;
+            };
+            let request = copy_request(std::iter::once(args.id.as_str()), scope, &args.copy)?;
             copy(out, loaded, &request).await
         }
 
@@ -225,7 +262,7 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
             let response = engine(loaded)
                 .projects(&request)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             respond(
                 out,
                 loaded,
@@ -242,7 +279,7 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
             let response = engine(loaded)
                 .project(&qualified(&args.id)?)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             show(
                 out,
                 loaded,
@@ -260,7 +297,7 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
             let response = engine(loaded)
                 .project_dependencies(&request)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             respond(
                 out,
                 loaded,
@@ -284,7 +321,7 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
             let response = engine
                 .documents(&request)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             respond(
                 out,
                 loaded,
@@ -301,7 +338,7 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
             let response = engine(loaded)
                 .document(&qualified(&args.id)?)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             show(
                 out,
                 loaded,
@@ -333,7 +370,7 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
             let response = engine(loaded)
                 .labels(&request)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             respond(
                 out,
                 loaded,
@@ -357,7 +394,7 @@ async fn run(command: &Command, flags: &Layer, out: &mut impl Write) -> Result<u
             let response = engine(loaded)
                 .search(&request)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             respond(
                 out,
                 loaded,
@@ -387,7 +424,7 @@ fn respond<T: Serialize>(
     text: impl FnOnce(&[T]) -> String,
     paging: &PageArgs,
     what: &str,
-) -> Result<u8, String> {
+) -> Result<u8, Failure> {
     let rendered = match loaded.config.output() {
         OutputFormat::Text => {
             let mut rendered = text(&response.items);
@@ -418,7 +455,7 @@ fn show<T: Serialize>(
     text: impl FnOnce(&T) -> String,
     args: &ShowArgs,
     what: &str,
-) -> Result<u8, String> {
+) -> Result<u8, Failure> {
     show_rendered(out, loaded, &response, &response, text, args, what)
 }
 
@@ -432,12 +469,15 @@ fn show_rendered<T>(
     text: impl FnOnce(&T) -> String,
     args: &ShowArgs,
     what: &str,
-) -> Result<u8, String> {
+) -> Result<u8, Failure> {
     match (response.items.first(), response.errors.is_empty()) {
-        (None, true) => Err(format!(
-            "no {what} with that id\n\
-             next: check the id, or list what is there — `onetaskgraph {what} list` \
-             reports every {what} the configured sources hold."
+        (None, true) => Err(Failure::decided(
+            "no-such-item",
+            format!(
+                "no {what} with that id\n\
+                 next: check the id, or list what is there — `onetaskgraph {what} list` \
+                 reports every {what} the configured sources hold."
+            ),
         )),
         _ => {
             let rendered = match loaded.config.output() {
@@ -465,7 +505,7 @@ async fn comment(
     out: &mut impl Write,
     loaded: &Loaded,
     command: &CommentCommand,
-) -> Result<u8, String> {
+) -> Result<u8, Failure> {
     let rendered = match command {
         CommentCommand::Add(args) => {
             // The body is read and refused before anything is built or read, so an empty
@@ -478,7 +518,7 @@ async fn comment(
             let added = engine(loaded)
                 .add_comment(&task, &comment)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             rendering(loaded, &added, render::comment, "the comment")?
         }
         CommentCommand::List(args) => {
@@ -486,7 +526,7 @@ async fn comment(
             let listed = engine(loaded)
                 .comments(&task)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             rendering(loaded, &listed, render::comments, "the comments")?
         }
         CommentCommand::Edit(args) => {
@@ -495,7 +535,7 @@ async fn comment(
             let edited = engine(loaded)
                 .edit_comment(&task, &args.comment_id, &body)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             rendering(loaded, &edited, render::comment, "the comment")?
         }
         CommentCommand::Delete(args) => {
@@ -503,7 +543,7 @@ async fn comment(
             let deleted = engine(loaded)
                 .delete_comment(&task, &args.comment_id)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failure::from(&error))?;
             rendering(loaded, &deleted, render::deleted, "the deletion")?
         }
     };
@@ -517,7 +557,7 @@ fn rendering<T: Serialize>(
     value: &T,
     text: impl FnOnce(&T) -> String,
     what: &str,
-) -> Result<String, String> {
+) -> Result<String, Failure> {
     match loaded.config.output() {
         OutputFormat::Text => Ok(text(value)),
         OutputFormat::Json => json(value, what),
@@ -529,15 +569,18 @@ fn rendering<T: Serialize>(
 /// Never trimmed and never normalised: a trailing newline is part of what was written. Text
 /// that is not UTF-8 is refused rather than repaired, because a repaired body is not the one
 /// the caller wrote.
-fn body(path: Option<&std::path::Path>) -> Result<CommentBody, String> {
+fn body(path: Option<&std::path::Path>) -> Result<CommentBody, Failure> {
     let (bytes, from) = match path {
         Some(path) => (
             std::fs::read(path).map_err(|error| {
-                format!(
-                    "--body-file {}: could not read it: {error}\n\
-                     next: name a readable file, or leave --body-file out and pass the body on \
-                     standard input.",
-                    path.display()
+                Failure::decided(
+                    "comment-body",
+                    format!(
+                        "--body-file {}: could not read it: {error}\n\
+                        next: name a readable file, or leave --body-file out and pass the body on \
+                        standard input.",
+                        path.display()
+                    ),
                 )
             })?,
             format!("--body-file {}", path.display()),
@@ -545,24 +588,33 @@ fn body(path: Option<&std::path::Path>) -> Result<CommentBody, String> {
         None => {
             let mut bytes = Vec::new();
             io::Read::read_to_end(&mut io::stdin().lock(), &mut bytes).map_err(|error| {
-                format!(
-                    "could not read the comment body from standard input: {error}\n\
-                     next: pass the body with --body-file PATH instead."
+                Failure::decided(
+                    "comment-body",
+                    format!(
+                        "could not read the comment body from standard input: {error}\n\
+                        next: pass the body with --body-file PATH instead."
+                    ),
                 )
             })?;
             (bytes, "standard input".to_owned())
         }
     };
     let text = String::from_utf8(bytes).map_err(|error| {
-        format!(
-            "the comment body on {from} is not UTF-8 text: {error}\n\
-             next: save the body as UTF-8 and pass it again."
+        Failure::decided(
+            "comment-body",
+            format!(
+                "the comment body on {from} is not UTF-8 text: {error}\n\
+                next: save the body as UTF-8 and pass it again."
+            ),
         )
     })?;
     CommentBody::new(text).map_err(|_| {
-        format!(
-            "the comment body on {from} is empty, and a comment has to say something\n\
-             next: write the comment's text to {from} and run the command again."
+        Failure::decided(
+            "comment-body",
+            format!(
+                "the comment body on {from} is empty, and a comment has to say something\n\
+                next: write the comment's text to {from} and run the command again."
+            ),
         )
     })
 }
@@ -572,11 +624,11 @@ fn body(path: Option<&std::path::Path>) -> Result<CommentBody, String> {
 /// The command line has no copy path of its own: this builds the one public request type
 /// and calls the one public method, so a copy typed at a shell and a copy a Rust caller
 /// makes cannot answer differently.
-async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> Result<u8, String> {
+async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> Result<u8, Failure> {
     let report = engine(loaded)
         .copy(request)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| Failure::from(&error))?;
     let rendered = match loaded.config.output() {
         OutputFormat::Text => render::copied(&report),
         OutputFormat::Json => json(&report, "the copy")?,
@@ -590,20 +642,26 @@ fn copy_request<'a>(
     ids: impl Iterator<Item = &'a str>,
     scope: CopyScope,
     args: &CopyArgs,
-) -> Result<CopyRequest, String> {
+) -> Result<CopyRequest, Failure> {
     let items = ids.map(qualified).collect::<Result<Vec<_>, _>>()?;
     Ok(CopyRequest {
-        items: CopyItems::new(items).ok_or(
-            "no id to copy\n\
-             next: name at least one qualified id — `onetaskgraph task list` reports them.",
-        )?,
+        items: CopyItems::new(items).ok_or_else(|| {
+            Failure::decided(
+                "no-id",
+                "no id to copy\n\
+                 next: name at least one qualified id — `onetaskgraph task list` reports them.",
+            )
+        })?,
         scope,
         destination: SourceName::new(args.to.clone()).map_err(|error| {
-            format!(
-                "--to {}: {error}\n\
-                 next: name a configured source — `onetaskgraph sources list` reports \
-                 them.",
-                args.to
+            Failure::decided(
+                "invalid-source-name",
+                format!(
+                    "--to {}: {error}\n\
+                     next: name a configured source — `onetaskgraph sources list` reports \
+                     them.",
+                    args.to
+                ),
             )
         })?,
         match_by: args.match_by.as_deref().map(MatchBy::parse),
@@ -639,15 +697,18 @@ fn report(errors: &[SourceFailure], allow_partial: bool) -> u8 {
 }
 
 /// The sources a request addresses, checked against the pattern a name must match.
-fn selection(args: &SelectionArgs) -> Result<Vec<SourceName>, String> {
+fn selection(args: &SelectionArgs) -> Result<Vec<SourceName>, Failure> {
     args.source
         .iter()
         .map(|name| {
             SourceName::new(name.clone()).map_err(|error| {
-                format!(
-                    "--source {name}: {error}\n\
-                     next: name a configured source — `onetaskgraph sources list` reports \
-                     them."
+                Failure::decided(
+                    "invalid-source-name",
+                    format!(
+                        "--source {name}: {error}\n\
+                         next: name a configured source — `onetaskgraph sources list` \
+                         reports them."
+                    ),
                 )
             })
         })
@@ -655,7 +716,7 @@ fn selection(args: &SelectionArgs) -> Result<Vec<SourceName>, String> {
 }
 
 /// The filters a list verb was given.
-fn filters(args: &FilterArgs) -> Result<Filters, String> {
+fn filters(args: &FilterArgs) -> Result<Filters, Failure> {
     Ok(Filters {
         text: args.search.as_ref().map(|terms| TextQuery {
             terms: terms.clone(),
@@ -712,28 +773,34 @@ fn selector(engine: &Engine, project: Option<&str>, orphans: bool) -> ProjectSel
 }
 
 /// One qualified id, as a verb that takes one reads it.
-fn qualified(id: &str) -> Result<GlobalId, String> {
+fn qualified(id: &str) -> Result<GlobalId, Failure> {
     GlobalId::from_str(id).map_err(|error| {
-        format!(
-            "{error}\n\
-             next: qualify the id with the source it belongs to — `onetaskgraph sources \
-             list` reports the configured names."
+        Failure::decided(
+            "invalid-id",
+            format!(
+                "{error}\n\
+                 next: qualify the id with the source it belongs to — `onetaskgraph sources \
+                 list` reports the configured names."
+            ),
         )
     })
 }
 
 /// Which page a verb was asked for.
-fn paging(loaded: &Loaded, args: &PageArgs) -> Result<Paging, String> {
+fn paging(loaded: &Loaded, args: &PageArgs) -> Result<Paging, Failure> {
     let limit = args.limit.unwrap_or_else(|| loaded.config.page_size());
     let token = args
         .page
         .as_ref()
         .map(|raw| {
             PageToken::parse(raw.clone()).map_err(|error| {
-                format!(
-                    "--page: {error}\n\
-                     next: pass a token exactly as a previous page reported it, or drop \
-                     --page to start the walk again."
+                Failure::decided(
+                    "page-token",
+                    format!(
+                        "--page: {error}\n\
+                         next: pass a token exactly as a previous page reported it, or drop \
+                         --page to start the walk again."
+                    ),
                 )
             })
         })
@@ -742,7 +809,10 @@ fn paging(loaded: &Loaded, args: &PageArgs) -> Result<Paging, String> {
 }
 
 /// One dependency walk, as a verb that takes one reads it.
-fn dependency_request(loaded: &Loaded, args: &DependencyArgs) -> Result<DependencyRequest, String> {
+fn dependency_request(
+    loaded: &Loaded,
+    args: &DependencyArgs,
+) -> Result<DependencyRequest, Failure> {
     Ok(DependencyRequest {
         id: qualified(&args.id)?,
         direction: args.direction.direction(),
@@ -751,17 +821,21 @@ fn dependency_request(loaded: &Loaded, args: &DependencyArgs) -> Result<Dependen
 }
 
 /// One value as pretty-printed JSON.
-fn json(value: &impl Serialize, what: &str) -> Result<String, String> {
-    serde_json::to_string_pretty(value).map_err(|error| format!("could not render {what}: {error}"))
+fn json(value: &impl Serialize, what: &str) -> Result<String, Failure> {
+    serde_json::to_string_pretty(value)
+        .map_err(|error| Failure::decided("render", format!("could not render {what}: {error}")))
 }
 
 /// The schema bundle as pretty-printed JSON.
-fn schema_bundle() -> Result<String, String> {
+fn schema_bundle() -> Result<String, Failure> {
     let mut bundle = onetaskgraph_core::schema_bundle();
-    bundle["commands"] = serde_json::to_value(public_commands()?)
-        .map_err(|error| format!("could not render the command surface: {error}"))?;
-    serde_json::to_string_pretty(&bundle)
-        .map_err(|error| format!("could not render the schema bundle: {error}"))
+    bundle["commands"] = serde_json::to_value(public_commands()?).map_err(|error| {
+        Failure::decided(
+            "render",
+            format!("could not render the command surface: {error}"),
+        )
+    })?;
+    json(&bundle, "the schema bundle")
 }
 
 /// Every public leaf command, derived from the same clap tree that parses invocations.
@@ -770,20 +844,23 @@ fn schema_bundle() -> Result<String, String> {
 struct PublicCommand(String);
 
 impl PublicCommand {
-    fn try_new(path: String) -> Result<Self, String> {
+    fn try_new(path: String) -> Result<Self, Failure> {
         if path.is_empty() || path.split(' ').any(|part| part.is_empty()) {
-            return Err(format!("invalid public command path {path:?}"));
+            return Err(Failure::decided(
+                "render",
+                format!("invalid public command path {path:?}"),
+            ));
         }
         Ok(Self(path))
     }
 }
 
-fn public_commands() -> Result<Vec<PublicCommand>, String> {
+fn public_commands() -> Result<Vec<PublicCommand>, Failure> {
     fn leaves(
         command: &clap::Command,
         prefix: &str,
         commands: &mut Vec<PublicCommand>,
-    ) -> Result<(), String> {
+    ) -> Result<(), Failure> {
         let visible: Vec<_> = command
             .get_subcommands()
             .filter(|child| !child.is_hide_set())
@@ -811,24 +888,25 @@ fn public_commands() -> Result<Vec<PublicCommand>, String> {
 }
 
 /// The effective configuration, in the format it asks for.
-fn effective_config(loaded: &Loaded) -> Result<String, String> {
+fn effective_config(loaded: &Loaded) -> Result<String, Failure> {
     match loaded.config.output() {
         OutputFormat::Text => Ok(loaded.effective.render_text()),
-        OutputFormat::Json => serde_json::to_string_pretty(&loaded.effective)
-            .map_err(|error| format!("could not render the configuration: {error}")),
+        OutputFormat::Json => json(&loaded.effective, "the configuration"),
     }
 }
 
 /// Load the configuration: documents, then the environment, then these flags.
-fn load(flags: &Layer) -> Result<Loaded, String> {
+fn load(flags: &Layer, environment: &Environment) -> Result<Loaded, Failure> {
     let working_directory = std::env::current_dir().map_err(|error| {
-        format!(
-            "could not read the working directory: {error}\n\
-             next: run this from a directory that still exists."
+        Failure::decided(
+            "working-directory",
+            format!(
+                "could not read the working directory: {error}\n\
+                 next: run this from a directory that still exists."
+            ),
         )
     })?;
-    onetaskgraph_core::config::load(&working_directory, &Environment::from_process(), flags)
-        .map_err(|error| error.to_string())
+    config::load(&working_directory, environment, flags).map_err(|error| Failure::from(&error))
 }
 
 /// Write `rendered` and a newline, reporting a failed write rather than dying at drop.
@@ -836,10 +914,11 @@ fn load(flags: &Layer) -> Result<Loaded, String> {
 /// The flush is explicit: a user piping into `head` closes the reader early, and a
 /// buffered write that fails at drop would exit zero having emitted a truncated
 /// document that a generator would then happily consume.
-fn emit(out: &mut impl Write, rendered: &str, what: &str) -> Result<(), String> {
-    writeln!(out, "{rendered}").map_err(|error| format!("could not write {what}: {error}"))?;
-    out.flush()
-        .map_err(|error| format!("could not write {what}: {error}"))
+fn emit(out: &mut impl Write, rendered: &str, what: &str) -> Result<(), Failure> {
+    let unwritten =
+        |error: io::Error| Failure::decided("write", format!("could not write {what}: {error}"));
+    writeln!(out, "{rendered}").map_err(unwritten)?;
+    out.flush().map_err(unwritten)
 }
 
 #[cfg(test)]
@@ -854,7 +933,7 @@ mod tests {
     /// What `run` does with the configuration is proven where it can be proven honestly:
     /// by the journeys in `tests/configuration.rs`, which drive this binary as a
     /// subprocess against a sandboxed host.
-    fn write_schema_bundle(out: &mut impl Write) -> Result<(), String> {
+    fn write_schema_bundle(out: &mut impl Write) -> Result<(), Failure> {
         emit(out, schema_bundle()?.trim_end(), "the schema bundle")
     }
 
@@ -921,7 +1000,8 @@ mod tests {
         let mut sink = Failing {
             fail_on_write: true,
         };
-        let message = write_schema_bundle(&mut sink).expect_err("writes refused");
+        let failure = write_schema_bundle(&mut sink).expect_err("writes refused");
+        let message = failure.message();
         assert!(
             message.contains("could not write the schema bundle"),
             "{message}"
@@ -935,7 +1015,8 @@ mod tests {
         let mut sink = Failing {
             fail_on_write: false,
         };
-        let message = write_schema_bundle(&mut sink).expect_err("flushes refused");
+        let failure = write_schema_bundle(&mut sink).expect_err("flushes refused");
+        let message = failure.message();
         assert!(
             message.contains("could not write the schema bundle"),
             "{message}"

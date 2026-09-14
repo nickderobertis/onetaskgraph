@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.30](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.29...onetaskgraph-github-projects-v0.2.30) - 2026-09-14
+
+### Added
+
+- *(copy)* copy only a project's named members, and report what it spent ([#904](https://github.com/nickderobertis/onetaskgraph/pull/904))
+
+## [0.2.29](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.28...onetaskgraph-github-projects-v0.2.29) - 2026-09-14
+
+### Fixed
+
+- *(github-projects)* state why unknown ships disabled and never close it ([#915](https://github.com/nickderobertis/onetaskgraph/pull/915))
+
 ## [0.2.28](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.27...onetaskgraph-github-projects-v0.2.28) - 2026-09-11
 
 ### Added

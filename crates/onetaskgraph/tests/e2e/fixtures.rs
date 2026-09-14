@@ -809,6 +809,8 @@ struct GitHubBoard {
     lagging_reads: usize,
     /// Every GraphQL document this board has received, in order.
     documents: Vec<String>,
+    /// The variables each of those documents was sent with, at the same index.
+    variables: Vec<Value>,
     /// The board's **own** title, description and readme — a person's, not this
     /// product's. `updateProjectV2` is answered here rather than refused so that a
     /// journey asserting these are byte-identical after a copy fails when something
@@ -832,6 +834,22 @@ impl GitHubBoardFields {
     #[must_use]
     pub fn documents(&self) -> Vec<String> {
         self.board.lock().unwrap().documents.clone()
+    }
+
+    /// Every GraphQL request this board has served, in order: the document and the
+    /// variables it was sent with.
+    ///
+    /// The variables are what name the node a per-issue read reached, which is what a
+    /// journey needs to say that a copy read *these* issues and no others.
+    #[must_use]
+    pub fn served(&self) -> Vec<(String, Value)> {
+        let board = self.board.lock().unwrap();
+        board
+            .documents
+            .iter()
+            .cloned()
+            .zip(board.variables.iter().cloned())
+            .collect()
     }
 
     /// Which of the documents this board received selected the board's own item
@@ -983,7 +1001,7 @@ impl GitHubBoard {
         let board_item = self.rendered(item);
         let mut issue = self.content(item);
         issue["projectItems"] = json!({"nodes":[{"id":board_item["id"],
-                                                 "project":{"number":7},
+                                                 "project":{"id":"PVT-board","number":7},
                                                  "fieldValues":board_item["fieldValues"]}],
                                        "pageInfo":{"hasNextPage":false}});
         issue
@@ -1175,6 +1193,7 @@ fn github_projects_board_at(
         created: 0,
         lagging_reads,
         documents: Vec::new(),
+        variables: Vec::new(),
         own: json!({"title":"Fixture board",
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
@@ -1197,7 +1216,11 @@ fn github_projects_board_at(
                 panic!("GraphQL request carries no variables object: {request}")
             });
             let variables = Value::Object(variables.clone());
-            board.lock().unwrap().documents.push(query.to_owned());
+            {
+                let mut served = board.lock().unwrap();
+                served.documents.push(query.to_owned());
+                served.variables.push(variables.clone());
+            }
             let owed = owed_failures
                 .iter()
                 .position(|operation| query.contains(operation));
@@ -1223,29 +1246,86 @@ fn github_projects_board_at(
         }
     });
     (
-        json!({
-            "owner": "fixture-owner",
-            "project_number": 7,
-            "repository": "nickderobertis/onetaskgraph",
-            "token_env": "GITHUB_PROJECTS_FIXTURE_TOKEN",
-            "endpoint": endpoint.clone(),
-            // `done` and `cancelled` keep their shipped defaults, which close the issue:
-            // GitHub derives a project's `Sub-issues progress` from closed sub-issues, so a
-            // plan whose finished tasks were only moved to a column reads 0% complete forever.
-            "status_mapping": {"todo":"Todo","in-progress":"Doing"},
-            // This board is a socket on loopback, not github.com, and it has no rate
-            // limiter to be paced for. The shipped default spaces a content-creating
-            // mutation every 750 ms so a copy cannot trip GitHub's secondary limit; left
-            // on here it would buy nothing and would spend that per mutation on every
-            // journey that writes. The pacing itself is proven where it is the subject, in
-            // `crates/onetaskgraph-github-projects/tests/plugin.rs`.
-            "pacing": {"min_mutation_interval_ms": 0}
-        }),
+        github_projects_block_at(&endpoint),
         GitHubBoardFields {
             endpoint,
             board: watched,
         },
     )
+}
+
+/// One block shared by the working, rate-limited and unreachable boards, so a failure
+/// journey's board differs from the working one only in what that journey sets: the class
+/// it asserts then comes from the endpoint's answer, never from a configuration drifting.
+fn github_projects_block_at(endpoint: &str) -> Value {
+    json!({
+        "owner": "fixture-owner",
+        "project_number": 7,
+        "repository": "nickderobertis/onetaskgraph",
+        "token_env": "GITHUB_PROJECTS_FIXTURE_TOKEN",
+        "endpoint": endpoint,
+        // `done` and `cancelled` keep their shipped defaults, which close the issue:
+        // GitHub derives a project's `Sub-issues progress` from closed sub-issues, so a
+        // plan whose finished tasks were only moved to a column reads 0% complete forever.
+        "status_mapping": {"todo":"Todo","in-progress":"Doing"},
+        // This board is a socket on loopback, not github.com, and it has no rate
+        // limiter to be paced for. The shipped default spaces a content-creating
+        // mutation every 750 ms so a copy cannot trip GitHub's secondary limit; left
+        // on here it would buy nothing and would spend that per mutation on every
+        // journey that writes. The pacing itself is proven where it is the subject, in
+        // `crates/onetaskgraph-github-projects/tests/plugin.rs`.
+        "pacing": {"min_mutation_interval_ms": 0}
+    })
+}
+
+/// A board whose rate limiter refuses every request, asking for `retry_after` seconds
+/// when it is given.
+///
+/// GitHub's primary limit answers `429 Too Many Requests`, with a `retry-after` when it
+/// names a wait. The source is given no retry budget, so it reports the first refusal
+/// rather than waiting it out: what is under test is what a caller is told, not how long
+/// the source is prepared to wait before telling it.
+pub fn github_projects_rate_limited(sandbox: &Sandbox, retry_after: Option<u64>) -> Value {
+    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
+    let endpoint = format!(
+        "http://{}/graphql",
+        listener.local_addr().expect("fixture address")
+    );
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.expect("GitHub fixture connection");
+            read_http_json(&mut stream);
+            let body = json!({"message": "API rate limit exceeded for this fixture"}).to_string();
+            let wait = retry_after
+                .map(|seconds| format!("retry-after: {seconds}\r\n"))
+                .unwrap_or_default();
+            let response = format!(
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\n{wait}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("GitHub fixture response");
+        }
+    });
+    let mut block = github_projects_block_at(&endpoint);
+    block["pacing"]["retry_budget_ms"] = json!(0);
+    block
+}
+
+/// A board at an address nothing listens on.
+///
+/// The port is bound and released again, so it is one this host just handed out and
+/// nothing has had reason to take since: a connection to it is refused outright rather
+/// than left waiting on a host that might answer.
+pub fn github_projects_unreachable(sandbox: &Sandbox) -> Value {
+    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
+    let address = TcpListener::bind("127.0.0.1:0")
+        .expect("GitHub fixture listener")
+        .local_addr()
+        .expect("fixture address");
+    github_projects_block_at(&format!("http://{address}/graphql"))
 }
 
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
@@ -1594,14 +1674,14 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             variables["after"].is_null() || variables["after"].is_string(),
             "dependency after must be null or a string"
         );
-        let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
+        let Some(near) = board.items.iter().find(|item| item["id"] == json!(id)) else {
             return json!({ "node": null });
         };
         // A draft has neither `blockedBy` nor `blocking`.
-        if GitHubBoard::is_draft(item) {
+        if GitHubBoard::is_draft(near) {
             return json!({"node":{"__typename":"DraftIssue"}});
         }
-        return json!({"node":{"__typename":"Issue",
+        return json!({"node":{"__typename":"Issue","body":near["body"].clone(),
             "blockedBy":{"nodes":board.related(&id, false),
                          "pageInfo":{"hasNextPage":false,"endCursor":null}},
             "blocking":{"nodes":board.related(&id, true),

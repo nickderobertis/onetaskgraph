@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery,
-    ItemWrite, Label, NativeId, NewComment, Page, PageRequest, Project, ProjectQuery, SourceError,
-    SourceName, Task, TaskQuery, WriteSupport, commentless, documentless, unwritable,
+    ItemWrite, Label, Metering, NativeId, NewComment, Page, PageRequest, Project, ProjectQuery,
+    SourceError, SourceName, Task, TaskQuery, WriteSupport, commentless, documentless, unwritable,
 };
 
 /// Whether a source is answering right now.
@@ -361,6 +361,24 @@ pub trait TaskSource: Send + Sync {
     ) -> Result<Option<NativeId>, SourceError> {
         let _ = (task, comment);
         Err(commentless(self.kind()))
+    }
+
+    /// What this source has sent to its backend since it was built and what that spent, or
+    /// `None` when it does not meter its own requests.
+    ///
+    /// Defaulted to `None`, which is what keeps metering an addition rather than a break: a
+    /// source that does not count its requests needs no edit, and is reported as not
+    /// metering rather than as having spent nothing. A source that answers owes a running
+    /// total — see [`Metering`] — because what one command spent is read as the difference
+    /// between two readings.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the reading itself could not be taken. A caller
+    /// reports such a source as not metering; what a command cost is never a reason for the
+    /// command to fail.
+    async fn metering(&self) -> Result<Option<Metering>, SourceError> {
+        Ok(None)
     }
 }
 
