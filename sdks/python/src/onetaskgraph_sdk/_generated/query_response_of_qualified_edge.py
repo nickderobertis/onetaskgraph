@@ -13,6 +13,11 @@ class DependencyKind(StrEnum):
     DependencyKindRelated = "related"
 
 
+class FailureClass(StrEnum):
+    FailureClassRefused = "refused"
+    FailureClassTransient = "transient"
+
+
 class GlobalId(RootModel[str]):
     root: Annotated[
         str,
@@ -180,6 +185,13 @@ class QueryPlan(BaseModel):
 
 
 class SourceFailure(BaseModel):
+    class_: Annotated[
+        FailureClass,
+        Field(
+            alias="class",
+            description="Whether repeating the request unchanged could change this source's answer.",
+        ),
+    ]
     error: Annotated[SourceError, Field(description="Why.")]
     source: Annotated[SourceName, Field(description="The source that failed.")]
 

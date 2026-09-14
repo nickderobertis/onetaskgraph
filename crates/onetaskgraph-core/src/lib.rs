@@ -32,6 +32,7 @@ pub mod config;
 mod engine;
 
 mod environment;
+mod failure;
 mod global_id;
 mod plan;
 mod registry;
@@ -49,6 +50,7 @@ pub use engine::{
     SourceState, TaskRequest,
 };
 pub use environment::Environment;
+pub use failure::{Failure, FailureClass, FailureDocument, classify};
 pub use global_id::GlobalId;
 pub use plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
 pub use registry::{PluginKind, plugin_for, plugin_kinds, registry};
