@@ -2301,6 +2301,11 @@ fn optional_str<'a>(v: &'a Value, k: &str) -> Result<Option<&'a str>, SourceErro
 /// at the end of `description`; its later write side must use this exact encoding.
 const METADATA_OPEN: &str = "<!-- onetaskgraph.metadata\n";
 const METADATA_CLOSE: &str = "\n-->";
+/// The same close as Linear hands a document's `content` back: it stores a document as
+/// Markdown and escapes a line opening `-->`, so the slot this source wrote reads back with
+/// a backslash before its close (observed from the real API on 2026-09-14). An issue's or a
+/// project's `description` comes back as written. The write side keeps the one encoding.
+const METADATA_CLOSE_ESCAPED: &str = "\n\\-->";
 
 fn metadata_description(
     description: Option<String>,
@@ -2312,16 +2317,21 @@ fn metadata_description(
         return Ok((Some(description), Default::default()));
     };
     let encoded_start = start + METADATA_OPEN.len();
-    let Some(relative_end) = description[encoded_start..].find(METADATA_CLOSE) else {
+    let close = [METADATA_CLOSE, METADATA_CLOSE_ESCAPED]
+        .into_iter()
+        .filter_map(|close| {
+            description[encoded_start..]
+                .find(close)
+                .map(|at| (at, close.len()))
+        })
+        .min();
+    let Some((relative_end, close_len)) = close else {
         return Err(SourceError::Malformed {
             message: "unterminated onetaskgraph metadata slot in Linear description".into(),
         });
     };
     let encoded_end = encoded_start + relative_end;
-    if !description[encoded_end + METADATA_CLOSE.len()..]
-        .trim()
-        .is_empty()
-    {
+    if !description[encoded_end + close_len..].trim().is_empty() {
         return Ok((Some(description), Default::default()));
     }
     let metadata =

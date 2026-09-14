@@ -29,6 +29,15 @@ than left to be rediscovered:
   asked for the documents belonging to no project, and this source applies that one
   predicate to a fetched page itself.
 
+A third was not in that schema and was captured from the real API on **2026-09-14**, the
+first time the credentialed journey read a document back inside the required check:
+**Linear stores a document's `content` as Markdown and escapes the metadata slot's close.**
+The slot written as `…\n-->` came back as `…\n\-->`, and the reader refused it as
+unterminated. An issue's and a project's `description` come back as written. So the reader
+accepts either close, the write side keeps its one encoding, and
+`a_document_reads_back_the_slot_linear_escaped_when_it_stored_the_content` serves the
+captured shape.
+
 `ProjectRelationCreateInput` carries a fourth date. Linear added two required fields to it
 — `anchorType: String!` and `relatedAnchorType: String!` — and the live journey's project
 write began failing with `Field "anchorType" of required type "String!" was not provided.`

@@ -3605,6 +3605,25 @@ async fn one_document_is_shown_by_its_id_and_an_unknown_one_is_no_document() {
 }
 
 #[tokio::test]
+async fn a_document_reads_back_the_slot_linear_escaped_when_it_stored_the_content() {
+    // Live-captured on 2026-09-14: Linear keeps a document's content as Markdown and hands
+    // the slot this source wrote back with its close escaped, which the live lane's own
+    // read-back was refused on as an unterminated slot.
+    let (endpoint, _) = response_server(vec![serde_json::json!({"document":{"id":"d1",
+        "title":"Fixture design note",
+        "content":"Body\n\n<!-- onetaskgraph.metadata\n{\"caller.count\":3}\n\\-->",
+        "url":"https://linear.app/acme/document/d1","createdAt":null,"updatedAt":null,
+        "project":{"id":"p1"}}})]);
+    let shown = source(&endpoint)
+        .get_document(&"d1".into())
+        .await
+        .expect("a slot whose close Linear escaped still reads")
+        .expect("and is there");
+    assert_eq!(shown.content.as_deref(), Some("Body"));
+    assert_eq!(shown.metadata["caller.count"], serde_json::json!(3));
+}
+
+#[tokio::test]
 async fn a_document_is_created_updated_and_removed_again_over_real_http() {
     let document = |id: &str| {
         serde_json::json!({"document":{"id":id,"title":"Design","content":"Body",
