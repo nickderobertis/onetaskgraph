@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.31](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.2.30...onetaskgraph-linear-v0.2.31) - 2026-09-14
+
+### Added
+
+- *(cli)* comment on a task with task comment add, list, edit and delete across every plugin ([#1073](https://github.com/nickderobertis/onetaskgraph/pull/1073))
+
 ## [0.2.24](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.2.23...onetaskgraph-linear-v0.2.24) - 2026-09-06
 
 ### Fixed
