@@ -27,8 +27,9 @@ pub struct Metering {
 /// came from.
 ///
 /// Two amounts rather than one beside a flag: a figure the backend reported or a request
-/// counted is a measurement, and a figure the source modelled is an estimate, and a caller
-/// adding readings up has to keep the two apart to say which a total is.
+/// counted is a measurement, while a figure the source modelled is a lower bound on what the
+/// backend charged. A caller adding readings up has to keep the two apart to say which a
+/// total is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Metered {
     /// The budget, as the backend names it — `graphql`, `rest`.
@@ -41,8 +42,8 @@ pub struct Metered {
     /// requests against a budget metered in requests.
     #[serde(default)]
     pub measured: u64,
-    /// How much was spent against it that is this source's own model rather than a
-    /// measurement — a lower bound, when the model is a minimum charge per call.
+    /// How much was spent against it that this source modelled rather than measured, which
+    /// is a lower bound on what the backend charged for it.
     #[serde(default)]
     pub modelled: u64,
 }
