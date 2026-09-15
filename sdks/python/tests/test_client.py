@@ -34,18 +34,6 @@ def run[T](awaitable: Awaitable[T]) -> T:
     return asyncio.run(awaitable)
 
 
-@pytest.fixture(scope="session")
-def binary() -> Path:
-    """Build and return the real workspace executable."""
-    subprocess.run(
-        ["cargo", "build", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph"],
-        cwd=WORKSPACE,
-        check=True,
-    )
-    suffix = ".exe" if sys.platform == "win32" else ""
-    return (WORKSPACE / "target" / "debug" / f"onetaskgraph{suffix}").resolve()
-
-
 def configured(tmp_path: Path, *, failing: bool = False) -> Path:
     """Create real Markdown and in-memory sources, optionally with one broken source."""
     markdown = tmp_path / "markdown" / "tasks"
