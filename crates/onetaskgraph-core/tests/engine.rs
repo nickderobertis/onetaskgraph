@@ -479,11 +479,11 @@ const FOURTEENTH_BUNDLE_SHAPE: [(&str, u64); 71] = [
     ("CommentList", 0xcd30d5deff29948d),
     ("CopyAction", 0x92821be0daa46894),
     ("CopyOutcome", 0xefcf23cfbd5dde3b),
-    ("CopyReport", 0x877b007bfc3c1ce0),
+    ("CopyReport", 0x7a640011d2f09d1c),
     ("CredentialLayer", 0x54cdffe467a3b7f1),
     ("DeletedComment", 0xaa757b7907bb38f8),
-    ("Delivered", 0x9eceb730d10394d4),
-    ("DeliveryOutcome", 0xd67a841466373d03),
+    ("Delivered", 0xd27ae244686ce058),
+    ("DeliveryOutcome", 0xdffbe7762b598b85),
     ("DependencyEdge", 0x965fcb2880071dcc),
     ("DependencyEndpoint", 0x52371a0138569604),
     ("DependencyKind", 0x62a3106e8479701a),
@@ -543,7 +543,7 @@ const FOURTEENTH_BUNDLE_SHAPE: [(&str, u64); 71] = [
     ("TaskDetail", 0xad3a71cf45fae03f),
     ("TaskQuery", 0x2d26e14d71c36263),
     ("TaskRef", 0xad8ce2508e0797c7),
-    ("TaskStatusSet", 0x3186549e9888cf8e),
+    ("TaskStatusSet", 0xbe06dc239bf5eeb0),
     ("TextFields", 0x7240bd05f9beff93),
 ];
 

@@ -612,7 +612,7 @@ export const runtimeSchemas = {
             "properties": {
               "failure": {
                 "$ref": "#/$defs/Failure",
-                "description": "Why, as every other verb reports a failure."
+                "description": "Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
               },
               "from": {
                 "anyOf": [
@@ -1085,7 +1085,7 @@ export const runtimeSchemas = {
         "properties": {
           "failure": {
             "$ref": "#/$defs/Failure",
-            "description": "Why, as every other verb reports a failure."
+            "description": "Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
           },
           "from": {
             "anyOf": [
@@ -1315,7 +1315,7 @@ export const runtimeSchemas = {
         "properties": {
           "failure": {
             "$ref": "#/$defs/Failure",
-            "description": "Why, as every other verb reports a failure."
+            "description": "Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
           },
           "from": {
             "anyOf": [
@@ -10856,7 +10856,7 @@ export const runtimeSchemas = {
             "properties": {
               "failure": {
                 "$ref": "#/$defs/Failure",
-                "description": "Why, as every other verb reports a failure."
+                "description": "Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
               },
               "from": {
                 "anyOf": [

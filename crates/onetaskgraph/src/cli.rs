@@ -513,6 +513,9 @@ pub struct CopyArgs {
     pub recreate: bool,
 
     /// Perform every read, write nothing, and report what would have happened.
+    ///
+    /// A dry run keeps no delivered task in step, so its `delivered` list is always empty —
+    /// which says nothing about whether any delivered task would have moved.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
 }

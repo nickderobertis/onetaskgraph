@@ -84,7 +84,12 @@ class Failure(BaseModel):
 
 
 class DeliveryOutcomeFailed(BaseModel):
-    failure: Annotated[Failure, Field(description="Why, as every other verb reports a failure.")]
+    failure: Annotated[
+        Failure,
+        Field(
+            description="Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
+        ),
+    ]
     from_: Annotated[
         StatusCategory | None,
         Field(alias="from", description="The category it read, when it could be read."),

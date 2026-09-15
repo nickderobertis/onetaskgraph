@@ -89,7 +89,9 @@ pub enum DeliveryOutcome {
         /// The category it read, when it could be read.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from: Option<StatusCategory>,
-        /// Why, as every other verb reports a failure.
+        /// Why, as the failure object itself: the same `class`, `kind`, `source`, `message`
+        /// and `retry_after_seconds` a failure document carries under its own `failure`
+        /// member — not that whole document nested again.
         failure: Failure,
     },
 }

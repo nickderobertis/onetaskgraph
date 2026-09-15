@@ -911,6 +911,20 @@ and does not any more:
    does not name — is reported failed for that task, which is left as it was. The deliverer's
    own write still stands.
 
+A task the rule may not write — `draft`, `backlog`, `unknown`, `done` or `cancelled` — is
+reported without its other deliverers being read, so nothing is pruned from it and no unreadable
+deliverer fails it on that write; its back-reference is still added or removed.
+
+Each verb that writes a deliverer — `task status set`, and a copy that is not a dry run —
+reports one entry per task it re-evaluated in a `delivered` list: `ticket` and `deliverer`, the
+two qualified ids; `outcome`, one of `written`, `unchanged`, `left` or `failed`; `from`, the
+category the task read, present whenever it could be read; `to`, the category written, present
+only when `written`; `failure`, present only when `failed`; and `pruned`, the deliverers removed
+for being not found, present only when there were any. `failure` is the failure object itself —
+the `class`, `kind`, `source`, `message` and `retry_after_seconds` a failure document carries
+under its own `failure` member — not that whole document nested again. A dry run writes
+nothing, so it re-evaluates no task and its `delivered` list is empty.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every

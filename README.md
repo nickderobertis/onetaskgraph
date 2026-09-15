@@ -116,7 +116,9 @@ done, and `todo` when they release it. A delivered task at `draft`, `backlog`, `
 the deliverer's own write stands.
 A copy rewrites a `delivers` entry naming another item it copies to that item's new id,
 counts those under `delivers_rewritten`, and never carries `delivered_by`. Every verb that
-writes a deliverer reports each delivered task it evaluated under `delivered`.
+writes a deliverer reports each delivered task it evaluated under `delivered`. A `--dry-run`
+copy writes nothing and so keeps no delivered task in step: its `delivered` list is empty,
+which says nothing about whether a delivered task would have moved.
 
 How a source *spells* a document is its own business. A GitHub Projects board has no
 document type, so `github-projects` reads one as an ordinary issue whose title begins

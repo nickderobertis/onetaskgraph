@@ -498,7 +498,9 @@ spent?: (Spent | null)
 [k: string]: any
 }
 /**
- * Why, as every other verb reports a failure.
+ * Why, as the failure object itself: the same `class`, `kind`, `source`, `message`
+ * and `retry_after_seconds` a failure document carries under its own `failure`
+ * member — not that whole document nested again.
  */
 export interface Failure {
 /**
@@ -667,7 +669,9 @@ export type SourceName = string
 export type StatusCategory = ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
 
 /**
- * Why, as every other verb reports a failure.
+ * Why, as the failure object itself: the same `class`, `kind`, `source`, `message`
+ * and `retry_after_seconds` a failure document carries under its own `failure`
+ * member — not that whole document nested again.
  */
 export interface Failure {
 /**
@@ -746,7 +750,9 @@ export type SourceName = string
 export type StatusCategory = ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
 
 /**
- * Why, as every other verb reports a failure.
+ * Why, as the failure object itself: the same `class`, `kind`, `source`, `message`
+ * and `retry_after_seconds` a failure document carries under its own `failure`
+ * member — not that whole document nested again.
  */
 export interface Failure {
 /**
@@ -5844,7 +5850,9 @@ status: Status
 [k: string]: any
 }
 /**
- * Why, as every other verb reports a failure.
+ * Why, as the failure object itself: the same `class`, `kind`, `source`, `message`
+ * and `retry_after_seconds` a failure document carries under its own `failure`
+ * member — not that whole document nested again.
  */
 export interface Failure {
 /**
