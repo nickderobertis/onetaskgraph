@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 #[allow(dead_code)]
 mod settle;
 
-use settle::{Bound, settled_documents, settled_tasks, settled_walk};
+use settle::{Bound, MOST_DOCUMENT_PAGES, settled_documents, settled_tasks, settled_walk};
 
 /// Room for the late listings below, which agree on their third read, with reads to spare, so
 /// that a pass is the listing catching up rather than the bound running out on the last read.
@@ -473,4 +473,88 @@ async fn a_listing_that_cannot_be_read_fails_at_once_rather_than_waiting() {
     );
     assert_eq!(answered.load(Ordering::SeqCst), 1);
     assert!(started.elapsed() < BOUND.interval + SLACK);
+}
+
+#[tokio::test]
+async fn a_walk_given_more_than_one_row_on_a_page_of_one_fails_at_once() {
+    // Exactly the expected set, so only the page limit can refuse it.
+    let (source, answered) = workspace(|_, _| {
+        issues(vec![
+            issue("i1", "first", "p1"),
+            issue("i2", "second", "p1"),
+        ])
+    });
+    let started = Instant::now();
+    let refusal = settled_walk(
+        BOUND,
+        source.as_ref(),
+        &under("p1"),
+        10,
+        "a walk in pages of one",
+        &["first".to_owned(), "second".to_owned()],
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        refusal,
+        "a walk in pages of one returned 2 rows on a page of one"
+    );
+    assert_eq!(
+        answered.load(Ordering::SeqCst),
+        1,
+        "a page past its limit is not an index catching up, so it is not read again"
+    );
+    assert!(started.elapsed() < BOUND.interval + SLACK);
+}
+
+#[tokio::test]
+async fn a_walk_that_does_not_end_fails_at_its_page_bound_naming_what_it_reached() {
+    let (source, answered) = workspace(|_, _| issues_then(vec![issue("i1", "first", "p1")], "c1"));
+    let refusal = settled_walk(
+        BOUND,
+        source.as_ref(),
+        &under("p1"),
+        3,
+        "a walk in pages of one",
+        &expected("first"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        refusal,
+        r#"a walk in pages of one had not ended after 3 pages, having reached ["first", "first", "first"]"#
+    );
+    assert_eq!(answered.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn a_document_listing_that_does_not_end_fails_at_its_page_bound() {
+    // Every page full, so the plugin answers each of its pages with one request, and every page
+    // names another after it.
+    let (source, answered) = workspace(|_, _| {
+        documents_then(
+            (0..onetaskgraph_linear::MAX_PAGE_SIZE)
+                .map(|n| document(&format!("d{n}"), "filed", None))
+                .collect(),
+            "c1",
+        )
+    });
+    let refusal = settled_documents(
+        BOUND,
+        source.as_ref(),
+        &DocumentQuery::default(),
+        &|_| true,
+        "the documents this run created",
+        &expected("filed"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        refusal,
+        format!("the documents this run created had not ended after {MOST_DOCUMENT_PAGES} pages")
+    );
+    assert_eq!(
+        answered.load(Ordering::SeqCst) as usize,
+        MOST_DOCUMENT_PAGES
+    );
 }

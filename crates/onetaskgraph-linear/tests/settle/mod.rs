@@ -127,7 +127,10 @@ pub async fn walked_task_titles(
 }
 
 /// The most pages of documents one listing walks before it is refused as not ending.
-const MOST_DOCUMENT_PAGES: usize = 1_000;
+///
+/// Ten thousand documents at Linear's page size, which is far past what a scratch workspace
+/// holds; a workspace past it fails naming this bound rather than walking without end.
+pub const MOST_DOCUMENT_PAGES: usize = 100;
 
 /// The sorted titles `keep` accepts of every document `query` answers, to its last page.
 ///
