@@ -57,7 +57,8 @@ pub fn live_write_config(
     status_option: &str,
 ) -> Value {
     json!({"owner":owner,"project_number":project_number,"repository":repository,
-           "status_mapping":{"todo":status_option,"backlog":null,"in-progress":null}})
+           "status_mapping":{"todo":status_option,"backlog":null,"queued":null,
+                             "in-progress":null}})
 }
 
 /// The prefix of every board item this lane writes.

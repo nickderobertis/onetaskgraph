@@ -137,7 +137,13 @@ fn the_lanes_write_configuration_is_accepted_whatever_the_board_calls_its_first_
     // The lane discovers this option name from the board at run time, so its configuration
     // has to be accepted whichever name comes back — including each name a shipped default
     // already claims, which is where pointing `unknown` at the column collided.
-    for option in ["Todo", "Backlog", "In Progress", "Ready for review"] {
+    for option in [
+        "Todo",
+        "Backlog",
+        "Queued",
+        "In Progress",
+        "Ready for review",
+    ] {
         onetaskgraph_github_projects::Plugin
             .build(
                 &SourceName::new("github-live").unwrap(),
