@@ -1751,13 +1751,30 @@ fn an_engine_that_lists_no_statuses_is_told_queued_as_unknown_under_its_own_name
                    "page": {"cursor": null, "limit": 2}}});
     let set = json!({"id": "3", "method": "set_task_status",
         "params": {"id": "T-3", "category": "queued"}});
+    settings["config"]["projects"][0]["status"] = json!({"category": "queued", "name": "Queued"});
+    let project = json!({"id": "4", "method": "get_project", "params": {"id": "P-1"}});
+    let projects = json!({"id": "5", "method": "query_projects",
+        "params": {"query": {"text": null, "labels": {"any_of": [], "all_of": [], "none_of": []}, "statuses": []},
+                   "page": {"cursor": null, "limit": 2}}});
 
     let earlier = served(&[
         handshake(2, settings.clone()),
         get.clone(),
         list.clone(),
         set,
+        project,
+        projects,
     ]);
+    assert_eq!(
+        earlier[4]["result"]["project"]["status"],
+        json!({"category": "unknown", "name": "Queued"}),
+        "{earlier:?}"
+    );
+    assert_eq!(
+        earlier[5]["result"]["items"][0]["status"],
+        json!({"category": "unknown", "name": "Queued"}),
+        "{earlier:?}"
+    );
     assert_eq!(earlier[0]["result"]["task_updates"], json!(true));
     assert_eq!(
         earlier[0]["result"]["statuses"],

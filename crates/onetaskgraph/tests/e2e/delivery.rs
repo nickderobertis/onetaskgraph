@@ -168,6 +168,13 @@ fn a_status_set_on_local_markdown_rewrites_the_status_and_nothing_else() {
             "work": boundary.source("local-md", json!({"root": root})),
         })));
         let before = show(&sandbox, "work:T-1");
+        let deps_before = parsed(&exits(
+            &who,
+            &sandbox,
+            &["task", "deps", "work:T-1", "--json"],
+            0,
+        ))["items"]
+            .clone();
         let beta = read(&root, "tasks/T-2.md");
 
         let set = parsed(&exits(
@@ -222,6 +229,22 @@ fn a_status_set_on_local_markdown_rewrites_the_status_and_nothing_else() {
             json!(["plan:P-9"])
         );
         assert_eq!(expected["comments"][0]["body"], "Keep me.");
+        let deps_after = parsed(&exits(
+            &who,
+            &sandbox,
+            &["task", "deps", "work:T-1", "--json"],
+            0,
+        ))["items"]
+            .clone();
+        assert_eq!(
+            deps_after, deps_before,
+            "{who}: the dependencies read back unchanged"
+        );
+        assert_eq!(
+            deps_after.as_array().map(Vec::len),
+            Some(1),
+            "{who}: {deps_after:#}"
+        );
 
         // The same, said in words.
         let rendered = stdout(&exits(
@@ -282,6 +305,30 @@ fn a_status_set_on_a_github_board_sends_only_the_option_update_or_the_close_or_r
         let (work, board) = board_source(&sandbox, boundary);
         sandbox.project_document(&document(&json!({"work": work})));
         let before = item(&sandbox, "work:T-3");
+        let body = sandbox.subdirectory("bodies").join("evidence.md");
+        std::fs::write(&body, "Seen on main.\n").expect("a comment body");
+        exits(
+            &who,
+            &sandbox,
+            &[
+                "task",
+                "comment",
+                "add",
+                "work:T-3",
+                "--body-file",
+                body.to_str().expect("a UTF-8 path"),
+                "--json",
+            ],
+            0,
+        );
+        let comments_before = show(&sandbox, "work:T-3")["comments"].clone();
+        let deps_before = parsed(&exits(
+            &who,
+            &sandbox,
+            &["task", "deps", "work:T-3", "--json"],
+            0,
+        ))["items"]
+            .clone();
 
         let steps: [(&str, &str, Value, Vec<&str>); 4] = [
             (
@@ -362,6 +409,28 @@ fn a_status_set_on_a_github_board_sends_only_the_option_update_or_the_close_or_r
         ] {
             assert_eq!(after[field], before[field], "{who}: {field} is unchanged");
         }
+        assert_eq!(
+            show(&sandbox, "work:T-3")["comments"],
+            comments_before,
+            "{who}: comments are unchanged"
+        );
+        assert_eq!(
+            comments_before.as_array().map(Vec::len),
+            Some(1),
+            "{who}: {comments_before:#}"
+        );
+        let deps_after = parsed(&exits(
+            &who,
+            &sandbox,
+            &["task", "deps", "work:T-3", "--json"],
+            0,
+        ))["items"]
+            .clone();
+        assert_eq!(deps_after, deps_before, "{who}: dependencies are unchanged");
+        assert!(
+            !deps_before.as_array().expect("edges").is_empty(),
+            "{who}: {deps_before:#}"
+        );
     }
 }
 
@@ -1180,5 +1249,76 @@ fn a_ticket_the_destination_refuses_is_failed_while_the_deliverers_write_lands()
     assert!(
         rendered.contains("delivered gh:T-3 by plan:P: failed at todo:"),
         "{rendered}"
+    );
+}
+
+#[test]
+fn a_github_task_holds_its_delivers_in_its_metadata_block_and_reports_them_qualified() {
+    let sandbox = Sandbox::new();
+    let plan = folder(
+        &sandbox,
+        "plan",
+        &[(
+            "tasks/A.md",
+            "---\ntitle: A\nstatus: todo\ndelivers: [\"gh:T-3\", \"tickets:T-1\"]\n---\nDo A.\n",
+        )],
+    );
+    let tickets = folder(
+        &sandbox,
+        "tickets",
+        &[("tasks/T-1.md", "---\ntitle: Ticket\nstatus: todo\n---\n")],
+    );
+    let (config, board) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "plan": markdown(&plan),
+        "tickets": markdown(&tickets),
+        "gh": {"plugin": "github-projects", "config": config},
+    })));
+    let copied = parsed(&exits(
+        "the copy onto the board",
+        &sandbox,
+        &["task", "copy", "plan:A", "--to", "gh", "--json"],
+        0,
+    ));
+    let landed = copied["items"][0]["destination"]
+        .as_str()
+        .expect("a destination id")
+        .to_owned();
+    let native = landed.strip_prefix("gh:").expect("a board id");
+    assert_eq!(
+        entries_of(&copied),
+        [
+            format!("gh:T-3 {landed} unchanged todo"),
+            format!("tickets:T-1 {landed} unchanged todo")
+        ],
+        "{copied:#}"
+    );
+
+    let held = board.body(native);
+    assert!(
+        held.as_str().is_some_and(
+            |body| body.starts_with("Do A.\n\n<!-- onetaskgraph.metadata\n")
+                && body.contains("\"onetaskgraph.delivers\":[\"gh:T-3\",\"tickets:T-1\"]")
+        ),
+        "the board keeps the list in the issue's metadata block: {held}"
+    );
+    let task = item(&sandbox, &landed);
+    assert_eq!(task["delivers"], json!(["gh:T-3", "tickets:T-1"]));
+    let metadata = task["metadata"].as_object().expect("metadata");
+    assert!(
+        !metadata.contains_key("onetaskgraph.delivers")
+            && !metadata.contains_key("onetaskgraph.delivered_by"),
+        "neither key is free metadata: {task:#}"
+    );
+    let ticket = item(&sandbox, "gh:T-3");
+    assert_eq!(ticket["delivered_by"], json!([landed]));
+    assert!(
+        !ticket["metadata"]
+            .as_object()
+            .is_some_and(|held| held.contains_key("onetaskgraph.delivered_by"))
+    );
+    assert_eq!(
+        item(&sandbox, "tickets:T-1")["delivered_by"],
+        json!([landed])
     );
 }

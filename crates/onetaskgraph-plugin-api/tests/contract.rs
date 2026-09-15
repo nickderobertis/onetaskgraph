@@ -12,7 +12,9 @@ use onetaskgraph_plugin_api::{
     SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
     TaskSource, TextFields, TextQuery, WriteSupport,
 };
-use onetaskgraph_plugin_api::{Comment, CommentBody, NewComment, commentless, unwritable};
+use onetaskgraph_plugin_api::{
+    Comment, CommentBody, NewComment, TaskRef, commentless, unwritable, unwritable_field,
+};
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret as _, SecretString};
 
@@ -1410,6 +1412,35 @@ async fn a_source_that_implements_only_the_read_methods_declares_no_write_side()
         };
         assert_eq!(message, "the read-only plugin cannot be written");
     }
+
+    // The two narrow writes are defaulted the same way, each refusal naming the one field it
+    // could not write — so a source written before they existed needs no edit either.
+    let status = source
+        .set_task_status(&NativeId::from("T-1"), StatusCategory::Queued)
+        .await
+        .expect_err("no status write by default");
+    assert_eq!(status, unwritable_field("read-only", "status"));
+    let SourceError::Refused { message } = status else {
+        panic!("a narrow write is refused by name");
+    };
+    assert_eq!(
+        message,
+        "the read-only plugin cannot write a task's status on its own"
+    );
+    let delivered_by = source
+        .set_delivered_by(
+            &NativeId::from("T-1"),
+            &[TaskRef::new("plan:P-1").expect("a task id")],
+        )
+        .await
+        .expect_err("no delivered_by write by default");
+    let SourceError::Refused { message } = delivered_by else {
+        panic!("a narrow write is refused by name");
+    };
+    assert_eq!(
+        message,
+        "the read-only plugin cannot write a task's delivered_by on its own"
+    );
 }
 
 #[test]
@@ -1771,4 +1802,140 @@ fn a_comment_carries_exactly_its_six_members_and_absent_ones_read_as_null() {
     declared.as_object_mut().unwrap().remove("comments");
     let read: Capabilities = serde_json::from_value(declared).expect("decodes");
     assert_eq!(read.comments, Support::Unsupported);
+}
+
+#[test]
+fn a_task_ref_names_a_task_bare_or_qualified_and_a_list_refuses_itself_and_repeats() {
+    let work = SourceName::new("work").expect("a name");
+    let bare = TaskRef::new("T-1").expect("a bare id");
+    let qualified = TaskRef::new("plan:P-1").expect("a qualified id");
+    assert!(!bare.is_qualified() && qualified.is_qualified());
+    assert_eq!(bare.parts("work"), ("work", "T-1"));
+    assert_eq!(qualified.parts("work"), ("plan", "P-1"));
+    assert_eq!(bare.in_source(&work).as_str(), "work:T-1");
+    assert_eq!(qualified.in_source(&work), qualified);
+    assert_eq!(
+        TaskRef::qualified(&work, &NativeId::from("T-2")).to_string(),
+        "work:T-2"
+    );
+    for (id, why) in [
+        ("", "an empty string names no task"),
+        ("plan:", "names a source and no task in it"),
+        ("Not A Source:T-1", "Not A Source"),
+    ] {
+        let refused = TaskRef::new(id).expect_err("not a task id");
+        assert!(refused.contains(why), "{id:?}: {refused}");
+    }
+
+    // The wire form is the string, and a string that is not a task id does not decode.
+    assert_eq!(
+        serde_json::to_value(&qualified).expect("encodes"),
+        serde_json::json!("plan:P-1")
+    );
+    assert!(serde_json::from_value::<TaskRef>(serde_json::json!("")).is_err());
+    let task: Task = serde_json::from_value(serde_json::json!({
+        "id": "T-1", "title": "One", "content": null,
+        "status": {"category": "queued", "name": "Queued"}, "labels": [],
+        "delivers": ["T-2", "plan:P-1"]
+    }))
+    .expect("decodes");
+    assert_eq!(
+        task.delivers,
+        [TaskRef::new("T-2").unwrap(), qualified.clone()]
+    );
+    assert!(task.delivered_by.is_empty());
+    let encoded = serde_json::to_value(&task).expect("encodes");
+    assert!(
+        encoded.get("delivered_by").is_none(),
+        "an empty list is left out: {encoded}"
+    );
+
+    let near = NativeId::from("T-1");
+    assert_eq!(
+        TaskRef::listed(
+            "delivers",
+            &near,
+            Some(&work),
+            vec![TaskRef::new("T-2").unwrap()]
+        )
+        .expect("a coherent list")
+        .len(),
+        1
+    );
+    for (entries, source, says) in [
+        (
+            vec!["T-1"],
+            Some(&work),
+            "delivers on task T-1 names T-1, which is that task itself",
+        ),
+        (
+            vec!["work:T-1"],
+            Some(&work),
+            "names work:T-1, which is that task itself",
+        ),
+        (vec!["T-1"], None, "names T-1, which is that task itself"),
+        (
+            vec!["T-2", "work:T-2"],
+            Some(&work),
+            "names work:T-2 more than once (as T-2 and work:T-2)",
+        ),
+        (
+            vec!["plan:X", "plan:X"],
+            None,
+            "names plan:X more than once",
+        ),
+    ] {
+        let entries = entries
+            .into_iter()
+            .map(|entry| TaskRef::new(entry).unwrap())
+            .collect();
+        let refused = TaskRef::listed("delivers", &near, source, entries).expect_err("refused");
+        assert!(refused.contains(says), "{refused}");
+    }
+    // Without its own name a source cannot tell a qualified entry naming itself from another's.
+    assert!(
+        TaskRef::listed(
+            "delivers",
+            &near,
+            None,
+            vec![TaskRef::new("work:T-1").unwrap()]
+        )
+        .is_ok()
+    );
+
+    assert!(
+        TaskRef::from_value("delivers", &near, Some(&work), None)
+            .expect("absent")
+            .is_empty()
+    );
+    for (value, says) in [
+        (
+            serde_json::json!("T-2"),
+            "delivers on task T-1 is \"T-2\", which is not a list of task ids",
+        ),
+        (
+            serde_json::json!([7]),
+            "delivers on task T-1 holds 7, which is not a task id: it is not a string",
+        ),
+        (
+            serde_json::json!(["plan:"]),
+            "holds \"plan:\", which is not a task id",
+        ),
+        (serde_json::json!(["T-1"]), "which is that task itself"),
+    ] {
+        let refused =
+            TaskRef::from_value("delivers", &near, Some(&work), Some(&value)).expect_err("refused");
+        assert!(refused.contains(says), "{value}: {refused}");
+    }
+    assert_eq!(
+        TaskRef::from_value(
+            TaskRef::DELIVERED_BY_KEY,
+            &near,
+            Some(&work),
+            Some(&serde_json::json!(["plan:P-1"]))
+        )
+        .expect("a list"),
+        [qualified]
+    );
+    assert_eq!(TaskRef::DELIVERS_KEY, "onetaskgraph.delivers");
 }
