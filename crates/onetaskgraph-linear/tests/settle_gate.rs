@@ -174,9 +174,26 @@ fn documents_then(nodes: Vec<Value>, cursor: &str) -> Value {
     json!({"documents": {"nodes": nodes, "pageInfo": {"hasNextPage": true, "endCursor": cursor}}})
 }
 
+/// The GraphQL `variables` object of one whole request [`request`] read.
+///
+/// Parsed rather than searched, so a body that is not the JSON document the plugin sends, or
+/// one without a `variables` object, fails the drive naming what arrived.
+fn variables(request: &str) -> serde_json::Map<String, Value> {
+    let (_, body) = request
+        .split_once("\r\n\r\n")
+        .unwrap_or_else(|| panic!("the plugin sent a request with no body: {request}"));
+    let mut document = serde_json::from_str::<Value>(body).unwrap_or_else(|error| {
+        panic!("the plugin sent a body that is not JSON ({error}): {body}")
+    });
+    match document.get_mut("variables").map(Value::take) {
+        Some(Value::Object(variables)) => variables,
+        _ => panic!("the plugin sent a body without a variables object: {body}"),
+    }
+}
+
 /// Whether `request` asks for the page after the cursor `c1`.
 fn after_c1(request: &str) -> bool {
-    request.contains(r#""after":"c1""#)
+    variables(request).get("after") == Some(&json!("c1"))
 }
 
 fn under(project: &str) -> TaskQuery {
@@ -383,8 +400,9 @@ async fn a_walk_in_pages_of_one_the_index_catches_up_with_late_passes_without_wa
     let walks = Arc::new(AtomicU32::new(0));
     let seen = Arc::clone(&walks);
     let (source, answered) = workspace(move |_, request| {
-        assert!(
-            request.contains(r#""first":1"#),
+        assert_eq!(
+            variables(request).get("first"),
+            Some(&json!(1)),
             "a walk asks for pages of one: {request}"
         );
         if after_c1(request) {
