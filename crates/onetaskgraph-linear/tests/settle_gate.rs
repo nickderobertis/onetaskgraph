@@ -30,7 +30,8 @@ mod settle;
 
 use settle::{Bound, settled_documents, settled_tasks};
 
-/// Five reads, fifty milliseconds apart.
+/// Room for the late listings below, which agree on their third read, with reads to spare, so
+/// that a pass is the listing catching up rather than the bound running out on the last read.
 const BOUND: Bound = Bound {
     reads: 5,
     interval: Duration::from_millis(50),
@@ -80,13 +81,24 @@ fn workspace(
     (source, answered)
 }
 
-/// One whole HTTP request: its headers, and as much body as they declare.
+/// The most a request to this workspace may be; the plugin's listings are a few hundred bytes.
+const MOST_A_REQUEST_IS: usize = 64 * 1024;
+
+/// One whole HTTP request: its headers, and exactly the body their `Content-Length` declares.
+///
+/// Anything else — a request past [`MOST_A_REQUEST_IS`], one with no `Content-Length` or an
+/// unreadable one, or a connection closed short of what it declared — is not a request the
+/// plugin sends, so it fails the drive naming what arrived rather than being answered.
 fn request(stream: &mut TcpStream) -> String {
     let mut bytes = Vec::new();
     let mut chunk = [0; 8192];
     loop {
         let n = stream.read(&mut chunk).unwrap();
         bytes.extend_from_slice(&chunk[..n]);
+        assert!(
+            bytes.len() <= MOST_A_REQUEST_IS,
+            "the plugin sent a request of more than {MOST_A_REQUEST_IS} bytes"
+        );
         let text = String::from_utf8_lossy(&bytes);
         if let Some(end) = text.find("\r\n\r\n") {
             let declared = text[..end]
@@ -94,16 +106,22 @@ fn request(stream: &mut TcpStream) -> String {
                 .find_map(|line| {
                     let (name, value) = line.split_once(':')?;
                     name.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse::<usize>().ok())?
+                        .then(|| value.trim().parse::<usize>())
                 })
-                .unwrap_or(0);
+                .unwrap_or_else(|| {
+                    panic!("the plugin sent a request with no Content-Length: {text}")
+                })
+                .unwrap_or_else(|error| {
+                    panic!("the plugin sent an unreadable Content-Length ({error}): {text}")
+                });
             if bytes.len() >= end + 4 + declared {
                 return text.into_owned();
             }
         }
-        if n == 0 {
-            return String::from_utf8_lossy(&bytes).into_owned();
-        }
+        assert!(
+            n > 0,
+            "the connection closed partway through a request: {text}"
+        );
     }
 }
 
