@@ -157,7 +157,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 13);
+    assert_eq!(bundle["version"], 14);
     assert!(
         bundle["roots"]["FailureDocument"].is_object(),
         "the document a failed command writes under machine output is a root"
@@ -176,6 +176,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task comment list",
             "task comment edit",
             "task comment delete",
+            "task status set",
             "project list",
             "project show",
             "project deps",

@@ -33,6 +33,7 @@ mod copy;
 // a plugin crate depending on the engine at any depth. Every other journey against that same
 // fixture board already runs in this target.
 mod copy_cost;
+mod delivery;
 mod document_store;
 mod failures;
 mod fixtures;
