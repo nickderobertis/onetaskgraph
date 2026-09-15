@@ -21,6 +21,7 @@ import {
 } from "../src/index.ts";
 import type { CopyReport } from "../src/generated/models.ts";
 import { runtimeSchemas } from "../src/generated/schemas.ts";
+import { CONFIGURATION_PREFIX } from "./ambient.ts";
 
 const binary = resolve(import.meta.dir, "../../../target/debug/onetaskgraph");
 let root = "";
@@ -45,24 +46,8 @@ function errorMessage(error: unknown): string {
   return error.message;
 }
 
-// The setup below is the first time anything here starts the debug binary, and that first
-// exec is not the same cost as the ones after it: on a loaded macOS runner, paging in an
-// unstripped debug build and validating its signature has outlasted bun's 5s default on its
-// own. A bound this wide still catches a command that hangs; what it stops doing is
-// reporting a cold start as one.
-const COLD_START_TIMEOUT_MS = 60_000;
-
-beforeAll(async () => {
+beforeAll(() => {
   root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-"));
-  // A client hands the binary this process's environment, so a shell that exports a source
-  // adds it to every command below, and an assertion on the first row reads that source
-  // instead of the one configured here. The binary names the variables its environment
-  // layer read, asked while `root` is still empty so no file layer answers beside it, and
-  // only those are removed: clearing the whole environment would take `PATH` with it.
-  const ambient = await new OnetaskgraphClient({ binaryPath: binary, cwd: root }).configShow();
-  for (const { origin } of ambient.settings) {
-    if (origin.layer === "environment") delete process.env[origin.variable];
-  }
   writeFileSync(
     resolve(root, "onetaskgraph.yaml"),
     JSON.stringify({
@@ -113,9 +98,16 @@ beforeAll(async () => {
     }),
   );
   client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
-}, COLD_START_TIMEOUT_MS);
+});
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+// This file's first command is the first time anything here starts the debug binary, and
+// that first exec is not the same cost as the ones after it: on a loaded macOS runner,
+// paging in an unstripped debug build and validating its signature has outlasted bun's 5s
+// default on its own. A bound this wide still catches a command that hangs; what it stops
+// doing is reporting a cold start as one.
+const COLD_START_TIMEOUT_MS = 60_000;
 
 // The warm spawns are not free either, and the test below is nothing but sixteen of them:
 // about 57ms each on an idle eight-core box, 914ms for the test. That left bun's 5s
@@ -136,6 +128,24 @@ test(
   },
   COLD_START_TIMEOUT_MS,
 );
+
+test("the prefix these tests remove is the one the binary reads its configuration under", async () => {
+  const probe = `${CONFIGURATION_PREFIX}SOURCES__PREFIX_PROBE__PLUGIN`;
+  const empty = mkdtempSync(resolve(tmpdir(), "onetaskgraph-prefix-"));
+  try {
+    const shown = await new OnetaskgraphClient({
+      binaryPath: binary,
+      cwd: empty,
+      env: { [probe]: "in-memory" },
+    }).configShow();
+    const read = shown.settings.flatMap(({ origin }) =>
+      origin.layer === "environment" ? [origin.variable] : [],
+    );
+    expect(read).toEqual([probe]);
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
+});
 
 test(
   "typed methods drive every real binary command",
