@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.32](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.31...onetaskgraph-plugin-api-v0.2.32) - 2026-09-15
+
+### Added
+
+- *(status)* add a queued category, a status-only write, and a delivers relation ([#1145](https://github.com/nickderobertis/onetaskgraph/pull/1145))
+
 ## [0.2.31](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.30...onetaskgraph-plugin-api-v0.2.31) - 2026-09-14
 
 ### Added
