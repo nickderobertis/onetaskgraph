@@ -289,6 +289,8 @@ async fn drive_every_declared_capability(
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     };
 
     let alpha_id = source

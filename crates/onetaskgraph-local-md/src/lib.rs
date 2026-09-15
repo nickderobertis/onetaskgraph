@@ -1447,6 +1447,8 @@ fn task(d: Entry) -> Task {
         updated_at: None,
         metadata: d.common.metadata,
         repositories: d.common.repositories,
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     }
 }
 fn project(d: Entry) -> Project {
@@ -1557,6 +1559,7 @@ fn category_name(category: StatusCategory) -> &'static str {
         StatusCategory::Draft => "draft",
         StatusCategory::Backlog => "backlog",
         StatusCategory::Todo => "todo",
+        StatusCategory::Queued => "queued",
         StatusCategory::InProgress => "in-progress",
         StatusCategory::Done => "done",
         StatusCategory::Cancelled => "cancelled",

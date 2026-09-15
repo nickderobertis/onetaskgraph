@@ -1649,6 +1649,8 @@ fn task(id: &str, title: &str, status: Status) -> Task {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     }
 }
 

@@ -1918,6 +1918,12 @@ fn workflow_state_types(s: &StatusCategory) -> Vec<&'static str> {
         StatusCategory::Draft => vec![],
         StatusCategory::Backlog => vec!["backlog"],
         StatusCategory::Todo => vec!["unstarted"],
+        // Linear has no state for work that is claimed and not yet started: `unstarted` is
+        // `todo` and `started` is `in-progress`, and a Linear issue reads back as one of
+        // those. So `queued` narrows to nothing, exactly as `draft` does — mapping it onto
+        // either neighbour would have a `queued` filter return an item that reads back as
+        // `todo` or `in-progress`, which is capability rule 1 broken.
+        StatusCategory::Queued => vec![],
         StatusCategory::InProgress => vec!["started"],
         StatusCategory::Done => vec!["completed"],
         StatusCategory::Cancelled => vec!["canceled"],
@@ -1939,6 +1945,9 @@ fn project_status_types(s: &StatusCategory) -> Vec<&'static str> {
         StatusCategory::Draft => vec![],
         StatusCategory::Backlog => vec!["backlog"],
         StatusCategory::Todo => vec!["planned"],
+        // No `ProjectStatusType` is claimed-and-not-started either, so `queued` narrows to
+        // nothing here for the reason it does for an issue above.
+        StatusCategory::Queued => vec![],
         StatusCategory::InProgress => vec!["started", "paused"],
         StatusCategory::Done => vec!["completed"],
         StatusCategory::Cancelled => vec!["canceled"],
@@ -2020,6 +2029,8 @@ fn map_task(v: &Value) -> Result<Task, SourceError> {
         updated_at: time(v, "updatedAt")?,
         metadata,
         repositories,
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     })
 }
 fn map_project(v: &Value) -> Result<Project, SourceError> {

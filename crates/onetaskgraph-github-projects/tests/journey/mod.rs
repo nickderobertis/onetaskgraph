@@ -1563,6 +1563,8 @@ fn artifact_task(
         updated_at: None,
         metadata,
         repositories: vec![],
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     }
 }
 

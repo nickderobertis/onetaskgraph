@@ -1157,6 +1157,8 @@ fn a_response_carries_the_plan_that_produced_it_and_round_trips() {
             updated_at: None,
             metadata: Default::default(),
             repositories: Vec::new(),
+            delivers: Vec::new(),
+            delivered_by: Vec::new(),
         }],
         // The hex of
         // `{"query":"0123456789abcdef","streams":[{"source":"work","stream":"items","cursor":"50"}]}`

@@ -571,10 +571,12 @@ pub struct SearchArgs {
 pub enum StatusArg {
     /// Written down but not yet committed to as work.
     Draft,
-    /// Known about, not yet queued.
+    /// Known about, not yet accepted as ready to work.
     Backlog,
-    /// Queued, not yet started.
+    /// Accepted and ready to be picked up, and nothing has claimed it.
     Todo,
+    /// Claimed by work that will do it, and not yet started.
+    Queued,
     /// Being worked on.
     InProgress,
     /// Finished.
@@ -593,6 +595,7 @@ impl StatusArg {
             Self::Draft => StatusCategory::Draft,
             Self::Backlog => StatusCategory::Backlog,
             Self::Todo => StatusCategory::Todo,
+            Self::Queued => StatusCategory::Queued,
             Self::InProgress => StatusCategory::InProgress,
             Self::Done => StatusCategory::Done,
             Self::Cancelled => StatusCategory::Cancelled,

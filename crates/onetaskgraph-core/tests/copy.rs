@@ -2240,6 +2240,8 @@ fn reported(id: &NativeId) -> Task {
         updated_at: None,
         metadata: std::collections::BTreeMap::new(),
         repositories: Vec::new(),
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     }
 }
 

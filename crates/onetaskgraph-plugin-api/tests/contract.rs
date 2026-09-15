@@ -835,6 +835,8 @@ fn a_task_round_trips_through_json_with_every_field_populated() {
             onetaskgraph_plugin_api::Repository::try_from("github.com/example/work".to_owned())
                 .expect("normalized origin"),
         ],
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     };
 
     let encoded = serde_json::to_string(&task).expect("encodes");
@@ -1357,6 +1359,8 @@ fn outgoing() -> Task {
         updated_at: None,
         metadata: std::collections::BTreeMap::new(),
         repositories: Vec::new(),
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     }
 }
 

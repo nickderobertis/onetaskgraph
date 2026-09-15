@@ -79,6 +79,18 @@ pub fn unwritable(kind: &str) -> SourceError {
     }
 }
 
+/// The refusal a source answers a narrow write of one field of a task with, when it cannot
+/// write that field on its own.
+///
+/// Spelled once beside [`unwritable`] for that function's reason. `field` is the field's own
+/// name — `status`, `delivered_by` — so the refusal names what could not be written.
+#[must_use]
+pub fn unwritable_field(kind: &str, field: &str) -> SourceError {
+    SourceError::Refused {
+        message: format!("the {kind} plugin cannot write a task's {field} on its own"),
+    }
+}
+
 /// The refusal a source with no documents answers a document read with.
 ///
 /// Spelled once beside [`unwritable`], and here rather than beside the reads it answers,

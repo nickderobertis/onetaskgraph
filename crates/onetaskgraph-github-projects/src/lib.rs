@@ -1406,10 +1406,11 @@ enum StatusTarget {
 /// generated from the variants rather than written beside them. The schema is what
 /// catches a list left one short — a list checking only the positions it already holds
 /// would pass while every mapping indexed by the new position panicked.
-pub const CATEGORIES: [StatusCategory; 7] = [
+pub const CATEGORIES: [StatusCategory; 8] = [
     StatusCategory::Draft,
     StatusCategory::Backlog,
     StatusCategory::Todo,
+    StatusCategory::Queued,
     StatusCategory::InProgress,
     StatusCategory::Done,
     StatusCategory::Cancelled,
@@ -1423,10 +1424,11 @@ pub const fn category_position(category: StatusCategory) -> usize {
         StatusCategory::Draft => 0,
         StatusCategory::Backlog => 1,
         StatusCategory::Todo => 2,
-        StatusCategory::InProgress => 3,
-        StatusCategory::Done => 4,
-        StatusCategory::Cancelled => 5,
-        StatusCategory::Unknown => 6,
+        StatusCategory::Queued => 3,
+        StatusCategory::InProgress => 4,
+        StatusCategory::Done => 5,
+        StatusCategory::Cancelled => 6,
+        StatusCategory::Unknown => 7,
     }
 }
 
@@ -1436,6 +1438,7 @@ fn category_name(category: StatusCategory) -> &'static str {
         StatusCategory::Draft => "draft",
         StatusCategory::Backlog => "backlog",
         StatusCategory::Todo => "todo",
+        StatusCategory::Queued => "queued",
         StatusCategory::InProgress => "in-progress",
         StatusCategory::Done => "done",
         StatusCategory::Cancelled => "cancelled",
@@ -1456,6 +1459,7 @@ fn shipped_default(category: StatusCategory) -> StatusTarget {
     match category {
         StatusCategory::Backlog => StatusTarget::Column(shipped_column("Backlog")),
         StatusCategory::Todo => StatusTarget::Column(shipped_column("Todo")),
+        StatusCategory::Queued => StatusTarget::Column(shipped_column("Queued")),
         StatusCategory::InProgress => StatusTarget::Column(shipped_column("In Progress")),
         StatusCategory::Done => StatusTarget::Closed(ClosedState::Completed),
         StatusCategory::Cancelled => StatusTarget::Closed(ClosedState::NotPlanned),
@@ -4229,6 +4233,8 @@ impl Resolved {
             updated_at: self.updated_at,
             metadata: self.metadata(),
             repositories: self.repositories.clone(),
+            delivers: Vec::new(),
+            delivered_by: Vec::new(),
         }
     }
 

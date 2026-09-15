@@ -52,6 +52,25 @@ pub struct Task {
     /// repeats.
     #[serde(default, deserialize_with = "unique_repositories")]
     pub repositories: Vec<Repository>,
+    /// The tasks this one delivers: finishing this task finishes them.
+    ///
+    /// Each entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a
+    /// bare native id names a task of the source holding this one — with no repeats and
+    /// never this task itself. Empty by default, and left out of the wire when empty, so a
+    /// reader written before the field existed reads exactly what it read before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(!skip_serializing_if)]
+    pub delivers: Vec<TaskRef>,
+    /// Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].
+    ///
+    /// **Owned by the store, not by a source record and not by a copy.** The engine keeps it
+    /// in step whenever it writes a task's `delivers`, through
+    /// [`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds
+    /// and reports it, and a copy keeps the destination's own rather than taking the
+    /// source's. Empty by default and left out of the wire when empty, as `delivers` is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(!skip_serializing_if)]
+    pub delivered_by: Vec<TaskRef>,
 }
 
 /// A grouping of tasks, shaped like a [`Task`] without a parent of its own.
@@ -250,6 +269,192 @@ impl From<Repository> for String {
     }
 }
 
+/// One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].
+///
+/// A string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:
+/// one holding a colon is `<source>:<native>` and names a task of any source, and one
+/// without is a bare native id naming a task of the source that holds the list. So a
+/// native id holding a colon cannot be named bare, exactly as it cannot in
+/// `onetaskgraph.depends_on`.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(try_from = "String", into = "String")]
+pub struct TaskRef(String);
+
+impl TaskRef {
+    /// The reserved metadata key a source records [`Task::delivers`] under when its backend
+    /// has no notion of its own.
+    ///
+    /// Spelled once, here, for the reason [`Repository::METADATA_KEY`] is.
+    pub const DELIVERS_KEY: &'static str = "onetaskgraph.delivers";
+
+    /// The reserved metadata key a source records [`Task::delivered_by`] under when its
+    /// backend has no notion of its own.
+    pub const DELIVERED_BY_KEY: &'static str = "onetaskgraph.delivered_by";
+
+    /// One entry, once it is established it is a task id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message saying why when the id is empty, or when it is qualified with a
+    /// source name that breaks the pattern or with no native id after the colon.
+    pub fn new(id: impl Into<String>) -> Result<Self, String> {
+        let id = id.into();
+        if id.is_empty() {
+            return Err("an empty string names no task".to_owned());
+        }
+        if let Some((source, native)) = id.split_once(':') {
+            SourceName::new(source).map_err(|error| error.to_string())?;
+            if native.is_empty() {
+                return Err(format!("{id:?} names a source and no task in it"));
+            }
+        }
+        Ok(Self(id))
+    }
+
+    /// The qualified entry naming `native` in `source`.
+    #[must_use]
+    pub fn qualified(source: &SourceName, native: &NativeId) -> Self {
+        Self(format!("{source}:{native}"))
+    }
+
+    /// The entry as it is spelled.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether the entry names its source in writing.
+    #[must_use]
+    pub fn is_qualified(&self) -> bool {
+        self.0.contains(':')
+    }
+
+    /// The source and the native id this entry names, reading a bare entry as naming a task
+    /// of `near_source`.
+    #[must_use]
+    pub fn parts<'a>(&'a self, near_source: &'a str) -> (&'a str, &'a str) {
+        self.0
+            .split_once(':')
+            .unwrap_or((near_source, self.0.as_str()))
+    }
+
+    /// This entry qualified, reading a bare one as naming a task of `near_source`.
+    #[must_use]
+    pub fn in_source(&self, near_source: &SourceName) -> Self {
+        if self.is_qualified() {
+            return self.clone();
+        }
+        Self(format!("{near_source}:{}", self.0))
+    }
+
+    /// The entries of one task's list, once it is established that none names the task
+    /// itself and none repeats.
+    ///
+    /// `field` is what the list is called where it is stored, for the message. `near` is the
+    /// task holding the list and `near_source` the configured name of the source holding it,
+    /// which is what tells `T-1` and `work:T-1` apart as the same task. A source that does
+    /// not know its own name passes `None`, and then only a bare entry can be recognised as
+    /// naming this task or one of the other entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the task and the entry.
+    pub fn listed(
+        field: &str,
+        near: &NativeId,
+        near_source: Option<&SourceName>,
+        entries: Vec<Self>,
+    ) -> Result<Vec<Self>, String> {
+        let normal = |entry: &Self| match near_source {
+            Some(source) => entry.in_source(source).0,
+            None => entry.0.clone(),
+        };
+        let this = match near_source {
+            Some(source) => Self::qualified(source, near).0,
+            None => near.0.clone(),
+        };
+        let mut seen: Vec<(String, &Self)> = Vec::with_capacity(entries.len());
+        for entry in &entries {
+            let named = normal(entry);
+            if named == this {
+                return Err(format!(
+                    "{field} on task {near} names {entry}, which is that task itself; a task \
+                     cannot be listed in its own {field}"
+                ));
+            }
+            if let Some((_, first)) = seen.iter().find(|(held, _)| *held == named) {
+                return Err(format!(
+                    "{field} on task {near} names {entry} more than once (as {first} and \
+                     {entry}); name each task once"
+                ));
+            }
+            seen.push((named, entry));
+        }
+        Ok(entries)
+    }
+
+    /// The entries one task's list holds, read out of the JSON a source stores it as.
+    ///
+    /// `value` is `None` when the source holds no list at all, which is the empty one.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the task and the entry when the value is not a list, when an
+    /// entry is not a task id, or when [`Self::listed`] refuses the list.
+    pub fn from_value(
+        field: &str,
+        near: &NativeId,
+        near_source: Option<&SourceName>,
+        value: Option<&Value>,
+    ) -> Result<Vec<Self>, String> {
+        let Some(value) = value else {
+            return Ok(Vec::new());
+        };
+        let Some(held) = value.as_array() else {
+            return Err(format!(
+                "{field} on task {near} is {value}, which is not a list of task ids"
+            ));
+        };
+        let entries = held
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_str()
+                    .ok_or_else(|| "it is not a string".to_owned())
+                    .and_then(Self::new)
+                    .map_err(|why| {
+                        format!(
+                            "{field} on task {near} holds {entry}, which is not a task id: {why}"
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::listed(field, near, near_source, entries)
+    }
+}
+
+impl TryFrom<String> for TaskRef {
+    type Error = String;
+
+    fn try_from(id: String) -> Result<Self, Self::Error> {
+        Self::new(id)
+    }
+}
+
+impl From<TaskRef> for String {
+    fn from(entry: TaskRef) -> Self {
+        entry.0
+    }
+}
+
+impl std::fmt::Display for TaskRef {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 /// A tag a source attaches to work.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Label {
@@ -279,10 +484,12 @@ pub struct Status {
 pub enum StatusCategory {
     /// Written down but not yet committed to as work.
     Draft,
-    /// Known about, not yet queued.
+    /// Known about, not yet accepted as ready to work.
     Backlog,
-    /// Queued, not yet started.
+    /// Accepted and ready to be picked up, and nothing has claimed it.
     Todo,
+    /// Claimed by work that will do it, and not yet started.
+    Queued,
     /// Being worked on.
     InProgress,
     /// Finished.
