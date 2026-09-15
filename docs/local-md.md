@@ -35,6 +35,7 @@ depends_on:
     kind: related
   - id: work:PLAT-9
     item: project
+delivers: [security/review, "tracker:ENG-42"]
 ---
 # Ship the release
 
@@ -62,10 +63,22 @@ it is a command of your own against that qualified id.
 `metadata` keys beginning `onetaskgraph.` and `onepipeline.` are reserved; see
 [`metadata.md`](./metadata.md).
 
+`delivers` names the tasks this one delivers: finishing it finishes them. A bare entry is a
+task of this folder — `security/review` above — and `<source>:<id>` is a task of any source,
+as `tracker:ENG-42` is. `delivered_by` is the other half and is onetaskgraph's to keep:
+whenever it writes a task's `delivers` — a copy into this folder, or `task status set` on the
+task — each task that list names gains `delivered_by: ["<source>:<id>"]` naming it, a task it
+stopped naming loses that entry, and nothing else in the delivered task's file changes. Both
+keys belong to a task alone; an entry that is not a task id, that names its own task, or that
+names one task twice is refused naming the task and the entry, and so is either key in a
+project's file. `docs/plugin-protocol.md` §4.17 states the rule that moves a delivered task's
+status along with its deliverers.
+
 Status names are preserved for display and mapped case-insensitively to normalized
 categories. The default mapping is `draft` → draft, `backlog` → backlog, `todo` → todo,
-`in progress` and `doing` → in-progress, `done` → done, and `cancelled`/`canceled` →
-cancelled. Other words map to unknown, and this source writes the original word into the
+`queued` → queued, `in progress` and `doing` → in-progress, `done` → done, and
+`cancelled`/`canceled` → cancelled. `queued` is work claimed by something that will do it and
+not yet started, where `todo` is work ready to be picked up that nothing has claimed. Other words map to unknown, and this source writes the original word into the
 Markdown so it round-trips by name. That differs from `github-projects`, which can only
 write an existing board option or a closed state: its unknown category is disabled by
 default, and mapping it to one option folds every unknown word into that option. Replace
@@ -79,6 +92,19 @@ sources:
       root: /home/me/notes
       status_mapping: { next: todo, active: in-progress, shipped: done }
 ```
+
+## Setting a status on its own
+
+`onetaskgraph task status set <source>:<id> <category>` rewrites the one `status:` line of
+the task's front matter and **no other byte of the file** — title, labels, metadata,
+`depends_on`, `delivers`, `delivered_by`, body and comments are left exactly as they were,
+and a Windows file keeps its line endings. The word written is one `status_mapping` reads
+back as that category: the category's own spelling when the mapping has it (`queued`, or
+`in progress` for `in-progress`), otherwise the first word the mapping sends there. A task
+already in the category is left byte for byte, word and all. A category the mapping reaches
+with no word is refused in the words a copy of that status is refused with — `this source
+reads "queued" as unknown, not queued` — and a task with no `status:` line gains one as the
+last line of its front matter.
 
 ## Documents
 

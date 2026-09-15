@@ -51,6 +51,7 @@ onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME]
 onetaskgraph task comment list   <ID>
 onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH]
 onetaskgraph task comment delete <ID> <COMMENT-ID>
+onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|cancelled|unknown
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
 onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks | --member TASK-ID...]
@@ -91,6 +92,29 @@ account themselves and refuse it rather than drop it. `task show` prints a task'
 after its body, and its `--json` carries them as a top-level `comments` list for a source
 whose tasks have comments — absent, rather than empty, for one whose tasks have none. A
 `task copy`, `project copy` or `document copy` never reads or writes a comment at either end.
+
+A task's **status** is set on its own with `task status set`, which writes that one field —
+title, body, labels, metadata, dependencies and comments stay exactly as they are — and
+answers with the status as the source reads it back. `queued` is the category for work
+claimed by something that will do it and not yet started, between `todo` (ready, and nothing
+has claimed it) and `in-progress`. A folder of Markdown reads the word `queued`; a GitHub
+Projects board sends it to its `Queued` column by default, `status_mapping.queued` naming
+another; Linear, which has no such state, refuses it by name.
+
+A task can name the tasks it **delivers**: finishing it finishes them. In a folder of
+Markdown that is a `delivers:` list in the front matter — a bare id names a task of the same
+folder and `<source>:<id>` a task anywhere — and on a GitHub board it is the
+`onetaskgraph.delivers` key of the issue's metadata block. The delivered task's
+`delivered_by` is onetaskgraph's to keep. Whenever it writes a task that delivers anything,
+or delivered something before — a copy, or `task status set` — each delivered task gains the
+deliverer's qualified id, a task it dropped loses it, and the delivered task's status follows
+its deliverers while it is at `todo`, `queued` or `in-progress`: `in-progress` while any runs,
+`queued` while any is queued, `done` once every one is done or cancelled and at least one is
+done, and `todo` when they release it. A delivered task at `draft`, `backlog`, `unknown`,
+`done` or `cancelled` is left alone; `docs/plugin-protocol.md` §4.17 states the rule exactly.
+A copy rewrites a `delivers` entry naming another item it copies to that item's new id,
+counts those under `delivers_rewritten`, and never carries `delivered_by`. Every verb that
+writes a deliverer reports each delivered task it evaluated under `delivered`.
 
 How a source *spells* a document is its own business. A GitHub Projects board has no
 document type, so `github-projects` reads one as an ordinary issue whose title begins
@@ -229,7 +253,7 @@ zero. Its shape is the `spent` property of the `CopyReport` root of `onetaskgrap
 | `0` | Success — every source asked, every source answered. |
 | `1` | The command failed while running: an id that names nothing, a configuration it will not run on, a source name nothing configures. |
 | `2` | The invocation itself was wrong — an unknown flag, a value out of range. |
-| `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. |
+| `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, or `task status set` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. |
 
 `--allow-partial` says a partial answer is acceptable and turns `4` into `0`. Nothing else
 does: a run that lost a source never exits `0` unless you asked for that.
