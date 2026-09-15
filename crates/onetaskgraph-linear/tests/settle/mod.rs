@@ -11,11 +11,17 @@
 //! document listing narrowed to a project come back without the document filed under it,
 //! while the unfiltered listing just before it already held both. Each failed on code that was
 //! correct, so no listing the journey compares to an exact set is read only once.
+//!
+//! A write reaches the same index before any listing does. The plugin resolves a label a write
+//! names through Linear's label filter, and a run had its first task write refused as unable to
+//! resolve uniquely a label it had created a moment before — so a label the journey creates is
+//! waited for too, through that very lookup.
 
 use std::future::Future;
 use std::time::{Duration, Instant};
 
 use onetaskgraph_plugin_api::{DocumentQuery, PageRequest, TaskQuery, TaskSource};
+use serde_json::{Value, json};
 
 /// How many times a listing is read, and how far apart, before its disagreement is the answer.
 #[derive(Clone, Copy, Debug)]
@@ -201,6 +207,37 @@ pub async fn settled_walk(
         let mut walked = walked_task_titles(source, query, most, what).await?;
         walked.sort();
         Ok(walked)
+    })
+    .await
+}
+
+/// [`settled`] over the lookup a write resolves the label `name` through, until exactly one
+/// label answers it.
+///
+/// The lookup is the plugin's own `graphql::ISSUE_LABEL`, sent by `send`, which answers with the
+/// request's `data`. Each label it answers with is listed as `name`, so a lookup that never finds
+/// the label and one finding two both fail naming how many it found — which are the two answers
+/// the plugin refuses a write over.
+pub async fn settled_label<F, Fut>(bound: Bound, name: &str, send: F) -> Result<(), String>
+where
+    F: Fn(&'static str, Value) -> Fut,
+    Fut: Future<Output = Result<Value, String>>,
+{
+    let what = format!("the labels named {name:?} by the lookup a write resolves it through");
+    let (what, send) = (what.as_str(), &send);
+    settled(bound, what, &[name.to_owned()], || async move {
+        let data = send(
+            onetaskgraph_linear::graphql::ISSUE_LABEL,
+            json!({ "name": name }),
+        )
+        .await
+        .map_err(|error| format!("{what} could not be read: {error}"))?;
+        let found = data
+            .pointer("/issueLabels/nodes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("{what} could not be read: no issueLabels.nodes in {data}"))?
+            .len();
+        Ok(vec![name.to_owned(); found])
     })
     .await
 }

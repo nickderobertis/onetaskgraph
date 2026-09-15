@@ -5,6 +5,8 @@
 //! compares Linear's listings through — and they reach that workspace through the real plugin
 //! over real HTTP. What stands in for Linear is a local server that answers a filtered listing
 //! from an index that has not caught up with a write for a number of reads, or never does.
+//! `settle::settled_label` is driven the same way, sending the plugin's own label lookup to a
+//! workspace whose label filter holds a just-created label late, never, or twice.
 //!
 //! No credential and no third-party API: every issue and document below is one this file
 //! answered with. A short bound stands in for [`settle::LINEAR_INDEX`], because what is proven
@@ -28,7 +30,9 @@ use serde_json::{Value, json};
 #[allow(dead_code)]
 mod settle;
 
-use settle::{Bound, MOST_DOCUMENT_PAGES, settled_documents, settled_tasks, settled_walk};
+use settle::{
+    Bound, MOST_DOCUMENT_PAGES, settled_documents, settled_label, settled_tasks, settled_walk,
+};
 
 /// Room for the late listings below, which agree on their third read, with reads to spare, so
 /// that a pass is the listing catching up rather than the bound running out on the last read.
@@ -47,11 +51,25 @@ impl SecretResolver for Key {
     }
 }
 
-/// A workspace answering the `n`th request, counted from one, with `answer(n, request)`, and
-/// how many requests it has answered.
+/// The plugin reaching a workspace answering the `n`th request, counted from one, with
+/// `answer(n, request)`, and how many requests it has answered.
 fn workspace(
     answer: impl Fn(u32, &str) -> Value + Send + 'static,
 ) -> (Box<dyn TaskSource>, Arc<AtomicU32>) {
+    let (url, answered) = serve(answer);
+    let source = onetaskgraph_linear::Plugin
+        .build(
+            &SourceName::new("live").unwrap(),
+            &json!({"endpoint": url}),
+            &Key,
+        )
+        .unwrap();
+    (source, answered)
+}
+
+/// The URL of a workspace answering as [`workspace`]'s does, and how many requests it has
+/// answered.
+fn serve(answer: impl Fn(u32, &str) -> Value + Send + 'static) -> (String, Arc<AtomicU32>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/graphql", listener.local_addr().unwrap());
     let answered = Arc::new(AtomicU32::new(0));
@@ -71,14 +89,24 @@ fn workspace(
             .unwrap();
         }
     });
-    let source = onetaskgraph_linear::Plugin
-        .build(
-            &SourceName::new("live").unwrap(),
-            &json!({"endpoint": url}),
-            &Key,
-        )
-        .unwrap();
-    (source, answered)
+    (url, answered)
+}
+
+/// One GraphQL request to `url`, sent as the live journey's `linear` sends one: the answer's
+/// `data`, or an `Err` naming what came back instead.
+async fn post(url: &str, query: &str, variables: Value) -> Result<Value, String> {
+    let body = reqwest::Client::new()
+        .post(url)
+        .json(&json!({"query": query, "variables": variables}))
+        .send()
+        .await
+        .map_err(|error| format!("the workspace could not be reached: {error}"))?
+        .json::<Value>()
+        .await
+        .map_err(|error| format!("the workspace answered invalid JSON: {error}"))?;
+    body.get("data")
+        .cloned()
+        .ok_or_else(|| format!("the workspace answered no data: {body}"))
 }
 
 /// The most a request to this workspace may be; the plugin's listings are a few hundred bytes.
@@ -212,6 +240,33 @@ fn filed_under(project: &str) -> DocumentQuery {
 
 fn expected(title: &str) -> Vec<String> {
     vec![title.to_owned()]
+}
+
+/// The label a run has just created, by the name a write resolves it through.
+const LABEL: &str = "otg-live-label";
+
+/// A label lookup's answer: one node per id.
+fn labels(ids: Vec<&str>) -> Value {
+    json!({"issueLabels": {"nodes": ids.into_iter().map(|id| json!({"id": id})).collect::<Vec<_>>()}})
+}
+
+/// Refuses `request` unless it is the plugin's own label lookup, asking for [`LABEL`].
+fn assert_looks_up_label(request: &str) {
+    let (_, body) = request
+        .split_once("\r\n\r\n")
+        .unwrap_or_else(|| panic!("the wait sent a request with no body: {request}"));
+    let document = serde_json::from_str::<Value>(body)
+        .unwrap_or_else(|error| panic!("the wait sent a body that is not JSON ({error}): {body}"));
+    assert_eq!(
+        document.get("query"),
+        Some(&json!(onetaskgraph_linear::graphql::ISSUE_LABEL)),
+        "the wait asks the lookup a write resolves a label through: {body}"
+    );
+    assert_eq!(
+        variables(request),
+        serde_json::Map::from_iter([("name".to_owned(), json!(LABEL))]),
+        "the wait asks for the label by its name and nothing else: {body}"
+    );
 }
 
 #[tokio::test]
@@ -470,6 +525,92 @@ async fn a_walk_that_never_reaches_the_expected_set_fails_within_the_bound_namin
             && waited < BOUND.interval * BOUND.reads + SLACK,
         "a wrong walk fails once the bound is spent, and waited {waited:?}"
     );
+}
+
+#[tokio::test]
+async fn a_label_the_lookup_holds_late_passes_without_looking_again() {
+    // Created a moment before, and not held by the label filter for the first two lookups.
+    let (url, answered) = serve(|n, request| {
+        assert_looks_up_label(request);
+        labels(if n > 2 { vec!["l1"] } else { vec![] })
+    });
+    settled_label(BOUND, LABEL, |query, variables| {
+        post(&url, query, variables)
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        answered.load(Ordering::SeqCst),
+        3,
+        "the wait looks the label up until one answers, and not once more"
+    );
+}
+
+#[tokio::test]
+async fn a_label_the_lookup_never_holds_fails_within_the_bound_naming_what_it_found() {
+    let (url, answered) = serve(|_, request| {
+        assert_looks_up_label(request);
+        labels(vec![])
+    });
+    let started = Instant::now();
+    let refusal = settled_label(BOUND, LABEL, |query, variables| {
+        post(&url, query, variables)
+    })
+    .await
+    .unwrap_err();
+    let waited = started.elapsed();
+    assert!(
+        refusal.starts_with(
+            r#"the labels named "otg-live-label" by the lookup a write resolves it through came back as [] rather than ["otg-live-label"], still after 5 reads"#
+        ),
+        "the failure names what the lookup found: {refusal}"
+    );
+    assert_eq!(answered.load(Ordering::SeqCst), BOUND.reads);
+    assert!(
+        waited >= BOUND.interval * (BOUND.reads - 1)
+            && waited < BOUND.interval * BOUND.reads + SLACK,
+        "a label never held fails once the bound is spent, and waited {waited:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_label_two_labels_answer_to_fails_within_the_bound_naming_both() {
+    // The other answer a write is refused over: a wait for exactly one never accepts two.
+    let (url, answered) = serve(|_, request| {
+        assert_looks_up_label(request);
+        labels(vec!["l1", "l2"])
+    });
+    let refusal = settled_label(BOUND, LABEL, |query, variables| {
+        post(&url, query, variables)
+    })
+    .await
+    .unwrap_err();
+    assert!(
+        refusal.starts_with(
+            r#"the labels named "otg-live-label" by the lookup a write resolves it through came back as ["otg-live-label", "otg-live-label"] rather than ["otg-live-label"], still after 5 reads"#
+        ),
+        "the failure names what the lookup found: {refusal}"
+    );
+    assert_eq!(answered.load(Ordering::SeqCst), BOUND.reads);
+}
+
+#[tokio::test]
+async fn a_label_lookup_that_cannot_be_read_fails_at_once_rather_than_waiting() {
+    let (url, answered) = serve(|_, _| json!({"issueLabels": null}));
+    let started = Instant::now();
+    let refusal = settled_label(BOUND, LABEL, |query, variables| {
+        post(&url, query, variables)
+    })
+    .await
+    .unwrap_err();
+    assert!(
+        refusal.starts_with(
+            r#"the labels named "otg-live-label" by the lookup a write resolves it through could not be read: "#
+        ),
+        "{refusal}"
+    );
+    assert_eq!(answered.load(Ordering::SeqCst), 1);
+    assert!(started.elapsed() < BOUND.interval + SLACK);
 }
 
 #[tokio::test]

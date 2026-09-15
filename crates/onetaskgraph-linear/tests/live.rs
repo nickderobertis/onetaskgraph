@@ -70,8 +70,8 @@ use cleanup::{
 mod settle;
 
 use settle::{
-    LINEAR_INDEX, settled, settled_documents, settled_tasks, settled_walk, task_titles,
-    walked_task_titles,
+    LINEAR_INDEX, settled, settled_documents, settled_label, settled_tasks, settled_walk,
+    task_titles, walked_task_titles,
 };
 
 /// The two workflow states this fixture files its issues under.
@@ -233,6 +233,14 @@ async fn drive_every_declared_capability(
     let only_label = artifact_label(run.id, run.stamp_micros + 1);
     create_label(&run.key, team_id, &run_label).await?;
     create_label(&run.key, team_id, &only_label).await?;
+    // The first task write names both, and the source resolves a label by name through
+    // Linear's label filter, which holds a label only some while after it was created.
+    for name in [&run_label, &only_label] {
+        settled_label(LINEAR_INDEX, name, |query, variables| {
+            linear(&run.key, query, variables, "live label lookup")
+        })
+        .await?;
+    }
     let open = Status {
         category: StatusCategory::Todo,
         name: run.open_state.clone(),
