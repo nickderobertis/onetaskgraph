@@ -368,7 +368,7 @@ use onetaskgraph_plugin_api::{
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     LabelFilter, Location, Metering, NativeId, NewComment, Page, PageRequest, Project,
     ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery,
     WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
@@ -1221,7 +1221,8 @@ pub struct GitHubProjectsConfig {
     /// Per-instance mapping from a status category to where it lands on this board.
     ///
     /// A category this does not mention keeps its shipped default: `backlog` to
-    /// "Backlog", `todo` to "Todo", `in-progress` to "In Progress", `done` to closed as
+    /// "Backlog", `todo` to "Todo", `queued` to "Queued", `in-progress` to "In Progress",
+    /// `done` to closed as
     /// completed, `cancelled` to closed as not planned, and `draft` and `unknown`
     /// disabled. `unknown` may name one existing board option; every unknown word then
     /// lands on that option and reads back as `unknown` under its name. It cannot name a
@@ -1558,6 +1559,43 @@ impl StatusMapping {
             matches!(self.target(*category), StatusTarget::Column(name)
                 if name.as_str().eq_ignore_ascii_case(option))
         })
+    }
+
+    /// The status an item reports, from the three things a read of it says: its board
+    /// `Status` option, whether its issue is closed, and the reason it was closed with.
+    ///
+    /// The closed state decides the category and the `Status` option decides the name, so
+    /// a closed issue sitting in a "Shipped" column reports `done` named `Shipped`. A
+    /// closed issue whose reason is `DUPLICATE` or `REOPENED` reports `Unknown`: a
+    /// duplicate is not finished work, and calling it done is a lie the next copy would
+    /// write back. `REOPENED`-while-closed is a state this source can never produce, so
+    /// it is read permissively rather than refused — reads are faithful, and refusals
+    /// belong on writes.
+    ///
+    /// One function of those three rather than of a response, so a narrow status write can
+    /// answer what a re-read would report by applying it to the state it has just written.
+    fn status(&self, option: Option<&str>, closed: bool, reason: Option<&str>) -> Status {
+        if closed {
+            let category = match reason {
+                None | Some("COMPLETED") => StatusCategory::Done,
+                Some("NOT_PLANNED") => StatusCategory::Cancelled,
+                Some(_) => StatusCategory::Unknown,
+            };
+            let fallback = match category {
+                StatusCategory::Done => "Done",
+                StatusCategory::Cancelled => "Cancelled",
+                _ => "Closed",
+            };
+            return Status {
+                category,
+                name: option.unwrap_or(fallback).to_owned(),
+            };
+        }
+        let name = option.unwrap_or("Open").to_owned();
+        Status {
+            category: self.category_of(&name).unwrap_or(StatusCategory::Unknown),
+            name,
+        }
     }
 }
 
@@ -2683,7 +2721,8 @@ impl GitHubProjectsSource {
         if let Some(labels) = content.get("labels") {
             complete_connection(labels, "content labels", NESTED_PAGE_SIZE)?;
         }
-        let (body, slot) = metadata_body(optional_str(content, "body")?.map(str::to_owned))?;
+        let raw_body = optional_str(content, "body")?.map(str::to_owned);
+        let (body, slot) = metadata_body(raw_body.clone())?;
         let parent = optional_str(content.get("parent").unwrap_or(&Value::Null), "id")?
             .map(|id| NativeId(id.to_owned()));
         // A draft has no sub-issues to summarise, and GitHub's schema gives it no field
@@ -2731,14 +2770,36 @@ impl GitHubProjectsSource {
         } else {
             own_repository.clone().into_iter().collect()
         };
+        let id = NativeId(content_id.to_owned());
+        // Read only for a task, because only a task has either list: a project or a
+        // document holding one of these keys holds nothing this source reports, and the
+        // keys are left out of its caller-visible metadata all the same.
+        let (delivers, delivered_by) = if kind == BoardKind::Work(ItemKind::Task) {
+            let listed = |key: &str| {
+                TaskRef::from_value(key, &id, Some(&self.name), slot.get(key))
+                    .map_err(|message| SourceError::Malformed { message })
+            };
+            (
+                listed(TaskRef::DELIVERS_KEY)?,
+                listed(TaskRef::DELIVERED_BY_KEY)?,
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let (option, closed, reason) = Self::status_parts(nodes, content)?;
         Ok(Some(Resolved {
             item_id: required_str(item, "id")?.to_owned(),
-            id: NativeId(content_id.to_owned()),
+            id,
             content_kind,
             kind,
             title,
             body: body.filter(|value| !value.is_empty()),
-            status: self.status(item, content)?,
+            raw_body,
+            status: self.statuses.status(option, closed, reason),
+            option: option.map(str::to_owned),
+            closed,
+            delivers,
+            delivered_by,
             labels: labels(content)?,
             parent,
             origin: text_field(nodes, ORIGIN_FIELD)?.filter(|value| !value.is_empty()),
@@ -2761,50 +2822,20 @@ impl GitHubProjectsSource {
         }))
     }
 
-    /// The status one board item reports.
-    ///
-    /// The closed state decides the category and the `Status` option decides the name, so
-    /// a closed issue sitting in a "Shipped" column reports `done` named `Shipped`. A
-    /// closed issue whose reason is `DUPLICATE` or `REOPENED` reports `Unknown`: a
-    /// duplicate is not finished work, and calling it done is a lie the next copy would
-    /// write back. `REOPENED`-while-closed is a state this source can never produce, so
-    /// it is read permissively rather than refused — reads are faithful, and refusals
-    /// belong on writes.
-    fn status(&self, item: &Value, content: &Value) -> Result<Status, SourceError> {
-        let nodes = item
-            .pointer("/fieldValues/nodes")
-            .and_then(Value::as_array)
-            .expect("resolve validates fieldValues.nodes before mapping status");
-        let option = nodes
+    /// What one board item's status is read from: its `Status` option, whether its issue
+    /// is closed, and the reason it was closed with. [`StatusMapping::status`] turns the
+    /// three into the status it reports.
+    fn status_parts<'a>(
+        field_values: &'a [Value],
+        content: &'a Value,
+    ) -> Result<(Option<&'a str>, bool, Option<&'a str>), SourceError> {
+        let option = field_values
             .iter()
             .find(|value| value.pointer("/field/name").and_then(Value::as_str) == Some("Status"))
             .map(|value| required_str(value, "name"))
             .transpose()?;
-        let state = optional_str(content, "state")?;
-        if state == Some("CLOSED") {
-            let category = match optional_str(content, "stateReason")? {
-                None | Some("COMPLETED") => StatusCategory::Done,
-                Some("NOT_PLANNED") => StatusCategory::Cancelled,
-                Some(_) => StatusCategory::Unknown,
-            };
-            let fallback = match category {
-                StatusCategory::Done => "Done",
-                StatusCategory::Cancelled => "Cancelled",
-                _ => "Closed",
-            };
-            return Ok(Status {
-                category,
-                name: option.unwrap_or(fallback).to_owned(),
-            });
-        }
-        let name = option.unwrap_or("Open").to_owned();
-        Ok(Status {
-            category: self
-                .statuses
-                .category_of(&name)
-                .unwrap_or(StatusCategory::Unknown),
-            name,
-        })
+        let closed = optional_str(content, "state")? == Some("CLOSED");
+        Ok((option, closed, optional_str(content, "stateReason")?))
     }
 
     /// The board Status option this write selects, or the refusal that says why not.
@@ -2814,12 +2845,15 @@ impl GitHubProjectsSource {
     /// issue's own state carries the category, and the option carries only the name a
     /// reader reports — so an option spelled the way this status is spelled is selected
     /// when the board has one, and nothing is refused when it does not.
+    ///
+    /// Answers the field's id, the option's id, and the option's name as the board spells
+    /// it — which is the name a read of the item reports once it sits there.
     fn column_for(
         &self,
         board: &Board,
         status: &Status,
         target: &StatusTarget,
-    ) -> Result<Option<(String, String)>, SourceError> {
+    ) -> Result<Option<(String, String, String)>, SourceError> {
         let (wanted, required) = match target {
             StatusTarget::Column(wanted) => (wanted.as_str(), true),
             StatusTarget::Closed(_) => (status.name.as_str(), false),
@@ -2866,8 +2900,161 @@ impl GitHubProjectsSource {
             Some(option) => Ok(Some((
                 required_str(field, "id")?.to_owned(),
                 required_str(option, "id")?.to_owned(),
+                required_str(option, "name")?.to_owned(),
             ))),
         }
+    }
+
+    /// The refusal a status that closes an issue is answered with over a board draft.
+    fn closes_a_draft(&self, category: StatusCategory) -> SourceError {
+        SourceError::Refused {
+            message: format!(
+                "status {} of source {} closes the item's issue, and GitHub draft items have \
+                 no open or closed state",
+                category_name(category),
+                self.name
+            ),
+        }
+    }
+
+    /// What a status write to one item needs of the board: the board's id and the
+    /// definition of its `Status` field, read off the item when the item says both.
+    ///
+    /// The same reasoning as [`Self::board_for_update`]: a node read of the item names its
+    /// board, and its `Status` value carries that field's definition, options and all. An
+    /// item that does not say — no board id, or no `Status` value to read the field off —
+    /// sends this back to reading the board, as does a board this command has already read.
+    async fn status_board(&self, item: &Resolved) -> Result<Board, SourceError> {
+        let defines_status = item
+            .fields
+            .iter()
+            .any(|field| field.get("name").and_then(Value::as_str) == Some("Status"));
+        if self.board_cache()?.is_none()
+            && defines_status
+            && let Some(board_id) = &item.board_id
+        {
+            return Ok(Board {
+                id: board_id.clone(),
+                fields: json!({"nodes": item.fields, "pageInfo": {"hasNextPage": false}}),
+                items: Vec::new(),
+            });
+        }
+        self.board().await
+    }
+
+    /// Set one task's status and nothing else; see [`TaskSource::set_task_status`].
+    async fn set_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        // Refused before anything is read, in the words a write of the same status is.
+        let target = self.resolved_target(category)?;
+        let Some(mut item) = self
+            .item_by_id(id)
+            .await?
+            .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
+        else {
+            return Ok(None);
+        };
+        if let StatusTarget::Closed(reason) = &target {
+            // The issue's own state carries a closed category, so the board option is left
+            // exactly where it is and goes on naming the status.
+            if item.content_kind == ContentKind::DraftIssue {
+                return Err(self.closes_a_draft(category));
+            }
+            self.update_content(
+                ContentKind::Issue,
+                &item.id,
+                json!({"stateInput": state_input(Some(&target))}),
+            )
+            .await?;
+            item.closed = true;
+            item.status = self
+                .statuses
+                .status(item.option.as_deref(), true, Some(reason.reason()));
+        } else {
+            let board = self.status_board(&item).await?;
+            let wanted = Status {
+                category,
+                name: category_name(category).to_owned(),
+            };
+            let (field, option, name) =
+                self.column_for(&board, &wanted, &target)?.ok_or_else(|| {
+                    SourceError::Malformed {
+                        message: format!(
+                            "status {} of source {} names no board Status option",
+                            category_name(category),
+                            self.name
+                        ),
+                    }
+                })?;
+            // An option is what an open item's status is, so a closed issue is reopened
+            // first — sitting closed in the column, it would read back as closed. A draft has
+            // no state to reopen.
+            if item.content_kind == ContentKind::Issue && item.closed {
+                self.update_content(
+                    ContentKind::Issue,
+                    &item.id,
+                    json!({"stateInput": state_input(Some(&target))}),
+                )
+                .await?;
+                item.closed = false;
+            }
+            self.set_item_field(
+                &board.id,
+                &item.item_id,
+                &field,
+                json!({"singleSelectOptionId": option}),
+            )
+            .await?;
+            item.status = self.statuses.status(Some(&name), false, None);
+            item.option = Some(name);
+        }
+        let status = item.status.clone();
+        self.remember_written(item, false)?;
+        Ok(Some(status))
+    }
+
+    /// Replace one task's `delivered_by` and nothing else; see
+    /// [`TaskSource::set_delivered_by`].
+    ///
+    /// One update of the body, which differs from the body GitHub holds only inside the
+    /// metadata slot — see [`with_slot`]. A body that would not change is not sent at all.
+    async fn replace_delivered_by(
+        &self,
+        id: &NativeId,
+        delivered_by: &[TaskRef],
+    ) -> Result<Option<()>, SourceError> {
+        let entries = TaskRef::listed(
+            TaskRef::DELIVERED_BY_KEY,
+            id,
+            Some(&self.name),
+            delivered_by.to_vec(),
+        )
+        .map_err(|message| SourceError::Refused { message })?;
+        let Some(mut item) = self
+            .item_by_id(id)
+            .await?
+            .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
+        else {
+            return Ok(None);
+        };
+        let held = item.raw_body.clone().unwrap_or_default();
+        let mut slot = item.slot.clone();
+        set_task_list(&mut slot, TaskRef::DELIVERED_BY_KEY, &entries);
+        let body = with_slot(&held, &slot)?;
+        if body != held {
+            self.update_content(item.content_kind, &item.id, json!({"body": body}))
+                .await?;
+        }
+        let (visible, slot) = metadata_body(Some(body.clone()))?;
+        item.body = visible.filter(|value| !value.is_empty());
+        item.raw_body = Some(body);
+        item.slot = slot;
+        item.delivered_by = entries;
+        self.remember_written(item, false)?;
+        Ok(Some(()))
     }
 
     /// This instance's target for a category, refusing one it has disabled.
@@ -3369,14 +3556,7 @@ impl GitHubProjectsSource {
             if let (Some(StatusTarget::Closed(_)), Some(status)) =
                 (status_target.as_ref(), incoming.written.status())
             {
-                return Err(SourceError::Refused {
-                    message: format!(
-                        "status {} of source {} closes the item's issue, and GitHub draft items \
-                         have no open or closed state",
-                        category_name(status.category),
-                        self.name
-                    ),
-                });
+                return Err(self.closes_a_draft(status.category));
             }
             if incoming.parent.is_some() {
                 return Err(SourceError::Refused {
@@ -3481,6 +3661,8 @@ impl GitHubProjectsSource {
             }
         };
 
+        let written_option = column.as_ref().map(|(_, _, name)| name.clone());
+        let column = column.map(|(field, option, _)| (field, option));
         // Creating an item here is several calls — `createIssue`, `addProjectV2ItemById`,
         // then each board field, the parent and the dependencies — and GitHub can fail at
         // any of them. Everything this source can refuse *before* the first of those is
@@ -3524,6 +3706,7 @@ impl GitHubProjectsSource {
             // same issue reports, rather than the person's text with the metadata slot
             // still on the end of it.
             body: metadata_body(body.clone())?.0,
+            raw_body: body.clone(),
             // A document has no status of its own; what it reads back as is whatever
             // the issue's own state says, which is what a re-read reports.
             status: incoming
@@ -3534,6 +3717,17 @@ impl GitHubProjectsSource {
                     category: StatusCategory::Unknown,
                     name: "Open".to_owned(),
                 }),
+            option: written_option.or_else(|| existing.and_then(|item| item.option.clone())),
+            // What `state_input` asked for: closed for a closed target, open for any other
+            // status, and the issue's own state left as it was by a document write.
+            closed: content_kind == ContentKind::Issue
+                && match status_target.as_ref() {
+                    Some(StatusTarget::Closed(_)) => true,
+                    Some(_) => false,
+                    None => existing.is_some_and(|item| item.closed),
+                },
+            delivers: incoming.delivers.to_vec(),
+            delivered_by: incoming.delivered_by.to_vec(),
             labels: incoming.labels.to_vec(),
             parent: incoming.parent.cloned(),
             origin: (!origin.is_empty()).then(|| origin.to_owned()),
@@ -3888,26 +4082,44 @@ impl GitHubProjectsSource {
         status_target: Option<&StatusTarget>,
     ) -> Result<(), SourceError> {
         let title = incoming.written_title();
-        let (operation, input, pointer) = match item.content_kind {
+        let fields = match item.content_kind {
+            ContentKind::DraftIssue => json!({"title":title,"body":body}),
+            ContentKind::Issue => json!({"title":title,"body":body,
+                                         "stateInput":state_input(status_target)}),
+        };
+        self.update_content(item.content_kind, &item.id, fields)
+            .await
+    }
+
+    /// Update one board item's content with exactly `fields` beside its id, through the
+    /// mutation its kind takes: `updateIssue` for an issue, `updateProjectV2DraftIssue` for
+    /// a draft.
+    ///
+    /// Every input field either mutation leaves out is a field GitHub leaves as it is, which
+    /// is what lets a narrow write carry the one thing it changes and nothing else.
+    async fn update_content(
+        &self,
+        kind: ContentKind,
+        id: &NativeId,
+        fields: Value,
+    ) -> Result<(), SourceError> {
+        let (operation, id_key, pointer) = match kind {
             ContentKind::DraftIssue => (
                 graphql::UPDATE_DRAFT,
-                json!({"draftIssueId":item.id.0,"title":title,"body":body}),
+                "draftIssueId",
                 "/updateProjectV2DraftIssue/draftIssue",
             ),
-            ContentKind::Issue => (
-                graphql::UPDATE_ISSUE,
-                json!({"id":item.id.0,"title":title,"body":body,
-                       "stateInput":state_input(status_target)}),
-                "/updateIssue/issue",
-            ),
+            ContentKind::Issue => (graphql::UPDATE_ISSUE, "id", "/updateIssue/issue"),
         };
+        let mut input = fields;
+        input[id_key] = json!(id.0);
         let data = self.graphql(operation, json!({"input":input})).await?;
         let returned = data
             .pointer(pointer)
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub item update returned no item".into(),
             })?;
-        if required_str(returned, "id")? != item.id.0 {
+        if required_str(returned, "id")? != id.0 {
             return Err(SourceError::Malformed {
                 message: "GitHub item update returned the wrong item".into(),
             });
@@ -3978,23 +4190,12 @@ impl GitHubProjectsSource {
                 message: "GitHub board addition returned no project item".into(),
             })?;
         if let Some(StatusTarget::Closed(_)) = status_target {
-            let closed = self
-                .graphql(
-                    graphql::UPDATE_ISSUE,
-                    json!({"input":{"id":content_id.0,"stateInput":state_input(status_target)}}),
-                )
-                .await?;
-            let returned =
-                closed
-                    .pointer("/updateIssue/issue")
-                    .ok_or_else(|| SourceError::Malformed {
-                        message: "GitHub item update returned no item".into(),
-                    })?;
-            if required_str(returned, "id")? != content_id.0 {
-                return Err(SourceError::Malformed {
-                    message: "GitHub item update returned the wrong item".into(),
-                });
-            }
+            self.update_content(
+                ContentKind::Issue,
+                &content_id,
+                json!({"stateInput":state_input(status_target)}),
+            )
+            .await?;
         }
         Ok((content_id, required_str(item, "id")?.to_owned(), url))
     }
@@ -4167,7 +4368,19 @@ struct Resolved {
     kind: BoardKind,
     title: String,
     body: Option<String>,
+    /// The body exactly as GitHub holds it, metadata slot and all, which is what a write
+    /// that changes the slot alone has to keep byte for byte outside it.
+    raw_body: Option<String>,
     status: Status,
+    /// The name of the board `Status` option this item sits in, as the board spells it.
+    option: Option<String>,
+    /// Whether this item's issue is closed. A draft has no such state and is never closed.
+    closed: bool,
+    /// The tasks this one delivers, read out of its slot. Empty for anything not a task.
+    delivers: Vec<TaskRef>,
+    /// Every task that delivers this one, read out of its slot. Empty for anything not a
+    /// task.
+    delivered_by: Vec<TaskRef>,
     labels: Vec<Label>,
     parent: Option<NativeId>,
     // llmlint: ignore[invalid_states_unrepresentable] The write side's reason, read back: this is the engine's qualified id, taken out of a board text field and handed on untouched. A newtype here would have this plugin define the syntax of an id `docs/metadata.md` says no plugin ever constructs or interprets.
@@ -4190,12 +4403,18 @@ struct Resolved {
 
 impl Resolved {
     /// The metadata a caller sees: their own keys, plus the copy origin this source keeps
-    /// in a field of its own, and none of the three keys that are only an encoding.
+    /// in a field of its own, and none of the five keys that are only an encoding.
+    ///
+    /// The two delivery keys are left out for every kind, not only for a task: they are
+    /// the encoding of [`Task::delivers`] and [`Task::delivered_by`], and a project or a
+    /// document carrying one holds nothing a caller's own metadata could mean by it.
     fn metadata(&self) -> BTreeMap<String, Value> {
         let mut metadata = self.slot.clone();
         metadata.remove(Repository::METADATA_KEY);
         metadata.remove(DependencyEdge::RECORDED_KEY);
         metadata.remove(ItemKind::METADATA_KEY);
+        metadata.remove(TaskRef::DELIVERS_KEY);
+        metadata.remove(TaskRef::DELIVERED_BY_KEY);
         if let Some(origin) = &self.origin {
             metadata.insert(ORIGIN_KEY.to_owned(), Value::String(origin.clone()));
         }
@@ -4233,8 +4452,8 @@ impl Resolved {
             updated_at: self.updated_at,
             metadata: self.metadata(),
             repositories: self.repositories.clone(),
-            delivers: Vec::new(),
-            delivered_by: Vec::new(),
+            delivers: self.delivers.clone(),
+            delivered_by: self.delivered_by.clone(),
         }
     }
 
@@ -4317,6 +4536,11 @@ struct Incoming<'a> {
     metadata: &'a BTreeMap<String, Value>,
     repositories: &'a [Repository],
     parent: Option<&'a NativeId>,
+    /// [`Task::delivers`], already checked. Empty for a project or a document, which is
+    /// what keeps either key out of their slot.
+    delivers: &'a [TaskRef],
+    /// [`Task::delivered_by`], already checked. Empty for a project or a document.
+    delivered_by: &'a [TaskRef],
 }
 
 impl Incoming<'_> {
@@ -4635,7 +4859,21 @@ impl TaskSource for GitHubProjectsSource {
         WriteSupport::Supported
     }
 
+    /// Create or update one task.
+    ///
+    /// Its `delivers` and `delivered_by` are checked before anything is read or written —
+    /// neither may name the task itself or name one task twice — and land in the body's
+    /// metadata slot under their reserved keys, in place of any caller metadata of those
+    /// names.
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        let near = write.target.as_ref().unwrap_or(&write.item.id);
+        for (key, entries) in [
+            (TaskRef::DELIVERS_KEY, &write.item.delivers),
+            (TaskRef::DELIVERED_BY_KEY, &write.item.delivered_by),
+        ] {
+            TaskRef::listed(key, near, Some(&self.name), entries.clone())
+                .map_err(|message| SourceError::Refused { message })?;
+        }
         self.write_item(
             &Incoming {
                 written: Written::Work(ItemKind::Task, &write.item.status),
@@ -4645,6 +4883,8 @@ impl TaskSource for GitHubProjectsSource {
                 metadata: &write.item.metadata,
                 repositories: &write.item.repositories,
                 parent: write.item.project.as_ref(),
+                delivers: &write.item.delivers,
+                delivered_by: &write.item.delivered_by,
             },
             write.target.as_ref(),
             &write.depends_on,
@@ -4662,6 +4902,8 @@ impl TaskSource for GitHubProjectsSource {
                 metadata: &write.item.metadata,
                 repositories: &write.item.repositories,
                 parent: None,
+                delivers: &[],
+                delivered_by: &[],
             },
             write.target.as_ref(),
             &write.depends_on,
@@ -4701,11 +4943,39 @@ impl TaskSource for GitHubProjectsSource {
                 metadata: &write.item.metadata,
                 repositories: &write.item.repositories,
                 parent: write.item.project.as_ref(),
+                delivers: &[],
+                delivered_by: &[],
             },
             write.target.as_ref(),
             &[],
         )
         .await
+    }
+
+    /// Set one task's status alone.
+    ///
+    /// A column target reopens a closed issue with an `updateIssue` carrying only its
+    /// `stateInput`, then selects the board option with `updateProjectV2ItemFieldValue`; a
+    /// closed target sends only that `updateIssue`, with the mapping's reason, and leaves
+    /// the option where it is. No request carries a title, a body or a label. The status
+    /// answered is what [`StatusMapping::status`] reads off the state just written, which is
+    /// what a re-read reports.
+    async fn set_task_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        self.set_status(id, category).await
+    }
+
+    /// Replace one task's `delivered_by` with a single body update that changes the
+    /// metadata slot and nothing outside it.
+    async fn set_delivered_by(
+        &self,
+        id: &NativeId,
+        delivered_by: &[TaskRef],
+    ) -> Result<Option<()>, SourceError> {
+        self.replace_delivered_by(id, delivered_by).await
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
@@ -5058,6 +5328,15 @@ fn slot_metadata(
             ),
         );
     }
+    // The typed lists are what land, whatever the caller's own metadata held under their
+    // keys: a key of either name travelling beside the field would otherwise be a second
+    // answer to the same question, and the field is the one the contract names.
+    for (key, entries) in [
+        (TaskRef::DELIVERS_KEY, incoming.delivers),
+        (TaskRef::DELIVERED_BY_KEY, incoming.delivered_by),
+    ] {
+        set_task_list(&mut metadata, key, entries);
+    }
     if fallback.is_empty() {
         metadata.remove(DependencyEdge::RECORDED_KEY);
     } else {
@@ -5212,8 +5491,41 @@ fn metadata_body(
     let Some(body) = body else {
         return Ok((None, BTreeMap::new()));
     };
-    let Some(start) = body.rfind(METADATA_OPEN) else {
+    let Some(slot) = slot_span(&body)? else {
         return Ok((Some(body), BTreeMap::new()));
+    };
+    let metadata =
+        serde_json::from_str(&body[slot.encoded_start..slot.encoded_end]).map_err(|error| {
+            SourceError::Malformed {
+                message: format!(
+                    "invalid canonical JSON in GitHub issue onetaskgraph metadata slot: {error}"
+                ),
+            }
+        })?;
+    let visible = body[..slot.start].trim_end();
+    Ok(((!visible.is_empty()).then(|| visible.to_owned()), metadata))
+}
+
+/// Where the metadata slot sits in one body, as byte offsets into it.
+struct SlotSpan {
+    /// Where [`METADATA_OPEN`] begins.
+    start: usize,
+    /// Where the encoded JSON begins, just past [`METADATA_OPEN`].
+    encoded_start: usize,
+    /// Where the encoded JSON ends, at the start of [`METADATA_CLOSE`].
+    encoded_end: usize,
+    /// Just past [`METADATA_CLOSE`].
+    end: usize,
+}
+
+/// The slot at the very end of `body`, or `None` when it has none.
+///
+/// The one reading of *where the slot is*, shared by [`metadata_body`], which reads it, and
+/// [`with_slot`], which rewrites it — so the two cannot disagree about which comment is the
+/// slot.
+fn slot_span(body: &str) -> Result<Option<SlotSpan>, SourceError> {
+    let Some(start) = body.rfind(METADATA_OPEN) else {
+        return Ok(None);
     };
     let encoded_start = start + METADATA_OPEN.len();
     let Some(relative_end) = body[encoded_start..].find(METADATA_CLOSE) else {
@@ -5222,18 +5534,72 @@ fn metadata_body(
         });
     };
     let encoded_end = encoded_start + relative_end;
-    if !body[encoded_end + METADATA_CLOSE.len()..].trim().is_empty() {
-        return Ok((Some(body), BTreeMap::new()));
+    let end = encoded_end + METADATA_CLOSE.len();
+    if !body[end..].trim().is_empty() {
+        return Ok(None);
     }
-    let metadata = serde_json::from_str(&body[encoded_start..encoded_end]).map_err(|error| {
-        SourceError::Malformed {
-            message: format!(
-                "invalid canonical JSON in GitHub issue onetaskgraph metadata slot: {error}"
-            ),
+    Ok(Some(SlotSpan {
+        start,
+        encoded_start,
+        encoded_end,
+        end,
+    }))
+}
+
+/// `body` with its metadata slot holding exactly `metadata`, and every byte outside the
+/// slot as it was.
+///
+/// A slot that is there has its JSON replaced in place; one that becomes empty is removed
+/// together with the one `"\n\n"` separating it from the prose before it. A body with no
+/// slot gains one the way [`compose_body`] writes it — after a `"\n\n"`, or alone in an empty
+/// body — and a body with no slot that is given no metadata is returned as it is.
+fn with_slot(body: &str, metadata: &BTreeMap<String, Value>) -> Result<String, SourceError> {
+    let encoded = if metadata.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::to_string(metadata).map_err(|error| SourceError::Malformed {
+                message: error.to_string(),
+            })?,
+        )
+    };
+    Ok(match (slot_span(body)?, encoded) {
+        (Some(slot), Some(encoded)) => format!(
+            "{}{encoded}{}",
+            &body[..slot.encoded_start],
+            &body[slot.encoded_end..]
+        ),
+        (Some(slot), None) => {
+            let before = &body[..slot.start];
+            format!(
+                "{}{}",
+                before.strip_suffix("\n\n").unwrap_or(before),
+                &body[slot.end..]
+            )
         }
-    })?;
-    let visible = body[..start].trim_end();
-    Ok(((!visible.is_empty()).then(|| visible.to_owned()), metadata))
+        (None, None) => body.to_owned(),
+        (None, Some(encoded)) if body.is_empty() => {
+            format!("{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
+        }
+        (None, Some(encoded)) => format!("{body}\n\n{METADATA_OPEN}{encoded}{METADATA_CLOSE}"),
+    })
+}
+
+/// Hold `entries` under `key` in one slot's metadata, or no such key when there are none.
+fn set_task_list(metadata: &mut BTreeMap<String, Value>, key: &str, entries: &[TaskRef]) {
+    if entries.is_empty() {
+        metadata.remove(key);
+    } else {
+        metadata.insert(
+            key.to_owned(),
+            Value::Array(
+                entries
+                    .iter()
+                    .map(|entry| Value::String(entry.as_str().to_owned()))
+                    .collect(),
+            ),
+        );
+    }
 }
 
 fn compose_body(
