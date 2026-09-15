@@ -25,6 +25,7 @@ RESPONSE_ROOTS = {
     "task_comment_list": "CommentList",
     "task_comment_edit": "Comment",
     "task_comment_delete": "DeletedComment",
+    "task_status_set": "TaskStatusSet",
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
     "project_deps": "QueryResponseOfQualifiedEdge",
@@ -45,7 +46,10 @@ RESPONSE_ROOTS = {
 # two keys is present. `DocumentQuery` and `PageOfDocument` are the plugin-facing halves of
 # the same contract, which the SDK owes a caller a model for whether or not a verb returns
 # one directly. `FailureDocument` is what any verb writes to stdout when it exits 1 under
-# `--json`, which no verb's response root describes.
+# `--json`, which no verb's response root describes. `Delivered` and `DeliveryOutcome` are
+# what a write reports about each task it kept in step with its deliverers, inside both a
+# `CopyReport` and a `TaskStatusSet`; `TaskRef` is the entry of a task's `delivers` and
+# `delivered_by`.
 CONTRACT_ROOTS = {
     "FailureDocument",
     "SourceFailure",
@@ -56,6 +60,9 @@ CONTRACT_ROOTS = {
     "DocumentQuery",
     "Location",
     "PageOfDocument",
+    "Delivered",
+    "DeliveryOutcome",
+    "TaskRef",
 }
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
@@ -419,6 +426,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id",)
         case ("task", "comment", "edit" | "delete"):
             return ("id", "comment_id")
+        case ("task", "status", "set"):
+            return ("id", "category")
         case ("task" | "project" | "document", "show" | "deps" | "copy"):
             return ("id",)
         case _:
@@ -487,6 +496,9 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         # `task copy` and `document copy` take one or more ids, which are the variadic
         # positionals the command surface has; the client passes each of them through.
         "ids": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
+        # `task status set` takes the category it sets as its second operand, spelled as the
+        # binary's status vocabulary spells it — which is exactly the generated enum's values.
+        "category": "StatusCategory | str",
     }
     for name, command in sorted(names.items()):
         root = RESPONSE_ROOTS[name]

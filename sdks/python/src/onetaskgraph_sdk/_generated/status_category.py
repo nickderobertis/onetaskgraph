@@ -9,6 +9,7 @@ class StatusCategory(StrEnum):
     StatusCategoryDraft = "draft"
     StatusCategoryBacklog = "backlog"
     StatusCategoryTodo = "todo"
+    StatusCategoryQueued = "queued"
     StatusCategoryInProgress = "in-progress"
     StatusCategoryDone = "done"
     StatusCategoryCancelled = "cancelled"

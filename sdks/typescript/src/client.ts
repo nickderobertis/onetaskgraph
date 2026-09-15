@@ -16,7 +16,9 @@ import type {
   QueryResponseOfQualifiedTask,
   QueryResponseOfSearchHit,
   SourceListings,
+  StatusCategory,
   TaskDetail,
+  TaskStatusSet,
 } from "./generated/models.ts";
 import { runtimeSchemas } from "./generated/schemas.ts";
 import { SCHEMA_BUNDLE_VERSION } from "./generated/models.ts";
@@ -90,6 +92,7 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   "task comment list": "CommentList",
   "task comment edit": "Comment",
   "task comment delete": "DeletedComment",
+  "task status set": "TaskStatusSet",
   "project list": "QueryResponseOfQualifiedProject",
   "project show": "QueryResponseOfQualifiedProject",
   "project deps": "QueryResponseOfQualifiedEdge",
@@ -101,17 +104,16 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   search: "QueryResponseOfSearchHit",
 };
 
-// A copy is one write into one destination, and a comment verb one call to one source, so
-// exit 4 — some sources answered and some did not — is not a code either can produce and not
-// one this client accepts from them.
+// Exit 4 is a whole answer with part of it missing: a read some sources could not answer, or a
+// write — a copy, or `task status set` — that landed and could not keep a task it delivers in
+// step, which its response names. A comment verb is one call to one source and neither reads
+// several nor keeps anything in step, so exit 4 is not a code it can produce and not one this
+// client accepts from it.
 const partialResponseCommands = new Set(
   Object.keys(responseRoots).filter(
     (command) =>
       command !== "config show" &&
       command !== "sources list" &&
-      command !== "task copy" &&
-      command !== "project copy" &&
-      command !== "document copy" &&
       !command.startsWith("task comment "),
   ),
 );
@@ -222,6 +224,9 @@ export class OnetaskgraphClient {
   }
   taskCommentDelete(id: string, commentId: string): Promise<DeletedComment> {
     return this.run("task comment delete", [id, commentId]);
+  }
+  taskStatusSet(id: string, category: StatusCategory): Promise<TaskStatusSet> {
+    return this.run("task status set", [id, category]);
   }
   taskDeps(id: string, options: DependencyOptions = {}): Promise<QueryResponseOfQualifiedEdge> {
     const args = [id];

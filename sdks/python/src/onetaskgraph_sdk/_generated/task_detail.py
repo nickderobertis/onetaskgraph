@@ -190,10 +190,20 @@ class StatusCategory(StrEnum):
     StatusCategoryDraft = "draft"
     StatusCategoryBacklog = "backlog"
     StatusCategoryTodo = "todo"
+    StatusCategoryQueued = "queued"
     StatusCategoryInProgress = "in-progress"
     StatusCategoryDone = "done"
     StatusCategoryCancelled = "cancelled"
     StatusCategoryUnknown = "unknown"
+
+
+class TaskRef(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`."
+        ),
+    ]
 
 
 class Comment(BaseModel):
@@ -265,6 +275,20 @@ class Task(BaseModel):
         AwareDatetime | None,
         Field(description="When the source says the task was created."),
     ] = None
+    delivered_by: Annotated[
+        list[TaskRef] | None,
+        Field(
+            description="Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
+            validate_default=True,
+        ),
+    ] = []
+    delivers: Annotated[
+        list[TaskRef] | None,
+        Field(
+            description="The tasks this one delivers: finishing this task finishes them.\n\nEach entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a\nbare native id names a task of the source holding this one — with no repeats and\nnever this task itself. Empty by default, and left out of the wire when empty, so a\nreader written before the field existed reads exactly what it read before.",
+            validate_default=True,
+        ),
+    ] = []
     id: Annotated[NativeId, Field(description="The source's own opaque identifier.")]
     labels: Annotated[
         list[Label],

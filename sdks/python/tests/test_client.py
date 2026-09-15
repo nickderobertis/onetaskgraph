@@ -13,9 +13,18 @@ from pathlib import Path
 
 import pytest
 
-from onetaskgraph_sdk import Client, GlobalId, OnetaskgraphError, __version__
+from onetaskgraph_sdk import (
+    Client,
+    Delivered,
+    GlobalId,
+    OnetaskgraphError,
+    StatusCategory,
+    TaskStatusSet,
+    __version__,
+)
 from onetaskgraph_sdk._generated.copy_report import CopyOutcome
 from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
+from onetaskgraph_sdk._generated.task_status_set import DeliveredFailed
 
 WORKSPACE = Path(__file__).parents[3]
 
@@ -430,6 +439,89 @@ def test_comment_methods_drive_the_binary(binary: Path, tmp_path: Path) -> None:
     ]
     with pytest.raises(TypeError, match="comment_id"):
         run(client._invoke(["task", "comment", "delete"], object, id="notes:T-1"))
+
+
+def delivering_folder(tmp_path: Path) -> Path:
+    """Configure one real Markdown folder, `work`, holding a plain task and a delivering one.
+
+    A folder of Markdown outlives the invocation, so what one call writes the next one reads
+    back. `P` delivers a task of `nowhere`, which no configuration names, so every write of
+    its status re-evaluates a delivered task that cannot be read.
+    """
+    tasks = tmp_path / "work" / "tasks"
+    tasks.mkdir(parents=True)
+    (tasks / "T-1.md").write_text("---\ntitle: One\nstatus: todo\n---\n", encoding="utf-8")
+    (tasks / "P.md").write_text(
+        '---\ntitle: Parent\nstatus: todo\ndelivers: ["nowhere:T-9"]\n---\n', encoding="utf-8"
+    )
+    work = {"plugin": "local-md", "config": {"root": str(tmp_path / "work")}}
+    (tmp_path / "onetaskgraph.yaml").write_text(
+        json.dumps({"sources": {"work": work}}), encoding="utf-8"
+    )
+    return tmp_path
+
+
+def test_task_status_set_drives_the_binary(binary: Path, tmp_path: Path) -> None:
+    """Set one task's status through the real binary, read it back, and be refused by name."""
+    client = Client(binary, cwd=delivering_folder(tmp_path))
+
+    answer = run(
+        client.task_status_set(id="work:T-1", category=StatusCategory.StatusCategoryQueued)
+    )
+    assert isinstance(answer, TaskStatusSet)
+    assert answer.id.root == "work:T-1"
+    assert answer.status.category == "queued"
+    assert answer.delivered == []
+
+    # The folder really holds it: a later invocation reads the status this one wrote.
+    shown = run(client.task_show(id=GlobalId(root="work:T-1"))).items[0].item
+    assert (shown.title, shown.status.category) == ("One", StatusCategory.StatusCategoryQueued)
+
+    # The category is accepted as the binary spells it, too.
+    moved = run(client.task_status_set(id=GlobalId(root="work:T-1"), category="in-progress"))
+    assert moved.status.category == "in-progress"
+
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.task_status_set(id="missing:T-1", category="queued"))
+    assert refused.value.exit_code == 1
+    assert 'no source named "missing" is configured' in str(refused.value)
+    assert run(client.task_show(id="work:T-1")).items[0].item.status.category == "in-progress"
+
+
+def test_task_status_set_answers_when_a_delivered_task_could_not_be_kept_in_step(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Exit 4 is a write that landed with a delivered task it could not reach, not a failure.
+
+    The client hands back the whole answer the binary wrote — the status set, and the task it
+    could not keep in step with why — rather than raising on the exit code as it does for 1.
+    """
+    client = Client(binary, cwd=delivering_folder(tmp_path))
+
+    # The invocation the client makes, observed at the process boundary: it exits 4.
+    arguments = [client.binary, "task", "status", "set", "work:P", "in-progress", "--json"]
+    completed = run(client._invoke_process(arguments))
+    assert completed.returncode == 4
+    assert "nowhere:T-9 could not be kept in step with work:P" in completed.stderr
+
+    answer = run(client.task_status_set(id="work:P", category="queued"))
+    assert (answer.id.root, answer.status.category) == ("work:P", "queued")
+    [entry] = answer.delivered
+    outcome = entry.root
+    assert isinstance(outcome, DeliveredFailed)
+    assert (outcome.ticket.root, outcome.deliverer.root, outcome.outcome) == (
+        "nowhere:T-9",
+        "work:P",
+        "failed",
+    )
+    assert outcome.failure.kind == "unknown-source"
+    # The entry reads as the published `Delivered` root too, not only as a nested model.
+    republished = Delivered.model_validate(entry.model_dump(mode="json", by_alias=True))
+    assert republished.root.outcome == "failed"
+
+    shown = run(client.task_show(id="work:P")).items[0].item
+    assert shown.status.category == "queued"
+    assert [reference.root for reference in shown.delivers or []] == ["nowhere:T-9"]
 
 
 def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
