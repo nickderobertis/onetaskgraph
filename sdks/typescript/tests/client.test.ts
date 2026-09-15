@@ -22,6 +22,15 @@ import {
 import type { CopyReport } from "../src/generated/models.ts";
 import { runtimeSchemas } from "../src/generated/schemas.ts";
 
+// A client hands the binary this process's environment, and the binary reads
+// `ONETASKGRAPH_SOURCES__<NAME>__...` as a configuration layer: a shell that exports one adds
+// a source to every command below, and an assertion on the first row reads that source
+// instead of the one configured here. Only these are removed, as the binary's own journeys
+// remove them, because clearing the whole environment would take `PATH` with it.
+for (const name of Object.keys(process.env)) {
+  if (name.startsWith("ONETASKGRAPH_")) delete process.env[name];
+}
+
 const binary = resolve(import.meta.dir, "../../../target/debug/onetaskgraph");
 let root = "";
 let client: OnetaskgraphClient;
