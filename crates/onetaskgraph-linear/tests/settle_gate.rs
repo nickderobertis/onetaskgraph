@@ -31,7 +31,8 @@ use serde_json::{Value, json};
 mod settle;
 
 use settle::{
-    Bound, MOST_DOCUMENT_PAGES, settled_documents, settled_label, settled_tasks, settled_walk,
+    Bound, LABEL_CONNECTION, LABEL_VARIABLE, MOST_DOCUMENT_PAGES, settled_documents, settled_label,
+    settled_tasks, settled_walk,
 };
 
 /// Room for the late listings below, which agree on their third read, with reads to spare, so
@@ -67,8 +68,8 @@ fn workspace(
     (source, answered)
 }
 
-/// The URL of a workspace answering as [`workspace`]'s does, and how many requests it has
-/// answered.
+/// [`workspace`] without the plugin in front of it, for the label wait: that wait is handed a
+/// way to send the plugin's lookup rather than a source, so it is pointed at the URL itself.
 fn serve(answer: impl Fn(u32, &str) -> Value + Send + 'static) -> (String, Arc<AtomicU32>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/graphql", listener.local_addr().unwrap());
@@ -245,9 +246,8 @@ fn expected(title: &str) -> Vec<String> {
 /// The label a run has just created, by the name a write resolves it through.
 const LABEL: &str = "otg-live-label";
 
-/// A label lookup's answer: one node per id.
 fn labels(ids: Vec<&str>) -> Value {
-    json!({"issueLabels": {"nodes": ids.into_iter().map(|id| json!({"id": id})).collect::<Vec<_>>()}})
+    json!({LABEL_CONNECTION: {"nodes": ids.into_iter().map(|id| json!({"id": id})).collect::<Vec<_>>()}})
 }
 
 /// Refuses `request` unless it is the plugin's own label lookup, asking for [`LABEL`].
@@ -264,7 +264,7 @@ fn assert_looks_up_label(request: &str) {
     );
     assert_eq!(
         variables(request),
-        serde_json::Map::from_iter([("name".to_owned(), json!(LABEL))]),
+        serde_json::Map::from_iter([(LABEL_VARIABLE.to_owned(), json!(LABEL))]),
         "the wait asks for the label by its name and nothing else: {body}"
     );
 }
@@ -524,6 +524,40 @@ async fn a_walk_that_never_reaches_the_expected_set_fails_within_the_bound_namin
         waited >= BOUND.interval * (BOUND.reads - 1)
             && waited < BOUND.interval * BOUND.reads + SLACK,
         "a wrong walk fails once the bound is spent, and waited {waited:?}"
+    );
+}
+
+#[test]
+fn the_label_wait_names_the_root_field_and_the_variable_of_the_plugins_own_lookup() {
+    use graphql_parser::query;
+    let lookup = onetaskgraph_linear::graphql::ISSUE_LABEL;
+    let document = query::parse_query::<String>(lookup).unwrap();
+    let [query::Definition::Operation(query::OperationDefinition::Query(operation))] =
+        &document.definitions[..]
+    else {
+        panic!("the plugin's label lookup is not one query: {lookup}");
+    };
+    assert_eq!(
+        operation
+            .variable_definitions
+            .iter()
+            .map(|variable| variable.name.as_str())
+            .collect::<Vec<_>>(),
+        [LABEL_VARIABLE],
+        "the wait sends the one variable the lookup takes: {lookup}"
+    );
+    let [query::Selection::Field(root)] = &operation.selection_set.items[..] else {
+        panic!("the plugin's label lookup does not select one root field: {lookup}");
+    };
+    assert_eq!(
+        root.name, LABEL_CONNECTION,
+        "the wait reads the root field the lookup answers under: {lookup}"
+    );
+    assert!(
+        root.selection_set.items.iter().any(
+            |selected| matches!(selected, query::Selection::Field(field) if field.name == "nodes")
+        ),
+        "the wait counts the nodes the lookup selects: {lookup}"
     );
 }
 

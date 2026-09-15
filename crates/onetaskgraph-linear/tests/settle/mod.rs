@@ -211,6 +211,15 @@ pub async fn settled_walk(
     .await
 }
 
+/// The root field `graphql::ISSUE_LABEL` answers under, whose `nodes` are the labels it found.
+///
+/// Named here once for the wait and the loopback workspace that stands in for it;
+/// `tests/settle_gate.rs` reconciles it, and [`LABEL_VARIABLE`], with that document.
+pub const LABEL_CONNECTION: &str = "issueLabels";
+
+/// The one variable `graphql::ISSUE_LABEL` takes: the label's name.
+pub const LABEL_VARIABLE: &str = "name";
+
 /// [`settled`] over the lookup a write resolves the label `name` through, until exactly one
 /// label answers it.
 ///
@@ -228,14 +237,17 @@ where
     settled(bound, what, &[name.to_owned()], || async move {
         let data = send(
             onetaskgraph_linear::graphql::ISSUE_LABEL,
-            json!({ "name": name }),
+            json!({ LABEL_VARIABLE: name }),
         )
         .await
         .map_err(|error| format!("{what} could not be read: {error}"))?;
         let found = data
-            .pointer("/issueLabels/nodes")
+            .get(LABEL_CONNECTION)
+            .and_then(|connection| connection.get("nodes"))
             .and_then(Value::as_array)
-            .ok_or_else(|| format!("{what} could not be read: no issueLabels.nodes in {data}"))?
+            .ok_or_else(|| {
+                format!("{what} could not be read: no {LABEL_CONNECTION}.nodes in {data}")
+            })?
             .len();
         Ok(vec![name.to_owned(); found])
     })
