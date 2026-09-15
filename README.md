@@ -111,7 +111,9 @@ deliverer's qualified id, a task it dropped loses it, and the delivered task's s
 its deliverers while it is at `todo`, `queued` or `in-progress`: `in-progress` while any runs,
 `queued` while any is queued, `done` once every one is done or cancelled and at least one is
 done, and `todo` when they release it. A delivered task at `draft`, `backlog`, `unknown`,
-`done` or `cancelled` is left alone; `docs/plugin-protocol.md` §4.17 states the rule exactly.
+`done` or `cancelled` is left alone, a deliverer its source no longer holds is dropped from
+`delivered_by`, and a delivered task that cannot be read or written is reported failed while
+the deliverer's own write stands.
 A copy rewrites a `delivers` entry naming another item it copies to that item's new id,
 counts those under `delivers_rewritten`, and never carries `delivered_by`. Every verb that
 writes a deliverer reports each delivered task it evaluated under `delivered`.

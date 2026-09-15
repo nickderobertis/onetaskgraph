@@ -71,8 +71,9 @@ task — each task that list names gains `delivered_by: ["<source>:<id>"]` namin
 stopped naming loses that entry, and nothing else in the delivered task's file changes. Both
 keys belong to a task alone; an entry that is not a task id, that names its own task, or that
 names one task twice is refused naming the task and the entry, and so is either key in a
-project's file. `docs/plugin-protocol.md` §4.17 states the rule that moves a delivered task's
-status along with its deliverers.
+project's file. The same write moves a delivered task's status along with its deliverers while
+it reads `todo`, `queued` or `in-progress`, rewriting only its `status:` line as
+`task status set` does.
 
 Status names are preserved for display and mapped case-insensitively to normalized
 categories. The default mapping is `draft` → draft, `backlog` → backlog, `todo` → todo,

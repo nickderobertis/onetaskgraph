@@ -209,7 +209,7 @@ Four keys never travel as metadata even though a source may store them that way.
 `onetaskgraph.delivered_by` are the *encoding* a source without a native slot uses; the truth
 is the typed `repositories`, `delivers` and `delivered_by` fields and the item's own edges,
 and those are what a copy carries — `delivered_by` excepted, which a copy never takes from its
-source and which the destination keeps as it holds it (`docs/plugin-protocol.md` §4.17). Writing the encoding beside them would have a
+source and which the destination keeps as it holds it. Writing the encoding beside them would have a
 destination hold one thing twice and disagree with itself the moment one changed.
 
 A copy adds one reserved key of its own, `onetaskgraph.origin`, whose value is the
