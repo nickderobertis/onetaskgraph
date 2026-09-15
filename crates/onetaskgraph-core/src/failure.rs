@@ -9,7 +9,7 @@
 
 use onetaskgraph_plugin_api::{SourceError, SourceName};
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::ConfigError;
 use crate::engine::EngineError;
@@ -19,7 +19,7 @@ use crate::engine::EngineError;
 /// Closed on purpose: a caller acts on this alone, so a third value would be one every
 /// caller written before it silently misreads. What the failure *was* is
 /// [`Failure`]'s `kind`, which is the open half.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum FailureClass {
     /// The store or a source declined the request; repeating it unchanged cannot alter
@@ -70,8 +70,10 @@ pub struct FailureDocument {
 /// Every member is always written, `source` and `retry_after_seconds` as `null` when they
 /// have nothing to say, so a caller reads a fixed shape.
 // Built only from an engine error, a configuration error or `Failure::decided`, so `class`
-// always follows `classify` and `message` is always the failure's own rendering.
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+// always follows `classify` and `message` is always the failure's own rendering. `Deserialize`
+// is for reading one back out of a report that carries it — a delivered task a copy could not
+// keep in step — and builds nothing a caller could not already have been handed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = every_member_required)]
 pub struct Failure {
     /// Whether repeating the request unchanged could change the answer.
@@ -177,7 +179,8 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
             ("no-documents".to_owned(), configured(name), None)
         }
         EngineError::NoComments { name, .. } => ("no-comments".to_owned(), configured(name), None),
-        EngineError::CommentsNotWritable { name, .. } => {
+        EngineError::CommentsNotWritable { name, .. }
+        | EngineError::StatusNotWritable { name, .. } => {
             ("not-writable".to_owned(), configured(name), None)
         }
         EngineError::NoSuchItem { .. } | EngineError::NoSuchTask { .. } => {

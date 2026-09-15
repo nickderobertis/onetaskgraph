@@ -15,10 +15,10 @@ use std::str::FromStr as _;
 use clap::{CommandFactory as _, Parser};
 use onetaskgraph_core::config::{self, Layer};
 use onetaskgraph_core::{
-    CopyItems, CopyRequest, CopyScope, DependencyRequest, DocumentFilters, DocumentRequest, Engine,
-    Environment, Failure, FailureDocument, Filters, GlobalId, LabelRequest, Loaded, MatchBy,
-    OutputFormat, PageToken, Paging, ProjectRequest, ProjectSelector, QueryResponse, SearchRequest,
-    SourceFailure, TaskRequest,
+    CopyItems, CopyRequest, CopyScope, Delivered, DeliveryOutcome, DependencyRequest,
+    DocumentFilters, DocumentRequest, Engine, Environment, Failure, FailureDocument, Filters,
+    GlobalId, LabelRequest, Loaded, MatchBy, OutputFormat, PageToken, Paging, ProjectRequest,
+    ProjectSelector, QueryResponse, SearchRequest, SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, NativeId, NewComment, SourceName, TextQuery,
@@ -28,7 +28,7 @@ use serde::Serialize;
 use crate::cli::{
     Cli, Command, CommentCommand, ConfigCommand, CopyArgs, DependencyArgs, DocumentCommand,
     DocumentFilterArgs, FilterArgs, LabelCommand, PageArgs, ProjectCommand, SelectionArgs,
-    ShowArgs, SourcesCommand, TaskCommand,
+    ShowArgs, SourcesCommand, StatusCommand, TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`.
@@ -47,6 +47,9 @@ const EXIT_USAGE: u8 = 2;
 /// because a caller scripting around this has to be able to tell a partial answer from a
 /// complete one without parsing prose — `--allow-partial` is how a caller says it will
 /// accept the answer anyway, and then this run exits `EXIT_OK` instead.
+///
+/// A write that landed and could not keep a task it delivers in step exits this too: what the
+/// command was asked to do happened, and part of what follows from it did not.
 const EXIT_PARTIAL: u8 = 4;
 
 /// One thread is enough: the concurrency the engine needs is several sources waiting on
@@ -203,6 +206,22 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Comment { command },
         } => comment(out, loaded, command).await,
+
+        Command::Task {
+            command:
+                TaskCommand::Status {
+                    command: StatusCommand::Set(args),
+                },
+        } => {
+            let task = qualified(&args.id)?;
+            let set = engine(loaded)
+                .set_task_status(&task, args.category.category())
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = rendering(loaded, &set, render::status_set, "the status")?;
+            emit(out, rendered.trim_end(), "the status")?;
+            Ok(delivery_exit(&set.delivered))
+        }
 
         Command::Task {
             command: TaskCommand::Deps(args),
@@ -634,7 +653,36 @@ async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> R
         OutputFormat::Json => json(&report, "the copy")?,
     };
     emit(out, rendered.trim_end(), "the copy")?;
-    Ok(EXIT_OK)
+    Ok(delivery_exit(&report.delivered))
+}
+
+/// Name every delivered task a write could not keep in step, and say what the exit code will
+/// mean.
+///
+/// The write itself landed, which is why this is [`EXIT_PARTIAL`] rather than a failure: the
+/// answer on standard output is the whole of what happened, and standard error says which
+/// part of what follows from it did not.
+fn delivery_exit(delivered: &[Delivered]) -> u8 {
+    let mut failed = false;
+    for entry in delivered {
+        if let DeliveryOutcome::Failed { failure, .. } = &entry.outcome {
+            failed = true;
+            eprintln!(
+                "onetaskgraph: task {} could not be kept in step with {}: {}",
+                entry.ticket,
+                entry.deliverer,
+                failure.message()
+            );
+        }
+    }
+    if !failed {
+        return EXIT_OK;
+    }
+    eprintln!(
+        "onetaskgraph: next: the write itself landed; fix what each task above names, then run \
+         the same command again — every write of the task re-evaluates what it delivers."
+    );
+    EXIT_PARTIAL
 }
 
 /// One copy, as a verb that takes one reads it.
@@ -960,6 +1008,7 @@ mod tests {
                 "task comment list",
                 "task comment edit",
                 "task comment delete",
+                "task status set",
                 "project list",
                 "project show",
                 "project deps",

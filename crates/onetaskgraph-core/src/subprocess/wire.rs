@@ -15,8 +15,8 @@ use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite, Metering,
-    NativeId, NewComment, Page, PageRequest, Project, ProjectQuery, SourceError, Task, TaskQuery,
-    WriteSupport,
+    NativeId, NewComment, Page, PageRequest, Project, ProjectQuery, SourceError, Status,
+    StatusCategory, Task, TaskQuery, TaskRef, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,6 +27,62 @@ use serde_json::Value;
 /// versions exactly, so a plugin speaking 1 is refused by name rather than being asked
 /// for a method it has never heard of halfway through undoing a copy.
 pub(crate) const PROTOCOL_VERSION: u32 = 2;
+
+/// Every status category this build knows, in the order the vocabulary lists them (§3.5).
+pub(crate) const STATUS_VOCABULARY: [StatusCategory; 8] = [
+    StatusCategory::Draft,
+    StatusCategory::Backlog,
+    StatusCategory::Todo,
+    StatusCategory::Queued,
+    StatusCategory::InProgress,
+    StatusCategory::Done,
+    StatusCategory::Cancelled,
+    StatusCategory::Unknown,
+];
+
+/// Whether `category` is one a peer that lists no statuses was not written against (§3.5).
+///
+/// A wildcard-free match, so a category added to the vocabulary does not compile until
+/// somebody decides here whether a peer that predates it can be handed it.
+pub(crate) const fn after_the_first_vocabulary(category: StatusCategory) -> bool {
+    match category {
+        StatusCategory::Queued => true,
+        StatusCategory::Draft
+        | StatusCategory::Backlog
+        | StatusCategory::Todo
+        | StatusCategory::InProgress
+        | StatusCategory::Done
+        | StatusCategory::Cancelled
+        | StatusCategory::Unknown => false,
+    }
+}
+
+/// One category as the wire spells it.
+pub(crate) fn spelled(category: StatusCategory) -> String {
+    serde_json::to_value(category)
+        .ok()
+        .and_then(|word| word.as_str().map(str::to_owned))
+        .expect("a status category serialises as its own word")
+}
+
+/// Every category this build knows, as a handshake lists them.
+pub(crate) fn vocabulary() -> Vec<String> {
+    STATUS_VOCABULARY.into_iter().map(spelled).collect()
+}
+
+/// Whether a handshake's `statuses` member lists every category this build knows.
+///
+/// An absent member is the first vocabulary, so it lists none of the categories added
+/// after it.
+pub(crate) fn knows_every_category(statuses: Option<&[String]>) -> bool {
+    let Some(listed) = statuses else {
+        return false;
+    };
+    STATUS_VOCABULARY
+        .into_iter()
+        .filter(|category| after_the_first_vocabulary(*category))
+        .all(|category| listed.contains(&spelled(category)))
+}
 
 /// One request line: `{ "id": …, "method": …, "params": … }` (§2).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +160,13 @@ pub(crate) struct InitializeParams {
     pub(crate) config: Value,
     /// Only the variables this plugin's configuration names (§3.1).
     pub(crate) secrets: BTreeMap<String, String>,
+    /// The status categories this engine knows (§3.5).
+    ///
+    /// Optional, and absent means the first vocabulary: an engine written before `queued`
+    /// sends none, and a plugin answering it reports a category outside that vocabulary as
+    /// `unknown`, keeping its name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) statuses: Option<Vec<String>>,
 }
 
 /// Who is asking, for the plugin's diagnostics (§3).
@@ -143,6 +206,21 @@ pub(crate) struct InitializeResult {
     /// says nothing here, is never sent the method, and is reported as not metering.
     #[serde(default)]
     pub(crate) meters: bool,
+    /// The status categories this plugin knows (§3.5).
+    ///
+    /// Optional, and absent means the first vocabulary — the seven categories before
+    /// `queued` — so a plugin written before there was a `queued` is never handed one.
+    /// Strings rather than categories, so a plugin listing a category this engine has never
+    /// heard of is read rather than refused.
+    #[serde(default)]
+    pub(crate) statuses: Option<Vec<String>>,
+    /// Whether this plugin answers `set_task_status` and `set_delivered_by`, and holds a
+    /// task's `delivers` and `delivered_by` (§3.6).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent either method, and
+    /// never handed a task carrying either list.
+    #[serde(default)]
+    pub(crate) task_updates: bool,
 }
 
 /// The `metering` result (§4.14).
@@ -355,6 +433,42 @@ pub(crate) struct DeletedCommentResult {
     /// The removed comment's id, or `null`.
     #[serde(default)]
     pub(crate) deleted: Option<NativeId>,
+}
+
+/// `set_task_status` parameters (§4.17).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StatusParams {
+    /// The task whose status is set.
+    pub(crate) id: NativeId,
+    /// The category to set it to.
+    pub(crate) category: StatusCategory,
+}
+
+/// The `set_task_status` result (§4.17): the status as the plugin now reads it, or `null`
+/// when there is no such task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StatusResult {
+    /// The status, or `null`.
+    #[serde(default)]
+    pub(crate) status: Option<Status>,
+}
+
+/// `set_delivered_by` parameters (§4.17).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DeliveredByParams {
+    /// The task whose list is replaced.
+    pub(crate) id: NativeId,
+    /// The whole list it holds afterwards.
+    pub(crate) delivered_by: Vec<TaskRef>,
+}
+
+/// The `set_delivered_by` result (§4.17): the list the task now holds, or `null` when there
+/// is no such task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DeliveredByResult {
+    /// The list, or `null`.
+    #[serde(default)]
+    pub(crate) delivered_by: Option<Vec<TaskRef>>,
 }
 
 /// The result of any write method (§4.9, §4.12): the id the destination holds the item

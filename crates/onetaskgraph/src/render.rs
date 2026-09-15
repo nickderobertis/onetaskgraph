@@ -12,11 +12,11 @@
 //! to drift from the one a filter compares against.
 
 use onetaskgraph_core::{
-    CommentList, CopyReport, DeletedComment, Predicate, Qualified, QualifiedEdge, QueryPlan,
-    SearchHit, SourceListing, SourceState,
+    CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, Predicate, Qualified,
+    QualifiedEdge, QueryPlan, SearchHit, SourceListing, SourceState, TaskStatusSet,
 };
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, Document, Label, Location, Project, Support, Task,
+    Capabilities, Comment, Document, Label, Location, Project, Support, Task, TaskRef,
 };
 use serde::Serialize;
 
@@ -68,7 +68,8 @@ fn columns(rows: &[Vec<String>]) -> String {
     rendered
 }
 
-/// One line per task: qualified id, normalised status, title.
+/// One line per task: qualified id, normalised status, title — and, for a task that delivers
+/// or is delivered by anything, one more cell naming each entry qualified.
 ///
 /// The normalised category rather than the source's own wording, because this list
 /// crosses sources and the category is the one vocabulary they share — and it is what
@@ -78,14 +79,98 @@ pub fn tasks(items: &[Qualified<Task>]) -> String {
         &items
             .iter()
             .map(|task| {
-                vec![
+                let mut row = vec![
                     task.id.to_string(),
                     wire(&task.item.status.category),
                     task.item.title.clone(),
-                ]
+                ];
+                let related = relation(&task.item);
+                if !related.is_empty() {
+                    row.push(related);
+                }
+                row
             })
             .collect::<Vec<_>>(),
     )
+}
+
+/// What a task delivers and what delivers it, in one cell: empty when it does neither.
+fn relation(task: &Task) -> String {
+    let mut said = Vec::new();
+    if !task.delivers.is_empty() {
+        said.push(format!("delivers {}", listed(&task.delivers)));
+    }
+    if !task.delivered_by.is_empty() {
+        said.push(format!("delivered by {}", listed(&task.delivered_by)));
+    }
+    said.join("; ")
+}
+
+/// A task list's entries, comma-separated, exactly as the verb qualified them.
+fn listed(entries: &[TaskRef]) -> String {
+    entries
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// What `task status set` did: the task, the status it now reads as, and each task it
+/// delivers that was kept in step.
+pub fn status_set(set: &TaskStatusSet) -> String {
+    let mut rendered = columns(&[
+        vec!["id:".to_owned(), set.id.to_string()],
+        vec![
+            "status:".to_owned(),
+            format!("{} ({})", wire(&set.status.category), set.status.name),
+        ],
+    ]);
+    if set.delivered.is_empty() {
+        rendered.push_str("delivered: none\n");
+    } else {
+        rendered.push_str(&delivered(&set.delivered));
+    }
+    rendered
+}
+
+/// One line per delivered task a write kept in step with a deliverer, saying in words what
+/// happened to it: the same entries the machine output carries under `delivered`.
+///
+/// A failure is its first line alone, so each task stays one line; standard error carries the
+/// whole of it, next action included.
+pub fn delivered(entries: &[Delivered]) -> String {
+    let mut rendered = String::new();
+    for entry in entries {
+        let what = match &entry.outcome {
+            DeliveryOutcome::Written { from, to } => {
+                format!("written from {} to {}", wire(from), wire(to))
+            }
+            DeliveryOutcome::Unchanged { from } => format!("unchanged at {}", wire(from)),
+            DeliveryOutcome::Left { from } => format!("left at {}", wire(from)),
+            DeliveryOutcome::Failed { from, failure } => format!(
+                "failed{}: {}",
+                from.as_ref()
+                    .map(|from| format!(" at {}", wire(from)))
+                    .unwrap_or_default(),
+                failure.message().lines().next().unwrap_or_default()
+            ),
+        };
+        rendered.push_str(&format!(
+            "delivered {} by {}: {what}",
+            entry.ticket, entry.deliverer
+        ));
+        if !entry.pruned.is_empty() {
+            let pruned = entry
+                .pruned
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            rendered.push_str(&format!("; pruned {pruned}"));
+        }
+        rendered.push('\n');
+    }
+    rendered
 }
 
 /// Where an entity is, as one cell: which kind of place, then the place itself.
@@ -168,7 +253,14 @@ pub fn copied(report: &CopyReport) -> String {
             })
             .collect::<Vec<_>>(),
     );
+    if report.delivers_rewritten > 0 {
+        rendered.push_str(&format!(
+            "delivers: {} rewritten\n",
+            report.delivers_rewritten
+        ));
+    }
     rendered.push_str(&references(report));
+    rendered.push_str(&delivered(&report.delivered));
     rendered.push_str(&spent(report));
     rendered
 }
@@ -277,6 +369,12 @@ pub fn task_detail(task: &Qualified<Task>) -> String {
             None => "none".to_owned(),
         },
     ));
+    if !item.delivers.is_empty() {
+        fields.push(("delivers", listed(&item.delivers)));
+    }
+    if !item.delivered_by.is_empty() {
+        fields.push(("delivered by", listed(&item.delivered_by)));
+    }
     detail(
         &mut fields,
         &item.labels,

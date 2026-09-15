@@ -17,7 +17,8 @@ use serde_json::Value;
 ///
 /// Exit codes: `0` on success, `1` when a command failed while running, `2` when the
 /// invocation itself was wrong (clap's own code for that), `4` when a query succeeded
-/// for some sources and failed for others without `--allow-partial`. `0` means success
+/// for some sources and failed for others without `--allow-partial`, or when a write landed
+/// and a task it delivers could not be kept in step with it. `0` means success
 /// and nothing else: a run that reached no source, or lost one, never exits `0` unless
 /// you asked for a partial answer.
 #[derive(Debug, Parser)]
@@ -122,6 +123,36 @@ pub enum TaskCommand {
         #[command(subcommand)]
         command: CommentCommand,
     },
+    /// Set one task's status, and nothing else about it.
+    ///
+    /// Every task it delivers is kept in step with it afterwards, and each is reported.
+    Status {
+        #[command(subcommand)]
+        command: StatusCommand,
+    },
+}
+
+/// What `onetaskgraph task status` can do.
+#[derive(Debug, Subcommand)]
+pub enum StatusCommand {
+    /// Set one task's status to a category, and nothing else about it.
+    Set(StatusSetArgs),
+}
+
+/// `onetaskgraph task status set`.
+#[derive(Debug, Args)]
+pub struct StatusSetArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `CommentAddArgs::id`: a `GlobalId`
+    /// here would refuse an unqualified id as a bad invocation under clap's wording, and
+    /// `qualified` in `main` converts it immediately with the next action a user needs.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// The status category to set.
+    #[arg(value_name = "CATEGORY")]
+    pub category: StatusArg,
 }
 
 /// What `onetaskgraph task comment` can do.

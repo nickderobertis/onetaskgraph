@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use onetaskgraph_plugin_api::{
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
     ItemKind, ItemWrite, Location, Metering, NativeId, Page, PageRequest, Project, ProjectQuery,
-    Repository, SourceError, SourceName, Task, TaskQuery,
+    Repository, SourceError, SourceName, StatusCategory, Task, TaskQuery, TaskRef,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,7 @@ use serde_json::Value;
 use crate::GlobalId;
 use crate::resolve::ResolvedSource;
 
+use super::delivery::{Delivered, targets};
 use super::fetch::{fits, unrepeated};
 use super::local::ProjectSelector;
 use super::{
@@ -196,6 +197,21 @@ pub struct CopyReport {
     // it is `substitute`: `Resolution` has no variant that counts an occurrence ambiguous
     // without counting it unresolved.
     pub references_ambiguous: u64,
+    /// `delivers` entries the copy rewrote to the destination's own id for a member of the
+    /// copied set, over the whole invocation. Every other entry arrives qualified and is not
+    /// counted. Left out when zero, as the three figures above are.
+    #[serde(default, skip_serializing_if = "nothing_to_report")]
+    #[schemars(!skip_serializing_if)]
+    pub delivers_rewritten: u64,
+    /// One entry per delivered task the copy kept in step with a task it landed, after the
+    /// whole copy was complete — see `task status set`, which reports the same entries. Left
+    /// out when there were none.
+    ///
+    /// A failed entry does not undo the copy: the tasks it landed stay landed, and the
+    /// command exits `4`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(!skip_serializing_if)]
+    pub delivered: Vec<Delivered>,
     /// What this copy spent, summed over the sources in the command that meter their own
     /// requests — and absent, never zero, when none of them does.
     ///
@@ -345,6 +361,15 @@ impl CopyAction {
             .expect("an internally tagged enum carries its tag")
             .to_owned()
     }
+}
+
+/// What one item points at, resolved as far as the copy has got: its forward edges and the
+/// tasks it delivers.
+struct Pointing<'a> {
+    /// Its forward edges, `None` where the far end is a member not landed yet.
+    edges: &'a [Option<DependencyEdge>],
+    /// The tasks it delivers that can already be named at the destination.
+    delivers: &'a [TaskRef],
 }
 
 /// Where one item is going at the destination.
@@ -529,6 +554,32 @@ struct Running {
     /// looked for it — so a second task filed under the same project does not walk the
     /// destination for it again.
     filings: BTreeMap<String, Option<NativeId>>,
+    /// `delivers` entries naming a member of the copied set, over the whole invocation.
+    delivers_rewritten: u64,
+    /// Every task this copy landed, for the relation rule once the whole copy is complete.
+    landed: Vec<LandedTask>,
+}
+
+/// One task a copy landed, and what the relation rule reads of it once the copy is complete.
+struct LandedTask {
+    /// Where it landed.
+    destination: GlobalId,
+    /// The source it was read from, which a bare `delivers` entry names a task of.
+    origin: SourceName,
+    /// Its `delivers`, as its source reported them.
+    delivers: Vec<TaskRef>,
+    /// The `delivers` the destination held there before this copy, qualified.
+    before: Vec<GlobalId>,
+    /// Its status category, as the copy wrote it.
+    category: StatusCategory,
+}
+
+/// A task a copy landed, with the tasks it delivers now and delivered before, qualified.
+struct Deliverer {
+    destination: GlobalId,
+    category: StatusCategory,
+    now: Vec<GlobalId>,
+    before: Vec<GlobalId>,
 }
 
 /// One item, read and resolved, on its way into the destination.
@@ -785,7 +836,21 @@ impl Engine {
         let before = readings(&metered).await;
         let mut journal = Journal::default();
         match self.copy_all(destination, request, &mut journal).await {
-            Ok(mut report) => {
+            Ok((mut report, deliverers)) => {
+                // After the whole copy is complete and outside the journal: what the relation
+                // rule writes is the delivered tasks' own, and a failure there is reported
+                // against that task rather than undoing a copy that landed.
+                for deliverer in &deliverers {
+                    report.delivered.extend(
+                        self.deliver(
+                            &deliverer.destination,
+                            deliverer.category,
+                            &deliverer.now,
+                            &deliverer.before,
+                        )
+                        .await,
+                    );
+                }
                 report.spent = spent_between(&before, &readings(&metered).await);
                 Ok(report)
             }
@@ -806,7 +871,7 @@ impl Engine {
         destination: &ResolvedSource,
         request: &CopyRequest,
         journal: &mut Journal,
-    ) -> Result<CopyReport, EngineError> {
+    ) -> Result<(CopyReport, Vec<Deliverer>), EngineError> {
         let mut running = Running::default();
         // The whole copied set, established before anything is written. For a project
         // copy that means reading every named project's membership first: the set is the
@@ -859,15 +924,43 @@ impl Engine {
             }
         };
         let references = running.references;
+        let delivers_rewritten = running.delivers_rewritten;
+        // Every member's destination id is known once the first pass has landed it, so the
+        // tasks each landed task delivers are settled here rather than after the repair.
+        let deliverers: Vec<Deliverer> = running
+            .landed
+            .iter()
+            .map(|task| Deliverer {
+                destination: task.destination.clone(),
+                category: task.category,
+                now: targets(
+                    &resolved_entries(&mapped_delivers(
+                        &task.delivers,
+                        &task.origin,
+                        destination,
+                        &running.resolvable,
+                        &running.counterparts,
+                    )),
+                    destination.name(),
+                ),
+                before: task.before.clone(),
+            })
+            .collect();
         self.repair(destination, request, running, journal).await?;
-        Ok(CopyReport {
-            items,
-            references_rewritten: references.rewritten,
-            references_unresolved: references.unresolved,
-            references_ambiguous: references.ambiguous,
-            // Filled in by `copy`, which is the one place both readings are taken.
-            spent: None,
-        })
+        Ok((
+            CopyReport {
+                items,
+                references_rewritten: references.rewritten,
+                references_unresolved: references.unresolved,
+                references_ambiguous: references.ambiguous,
+                delivers_rewritten,
+                // Filled in by `copy`, once the copy is complete.
+                delivered: Vec::new(),
+                // Filled in by `copy`, which is the one place both readings are taken.
+                spent: None,
+            },
+            deliverers,
+        ))
     }
 
     /// Write every deferred item again, now that every destination id is known.
@@ -901,12 +994,14 @@ impl Engine {
                 &resolvable,
                 &counterparts,
             );
+            let delivers = delivers_of(&entry.item, destination, &resolvable, &counterparts);
             self.write(
                 destination,
                 &entry.item,
                 Some(entry.destination),
                 entry.filed,
                 &resolved(&edges),
+                &resolved_entries(&delivers),
                 entry.prior,
                 journal,
             )
@@ -1083,10 +1178,20 @@ impl Engine {
                     &before_members,
                 );
                 let held = project.held.as_ref();
+                let unchanged_with = |edges: &[Option<DependencyEdge>]| {
+                    !changes(
+                        held,
+                        &project,
+                        target,
+                        &None,
+                        &resolved(edges),
+                        &[],
+                        destination.name(),
+                    )
+                };
                 Some(
-                    (!settled.iter().any(Option::is_none)
-                        && !changes(held, &project, target, &None, &resolved(&settled)))
-                        || !changes(held, &project, target, &None, &resolved(&first)),
+                    (!settled.iter().any(Option::is_none) && unchanged_with(&settled))
+                        || unchanged_with(&first),
                 )
             }
             Target::Create => None,
@@ -1648,6 +1753,10 @@ impl Engine {
                     .counterparts
                     .insert(item.source.to_string(), id.clone());
             }
+            if let Item::Task(task) = &item.item {
+                running.delivers_rewritten +=
+                    members_named(&task.delivers, &item.source.source, &running.resolvable);
+            }
         }
 
         // Resolved once per item, and used by both passes: the repair pass writes the
@@ -1671,16 +1780,26 @@ impl Engine {
                 &running.resolvable,
                 &running.counterparts,
             );
-            if edges.iter().any(Option::is_none) {
+            let delivers = delivers_of(
+                item,
+                destination,
+                &running.resolvable,
+                &running.counterparts,
+            );
+            if edges.iter().any(Option::is_none) || delivers.iter().any(Option::is_none) {
                 unresolved.push(index);
             }
+            let resolvable_delivers = resolved_entries(&delivers);
             let (outcome, prior) = self
                 .land(
                     destination,
                     request,
                     item,
                     filed[index].clone(),
-                    &edges,
+                    Pointing {
+                        edges: &edges,
+                        delivers: &resolvable_delivers,
+                    },
                     journal,
                 )
                 .await?;
@@ -1688,6 +1807,20 @@ impl Engine {
                 running
                     .counterparts
                     .insert(item.source.to_string(), id.native.clone());
+            }
+            if !request.dry_run
+                && let (Item::Task(task), Some(landed)) = (&item.item, outcome.destination())
+            {
+                running.landed.push(LandedTask {
+                    destination: landed.clone(),
+                    origin: item.source.source.clone(),
+                    delivers: task.delivers.clone(),
+                    before: match prior.as_ref().map(|prior| &prior.item) {
+                        Some(Item::Task(held)) => targets(&held.delivers, destination.name()),
+                        _ => Vec::new(),
+                    },
+                    category: task.status.category,
+                });
             }
             outcomes.push(outcome);
             priors.push(prior);
@@ -1914,9 +2047,10 @@ impl Engine {
         request: &CopyRequest,
         item: &Planned,
         project: Option<NativeId>,
-        edges: &[Option<DependencyEdge>],
+        pointing: Pointing<'_>,
         journal: &mut Journal,
     ) -> Result<(CopyOutcome, Option<Prior>), EngineError> {
+        let Pointing { edges, delivers } = pointing;
         let target = match &item.target {
             Target::Update { id, .. } => Some(id.clone()),
             Target::Create => None,
@@ -1928,7 +2062,15 @@ impl Engine {
         let edges = resolved(edges);
         let qualified = |native: NativeId| GlobalId::new(destination.name().clone(), native);
         if let Some(id) = &target
-            && !changes(prior.as_ref(), item, id, &project, &edges)
+            && !changes(
+                prior.as_ref(),
+                item,
+                id,
+                &project,
+                &edges,
+                delivers,
+                destination.name(),
+            )
         {
             return Ok((
                 CopyOutcome {
@@ -1963,6 +2105,7 @@ impl Engine {
                 target,
                 project,
                 &edges,
+                delivers,
                 prior.clone(),
                 journal,
             )
@@ -2101,14 +2244,17 @@ impl Engine {
         target: Option<NativeId>,
         project: Option<NativeId>,
         edges: &[DependencyEdge],
+        delivers: &[TaskRef],
         prior: Option<Prior>,
         journal: &mut Journal,
     ) -> Result<NativeId, EngineError> {
         let created_kind = item.item.level();
         let suggested = target.clone().unwrap_or_else(|| item.item.id().clone());
         // Settled before the journal takes `prior`, and from that same read: what the
-        // destination holds at the origin key is what a copy-back leaves there.
+        // destination holds at the origin key is what a copy-back leaves there, and what it
+        // holds as `delivered_by` is what the item keeps.
         let origin = recorded(item, prior.as_ref());
+        let landing = outgoing(item, suggested, project, &origin, delivers, prior.as_ref());
         // Recorded *before* the write rather than after it. A destination's own write is
         // several calls — `docs/plugin-protocol.md` §4.9 — and one of them failing leaves
         // the ones before it applied. No source can put those back, because only this
@@ -2120,7 +2266,7 @@ impl Engine {
         if let (Some(id), Some(prior)) = (target.clone(), prior) {
             journal.record(Undo::Updated { id, prior });
         }
-        let landed = match outgoing(item, suggested, project, &origin) {
+        let landed = match landing {
             Item::Task(task) => destination
                 .source()
                 .write_task(&ItemWrite {
@@ -2313,6 +2459,8 @@ fn changes(
     target: &NativeId,
     project: &Option<NativeId>,
     edges: &[DependencyEdge],
+    delivers: &[TaskRef],
+    destination: &SourceName,
 ) -> bool {
     let Some(held) = held else {
         return true;
@@ -2322,8 +2470,10 @@ fn changes(
         target.clone(),
         project.clone(),
         &recorded(item, Some(held)),
+        delivers,
+        Some(held),
     );
-    !same(&held.item, &outgoing) || !same_edges(&held.edges, edges)
+    !same(&held.item, &outgoing, destination) || !same_edges(&held.edges, edges)
 }
 
 /// Remove one item this copy created, through the destination's own write interface.
@@ -2619,7 +2769,18 @@ fn described(item: &Item) -> (&str, &BTreeMap<String, Value>) {
 /// under are removed, because those fields travel as themselves — leaving the encoding
 /// beside them would have the destination hold one thing twice, and disagree with itself
 /// the moment one changed.
-fn outgoing(item: &Planned, id: NativeId, project: Option<NativeId>, origin: &Origin) -> Item {
+///
+/// A task's `delivers` is `delivers`, already resolved against the destination, and its
+/// `delivered_by` is the one the destination holds — never the source's, and empty for an
+/// item this copy creates: that list is the store's to keep, at the destination.
+fn outgoing(
+    item: &Planned,
+    id: NativeId,
+    project: Option<NativeId>,
+    origin: &Origin,
+    delivers: &[TaskRef],
+    held: Option<&Prior>,
+) -> Item {
     match &item.item {
         Item::Task(task) => Item::Task(Box::new(Task {
             id,
@@ -2629,6 +2790,11 @@ fn outgoing(item: &Planned, id: NativeId, project: Option<NativeId>, origin: &Or
             updated_at: None,
             project,
             metadata: carried(&task.metadata, origin),
+            delivers: delivers.to_vec(),
+            delivered_by: match held.map(|held| &held.item) {
+                Some(Item::Task(held)) => held.delivered_by.clone(),
+                _ => Vec::new(),
+            },
             ..(**task).clone()
         })),
         Item::Project(project) => Item::Project(Box::new(Project {
@@ -2661,6 +2827,8 @@ fn carried(metadata: &BTreeMap<String, Value>, origin: &Origin) -> BTreeMap<Stri
     let mut carried = metadata.clone();
     carried.remove(Repository::METADATA_KEY);
     carried.remove(DependencyEdge::RECORDED_KEY);
+    carried.remove(TaskRef::DELIVERS_KEY);
+    carried.remove(TaskRef::DELIVERED_BY_KEY);
     carried.remove(GlobalId::ORIGIN_KEY);
     let held = match origin {
         Origin::Records(id) => Some(Value::String(id.to_string())),
@@ -2716,10 +2884,15 @@ fn recorded(item: &Planned, held: Option<&Prior>) -> Origin {
 ///
 /// The destination's own `url` and timestamps are excluded because a copy never writes
 /// them, so a difference there is not one this copy would close.
-fn same(held: &Item, outgoing: &Item) -> bool {
+fn same(held: &Item, outgoing: &Item, destination: &SourceName) -> bool {
     match (held, outgoing) {
         (Item::Task(held), Item::Task(outgoing)) => {
-            held.title == outgoing.title
+            // Qualified before they are compared, so `T-1` and `folder:T-1` at the destination
+            // `folder` are the one entry they are.
+            targets(&held.delivers, destination) == targets(&outgoing.delivers, destination)
+                && targets(&held.delivered_by, destination)
+                    == targets(&outgoing.delivered_by, destination)
+                && held.title == outgoing.title
                 && held.content == outgoing.content
                 && held.status == outgoing.status
                 && held.labels == outgoing.labels
@@ -2799,6 +2972,82 @@ fn mapped_edges(
                 })
         })
         .collect()
+}
+
+/// Each `delivers` entry of one planned task as the destination should hold it, or `None`
+/// where it names a member of this copy whose destination id is not known yet. Empty for
+/// anything but a task.
+fn delivers_of(
+    item: &Planned,
+    destination: &ResolvedSource,
+    copied: &[GlobalId],
+    written: &BTreeMap<String, NativeId>,
+) -> Vec<Option<TaskRef>> {
+    match &item.item {
+        Item::Task(task) => mapped_delivers(
+            &task.delivers,
+            &item.source.source,
+            destination,
+            copied,
+            written,
+        ),
+        Item::Project(_) | Item::Document(_) => Vec::new(),
+    }
+}
+
+/// Each `delivers` entry as the destination should hold it, or `None` when it names a member
+/// of this copy whose destination id is not known yet.
+///
+/// An entry naming a member of the copied set becomes that member's own id at the
+/// destination — bare, because the member is the destination's, unless the id holds a colon
+/// a bare entry would be misread by. Every other entry is carried through qualified, so a
+/// bare one read at `origin` goes on naming a task of `origin`.
+fn mapped_delivers(
+    entries: &[TaskRef],
+    origin: &SourceName,
+    destination: &ResolvedSource,
+    copied: &[GlobalId],
+    written: &BTreeMap<String, NativeId>,
+) -> Vec<Option<TaskRef>> {
+    entries
+        .iter()
+        .map(|entry| {
+            let qualified = entry.in_source(origin);
+            let Ok(far) = qualified.as_str().parse::<GlobalId>() else {
+                return Some(qualified);
+            };
+            if !copied.contains(&far) {
+                return Some(qualified);
+            }
+            let native = written.get(&far.to_string())?;
+            Some(if native.as_str().contains(':') {
+                TaskRef::qualified(destination.name(), native)
+            } else {
+                TaskRef::new(native.as_str())
+                    .unwrap_or_else(|_| TaskRef::qualified(destination.name(), native))
+            })
+        })
+        .collect()
+}
+
+/// How many of one task's `delivers` entries name a member of the copied set.
+fn members_named(entries: &[TaskRef], origin: &SourceName, copied: &[GlobalId]) -> u64 {
+    let named = entries
+        .iter()
+        .filter(|entry| {
+            entry
+                .in_source(origin)
+                .as_str()
+                .parse::<GlobalId>()
+                .is_ok_and(|far| copied.contains(&far))
+        })
+        .count();
+    u64::try_from(named).unwrap_or(u64::MAX)
+}
+
+/// The entries that could be resolved, which is every one of them on the second pass.
+fn resolved_entries(entries: &[Option<TaskRef>]) -> Vec<TaskRef> {
+    entries.iter().flatten().cloned().collect()
 }
 
 /// The native id a qualified endpoint names at `destination`, when it names one there.
