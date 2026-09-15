@@ -69,7 +69,10 @@ use cleanup::{
 // workspace whose index lags.
 mod settle;
 
-use settle::{LINEAR_INDEX, settled, settled_documents, settled_tasks, task_titles};
+use settle::{
+    LINEAR_INDEX, settled, settled_documents, settled_tasks, settled_walk, task_titles,
+    walked_task_titles,
+};
 
 /// The two workflow states this fixture files its issues under.
 ///
@@ -524,7 +527,11 @@ async fn drive_every_declared_capability(
     }
 
     // Paging: a limit smaller than the result set walks to exhaustion, reaching every row
-    // exactly once and in the order one whole page reports them.
+    // exactly once and in the order one whole page reports them. The walk is a listing like
+    // the others and waits out the index the same way, so the order is compared over a set
+    // the index has already caught up with rather than over a walk that raced it.
+    let walk = "a walk in pages of one over this run's own three issues";
+    settled_walk(LINEAR_INDEX, source, &scoped(), 10, walk, &all_three).await?;
     let whole = source
         .query_tasks(&scoped(), &page(50))
         .await
@@ -533,28 +540,7 @@ async fn drive_every_declared_capability(
         .into_iter()
         .map(|task| task.title)
         .collect::<Vec<_>>();
-    let mut walked = Vec::new();
-    let mut cursor = None;
-    loop {
-        let step = source
-            .query_tasks(&scoped(), &PageRequest { cursor, limit: 1 })
-            .await
-            .map_err(|error| format!("live paged read failed: {error}"))?;
-        ensure!(
-            step.items.len() <= 1,
-            "a page of one returned {} rows",
-            step.items.len()
-        );
-        walked.extend(step.items.into_iter().map(|task| task.title));
-        cursor = step.next;
-        if cursor.is_none() {
-            break;
-        }
-        ensure!(
-            walked.len() <= 10,
-            "the paged walk over this run's own three issues must terminate"
-        );
-    }
+    let walked = walked_task_titles(source, &scoped(), 10, walk).await?;
     ensure!(
         walked == whole,
         "a walk in pages of one reached {walked:?} where one whole page reports {whole:?}"

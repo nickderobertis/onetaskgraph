@@ -1,10 +1,10 @@
 //! The live journey's exact-set reads, against a loopback workspace whose index lags.
 //!
-//! The reads and the wait are the real ones — `settle::settled_tasks` and
-//! `settle::settled_documents`, the same code `tests/live.rs` compares Linear's listings
-//! through — and they reach that workspace through the real plugin over real HTTP. What
-//! stands in for Linear is a local server that answers a filtered listing from an index that
-//! has not caught up with a write for a number of reads, or never does.
+//! The reads and the wait are the real ones — `settle::settled_tasks`,
+//! `settle::settled_documents` and `settle::settled_walk`, the same code `tests/live.rs`
+//! compares Linear's listings through — and they reach that workspace through the real plugin
+//! over real HTTP. What stands in for Linear is a local server that answers a filtered listing
+//! from an index that has not caught up with a write for a number of reads, or never does.
 //!
 //! No credential and no third-party API: every issue and document below is one this file
 //! answered with. A short bound stands in for [`settle::LINEAR_INDEX`], because what is proven
@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 #[allow(dead_code)]
 mod settle;
 
-use settle::{Bound, settled_documents, settled_tasks};
+use settle::{Bound, settled_documents, settled_tasks, settled_walk};
 
 /// Room for the late listings below, which agree on their third read, with reads to spare, so
 /// that a pass is the listing catching up rather than the bound running out on the last read.
@@ -160,8 +160,23 @@ fn issues(nodes: Vec<Value>) -> Value {
     json!({"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": false, "endCursor": null}}})
 }
 
+/// A page of issues with another after it, at `cursor`.
+fn issues_then(nodes: Vec<Value>, cursor: &str) -> Value {
+    json!({"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": true, "endCursor": cursor}}})
+}
+
 fn documents(nodes: Vec<Value>) -> Value {
     json!({"documents": {"nodes": nodes, "pageInfo": {"hasNextPage": false, "endCursor": null}}})
+}
+
+/// A page of documents with another after it, at `cursor`.
+fn documents_then(nodes: Vec<Value>, cursor: &str) -> Value {
+    json!({"documents": {"nodes": nodes, "pageInfo": {"hasNextPage": true, "endCursor": cursor}}})
+}
+
+/// Whether `request` asks for the page after the cursor `c1`.
+fn after_c1(request: &str) -> bool {
+    request.contains(r#""after":"c1""#)
 }
 
 fn under(project: &str) -> TaskQuery {
@@ -326,6 +341,116 @@ async fn a_document_listing_that_never_catches_up_fails_within_the_bound_naming_
         waited >= BOUND.interval * (BOUND.reads - 1)
             && waited < BOUND.interval * BOUND.reads + SLACK,
         "a listing that never catches up fails once the bound is spent, and waited {waited:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_document_listing_reads_past_a_first_page_full_of_other_documents() {
+    // A workspace holding a whole page of documents that are not this run's before its own:
+    // a listing that stopped at the first page would never see `filed`, however long it waited.
+    let (source, answered) = workspace(|_, request| {
+        if after_c1(request) {
+            documents(vec![document("d1", "filed", None)])
+        } else {
+            documents_then(
+                (0..onetaskgraph_linear::MAX_PAGE_SIZE)
+                    .map(|n| document(&format!("o{n}"), &format!("another run's {n}"), None))
+                    .collect(),
+                "c1",
+            )
+        }
+    });
+    settled_documents(
+        BOUND,
+        source.as_ref(),
+        &DocumentQuery::default(),
+        &|title| !title.starts_with("another run's"),
+        "the documents this run created",
+        &expected("filed"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        answered.load(Ordering::SeqCst),
+        2,
+        "one read walks both pages, and agrees on them"
+    );
+}
+
+#[tokio::test]
+async fn a_walk_in_pages_of_one_the_index_catches_up_with_late_passes_without_walking_again() {
+    // The first walk finds the index empty; every walk after it reaches both issues, one a page.
+    let walks = Arc::new(AtomicU32::new(0));
+    let seen = Arc::clone(&walks);
+    let (source, answered) = workspace(move |_, request| {
+        assert!(
+            request.contains(r#""first":1"#),
+            "a walk asks for pages of one: {request}"
+        );
+        if after_c1(request) {
+            return issues(vec![issue("i2", "second", "p1")]);
+        }
+        if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+            issues(vec![])
+        } else {
+            issues_then(vec![issue("i1", "first", "p1")], "c1")
+        }
+    });
+    settled_walk(
+        BOUND,
+        source.as_ref(),
+        &under("p1"),
+        10,
+        "a walk in pages of one",
+        &["second".to_owned(), "first".to_owned()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        walks.load(Ordering::SeqCst),
+        2,
+        "one walk more than the lag"
+    );
+    assert_eq!(
+        answered.load(Ordering::SeqCst),
+        3,
+        "the empty walk's one page, then both pages of the walk that agrees"
+    );
+}
+
+#[tokio::test]
+async fn a_walk_that_never_reaches_the_expected_set_fails_within_the_bound_naming_what_it_reached()
+{
+    let (source, answered) = workspace(|_, request| {
+        if after_c1(request) {
+            issues(vec![issue("i3", "stranger", "p2")])
+        } else {
+            issues_then(vec![issue("i1", "first", "p1")], "c1")
+        }
+    });
+    let started = Instant::now();
+    let refusal = settled_walk(
+        BOUND,
+        source.as_ref(),
+        &under("p1"),
+        10,
+        "a walk in pages of one",
+        &["first".to_owned(), "second".to_owned()],
+    )
+    .await
+    .unwrap_err();
+    let waited = started.elapsed();
+    assert!(
+        refusal.starts_with(
+            r#"a walk in pages of one came back as ["first", "stranger"] rather than ["first", "second"], still after 5 reads"#
+        ),
+        "the failure names what the walk reached: {refusal}"
+    );
+    assert_eq!(answered.load(Ordering::SeqCst), 2 * BOUND.reads);
+    assert!(
+        waited >= BOUND.interval * (BOUND.reads - 1)
+            && waited < BOUND.interval * BOUND.reads + SLACK,
+        "a wrong walk fails once the bound is spent, and waited {waited:?}"
     );
 }
 

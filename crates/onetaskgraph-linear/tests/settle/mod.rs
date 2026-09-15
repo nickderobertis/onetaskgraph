@@ -91,33 +91,84 @@ pub async fn task_titles(
     Ok(titles)
 }
 
-/// The sorted titles `keep` accepts of one whole page of documents `query` answers.
+/// The titles of every task `query` answers, walked in pages of one, in the order the walk
+/// reached them.
+///
+/// A page holding more than one row, or a walk that has not ended after `most` pages, is an
+/// `Err` naming what it reached: neither is an index that has not caught up.
+pub async fn walked_task_titles(
+    source: &dyn TaskSource,
+    query: &TaskQuery,
+    most: usize,
+    what: &str,
+) -> Result<Vec<String>, String> {
+    let mut walked = Vec::new();
+    let mut cursor = None;
+    for _ in 0..most {
+        let step = source
+            .query_tasks(query, &PageRequest { cursor, limit: 1 })
+            .await
+            .map_err(|error| format!("{what} could not be read: {error}"))?;
+        if step.items.len() > 1 {
+            return Err(format!(
+                "{what} returned {} rows on a page of one",
+                step.items.len()
+            ));
+        }
+        walked.extend(step.items.into_iter().map(|task| task.title));
+        cursor = step.next;
+        if cursor.is_none() {
+            return Ok(walked);
+        }
+    }
+    Err(format!(
+        "{what} had not ended after {most} pages, having reached {walked:?}"
+    ))
+}
+
+/// The most pages of documents one listing walks before it is refused as not ending.
+const MOST_DOCUMENT_PAGES: usize = 1_000;
+
+/// The sorted titles `keep` accepts of every document `query` answers, to its last page.
 ///
 /// `keep` is there because Linear's `documents` connection is the whole workspace: the live
 /// journey compares only its own run's documents, never another run's in flight beside it.
+/// Every page rather than the first for that same reason — a workspace holding a page of other
+/// documents would leave this run's off the first one, and no wait could ever settle that.
 pub async fn document_titles(
     source: &dyn TaskSource,
     query: &DocumentQuery,
     keep: &dyn Fn(&str) -> bool,
     what: &str,
 ) -> Result<Vec<String>, String> {
-    let mut titles = source
-        .query_documents(
-            query,
-            &PageRequest {
-                cursor: None,
-                limit: onetaskgraph_linear::MAX_PAGE_SIZE,
-            },
-        )
-        .await
-        .map_err(|error| format!("{what} could not be read: {error}"))?
-        .items
-        .into_iter()
-        .map(|document| document.title)
-        .filter(|title| keep(title))
-        .collect::<Vec<_>>();
-    titles.sort();
-    Ok(titles)
+    let mut titles = Vec::new();
+    let mut cursor = None;
+    for _ in 0..MOST_DOCUMENT_PAGES {
+        let step = source
+            .query_documents(
+                query,
+                &PageRequest {
+                    cursor,
+                    limit: onetaskgraph_linear::MAX_PAGE_SIZE,
+                },
+            )
+            .await
+            .map_err(|error| format!("{what} could not be read: {error}"))?;
+        titles.extend(
+            step.items
+                .into_iter()
+                .map(|document| document.title)
+                .filter(|title| keep(title)),
+        );
+        cursor = step.next;
+        if cursor.is_none() {
+            titles.sort();
+            return Ok(titles);
+        }
+    }
+    Err(format!(
+        "{what} had not ended after {MOST_DOCUMENT_PAGES} pages"
+    ))
 }
 
 /// [`settled`] over a page of fifty tasks.
@@ -130,6 +181,23 @@ pub async fn settled_tasks(
 ) -> Result<(), String> {
     settled(bound, what, expected, || {
         task_titles(source, query, 50, what)
+    })
+    .await
+}
+
+/// [`settled`] over the set a walk in pages of one reaches.
+pub async fn settled_walk(
+    bound: Bound,
+    source: &dyn TaskSource,
+    query: &TaskQuery,
+    most: usize,
+    what: &str,
+    expected: &[String],
+) -> Result<(), String> {
+    settled(bound, what, expected, || async move {
+        let mut walked = walked_task_titles(source, query, most, what).await?;
+        walked.sort();
+        Ok(walked)
     })
     .await
 }
