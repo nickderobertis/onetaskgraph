@@ -212,6 +212,31 @@ async fn task_titles(
     ))
 }
 
+/// The titles `query` answers once Linear agrees with `expected`, or the last answer it gave
+/// when it never did.
+///
+/// Linear indexes a created issue filter by filter rather than all at once: a run once had
+/// its label read return all three issues while `project: {null: true}` still returned none,
+/// and failed on code that was correct. So every exact-set read waits out that lag, with the
+/// same twenty one-second polls the fixture always settled with, and a filter that is really
+/// wrong still fails, naming what it returned, once they are spent.
+async fn settled_titles(
+    source: &dyn TaskSource,
+    query: &TaskQuery,
+    what: &str,
+    expected: &[String],
+) -> Result<Vec<String>, String> {
+    let mut titles = task_titles(source, query, what).await?;
+    for _ in 0..20 {
+        if titles == expected {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        titles = task_titles(source, query, what).await?;
+    }
+    Ok(titles)
+}
+
 /// Everything this lane needs to reach the one team it may write to.
 struct LiveRun {
     key: String,
@@ -340,28 +365,14 @@ async fn drive_every_declared_capability(
         .map_err(|error| format!("live task write of {orphan:?} failed: {error}"))?;
 
     // Linear indexes a created issue before it answers a filtered query over it, so the
-    // reads below wait for the fixture rather than racing it.
-    let mut settled = false;
-    for _ in 0..20 {
-        if task_titles(source, &scoped(), "fixture settling read")
-            .await?
-            .len()
-            == 3
-        {
-            settled = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
+    // reads below wait for the fixture rather than racing it — each one, through
+    // `settled_titles`, because the index does not catch up on every filter at once.
     let all_three = sorted(vec![first.clone(), second.clone(), orphan.clone()]);
+    let scoped_read = settled_titles(source, &scoped(), "scoped read", &all_three).await?;
     ensure!(
-        settled,
-        "the live fixture never became readable: Linear never returned all three issues \
-         labelled {run_label}"
-    );
-    ensure!(
-        task_titles(source, &scoped(), "scoped read").await? == all_three,
-        "the three issues this run created did not come back as {all_three:?}"
+        scoped_read == all_three,
+        "the three issues this run created, labelled {run_label}, came back as \
+         {scoped_read:?} rather than {all_three:?}"
     );
 
     // `projects`: two are held, and a listing scoped to one keeps the issue filed under
@@ -395,25 +406,38 @@ async fn drive_every_declared_capability(
         project: ProjectFilter::Is(id.clone()),
         ..TaskQuery::default()
     };
-    let under_alpha = task_titles(source, &under(&alpha_id), "project filter").await?;
+    let under_alpha = settled_titles(
+        source,
+        &under(&alpha_id),
+        "project filter",
+        std::slice::from_ref(&first),
+    )
+    .await?;
     ensure!(
         under_alpha == vec![first.clone()],
         "the issues of one of this run's two projects came back as {under_alpha:?}"
     );
-    let under_beta = task_titles(source, &under(&beta_id), "project filter").await?;
+    let under_beta = settled_titles(
+        source,
+        &under(&beta_id),
+        "project filter",
+        std::slice::from_ref(&second),
+    )
+    .await?;
     ensure!(
         under_beta == vec![second.clone()],
         "the issues of the other of this run's two projects came back as {under_beta:?}"
     );
 
     // `orphan_tasks`: the one issue filed under neither project.
-    let orphans = task_titles(
+    let orphans = settled_titles(
         source,
         &TaskQuery {
             project: ProjectFilter::Orphans,
             ..scoped()
         },
         "orphan selection",
+        std::slice::from_ref(&orphan),
     )
     .await?;
     ensure!(
@@ -423,7 +447,7 @@ async fn drive_every_declared_capability(
 
     // `filter_by_label`: one of the three carries the second label, and the exclusion
     // keeps exactly the other two.
-    let carrying = task_titles(
+    let carrying = settled_titles(
         source,
         &TaskQuery {
             labels: LabelFilter {
@@ -433,13 +457,15 @@ async fn drive_every_declared_capability(
             ..TaskQuery::default()
         },
         "label filter",
+        std::slice::from_ref(&first),
     )
     .await?;
     ensure!(
         carrying == vec![first.clone()],
         "this run's issues carrying its second label came back as {carrying:?}"
     );
-    let without = task_titles(
+    let second_and_orphan = sorted(vec![second.clone(), orphan.clone()]);
+    let without = settled_titles(
         source,
         &TaskQuery {
             labels: LabelFilter {
@@ -450,35 +476,39 @@ async fn drive_every_declared_capability(
             ..TaskQuery::default()
         },
         "label exclusion",
+        &second_and_orphan,
     )
     .await?;
     ensure!(
-        without == sorted(vec![second.clone(), orphan.clone()]),
+        without == second_and_orphan,
         "this run's issues not carrying its second label came back as {without:?}"
     );
 
     // `filter_by_status`: two issues sit in an `unstarted` state and one in a `completed`
     // one, so the normalised categories separate them.
-    let todo = task_titles(
+    let first_and_second = sorted(vec![first.clone(), second.clone()]);
+    let todo = settled_titles(
         source,
         &TaskQuery {
             statuses: vec![StatusCategory::Todo],
             ..scoped()
         },
         "status filter",
+        &first_and_second,
     )
     .await?;
     ensure!(
-        todo == sorted(vec![first.clone(), second.clone()]),
+        todo == first_and_second,
         "this run's unstarted issues came back as {todo:?}"
     );
-    let finished = task_titles(
+    let finished = settled_titles(
         source,
         &TaskQuery {
             statuses: vec![StatusCategory::Done],
             ..scoped()
         },
         "status filter",
+        std::slice::from_ref(&orphan),
     )
     .await?;
     ensure!(
@@ -496,7 +526,7 @@ async fn drive_every_declared_capability(
         TextFields::Content,
         TextFields::TitleOrContent,
     ] {
-        let searched = task_titles(
+        let searched = settled_titles(
             source,
             &TaskQuery {
                 text: Some(TextQuery {
@@ -506,6 +536,7 @@ async fn drive_every_declared_capability(
                 ..scoped()
             },
             "ignored search",
+            &all_three,
         )
         .await?;
         ensure!(
