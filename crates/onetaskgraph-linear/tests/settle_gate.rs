@@ -86,9 +86,10 @@ const MOST_A_REQUEST_IS: usize = 64 * 1024;
 
 /// One whole HTTP request: its headers, and exactly the body their `Content-Length` declares.
 ///
-/// Anything else — a request past [`MOST_A_REQUEST_IS`], one with no `Content-Length` or an
-/// unreadable one, or a connection closed short of what it declared — is not a request the
-/// plugin sends, so it fails the drive naming what arrived rather than being answered.
+/// Anything else — a request past [`MOST_A_REQUEST_IS`], whether read or declared, one with no
+/// `Content-Length` or an unreadable one, one that is not UTF-8, or a connection closed short of
+/// what it declared — is not a request the plugin sends, so it fails the drive naming what
+/// arrived rather than being answered.
 fn request(stream: &mut TcpStream) -> String {
     let mut bytes = Vec::new();
     let mut chunk = [0; 8192];
@@ -99,9 +100,11 @@ fn request(stream: &mut TcpStream) -> String {
             bytes.len() <= MOST_A_REQUEST_IS,
             "the plugin sent a request of more than {MOST_A_REQUEST_IS} bytes"
         );
-        let text = String::from_utf8_lossy(&bytes);
-        if let Some(end) = text.find("\r\n\r\n") {
-            let declared = text[..end]
+        if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+            let headers = std::str::from_utf8(&bytes[..end]).unwrap_or_else(|error| {
+                panic!("the plugin sent headers that are not UTF-8: {error}")
+            });
+            let declared = headers
                 .lines()
                 .find_map(|line| {
                     let (name, value) = line.split_once(':')?;
@@ -109,18 +112,29 @@ fn request(stream: &mut TcpStream) -> String {
                         .then(|| value.trim().parse::<usize>())
                 })
                 .unwrap_or_else(|| {
-                    panic!("the plugin sent a request with no Content-Length: {text}")
+                    panic!("the plugin sent a request with no Content-Length: {headers}")
                 })
                 .unwrap_or_else(|error| {
-                    panic!("the plugin sent an unreadable Content-Length ({error}): {text}")
+                    panic!("the plugin sent an unreadable Content-Length ({error}): {headers}")
                 });
-            if bytes.len() >= end + 4 + declared {
-                return text.into_owned();
+            // `end + 4` is at most what was read, which the ceiling already holds, so this
+            // subtraction cannot underflow and the sum below cannot overflow.
+            assert!(
+                declared <= MOST_A_REQUEST_IS - (end + 4),
+                "the plugin declared a body of {declared} bytes, past {MOST_A_REQUEST_IS}: {headers}"
+            );
+            let whole = end + 4 + declared;
+            if bytes.len() >= whole {
+                bytes.truncate(whole);
+                return String::from_utf8(bytes).unwrap_or_else(|error| {
+                    panic!("the plugin sent a request that is not UTF-8: {error}")
+                });
             }
         }
         assert!(
             n > 0,
-            "the connection closed partway through a request: {text}"
+            "the connection closed partway through a request, after {} bytes",
+            bytes.len()
         );
     }
 }
