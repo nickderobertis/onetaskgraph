@@ -14,17 +14,21 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
-use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName, TaskSource};
+use onetaskgraph_plugin_api::{
+    Page, Project, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
+    TaskSource,
+};
 use secrecy::SecretString;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
-    AddCommentParams, CommentsParams, DeleteCommentParams, DeleteParams, DependencyParams,
-    DocumentQueryParams, DocumentWriteParams, EditCommentParams, HandshakePluginKind, IdParams,
-    InitializeParams, InitializeResult, LabelParams, PROTOCOL_VERSION, ProjectQueryParams,
-    ProjectWriteParams, Request, Response, TaskQueryParams, TaskWriteParams,
+    AddCommentParams, CommentsParams, DeleteCommentParams, DeleteParams, DeliveredByParams,
+    DependencyParams, DocumentQueryParams, DocumentWriteParams, EditCommentParams,
+    HandshakePluginKind, IdParams, InitializeParams, InitializeResult, LabelParams,
+    PROTOCOL_VERSION, ProjectQueryParams, ProjectWriteParams, Request, Response, StatusParams,
+    TaskQueryParams, TaskWriteParams, after_the_first_vocabulary, knows_every_category, vocabulary,
 };
 use crate::registry::PluginKind;
 
@@ -41,6 +45,16 @@ struct HostedSettings {
     /// That plugin's own `config:` block.
     #[serde(default)]
     config: Value,
+}
+
+/// The source one connection hosts, and what the engine said it can be told.
+struct Hosted {
+    /// The built source.
+    source: Box<dyn TaskSource>,
+    /// Whether the engine's `initialize` listed every status category this build knows
+    /// (§3.5). An engine that did not is told a category added after the first vocabulary
+    /// as `unknown`, keeping its name.
+    engine_knows_every_category: bool,
 }
 
 /// Serve one connection until the engine closes its input.
@@ -73,7 +87,7 @@ async fn serve_kind(
     mut output: impl Write,
     kind: Option<PluginKind>,
 ) -> std::io::Result<()> {
-    let mut source: Option<Box<dyn TaskSource>> = None;
+    let mut source: Option<Hosted> = None;
     loop {
         let line = match read_line(&mut input) {
             Line::Read(line) => line,
@@ -148,7 +162,7 @@ const VERSION_REFUSAL: &str = "protocol version ";
 
 /// Answer one well-formed request.
 async fn answer(
-    source: &mut Option<Box<dyn TaskSource>>,
+    source: &mut Option<Hosted>,
     request: Request,
     kind: Option<PluginKind>,
 ) -> Response {
@@ -164,7 +178,7 @@ async fn answer(
             None => initialize(source, id, params, kind).await,
         };
     }
-    let Some(built) = source.as_deref() else {
+    let Some(built) = source.as_ref() else {
         return Response::failed(
             id,
             SourceError::Malformed {
@@ -172,7 +186,14 @@ async fn answer(
             },
         );
     };
-    match dispatch(built, &method, params).await {
+    match dispatch(
+        built.source.as_ref(),
+        built.engine_knows_every_category,
+        &method,
+        params,
+    )
+    .await
+    {
         Ok(result) => Response::ok(id, result),
         Err(error) => Response::failed(id, error),
     }
@@ -180,7 +201,7 @@ async fn answer(
 
 /// The handshake (§3), including the version refusal §6.2 spells out.
 async fn initialize(
-    source: &mut Option<Box<dyn TaskSource>>,
+    source: &mut Option<Hosted>,
     id: String,
     params: Value,
     kind: Option<PluginKind>,
@@ -229,8 +250,16 @@ async fn initialize(
                 // Asked once, here, for the same reason `writes` is: the engine is then
                 // never sent a method this plugin would only have to decline.
                 meters: matches!(built.metering().await, Ok(Some(_))),
+                statuses: Some(vocabulary()),
+                // This host serves this build's own plugins, whose every one implements both
+                // narrow writes or refuses one by name — which is an answer, not a method the
+                // engine should not have sent.
+                task_updates: true,
             };
-            *source = Some(built);
+            *source = Some(Hosted {
+                source: built,
+                engine_knows_every_category: knows_every_category(params.statuses.as_deref()),
+            });
             Response::ok(
                 id,
                 serde_json::to_value(&result).expect("a result is plain data"),
@@ -288,9 +317,38 @@ impl SecretResolver for Handshake<'_> {
     }
 }
 
+/// A status as an engine that knows `known` categories may be told it (§3.5).
+fn told(status: Status, known: bool) -> Status {
+    if known || !after_the_first_vocabulary(status.category) {
+        return status;
+    }
+    Status {
+        category: StatusCategory::Unknown,
+        name: status.name,
+    }
+}
+
+fn told_task(task: Task, known: bool) -> Task {
+    Task {
+        status: told(task.status.clone(), known),
+        ..task
+    }
+}
+
+fn told_project(project: Project, known: bool) -> Project {
+    Project {
+        status: told(project.status.clone(), known),
+        ..project
+    }
+}
+
 /// One method call against the built source (§4).
+///
+/// `known` is whether the engine listed every status category this build knows; every
+/// status this answers with passes through [`told`] on its way out.
 async fn dispatch(
     source: &dyn TaskSource,
+    known: bool,
     method: &str,
     params: Value,
 ) -> Result<Value, SourceError> {
@@ -298,19 +356,49 @@ async fn dispatch(
         "health" => encode(source.health().await?),
         "get_task" => {
             let params: IdParams = decode(method, params)?;
-            encode(json!({ "task": source.get_task(&params.id).await? }))
+            let task = source.get_task(&params.id).await?;
+            encode(json!({ "task": task.map(|task| told_task(task, known)) }))
         }
         "get_project" => {
             let params: IdParams = decode(method, params)?;
-            encode(json!({ "project": source.get_project(&params.id).await? }))
+            let project = source.get_project(&params.id).await?;
+            encode(json!({ "project": project.map(|project| told_project(project, known)) }))
         }
         "query_tasks" => {
             let params: TaskQueryParams = decode(method, params)?;
-            encode(source.query_tasks(&params.query, &params.page).await?)
+            let page = source.query_tasks(&params.query, &params.page).await?;
+            encode(Page {
+                items: page
+                    .items
+                    .into_iter()
+                    .map(|task| told_task(task, known))
+                    .collect(),
+                next: page.next,
+            })
         }
         "query_projects" => {
             let params: ProjectQueryParams = decode(method, params)?;
-            encode(source.query_projects(&params.query, &params.page).await?)
+            let page = source.query_projects(&params.query, &params.page).await?;
+            encode(Page {
+                items: page
+                    .items
+                    .into_iter()
+                    .map(|project| told_project(project, known))
+                    .collect(),
+                next: page.next,
+            })
+        }
+        "set_task_status" => {
+            let params: StatusParams = decode(method, params)?;
+            let status = source.set_task_status(&params.id, params.category).await?;
+            encode(json!({ "status": status.map(|status| told(status, known)) }))
+        }
+        "set_delivered_by" => {
+            let params: DeliveredByParams = decode(method, params)?;
+            let held = source
+                .set_delivered_by(&params.id, &params.delivered_by)
+                .await?;
+            encode(json!({ "delivered_by": held.map(|()| params.delivered_by) }))
         }
         "labels" => {
             let params: LabelParams = decode(method, params)?;

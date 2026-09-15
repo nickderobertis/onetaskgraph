@@ -151,6 +151,9 @@ fn every_verb() -> Vec<Vec<String>> {
         owned(&["task", "list", "--no-project"]),
         owned(&["task", "list", "--limit", "1"]),
         owned(&["task", "show", &task]),
+        // A status write lands in the source's own store — an in-memory one here, which holds
+        // it in the process that wrote it — and nowhere else.
+        owned(&["task", "status", "set", &task, "todo"]),
         owned(&["task", "deps", &task]),
         vec![
             "task".to_owned(),

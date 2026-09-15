@@ -16,7 +16,8 @@ use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery, Health,
     ItemWrite, Label, Metering, NativeId, NewComment, Page, PageRequest, Project, ProjectQuery,
-    SourceError, SourceName, Task, TaskQuery, TaskSource, WriteSupport,
+    SourceError, SourceName, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskSource,
+    WriteSupport,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,11 +25,12 @@ use serde_json::{Value, json};
 use super::connection::{Connection, Peer};
 use super::wire::{
     AddCommentParams, CommentResult, CommentsParams, CommentsResult, DeleteCommentParams,
-    DeleteParams, DeletedCommentResult, DependencyParams, DocumentQueryParams, DocumentResult,
-    DocumentWriteParams, EditCommentParams, EngineIdentity, IdParams, InitializeParams,
-    InitializeResult, LabelParams, MeteringResult, PROTOCOL_VERSION, ProjectQueryParams,
-    ProjectResult, ProjectWriteParams, Request, TaskQueryParams, TaskResult, TaskWriteParams,
-    WriteResult,
+    DeleteParams, DeletedCommentResult, DeliveredByParams, DeliveredByResult, DependencyParams,
+    DocumentQueryParams, DocumentResult, DocumentWriteParams, EditCommentParams, EngineIdentity,
+    IdParams, InitializeParams, InitializeResult, LabelParams, MeteringResult, PROTOCOL_VERSION,
+    ProjectQueryParams, ProjectResult, ProjectWriteParams, Request, StatusParams, StatusResult,
+    TaskQueryParams, TaskResult, TaskWriteParams, WriteResult, after_the_first_vocabulary,
+    knows_every_category, spelled, vocabulary,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -84,6 +86,14 @@ pub struct SubprocessSource {
     /// A plugin that said nothing is never sent the method and is reported as not metering,
     /// which is what §3.4 makes an absent member mean.
     meters: bool,
+    /// Whether the plugin's handshake listed every status category this build knows (§3.5).
+    ///
+    /// A plugin that listed none was written against the first vocabulary, and is never
+    /// handed a category added after it: not in a query, not in a write.
+    knows_every_category: bool,
+    /// Whether the plugin said it answers the two narrow task writes and holds a task's two
+    /// lists (§3.6), read at the same handshake.
+    task_updates: bool,
     /// The live process.
     connection: Connection,
 }
@@ -207,6 +217,8 @@ impl SubprocessSource {
             capabilities,
             writes,
             meters,
+            statuses,
+            task_updates,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -233,6 +245,8 @@ impl SubprocessSource {
             capabilities,
             writes: writes.unwrap_or(WriteSupport::Unsupported),
             meters,
+            knows_every_category: knows_every_category(statuses.as_deref()),
+            task_updates,
             connection: Connection::adopt(peer),
         })
     }
@@ -253,6 +267,7 @@ impl SubprocessSource {
             source_name: name.as_str().to_owned(),
             config: config.clone(),
             secrets,
+            statuses: Some(vocabulary()),
         };
         let request = Request {
             id: HANDSHAKE_ID.to_owned(),
@@ -292,6 +307,65 @@ impl SubprocessSource {
         serde_json::from_value(result).map_err(|error| SourceError::Malformed {
             message: format!("the plugin's handshake answer is not an initialize result: {error}"),
         })
+    }
+
+    /// The statuses a query may hand this plugin, or `None` when every one asked for is a
+    /// category it was not written against — which no row it holds can be in.
+    ///
+    /// Dropping those categories narrows nothing: a plugin that does not know a category
+    /// cannot report a row in it, so the rows the rest of the list matches are every row the
+    /// whole list matches.
+    fn statuses_for(&self, statuses: &[StatusCategory]) -> Option<Vec<StatusCategory>> {
+        if self.knows_every_category {
+            return Some(statuses.to_vec());
+        }
+        let known: Vec<StatusCategory> = statuses
+            .iter()
+            .copied()
+            .filter(|category| !after_the_first_vocabulary(*category))
+            .collect();
+        (known.len() == statuses.len() || !known.is_empty()).then_some(known)
+    }
+
+    /// Refuse a status this plugin's handshake says it was not written against, before it is
+    /// sent (§3.5).
+    fn knows(&self, category: StatusCategory) -> Result<(), SourceError> {
+        if self.knows_every_category || !after_the_first_vocabulary(category) {
+            return Ok(());
+        }
+        Err(SourceError::Refused {
+            message: format!(
+                "the {:?} plugin's handshake does not list the status category {}, so this \
+                 engine does not hand it one (docs/plugin-protocol.md §3.5); next: upgrade the \
+                 plugin to one whose handshake lists it, or use a category it knows",
+                self.kind,
+                spelled(category)
+            ),
+        })
+    }
+
+    /// Refuse what only a plugin declaring `task_updates` is handed, before it is sent (§3.6).
+    fn updates(&self, what: &str) -> Result<(), SourceError> {
+        if self.task_updates {
+            return Ok(());
+        }
+        Err(SourceError::Refused {
+            message: format!(
+                "the {:?} plugin's handshake does not say it answers the narrow task writes, so \
+                 this engine does not send it {what} (docs/plugin-protocol.md §3.6); next: \
+                 upgrade the plugin to one whose handshake sets task_updates",
+                self.kind
+            ),
+        })
+    }
+
+    /// Refuse a task write this plugin could only drop part of in silence.
+    fn writable_task(&self, task: &Task) -> Result<(), SourceError> {
+        self.knows(task.status.category)?;
+        if !task.delivers.is_empty() || !task.delivered_by.is_empty() {
+            self.updates("a task carrying delivers or delivered_by")?;
+        }
+        Ok(())
     }
 
     /// One call, with its result parsed into the shape the method promises.
@@ -370,10 +444,16 @@ impl TaskSource for SubprocessSource {
         query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
+        let Some(statuses) = self.statuses_for(&query.statuses) else {
+            return Ok(Page::last(Vec::new()));
+        };
         self.ask(
             "query_tasks",
             params(&TaskQueryParams {
-                query: query.clone(),
+                query: TaskQuery {
+                    statuses,
+                    ..query.clone()
+                },
                 page: page.clone(),
             }),
         )
@@ -385,10 +465,16 @@ impl TaskSource for SubprocessSource {
         query: &ProjectQuery,
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
+        let Some(statuses) = self.statuses_for(&query.statuses) else {
+            return Ok(Page::last(Vec::new()));
+        };
         self.ask(
             "query_projects",
             params(&ProjectQueryParams {
-                query: query.clone(),
+                query: ProjectQuery {
+                    statuses,
+                    ..query.clone()
+                },
                 page: page.clone(),
             }),
         )
@@ -439,6 +525,7 @@ impl TaskSource for SubprocessSource {
     }
 
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        self.writable_task(&write.item)?;
         let result: WriteResult = self
             .ask(
                 "write_task",
@@ -451,6 +538,7 @@ impl TaskSource for SubprocessSource {
     }
 
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        self.knows(write.item.status.category)?;
         let result: WriteResult = self
             .ask(
                 "write_project",
@@ -460,6 +548,43 @@ impl TaskSource for SubprocessSource {
             )
             .await?;
         Ok(result.id)
+    }
+
+    async fn set_task_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        self.updates("set_task_status")?;
+        self.knows(category)?;
+        let result: StatusResult = self
+            .ask(
+                "set_task_status",
+                params(&StatusParams {
+                    id: id.clone(),
+                    category,
+                }),
+            )
+            .await?;
+        Ok(result.status)
+    }
+
+    async fn set_delivered_by(
+        &self,
+        id: &NativeId,
+        delivered_by: &[TaskRef],
+    ) -> Result<Option<()>, SourceError> {
+        self.updates("set_delivered_by")?;
+        let result: DeliveredByResult = self
+            .ask(
+                "set_delivered_by",
+                params(&DeliveredByParams {
+                    id: id.clone(),
+                    delivered_by: delivered_by.to_vec(),
+                }),
+            )
+            .await?;
+        Ok(result.delivered_by.map(|_| ()))
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {

@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
     DocumentQuery, Health, ItemKind, Label, Location, NewComment, Page, PageRequest, Project,
-    ProjectQuery, Repository, SourceError, Status, StatusCategory, Task, TaskQuery, TextFields,
+    ProjectQuery, Repository, SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef,
+    TextFields,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
@@ -18,10 +19,10 @@ use crate::config::{EffectiveConfig, Origin, OutputFormat, Setting};
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::{
-    CommentList, CopyAction, CopyOutcome, CopyReport, DeletedComment, Failure, FailureClass,
-    FailureDocument, GlobalId, PageToken, Predicate, Qualified, QualifiedEdge, QualifiedEndpoint,
-    QueryPlan, QueryResponse, SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan,
-    TaskDetail,
+    CommentList, CopyAction, CopyOutcome, CopyReport, DeletedComment, Delivered, DeliveryOutcome,
+    Failure, FailureClass, FailureDocument, GlobalId, PageToken, Predicate, Qualified,
+    QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, SearchHit, SearchKind,
+    SourceFailure, SourceListing, SourcePlan, TaskDetail, TaskStatusSet,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -37,7 +38,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 13;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 14;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -136,6 +137,13 @@ pub fn schema_bundle() -> Value {
     roots.insert("CommentList", schema_for!(CommentList));
     roots.insert("DeletedComment", schema_for!(DeletedComment));
     roots.insert("TaskDetail", schema_for!(TaskDetail));
+
+    // What `task status set` answers with, and the per-task entries it and a copy report for
+    // the delivered tasks they kept in step — plus the entry type both of a task's lists hold.
+    roots.insert("TaskRef", schema_for!(TaskRef));
+    roots.insert("TaskStatusSet", schema_for!(TaskStatusSet));
+    roots.insert("Delivered", schema_for!(Delivered));
+    roots.insert("DeliveryOutcome", schema_for!(DeliveryOutcome));
 
     roots.insert("CopyReport", schema_for!(CopyReport));
     roots.insert("CopyOutcome", schema_for!(CopyOutcome));

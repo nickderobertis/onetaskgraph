@@ -736,6 +736,8 @@ fn outgoing(id: &str, title: &str, status: &str, category: StatusCategory) -> Ta
             serde_json::from_value(serde_json::json!("github.com/nickderobertis/onetaskgraph"))
                 .expect("a normalized origin"),
         ],
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     }
 }
 
@@ -1221,6 +1223,8 @@ async fn an_unstated_status_reads_as_backlog_and_draft_is_read_as_an_ordinary_st
                 updated_at: None,
                 metadata: Default::default(),
                 repositories: Vec::new(),
+                delivers: Vec::new(),
+                delivered_by: Vec::new(),
             },
             depends_on: Vec::new(),
         })

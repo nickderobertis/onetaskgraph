@@ -150,6 +150,30 @@ captured from the real API, and two readings the plugin depends on are not in an
 `comments.json` covers the `comments` connection of an issue, `Comment`, its `user` and the
 backward `PageInfo`. It is documentation-derived, with invented identifiers and content.
 
+## A narrow status write, and the correction it needed
+
+The status write carries a sixth date. On **2026-09-15** two parts of the pin were read from
+the same published SDK schema as the comment contract, at the same commit
+`23f11eb41ef63ba219ec582911079c19d1abbf62`. Nothing was captured from the real API.
+
+- **`StringComparator.eq: String`**, the case-sensitive single-value member.
+  `ISSUE_STATE_OF_TYPE` finds the configured team's workflow states of one `type` with
+  `workflowStates(filter:{type:{eq:$type},team:{id:{eq:$team}}})`, selecting `id` and
+  `name`. `WorkflowState.type` is a fixed vocabulary, so a case-sensitive match is exact.
+- **Every member of `IssueUpdateInput` is optional.** This file had `title`, `stateId` and
+  `labelIds` as required, which was derived rather than observed and never checked: the one
+  writer sent all of them anyway. The status write sends `{stateId}` alone, and that is valid
+  only because the members really are optional. Linear leaves any member that is absent as
+  the issue already holds it.
+
+That SDK file spells `WorkflowStateFilter.team` as `TeamFilter`. The pin keeps
+`NullableTeamFilter`, because Linear's own refusal is where that shape came from (see
+above), and a refusal from the API outranks the published schema.
+
+No fixture file was added for this. The status-write tests answer inline, the way every
+other write test in `plugin.rs` does, and the fields they answer with are the ones the
+document selects.
+
 ## The 2026-09-04 audit, and why it was not five more round trips
 
 Five contract drifts had been found here one at a time, each by pushing and waiting for

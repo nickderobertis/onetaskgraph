@@ -2,7 +2,7 @@
 
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Document, ItemKind, Label, NativeId, Project, Support, Task, WriteSupport,
+    Document, ItemKind, Label, NativeId, Project, Support, Task, TaskRef, WriteSupport,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, de::Error as _};
@@ -182,6 +182,19 @@ impl InMemoryConfig {
                     "task {} is filed under project {project}, which this source does not hold",
                     task.id
                 ));
+            }
+        }
+
+        // A task's two task lists, held to what every source holds them to: no entry naming
+        // the task itself, and none naming one task twice.
+        for task in &self.tasks {
+            for (field, list) in [
+                ("delivers", &task.delivers),
+                ("delivered_by", &task.delivered_by),
+            ] {
+                if let Err(message) = TaskRef::listed(field, &task.id, None, list.clone()) {
+                    problems.push(message);
+                }
             }
         }
 

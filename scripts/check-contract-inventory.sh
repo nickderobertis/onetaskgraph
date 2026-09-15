@@ -43,6 +43,12 @@ EXCEPTIONS = {
         "`Capabilities.comments: Support::Unsupported` obliges every comment-free source "
         "to answer a comment call with"
     ),
+    "unwritable_field": (
+        "a free function, not one of the contract's types — the inventory enumerates the "
+        "traits and types a plugin author implements against, and this is the one refusal "
+        "`TaskSource::set_task_status` and `TaskSource::set_delivered_by` answer with by "
+        "default, for a source that cannot write that one field of a task on its own"
+    ),
     "SOURCE_NAME_PATTERN": (
         "a const, not one of the contract's types — the inventory enumerates the traits "
         "and types a plugin author implements against"

@@ -51,7 +51,8 @@ use onetaskgraph_plugin_api::{
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     LabelFilter, Location, NativeId, NewComment, Page, PageRequest, Project, ProjectFilter,
     ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery, WriteSupport,
+    StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery,
+    WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -77,6 +78,7 @@ fn default_statuses() -> BTreeMap<String, StatusCategory> {
         ("draft", StatusCategory::Draft),
         ("backlog", StatusCategory::Backlog),
         ("todo", StatusCategory::Todo),
+        ("queued", StatusCategory::Queued),
         ("in progress", StatusCategory::InProgress),
         ("doing", StatusCategory::InProgress),
         ("done", StatusCategory::Done),
@@ -110,7 +112,7 @@ impl SourcePlugin for Plugin {
                 message: format!("source {name}: {e}"),
             })?;
         LocalMdSource::new(config)
-            .map(|s| Box::new(s) as Box<dyn TaskSource>)
+            .map(|s| Box::new(s.named(name.clone())) as Box<dyn TaskSource>)
             .map_err(|e| match e {
                 SourceError::Config { message } => SourceError::Config {
                     message: format!("source {name}: {message}"),
@@ -124,6 +126,12 @@ impl SourcePlugin for Plugin {
 #[derive(Debug, Clone)]
 pub struct LocalMdSource {
     root: PathBuf,
+    /// The name this source's configuration gave it, once it is known.
+    ///
+    /// What tells `T-1` and `work:T-1` apart as one task in a `delivers` list. A source built
+    /// without one — straight from [`LocalMdSource::new`] — recognises only a bare entry as
+    /// naming a task of its own.
+    name: Option<SourceName>,
     statuses: BTreeMap<String, StatusCategory>,
 }
 
@@ -145,6 +153,12 @@ struct FrontMatter {
     metadata: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     repositories: Vec<Repository>,
+    /// The tasks this one delivers, read as JSON rather than as strings so an entry that is
+    /// not a task id is refused naming it rather than failing the whole front matter in
+    /// serde's words.
+    delivers: Option<serde_json::Value>,
+    /// Every task that delivers this one, read on the terms `delivers` is.
+    delivered_by: Option<serde_json::Value>,
 }
 fn default_status() -> String {
     "backlog".to_owned()
@@ -167,7 +181,7 @@ struct SharedFront {
 
 impl FrontMatter {
     /// This front matter split into what every kind carries, and what only work does.
-    fn split(self) -> (SharedFront, String, Vec<Dependency>) {
+    fn split(self) -> (SharedFront, String, Vec<Dependency>, Delivery) {
         (
             SharedFront {
                 title: self.title,
@@ -179,8 +193,18 @@ impl FrontMatter {
             },
             self.status,
             self.depends_on,
+            Delivery {
+                delivers: self.delivers,
+                delivered_by: self.delivered_by,
+            },
         )
     }
+}
+
+/// The two task lists a front matter holds, before they are read as task ids.
+struct Delivery {
+    delivers: Option<serde_json::Value>,
+    delivered_by: Option<serde_json::Value>,
 }
 
 impl From<DocumentFrontMatter> for SharedFront {
@@ -275,6 +299,9 @@ struct Entry {
     common: Common,
     status: Status,
     dependencies: Vec<DependencyEdge>,
+    /// Empty for a project, which delivers nothing and is delivered by nothing.
+    delivers: Vec<TaskRef>,
+    delivered_by: Vec<TaskRef>,
 }
 
 /// What every Markdown file of this source carries, whichever folder it is in.
@@ -362,12 +389,20 @@ impl LocalMdSource {
         }
         Ok(Self {
             root,
+            name: None,
             statuses: config
                 .status_mapping
                 .into_iter()
                 .map(|(k, v)| (k.to_lowercase(), v))
                 .collect(),
         })
+    }
+
+    /// This source, knowing the name its configuration gave it.
+    #[must_use]
+    pub fn named(mut self, name: SourceName) -> Self {
+        self.name = Some(name);
+        self
     }
 
     fn directory(&self, kind: Kind) -> Result<PathBuf, SourceError> {
@@ -540,7 +575,7 @@ impl LocalMdSource {
             serde_norway::from_str(&yaml).map_err(|e| SourceError::Malformed {
                 message: format!("{}: {e}", path.display()),
             })?;
-        let (shared, status, depends_on) = front.split();
+        let (shared, status, depends_on, delivery) = front.split();
         // A task's comments section is not its content: what a query searches, a copy reads
         // and `task show` prints as the body is everything above it. A project has no
         // comments, so a `## Comments` heading in one is ordinary content.
@@ -586,10 +621,50 @@ impl LocalMdSource {
                 }),
             })
             .collect::<Result<Vec<_>, SourceError>>()?;
+        let (delivers, delivered_by) = match kind {
+            WorkKind::Task => (
+                self.task_list("delivers", &common.id, path, delivery.delivers.as_ref())?,
+                self.task_list(
+                    "delivered_by",
+                    &common.id,
+                    path,
+                    delivery.delivered_by.as_ref(),
+                )?,
+            ),
+            WorkKind::Project => {
+                if delivery.delivers.is_some() || delivery.delivered_by.is_some() {
+                    return Err(SourceError::Malformed {
+                        message: format!(
+                            "{}: `delivers` and `delivered_by` belong to a task, and this is a \
+                             project; next: move them to the task that delivers",
+                            path.display()
+                        ),
+                    });
+                }
+                (Vec::new(), Vec::new())
+            }
+        };
         Ok(Entry {
             common,
             status,
             dependencies,
+            delivers,
+            delivered_by,
+        })
+    }
+
+    /// One of a task file's two task lists, read as task ids.
+    fn task_list(
+        &self,
+        field: &str,
+        id: &NativeId,
+        path: &Path,
+        value: Option<&serde_json::Value>,
+    ) -> Result<Vec<TaskRef>, SourceError> {
+        TaskRef::from_value(field, id, self.name.as_ref(), value).map_err(|message| {
+            SourceError::Malformed {
+                message: format!("{}: {message}", path.display()),
+            }
         })
     }
 
@@ -885,12 +960,21 @@ impl TaskSource for LocalMdSource {
     }
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         let task = &write.item;
+        let near = write.target.as_ref().unwrap_or(&task.id);
+        for (field, list) in [
+            ("delivers", &task.delivers),
+            ("delivered_by", &task.delivered_by),
+        ] {
+            self.representable_list(field, near, list)?;
+        }
         self.write_entry(
             write.target.as_ref(),
             &Outgoing::Work {
                 kind: WorkKind::Task,
                 status: &task.status,
                 depends_on: &write.depends_on,
+                delivers: &task.delivers,
+                delivered_by: &task.delivered_by,
                 fields: Fields {
                     id: &task.id,
                     title: &task.title,
@@ -911,6 +995,8 @@ impl TaskSource for LocalMdSource {
                 kind: WorkKind::Project,
                 status: &project.status,
                 depends_on: &write.depends_on,
+                delivers: &[],
+                delivered_by: &[],
                 fields: Fields {
                     id: &project.id,
                     title: &project.title,
@@ -945,6 +1031,55 @@ impl TaskSource for LocalMdSource {
                 },
             },
         )
+    }
+    /// Rewrite the one `status:` entry of the task's front matter, and nothing else.
+    ///
+    /// A task already in `category` is left byte for byte as it is, word and all: a rewrite
+    /// would respell a status the file already holds. Otherwise the word written is one this
+    /// folder's `status_mapping` reads back as `category` — the category's own spelling when
+    /// the mapping has it, else the first word that maps there — and a category the mapping
+    /// reaches with no word is refused in the words a copy of that status is.
+    async fn set_task_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        let Some(path) = self.locate(Kind::Task, id)? else {
+            return Ok(None);
+        };
+        let entry = self.parse(WorkKind::Task, &path)?;
+        if entry.status.category == category {
+            return Ok(Some(entry.status));
+        }
+        let word = self.word_for(category);
+        let status = Status {
+            category,
+            name: word,
+        };
+        self.representable_status(&status)?;
+        // A string always renders as a YAML scalar.
+        let rendered = serde_norway::to_string(&status.name).expect("a status word renders");
+        self.rewrite_front_entry(&path, "status", Some(rendered.trim_end()))?;
+        Ok(Some(status))
+    }
+
+    /// Rewrite the one `delivered_by:` entry of the task's front matter, and nothing else —
+    /// removing it when the list is empty.
+    async fn set_delivered_by(
+        &self,
+        id: &NativeId,
+        delivered_by: &[TaskRef],
+    ) -> Result<Option<()>, SourceError> {
+        self.representable_list("delivered_by", id, delivered_by)?;
+        let Some(path) = self.locate(Kind::Task, id)? else {
+            return Ok(None);
+        };
+        self.parse(WorkKind::Task, &path)?;
+        // A list of strings always renders as JSON, which is a YAML flow sequence.
+        let rendered = (!delivered_by.is_empty())
+            .then(|| serde_json::to_string(delivered_by).expect("a list of task ids renders"));
+        self.rewrite_front_entry(&path, "delivered_by", rendered.as_deref())?;
+        Ok(Some(()))
     }
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         self.delete_entry(Kind::Task, id)
@@ -1168,6 +1303,73 @@ fn front_matter(text: &str) -> Option<(&str, usize)> {
         }
     }
     None
+}
+
+/// `text` with its front matter's top-level `key` entry replaced by `key: value`, or removed
+/// when `value` is `None`, and every other byte exactly as it was — or `None` when `text` has
+/// no front matter.
+///
+/// An entry is its `key:` line and every line after it that continues it: an indented line,
+/// or a `- ` sequence item. An absent key is added as the last line of the front matter. The
+/// line ending written is the one the file already uses.
+fn with_front_entry(text: &str, key: &str, value: Option<&str>) -> Option<String> {
+    let (open, newline) = if text.starts_with("---\r\n") {
+        ("---\r\n", "\r\n")
+    } else {
+        ("---\n", "\n")
+    };
+    let (yaml, _) = front_matter(text)?;
+    let start = open.len();
+    let end = start + yaml.len();
+    let mut lines: Vec<(usize, usize)> = Vec::new();
+    let mut at = start;
+    while at < end {
+        let next = text[at..end].find('\n').map_or(end, |found| at + found + 1);
+        lines.push((at, next));
+        at = next;
+    }
+    let prefix = format!("{key}:");
+    let written = value.map(|value| format!("{key}: {value}"));
+    let Some(index) = lines
+        .iter()
+        .position(|&(from, _)| text[from..].starts_with(&prefix))
+    else {
+        let Some(written) = written else {
+            return Some(text.to_owned());
+        };
+        let separator = if end > start { newline } else { "" };
+        return Some(format!(
+            "{}{separator}{written}{}",
+            &text[..end],
+            &text[end..]
+        ));
+    };
+    let mut last = index;
+    while let Some(&(from, to)) = lines.get(last + 1) {
+        let line = text[from..to].trim_end_matches(['\r', '\n']);
+        if line.starts_with([' ', '\t']) || line == "-" || line.starts_with("- ") {
+            last += 1;
+        } else {
+            break;
+        }
+    }
+    let from = lines[index].0;
+    let to = lines[last].1;
+    let ended = text[..to].ends_with('\n');
+    Some(match written {
+        Some(written) => format!(
+            "{}{written}{}{}",
+            &text[..from],
+            if ended { newline } else { "" },
+            &text[to..]
+        ),
+        // The entry was the last line, so the line ending before it goes with it.
+        None if !ended && from > start => {
+            let before = text[..from].strip_suffix(newline).unwrap_or(&text[..from]);
+            format!("{before}{}", &text[to..])
+        }
+        None => format!("{}{}", &text[..from], &text[to..]),
+    })
 }
 
 /// The refusal for a file with no front matter this source can find.
@@ -1447,6 +1649,8 @@ fn task(d: Entry) -> Task {
         updated_at: None,
         metadata: d.common.metadata,
         repositories: d.common.repositories,
+        delivers: d.delivers,
+        delivered_by: d.delivered_by,
     }
 }
 fn project(d: Entry) -> Project {
@@ -1478,6 +1682,10 @@ enum Outgoing<'a> {
         kind: WorkKind,
         status: &'a Status,
         depends_on: &'a [DependencyEdge],
+        /// Empty for a project.
+        delivers: &'a [TaskRef],
+        /// Empty for a project.
+        delivered_by: &'a [TaskRef],
         fields: Fields<'a>,
     },
     /// A document, which takes part in no dependency graph and has no status.
@@ -1532,6 +1740,10 @@ struct WrittenFrontMatter {
     metadata: BTreeMap<String, serde_json::Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     repositories: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    delivers: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    delivered_by: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1557,6 +1769,7 @@ fn category_name(category: StatusCategory) -> &'static str {
         StatusCategory::Draft => "draft",
         StatusCategory::Backlog => "backlog",
         StatusCategory::Todo => "todo",
+        StatusCategory::Queued => "queued",
         StatusCategory::InProgress => "in-progress",
         StatusCategory::Done => "done",
         StatusCategory::Cancelled => "cancelled",
@@ -1713,6 +1926,92 @@ impl LocalMdSource {
         })
     }
 
+    /// Refuse a status this folder would read back as another category, in the one wording a
+    /// copy and a status write share.
+    fn representable_status(&self, status: &Status) -> Result<(), SourceError> {
+        let mapped = self
+            .statuses
+            .get(&status.name.to_lowercase())
+            .copied()
+            .unwrap_or(StatusCategory::Unknown);
+        if mapped == status.category {
+            return Ok(());
+        }
+        Err(SourceError::Refused {
+            message: format!(
+                "cannot represent the field `status`: this source reads {:?} as {}, not {}; \
+                 next: map {:?} to {} under this source's status_mapping",
+                status.name,
+                category_name(mapped),
+                category_name(status.category),
+                status.name,
+                category_name(status.category),
+            ),
+        })
+    }
+
+    /// Refuse a task list naming its own task or one task twice, naming the field.
+    fn representable_list(
+        &self,
+        field: &str,
+        near: &NativeId,
+        list: &[TaskRef],
+    ) -> Result<(), SourceError> {
+        TaskRef::listed(field, near, self.name.as_ref(), list.to_vec())
+            .map(|_| ())
+            .map_err(|message| SourceError::Refused {
+                message: format!("cannot represent the field `{field}`: {message}"),
+            })
+    }
+
+    /// The word this folder writes a status in `category` as.
+    ///
+    /// The category's own spelling when the mapping reads that word as it — `queued`, or
+    /// `in progress` for `in-progress` — else the first word the mapping sends there, else the
+    /// category's own spelling, which [`Self::representable_status`] then refuses by name.
+    fn word_for(&self, category: StatusCategory) -> String {
+        let spelled = category_name(category);
+        let spoken = spelled.replace('-', " ");
+        let words: Vec<&String> = self
+            .statuses
+            .iter()
+            .filter(|(_, held)| **held == category)
+            .map(|(word, _)| word)
+            .collect();
+        words
+            .iter()
+            .find(|word| word.as_str() == spelled || word.as_str() == spoken)
+            .or_else(|| words.first())
+            .map_or_else(|| spelled.to_owned(), |word| (*word).clone())
+    }
+
+    /// Replace one top-level entry of a task file's front matter, leaving every other byte
+    /// of the file as it was, and refuse a result this source could not read back.
+    fn rewrite_front_entry(
+        &self,
+        path: &Path,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<(), SourceError> {
+        let text = fs::read_to_string(path).map_err(|e| SourceError::Malformed {
+            message: format!("{}: {e}", path.display()),
+        })?;
+        let rewritten = with_front_entry(&text, key, value).ok_or_else(|| unfronted(path))?;
+        let Some((yaml, _)) = front_matter(&rewritten) else {
+            return Err(unfronted(path));
+        };
+        serde_norway::from_str::<FrontMatter>(yaml).map_err(|e| SourceError::Malformed {
+            message: format!(
+                "{}: rewriting `{key}` would leave front matter this source cannot read: {e}; \
+                 next: tidy that entry of the file by hand",
+                path.display()
+            ),
+        })?;
+        fs::write(path, rewritten).map_err(|e| SourceError::Unavailable {
+            message: format!("cannot write {}: {e}", path.display()),
+        })
+    }
+
     /// One file's whole text, or a refusal naming the field this source cannot hold.
     fn render(&self, outgoing: &Outgoing<'_>) -> Result<String, SourceError> {
         let is_task = matches!(
@@ -1722,31 +2021,18 @@ impl LocalMdSource {
                 ..
             }
         );
-        let (status, depends_on) = match outgoing {
+        let (status, depends_on, delivers, delivered_by) = match outgoing {
             Outgoing::Work {
-                status, depends_on, ..
-            } => (Some(*status), *depends_on),
-            Outgoing::Document { .. } => (None, [].as_slice()),
+                status,
+                depends_on,
+                delivers,
+                delivered_by,
+                ..
+            } => (Some(*status), *depends_on, *delivers, *delivered_by),
+            Outgoing::Document { .. } => (None, [].as_slice(), [].as_slice(), [].as_slice()),
         };
         if let Some(status) = status {
-            let mapped = self
-                .statuses
-                .get(&status.name.to_lowercase())
-                .copied()
-                .unwrap_or(StatusCategory::Unknown);
-            if mapped != status.category {
-                return Err(SourceError::Refused {
-                    message: format!(
-                        "cannot represent the field `status`: this source reads {:?} as {}, not \
-                         {}; next: map {:?} to {} under this source's status_mapping",
-                        status.name,
-                        category_name(mapped),
-                        category_name(status.category),
-                        status.name,
-                        category_name(status.category),
-                    ),
-                });
-            }
+            self.representable_status(status)?;
         }
         let outgoing = outgoing.fields();
         let front = WrittenFrontMatter {
@@ -1782,6 +2068,8 @@ impl LocalMdSource {
                 .iter()
                 .map(|repository| repository.as_str().to_owned())
                 .collect(),
+            delivers: delivers.iter().map(ToString::to_string).collect(),
+            delivered_by: delivered_by.iter().map(ToString::to_string).collect(),
         };
         let yaml = serde_norway::to_string(&front).map_err(|e| SourceError::Malformed {
             message: format!("cannot render front matter for {}: {e}", outgoing.id),

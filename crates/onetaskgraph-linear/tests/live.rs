@@ -65,6 +65,15 @@ use cleanup::{
     sweep_orphans,
 };
 
+// `settle` is shared with `tests/settle_gate.rs`, which drives these reads against a loopback
+// workspace whose index lags.
+mod settle;
+
+use settle::{
+    LINEAR_INDEX, settled, settled_documents, settled_label, settled_tasks, settled_walk,
+    task_titles, walked_task_titles,
+};
+
 /// The two workflow states this fixture files its issues under.
 ///
 /// Chosen by Linear's own `WorkflowState.type` rather than by name, because the display
@@ -195,23 +204,6 @@ fn sorted(mut titles: Vec<String>) -> Vec<String> {
     titles
 }
 
-async fn task_titles(
-    source: &dyn TaskSource,
-    query: &TaskQuery,
-    what: &str,
-) -> Result<Vec<String>, String> {
-    Ok(sorted(
-        source
-            .query_tasks(query, &page(50))
-            .await
-            .map_err(|error| format!("live {what} failed: {error}"))?
-            .items
-            .into_iter()
-            .map(|task| task.title)
-            .collect(),
-    ))
-}
-
 /// Everything this lane needs to reach the one team it may write to.
 struct LiveRun {
     key: String,
@@ -241,6 +233,14 @@ async fn drive_every_declared_capability(
     let only_label = artifact_label(run.id, run.stamp_micros + 1);
     create_label(&run.key, team_id, &run_label).await?;
     create_label(&run.key, team_id, &only_label).await?;
+    // The first task write names both, and the source resolves a label by name through
+    // Linear's label filter, which holds a label only some while after it was created.
+    for name in [&run_label, &only_label] {
+        settled_label(LINEAR_INDEX, name, |query, variables| {
+            linear(&run.key, query, variables, "live label lookup")
+        })
+        .await?;
+    }
     let open = Status {
         category: StatusCategory::Todo,
         name: run.open_state.clone(),
@@ -289,6 +289,8 @@ async fn drive_every_declared_capability(
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     };
 
     let alpha_id = source
@@ -338,29 +340,17 @@ async fn drive_every_declared_capability(
         .map_err(|error| format!("live task write of {orphan:?} failed: {error}"))?;
 
     // Linear indexes a created issue before it answers a filtered query over it, so the
-    // reads below wait for the fixture rather than racing it.
-    let mut settled = false;
-    for _ in 0..20 {
-        if task_titles(source, &scoped(), "fixture settling read")
-            .await?
-            .len()
-            == 3
-        {
-            settled = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
+    // reads below wait for the fixture rather than racing it — each one, through `settle`,
+    // because the index does not catch up on every filter at once.
     let all_three = sorted(vec![first.clone(), second.clone(), orphan.clone()]);
-    ensure!(
-        settled,
-        "the live fixture never became readable: Linear never returned all three issues \
-         labelled {run_label}"
-    );
-    ensure!(
-        task_titles(source, &scoped(), "scoped read").await? == all_three,
-        "the three issues this run created did not come back as {all_three:?}"
-    );
+    settled_tasks(
+        LINEAR_INDEX,
+        source,
+        &scoped(),
+        &format!("the three issues this run created, labelled {run_label},"),
+        &all_three,
+    )
+    .await?;
 
     // `projects`: two are held, and a listing scoped to one keeps the issue filed under
     // it and no other. Unscoped on purpose — the workspace holds issues of its own, so a
@@ -393,35 +383,40 @@ async fn drive_every_declared_capability(
         project: ProjectFilter::Is(id.clone()),
         ..TaskQuery::default()
     };
-    let under_alpha = task_titles(source, &under(&alpha_id), "project filter").await?;
-    ensure!(
-        under_alpha == vec![first.clone()],
-        "the issues of one of this run's two projects came back as {under_alpha:?}"
-    );
-    let under_beta = task_titles(source, &under(&beta_id), "project filter").await?;
-    ensure!(
-        under_beta == vec![second.clone()],
-        "the issues of the other of this run's two projects came back as {under_beta:?}"
-    );
+    settled_tasks(
+        LINEAR_INDEX,
+        source,
+        &under(&alpha_id),
+        "the issues of one of this run's two projects",
+        std::slice::from_ref(&first),
+    )
+    .await?;
+    settled_tasks(
+        LINEAR_INDEX,
+        source,
+        &under(&beta_id),
+        "the issues of the other of this run's two projects",
+        std::slice::from_ref(&second),
+    )
+    .await?;
 
     // `orphan_tasks`: the one issue filed under neither project.
-    let orphans = task_titles(
+    settled_tasks(
+        LINEAR_INDEX,
         source,
         &TaskQuery {
             project: ProjectFilter::Orphans,
             ..scoped()
         },
-        "orphan selection",
+        "this run's issues belonging to no project",
+        std::slice::from_ref(&orphan),
     )
     .await?;
-    ensure!(
-        orphans == vec![orphan.clone()],
-        "this run's issues belonging to no project came back as {orphans:?}"
-    );
 
     // `filter_by_label`: one of the three carries the second label, and the exclusion
     // keeps exactly the other two.
-    let carrying = task_titles(
+    settled_tasks(
+        LINEAR_INDEX,
         source,
         &TaskQuery {
             labels: LabelFilter {
@@ -430,14 +425,12 @@ async fn drive_every_declared_capability(
             },
             ..TaskQuery::default()
         },
-        "label filter",
+        "this run's issues carrying its second label",
+        std::slice::from_ref(&first),
     )
     .await?;
-    ensure!(
-        carrying == vec![first.clone()],
-        "this run's issues carrying its second label came back as {carrying:?}"
-    );
-    let without = task_titles(
+    settled_tasks(
+        LINEAR_INDEX,
         source,
         &TaskQuery {
             labels: LabelFilter {
@@ -447,42 +440,35 @@ async fn drive_every_declared_capability(
             },
             ..TaskQuery::default()
         },
-        "label exclusion",
+        "this run's issues not carrying its second label",
+        &[second.clone(), orphan.clone()],
     )
     .await?;
-    ensure!(
-        without == sorted(vec![second.clone(), orphan.clone()]),
-        "this run's issues not carrying its second label came back as {without:?}"
-    );
 
     // `filter_by_status`: two issues sit in an `unstarted` state and one in a `completed`
     // one, so the normalised categories separate them.
-    let todo = task_titles(
+    settled_tasks(
+        LINEAR_INDEX,
         source,
         &TaskQuery {
             statuses: vec![StatusCategory::Todo],
             ..scoped()
         },
-        "status filter",
+        "this run's unstarted issues",
+        &[first.clone(), second.clone()],
     )
     .await?;
-    ensure!(
-        todo == sorted(vec![first.clone(), second.clone()]),
-        "this run's unstarted issues came back as {todo:?}"
-    );
-    let finished = task_titles(
+    settled_tasks(
+        LINEAR_INDEX,
         source,
         &TaskQuery {
             statuses: vec![StatusCategory::Done],
             ..scoped()
         },
-        "status filter",
+        "this run's completed issue",
+        std::slice::from_ref(&orphan),
     )
     .await?;
-    ensure!(
-        finished == vec![orphan.clone()],
-        "this run's completed issue came back as {finished:?}"
-    );
 
     // `search_title` and `search_content` are declared `Unsupported`, and capability rule
     // 2 is what that declaration promises: the source **ignores** the predicate and
@@ -494,7 +480,8 @@ async fn drive_every_declared_capability(
         TextFields::Content,
         TextFields::TitleOrContent,
     ] {
-        let searched = task_titles(
+        settled_tasks(
+            LINEAR_INDEX,
             source,
             &TaskQuery {
                 text: Some(TextQuery {
@@ -503,14 +490,13 @@ async fn drive_every_declared_capability(
                 }),
                 ..scoped()
             },
-            "ignored search",
+            &format!(
+                "a {fields:?} search this source declares unsupported, which must return the \
+                 wider set,"
+            ),
+            &all_three,
         )
         .await?;
-        ensure!(
-            searched == all_three,
-            "a {fields:?} search this source declares unsupported narrowed the result to \
-             {searched:?} instead of returning the wider set"
-        );
     }
 
     // `task_dependencies` and `project_dependencies`, both directions each. One relation
@@ -549,7 +535,11 @@ async fn drive_every_declared_capability(
     }
 
     // Paging: a limit smaller than the result set walks to exhaustion, reaching every row
-    // exactly once and in the order one whole page reports them.
+    // exactly once and in the order one whole page reports them. The walk is a listing like
+    // the others and waits out the index the same way, so the order is compared over a set
+    // the index has already caught up with rather than over a walk that raced it.
+    let walk = "a walk in pages of one over this run's own three issues";
+    settled_walk(LINEAR_INDEX, source, &scoped(), 10, walk, &all_three).await?;
     let whole = source
         .query_tasks(&scoped(), &page(50))
         .await
@@ -558,28 +548,7 @@ async fn drive_every_declared_capability(
         .into_iter()
         .map(|task| task.title)
         .collect::<Vec<_>>();
-    let mut walked = Vec::new();
-    let mut cursor = None;
-    loop {
-        let step = source
-            .query_tasks(&scoped(), &PageRequest { cursor, limit: 1 })
-            .await
-            .map_err(|error| format!("live paged read failed: {error}"))?;
-        ensure!(
-            step.items.len() <= 1,
-            "a page of one returned {} rows",
-            step.items.len()
-        );
-        walked.extend(step.items.into_iter().map(|task| task.title));
-        cursor = step.next;
-        if cursor.is_none() {
-            break;
-        }
-        ensure!(
-            walked.len() <= 10,
-            "the paged walk over this run's own three issues must terminate"
-        );
-    }
+    let walked = walked_task_titles(source, &scoped(), 10, walk).await?;
     ensure!(
         walked == whole,
         "a walk in pages of one reached {walked:?} where one whole page reports {whole:?}"
@@ -589,32 +558,13 @@ async fn drive_every_declared_capability(
     // ceiling instead of passing it on, so the read succeeds rather than being refused
     // for a page size Linear's connection cannot serve.
     let ceiling = source.capabilities().max_page_size;
-    let clamped = sorted(
-        source
-            .query_tasks(
-                &scoped(),
-                &PageRequest {
-                    cursor: None,
-                    limit: ceiling + 1,
-                },
-            )
-            .await
-            .map_err(|error| {
-                format!(
-                    "a limit one above the declared ceiling was refused rather than clamped: \
-                     {error}"
-                )
-            })?
-            .items
-            .into_iter()
-            .map(|task| task.title)
-            .collect(),
-    );
-    ensure!(
-        clamped == all_three,
-        "a limit above the declared ceiling returned {clamped:?} rather than this run's own \
-         three issues"
-    );
+    let over_the_ceiling = scoped();
+    let what = "a read at a limit one above the declared ceiling, which this source clamps \
+                rather than refuses,";
+    settled(LINEAR_INDEX, what, &all_three, || {
+        task_titles(source, &over_the_ceiling, ceiling + 1, what)
+    })
+    .await?;
     // And that the ceiling itself is a page Linear really serves, rather than a number
     // this source guessed at. What Linear does with one row *more* is its own business and
     // is documented nowhere, so nothing here asserts on it.
@@ -749,55 +699,58 @@ async fn drive_documents(
     );
 
     // Both this run's documents come back, the project predicate keeps one and the orphan
-    // predicate the other, and a label demanded of a document keeps neither.
-    let titles = |query: DocumentQuery| async move {
-        let mut found = source
-            .query_documents(&query, &page(onetaskgraph_linear::MAX_PAGE_SIZE))
-            .await
-            .map_err(|error| format!("live document read failed: {error}"))?
-            .items
-            .into_iter()
-            .map(|document| document.title)
-            .filter(|title| is_this_runs(run.id, ARTIFACT_PREFIX, title))
-            .collect::<Vec<_>>();
-        found.sort();
-        Ok::<_, String>(found)
-    };
-    let both = sorted(vec![filed.to_owned(), loose.to_owned()]);
-    ensure!(
-        titles(DocumentQuery::default()).await? == both,
-        "the two documents this run created did not come back as {both:?}"
-    );
-    ensure!(
-        titles(DocumentQuery {
+    // predicate the other, and a label demanded of a document keeps neither. Each listing
+    // waits out the index as the issue listings do: a document's project filter has come back
+    // without the document filed there while the unfiltered listing already held it.
+    let this_runs = |title: &str| is_this_runs(run.id, ARTIFACT_PREFIX, title);
+    settled_documents(
+        LINEAR_INDEX,
+        source,
+        &DocumentQuery::default(),
+        &this_runs,
+        "the two documents this run created",
+        &[filed.to_owned(), loose.to_owned()],
+    )
+    .await?;
+    settled_documents(
+        LINEAR_INDEX,
+        source,
+        &DocumentQuery {
             project: ProjectFilter::Is(under.clone()),
             ..DocumentQuery::default()
-        })
-        .await?
-            == vec![filed.to_owned()],
-        "a document listing narrowed to this run's project kept the wrong documents"
-    );
-    ensure!(
-        titles(DocumentQuery {
+        },
+        &this_runs,
+        "a document listing narrowed to this run's project",
+        &[filed.to_owned()],
+    )
+    .await?;
+    settled_documents(
+        LINEAR_INDEX,
+        source,
+        &DocumentQuery {
             project: ProjectFilter::Orphans,
             ..DocumentQuery::default()
-        })
-        .await?
-            == vec![loose.to_owned()],
-        "a document listing narrowed to the orphans kept the wrong documents"
-    );
-    ensure!(
-        titles(DocumentQuery {
+        },
+        &this_runs,
+        "a document listing narrowed to the orphans",
+        &[loose.to_owned()],
+    )
+    .await?;
+    settled_documents(
+        LINEAR_INDEX,
+        source,
+        &DocumentQuery {
             labels: LabelFilter {
                 any_of: vec![artifact_label(run.id, run.stamp_micros)],
                 ..LabelFilter::default()
             },
             ..DocumentQuery::default()
-        })
-        .await?
-        .is_empty(),
-        "no Linear document carries a label, so a query demanding one keeps nothing"
-    );
+        },
+        &this_runs,
+        "a document listing demanding a label, which no Linear document carries,",
+        &[],
+    )
+    .await?;
 
     // And removed again, which is what lets a copy that could not finish take one back.
     // The sweep would clear them anyway; driving the verb is what proves it works.

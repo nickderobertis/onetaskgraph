@@ -636,6 +636,8 @@ impl TaskSource for Rendezvous {
             updated_at: None,
             metadata: Default::default(),
             repositories: Vec::new(),
+            delivers: Vec::new(),
+            delivered_by: Vec::new(),
         }]))
     }
 
@@ -932,6 +934,8 @@ fn one_task(id: &NativeId) -> Task {
         updated_at: None,
         metadata: std::collections::BTreeMap::new(),
         repositories: Vec::new(),
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     }
 }
 
@@ -1293,6 +1297,8 @@ impl Recording {
                 updated_at: None,
                 metadata: Default::default(),
                 repositories: Vec::new(),
+                delivers: Vec::new(),
+                delivered_by: Vec::new(),
             })
             .collect();
         Page {

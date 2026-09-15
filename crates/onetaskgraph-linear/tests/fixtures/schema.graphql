@@ -55,6 +55,12 @@
 # `DeletePayload` the relation deletes answer. As everywhere else here, only the arguments,
 # fields and input members the plugin sends or selects are kept: `Issue.comments` keeps
 # `before` and `last` of its seven arguments, and the two inputs keep `body` and `issueId`.
+#
+# A narrow status write carries a sixth date. `StringComparator.eq` and the optional
+# nullability of every `IssueUpdateInput` member were read from that same SDK schema file at
+# that same commit on 2026-09-15. That file spells `WorkflowStateFilter.team` a `TeamFilter`,
+# and this one keeps `NullableTeamFilter`: the real API's own refusal outranks the published
+# schema, as recorded above.
 # Only the read/write contract exercised by this plugin is retained.
 type Query {
   viewer: User!
@@ -365,8 +371,11 @@ input IssueLabelFilter {
 # type "StringComparator". Did you mean "eqIgnoreCase" or "neqIgnoreCase"?` — which is
 # where the two case-insensitive members below come from. `in` is the case-*sensitive* list
 # operator, which is why the two status narrowings use it over a fixed vocabulary and the
-# label predicates, over names a user typed, do not.
+# label predicates, over names a user typed, do not. `eq` is the case-sensitive single-value
+# operator, pinned 2026-09-15 from the SDK schema named in the header, and is what a status
+# write finds a workflow state of one `type` with — a fixed vocabulary again.
 input StringComparator {
+  eq: String
   eqIgnoreCase: String
   neqIgnoreCase: String
   in: [String!]
@@ -390,11 +399,14 @@ input IssueCreateInput {
   labelIds: [String!]!
   projectId: String
 }
+# Every member optional, as published — corrected 2026-09-15 from the SDK schema named in the
+# header, where this file had carried `title`, `stateId` and `labelIds` as required. An absent
+# member is left as the issue holds it, which is what lets a status write send `stateId` alone.
 input IssueUpdateInput {
-  title: String!
+  title: String
   description: String
-  stateId: String!
-  labelIds: [String!]!
+  stateId: String
+  labelIds: [String!]
   projectId: String
 }
 input ProjectCreateInput {

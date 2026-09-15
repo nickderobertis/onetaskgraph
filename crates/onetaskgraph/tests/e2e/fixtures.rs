@@ -811,6 +811,12 @@ struct GitHubBoard {
     documents: Vec<String>,
     /// The variables each of those documents was sent with, at the same index.
     variables: Vec<Value>,
+    /// `Status` options taken off this board, by name.
+    ///
+    /// Every journey reads the one shared option set, and a journey about a write naming an
+    /// option the board does not have needs one taken away — which is what this is, rather
+    /// than a second board with a second spelling of the rest.
+    lacking: Vec<String>,
     /// The board's **own** title, description and readme — a person's, not this
     /// product's. `updateProjectV2` is answered here rather than refused so that a
     /// journey asserting these are byte-identical after a copy fails when something
@@ -850,6 +856,23 @@ impl GitHubBoardFields {
             .cloned()
             .zip(board.variables.iter().cloned())
             .collect()
+    }
+
+    /// Take one `Status` option off this board, as a person deleting a column would.
+    pub fn without_option(&self, name: &str) {
+        self.board.lock().unwrap().lacking.push(name.to_owned());
+    }
+
+    /// The body this board holds for one issue, byte for byte.
+    #[must_use]
+    pub fn body(&self, id: &str) -> Value {
+        self.board
+            .lock()
+            .unwrap()
+            .items
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .map_or(Value::Null, |item| item["body"].clone())
     }
 
     /// Which of the documents this board received selected the board's own item
@@ -911,15 +934,30 @@ fn graphql_over_http(endpoint: &str, query: &str, variables: &Value) -> Value {
 }
 
 impl GitHubBoard {
-    fn options() -> Value {
-        json!([{"id":"OPT-backlog","name":"Backlog"},{"id":"OPT-todo","name":"Todo"},
-               {"id":"OPT-doing","name":"Doing"},{"id":"OPT-shipped","name":"Shipped"}])
+    fn options(&self) -> Value {
+        let every = json!([{"id":"OPT-backlog","name":"Backlog"},{"id":"OPT-todo","name":"Todo"},
+               {"id":"OPT-queued","name":"Queued"},{"id":"OPT-doing","name":"Doing"},
+               {"id":"OPT-shipped","name":"Shipped"}]);
+        Value::Array(
+            every
+                .as_array()
+                .expect("the option set is a list")
+                .iter()
+                .filter(|option| {
+                    !self
+                        .lacking
+                        .iter()
+                        .any(|name| option["name"] == json!(name))
+                })
+                .cloned()
+                .collect(),
+        )
     }
 
-    fn fields() -> Value {
+    fn fields(&self) -> Value {
         json!({"nodes":[
             {"__typename":"ProjectV2SingleSelectField","id":"FIELD-status","name":"Status",
-             "options":Self::options()},
+             "options":self.options()},
             {"__typename":"ProjectV2Field","id":"FIELD-origin","name":"onetaskgraph.origin"}
         ],"pageInfo":{"hasNextPage":false}})
     }
@@ -1012,7 +1050,7 @@ impl GitHubBoard {
         // board's built-in `Labels` field, so an item's labels are its content's alone.
         let values = vec![
             json!({"name":item["status"],"field":{"id":"FIELD-status","name":"Status",
-                   "options":Self::options()}}),
+                   "options":self.options()}}),
             json!({"text":item["origin"],"field":{"id":"FIELD-origin","name":"onetaskgraph.origin"}}),
         ];
         json!({"id":item["item"],
@@ -1194,6 +1232,7 @@ fn github_projects_board_at(
         lagging_reads,
         documents: Vec::new(),
         variables: Vec::new(),
+        lacking: Vec::new(),
         own: json!({"title":"Fixture board",
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
@@ -1458,7 +1497,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         if let Some(title) = input["title"].as_str() {
             held["title"] = json!(title);
         }
-        if input.get("body").is_some() && input["title"].is_string() {
+        // A body arrives without a title when only the metadata slot changes, and it is the
+        // whole new body either way.
+        if input.get("body").is_some_and(|body| !body.is_null()) {
             held["body"] = input["body"].clone();
         }
         let state = input["stateInput"].clone();
@@ -1477,7 +1518,8 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         );
         let item_id = input["itemId"].clone();
         let option = input["value"]["singleSelectOptionId"].as_str().map(|id| {
-            GitHubBoard::options()
+            board
+                .options()
                 .as_array()
                 .unwrap()
                 .iter()
@@ -1721,7 +1763,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         .collect::<Vec<_>>();
     let title = board.own["title"].clone();
     json!({"owner":{"projectV2":{"id":"PVT-board","title":title,
-        "fields":GitHubBoard::fields(),
+        "fields":board.fields(),
         "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < visible,
                                            "endCursor":end.to_string()}}}}})
 }

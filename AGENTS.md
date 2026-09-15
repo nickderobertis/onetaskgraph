@@ -57,7 +57,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
 
 - **`onetaskgraph-plugin-api`** — exactly what a plugin author needs, and nothing else:
   the traits `TaskSource`, `SourcePlugin` and `SecretResolver`; the work types `Task`,
-  `Project`, `Document`, `Location`, `Label`, `Status`, `StatusCategory`, `Repository`,
+  `Project`, `Document`, `Location`, `Label`, `Status`, `StatusCategory`, `TaskRef`,
+  `Repository`,
   `DependencyEdge`, `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
   `Direction`, `NativeId`, `SourceName`; the query and paging types `TaskQuery`,
   `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,
@@ -599,6 +600,30 @@ them do; this is the inventory of what is owed, not a status board.
     were, and nothing the copy wrote carries a comment of what it was copied from.
 41. A copy into a Markdown task keeps that file's comments section byte for byte, and no
     comment of the copy's source enters it.
+42. A task's status is set on its own through the binary — on a folder of Markdown, whose
+    record is byte-identical apart from its `status`, over the in-process boundary and the
+    stdio plugin protocol alike, and on a GitHub board, whose only mutations are the `Status`
+    option update or the close or reopen the category's target needs — and `task show` reads
+    everything else back unchanged.
+43. Every refusal `task status set` owes exits non-zero with the problem and a next action: an
+    unqualified id, an unknown source, a missing task, a category the source has disabled, and
+    a source that cannot write a status.
+44. A task's `delivers` and a delivered task's `delivered_by` come back qualified out of a
+    folder of Markdown and a GitHub board, neither is ever free metadata, and an entry that is
+    not a task id, names its own task or repeats is refused by name.
+45. A copy rewrites a `delivers` entry naming a member of the copied set to the destination's
+    id, carries every other entry qualified, never takes `delivered_by` from its source and
+    keeps the destination's own on a total replacement, counts what it rewrote, and keeps every
+    delivered task's back-reference in step — removing it from a task it dropped.
+46. Every row of the delivered-task rule and every branch of its result, through the binary:
+    one deliverer followed through `queued`, `in-progress` and `done`; a release; `draft` and
+    `backlog` writing nothing; two deliverers; a task the rule may not touch; a re-copy that
+    re-evaluates; a deliverer read as not found pruned and one in an unconfigured source failed
+    with exit `4`; a dropped task released over the deliverers that remain; and a Markdown task
+    keeping a GitHub ticket's column and closed state in step.
+47. A delivered task the destination refuses — a board lacking `Queued` — is reported failed
+    with the failure document, the deliverer's own write lands and reads back, and the verb
+    exits `4`.
 
 ## What a copied document's references are pointed at
 

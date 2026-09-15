@@ -3,6 +3,8 @@ from .comment import Comment as Comment
 from .comment_list import CommentList as CommentList
 from .copy_report import CopyReport as CopyReport
 from .deleted_comment import DeletedComment as DeletedComment
+from .delivered import Delivered as Delivered
+from .delivery_outcome import DeliveryOutcome as DeliveryOutcome
 from .document import Document as Document
 from .document_query import DocumentQuery as DocumentQuery
 from .effective_config import EffectiveConfig as EffectiveConfig
@@ -21,3 +23,5 @@ from .source_failure import SourceFailure as SourceFailure
 from .source_listing import SourceListing as SourceListing
 from .status_category import StatusCategory as StatusCategory
 from .task_detail import TaskDetail as TaskDetail
+from .task_ref import TaskRef as TaskRef
+from .task_status_set import TaskStatusSet as TaskStatusSet

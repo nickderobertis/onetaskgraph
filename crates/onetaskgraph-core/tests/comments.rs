@@ -306,6 +306,8 @@ fn a_task(native: &str) -> Task {
         updated_at: None,
         metadata: Default::default(),
         repositories: Vec::new(),
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     }
 }
 

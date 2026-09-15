@@ -14,10 +14,11 @@ trip through the ticketing system the user already works in.
 
 Keys are free-form, with two prefixes reserved:
 
-- `onetaskgraph.` belongs to this product. It defines exactly four keys, each spelled
+- `onetaskgraph.` belongs to this product. It defines exactly six keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
-  (`DependencyEdge::RECORDED_KEY`) and `onetaskgraph.item_kind`
+  (`DependencyEdge::RECORDED_KEY`), `onetaskgraph.delivers` (`TaskRef::DELIVERS_KEY`),
+  `onetaskgraph.delivered_by` (`TaskRef::DELIVERED_BY_KEY`) and `onetaskgraph.item_kind`
   (`ItemKind::METADATA_KEY`) in the contract crate, and `onetaskgraph.origin`
   (`GlobalId::ORIGIN_KEY`) in the engine — that last one carries a *qualified* id, whose
   contents no plugin ever constructs or interprets, though `github-projects` routes the
@@ -203,10 +204,12 @@ reached. Both are defaulted to refusing, so a source with nothing to write into 
 edit. `local-md` and `in-memory` are writable today; each remote source's own write side
 lands with its own node, and Linear's writes back to the slot described above.
 
-Two keys never travel as metadata even though a source may store them that way.
-`onetaskgraph.repositories` and `onetaskgraph.depends_on` are the *encoding* a source
-without a native slot uses; the truth is the typed `repositories` field and the item's own
-edges, and those are what a copy carries. Writing the encoding beside them would have a
+Four keys never travel as metadata even though a source may store them that way.
+`onetaskgraph.repositories`, `onetaskgraph.depends_on`, `onetaskgraph.delivers` and
+`onetaskgraph.delivered_by` are the *encoding* a source without a native slot uses; the truth
+is the typed `repositories`, `delivers` and `delivered_by` fields and the item's own edges,
+and those are what a copy carries — `delivered_by` excepted, which a copy never takes from its
+source and which the destination keeps as it holds it. Writing the encoding beside them would have a
 destination hold one thing twice and disagree with itself the moment one changed.
 
 A copy adds one reserved key of its own, `onetaskgraph.origin`, whose value is the

@@ -17,11 +17,12 @@ use onetaskgraph_core::{
 };
 use onetaskgraph_plugin_api::{
     Cursor, Direction, Document, DocumentQuery, ItemWrite, LabelFilter, Location, NativeId,
-    PageRequest, ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, Support,
-    Task, TaskQuery, TaskSource, WriteSupport,
+    PageRequest, ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, Status,
+    StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
 
 /// The work every test here serves, small enough to page through in one assertion.
 fn dataset() -> Value {
@@ -1527,5 +1528,294 @@ fn a_named_credential_that_resolves_is_forwarded_and_the_run_gets_as_far_as_spaw
     assert!(
         matches!(error, SourceError::Unavailable { .. }),
         "resolution passed and the spawn failed: {error:?}"
+    );
+}
+
+/// A peer that answers each request under that request's own id with the next of `results`,
+/// the handshake first, and records every request it is sent — including any it is sent after
+/// it has run out of answers.
+fn recording(
+    results: Vec<Value>,
+) -> (
+    Result<SubprocessSource, SourceError>,
+    Arc<Mutex<Vec<Value>>>,
+) {
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&heard);
+    let (to_engine, mut from_peer) = pipe().expect("a pipe");
+    let (to_peer, from_engine) = pipe().expect("a pipe");
+    std::thread::spawn(move || {
+        let mut asked = BufReader::new(to_peer);
+        let mut results = results.into_iter();
+        loop {
+            let mut line = String::new();
+            match asked.read_line(&mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+            let request: Value = serde_json::from_str(&line).expect("a request line");
+            let id = request["id"].clone();
+            kept.lock().expect("the record").push(request);
+            let Some(result) = results.next() else {
+                continue;
+            };
+            let answer = json!({"id": id, "result": result});
+            if writeln!(from_peer, "{answer}").is_err() || from_peer.flush().is_err() {
+                return;
+            }
+        }
+    });
+    (
+        SubprocessSource::over(from_engine, to_engine, &name(), &json!({}), BTreeMap::new()),
+        heard,
+    )
+}
+
+/// One task as a write carries it.
+fn written(value: Value) -> Task {
+    serde_json::from_value(value).expect("a task")
+}
+
+#[tokio::test]
+async fn a_plugin_whose_handshake_lists_no_statuses_is_never_handed_queued_or_a_narrow_write() {
+    let (source, heard) = recording(vec![
+        json!({"protocol_version": 2, "kind": "earlier", "capabilities": capabilities(),
+               "writes": "supported"}),
+        json!({"items": [], "next": null}),
+    ]);
+    let source = source.expect("the handshake completes");
+
+    // Every category the engine knows is listed in its own handshake.
+    let handshake = heard.lock().expect("the record")[0].clone();
+    assert_eq!(
+        handshake["params"]["statuses"],
+        json!([
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "done",
+            "cancelled",
+            "unknown"
+        ])
+    );
+
+    // A query for `queued` alone is not sent: nothing such a plugin holds can be in it.
+    let only = TaskQuery {
+        statuses: vec![StatusCategory::Queued],
+        ..everything()
+    };
+    let answered = source
+        .query_tasks(&only, &page(10))
+        .await
+        .expect("answered");
+    assert!(answered.items.is_empty() && answered.next.is_none());
+    // One naming a category it knows beside `queued` is sent that category alone.
+    let mixed = TaskQuery {
+        statuses: vec![StatusCategory::Todo, StatusCategory::Queued],
+        ..everything()
+    };
+    source
+        .query_tasks(&mixed, &page(10))
+        .await
+        .expect("answered");
+
+    let refused = |error: SourceError| match error {
+        SourceError::Refused { message } => message,
+        other => panic!("expected a refusal by name, got {other:?}"),
+    };
+    let queued = written(json!({"id": "T-1", "title": "Alpha", "content": null,
+        "status": {"category": "queued", "name": "Queued"}, "labels": []}));
+    let message = refused(
+        source
+            .write_task(&ItemWrite {
+                target: None,
+                item: queued,
+                depends_on: Vec::new(),
+            })
+            .await
+            .expect_err("never handed queued"),
+    );
+    assert!(
+        message.contains("\"earlier\" plugin's handshake does not list the status category queued"),
+        "{message}"
+    );
+    let delivering = written(json!({"id": "T-1", "title": "Alpha", "content": null,
+        "status": {"category": "todo", "name": "Todo"}, "labels": [], "delivers": ["T-2"]}));
+    let message = refused(
+        source
+            .write_task(&ItemWrite {
+                target: None,
+                item: delivering,
+                depends_on: Vec::new(),
+            })
+            .await
+            .expect_err("never handed a list it would drop"),
+    );
+    assert!(
+        message.contains("does not say it answers the narrow task writes"),
+        "{message}"
+    );
+    let message = refused(
+        source
+            .set_task_status(&NativeId::from("T-1"), StatusCategory::Todo)
+            .await
+            .expect_err("never sent the method"),
+    );
+    assert!(
+        message.contains("does not send it set_task_status"),
+        "{message}"
+    );
+    let message = refused(
+        source
+            .set_delivered_by(&NativeId::from("T-1"), &[])
+            .await
+            .expect_err("never sent the method"),
+    );
+    assert!(
+        message.contains("does not send it set_delivered_by"),
+        "{message}"
+    );
+
+    let heard = heard.lock().expect("the record").clone();
+    let methods: Vec<&str> = heard
+        .iter()
+        .map(|request| request["method"].as_str().unwrap())
+        .collect();
+    assert_eq!(methods, ["initialize", "query_tasks"], "{heard:?}");
+    assert_eq!(heard[1]["params"]["query"]["statuses"], json!(["todo"]));
+}
+
+#[tokio::test]
+async fn the_narrow_task_writes_cross_the_wire_and_land_in_the_hosted_source() {
+    let there = a_process_away(hosted_settings()).expect("connects");
+    let id = NativeId::from("T-3");
+    assert_eq!(
+        there
+            .set_task_status(&id, StatusCategory::Queued)
+            .await
+            .expect("answered"),
+        Some(Status {
+            category: StatusCategory::Queued,
+            name: "queued".to_owned()
+        })
+    );
+    let queued = TaskQuery {
+        statuses: vec![StatusCategory::Queued],
+        ..everything()
+    };
+    let found: Vec<String> = there
+        .query_tasks(&queued, &page(2))
+        .await
+        .expect("answered")
+        .items
+        .into_iter()
+        .map(|task| task.id.0)
+        .collect();
+    assert_eq!(found, ["T-3"]);
+
+    let by = vec![TaskRef::new("plan:P-1").expect("a task id")];
+    assert_eq!(
+        there.set_delivered_by(&id, &by).await.expect("answered"),
+        Some(())
+    );
+    let held = there.get_task(&id).await.expect("answered").expect("held");
+    assert_eq!(held.delivered_by, by);
+    assert_eq!(held.status.category, StatusCategory::Queued);
+
+    let nothing = NativeId::from("T-9");
+    assert_eq!(
+        there
+            .set_task_status(&nothing, StatusCategory::Done)
+            .await
+            .expect("answered"),
+        None
+    );
+    assert_eq!(
+        there
+            .set_delivered_by(&nothing, &[])
+            .await
+            .expect("answered"),
+        None
+    );
+}
+
+#[test]
+fn an_engine_that_lists_no_statuses_is_told_queued_as_unknown_under_its_own_name() {
+    let mut settings = hosted_settings();
+    settings["config"]["tasks"][0]["status"] = json!({"category": "queued", "name": "Queued"});
+    let get = json!({"id": "1", "method": "get_task", "params": {"id": "T-1"}});
+    let list = json!({"id": "2", "method": "query_tasks",
+        "params": {"query": {"text": null, "labels": {"any_of": [], "all_of": [], "none_of": []}, "statuses": [], "project": "any"},
+                   "page": {"cursor": null, "limit": 2}}});
+    let set = json!({"id": "3", "method": "set_task_status",
+        "params": {"id": "T-3", "category": "queued"}});
+    settings["config"]["projects"][0]["status"] = json!({"category": "queued", "name": "Queued"});
+    let project = json!({"id": "4", "method": "get_project", "params": {"id": "P-1"}});
+    let projects = json!({"id": "5", "method": "query_projects",
+        "params": {"query": {"text": null, "labels": {"any_of": [], "all_of": [], "none_of": []}, "statuses": []},
+                   "page": {"cursor": null, "limit": 2}}});
+
+    let earlier = served(&[
+        handshake(2, settings.clone()),
+        get.clone(),
+        list.clone(),
+        set,
+        project,
+        projects,
+    ]);
+    assert_eq!(
+        earlier[4]["result"]["project"]["status"],
+        json!({"category": "unknown", "name": "Queued"}),
+        "{earlier:?}"
+    );
+    assert_eq!(
+        earlier[5]["result"]["items"][0]["status"],
+        json!({"category": "unknown", "name": "Queued"}),
+        "{earlier:?}"
+    );
+    assert_eq!(earlier[0]["result"]["task_updates"], json!(true));
+    assert_eq!(
+        earlier[0]["result"]["statuses"],
+        json!([
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "done",
+            "cancelled",
+            "unknown"
+        ])
+    );
+    assert_eq!(
+        earlier[1]["result"]["task"]["status"],
+        json!({"category": "unknown", "name": "Queued"})
+    );
+    assert_eq!(
+        earlier[2]["result"]["items"][0]["status"],
+        json!({"category": "unknown", "name": "Queued"})
+    );
+    assert_eq!(
+        earlier[3]["result"]["status"],
+        json!({"category": "unknown", "name": "queued"})
+    );
+
+    let mut current = handshake(2, settings);
+    current["params"]["statuses"] = json!([
+        "draft",
+        "backlog",
+        "todo",
+        "queued",
+        "in-progress",
+        "done",
+        "cancelled",
+        "unknown"
+    ]);
+    let now = served(&[current, get]);
+    assert_eq!(
+        now[1]["result"]["task"]["status"],
+        json!({"category": "queued", "name": "Queued"})
     );
 }

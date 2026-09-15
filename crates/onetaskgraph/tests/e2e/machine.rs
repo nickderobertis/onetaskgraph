@@ -32,7 +32,7 @@ fn with_a_destination(sandbox: &Sandbox, boundary: crate::common::SourceBoundary
 }
 
 /// The bundle this binary emits, as a validator can read it.
-fn bundle(sandbox: &Sandbox) -> Value {
+pub(crate) fn bundle(sandbox: &Sandbox) -> Value {
     let rendered = stdout(
         sandbox
             .command()
@@ -45,7 +45,7 @@ fn bundle(sandbox: &Sandbox) -> Value {
 }
 
 /// Validate `document` against the bundle's root called `root`.
-fn validates(bundle: &Value, root: &str, document: &Value, what: &str) {
+pub(crate) fn validates(bundle: &Value, root: &str, document: &Value, what: &str) {
     let schema = &bundle["roots"][root];
     assert!(schema.is_object(), "the bundle has no root called {root}");
     let validator = jsonschema::validator_for(schema)

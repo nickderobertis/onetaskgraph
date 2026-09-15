@@ -18,7 +18,7 @@ use onetaskgraph_plugin_api::{
     DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter,
     Location, NativeId, NewComment, PageRequest, Project, ProjectFilter, ProjectQuery, Repository,
     SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
-    TaskQuery, TaskSource, TextFields, TextQuery, WriteSupport,
+    TaskQuery, TaskRef, TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -744,6 +744,12 @@ impl Fixture {
     fn read_behind(&self, count: usize) {
         self.state.lock().unwrap().lagging_reads = count;
     }
+    /// Give this board's `Status` field one more option, the way a person adding a column on
+    /// GitHub does. The shipped board has no `Queued` option, which is what lets one case
+    /// prove a status needing it is refused and another prove it lands once it is there.
+    fn offer_option(&self, id: &'static str, name: &'static str) {
+        self.state.lock().unwrap().options.push((id, name));
+    }
 }
 
 fn board(items: Vec<Item>) -> Fixture {
@@ -1083,8 +1089,14 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     }
     if query.contains("updateProjectV2DraftIssue(input:$input)") {
         let item = state.find(&input["draftIssueId"]);
-        item.title = input["title"].as_str().unwrap_or_default().to_owned();
-        item.body = input["body"].as_str().map(str::to_owned);
+        // `UpdateProjectV2DraftIssueInput.title` and `.body` are both nullable in the pinned
+        // schema, and a field the input leaves out is one GitHub leaves as it is.
+        if let Some(title) = input["title"].as_str() {
+            item.title = title.to_owned();
+        }
+        if input.get("body").is_some() {
+            item.body = input["body"].as_str().map(str::to_owned);
+        }
         return json!({"updateProjectV2DraftIssue":{"draftIssue":{"id":input["draftIssueId"]}}});
     }
     if query.contains("updateProjectV2ItemFieldValue(input:$input)") {
@@ -1649,6 +1661,8 @@ fn task(id: &str, title: &str, status: Status) -> Task {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
     }
 }
 
@@ -4061,11 +4075,12 @@ async fn each_distinct_repository_is_looked_up_once_per_command() {
 
 #[tokio::test]
 async fn the_shipped_mapping_puts_each_category_where_it_says_it_does() {
-    let fixture = board(vec![]);
+    let fixture = queued_board(vec![]);
     let source = source(&fixture);
     for (category, name, expected_option, expected_state) in [
         (StatusCategory::Backlog, "Backlog", Some("Backlog"), "OPEN"),
         (StatusCategory::Todo, "Todo", Some("Todo"), "OPEN"),
+        (StatusCategory::Queued, "Queued", Some("Queued"), "OPEN"),
         (
             StatusCategory::InProgress,
             "In Progress",
@@ -4323,6 +4338,845 @@ async fn a_blank_option_name_and_a_malformed_target_are_refused() {
             "{mapping}"
         );
     }
+}
+
+/// A board whose `Status` field also offers `Queued`, where the shipped mapping sends
+/// `queued`.
+fn queued_board(items: Vec<Item>) -> Fixture {
+    let fixture = board(items);
+    fixture.offer_option("OPT_queued", "Queued");
+    fixture
+}
+
+fn refs(entries: &[&str]) -> Vec<TaskRef> {
+    entries
+        .iter()
+        .map(|entry| TaskRef::new(*entry).expect("a task id"))
+        .collect()
+}
+
+fn id(native: &str) -> NativeId {
+    NativeId(native.to_owned())
+}
+
+/// A body holding prose and then a slot of exactly `slot`.
+fn slotted(prose: &str, slot: &Value) -> String {
+    format!("{prose}\n\n<!-- onetaskgraph.metadata\n{slot}\n-->")
+}
+
+/// One stored body split around its metadata slot: the bytes before the slot's JSON, that
+/// JSON parsed, and the bytes after it.
+fn split_slot(body: &str) -> (&str, Value, &str) {
+    let open = "<!-- onetaskgraph.metadata\n";
+    let start = body.rfind(open).expect("a slot") + open.len();
+    let end = start + body[start..].find("\n-->").expect("a closed slot");
+    (
+        &body[..start],
+        serde_json::from_str(&body[start..end]).expect("the slot's JSON"),
+        &body[end..],
+    )
+}
+
+/// Every mutation this board received, as its operation and the input fields it carried.
+fn mutation_fields(fixture: &Fixture) -> Vec<(String, BTreeSet<String>)> {
+    fixture
+        .seen()
+        .iter()
+        .map(|call| {
+            (
+                call[0].as_str().expect("an operation").to_owned(),
+                call[1]
+                    .as_object()
+                    .expect("an input object")
+                    .keys()
+                    .cloned()
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn fields(names: &[&str]) -> BTreeSet<String> {
+    names.iter().map(|name| (*name).to_owned()).collect()
+}
+
+#[tokio::test]
+async fn an_open_item_at_the_queued_option_reads_back_as_queued_named_queued() {
+    let fixture = queued_board(vec![Item::issue("I_held", "claimed").status("Queued")]);
+    let source = source(&fixture);
+    let written = source
+        .write_task(&write(task(
+            "T-1",
+            "claimed too",
+            status(StatusCategory::Queued, "Queued"),
+        )))
+        .await
+        .expect("queued lands where the shipped mapping sends it");
+    assert_eq!(fixture.item(&written.0).status.as_deref(), Some("Queued"));
+    assert_eq!(fixture.item(&written.0).state, "OPEN");
+    // A source that wrote nothing reads both from GitHub rather than from its own record.
+    let fresh = source_of(&fixture);
+    for held in ["I_held", written.0.as_str()] {
+        assert_eq!(
+            fresh.get_task(&id(held)).await.unwrap().unwrap().status,
+            status(StatusCategory::Queued, "Queued"),
+            "{held}"
+        );
+    }
+}
+
+fn source_of(fixture: &Fixture) -> Box<dyn TaskSource> {
+    configured(&fixture.endpoint, json!({}))
+}
+
+#[tokio::test]
+async fn status_mapping_queued_names_the_board_option_queued_lands_on() {
+    let fixture = board(vec![Item::issue("I_1", "held").status("Shipped")]);
+    let source = configured(
+        &fixture.endpoint,
+        json!({"status_mapping":{"queued":"Shipped"}}),
+    );
+    assert_eq!(
+        source.get_task(&id("I_1")).await.unwrap().unwrap().status,
+        status(StatusCategory::Queued, "Shipped")
+    );
+    let written = source
+        .write_task(&write(task(
+            "T-1",
+            "one",
+            status(StatusCategory::Queued, "Shipped"),
+        )))
+        .await
+        .expect("queued lands on the configured option");
+    assert_eq!(fixture.item(&written.0).status.as_deref(), Some("Shipped"));
+}
+
+#[tokio::test]
+async fn queued_cannot_share_a_board_option_with_another_category() {
+    for (mapping, earlier, later, option) in [
+        (json!({"queued":"Todo"}), "todo", "queued", "Todo"),
+        (
+            json!({"in-progress":"Queued"}),
+            "queued",
+            "in-progress",
+            "Queued",
+        ),
+        (json!({"queued":"backlog"}), "backlog", "queued", "backlog"),
+    ] {
+        let message = build_refusal(json!({"owner":"octo-org","project_number":7,
+            "endpoint":"https://api.github.com/graphql","status_mapping":mapping}));
+        assert!(
+            message.contains(&format!("sends both {earlier} and {later}")),
+            "{message}"
+        );
+        assert!(message.contains(&format!("{option:?}")), "{message}");
+    }
+}
+
+#[tokio::test]
+async fn queued_over_a_board_without_that_option_is_refused_naming_it() {
+    let fixture = board(vec![Item::issue("I_1", "held").status("Todo")]);
+    let source = source(&fixture);
+    let written = refusal(
+        source
+            .write_task(&write(task(
+                "T-1",
+                "one",
+                status(StatusCategory::Queued, "Queued"),
+            )))
+            .await
+            .expect_err("the board has no Queued option"),
+    );
+    let set = refusal(
+        source
+            .set_task_status(&id("I_1"), StatusCategory::Queued)
+            .await
+            .expect_err("the board has no Queued option"),
+    );
+    for message in [&written, &set] {
+        assert!(message.contains("\"Queued\""), "{message}");
+        assert!(message.contains("status queued"), "{message}");
+        assert!(message.contains("work"), "the instance is named: {message}");
+    }
+    assert!(fixture.seen().is_empty(), "nothing is written first");
+    assert_eq!(fixture.item("I_1").status.as_deref(), Some("Todo"));
+}
+
+#[tokio::test]
+async fn delivers_and_delivered_by_land_in_the_slot_and_never_among_the_callers_metadata() {
+    let fixture = board(vec![]);
+    let source = source(&fixture);
+    let mut item = task("T-1", "Ship it", status(StatusCategory::Todo, "Todo"));
+    item.content = Some("The prose.".to_owned());
+    item.delivers = refs(&["I_far", "plans:P-9"]);
+    item.delivered_by = refs(&["plans:P-1"]);
+    item.metadata = BTreeMap::from([
+        ("caller.kept".to_owned(), json!({"nested":[1, true]})),
+        (TaskRef::DELIVERS_KEY.to_owned(), json!(["stale:ignored"])),
+        (
+            TaskRef::DELIVERED_BY_KEY.to_owned(),
+            json!("not even a list"),
+        ),
+    ]);
+    let written = source
+        .write_task(&write(item))
+        .await
+        .expect("a task with both lists is written");
+    let body = fixture.item(&written.0).body.expect("a body");
+    let (_, slot, _) = split_slot(&body);
+    assert_eq!(
+        slot[TaskRef::DELIVERS_KEY],
+        json!(["I_far", "plans:P-9"]),
+        "the typed field is what lands, not the caller's key of the same name"
+    );
+    assert_eq!(slot[TaskRef::DELIVERED_BY_KEY], json!(["plans:P-1"]));
+
+    let fresh = source_of(&fixture);
+    for reader in [source.as_ref(), fresh.as_ref()] {
+        let read = reader.get_task(&written).await.unwrap().unwrap();
+        assert_eq!(read.delivers, refs(&["I_far", "plans:P-9"]));
+        assert_eq!(read.delivered_by, refs(&["plans:P-1"]));
+        assert_eq!(
+            read.metadata,
+            BTreeMap::from([("caller.kept".to_owned(), json!({"nested":[1, true]}))]),
+            "neither reserved key is ever among the caller's own metadata"
+        );
+        assert_eq!(read.content.as_deref(), Some("The prose."));
+    }
+
+    let mut cleared = task("T-1", "Ship it", status(StatusCategory::Todo, "Todo"));
+    cleared.content = Some("The prose.".to_owned());
+    cleared.repositories = vec![repo("acme/work")];
+    source
+        .write_task(&ItemWrite {
+            target: Some(written.clone()),
+            item: cleared,
+            depends_on: vec![],
+        })
+        .await
+        .expect("an update emptying both lists");
+    let body = fixture.item(&written.0).body.unwrap();
+    assert!(!body.contains("onetaskgraph.deliver"), "{body}");
+    let read = fresh.get_task(&written).await.unwrap().unwrap();
+    assert!(read.delivers.is_empty() && read.delivered_by.is_empty());
+}
+
+#[tokio::test]
+async fn a_project_or_a_document_neither_stores_nor_reports_either_delivery_key() {
+    let fixture = board(vec![
+        Item::issue("I_plan", "a plan").body(&slotted(
+            "plan prose",
+            &json!({"caller.x":1,"onetaskgraph.delivers":"not a list",
+                    "onetaskgraph.item_kind":"project"}),
+        )),
+        design("I_doc", "notes").body(&slotted(
+            "doc prose",
+            &json!({"caller.x":1,"onetaskgraph.delivered_by":["I_doc"]}),
+        )),
+    ]);
+    let source = source(&fixture);
+    let caller = BTreeMap::from([("caller.x".to_owned(), json!(1))]);
+    assert_eq!(
+        source
+            .get_project(&id("I_plan"))
+            .await
+            .expect("a project's delivery key is not read, so it cannot be refused")
+            .unwrap()
+            .metadata,
+        caller
+    );
+    assert_eq!(
+        source
+            .get_document(&id("I_doc"))
+            .await
+            .unwrap()
+            .unwrap()
+            .metadata,
+        caller
+    );
+
+    let reserved = BTreeMap::from([
+        ("caller.x".to_owned(), json!(1)),
+        (TaskRef::DELIVERS_KEY.to_owned(), json!(["plans:T-1"])),
+        (TaskRef::DELIVERED_BY_KEY.to_owned(), json!(["plans:T-2"])),
+    ]);
+    let mut plan = project("P-1", "a new plan", status(StatusCategory::Todo, "Todo"));
+    plan.metadata = reserved.clone();
+    let plan = source.write_project(&write(plan)).await.unwrap();
+    let mut notes = document("D-1", "new notes");
+    notes.metadata = reserved;
+    let notes = source.write_document(&write(notes)).await.unwrap();
+    for written in [plan, notes] {
+        let body = fixture.item(&written.0).body.unwrap();
+        assert!(!body.contains("onetaskgraph.deliver"), "{body}");
+        assert!(body.contains("caller.x"), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn a_delivery_list_this_source_cannot_read_is_refused_naming_the_task_and_the_entry() {
+    for (key, value, entry) in [
+        (TaskRef::DELIVERS_KEY, json!("I_2"), "\"I_2\""),
+        (TaskRef::DELIVERS_KEY, json!([7]), "7"),
+        (TaskRef::DELIVERED_BY_KEY, json!([""]), "\"\""),
+        (TaskRef::DELIVERED_BY_KEY, json!(["plans:"]), "plans:"),
+        (TaskRef::DELIVERS_KEY, json!(["I_1"]), "I_1"),
+        (TaskRef::DELIVERED_BY_KEY, json!(["work:I_1"]), "work:I_1"),
+        (
+            TaskRef::DELIVERED_BY_KEY,
+            json!(["plans:P-1", "plans:P-1"]),
+            "plans:P-1",
+        ),
+        (
+            TaskRef::DELIVERS_KEY,
+            json!(["I_2", "work:I_2"]),
+            "work:I_2",
+        ),
+    ] {
+        let mut slot = serde_json::Map::new();
+        slot.insert(key.to_owned(), value.clone());
+        let fixture = board(vec![
+            Item::issue("I_1", "a task").body(&slotted("prose", &Value::Object(slot))),
+        ]);
+        let error = source(&fixture)
+            .get_task(&id("I_1"))
+            .await
+            .expect_err("a delivery list this source cannot read is refused");
+        assert!(
+            matches!(error, SourceError::Malformed { .. }),
+            "{value}: {error:?}"
+        );
+        let message = error.to_string();
+        assert!(message.contains(key), "{message}");
+        assert!(message.contains("task I_1"), "{message}");
+        assert!(message.contains(entry), "{message}");
+    }
+}
+
+#[tokio::test]
+async fn a_delivery_list_naming_its_own_task_or_one_task_twice_is_refused_before_any_request() {
+    let fixture = board(vec![Item::issue("I_1", "held")]);
+    let source = source(&fixture);
+    for (target, delivers, delivered_by, near, entry) in [
+        (None, refs(&["T-1"]), vec![], "T-1", "T-1"),
+        (None, vec![], refs(&["work:T-1"]), "T-1", "work:T-1"),
+        (Some("I_1"), refs(&["work:I_1"]), vec![], "I_1", "work:I_1"),
+        (
+            Some("I_1"),
+            vec![],
+            refs(&["plans:P-1", "plans:P-1"]),
+            "I_1",
+            "plans:P-1",
+        ),
+        (None, refs(&["I_2", "work:I_2"]), vec![], "T-1", "work:I_2"),
+    ] {
+        let mut item = task("T-1", "x", status(StatusCategory::Todo, "Todo"));
+        item.delivers = delivers;
+        item.delivered_by = delivered_by;
+        let error = source
+            .write_task(&ItemWrite {
+                target: target.map(id),
+                item,
+                depends_on: vec![],
+            })
+            .await
+            .expect_err("the list is refused");
+        assert!(matches!(error, SourceError::Refused { .. }), "{error:?}");
+        let message = error.to_string();
+        assert!(message.contains(&format!("task {near}")), "{message}");
+        assert!(message.contains(entry), "{message}");
+    }
+    assert!(
+        fixture.documents().is_empty(),
+        "nothing is read or written before the lists are checked"
+    );
+}
+
+#[tokio::test]
+async fn a_status_set_to_a_column_reopens_a_closed_issue_moves_its_option_and_nothing_else() {
+    let fixture = queued_board(vec![
+        Item::issue("I_1", "shipped early")
+            .body(&slotted("prose", &json!({"caller.x":1})))
+            .labelled(&[("L_1", "bug")])
+            .closed(Some("COMPLETED"))
+            .status("Shipped"),
+        Item::issue("I_bare", "no column").closed(Some("NOT_PLANNED")),
+    ]);
+    let source = source(&fixture);
+    let before = fixture.item("I_1");
+    let answered = source
+        .set_task_status(&id("I_1"), StatusCategory::Queued)
+        .await
+        .expect("a column status is writable over a closed issue")
+        .expect("a task of this board");
+    assert_eq!(answered, status(StatusCategory::Queued, "Queued"));
+    assert_eq!(
+        fixture.seen(),
+        vec![
+            json!(["updateIssue", {"id":"I_1","stateInput":{"value":"OPEN"}}]),
+            json!(["updateProjectV2ItemFieldValue", {"projectId":"PVT_board",
+                "itemId":"PVTI_I_1","fieldId":"FIELD_status",
+                "value":{"singleSelectOptionId":"OPT_queued"}}]),
+        ],
+        "a reopen carrying its state alone, then the option"
+    );
+    let after = fixture.item("I_1");
+    assert_eq!(
+        (after.state, after.status.as_deref()),
+        ("OPEN", Some("Queued"))
+    );
+    assert_eq!(after.title, before.title);
+    assert_eq!(after.body, before.body);
+    assert_eq!(after.labels, before.labels);
+    assert_eq!(
+        source_of(&fixture)
+            .get_task(&id("I_1"))
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        answered,
+        "the answer is what a re-read reports"
+    );
+    assert!(
+        fixture.board_item_reads().is_empty(),
+        "the item named its board and its Status field, so the board was not read"
+    );
+
+    // An item holding no `Status` value cannot say what the field's options are, so the
+    // board is read for them.
+    assert_eq!(
+        source
+            .set_task_status(&id("I_bare"), StatusCategory::Todo)
+            .await
+            .unwrap(),
+        Some(status(StatusCategory::Todo, "Todo"))
+    );
+    assert_eq!(fixture.board_item_reads().len(), 1);
+    assert_eq!(fixture.item("I_bare").state, "OPEN");
+}
+
+#[tokio::test]
+async fn a_status_set_to_a_column_on_an_open_issue_or_a_draft_moves_only_its_option() {
+    let fixture = board(vec![
+        Item::issue("I_open", "doing").status("Todo"),
+        Item::draft("D_1", "a draft")
+            .body("draft prose")
+            .status("Todo"),
+    ]);
+    let source = source(&fixture);
+    for held in ["I_open", "D_1"] {
+        let answered = source
+            .set_task_status(&id(held), StatusCategory::InProgress)
+            .await
+            .unwrap()
+            .expect("a task of this board");
+        assert_eq!(
+            answered,
+            status(StatusCategory::InProgress, "In Progress"),
+            "{held}"
+        );
+        assert_eq!(
+            source_of(&fixture)
+                .get_task(&id(held))
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            answered,
+            "{held}"
+        );
+    }
+    assert_eq!(
+        mutation_fields(&fixture),
+        vec![
+            (
+                "updateProjectV2ItemFieldValue".to_owned(),
+                fields(&["fieldId", "itemId", "projectId", "value"])
+            );
+            2
+        ]
+    );
+    assert_eq!(fixture.item("I_open").state, "OPEN");
+    assert_eq!(fixture.item("D_1").title, "a draft");
+    assert_eq!(fixture.item("D_1").body.as_deref(), Some("draft prose"));
+}
+
+#[tokio::test]
+async fn a_status_set_to_a_closed_state_closes_with_the_mappings_reason_and_leaves_the_option() {
+    let fixture = board(vec![
+        Item::issue("I_1", "one")
+            .status("Shipped")
+            .body("kept prose"),
+        Item::issue("I_2", "two"),
+    ]);
+    let source = source(&fixture);
+    let done = source
+        .set_task_status(&id("I_1"), StatusCategory::Done)
+        .await
+        .unwrap()
+        .unwrap();
+    let cancelled = source
+        .set_task_status(&id("I_2"), StatusCategory::Cancelled)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(done, status(StatusCategory::Done, "Shipped"));
+    assert_eq!(cancelled, status(StatusCategory::Cancelled, "Cancelled"));
+    assert_eq!(
+        fixture.seen(),
+        vec![
+            json!(["updateIssue", {"id":"I_1",
+                "stateInput":{"value":"CLOSED","stateReason":"COMPLETED"}}]),
+            json!(["updateIssue", {"id":"I_2",
+                "stateInput":{"value":"CLOSED","stateReason":"NOT_PLANNED"}}]),
+        ]
+    );
+    assert_eq!(fixture.item("I_1").status.as_deref(), Some("Shipped"));
+    assert_eq!(fixture.item("I_1").body.as_deref(), Some("kept prose"));
+    let fresh = source_of(&fixture);
+    for (held, answered) in [("I_1", done), ("I_2", cancelled)] {
+        assert_eq!(
+            fresh.get_task(&id(held)).await.unwrap().unwrap().status,
+            answered,
+            "{held}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_status_set_refuses_what_a_write_of_it_refuses_and_answers_none_for_no_task() {
+    let fixture = board(vec![
+        Item::draft("D_1", "a draft").status("Todo"),
+        Item::issue("I_plan", "a plan").sub_issues(1),
+        Item::issue("I_step", "a step")
+            .parent("I_plan")
+            .status("Todo"),
+        design("I_doc", "notes"),
+    ]);
+    let source = configured(
+        &fixture.endpoint,
+        json!({"status_mapping":{"backlog":null}}),
+    );
+    let closed = refusal(
+        source
+            .set_task_status(&id("D_1"), StatusCategory::Done)
+            .await
+            .expect_err("a draft has no closed state"),
+    );
+    let written = refusal(
+        source
+            .write_task(&ItemWrite {
+                target: Some(id("D_1")),
+                item: task("D_1", "a draft", status(StatusCategory::Done, "Done")),
+                depends_on: vec![],
+            })
+            .await
+            .expect_err("a draft has no closed state"),
+    );
+    assert_eq!(closed, written, "a status set says what a write says");
+    assert!(closed.contains("draft"), "{closed}");
+
+    for category in [
+        StatusCategory::Backlog,
+        StatusCategory::Draft,
+        StatusCategory::Unknown,
+    ] {
+        let set = refusal(
+            source
+                .set_task_status(&id("I_step"), category)
+                .await
+                .expect_err("a disabled status"),
+        );
+        let written = refusal(
+            source
+                .write_task(&write(task("T-1", "x", status(category, "x"))))
+                .await
+                .expect_err("a disabled status"),
+        );
+        assert_eq!(set, written, "{category:?}");
+    }
+
+    for held in ["I_plan", "I_doc", "I_missing"] {
+        assert_eq!(
+            source
+                .set_task_status(&id(held), StatusCategory::Todo)
+                .await
+                .unwrap(),
+            None,
+            "{held} is no task of this board"
+        );
+    }
+    assert!(fixture.seen().is_empty(), "nothing was written");
+}
+
+#[tokio::test]
+async fn a_status_set_is_what_the_rest_of_the_command_reads() {
+    let fixture = queued_board(vec![
+        Item::issue("I_1", "one").status("Todo"),
+        Item::issue("I_2", "two").closed(Some("COMPLETED")),
+    ]);
+    let source = source(&fixture);
+    async fn statuses(source: &dyn TaskSource) -> Vec<(String, Status)> {
+        source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|task| (task.id.0, task.status))
+            .collect()
+    }
+    assert_eq!(
+        statuses(source.as_ref()).await,
+        vec![
+            ("I_1".to_owned(), status(StatusCategory::Todo, "Todo")),
+            ("I_2".to_owned(), status(StatusCategory::Done, "Done")),
+        ]
+    );
+    source
+        .set_task_status(&id("I_1"), StatusCategory::Queued)
+        .await
+        .unwrap();
+    source
+        .set_task_status(&id("I_2"), StatusCategory::InProgress)
+        .await
+        .unwrap();
+    let expected = vec![
+        ("I_1".to_owned(), status(StatusCategory::Queued, "Queued")),
+        (
+            "I_2".to_owned(),
+            status(StatusCategory::InProgress, "In Progress"),
+        ),
+    ];
+    assert_eq!(statuses(source.as_ref()).await, expected);
+    assert_eq!(
+        fixture.board_item_reads().len(),
+        1,
+        "the second list is answered from this command's own view of the board"
+    );
+    assert_eq!(statuses(source_of(&fixture).as_ref()).await, expected);
+}
+
+#[tokio::test]
+async fn delivered_by_is_replaced_by_one_body_update_that_changes_only_the_slot() {
+    let held = "Prose with a `<!-- comment -->` in it.\n\n\n  and trailing spaces  \n\n\
+                <!-- onetaskgraph.metadata\n{ \"caller.x\" : 1, \"onetaskgraph.delivers\": [\"I_9\"], \
+                \"onetaskgraph.delivered_by\": [\"old:T-1\"], \"onetaskgraph.item_kind\":\"task\" }\n-->";
+    let fixture = board(vec![
+        Item::issue("I_1", "a task")
+            .body(held)
+            .labelled(&[("L_1", "bug")])
+            .status("Todo"),
+    ]);
+    let source = source(&fixture);
+    assert_eq!(
+        source
+            .set_delivered_by(&id("I_1"), &refs(&["plans:P-1", "work:I_2"]))
+            .await
+            .expect("a delivered_by list is writable"),
+        Some(())
+    );
+    assert_eq!(
+        mutation_fields(&fixture),
+        vec![("updateIssue".to_owned(), fields(&["body", "id"]))],
+        "one update, carrying the body and nothing else"
+    );
+    let stored = fixture.item("I_1").body.unwrap();
+    let (before_slot, _, after_slot) = split_slot(held);
+    let (prefix, slot, suffix) = split_slot(&stored);
+    assert_eq!(
+        (prefix, suffix),
+        (before_slot, after_slot),
+        "every byte outside the slot is as it was"
+    );
+    assert_eq!(
+        slot,
+        json!({"caller.x":1,"onetaskgraph.delivers":["I_9"],
+               "onetaskgraph.delivered_by":["plans:P-1","work:I_2"],
+               "onetaskgraph.item_kind":"task"}),
+        "the list is replaced rather than merged, and every other key stays"
+    );
+    let read = source_of(&fixture)
+        .get_task(&id("I_1"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(read.delivered_by, refs(&["plans:P-1", "work:I_2"]));
+    assert_eq!(read.delivers, refs(&["I_9"]));
+    assert_eq!(
+        read.metadata,
+        BTreeMap::from([("caller.x".to_owned(), json!(1))])
+    );
+    assert_eq!(read.title, "a task");
+    assert_eq!(read.status, status(StatusCategory::Todo, "Todo"));
+    assert_eq!(read.labels.len(), 1);
+}
+
+#[tokio::test]
+async fn delivered_by_adds_a_slot_where_there_was_none_and_removes_one_it_empties() {
+    let only = json!({"onetaskgraph.delivered_by":["plans:P-1"]});
+    let slot_alone = format!("<!-- onetaskgraph.metadata\n{only}\n-->");
+    let fixture = board(vec![
+        Item::issue("I_prose", "prose only").body("Just prose.\n"),
+        Item::issue("I_empty", "no body"),
+        Item::issue("I_emptied", "slot emptied").body(&slotted("Kept prose.", &only)),
+        Item::issue("I_bare", "slot alone").body(&slot_alone),
+    ]);
+    let source = source(&fixture);
+    for (held, entries, stored) in [
+        (
+            "I_prose",
+            refs(&["plans:P-1"]),
+            format!("Just prose.\n\n\n{slot_alone}"),
+        ),
+        ("I_empty", refs(&["plans:P-1"]), slot_alone.clone()),
+        ("I_emptied", vec![], "Kept prose.".to_owned()),
+        ("I_bare", vec![], String::new()),
+    ] {
+        source
+            .set_delivered_by(&id(held), &entries)
+            .await
+            .unwrap()
+            .expect("a task of this board");
+        assert_eq!(
+            fixture.item(held).body.as_deref(),
+            Some(stored.as_str()),
+            "{held}"
+        );
+        assert_eq!(
+            source_of(&fixture)
+                .get_task(&id(held))
+                .await
+                .unwrap()
+                .unwrap()
+                .delivered_by,
+            entries,
+            "{held}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn delivered_by_already_as_asked_sends_nothing() {
+    let fixture = board(vec![
+        Item::issue("I_1", "held").body(&slotted(
+            "prose",
+            &json!({"onetaskgraph.delivered_by":["plans:P-1"]}),
+        )),
+        Item::issue("I_2", "none").body("prose"),
+    ]);
+    let source = source(&fixture);
+    source
+        .set_delivered_by(&id("I_1"), &refs(&["plans:P-1"]))
+        .await
+        .unwrap();
+    source.set_delivered_by(&id("I_2"), &[]).await.unwrap();
+    assert!(fixture.seen().is_empty(), "{:?}", fixture.seen());
+}
+
+#[tokio::test]
+async fn delivered_by_naming_its_own_task_or_one_task_twice_is_refused_and_no_task_is_none() {
+    let fixture = board(vec![
+        Item::issue("I_1", "a task"),
+        Item::issue("I_plan", "a plan").sub_issues(1),
+        design("I_doc", "notes"),
+    ]);
+    let source = source(&fixture);
+    for (entries, entry) in [
+        (refs(&["work:I_1"]), "work:I_1"),
+        (refs(&["I_1"]), "I_1"),
+        (refs(&["plans:P-1", "plans:P-1"]), "plans:P-1"),
+    ] {
+        let error = source
+            .set_delivered_by(&id("I_1"), &entries)
+            .await
+            .expect_err("the list is refused");
+        assert!(matches!(error, SourceError::Refused { .. }), "{error:?}");
+        let message = error.to_string();
+        assert!(message.contains(TaskRef::DELIVERED_BY_KEY), "{message}");
+        assert!(message.contains("task I_1"), "{message}");
+        assert!(message.contains(entry), "{message}");
+    }
+    assert!(
+        fixture.documents().is_empty(),
+        "nothing is read before the list is checked"
+    );
+    for held in ["I_plan", "I_doc", "I_missing"] {
+        assert_eq!(
+            source
+                .set_delivered_by(&id(held), &refs(&["plans:P-1"]))
+                .await
+                .unwrap(),
+            None,
+            "{held} is no task of this board"
+        );
+    }
+    assert!(fixture.seen().is_empty(), "nothing was written");
+}
+
+#[tokio::test]
+async fn a_drafts_delivered_by_is_written_through_the_draft_update_with_its_body_alone() {
+    let fixture = board(vec![
+        Item::draft("D_1", "a draft")
+            .body("Draft prose.")
+            .status("Todo"),
+    ]);
+    let source = source(&fixture);
+    source
+        .set_delivered_by(&id("D_1"), &refs(&["plans:P-1"]))
+        .await
+        .unwrap()
+        .expect("a draft is a task of this board");
+    let expected = format!(
+        "Draft prose.\n\n<!-- onetaskgraph.metadata\n{}\n-->",
+        json!({"onetaskgraph.delivered_by":["plans:P-1"]})
+    );
+    assert_eq!(
+        fixture.seen(),
+        vec![json!(["updateProjectV2DraftIssue", {"draftIssueId":"D_1","body":expected}])]
+    );
+    assert_eq!(fixture.item("D_1").title, "a draft");
+    assert_eq!(
+        source_of(&fixture)
+            .get_task(&id("D_1"))
+            .await
+            .unwrap()
+            .unwrap()
+            .delivered_by,
+        refs(&["plans:P-1"])
+    );
+}
+
+#[tokio::test]
+async fn a_narrow_write_to_an_item_this_command_created_is_what_the_command_reads_next() {
+    let fixture = board(vec![]);
+    let source = source(&fixture);
+    let mut item = task("T-1", "fresh", status(StatusCategory::Todo, "Todo"));
+    item.content = Some("prose".to_owned());
+    let written = source.write_task(&write(item)).await.unwrap();
+    source
+        .set_delivered_by(&written, &refs(&["plans:P-1"]))
+        .await
+        .unwrap()
+        .expect("a task this command created");
+    let done = source
+        .set_task_status(&written, StatusCategory::Done)
+        .await
+        .unwrap()
+        .expect("a task this command created");
+    let own = source.get_task(&written).await.unwrap().unwrap();
+    let fresh = source_of(&fixture)
+        .get_task(&written)
+        .await
+        .unwrap()
+        .unwrap();
+    for read in [&own, &fresh] {
+        assert_eq!(read.delivered_by, refs(&["plans:P-1"]));
+        assert_eq!(read.content.as_deref(), Some("prose"));
+        assert_eq!(read.status, done);
+    }
+    assert_eq!(done, status(StatusCategory::Done, "Todo"));
 }
 
 #[tokio::test]

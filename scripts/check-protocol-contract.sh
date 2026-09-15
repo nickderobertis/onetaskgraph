@@ -108,6 +108,8 @@ METHOD_SECTIONS = {
     "add_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
     "edit_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
     "delete_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
+    "set_task_status": "### 4.17 `set_task_status` and `set_delivered_by`",
+    "set_delivered_by": "### 4.17 `set_task_status` and `set_delivered_by`",
 }
 
 ENUM_SECTIONS = {

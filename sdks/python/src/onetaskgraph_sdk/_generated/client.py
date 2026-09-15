@@ -18,7 +18,9 @@ from .models import (
     QueryResponseOfQualifiedTask,
     QueryResponseOfSearchHit,
     SourceListing,
+    StatusCategory,
     TaskDetail,
+    TaskStatusSet,
 )
 
 POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
@@ -35,6 +37,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "copy"): ("ids",),
     ("task", "deps"): ("id",),
     ("task", "show"): ("id",),
+    ("task", "status", "set"): ("id", "category"),
 }
 """The operands each command takes ahead of its options, in order, by command.
 
@@ -260,10 +263,15 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
-            Literal["draft", "backlog", "todo", "in-progress", "done", "cancelled", "unknown"]
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
         ]
         | tuple[
-            Literal["draft", "backlog", "todo", "in-progress", "done", "cancelled", "unknown"], ...
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
         ]
         | None = None,
     ) -> QueryResponseOfQualifiedProject:
@@ -514,10 +522,15 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
-            Literal["draft", "backlog", "todo", "in-progress", "done", "cancelled", "unknown"]
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
         ]
         | tuple[
-            Literal["draft", "backlog", "todo", "in-progress", "done", "cancelled", "unknown"], ...
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
         ]
         | None = None,
     ) -> QueryResponseOfQualifiedTask:
@@ -560,6 +573,26 @@ class GeneratedClient:
             allow_partial=allow_partial,
             default_sources=default_sources,
             explain=explain,
+            page_size=page_size,
+            set=set,
+        )
+
+    async def task_status_set(
+        self,
+        id: GlobalId | str,
+        category: StatusCategory | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskStatusSet:
+        """Run ``onetaskgraph task status set``."""
+        return await self._invoke(
+            ["task", "status", "set"],
+            TaskStatusSet,
+            id=id,
+            category=category,
+            default_sources=default_sources,
             page_size=page_size,
             set=set,
         )

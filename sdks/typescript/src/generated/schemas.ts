@@ -545,8 +545,189 @@ export const runtimeSchemas = {
         ],
         "type": "object"
       },
+      "Delivered": {
+        "description": "What keeping one delivered task in step with one deliverer came to.",
+        "oneOf": [
+          {
+            "description": "Its status was written.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "written",
+                "type": "string"
+              },
+              "to": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category written."
+              }
+            },
+            "required": [
+              "outcome",
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The rule asked for what it already holds, or for nothing at all.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "unchanged",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "It is at `draft`, `backlog`, `unknown`, `done` or `cancelled`, which a claim never\naccepts, reopens or un-defers on a person's behalf.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "left",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "It, or a deliverer it names, could not be read or written; the rule did not guess.",
+            "properties": {
+              "failure": {
+                "$ref": "#/$defs/Failure",
+                "description": "Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
+              },
+              "from": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StatusCategory"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The category it read, when it could be read."
+              },
+              "outcome": {
+                "const": "failed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "failure"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "deliverer": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+          },
+          "pruned": {
+            "default": [],
+            "description": "Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            "items": {
+              "$ref": "#/$defs/GlobalId"
+            },
+            "type": "array"
+          },
+          "ticket": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The delivered task."
+          }
+        },
+        "required": [
+          "ticket",
+          "deliverer"
+        ],
+        "type": "object"
+      },
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
         "type": "string"
       },
       "Spent": {
@@ -571,11 +752,71 @@ export const runtimeSchemas = {
           "budgets"
         ],
         "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "What a copy did, one entry per item.\n\nThe same per-item outcomes reach every consumer: the machine-readable output renders\nthis, the rendered output renders this, and a Rust caller is handed it.",
     "properties": {
+      "delivered": {
+        "default": [],
+        "description": "One entry per delivered task the copy kept in step with a task it landed, after the\nwhole copy was complete — see `task status set`, which reports the same entries. Left\nout when there were none.\n\nA failed entry does not undo the copy: the tasks it landed stay landed, and the\ncommand exits `4`.",
+        "items": {
+          "$ref": "#/$defs/Delivered"
+        },
+        "type": "array"
+      },
+      "delivers_rewritten": {
+        "default": 0,
+        "description": "`delivers` entries the copy rewrote to the destination's own id for a member of the\ncopied set, over the whole invocation. Every other entry arrives qualified and is not\ncounted. Left out when zero, as the three figures above are.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
       "items": {
         "description": "One entry per item the copy considered, in the order it considered them.",
         "items": {
@@ -659,6 +900,447 @@ export const runtimeSchemas = {
     ],
     "title": "DeletedComment",
     "type": "object"
+  },
+  "Delivered": {
+    "$defs": {
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What keeping one delivered task in step with one deliverer came to.",
+    "oneOf": [
+      {
+        "description": "Its status was written.",
+        "properties": {
+          "from": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The category it read."
+          },
+          "outcome": {
+            "const": "written",
+            "type": "string"
+          },
+          "to": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The category written."
+          }
+        },
+        "required": [
+          "outcome",
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The rule asked for what it already holds, or for nothing at all.",
+        "properties": {
+          "from": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The category it read."
+          },
+          "outcome": {
+            "const": "unchanged",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "from"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "It is at `draft`, `backlog`, `unknown`, `done` or `cancelled`, which a claim never\naccepts, reopens or un-defers on a person's behalf.",
+        "properties": {
+          "from": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The category it read."
+          },
+          "outcome": {
+            "const": "left",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "from"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "It, or a deliverer it names, could not be read or written; the rule did not guess.",
+        "properties": {
+          "failure": {
+            "$ref": "#/$defs/Failure",
+            "description": "Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
+          },
+          "from": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StatusCategory"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The category it read, when it could be read."
+          },
+          "outcome": {
+            "const": "failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "failure"
+        ],
+        "type": "object"
+      }
+    ],
+    "properties": {
+      "deliverer": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+      },
+      "pruned": {
+        "default": [],
+        "description": "Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+        "items": {
+          "$ref": "#/$defs/GlobalId"
+        },
+        "type": "array"
+      },
+      "ticket": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The delivered task."
+      }
+    },
+    "required": [
+      "ticket",
+      "deliverer"
+    ],
+    "title": "Delivered",
+    "type": "object"
+  },
+  "DeliveryOutcome": {
+    "$defs": {
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The four things re-evaluating a delivered task can come to, and the categories each is\nabout.",
+    "oneOf": [
+      {
+        "description": "Its status was written.",
+        "properties": {
+          "from": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The category it read."
+          },
+          "outcome": {
+            "const": "written",
+            "type": "string"
+          },
+          "to": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The category written."
+          }
+        },
+        "required": [
+          "outcome",
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The rule asked for what it already holds, or for nothing at all.",
+        "properties": {
+          "from": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The category it read."
+          },
+          "outcome": {
+            "const": "unchanged",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "from"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "It is at `draft`, `backlog`, `unknown`, `done` or `cancelled`, which a claim never\naccepts, reopens or un-defers on a person's behalf.",
+        "properties": {
+          "from": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The category it read."
+          },
+          "outcome": {
+            "const": "left",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "from"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "It, or a deliverer it names, could not be read or written; the rule did not guess.",
+        "properties": {
+          "failure": {
+            "$ref": "#/$defs/Failure",
+            "description": "Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
+          },
+          "from": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StatusCategory"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The category it read, when it could be read."
+          },
+          "outcome": {
+            "const": "failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "failure"
+        ],
+        "type": "object"
+      }
+    ],
+    "title": "DeliveryOutcome"
   },
   "DependencyEdge": {
     "$defs": {
@@ -2307,12 +2989,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -2464,12 +3151,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -2511,6 +3203,22 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "delivered_by": {
+            "default": [],
+            "description": "Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "delivers": {
+            "default": [],
+            "description": "The tasks this one delivers: finishing this task finishes them.\n\nEach entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a\nbare native id names a task of the source holding this one — with no repeats and\nnever this task itself. Empty by default, and left out of the wire when empty, so a\nreader written before the field existed reads exactly what it read before.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
           },
           "id": {
             "$ref": "#/$defs/NativeId",
@@ -2591,6 +3299,10 @@ export const runtimeSchemas = {
           "labels"
         ],
         "type": "object"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2797,12 +3509,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -2960,12 +3677,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -3605,12 +4327,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -3753,12 +4480,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -3800,6 +4532,22 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "delivered_by": {
+            "default": [],
+            "description": "Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "delivers": {
+            "default": [],
+            "description": "The tasks this one delivers: finishing this task finishes them.\n\nEach entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a\nbare native id names a task of the source holding this one — with no repeats and\nnever this task itself. Empty by default, and left out of the wire when empty, so a\nreader written before the field existed reads exactly what it read before.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
           },
           "id": {
             "$ref": "#/$defs/NativeId",
@@ -3880,6 +4628,10 @@ export const runtimeSchemas = {
           "labels"
         ],
         "type": "object"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5799,12 +6551,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -6271,12 +7028,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -6318,6 +7080,22 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "delivered_by": {
+            "default": [],
+            "description": "Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "delivers": {
+            "default": [],
+            "description": "The tasks this one delivers: finishing this task finishes them.\n\nEach entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a\nbare native id names a task of the source holding this one — with no repeats and\nnever this task itself. Empty by default, and left out of the wire when empty, so a\nreader written before the field existed reads exactly what it read before.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
           },
           "id": {
             "$ref": "#/$defs/NativeId",
@@ -6398,6 +7176,10 @@ export const runtimeSchemas = {
           "labels"
         ],
         "type": "object"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -6979,12 +7761,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -7026,6 +7813,22 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "delivered_by": {
+            "default": [],
+            "description": "Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "delivers": {
+            "default": [],
+            "description": "The tasks this one delivers: finishing this task finishes them.\n\nEach entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a\nbare native id names a task of the source holding this one — with no repeats and\nnever this task itself. Empty by default, and left out of the wire when empty, so a\nreader written before the field existed reads exactly what it read before.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
           },
           "id": {
             "$ref": "#/$defs/NativeId",
@@ -7106,6 +7909,10 @@ export const runtimeSchemas = {
           "labels"
         ],
         "type": "object"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -7417,12 +8224,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -7464,6 +8276,22 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "delivered_by": {
+            "default": [],
+            "description": "Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "delivers": {
+            "default": [],
+            "description": "The tasks this one delivers: finishing this task finishes them.\n\nEach entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a\nbare native id names a task of the source holding this one — with no repeats and\nnever this task itself. Empty by default, and left out of the wire when empty, so a\nreader written before the field existed reads exactly what it read before.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
           },
           "id": {
             "$ref": "#/$defs/NativeId",
@@ -7544,6 +8372,10 @@ export const runtimeSchemas = {
           "labels"
         ],
         "type": "object"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -8757,12 +9589,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -8818,12 +9655,17 @@ export const runtimeSchemas = {
       },
       {
         "const": "backlog",
-        "description": "Known about, not yet queued.",
+        "description": "Known about, not yet accepted as ready to work.",
         "type": "string"
       },
       {
         "const": "todo",
-        "description": "Queued, not yet started.",
+        "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+        "type": "string"
+      },
+      {
+        "const": "queued",
+        "description": "Claimed by work that will do it, and not yet started.",
         "type": "string"
       },
       {
@@ -8943,12 +9785,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -8972,6 +9819,10 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -8991,6 +9842,22 @@ export const runtimeSchemas = {
           "string",
           "null"
         ]
+      },
+      "delivered_by": {
+        "default": [],
+        "description": "Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
+        "items": {
+          "$ref": "#/$defs/TaskRef"
+        },
+        "type": "array"
+      },
+      "delivers": {
+        "default": [],
+        "description": "The tasks this one delivers: finishing this task finishes them.\n\nEach entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a\nbare native id names a task of the source holding this one — with no repeats and\nnever this task itself. Empty by default, and left out of the wire when empty, so a\nreader written before the field existed reads exactly what it read before.",
+        "items": {
+          "$ref": "#/$defs/TaskRef"
+        },
+        "type": "array"
       },
       "id": {
         "$ref": "#/$defs/NativeId",
@@ -9521,12 +10388,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -9568,6 +10440,22 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "delivered_by": {
+            "default": [],
+            "description": "Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "delivers": {
+            "default": [],
+            "description": "The tasks this one delivers: finishing this task finishes them.\n\nEach entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a\nbare native id names a task of the source holding this one — with no repeats and\nnever this task itself. Empty by default, and left out of the wire when empty, so a\nreader written before the field existed reads exactly what it read before.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
           },
           "id": {
             "$ref": "#/$defs/NativeId",
@@ -9648,6 +10536,10 @@ export const runtimeSchemas = {
           "labels"
         ],
         "type": "object"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -9777,12 +10669,17 @@ export const runtimeSchemas = {
           },
           {
             "const": "backlog",
-            "description": "Known about, not yet queued.",
+            "description": "Known about, not yet accepted as ready to work.",
             "type": "string"
           },
           {
             "const": "todo",
-            "description": "Queued, not yet started.",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
             "type": "string"
           },
           {
@@ -9882,6 +10779,290 @@ export const runtimeSchemas = {
       "project"
     ],
     "title": "TaskQuery",
+    "type": "object"
+  },
+  "TaskRef": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+    "title": "TaskRef",
+    "type": "string"
+  },
+  "TaskStatusSet": {
+    "$defs": {
+      "Delivered": {
+        "description": "What keeping one delivered task in step with one deliverer came to.",
+        "oneOf": [
+          {
+            "description": "Its status was written.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "written",
+                "type": "string"
+              },
+              "to": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category written."
+              }
+            },
+            "required": [
+              "outcome",
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The rule asked for what it already holds, or for nothing at all.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "unchanged",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "It is at `draft`, `backlog`, `unknown`, `done` or `cancelled`, which a claim never\naccepts, reopens or un-defers on a person's behalf.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "left",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "It, or a deliverer it names, could not be read or written; the rule did not guess.",
+            "properties": {
+              "failure": {
+                "$ref": "#/$defs/Failure",
+                "description": "Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
+              },
+              "from": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StatusCategory"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The category it read, when it could be read."
+              },
+              "outcome": {
+                "const": "failed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "failure"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "deliverer": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+          },
+          "pruned": {
+            "default": [],
+            "description": "Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            "items": {
+              "$ref": "#/$defs/GlobalId"
+            },
+            "type": "array"
+          },
+          "ticket": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The delivered task."
+          }
+        },
+        "required": [
+          "ticket",
+          "deliverer"
+        ],
+        "type": "object"
+      },
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task status set` answers with.",
+    "properties": {
+      "delivered": {
+        "description": "One entry per task it delivers, or dropped, that this write re-evaluated. Empty when\nit delivers nothing.",
+        "items": {
+          "$ref": "#/$defs/Delivered"
+        },
+        "type": "array"
+      },
+      "id": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The task whose status was set."
+      },
+      "status": {
+        "$ref": "#/$defs/Status",
+        "description": "Its status as its source reads it back."
+      }
+    },
+    "required": [
+      "id",
+      "status",
+      "delivered"
+    ],
+    "title": "TaskStatusSet",
     "type": "object"
   },
   "TextFields": {

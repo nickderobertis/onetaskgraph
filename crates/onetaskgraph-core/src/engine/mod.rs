@@ -17,6 +17,7 @@
 
 mod comment;
 mod copy;
+mod delivery;
 mod fetch;
 mod join;
 mod local;
@@ -50,6 +51,7 @@ pub use copy::{
     BudgetSpent, CopyAction, CopyItems, CopyOutcome, CopyReport, CopyRequest, CopyScope, MatchBy,
     Spent,
 };
+pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
 pub use local::ProjectSelector;
 
 /// One item, under the qualified id the engine addresses it by.
@@ -359,6 +361,19 @@ pub enum EngineError {
          one's plugin."
     )]
     CommentsNotWritable {
+        /// The configured name of the source.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+    },
+
+    /// `task status set` named a source whose plugin has no write side.
+    #[error(
+        "source {name} cannot write a status: its plugin is {kind}, which has no write side\n\
+         next: set the status in that source itself, or name a task of a source whose plugin \
+         can be written — `onetaskgraph sources list` reports each one's plugin."
+    )]
+    StatusNotWritable {
         /// The configured name of the source.
         name: String,
         /// The plugin behind it.
@@ -769,9 +784,8 @@ impl Engine {
             budget,
             owed(&states),
             &query,
-            |name, task: Task| Qualified {
-                id: GlobalId::new(name.clone(), task.id.clone()),
-                item: task,
+            |name, task: Task| {
+                delivery::qualified_task(GlobalId::new(name.clone(), task.id.clone()), task)
             },
         )
     }
@@ -1062,10 +1076,10 @@ impl Engine {
             owed(&states),
             &query,
             |name, found: Found| match found {
-                Found::Task(task) => SearchHit::Task(Qualified {
-                    id: GlobalId::new(name.clone(), task.id.clone()),
-                    item: task,
-                }),
+                Found::Task(task) => SearchHit::Task(delivery::qualified_task(
+                    GlobalId::new(name.clone(), task.id.clone()),
+                    task,
+                )),
                 Found::Project(project) => SearchHit::Project(Qualified {
                     id: GlobalId::new(name.clone(), project.id.clone()),
                     item: project,
@@ -1089,9 +1103,8 @@ impl Engine {
         };
         let found = source.source().get_task(&id.native).await;
         let qualified = GlobalId::new(source.name().clone(), id.native.clone());
-        answer.one(source, found, |task| Qualified {
-            id: qualified,
-            item: task,
+        answer.one(source, found, |task| {
+            delivery::qualified_task(qualified, task)
         })
     }
 

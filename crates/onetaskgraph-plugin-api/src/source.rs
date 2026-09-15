@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery,
     ItemWrite, Label, Metering, NativeId, NewComment, Page, PageRequest, Project, ProjectQuery,
-    SourceError, SourceName, Task, TaskQuery, WriteSupport, commentless, documentless, unwritable,
+    SourceError, SourceName, Status, StatusCategory, Task, TaskQuery, TaskRef, WriteSupport,
+    commentless, documentless, unwritable, unwritable_field,
 };
 
 /// Whether a source is answering right now.
@@ -181,6 +182,63 @@ pub trait TaskSource: Send + Sync {
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
         let _ = write;
         Err(unwritable(self.kind()))
+    }
+
+    /// Set the status of one task this source holds, and change nothing else about it,
+    /// answering with the status as this source now reads it — or `None` when this source
+    /// holds no such task.
+    ///
+    /// The category lands where this source's own mapping sends it, exactly as a
+    /// [`write_task`](Self::write_task) of a task in that category would: a category this
+    /// source has disabled is refused in the words a write of it is refused with. Title,
+    /// content, labels, metadata, dependencies, [`Task::delivers`], [`Task::delivered_by`],
+    /// project and comments are left exactly as they are.
+    ///
+    /// Defaulted to [`unwritable_field`], which is what keeps this an addition rather than a
+    /// break: a source that cannot write a status on its own needs no edit and refuses by
+    /// saying so. A source declaring [`WriteSupport::Unsupported`] is never asked.
+    ///
+    /// [`Task::delivers`]: crate::Task::delivers
+    /// [`Task::delivered_by`]: crate::Task::delivered_by
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source cannot write a status, or cannot
+    /// write this one; and whatever else the source could not do the write for.
+    async fn set_task_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        let _ = (id, category);
+        Err(unwritable_field(self.kind(), "status"))
+    }
+
+    /// Replace the [`Task::delivered_by`] of one task this source holds, and change nothing
+    /// else about it — or answer `None` when this source holds no such task.
+    ///
+    /// Every entry is a qualified id, and the list is the whole of it: what the task held
+    /// there before is replaced, not merged. It is the store's to keep in step — the engine
+    /// calls this whenever it writes a task's [`Task::delivers`] — and nothing a person types
+    /// reaches it directly.
+    ///
+    /// Defaulted to [`unwritable_field`] on exactly the terms of
+    /// [`set_task_status`](Self::set_task_status).
+    ///
+    /// [`Task::delivers`]: crate::Task::delivers
+    /// [`Task::delivered_by`]: crate::Task::delivered_by
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source cannot hold the list, and whatever
+    /// else it could not do the write for.
+    async fn set_delivered_by(
+        &self,
+        id: &NativeId,
+        delivered_by: &[TaskRef],
+    ) -> Result<Option<()>, SourceError> {
+        let _ = (id, delivered_by);
+        Err(unwritable_field(self.kind(), "delivered_by"))
     }
 
     /// Remove one task this destination holds, so a copy that could not finish can put

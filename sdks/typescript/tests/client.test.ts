@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
@@ -20,6 +21,7 @@ import {
 } from "../src/index.ts";
 import type { CopyReport } from "../src/generated/models.ts";
 import { runtimeSchemas } from "../src/generated/schemas.ts";
+import { CONFIGURATION_PREFIX } from "./ambient.ts";
 
 const binary = resolve(import.meta.dir, "../../../target/debug/onetaskgraph");
 let root = "";
@@ -126,6 +128,24 @@ test(
   },
   COLD_START_TIMEOUT_MS,
 );
+
+test("the prefix these tests remove is the one the binary reads its configuration under", async () => {
+  const probe = `${CONFIGURATION_PREFIX}SOURCES__PREFIX_PROBE__PLUGIN`;
+  const empty = mkdtempSync(resolve(tmpdir(), "onetaskgraph-prefix-"));
+  try {
+    const shown = await new OnetaskgraphClient({
+      binaryPath: binary,
+      cwd: empty,
+      env: { [probe]: "in-memory" },
+    }).configShow();
+    const read = shown.settings.flatMap(({ origin }) =>
+      origin.layer === "environment" ? [origin.variable] : [],
+    );
+    expect(read).toEqual([probe]);
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
+});
 
 test(
   "typed methods drive every real binary command",
@@ -518,6 +538,92 @@ test(
       );
     } finally {
       rmSync(commentRoot, { recursive: true, force: true });
+    }
+  },
+  SUBPROCESS_SUITE_TIMEOUT_MS,
+);
+
+// One folder of Markdown, `work`, which outlives the invocation so what one call writes the
+// next one reads back. `P` delivers a task of `nowhere`, which no configuration names, so every
+// write of its status re-evaluates a delivered task that cannot be read.
+function deliveringFolder(): string {
+  const statusRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-status-"));
+  mkdirSync(resolve(statusRoot, "work/tasks"), { recursive: true });
+  writeFileSync(resolve(statusRoot, "work/tasks/T-1.md"), "---\ntitle: One\nstatus: todo\n---\n");
+  writeFileSync(
+    resolve(statusRoot, "work/tasks/P.md"),
+    '---\ntitle: Parent\nstatus: todo\ndelivers: ["nowhere:T-9"]\n---\n',
+  );
+  writeFileSync(
+    resolve(statusRoot, "onetaskgraph.yaml"),
+    JSON.stringify({
+      sources: { work: { plugin: "local-md", config: { root: resolve(statusRoot, "work") } } },
+    }),
+  );
+  return statusRoot;
+}
+
+test(
+  "a task's status is set through the real binary, read back, and refused by name",
+  async () => {
+    const statusRoot = deliveringFolder();
+    try {
+      const statusClient = new OnetaskgraphClient({ binaryPath: binary, cwd: statusRoot });
+
+      const answer = await statusClient.taskStatusSet("work:T-1", "queued");
+      expect(answer.id).toBe("work:T-1");
+      expect(answer.status.category).toBe("queued");
+      expect(answer.delivered).toEqual([]);
+
+      // The folder really holds it: a later invocation reads the status this one wrote.
+      const shown = await statusClient.taskShow("work:T-1");
+      expect(shown.items[0]?.item.status.category).toBe("queued");
+
+      const refused = statusClient.taskStatusSet("missing:T-1", "queued");
+      await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+      await expect(refused).rejects.toMatchObject({ exitCode: 1 });
+      await expect(refused).rejects.toThrow('no source named "missing" is configured');
+    } finally {
+      rmSync(statusRoot, { recursive: true, force: true });
+    }
+  },
+  SUBPROCESS_SUITE_TIMEOUT_MS,
+);
+
+test(
+  "task status set answers when a delivered task could not be kept in step",
+  async () => {
+    // Exit 4 is a write that landed with a delivered task it could not reach, not a failure,
+    // so the client hands back the whole answer rather than rejecting on the exit code.
+    const statusRoot = deliveringFolder();
+    try {
+      const statusClient = new OnetaskgraphClient({ binaryPath: binary, cwd: statusRoot });
+
+      // The invocation the client makes, observed at the process boundary: it exits 4.
+      const observed = spawnSync(
+        binary,
+        ["task", "status", "set", "work:P", "in-progress", "--json"],
+        { cwd: statusRoot, encoding: "utf8" },
+      );
+      expect(observed.status).toBe(4);
+      expect(observed.stderr).toContain("nowhere:T-9 could not be kept in step with work:P");
+
+      const answer = await statusClient.taskStatusSet("work:P", "queued");
+      expect(answer.id).toBe("work:P");
+      expect(answer.status.category).toBe("queued");
+      expect(answer.delivered).toHaveLength(1);
+      expect(answer.delivered[0]).toMatchObject({
+        ticket: "nowhere:T-9",
+        deliverer: "work:P",
+        outcome: "failed",
+        failure: { kind: "unknown-source" },
+      });
+
+      const shown = await statusClient.taskShow("work:P");
+      expect(shown.items[0]?.item.status.category).toBe("queued");
+      expect(shown.items[0]?.item.delivers).toEqual(["nowhere:T-9"]);
+    } finally {
+      rmSync(statusRoot, { recursive: true, force: true });
     }
   },
   SUBPROCESS_SUITE_TIMEOUT_MS,

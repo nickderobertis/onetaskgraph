@@ -33,6 +33,14 @@ mod copy;
 // a plugin crate depending on the engine at any depth. Every other journey against that same
 // fixture board already runs in this target.
 mod copy_cost;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against folders of Markdown and a
+// loopback fixture board, with no credential and no network, and the whole module finishes in
+// under a second. What it proves is the engine's own rule — `task status set` and the
+// delivered-task propagation live in `onetaskgraph-core` — so it cannot sit behind a plugin
+// crate's edge, which AGENTS.md forbids depending on the engine at any depth, and AGENTS.md
+// requires a journey to drive the compiled binary rather than the engine in process.
+mod delivery;
 mod document_store;
 mod failures;
 mod fixtures;

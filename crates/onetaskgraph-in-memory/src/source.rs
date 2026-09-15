@@ -8,8 +8,8 @@ use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     NativeId, NewComment, Page, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Task, TaskQuery, TaskSource, TextFields, TextQuery,
-    WriteSupport, commentless, documentless, unwritable,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery, TaskRef,
+    TaskSource, TextFields, TextQuery, WriteSupport, commentless, documentless, unwritable,
 };
 use schemars::{Schema, schema_for};
 
@@ -444,6 +444,9 @@ impl TaskSource for InMemorySource {
 
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.writable(&write.item.metadata)?;
+        let near = write.target.as_ref().unwrap_or(&write.item.id);
+        listed("delivers", near, &write.item.delivers)?;
+        listed("delivered_by", near, &write.item.delivered_by)?;
         self.creatable(write.target.as_ref(), &write.item.title)?;
         let mut held = self.held()?;
         let id = match &write.target {
@@ -548,6 +551,50 @@ impl TaskSource for InMemorySource {
         self.deletable(id)?;
         self.held()?.documents.retain(|document| &document.id != id);
         Ok(())
+    }
+
+    /// Set the held task's status, keeping its name when the category is the one it already
+    /// holds and otherwise naming it in the category's own spelling — an in-memory source has
+    /// no vocabulary of its own to take a word from.
+    async fn set_task_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let mut held = self.held()?;
+        let Some(task) = held.tasks.iter_mut().find(|task| &task.id == id) else {
+            return Ok(None);
+        };
+        if task.status.category != category {
+            task.status = Status {
+                category,
+                name: serde_json::to_value(category)
+                    .ok()
+                    .and_then(|spelled| spelled.as_str().map(str::to_owned))
+                    .expect("a status category serialises as its own word"),
+            };
+        }
+        Ok(Some(task.status.clone()))
+    }
+
+    async fn set_delivered_by(
+        &self,
+        id: &NativeId,
+        delivered_by: &[TaskRef],
+    ) -> Result<Option<()>, SourceError> {
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        listed("delivered_by", id, delivered_by)?;
+        let mut held = self.held()?;
+        let Some(task) = held.tasks.iter_mut().find(|task| &task.id == id) else {
+            return Ok(None);
+        };
+        task.delivered_by = delivered_by.to_vec();
+        Ok(Some(()))
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
@@ -798,6 +845,18 @@ impl InMemorySource {
             ),
         })
     }
+}
+
+/// Refuse a task list naming its own task or one task twice, naming the field.
+///
+/// With no name of its own to recognise — a plugin learns its configured name nowhere this one
+/// reads — only a bare entry is recognised as naming this source's task.
+fn listed(field: &str, near: &NativeId, list: &[TaskRef]) -> Result<(), SourceError> {
+    TaskRef::listed(field, near, None, list.to_vec())
+        .map(|_| ())
+        .map_err(|message| SourceError::Refused {
+            message: format!("cannot represent the field `{field}`: {message}"),
+        })
 }
 
 /// Where `id` sits among the ids given, or `None` when it sits nowhere.

@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import "./ambient.ts";
 
 const packageRoot = resolve(import.meta.dir, "..");
 const binary = resolve(packageRoot, "../../target/debug/onetaskgraph");

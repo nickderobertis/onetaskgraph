@@ -163,6 +163,7 @@ the source can do natively, and what configuration it is being built with.
 | `source_name` | string | The configured name, matching `^[a-z0-9][a-z0-9-]*$`. **For error messages and for recognising itself in a qualified id** — see §3.2. |
 | `config` | object | This source's `config:` block, verbatim. |
 | `secrets` | object | String to string. Only the variables this plugin asked for; see §3.1. |
+| `statuses` | array of strings | The status categories this engine knows. Optional; see §3.5. |
 
 **Response.**
 
@@ -195,6 +196,8 @@ the source can do natively, and what configuration it is being built with.
 | `capabilities` | object | A `Capabilities` (§4.2). Read **once**; the engine does not ask again. |
 | `writes` | string | Whether this plugin can be written through. Optional; see §3.3. |
 | `meters` | boolean | Whether this plugin answers `metering`. Optional; see §3.4. |
+| `statuses` | array of strings | The status categories this plugin knows. Optional; see §3.5. |
+| `task_updates` | boolean | Whether this plugin answers the two narrow task writes and holds a task's `delivers` and `delivered_by`. Optional; see §3.6. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -260,6 +263,39 @@ was metering says nothing here, is never sent `metering`, and is reported as not
 which a command reports by leaving what it spent out, never by reporting that nothing was
 spent.
 
+### 3.5 `statuses`
+
+An array of the `StatusCategory` values a peer knows, each spelled as §4.5 spells it. Both
+sides send one: the engine in the `params` of `initialize`, and the plugin in its `result`.
+
+The member is **optional**, and an absent one means the **first vocabulary**: `"draft"`,
+`"backlog"`, `"todo"`, `"in-progress"`, `"done"`, `"cancelled"` and `"unknown"` — every
+category there was before `"queued"`. A listed value the other side has never heard of is
+ignored, by §2.1.
+
+Nothing crosses to a peer that did not list it without a refusal by name:
+
+- **An engine never hands a plugin a category that plugin did not list.** A `query_tasks` or
+  `query_projects` filter naming one is answered without that category: a plugin that does
+  not know a category holds no item in it, so every other category of the filter is sent as
+  it was and a filter naming only such categories is answered with an empty last page and
+  nothing sent. A `write_task` or `write_project` carrying one, and a `set_task_status` naming
+  one, are refused before anything is sent, with a `{"kind": "refused"}` naming the plugin
+  and the category.
+- **A plugin never tells an engine a category that engine did not list.** An item in such a
+  category is reported as `"unknown"`, keeping its `name`, in every result that carries a
+  `Status`: `get_task`, `get_project`, `query_tasks`, `query_projects` and `set_task_status`.
+
+### 3.6 `task_updates`
+
+A boolean: `true` when this plugin answers `set_task_status` and `set_delivered_by` (§4.17)
+and holds a task's `delivers` and `delivered_by`, and `false` when it does not.
+
+The member is **optional**, and an absent one means `false`. Such a plugin is never sent
+either method — the call is refused before anything is sent, naming the plugin — and is never
+handed a `write_task` whose task carries a non-empty `delivers` or `delivered_by`, which a
+plugin written before those lists would otherwise drop in silence under §2.1.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -290,6 +326,8 @@ its `result`; the JSON shape of every contract type in them is what
 | `add_comment` | `TaskSource::add_comment` |
 | `edit_comment` | `TaskSource::edit_comment` |
 | `delete_comment` | `TaskSource::delete_comment` |
+| `set_task_status` | `TaskSource::set_task_status` |
+| `set_delivered_by` | `TaskSource::set_delivered_by` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -410,8 +448,11 @@ look like a failure of the source.
   per-source, and a user filtering across sources types a word. `any_of` matches a
   task carrying at least one; `all_of` matches a task carrying every one; `none_of`
   excludes a task carrying any. An empty list is not a filter.
-- `statuses` holds `StatusCategory` values: `"draft"`, `"backlog"`, `"todo"`,
+- `statuses` holds `StatusCategory` values: `"draft"`, `"backlog"`, `"todo"`, `"queued"`,
   `"in-progress"`, `"done"`, `"cancelled"`, `"unknown"`. An empty list is not a filter.
+  `"todo"` is work accepted and ready to be picked up that nothing has claimed; `"queued"` is
+  work claimed by something that will do it and not yet started. §3.5 says what a plugin
+  whose handshake does not list `"queued"` is handed instead.
 - `project` is the string `"any"`, the string `"orphans"` — tasks belonging to no
   project — or the object `{"is": "<native id>"}`. It is externally tagged, unlike
   `SourceError` (§5), which is tagged on `kind`; both shapes are as
@@ -791,6 +832,99 @@ same way, naming why, rather than escaping it into something else. A comment id 
 comment on a *different* task of this source is a comment this task does not have, and is
 answered `null`.
 
+### 4.17 `set_task_status` and `set_delivered_by`
+
+Only a plugin that answered `"supported"` to §3.3 **and** `task_updates: true` to §3.6 is ever
+sent either of these. Each writes one field of one task and nothing else.
+
+```json
+{ "id": "16", "method": "set_task_status", "params": { "id": "ENG-1", "category": "queued" } }
+{ "id": "16", "result": { "status": { "category": "queued", "name": "Queued" } } }
+{ "id": "17", "method": "set_delivered_by", "params": { "id": "ENG-1", "delivered_by": ["plan:P-1"] } }
+{ "id": "17", "result": { "delivered_by": ["plan:P-1"] } }
+```
+
+For `set_task_status`, `id` is the `NativeId` of a task at **this** source and `category` a
+`StatusCategory`. The plugin sets that task's status to where its own mapping sends the
+category — exactly where a `write_task` of a task in that category would put it — and
+changes **nothing else**: title, content, labels, metadata, dependencies, `delivers`,
+`delivered_by`, project and comments stay as they are. `result.status` is the `Status` the
+plugin now reads for that task, category and name, or `null` when it holds no such task. A
+category this plugin has disabled is refused with `{"kind": "refused"}`, in the words its
+`write_task` refuses that status with.
+
+For `set_delivered_by`, `delivered_by` is the whole list the task holds afterwards — it
+replaces what was there rather than merging with it — and every entry is a qualified
+`<source>:<native>` id. Nothing else about the task changes. `result.delivered_by` is the list
+the task now holds, or `null` when this plugin holds no such task: the trait method carries
+`()` inside its `Option`, so all a plugin says is that it wrote the list, or that there was no
+task to write it on.
+
+A plugin that cannot write one of these on its own refuses with `{"kind": "refused"}`, naming
+the field.
+
+#### A task's `delivers` and `delivered_by`
+
+A `Task` carries two optional lists of strings, each left out — never `null` — when empty:
+
+- `delivers` — the tasks this one delivers, which finishing it finishes. An entry holding a
+  colon is a qualified `<source>:<native>` id naming a task of any source; an entry without
+  one names a task of this plugin's own source, colons being how the two are told apart.
+- `delivered_by` — every task that delivers this one, by qualified id. It is the **engine's**
+  to keep: a plugin holds it, reports it, and writes it when `write_task` or
+  `set_delivered_by` hands it one, and nothing a copy reads from a source ever supplies it.
+
+A plugin refuses — `{"kind": "malformed"}` on a read, `{"kind": "refused"}` on a write — an
+entry that is not a task id, an entry naming the task itself (bare, or qualified with the
+plugin's own `source_name` from §3.2), and an entry naming one task twice, naming the task
+and the entry. A plugin with no field of its own for these lists keeps them under the reserved
+metadata keys `onetaskgraph.delivers` and `onetaskgraph.delivered_by`, and never returns
+either among a task's `metadata`.
+
+#### What the engine does with them
+
+These rules are the engine's. A plugin implements none of them, and is reached by them only
+through the two methods above.
+
+Whenever the engine writes a task whose `delivers` is not empty, or was not before the write —
+a copy that lands it, or `task status set` on it, including a write that leaves the task's own
+status as it was — it re-evaluates every task that list names and every task it named before
+and does not any more:
+
+1. **The back-reference.** A delivered task's `delivered_by` gains the deliverer's qualified id
+   while the deliverer names it, and loses it once the deliverer has dropped it.
+2. **What each deliverer counts as.** Over every deliverer that `delivered_by` names — the one
+   just written included, one that just dropped the task excluded — `queued` and `in-progress`
+   are a claim, `done` is finished, `todo`, `cancelled` and `unknown` are a release, and
+   `draft` and `backlog` count as nothing. A deliverer its source reads as not found counts as
+   nothing and is removed from `delivered_by` on the same write.
+3. **The result**, by the first branch that matches: `done` when every deliverer is `done` or
+   `cancelled` and at least one is `done`; otherwise `in-progress` when any is `in-progress`;
+   otherwise `queued` when any is `queued`; otherwise `todo` when any releases or is `done`;
+   otherwise `todo` when no deliverer remains; otherwise — every remaining one `draft` or
+   `backlog` — nothing.
+4. **The write.** A delivered task is written only when it reads `todo`, `queued` or
+   `in-progress` and the result differs from what it holds, and only through
+   `set_task_status`. One at `draft`, `backlog`, `unknown`, `done` or `cancelled` is left alone.
+5. **A failure.** A delivered task that cannot be read or written, or a deliverer that cannot be
+   read for any reason other than not found — a transport failure, a source the configuration
+   does not name — is reported failed for that task, which is left as it was. The deliverer's
+   own write still stands.
+
+A task the rule may not write — `draft`, `backlog`, `unknown`, `done` or `cancelled` — is
+reported without its other deliverers being read, so nothing is pruned from it and no unreadable
+deliverer fails it on that write; its back-reference is still added or removed.
+
+Each verb that writes a deliverer — `task status set`, and a copy that is not a dry run —
+reports one entry per task it re-evaluated in a `delivered` list: `ticket` and `deliverer`, the
+two qualified ids; `outcome`, one of `written`, `unchanged`, `left` or `failed`; `from`, the
+category the task read, present whenever it could be read; `to`, the category written, present
+only when `written`; `failure`, present only when `failed`; and `pruned`, the deliverers removed
+for being not found, present only when there were any. `failure` is the failure object itself —
+the `class`, `kind`, `source`, `message` and `retry_after_seconds` a failure document carries
+under its own `failure` member — not that whole document nested again. A dry run writes
+nothing, so it re-evaluates no task and its `delivered` list is empty.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every
@@ -866,6 +1000,18 @@ The comments of §4.15 and §4.16 were added **without** a bump, for exactly the
 documents were: the engine sends a comment method only to a plugin that declared `comments`
 `"native"` in its handshake, and a plugin written before there were comments cannot have
 declared that. The three that write are gated twice, on that declaration and on §3.3.
+
+The `"queued"` status category, the `statuses` and `task_updates` members of §3.5 and §3.6,
+the two methods of §4.17 and a task's `delivers` and `delivered_by` were added **without** a
+bump, and each of them is gated so that a peer written against the earlier protocol is never
+handed a shape it was not written for without a refusal by name. A new category is a value a
+peer has to parse, so it is not safe under §2.1 on its own: an engine hands a plugin a category
+only when that plugin's handshake listed it, a plugin tells an engine one only when that
+engine's `initialize` listed it, and every other case is the one §3.5 spells out — answered
+without it, refused by name, or reported as `"unknown"` under its own name. The two methods and
+the two lists reach only a plugin that answered `task_updates: true`, which a plugin written
+before them cannot have done, so such a plugin is refused by name before anything is sent
+rather than asked for a method it has never heard of or handed a list it would drop.
 
 A version is bumped when a change is **not** safe under §2.1 — a member removed, a
 type narrowed, a meaning changed, a method removed or renamed. Adding an optional
