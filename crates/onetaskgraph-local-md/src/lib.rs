@@ -1057,10 +1057,8 @@ impl TaskSource for LocalMdSource {
             name: word,
         };
         self.representable_status(&status)?;
-        let rendered =
-            serde_norway::to_string(&status.name).map_err(|e| SourceError::Malformed {
-                message: format!("cannot render the status {:?}: {e}", status.name),
-            })?;
+        // A string always renders as a YAML scalar.
+        let rendered = serde_norway::to_string(&status.name).expect("a status word renders");
         self.rewrite_front_entry(&path, "status", Some(rendered.trim_end()))?;
         Ok(Some(status))
     }
@@ -1077,12 +1075,9 @@ impl TaskSource for LocalMdSource {
             return Ok(None);
         };
         self.parse(WorkKind::Task, &path)?;
+        // A list of strings always renders as JSON, which is a YAML flow sequence.
         let rendered = (!delivered_by.is_empty())
-            .then(|| serde_json::to_string(delivered_by))
-            .transpose()
-            .map_err(|e| SourceError::Malformed {
-                message: format!("cannot render delivered_by for {id}: {e}"),
-            })?;
+            .then(|| serde_json::to_string(delivered_by).expect("a list of task ids renders"));
         self.rewrite_front_entry(&path, "delivered_by", rendered.as_deref())?;
         Ok(Some(()))
     }

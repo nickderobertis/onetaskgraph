@@ -388,3 +388,57 @@ async fn delivered_by_is_rewritten_alone_added_when_absent_and_removed_when_empt
     assert!(message.contains("which is that task itself"), "{message}");
     assert!(Path::new(&root.path().join("tasks/none.md")).exists());
 }
+
+#[tokio::test]
+async fn emptying_a_list_the_file_never_held_or_one_between_other_keys_touches_nothing_else() {
+    let untouched = "---\ntitle: Plain\nstatus: todo\n---\nbody\n";
+    let middle = "---\ntitle: Middle\ndelivered_by:\n  - \"plan:P-1\"\n  - \"plan:P-2\"\nstatus: todo\n---\nbody\n";
+    let (root, source) = folder(
+        &[("tasks/plain.md", untouched), ("tasks/middle.md", middle)],
+        json!({}),
+    );
+    source
+        .set_delivered_by(&id("plain"), &[])
+        .await
+        .unwrap()
+        .expect("held");
+    assert_eq!(
+        read(&root, "tasks/plain.md"),
+        untouched,
+        "nothing to remove, nothing written"
+    );
+    source
+        .set_delivered_by(&id("middle"), &[])
+        .await
+        .unwrap()
+        .expect("held");
+    assert_eq!(
+        read(&root, "tasks/middle.md"),
+        "---\ntitle: Middle\nstatus: todo\n---\nbody\n",
+        "an entry between two others goes with its own continuation lines alone"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_record_the_filesystem_will_not_let_this_source_write_is_reported_rather_than_lost() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let original = "---\ntitle: Locked\nstatus: todo\n---\n";
+    let (root, source) = folder(&[("tasks/locked.md", original)], json!({}));
+    let path = root.path().join("tasks/locked.md");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).expect("read-only");
+    let refused = source
+        .set_task_status(&id("locked"), StatusCategory::Done)
+        .await;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("writable again");
+    // A process running as root writes through the mode bits, which is the one host where
+    // this refusal cannot be provoked; everywhere else it is reported, and nothing is lost.
+    match refused {
+        Err(SourceError::Unavailable { message }) => {
+            assert!(message.starts_with("cannot write "), "{message}");
+            assert_eq!(read(&root, "tasks/locked.md"), original);
+        }
+        Ok(_) if fs::metadata(&path).is_ok() && std::env::var("USER").as_deref() == Ok("root") => {}
+        other => panic!("expected the write to be reported unavailable, got {other:?}"),
+    }
+}
