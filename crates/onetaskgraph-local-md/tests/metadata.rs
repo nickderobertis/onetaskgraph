@@ -612,13 +612,7 @@ async fn a_staging_file_is_never_listed_as_a_record() {
     // A staging name that resolves to nothing is what a listing meets when a write renames its
     // staging file away between reading the folder and resolving the entry: it is skipped
     // rather than failing the whole listing.
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(
-        root.path().join("tasks/renamed-away"),
-        root.path()
-            .join(format!("tasks/.a.md.4242-3{STAGING_SUFFIX}")),
-    )
-    .unwrap();
+    plant_dangling_staging_name(root.path());
     let tasks = source
         .query_tasks(&TaskQuery::default(), &page())
         .await
@@ -649,6 +643,22 @@ async fn a_staging_file_is_never_listed_as_a_record() {
     );
     let labels = source.labels(&page()).await.unwrap();
     assert!(labels.items.is_empty(), "{labels:?}");
+}
+
+/// A staging name that is a dangling symlink. Creating one on Windows needs a privilege the
+/// runner does not grant, so there the listing is proven without it.
+fn plant_dangling_staging_name(root: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        root.join("tasks/renamed-away"),
+        root.join(format!(
+            "tasks/.a.md.4242-3{}",
+            onetaskgraph_local_md::STAGING_SUFFIX
+        )),
+    )
+    .unwrap();
+    #[cfg(not(unix))]
+    let _ = root;
 }
 
 #[cfg(unix)]
