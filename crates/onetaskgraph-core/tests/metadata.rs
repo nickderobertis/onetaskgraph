@@ -396,8 +396,7 @@ async fn every_refusal_names_its_cause() {
         assert!(failure.message().contains("next:"), "{}", failure.message());
     }
 
-    let (read_only, calls_read_only) =
-        engine_without(json!({"writes": "unsupported", "documents": "native"}));
+    let (read_only, calls_read_only) = read_only_engine();
     for error in [
         read_only
             .set_task_metadata(&id("work:T-1"), &review, &json!(1))
@@ -425,9 +424,13 @@ async fn every_refusal_names_its_cause() {
     drop(calls);
 }
 
-/// [`engine`] over a configuration holding no documents, for the capabilities given.
-fn engine_without(capabilities: Value) -> (Engine, Arc<Mutex<Vec<&'static str>>>) {
-    engine(capabilities, false)
+/// [`engine`] over a source declaring no write side and native documents — a name of its
+/// own because a test holding a local `engine` binding shadows that function.
+fn read_only_engine() -> (Engine, Arc<Mutex<Vec<&'static str>>>) {
+    engine(
+        json!({"writes": "unsupported", "documents": "native"}),
+        false,
+    )
 }
 
 #[tokio::test]
