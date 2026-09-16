@@ -910,16 +910,30 @@ impl LinearSource {
             }
             None => nodes.iter().collect::<Vec<_>>(),
         };
-        if matched.len() != 1 {
-            return Err(SourceError::Refused {
+        match matched.as_slice() {
+            [] => Err(SourceError::Refused {
                 message: format!(
-                    "source {} cannot resolve {} uniquely",
+                    "source {} cannot resolve {}: found 0 matches",
                     self.name,
                     lookup.diagnostic()
                 ),
-            });
+            }),
+            [node] => Ok(NativeId(backend_id(node, "id")?.to_owned())),
+            nodes => {
+                let ids = nodes
+                    .iter()
+                    .map(|node| backend_id(node, "id"))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Err(SourceError::Refused {
+                    message: format!(
+                        "source {} cannot resolve {}: found {} matches with ids {ids:?}",
+                        self.name,
+                        lookup.diagnostic(),
+                        nodes.len()
+                    ),
+                })
+            }
         }
-        Ok(NativeId(backend_id(matched[0], "id")?.to_owned()))
     }
     async fn team_id(&self) -> Result<NativeId, SourceError> {
         let team = self.team.as_ref().ok_or_else(|| SourceError::Refused {
