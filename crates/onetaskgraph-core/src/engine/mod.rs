@@ -30,8 +30,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, Direction, Document, DocumentQuery, Label, LabelFilter,
-    NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
-    SourceName, StatusCategory, Task, TaskQuery, TextFields, TextQuery,
+    MetadataRecord, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery,
+    SecretResolver, SourceError, SourceName, StatusCategory, Task, TaskQuery, TextFields,
+    TextQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -394,8 +395,8 @@ pub enum EngineError {
         name: String,
         /// The plugin behind it.
         kind: String,
-        /// Which kind of record was named: `task`, `project` or `document`.
-        record: String,
+        /// Which kind of record was named.
+        record: MetadataRecord,
     },
 
     /// A metadata verb named a project its source does not hold.

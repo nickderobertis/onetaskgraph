@@ -7,9 +7,10 @@ use serde_json::Value;
 
 use crate::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery,
-    ItemWrite, Label, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Project,
-    ProjectQuery, SourceError, SourceName, Status, StatusCategory, Task, TaskQuery, TaskRef,
-    WriteSupport, commentless, documentless, unwritable, unwritable_field, unwritable_metadata,
+    ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
+    PageRequest, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory, Task,
+    TaskQuery, TaskRef, WriteSupport, commentless, documentless, unwritable, unwritable_field,
+    unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -274,7 +275,7 @@ pub trait TaskSource: Send + Sync {
         value: &Value,
     ) -> Result<Option<Task>, SourceError> {
         let _ = (id, key, value);
-        Err(unwritable_metadata(self.kind(), "task"))
+        Err(unwritable_metadata(self.kind(), MetadataRecord::Task))
     }
 
     /// Set one key of the metadata of one project this source holds, on exactly the terms of
@@ -290,7 +291,7 @@ pub trait TaskSource: Send + Sync {
         value: &Value,
     ) -> Result<Option<Project>, SourceError> {
         let _ = (id, key, value);
-        Err(unwritable_metadata(self.kind(), "project"))
+        Err(unwritable_metadata(self.kind(), MetadataRecord::Project))
     }
 
     /// Set one key of the metadata of one document this source holds, on exactly the terms of
@@ -309,7 +310,7 @@ pub trait TaskSource: Send + Sync {
         value: &Value,
     ) -> Result<Option<Document>, SourceError> {
         let _ = (id, key, value);
-        Err(unwritable_metadata(self.kind(), "document"))
+        Err(unwritable_metadata(self.kind(), MetadataRecord::Document))
     }
 
     /// Remove one task this destination holds, so a copy that could not finish can put

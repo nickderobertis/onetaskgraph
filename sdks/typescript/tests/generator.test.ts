@@ -149,12 +149,21 @@ test("a schema that accepts any JSON value generates as unknown", () => {
         Thing: {
           $schema: "https://json-schema.org/draft/2020-12/schema",
           type: "object",
-          required: ["value", "limit"],
+          required: ["value", "anything", "limit", "labels"],
           properties: {
             value: { description: "Any JSON value at all." },
+            // The empty schema accepts any JSON value too.
+            anything: {},
             // A default is data rather than a schema, so an object literal held there is left
             // exactly as it is even when every key it has is an annotation keyword's name.
             limit: { type: "object", default: { description: "data" } },
+            // And a `properties` map is names rather than a schema, so an object whose only
+            // property is called `description` is still that object.
+            labels: {
+              type: "object",
+              required: ["description"],
+              properties: { description: { type: "string" } },
+            },
           },
         },
       },
@@ -165,8 +174,10 @@ test("a schema that accepts any JSON value generates as unknown", () => {
     expect(result.status, result.stderr).toBe(0);
     const models = readFileSync(resolve(generated, "models.ts"), "utf8");
     expect(models).toContain("value: unknown");
+    expect(models).toContain("anything: unknown");
     expect(models).not.toContain("tsType");
     expect(models).toMatch(/limit: \{/);
+    expect(models).toMatch(/labels: \{\s*description: string/);
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
     rmSync(generated, { recursive: true, force: true });

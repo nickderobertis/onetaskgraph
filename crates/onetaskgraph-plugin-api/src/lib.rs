@@ -29,7 +29,7 @@ pub use capability::{Capabilities, DependencySupport, Support};
 pub use comment::{Comment, CommentBody, NewComment, commentless};
 pub use error::SourceError;
 pub use id::{NativeId, SOURCE_NAME_PATTERN, SourceName};
-pub use metadata::{MetadataKey, unwritable_metadata};
+pub use metadata::{MetadataKey, MetadataRecord, unwritable_metadata};
 pub use metering::{Metered, Metering};
 pub use query::{
     Cursor, DocumentQuery, LabelFilter, Page, PageRequest, ProjectFilter, ProjectQuery, TaskQuery,

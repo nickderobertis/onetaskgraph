@@ -13,8 +13,8 @@ use onetaskgraph_plugin_api::{
     TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use onetaskgraph_plugin_api::{
-    Comment, CommentBody, MetadataKey, NewComment, TaskRef, commentless, unwritable,
-    unwritable_field, unwritable_metadata,
+    Comment, CommentBody, MetadataKey, MetadataRecord, NewComment, TaskRef, commentless,
+    unwritable, unwritable_field, unwritable_metadata,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -1449,21 +1449,21 @@ async fn a_source_that_implements_only_the_read_methods_declares_no_write_side()
     let id = NativeId::from("T-1");
     let refusals = [
         (
-            "task",
+            MetadataRecord::Task,
             source
                 .set_task_metadata(&id, &key, &value)
                 .await
                 .map(|_| ()),
         ),
         (
-            "project",
+            MetadataRecord::Project,
             source
                 .set_project_metadata(&id, &key, &value)
                 .await
                 .map(|_| ()),
         ),
         (
-            "document",
+            MetadataRecord::Document,
             source
                 .set_document_metadata(&id, &key, &value)
                 .await

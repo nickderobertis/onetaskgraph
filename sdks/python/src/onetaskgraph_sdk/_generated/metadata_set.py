@@ -59,6 +59,8 @@ class MetadataSet(BaseModel):
             description="Where the source reports the record to be, left out when it does not say."
         ),
     ] = None
+    # A metadata value is arbitrary JSON by the emitted wire contract: the key's
+    # value as the source reads it back, of whatever JSON type the caller set.
     value: Annotated[
         Any,
         Field(

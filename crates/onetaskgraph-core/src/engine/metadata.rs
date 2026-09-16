@@ -9,7 +9,7 @@
 //!
 //! Metadata is not status, so no delivered task is re-evaluated after one of these writes.
 
-use onetaskgraph_plugin_api::{Location, MetadataKey, SourceError};
+use onetaskgraph_plugin_api::{Location, MetadataKey, MetadataRecord, SourceError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -34,25 +34,6 @@ pub struct MetadataSet {
     pub location: Option<Location>,
 }
 
-/// Which of the three kinds of record a metadata write names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Record {
-    Task,
-    Project,
-    Document,
-}
-
-impl Record {
-    /// The noun the refusals and the not-found errors use.
-    const fn noun(self) -> &'static str {
-        match self {
-            Self::Task => "task",
-            Self::Project => "project",
-            Self::Document => "document",
-        }
-    }
-}
-
 impl Engine {
     /// Set one key of one task's metadata, and nothing else about it.
     ///
@@ -69,7 +50,7 @@ impl Engine {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<MetadataSet, EngineError> {
-        let source = self.metadata_writable(id, Record::Task)?;
+        let source = self.metadata_writable(id, MetadataRecord::Task)?;
         let task = source
             .source()
             .set_task_metadata(&id.native, key, value)
@@ -91,7 +72,7 @@ impl Engine {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<MetadataSet, EngineError> {
-        let source = self.metadata_writable(id, Record::Project)?;
+        let source = self.metadata_writable(id, MetadataRecord::Project)?;
         let project = source
             .source()
             .set_project_metadata(&id.native, key, value)
@@ -114,7 +95,7 @@ impl Engine {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<MetadataSet, EngineError> {
-        let source = self.metadata_writable(id, Record::Document)?;
+        let source = self.metadata_writable(id, MetadataRecord::Document)?;
         let document = source
             .source()
             .set_document_metadata(&id.native, key, value)
@@ -128,17 +109,19 @@ impl Engine {
     fn metadata_writable(
         &self,
         id: &GlobalId,
-        record: Record,
+        record: MetadataRecord,
     ) -> Result<&ResolvedSource, EngineError> {
         let source = self.built(&id.source)?;
         if !source.source().writes().is_supported() {
             return Err(EngineError::MetadataNotWritable {
                 name: source.name().to_string(),
                 kind: source.kind().to_owned(),
-                record: record.noun().to_owned(),
+                record,
             });
         }
-        if record == Record::Document && !source.source().capabilities().documents.is_native() {
+        if record == MetadataRecord::Document
+            && !source.source().capabilities().documents.is_native()
+        {
             return Err(EngineError::NoDocuments {
                 name: source.name().to_string(),
                 kind: source.kind().to_owned(),

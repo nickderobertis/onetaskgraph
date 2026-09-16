@@ -91,16 +91,50 @@ impl std::fmt::Display for MetadataKey {
     }
 }
 
+/// Which kind of record a narrow metadata write names.
+///
+/// The three a record can be, and no fourth: a refusal, a not-found error or a protocol guard
+/// that names the record takes one of these rather than a noun, so it cannot name something
+/// that is not a record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MetadataRecord {
+    /// A task, written through [`TaskSource::set_task_metadata`](crate::TaskSource::set_task_metadata).
+    Task,
+    /// A project, written through
+    /// [`TaskSource::set_project_metadata`](crate::TaskSource::set_project_metadata).
+    Project,
+    /// A document, written through
+    /// [`TaskSource::set_document_metadata`](crate::TaskSource::set_document_metadata).
+    Document,
+}
+
+impl MetadataRecord {
+    /// The record's noun as a message spells it: `task`, `project` or `document`.
+    #[must_use]
+    pub const fn noun(self) -> &'static str {
+        match self {
+            Self::Task => "task",
+            Self::Project => "project",
+            Self::Document => "document",
+        }
+    }
+}
+
+impl std::fmt::Display for MetadataRecord {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.noun())
+    }
+}
+
 /// The refusal a source answers a narrow metadata write with when it cannot make one on its
 /// own.
 ///
-/// `record` is the noun of what was written — `task`, `project` or `document` — so the
-/// refusal reads `the linear plugin cannot write a document's metadata on its own`. Spelled
-/// once beside [`unwritable_field`](crate::unwritable_field) for that function's reason: the
-/// trait's defaults and the engine's refusal of a plugin whose handshake does not declare the
-/// write say the same thing in the same words.
+/// It reads `the linear plugin cannot write a document's metadata on its own`, naming the
+/// record. Spelled once beside [`unwritable_field`](crate::unwritable_field) for that
+/// function's reason: the trait's defaults and the engine's refusal of a plugin whose
+/// handshake does not declare the write say the same thing in the same words.
 #[must_use]
-pub fn unwritable_metadata(kind: &str, record: &str) -> SourceError {
+pub fn unwritable_metadata(kind: &str, record: MetadataRecord) -> SourceError {
     SourceError::Refused {
         message: format!("the {kind} plugin cannot write a {record}'s metadata on its own"),
     }

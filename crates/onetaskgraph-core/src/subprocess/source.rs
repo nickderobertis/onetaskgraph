@@ -15,9 +15,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery, Health,
-    ItemWrite, Label, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Project,
-    ProjectQuery, SourceError, SourceName, Status, StatusCategory, Task, TaskQuery, TaskRef,
-    TaskSource, WriteSupport, unwritable_metadata,
+    ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
+    PageRequest, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory, Task,
+    TaskQuery, TaskRef, TaskSource, WriteSupport, unwritable_metadata,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -366,7 +366,7 @@ impl SubprocessSource {
 
     /// Refuse a narrow metadata write of `record` to a plugin whose handshake did not declare
     /// `metadata_updates`, before it is sent (§3.7), in the contract's own words.
-    fn metadata_updates(&self, record: &str) -> Result<(), SourceError> {
+    fn metadata_updates(&self, record: MetadataRecord) -> Result<(), SourceError> {
         if self.metadata_updates {
             return Ok(());
         }
@@ -607,7 +607,7 @@ impl TaskSource for SubprocessSource {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Task>, SourceError> {
-        self.metadata_updates("task")?;
+        self.metadata_updates(MetadataRecord::Task)?;
         let result: TaskResult = self
             .ask("set_task_metadata", metadata_params(id, key, value))
             .await?;
@@ -620,7 +620,7 @@ impl TaskSource for SubprocessSource {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Project>, SourceError> {
-        self.metadata_updates("project")?;
+        self.metadata_updates(MetadataRecord::Project)?;
         let result: ProjectResult = self
             .ask("set_project_metadata", metadata_params(id, key, value))
             .await?;
@@ -633,7 +633,7 @@ impl TaskSource for SubprocessSource {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Document>, SourceError> {
-        self.metadata_updates("document")?;
+        self.metadata_updates(MetadataRecord::Document)?;
         let result: DocumentResult = self
             .ask("set_document_metadata", metadata_params(id, key, value))
             .await?;

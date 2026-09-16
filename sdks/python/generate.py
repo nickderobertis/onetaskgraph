@@ -307,6 +307,12 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
                 )
                 for line in generated
             ]
+        if root == "MetadataSet":
+            generated = any_json_value(
+                generated,
+                "    # A metadata value is arbitrary JSON by the emitted wire contract: the key's\n"
+                "    # value as the source reads it back, of whatever JSON type the caller set.",
+            )
         if any("dict[str, Any]" in line for line in generated):
             generated = [
                 line.replace("from pydantic import ", "from pydantic import JsonValue, ").replace(
@@ -388,6 +394,24 @@ def rename_qualified_definitions(value: JsonValue) -> None:
     for old, new in renames.items():
         definitions[new] = definitions.pop(old)
     replace_references(value, renames)
+
+
+def any_json_value(lines: list[str], reason: str) -> list[str]:
+    """Put `reason` above a `value` field the code generator typed `Any`, saying why it is.
+
+    A schema that constrains nothing accepts any JSON value, and `Any` is the only annotation
+    that says so; the comment is what tells a reader the escape is the contract rather than a
+    gap in it.
+    """
+    annotated: list[str] = []
+    for index, line in enumerate(lines):
+        following = lines[index + 1].strip() if index + 1 < len(lines) else ""
+        if line.startswith("    value: Annotated[Any") or (
+            line == "    value: Annotated[" and following == "Any,"
+        ):
+            annotated.append(reason)
+        annotated.append(line)
+    return annotated
 
 
 def replace_references(value: JsonValue, renames: dict[str, str]) -> None:

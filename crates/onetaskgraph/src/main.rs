@@ -21,7 +21,8 @@ use onetaskgraph_core::{
     ProjectSelector, QueryResponse, SearchRequest, SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
-    CommentBody, LabelFilter, MetadataKey, NativeId, NewComment, SourceName, TextQuery,
+    CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SourceName,
+    TextQuery,
 };
 use serde::Serialize;
 
@@ -228,21 +229,21 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 TaskCommand::Metadata {
                     command: MetadataCommand::Set(args),
                 },
-        } => metadata_set(out, loaded, Record::Task, args).await,
+        } => metadata_set(out, loaded, MetadataRecord::Task, args).await,
 
         Command::Project {
             command:
                 ProjectCommand::Metadata {
                     command: MetadataCommand::Set(args),
                 },
-        } => metadata_set(out, loaded, Record::Project, args).await,
+        } => metadata_set(out, loaded, MetadataRecord::Project, args).await,
 
         Command::Document {
             command:
                 DocumentCommand::Metadata {
                     command: MetadataCommand::Set(args),
                 },
-        } => metadata_set(out, loaded, Record::Document, args).await,
+        } => metadata_set(out, loaded, MetadataRecord::Document, args).await,
 
         Command::Task {
             command: TaskCommand::Deps(args),
@@ -677,14 +678,6 @@ async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> R
     Ok(delivery_exit(&report.delivered))
 }
 
-/// Which kind of record a `metadata set` verb names.
-#[derive(Debug, Clone, Copy)]
-enum Record {
-    Task,
-    Project,
-    Document,
-}
-
 /// Set one metadata key of one record.
 ///
 /// The id, the key and the value are each refused, with the next action, before the engine is
@@ -692,7 +685,7 @@ enum Record {
 async fn metadata_set(
     out: &mut impl Write,
     loaded: &Loaded,
-    record: Record,
+    record: MetadataRecord,
     args: &MetadataSetArgs,
 ) -> Result<u8, Failure> {
     let id = qualified(&args.id)?;
@@ -700,9 +693,9 @@ async fn metadata_set(
     let value = metadata_value(&args.value)?;
     let engine = engine(loaded);
     let set = match record {
-        Record::Task => engine.set_task_metadata(&id, &key, &value).await,
-        Record::Project => engine.set_project_metadata(&id, &key, &value).await,
-        Record::Document => engine.set_document_metadata(&id, &key, &value).await,
+        MetadataRecord::Task => engine.set_task_metadata(&id, &key, &value).await,
+        MetadataRecord::Project => engine.set_project_metadata(&id, &key, &value).await,
+        MetadataRecord::Document => engine.set_document_metadata(&id, &key, &value).await,
     }
     .map_err(|error| Failure::from(&error))?;
     let rendered = rendering(loaded, &set, render::metadata_set, "the metadata key")?;
