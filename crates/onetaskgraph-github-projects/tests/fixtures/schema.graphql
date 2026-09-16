@@ -132,7 +132,16 @@ input ProjectV2SingleSelectFieldOptionInput {
   color: ProjectV2SingleSelectFieldOptionColor!
   description: String!
 }
-enum ProjectV2SingleSelectFieldOptionColor { GRAY BLUE GREEN YELLOW PURPLE RED ORANGE PINK }
+enum ProjectV2SingleSelectFieldOptionColor {
+  GRAY
+  BLUE
+  GREEN
+  YELLOW
+  PURPLE
+  RED
+  ORANGE
+  PINK
+}
 input AddSubIssueInput {
   issueId: ID!
   subIssueId: ID
@@ -165,7 +174,9 @@ type UpdateProjectV2DraftIssuePayload {
 type UpdateProjectV2ItemFieldValuePayload {
   projectV2Item: ProjectV2Item
 }
-type UpdateProjectV2FieldPayload { projectV2Field: ProjectV2FieldConfiguration }
+type UpdateProjectV2FieldPayload {
+  projectV2Field: ProjectV2FieldConfiguration
+}
 type AddSubIssuePayload {
   issue: Issue
   subIssue: Issue
