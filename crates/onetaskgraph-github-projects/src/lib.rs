@@ -1166,7 +1166,7 @@ pub enum StatusTargetConfig {
 ///
 /// Validated on the way in rather than checked later, so a blank option name — which
 /// nothing on a board can be — is a state this type cannot hold.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(try_from = "String")]
 pub struct ColumnName(String);
 
@@ -1814,7 +1814,7 @@ pub struct StatusOption {
     /// GitHub's stable id.
     pub id: StatusOptionId,
     /// The visible option name.
-    pub name: String,
+    pub name: ColumnName,
     /// GitHub's single-select color token.
     pub color: StatusOptionColor,
     /// The option description, including an empty one.
@@ -1839,7 +1839,7 @@ pub struct AssignedStatusOption {
     /// GitHub's stable id.
     pub id: StatusOptionId,
     /// The visible name.
-    pub name: String,
+    pub name: ColumnName,
 }
 
 /// The plan and verified outcome of reconciling configured Status options.
@@ -1901,7 +1901,7 @@ impl GitHubProjectsSource {
                 !before
                     .options
                     .iter()
-                    .any(|option| option.name.eq_ignore_ascii_case(wanted))
+                    .any(|option| option.name.as_str().eq_ignore_ascii_case(wanted))
             })
             .collect::<Vec<_>>();
         let report = StatusOptionsReport {
@@ -1951,7 +1951,7 @@ impl GitHubProjectsSource {
             after
                 .options
                 .iter()
-                .any(|option| option.name.eq_ignore_ascii_case(wanted))
+                .any(|option| option.name.as_str().eq_ignore_ascii_case(wanted))
         });
         if !options_preserved || !additions_present || after.assignments != before.assignments {
             let recovery = serde_json::to_string_pretty(&before.assignments).map_err(|error| {
@@ -2026,7 +2026,10 @@ impl GitHubProjectsSource {
                 .map(|option| {
                     Ok(StatusOption {
                         id: required_str(option, "id")?.to_owned().into(),
-                        name: required_str(option, "name")?.to_owned(),
+                        name: ColumnName::try_from(required_str(option, "name")?.to_owned())
+                            .map_err(|message| SourceError::Malformed {
+                                message: format!("GitHub Status option name is invalid: {message}"),
+                            })?,
                         color: serde_json::from_value(
                             option.get("color").cloned().unwrap_or(Value::Null),
                         )
@@ -2083,7 +2086,12 @@ impl GitHubProjectsSource {
                         .map(|value| {
                             Ok(AssignedStatusOption {
                                 id: required_str(value, "optionId")?.to_owned().into(),
-                                name: required_str(value, "name")?.to_owned(),
+                                name: ColumnName::try_from(required_str(value, "name")?.to_owned())
+                                    .map_err(|message| SourceError::Malformed {
+                                        message: format!(
+                                            "GitHub assigned Status name is invalid: {message}"
+                                        ),
+                                    })?,
                             })
                         })
                         .transpose()?,

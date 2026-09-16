@@ -55,6 +55,16 @@ fn nothing_missing_is_a_read_only_plan_and_an_unchanged_apply() {
         stdout(&applied_noop),
         "board: missing configured Status options: none\n"
     );
+    let json_noop = sandbox
+        .command()
+        .args(["--json", "sources", "status-options", "board", "--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let report: Value = serde_json::from_str(&stdout(&json_noop)).expect("a no-op JSON report");
+    assert_eq!(report["outcome"], "unchanged");
+    assert_eq!(report["missing"], json!([]));
     assert!(
         !board
             .documents()

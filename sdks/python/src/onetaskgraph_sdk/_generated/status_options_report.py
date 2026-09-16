@@ -10,6 +10,15 @@ from typing import Annotated
 from pydantic import BaseModel, Field, RootModel
 
 
+class ColumnName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name of a `Status` single-select option on the board.\n\nValidated on the way in rather than checked later, so a blank option name — which\nnothing on a board can be — is a state this type cannot hold."
+        ),
+    ]
+
+
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -50,7 +59,7 @@ class StatusOption(BaseModel):
         str, Field(description="The option description, including an empty one.")
     ]
     id: Annotated[StatusOptionId, Field(description="GitHub's stable id.")]
-    name: Annotated[str, Field(description="The visible option name.")]
+    name: Annotated[ColumnName, Field(description="The visible option name.")]
 
 
 class StatusOptionsReport(BaseModel):
