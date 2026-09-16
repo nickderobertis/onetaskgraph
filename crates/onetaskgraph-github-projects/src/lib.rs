@@ -74,7 +74,10 @@
 //! `<!-- onetaskgraph.metadata ... -->` comment at the end of the issue body — the same
 //! encoding `docs/metadata.md` settles for Linear, not a second one. A ProjectV2 text
 //! field is length-bounded and `shortDescription` is capped at 300 characters, which is
-//! why neither can hold a caller's own prose.
+//! why neither can hold a caller's own prose. Setting one caller key on its own — on a task,
+//! a project or a document alike — is one update of the issue body that changes that slot
+//! and not one byte outside it, and it is not sent at all when the key already holds the
+//! value.
 //!
 //! **Status.** `status_mapping` is per-instance configuration from a status category to
 //! `null`, a board `Status` option name, or a closed state of `completed` or
@@ -366,7 +369,7 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    LabelFilter, Location, Metering, NativeId, NewComment, Page, PageRequest, Project,
+    LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Project,
     ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
     Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery,
     WriteSupport,
@@ -3040,10 +3043,58 @@ impl GitHubProjectsSource {
         else {
             return Ok(None);
         };
-        let held = item.raw_body.clone().unwrap_or_default();
         let mut slot = item.slot.clone();
         set_task_list(&mut slot, TaskRef::DELIVERED_BY_KEY, &entries);
-        let body = with_slot(&held, &slot)?;
+        self.write_slot(&mut item, &slot).await?;
+        item.delivered_by = entries;
+        self.remember_written(item, false)?;
+        Ok(Some(()))
+    }
+
+    /// Set one caller key of the metadata slot of one issue of `kind`, and nothing else;
+    /// see [`TaskSource::set_task_metadata`].
+    ///
+    /// `None` when this board holds no item by that id, or holds one of another kind. The
+    /// answer is the item as this source now reads it, so what a caller is told the key
+    /// holds is what the slot holds.
+    ///
+    /// A key already holding the value is answered without a write, compared as JSON rather
+    /// than as the body's bytes: a slot a person spelled with other whitespace would
+    /// otherwise be re-encoded, which is a write that changes nothing the caller asked for.
+    async fn set_slot_key(
+        &self,
+        id: &NativeId,
+        kind: BoardKind,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Resolved>, SourceError> {
+        let Some(mut item) = self.item_by_id(id).await?.filter(|item| item.kind == kind) else {
+            return Ok(None);
+        };
+        if item.slot.get(key.as_str()) == Some(value) {
+            return Ok(Some(item));
+        }
+        let mut slot = item.slot.clone();
+        slot.insert(key.as_str().to_owned(), value.clone());
+        self.write_slot(&mut item, &slot).await?;
+        self.remember_written(item.clone(), false)?;
+        Ok(Some(item))
+    }
+
+    /// Put `slot` in one item's metadata slot with a single update of its body, and bring
+    /// `item` up to what that write left.
+    ///
+    /// The body sent differs from the body GitHub holds only inside the slot — see
+    /// [`with_slot`] — and a body that would not change is not sent at all. It goes through
+    /// the mutation the item's content takes, so a board draft's body is written with
+    /// `updateProjectV2DraftIssue` exactly as an issue's is with `updateIssue`.
+    async fn write_slot(
+        &self,
+        item: &mut Resolved,
+        slot: &BTreeMap<String, Value>,
+    ) -> Result<(), SourceError> {
+        let held = item.raw_body.clone().unwrap_or_default();
+        let body = with_slot(&held, slot)?;
         if body != held {
             self.update_content(item.content_kind, &item.id, json!({"body": body}))
                 .await?;
@@ -3052,9 +3103,7 @@ impl GitHubProjectsSource {
         item.body = visible.filter(|value| !value.is_empty());
         item.raw_body = Some(body);
         item.slot = slot;
-        item.delivered_by = entries;
-        self.remember_written(item, false)?;
-        Ok(Some(()))
+        Ok(())
     }
 
     /// This instance's target for a category, refusing one it has disabled.
@@ -4976,6 +5025,49 @@ impl TaskSource for GitHubProjectsSource {
         delivered_by: &[TaskRef],
     ) -> Result<Option<()>, SourceError> {
         self.replace_delivered_by(id, delivered_by).await
+    }
+
+    /// Set one key of one task issue's metadata with a single body update that changes the
+    /// metadata slot and nothing outside it — no title, label, state or board field request —
+    /// and sends nothing when the task already holds that value under the key.
+    async fn set_task_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Task>, SourceError> {
+        Ok(self
+            .set_slot_key(id, BoardKind::Work(ItemKind::Task), key, value)
+            .await?
+            .map(|item| item.task()))
+    }
+
+    /// Set one key of one project issue's metadata, on exactly the terms of
+    /// [`set_task_metadata`](TaskSource::set_task_metadata).
+    async fn set_project_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Project>, SourceError> {
+        Ok(self
+            .set_slot_key(id, BoardKind::Work(ItemKind::Project), key, value)
+            .await?
+            .map(|item| item.project()))
+    }
+
+    /// Set one key of one design-document issue's metadata, on exactly the terms of
+    /// [`set_task_metadata`](TaskSource::set_task_metadata).
+    async fn set_document_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Document>, SourceError> {
+        Ok(self
+            .set_slot_key(id, BoardKind::Document, key, value)
+            .await?
+            .map(|item| item.document()))
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
