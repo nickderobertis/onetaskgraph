@@ -513,9 +513,19 @@ A source behind that seam is a source like any other: it declares its own capabi
 so a plan says `pushed down` for what it applies itself, and the engine compensates for
 the rest exactly as it does in process.
 
-`onetaskgraph-source` ships beside the main binary and is the reference implementation of
-the plugin side — it hosts any built-in plugin over the same protocol, so you can read a
-working peer beside the specification.
+`onetaskgraph-source` is the **reference implementation of that plugin side**, and the test
+host this repository drives its own journeys against: it hosts any built-in plugin over the
+same protocol, so every journey runs a second time over a real pipe to a real second
+process, and so you can read a working peer beside the specification.
+
+**It is not part of the command-line interface.** Nothing `onetaskgraph` does needs it at
+run time, and nothing may depend on finding it beside an installed CLI or resolve it off a
+search path — a downstream test chain that did picked up an unrelated stale build and
+treated a reference host as a runtime dependency. Read it, or build it, from a checkout:
+
+```bash
+cargo build -p onetaskgraph --bin onetaskgraph-source
+```
 
 ## Licence
 
