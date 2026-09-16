@@ -405,6 +405,10 @@ fn a_mistaken_id_key_or_value_is_refused_before_any_source_is_asked() {
 /// raises ignored, so the write sees `EFBIG` and the binary reports it. Every record here is
 /// far below the limit and the value set is far above it, so only the staging write can meet
 /// it. Unix only: Windows has no per-process file-size limit to set.
+///
+/// The limit reaches every file the process writes, so under a coverage run it would also
+/// truncate the profile LLVM's runtime writes on exit, and a truncated profile in the run's
+/// own pool fails the whole merge. That profile goes to a directory of its own instead.
 #[cfg(unix)]
 #[test]
 fn a_write_that_fails_after_staging_leaves_the_record_and_no_staging_file() {
@@ -429,6 +433,7 @@ fn a_write_that_fails_after_staging_leaves_the_record_and_no_staging_file() {
     };
     let before = listed(&root);
     let oversized = serde_json::to_string(&"x".repeat(64 * 1024)).expect("a JSON string");
+    let truncated_profiles = tempfile::tempdir().expect("a directory for truncated profiles");
 
     for (kind, relative) in VERBS {
         let id = format!(
@@ -455,6 +460,10 @@ fn a_write_that_fails_after_staging_leaves_the_record_and_no_staging_file() {
             .current_dir(sandbox.project())
             .env("XDG_CONFIG_HOME", sandbox.config_home())
             .env_remove("HOME")
+            .env(
+                "LLVM_PROFILE_FILE",
+                truncated_profiles.path().join("onetaskgraph-%p.profraw"),
+            )
             .output()
             .expect("the shell runs");
         let who = format!("{kind} metadata set {id}");
