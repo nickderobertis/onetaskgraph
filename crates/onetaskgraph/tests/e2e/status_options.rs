@@ -245,6 +245,24 @@ fn a_board_without_a_status_field_is_refused_by_source_name() {
 }
 
 #[test]
+fn an_inaccessible_board_is_refused_by_source_name() {
+    let (sandbox, board) = configured();
+    board.without_accessible_status_board();
+    let output = sandbox
+        .command()
+        .args(["sources", "status-options", "board"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let complaint = stderr(&output);
+    assert!(
+        complaint.contains("board") && complaint.contains("no accessible GitHub Projects board"),
+        "{complaint}"
+    );
+}
+
+#[test]
 fn the_assignment_snapshot_walks_every_page() {
     let (sandbox, board) = configured();
     board.paginate_status_snapshots();

@@ -819,6 +819,7 @@ struct GitHubBoard {
     omit_added_status_option: bool,
     status_snapshot_page_size: Option<usize>,
     status_field_present: bool,
+    status_board_accessible: bool,
     /// The board's **own** title, description and readme — a person's, not this
     /// product's. `updateProjectV2` is answered here rather than refused so that a
     /// journey asserting these are byte-identical after a copy fails when something
@@ -903,6 +904,11 @@ impl GitHubBoardFields {
     /// Remove the board's Status field entirely.
     pub fn without_status_field(&self) {
         self.board.lock().unwrap().status_field_present = false;
+    }
+
+    /// Make the configured board absent from GitHub's response, as an inaccessible board is.
+    pub fn without_accessible_status_board(&self) {
+        self.board.lock().unwrap().status_board_accessible = false;
     }
 
     /// The body this board holds for one issue, byte for byte.
@@ -1278,6 +1284,7 @@ fn github_projects_board_at(
         omit_added_status_option: false,
         status_snapshot_page_size: None,
         status_field_present: true,
+        status_board_accessible: true,
         own: json!({"title":"Fixture board",
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
@@ -1472,6 +1479,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     if query.contains("optionId field{") && query.contains("fields(first:$nestedFirst)") {
         assert_eq!(variables["owner"], "fixture-owner");
         assert_eq!(variables["number"], 7);
+        if !board.status_board_accessible {
+            return json!({"owner":{"projectV2":null}});
+        }
         let offset = variables["after"]
             .as_str()
             .map_or(0, |cursor| cursor.parse().unwrap());

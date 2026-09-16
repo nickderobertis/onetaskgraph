@@ -316,6 +316,17 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
                 "    # A metadata value is arbitrary JSON by the emitted wire contract: the key's\n"
                 "    # value as the source reads it back, of whatever JSON type the caller set.",
             )
+        if root == "StatusOptionsReport":
+            generated = [
+                (
+                    "    # llmlint: ignore[modern_domain_modeling] GitHub GraphQL node IDs are\n"
+                    "    # opaque wire values that this operation preserves and compares verbatim.\n"
+                    + line
+                )
+                if line.startswith("    id: Annotated[str")
+                else line
+                for line in generated
+            ]
         if any("dict[str, Any]" in line for line in generated):
             generated = [
                 line.replace("from pydantic import ", "from pydantic import JsonValue, ").replace(

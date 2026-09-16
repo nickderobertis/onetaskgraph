@@ -1801,6 +1801,8 @@ pub enum StatusOptionsOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct StatusOption {
     /// GitHub's stable id.
+    // llmlint: ignore[invalid_states_unrepresentable] GitHub GraphQL node IDs are opaque
+    // wire values; this operation only preserves and compares them and never parses them.
     pub id: String,
     /// The visible option name.
     pub name: String,
@@ -1814,8 +1816,8 @@ pub struct StatusOption {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct StatusAssignment {
     /// The project item id whose assignment this is.
-    /// llmlint: ignore[invalid_states_unrepresentable] This is an opaque GraphQL node ID
-    /// carried verbatim as operator recovery data; no operation interprets its grammar.
+    // llmlint: ignore[invalid_states_unrepresentable] This is an opaque GraphQL node ID
+    // carried verbatim as operator recovery data; no operation interprets its grammar.
     pub item_id: String,
     /// The selected option, absent when the item has no status.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1826,8 +1828,8 @@ pub struct StatusAssignment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct AssignedStatusOption {
     /// GitHub's stable id.
-    /// llmlint: ignore[invalid_states_unrepresentable] This opaque GraphQL ID is only
-    /// compared and rendered; wrapping it would add no validation or impossible state.
+    // llmlint: ignore[invalid_states_unrepresentable] This opaque GraphQL ID is only
+    // compared and rendered; wrapping it would add no validation or impossible state.
     pub id: String,
     /// The visible name.
     pub name: String,
@@ -1839,6 +1841,8 @@ pub struct StatusOptionsReport {
     /// The configured source name.
     pub source: SourceName,
     /// Configured option names absent before the operation.
+    // llmlint: ignore[invalid_states_unrepresentable] These names have already passed
+    // `ColumnName` validation; the report exposes their stable serialized string contract.
     pub missing: Vec<String>,
     /// What the requested operation did.
     pub outcome: StatusOptionsOutcome,
@@ -1848,9 +1852,11 @@ pub struct StatusOptionsReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StatusSnapshot {
-    // llmlint: ignore[invalid_states_unrepresentable] These private opaque GraphQL IDs
-    // are passed back to the one mutation and are never parsed or interchanged by callers.
+    // llmlint: ignore[invalid_states_unrepresentable] This private opaque GraphQL ID is
+    // passed back as the mutation's project identity and is never parsed by this crate.
     board_id: String,
+    // llmlint: ignore[invalid_states_unrepresentable] This private opaque GraphQL ID is
+    // passed back as the mutation's field identity and is never parsed by this crate.
     field_id: String,
     options: Vec<StatusOption>,
     assignments: Vec<StatusAssignment>,
@@ -1974,6 +1980,7 @@ impl GitHubProjectsSource {
                 .await?;
             let board = data
                 .pointer("/owner/projectV2")
+                .filter(|board| board.is_object())
                 .ok_or_else(|| SourceError::Refused {
                     message: format!(
                         "source {} has no accessible GitHub Projects board",

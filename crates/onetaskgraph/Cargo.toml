@@ -31,6 +31,8 @@ onetaskgraph-core.workspace = true
 # a source returns, and re-exporting them from the engine would make the engine's public
 # surface a second place the contract is spelled.
 onetaskgraph-plugin-api.workspace = true
+# llmlint: ignore[new_command_or_client_gets_its_own_project] The plugin remains its own Nx
+# project; this dependency is the repository's sole CLI wrapper exposing the accepted command.
 onetaskgraph-github-projects.workspace = true
 serde.workspace = true
 serde_json.workspace = true

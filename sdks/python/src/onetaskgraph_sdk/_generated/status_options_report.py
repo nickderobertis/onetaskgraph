@@ -42,6 +42,8 @@ class StatusOption(BaseModel):
     description: Annotated[
         str, Field(description="The option description, including an empty one.")
     ]
+    # llmlint: ignore[modern_domain_modeling] GitHub GraphQL node IDs are
+    # opaque wire values that this operation preserves and compares verbatim.
     id: Annotated[str, Field(description="GitHub's stable id.")]
     name: Annotated[str, Field(description="The visible option name.")]
 
