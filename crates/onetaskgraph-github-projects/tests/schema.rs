@@ -2,8 +2,8 @@
 //!
 //! The pinned subset defines no `updateProjectV2`, no `ProjectV2.shortDescription` and no
 //! `ProjectV2.readme`, so a document that reached for one would fail here rather than
-//! rename a user's board; it defines no `updateProjectV2Field` either, so nothing can
-//! overwrite a Status field's option set.
+//! rename a user's board. It deliberately defines `updateProjectV2Field` for the one
+//! guarded status-options document, and validates the exact document production sends.
 
 use graphql_parser::{query, schema};
 use std::collections::{HashMap, HashSet};
@@ -270,6 +270,8 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         (graphql::UPDATE_ISSUE, None, None),
         (graphql::UPDATE_DRAFT, None, None),
         (graphql::UPDATE_FIELD, None, None),
+        (graphql::STATUS_OPTIONS_UPDATE, None, None),
+        (graphql::STATUS_OPTIONS_SNAPSHOT, None, None),
         (graphql::ADD_SUB_ISSUE, None, None),
         (graphql::REMOVE_SUB_ISSUE, None, None),
         (graphql::ADD_BLOCKED_BY, None, None),
@@ -340,7 +342,7 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
     }
 }
 
-/// Nothing this crate can do renames a board or rewrites a Status field's options.
+/// Nothing except the named guarded document can rewrite a Status field's options.
 ///
 /// The pinned schema already refuses a *document* naming either, and this reads the whole
 /// crate rather than the documents alone: the criterion is that no code path invokes
@@ -349,7 +351,7 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
 /// options, so no addition is additive and a mistake destroys every item's status; a
 /// status this board cannot represent is a refusal instead.
 #[test]
-fn no_source_path_writes_the_board_itself_or_a_status_fields_option_set() {
+fn only_the_guarded_source_path_writes_a_status_fields_option_set() {
     /// Everything the file says that is not a comment about what it does not do.
     fn code(text: &str, comment: &str) -> String {
         text.lines()
@@ -357,13 +359,7 @@ fn no_source_path_writes_the_board_itself_or_a_status_fields_option_set() {
             .collect::<Vec<_>>()
             .join("\n")
     }
-    const FORBIDDEN: [&str; 5] = [
-        "updateProjectV2Field",
-        "singleSelectOptions",
-        "updateProjectV2(",
-        "shortDescription",
-        "readme",
-    ];
+    const FORBIDDEN: [&str; 3] = ["updateProjectV2(", "shortDescription", "readme"];
     for forbidden in FORBIDDEN {
         assert!(
             !code(include_str!("../src/lib.rs"), "//").contains(forbidden),
@@ -374,6 +370,13 @@ fn no_source_path_writes_the_board_itself_or_a_status_fields_option_set() {
             "the pinned schema defines {forbidden}, which would let a document reach it"
         );
     }
+    assert_eq!(
+        code(include_str!("../src/lib.rs"), "//")
+            .matches("updateProjectV2Field(input:$input)")
+            .count(),
+        1,
+        "exactly the guarded mutation document may call updateProjectV2Field"
+    );
 }
 
 /// The category list this source maps cannot silently lose a variant of the vocabulary.

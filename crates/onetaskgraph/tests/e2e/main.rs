@@ -56,4 +56,5 @@ mod metadata;
 mod multi_source;
 mod no_persistence;
 mod source_host;
+mod status_options;
 mod surface;

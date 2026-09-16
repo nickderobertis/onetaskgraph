@@ -15,6 +15,7 @@ use onetaskgraph_core::{
     CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, MetadataSet, Predicate,
     Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing, SourceState, TaskStatusSet,
 };
+use onetaskgraph_github_projects::StatusOptionsReport;
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, Document, Label, Location, Project, Support, Task, TaskRef,
 };
@@ -32,6 +33,25 @@ fn wire(value: &impl Serialize) -> String {
         .expect("a contract enum serialises")
         .trim_matches('"')
         .to_owned()
+}
+
+/// A concise read-only plan or verified apply result for board Status options.
+pub fn status_options(report: &StatusOptionsReport) -> String {
+    let missing = if report.missing.is_empty() {
+        "none".to_owned()
+    } else {
+        report.missing.join(", ")
+    };
+    match report.outcome {
+        onetaskgraph_github_projects::StatusOptionsOutcome::Applied => {
+            format!("{}: added and verified: {missing}\n", report.source)
+        }
+        onetaskgraph_github_projects::StatusOptionsOutcome::Planned
+        | onetaskgraph_github_projects::StatusOptionsOutcome::Unchanged => format!(
+            "{}: missing configured Status options: {missing}\n",
+            report.source
+        ),
+    }
 }
 
 /// Lay `rows` out as aligned columns, one line each.
