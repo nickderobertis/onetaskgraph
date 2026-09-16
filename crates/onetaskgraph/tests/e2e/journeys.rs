@@ -936,7 +936,7 @@ fn a_colon_in_a_source_native_dependency_id_is_not_reinterpreted_as_a_source() {
 }
 
 #[test]
-fn malformed_local_markdown_names_its_path_without_hiding_valid_rows() {
+fn task_list_fails_and_names_a_malformed_local_markdown_file() {
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("malformed-local-md");
     let tasks = root.join("tasks");
@@ -965,12 +965,15 @@ fn malformed_local_markdown_names_its_path_without_hiding_valid_rows() {
     );
 
     let listing = run(&sandbox, &["task", "list"]);
-    assert_eq!(listing.status.code(), Some(0), "{}", stderr(&listing));
-    assert_eq!(listed(&stdout(&listing)), ours(&["valid"]));
+    assert_ne!(listing.status.code(), Some(0), "{}", stdout(&listing));
+    let complaint = stderr(&listing);
     assert!(
-        stderr(&listing).is_empty(),
-        "a usable listing stays quiet:\n{}",
-        stderr(&listing)
+        complaint.contains(&malformed.display().to_string()),
+        "the malformed file's exact path must reach the user:\n{complaint}"
+    );
+    assert!(
+        complaint.contains("front matter"),
+        "the parse diagnostic must reach the user:\n{complaint}"
     );
 }
 

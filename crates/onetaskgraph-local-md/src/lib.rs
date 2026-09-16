@@ -781,17 +781,15 @@ impl LocalMdSource {
     fn readable_work(&self, kind: WorkKind) -> Result<Vec<Entry>, SourceError> {
         self.paths(kind.kind())?
             .into_iter()
-            .filter_map(|p| self.parse(kind, &p).ok())
-            .collect::<Vec<_>>()
-            .pipe(Ok)
+            .map(|p| self.parse(kind, &p))
+            .collect()
     }
 
     fn readable_documents(&self) -> Result<Vec<Document>, SourceError> {
         self.paths(Kind::Document)?
             .into_iter()
-            .filter_map(|p| self.parse_document(&p).ok())
-            .collect::<Vec<_>>()
-            .pipe(Ok)
+            .map(|p| self.parse_document(&p))
+            .collect()
     }
 
     /// The confined canonical path `id` names under `kind`, when this source holds one.
@@ -851,13 +849,6 @@ impl LocalMdSource {
         })
     }
 }
-
-trait Pipe: Sized {
-    fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {
-        f(self)
-    }
-}
-impl<T> Pipe for T {}
 
 /// The labels one file's `labels:` key names, in the order it names them.
 fn labels_of(inputs: Vec<LabelInput>) -> Vec<Label> {

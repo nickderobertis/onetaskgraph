@@ -520,25 +520,139 @@ async fn invalid_roots_documents_and_pages_are_refused_at_the_public_boundary() 
 }
 
 #[tokio::test]
-async fn malformed_file_is_named_on_direct_read_while_other_rows_still_list() {
+async fn task_query_surfaces_malformed_front_matter_instead_of_dropping_the_record() {
     let (root, source) = source();
     fs::write(root.path().join("tasks/bad.md"), "not front matter").unwrap();
-    let error = source.get_task(&NativeId("bad".into())).await.unwrap_err();
-    assert!(matches!(error, SourceError::Malformed { ref message } if message.contains("bad.md")));
-    assert_eq!(
-        source
-            .query_tasks(
-                &TaskQuery::default(),
-                &PageRequest {
-                    cursor: None,
-                    limit: 10
-                }
-            )
+    let error = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, SourceError::Malformed { ref message }
+            if message.contains("bad.md") && message.contains("front matter")),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn task_query_surfaces_a_malformed_delivery_reference() {
+    let (root, source) = source();
+    fs::write(
+        root.path().join("tasks/bad-delivery.md"),
+        "---\ndelivers: [\"\"]\n---\n",
+    )
+    .unwrap();
+
+    let error = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, SourceError::Malformed { ref message }
+            if message.contains("bad-delivery.md")
+                && message.contains("delivers")
+                && message.contains("not a task id")),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn project_query_surfaces_a_malformed_record() {
+    let (root, source) = source();
+    fs::write(
+        root.path().join("projects/bad-project.md"),
+        "---\nlabels: [\n---\n",
+    )
+    .unwrap();
+
+    let error = source
+        .query_projects(&ProjectQuery::default(), &page(10))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, SourceError::Malformed { ref message }
+            if message.contains("bad-project.md")
+                && message.contains("expected node content")),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn document_query_surfaces_a_malformed_record() {
+    let (root, source) = source();
+    fs::create_dir(root.path().join("documents")).unwrap();
+    fs::write(
+        root.path().join("documents/bad-document.md"),
+        "---\nlabels: [\n---\n",
+    )
+    .unwrap();
+
+    let error = source
+        .query_documents(&DocumentQuery::default(), &page(10))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, SourceError::Malformed { ref message }
+            if message.contains("bad-document.md")
+                && message.contains("expected node content")),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn label_and_dependency_scans_surface_malformed_records() {
+    let (task_root, task_source) = source();
+    fs::write(
+        task_root.path().join("tasks/bad-task.md"),
+        "not front matter",
+    )
+    .unwrap();
+    for error in [
+        task_source.labels(&page(10)).await.unwrap_err(),
+        task_source
+            .task_dependencies(&NativeId("b".into()), Direction::DependedOnBy, &page(10))
             .await
-            .unwrap()
-            .items
-            .len(),
-        2
+            .unwrap_err(),
+    ] {
+        assert!(
+            matches!(error, SourceError::Malformed { ref message }
+                if message.contains("bad-task.md") && message.contains("front matter")),
+            "{error:?}"
+        );
+    }
+
+    let (project_root, project_source) = source();
+    fs::write(
+        project_root.path().join("projects/bad-project.md"),
+        "not front matter",
+    )
+    .unwrap();
+    for error in [
+        project_source.labels(&page(10)).await.unwrap_err(),
+        project_source
+            .project_dependencies(&NativeId("p".into()), Direction::DependedOnBy, &page(10))
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(
+            matches!(error, SourceError::Malformed { ref message }
+                if message.contains("bad-project.md") && message.contains("front matter")),
+            "{error:?}"
+        );
+    }
+
+    let (document_root, document_source) = source();
+    fs::create_dir(document_root.path().join("documents")).unwrap();
+    fs::write(
+        document_root.path().join("documents/bad-document.md"),
+        "not front matter",
+    )
+    .unwrap();
+    let error = document_source.labels(&page(10)).await.unwrap_err();
+    assert!(
+        matches!(error, SourceError::Malformed { ref message }
+            if message.contains("bad-document.md") && message.contains("front matter")),
+        "{error:?}"
     );
 }
 
@@ -1500,11 +1614,16 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
             panic!("a document carrying `{file}` must be refused");
         };
         assert!(message.contains(refused), "{message}");
-        // And a file this source cannot read is skipped by a listing rather than failing
-        // it, exactly as an unreadable task is.
-        assert_eq!(
-            document_ids(source.as_ref(), &DocumentQuery::default()).await,
-            ["design", "nested/loose"]
+        // A listing surfaces the same malformed record instead of silently losing it.
+        let Err(SourceError::Malformed { message }) = source
+            .query_documents(&DocumentQuery::default(), &page(50))
+            .await
+        else {
+            panic!("a listing must refuse a document carrying `{file}`");
+        };
+        assert!(
+            message.contains("rejected.md") && message.contains(refused),
+            "{message}"
         );
     }
     fs::remove_file(root.path().join("documents/rejected.md")).expect("the rejected document");
