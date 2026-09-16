@@ -65,6 +65,17 @@ fn nothing_missing_is_a_read_only_plan() {
 fn apply_adds_only_the_missing_option_with_every_existing_id_and_assignment_preserved() {
     let (sandbox, board) = configured();
     board.without_option("Queued");
+    let plan = sandbox
+        .command()
+        .args(["sources", "status-options", "board"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(
+        stdout(&plan),
+        "board: missing configured Status options: Queued\n"
+    );
     let output = sandbox
         .command()
         .args(["--json", "sources", "status-options", "board", "--apply"])
@@ -75,6 +86,17 @@ fn apply_adds_only_the_missing_option_with_every_existing_id_and_assignment_pres
     let report: Value = serde_json::from_str(&stdout(&output)).expect("an applied JSON report");
     assert_eq!(report["outcome"], "applied");
     assert_eq!(report["missing"], json!(["Queued"]));
+    let existing = report["existing"]
+        .as_array()
+        .expect("the existing option list is machine-readable");
+    assert!(existing.iter().any(|option| option["id"] == "OPT-todo"
+        && option["name"] == "Todo"
+        && option["color"] == "BLUE"
+        && option["description"] == "ready"));
+    assert!(existing.iter().any(|option| option["id"] == "OPT-shipped"
+        && option["name"] == "Shipped"
+        && option["color"] == "PURPLE"
+        && option["description"] == "custom"));
     let (_, variables) = board
         .served()
         .into_iter()
@@ -102,6 +124,17 @@ fn apply_adds_only_the_missing_option_with_every_existing_id_and_assignment_pres
             .iter()
             .any(|option| option["name"] == "Shipped" && option["id"] == "OPT-shipped")
     );
+
+    let (human_sandbox, human_board) = configured();
+    human_board.without_option("Queued");
+    let applied = human_sandbox
+        .command()
+        .args(["sources", "status-options", "board", "--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(stdout(&applied), "board: added and verified: Queued\n");
 }
 
 #[test]
