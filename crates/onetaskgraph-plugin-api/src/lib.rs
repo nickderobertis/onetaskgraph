@@ -18,6 +18,7 @@ mod capability;
 mod comment;
 mod error;
 mod id;
+mod metadata;
 mod metering;
 mod query;
 mod source;
@@ -28,6 +29,7 @@ pub use capability::{Capabilities, DependencySupport, Support};
 pub use comment::{Comment, CommentBody, NewComment, commentless};
 pub use error::SourceError;
 pub use id::{NativeId, SOURCE_NAME_PATTERN, SourceName};
+pub use metadata::{MetadataKey, unwritable_metadata};
 pub use metering::{Metered, Metering};
 pub use query::{
     Cursor, DocumentQuery, LabelFilter, Page, PageRequest, ProjectFilter, ProjectQuery, TaskQuery,

@@ -49,6 +49,12 @@ EXCEPTIONS = {
         "`TaskSource::set_task_status` and `TaskSource::set_delivered_by` answer with by "
         "default, for a source that cannot write that one field of a task on its own"
     ),
+    "unwritable_metadata": (
+        "a free function, not one of the contract's types — the inventory enumerates the "
+        "traits and types a plugin author implements against, and this is the one refusal "
+        "`TaskSource::set_task_metadata`, `set_project_metadata` and `set_document_metadata` "
+        "answer with by default, for a source that cannot write one metadata key on its own"
+    ),
     "SOURCE_NAME_PATTERN": (
         "a const, not one of the contract's types — the inventory enumerates the traits "
         "and types a plugin author implements against"
