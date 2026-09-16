@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 mod settle;
 
 use settle::{
-    Bound, LABEL_CONNECTION, LABEL_VARIABLE, MOST_DOCUMENT_PAGES, settled_document_absent,
+    Bound, DocumentListingBudget, LABEL_CONNECTION, LABEL_VARIABLE, settled_document_absent,
     settled_documents, settled_label, settled_tasks, settled_walk,
 };
 
@@ -41,6 +41,11 @@ use settle::{
 const BOUND: Bound = Bound {
     reads: 5,
     interval: Duration::from_millis(50),
+};
+
+const DOCUMENT_LISTING: DocumentListingBudget = DocumentListingBudget {
+    pages: 10,
+    elapsed: Duration::from_secs(5),
 };
 
 /// How late past the bound a failing wait may still report, for a loaded machine.
@@ -244,6 +249,10 @@ fn expected(title: &str) -> Vec<String> {
     vec![title.to_owned()]
 }
 
+fn expected_document(id: &str, title: &str) -> Vec<(NativeId, String)> {
+    vec![(NativeId(id.into()), title.to_owned())]
+}
+
 /// The label a run has just created, by the name a write resolves it through.
 const LABEL: &str = "otg-live-label";
 
@@ -357,21 +366,26 @@ async fn a_document_listing_the_index_catches_up_with_late_passes_without_readin
     });
     settled_documents(
         BOUND,
+        DOCUMENT_LISTING,
         source.as_ref(),
         &DocumentQuery::default(),
-        &|_| true,
+        &[NativeId("d1".into()), NativeId("d2".into())],
         "the two documents this run created",
-        &["loose".to_owned(), "filed".to_owned()],
+        &[
+            (NativeId("d2".into()), "loose".to_owned()),
+            (NativeId("d1".into()), "filed".to_owned()),
+        ],
     )
     .await
     .unwrap();
     settled_documents(
         BOUND,
+        DOCUMENT_LISTING,
         source.as_ref(),
         &filed_under("p1"),
-        &|_| true,
+        &[NativeId("d1".into()), NativeId("d2".into())],
         "a document listing narrowed to this run's project",
-        &expected("filed"),
+        &expected_document("d1", "filed"),
     )
     .await
     .unwrap();
@@ -394,18 +408,19 @@ async fn a_document_listing_that_never_catches_up_fails_within_the_bound_naming_
     let started = Instant::now();
     let refusal = settled_documents(
         BOUND,
+        DOCUMENT_LISTING,
         source.as_ref(),
         &filed_under("p1"),
-        &|title| title != "another run's",
+        &[NativeId("d1".into())],
         "a document listing narrowed to this run's project",
-        &expected("filed"),
+        &expected_document("d1", "filed"),
     )
     .await
     .unwrap_err();
     let waited = started.elapsed();
     assert!(
         refusal.starts_with(
-            r#"a document listing narrowed to this run's project came back as [] rather than ["filed"], still after 5 reads"#
+            r#"a document listing narrowed to this run's project completed its listing but the document ids ["d1"] were missing, still after 5 reads"#
         ),
         "the failure names what the listing returned: {refusal}"
     );
@@ -415,6 +430,31 @@ async fn a_document_listing_that_never_catches_up_fails_within_the_bound_naming_
             && waited < BOUND.interval * BOUND.reads + SLACK,
         "a listing that never catches up fails once the bound is spent, and waited {waited:?}"
     );
+}
+
+#[tokio::test]
+async fn this_runs_document_does_not_pass_an_empty_expectation() {
+    let (source, answered) = workspace(|_, _| documents(vec![document("d1", "filed", None)]));
+    let refusal = settled_documents(
+        Bound {
+            reads: 1,
+            interval: Duration::ZERO,
+        },
+        DOCUMENT_LISTING,
+        source.as_ref(),
+        &DocumentQuery::default(),
+        &[NativeId("d1".into())],
+        "a document listing demanding a label",
+        &[],
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        refusal
+            .contains(r#"completed its listing with [(NativeId("d1"), "filed")] rather than []"#),
+        "the unexpected document is reported: {refusal}"
+    );
+    assert_eq!(answered.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -460,7 +500,7 @@ async fn a_deleted_document_that_never_disappears_fails_at_the_bound_naming_it()
 }
 
 #[tokio::test]
-async fn a_document_listing_reads_past_a_first_page_full_of_other_documents() {
+async fn unfiltered_and_orphan_document_listings_read_past_other_documents() {
     // A workspace holding a whole page of documents that are not this run's before its own:
     // a listing that stopped at the first page would never see `filed`, however long it waited.
     let (source, answered) = workspace(|_, request| {
@@ -477,18 +517,33 @@ async fn a_document_listing_reads_past_a_first_page_full_of_other_documents() {
     });
     settled_documents(
         BOUND,
+        DOCUMENT_LISTING,
         source.as_ref(),
         &DocumentQuery::default(),
-        &|title| !title.starts_with("another run's"),
+        &[NativeId("d1".into())],
         "the documents this run created",
-        &expected("filed"),
+        &expected_document("d1", "filed"),
+    )
+    .await
+    .unwrap();
+    settled_documents(
+        BOUND,
+        DOCUMENT_LISTING,
+        source.as_ref(),
+        &DocumentQuery {
+            project: ProjectFilter::Orphans,
+            ..DocumentQuery::default()
+        },
+        &[NativeId("d1".into())],
+        "the orphan documents this run created",
+        &expected_document("d1", "filed"),
     )
     .await
     .unwrap();
     assert_eq!(
         answered.load(Ordering::SeqCst),
-        2,
-        "one read walks both pages, and agrees on them"
+        4,
+        "each of the unfiltered and orphan reads walks both pages, and agrees on them"
     );
 }
 
@@ -805,20 +860,52 @@ async fn a_document_listing_that_does_not_end_fails_at_its_page_bound() {
     });
     let refusal = settled_documents(
         BOUND,
+        DocumentListingBudget {
+            pages: 3,
+            elapsed: Duration::from_secs(5),
+        },
         source.as_ref(),
         &DocumentQuery::default(),
-        &|_| true,
+        &[NativeId("d0".into())],
         "the documents this run created",
-        &expected("filed"),
+        &expected_document("d0", "filed"),
     )
     .await
     .unwrap_err();
-    assert_eq!(
-        refusal,
-        format!("the documents this run created had not ended after {MOST_DOCUMENT_PAGES} pages")
+    assert!(
+        refusal.starts_with(
+            "the documents this run created exhausted its document listing budget after 3 pages"
+        ),
+        "budget exhaustion is named distinctly: {refusal}"
     );
-    assert_eq!(
-        answered.load(Ordering::SeqCst) as usize,
-        MOST_DOCUMENT_PAGES
+    assert_eq!(answered.load(Ordering::SeqCst) as usize, 3);
+}
+
+#[tokio::test]
+async fn a_document_listing_that_outlasts_its_time_budget_is_budget_exhaustion() {
+    let (source, answered) = workspace(|_, _| {
+        thread::sleep(Duration::from_millis(50));
+        documents(vec![document("d1", "filed", None)])
+    });
+    let refusal = settled_documents(
+        BOUND,
+        DocumentListingBudget {
+            pages: 10,
+            elapsed: Duration::from_millis(10),
+        },
+        source.as_ref(),
+        &DocumentQuery::default(),
+        &[NativeId("d1".into())],
+        "the documents this run created",
+        &expected_document("d1", "filed"),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        refusal.starts_with(
+            "the documents this run created exhausted its document listing budget after 0 pages"
+        ),
+        "time exhaustion is named as budget exhaustion with the pages read: {refusal}"
     );
+    assert_eq!(answered.load(Ordering::SeqCst), 1);
 }
