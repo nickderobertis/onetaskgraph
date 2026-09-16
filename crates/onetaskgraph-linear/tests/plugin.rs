@@ -2,9 +2,9 @@
 
 use onetaskgraph_plugin_api::{
     Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction,
-    Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId,
-    NewComment, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
-    SourceName, SourcePlugin, StatusCategory, Task, TaskQuery, TaskSource,
+    Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey,
+    NativeId, NewComment, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver,
+    SourceError, SourceName, SourcePlugin, StatusCategory, Task, TaskQuery, TaskSource,
 };
 use secrecy::SecretString;
 use std::{
@@ -4890,6 +4890,47 @@ async fn a_task_already_in_the_category_keeps_its_own_state_and_nothing_is_writt
         .collect::<Vec<_>>();
     assert_eq!(requests.len(), 1, "the read alone: {requests:?}");
     assert_eq!(requests[0]["query"], onetaskgraph_linear::graphql::ISSUE);
+}
+
+#[tokio::test]
+async fn a_metadata_key_is_refused_by_name_for_every_record_before_any_request() {
+    let (endpoint, wire) = response_server(Vec::new());
+    let source = writable_source(&endpoint);
+    let id: NativeId = "I-1".into();
+    let key = MetadataKey::new("myapp.review").expect("a caller key");
+    let value = serde_json::json!({"approved": true});
+    let refusals = [
+        (
+            "task",
+            source
+                .set_task_metadata(&id, &key, &value)
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "project",
+            source
+                .set_project_metadata(&id, &key, &value)
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "document",
+            source
+                .set_document_metadata(&id, &key, &value)
+                .await
+                .map(|_| ()),
+        ),
+    ];
+    for (record, refusal) in refusals {
+        assert_eq!(
+            refusal.expect_err("Linear writes no metadata key on its own"),
+            SourceError::Refused {
+                message: format!("the linear plugin cannot write a {record}'s metadata on its own"),
+            }
+        );
+    }
+    assert!(wire.try_iter().next().is_none(), "nothing was sent");
 }
 
 #[tokio::test]
