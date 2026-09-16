@@ -15,7 +15,7 @@ fn configured() -> (Sandbox, crate::fixtures::GitHubBoardFields) {
 }
 
 #[test]
-fn nothing_missing_is_a_read_only_plan() {
+fn nothing_missing_is_a_read_only_plan_and_an_unchanged_apply() {
     let (sandbox, board) = configured();
     let output = sandbox
         .command()
@@ -46,18 +46,37 @@ fn nothing_missing_is_a_read_only_plan() {
 
     let applied_noop = sandbox
         .command()
-        .args(["--json", "sources", "status-options", "board", "--apply"])
+        .args(["sources", "status-options", "board", "--apply"])
         .assert()
         .success()
         .get_output()
         .clone();
-    let report: Value = serde_json::from_str(&stdout(&applied_noop)).expect("a JSON report");
-    assert_eq!(report["outcome"], "unchanged");
+    assert_eq!(
+        stdout(&applied_noop),
+        "board: missing configured Status options: none\n"
+    );
     assert!(
         !board
             .documents()
             .iter()
             .any(|document| document.contains("updateProjectV2Field"))
+    );
+}
+
+#[test]
+fn configured_option_matching_is_case_insensitive() {
+    let (sandbox, board) = configured();
+    board.rename_option("Queued", "queued");
+    let output = sandbox
+        .command()
+        .args(["sources", "status-options", "board"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(
+        stdout(&output),
+        "board: missing configured Status options: none\n"
     );
 }
 

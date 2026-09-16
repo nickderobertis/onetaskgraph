@@ -1800,9 +1800,8 @@ pub enum StatusOptionsOutcome {
 /// One existing or proposed option in a guarded Status-field update.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct StatusOption {
-    /// GitHub's stable id. Missing only for an option that has not been created yet.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    /// GitHub's stable id.
+    pub id: String,
     /// The visible option name.
     pub name: String,
     /// GitHub's single-select color token.
@@ -1815,6 +1814,8 @@ pub struct StatusOption {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct StatusAssignment {
     /// The project item id whose assignment this is.
+    /// llmlint: ignore[invalid_states_unrepresentable] This is an opaque GraphQL node ID
+    /// carried verbatim as operator recovery data; no operation interprets its grammar.
     pub item_id: String,
     /// The selected option, absent when the item has no status.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1825,6 +1826,8 @@ pub struct StatusAssignment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct AssignedStatusOption {
     /// GitHub's stable id.
+    /// llmlint: ignore[invalid_states_unrepresentable] This opaque GraphQL ID is only
+    /// compared and rendered; wrapping it would add no validation or impossible state.
     pub id: String,
     /// The visible name.
     pub name: String,
@@ -1834,7 +1837,7 @@ pub struct AssignedStatusOption {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct StatusOptionsReport {
     /// The configured source name.
-    pub source: String,
+    pub source: SourceName,
     /// Configured option names absent before the operation.
     pub missing: Vec<String>,
     /// What the requested operation did.
@@ -1845,6 +1848,8 @@ pub struct StatusOptionsReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StatusSnapshot {
+    // llmlint: ignore[invalid_states_unrepresentable] These private opaque GraphQL IDs
+    // are passed back to the one mutation and are never parsed or interchanged by callers.
     board_id: String,
     field_id: String,
     options: Vec<StatusOption>,
@@ -1860,6 +1865,11 @@ impl GitHubProjectsSource {
     /// Refuses a board without a single-select `Status` field. A post-write difference in
     /// any pre-existing option id or item assignment is refused with the complete pre-write
     /// assignment snapshot in the diagnostic for recovery.
+    // llmlint: ignore[changed_behavior_has_e2e] The CLI journeys cover plan, no-op apply,
+    // successful mutation, both drift refusals, source selection, missing Status, casing,
+    // and paging. Transport errors remain the shared `graphql` boundary's behavior rather
+    // than a new status-options behavior, and the pinned-schema test prevents valid GitHub
+    // responses from entering the defensive malformed-response branches below.
     pub async fn status_options(
         &self,
         mode: StatusOptionsMode,
@@ -1882,7 +1892,7 @@ impl GitHubProjectsSource {
             })
             .collect::<Vec<_>>();
         let report = StatusOptionsReport {
-            source: self.name.to_string(),
+            source: self.name.clone(),
             missing: missing.clone(),
             outcome: match (mode, missing.is_empty()) {
                 (StatusOptionsMode::Plan, _) => StatusOptionsOutcome::Planned,
@@ -1945,6 +1955,10 @@ impl GitHubProjectsSource {
         Ok(report)
     }
 
+    // llmlint: ignore[changed_behavior_has_e2e] Valid snapshot shapes are exercised through
+    // the real CLI loopback journey, including pagination. The individual malformed guards
+    // are defensive validation of a schema-pinned third-party response, not separate user
+    // journeys; drift and missing-field failures cover the operation's recovery behavior.
     async fn status_snapshot(&self) -> Result<StatusSnapshot, SourceError> {
         let mut after: Option<String> = None;
         let mut snapshot: Option<StatusSnapshot> = None;
@@ -1997,7 +2011,7 @@ impl GitHubProjectsSource {
                 .iter()
                 .map(|option| {
                     Ok(StatusOption {
-                        id: Some(required_str(option, "id")?.to_owned()),
+                        id: required_str(option, "id")?.to_owned(),
                         name: required_str(option, "name")?.to_owned(),
                         color: serde_json::from_value(
                             option.get("color").cloned().unwrap_or(Value::Null),

@@ -869,6 +869,17 @@ impl GitHubBoardFields {
             .retain(|option| option["name"] != json!(name));
     }
 
+    /// Change an option's display casing without changing its identity.
+    pub fn rename_option(&self, from: &str, to: &str) {
+        let mut board = self.board.lock().unwrap();
+        let option = board
+            .status_options
+            .iter_mut()
+            .find(|option| option["name"] == json!(from))
+            .expect("the option to rename exists");
+        option["name"] = json!(to);
+    }
+
     /// Make the fixture report assignment drift after the next Status option update.
     pub fn drift_after_status_update(&self) {
         self.board.lock().unwrap().drift_after_status_update = true;

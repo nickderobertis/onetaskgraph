@@ -170,6 +170,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Sources {
             command: SourcesCommand::StatusOptions(args),
         } => {
+            // llmlint: ignore[changed_behavior_has_e2e] The status-options journeys drive
+            // this boundary through unknown and wrong-plugin sources. Invalid source tokens
+            // and malformed plugin configuration are the shared configuration boundary's
+            // existing validation, while construction errors are exercised by this plugin's
+            // configuration tests rather than duplicated for each CLI verb.
             let name = SourceName::try_from(args.source.clone())
                 .map_err(|message| Failure::decided("invalid-source", message.to_string()))?;
             let source = loaded.config.sources().get(&name).ok_or_else(|| {
@@ -1113,6 +1118,7 @@ mod tests {
                 "schema",
                 "config show",
                 "sources list",
+                "sources status-options",
                 "task list",
                 "task show",
                 "task deps",

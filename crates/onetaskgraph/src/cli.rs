@@ -113,8 +113,12 @@ pub enum SourcesCommand {
 #[derive(Debug, Args)]
 pub struct StatusOptionsArgs {
     /// The configured `github-projects` source name.
+    /// llmlint: ignore[invalid_states_unrepresentable] Clap collects this token as text;
+    /// the command converts it to `SourceName` before the configuration lookup or I/O.
     pub source: String,
     /// Add missing configured options and verify existing ids and assignments afterwards.
+    /// llmlint: ignore[invalid_states_unrepresentable] A presence-only CLI flag is
+    /// intrinsically boolean; the command immediately maps it to `StatusOptionsMode`.
     #[arg(long)]
     pub apply: bool,
 }

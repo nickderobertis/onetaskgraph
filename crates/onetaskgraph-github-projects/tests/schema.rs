@@ -8,6 +8,50 @@
 use graphql_parser::{query, schema};
 use std::collections::{HashMap, HashSet};
 
+#[test]
+fn status_option_colors_match_the_pinned_graphql_vocabulary() {
+    use onetaskgraph_github_projects::StatusOptionColor;
+
+    let rust_schema = schemars::schema_for!(StatusOptionColor);
+    let rust_value = rust_schema.as_value();
+    let rust_variants = rust_value
+        .get("enum")
+        .or_else(|| rust_value.get("oneOf"))
+        .and_then(serde_json::Value::as_array)
+        .expect("StatusOptionColor is a closed enum");
+    let rust_colors = rust_variants
+        .iter()
+        .map(|color| {
+            color
+                .as_str()
+                .or_else(|| color.get("const").and_then(serde_json::Value::as_str))
+                .expect("a color token")
+                .to_owned()
+        })
+        .collect::<HashSet<_>>();
+    let graphql_schema =
+        schema::parse_schema::<String>(include_str!("fixtures/schema.graphql")).unwrap();
+    let graphql_colors = graphql_schema
+        .definitions
+        .iter()
+        .find_map(|definition| match definition {
+            schema::Definition::TypeDefinition(schema::TypeDefinition::Enum(value))
+                if value.name == "ProjectV2SingleSelectFieldOptionColor" =>
+            {
+                Some(
+                    value
+                        .values
+                        .iter()
+                        .map(|color| color.name.clone())
+                        .collect::<HashSet<_>>(),
+                )
+            }
+            _ => None,
+        })
+        .expect("the pinned schema defines GitHub's option colors");
+    assert_eq!(rust_colors, graphql_colors);
+}
+
 fn named_type<'a>(kind: &'a schema::Type<'a, String>) -> &'a str {
     match kind {
         schema::Type::NamedType(name) => name,
