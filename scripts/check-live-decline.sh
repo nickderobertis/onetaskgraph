@@ -92,14 +92,25 @@ run_journey() {
 # would then drive a decline that lane cannot produce and report the failure as the lane's.
 # Neither half is syntax-aware, so what stands behind them is the drive itself: a lane whose
 # real call this reads wrongly fails below, naming what it expected.
+#
+# **The stripped text is captured whole and matched in the shell, never piped into
+# `grep -q`.** Under `pipefail` that pipeline answers with `sed`'s status too, and `grep -q`
+# exits on its first match — so when `sed` still had text to write, it took SIGPIPE, the
+# pipeline read as no match, and a lane naming `Exclusivity::OneAtATime` was reported as
+# naming nothing. Whether it did depended on how fast the runner was, which is how the same
+# file passed on one machine and failed `check (ubuntu-latest)`.
+# scripts/check-live-decline-reading.sh drives that shape until the old form misreads it.
+stripped="$(sed 's|//.*||' "$JOURNEY")"
 exclusivity=""
 for variant in OneAtATime Shared; do
-  if sed 's|//.*||' "$JOURNEY" | grep -q "Exclusivity::$variant"; then
-    if [ -n "$exclusivity" ]; then
-      fail "$JOURNEY opens a session with both Exclusivity::$exclusivity and Exclusivity::$variant, so which precondition can decline it is ambiguous. Open one."
-    fi
-    exclusivity="$variant"
-  fi
+  case "$stripped" in
+    *"Exclusivity::$variant"*)
+      if [ -n "$exclusivity" ]; then
+        fail "$JOURNEY opens a session with both Exclusivity::$exclusivity and Exclusivity::$variant, so which precondition can decline it is ambiguous. Open one."
+      fi
+      exclusivity="$variant"
+      ;;
+  esac
 done
 
 if [ "$exclusivity" = "OneAtATime" ]; then
