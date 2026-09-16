@@ -39,10 +39,12 @@ mkdir -p "$scratch/tree/scripts" "$scratch/tree/crates/$CRATE/tests" "$scratch/b
 cp "$ROOT/$GUARD" "$scratch/tree/$GUARD" || fatal \
   "could not copy $GUARD into the scratch tree" \
   "restore it with 'git checkout -- $GUARD', then rerun"
-printf '{"targets": {"test": {"options": {"commands": []}}}}\n' > "$scratch/tree/crates/$CRATE/project.json"
+printf '{"targets": {"test": {"options": {"commands": []}}}}\n' > "$scratch/tree/crates/$CRATE/project.json" || fatal \
+  "could not write the fixture crate's project.json under $scratch" \
+  "check 'df -h' for free space, then rerun"
 
 # The three outcomes as the journey reports them, keyed on the environment the guard sets.
-cat > "$scratch/bin/cargo" <<'CARGO'
+cat > "$scratch/bin/cargo" <<'CARGO' || fatal "could not write the stand-in cargo under $scratch/bin" "check 'df -h' for free space, then rerun"
 #!/usr/bin/env bash
 if [ -f "${ONETASKGRAPH_LIVE_SEAT_DIR:-}" ]; then
   echo "live session DID NOT RUN: not a test failure in the code under test; no seat could be taken under ONETASKGRAPH_LIVE_SEAT_DIR"
@@ -54,7 +56,9 @@ if [ "${ONETASKGRAPH_LIVE_REQUIRED:-}" = 1 ]; then
 fi
 echo "live session skipped: no credential"
 CARGO
-chmod +x "$scratch/bin/cargo"
+chmod +x "$scratch/bin/cargo" || fatal \
+  "could not make the stand-in cargo under $scratch/bin executable" \
+  "check that \$TMPDIR is not mounted noexec, then rerun"
 
 # A first line, then about 400 KB of ordinary code with no comment on it, so every byte of it
 # survives the comment strip and follows the first line into whatever reads it.
@@ -63,7 +67,9 @@ write_journey() {
     printf '%s\n' "$1"
     # awk rather than `yes | head`, which is this very defect: `yes` takes SIGPIPE.
     awk 'BEGIN { for (i = 0; i < 16000; i++) print "    let padding = Some(1);" }'
-  } > "$scratch/tree/crates/$CRATE/tests/live.rs"
+  } > "$scratch/tree/crates/$CRATE/tests/live.rs" || fatal \
+    "could not write the fixture journey under $scratch" \
+    "check 'df -h' for free space and that awk is on PATH, then rerun"
 }
 
 failures=0
