@@ -3,6 +3,7 @@
 use schemars::{JsonSchema, Schema};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery,
@@ -270,7 +271,7 @@ pub trait TaskSource: Send + Sync {
         &self,
         id: &NativeId,
         key: &MetadataKey,
-        value: &serde_json::Value,
+        value: &Value,
     ) -> Result<Option<Task>, SourceError> {
         let _ = (id, key, value);
         Err(unwritable_metadata(self.kind(), "task"))
@@ -286,7 +287,7 @@ pub trait TaskSource: Send + Sync {
         &self,
         id: &NativeId,
         key: &MetadataKey,
-        value: &serde_json::Value,
+        value: &Value,
     ) -> Result<Option<Project>, SourceError> {
         let _ = (id, key, value);
         Err(unwritable_metadata(self.kind(), "project"))
@@ -305,7 +306,7 @@ pub trait TaskSource: Send + Sync {
         &self,
         id: &NativeId,
         key: &MetadataKey,
-        value: &serde_json::Value,
+        value: &Value,
     ) -> Result<Option<Document>, SourceError> {
         let _ = (id, key, value);
         Err(unwritable_metadata(self.kind(), "document"))

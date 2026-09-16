@@ -625,6 +625,16 @@ them do; this is the inventory of what is owed, not a status board.
 47. A delivered task the destination refuses — a board lacking `Queued` — is reported failed
     with the failure document, the deliverer's own write lands and reads back, and the verb
     exits `4`.
+48. One metadata key of a task, a project and a document is set through the binary on a
+    folder of Markdown, over the in-process boundary and the stdio plugin protocol alike: the
+    file changes by that one entry and no other byte, a later invocation reads the key back
+    beside every other field as it was, the answer validates against `MetadataSet`, and
+    setting the value a key already holds writes nothing.
+49. Every refusal a metadata set owes exits non-zero with the problem and a next action: an
+    unqualified id, a key with no dot or an empty segment or in the `onetaskgraph.`
+    namespace, and a value that is not JSON — each before any source is started — and an
+    unknown source, a source with no write side, a record the source does not hold, and a
+    stdio plugin whose handshake does not declare the write, which is never asked.
 
 ## What a copied document's references are pointed at
 

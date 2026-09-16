@@ -201,6 +201,7 @@ the source can do natively, and what configuration it is being built with.
 | `meters` | boolean | Whether this plugin answers `metering`. Optional; see §3.4. |
 | `statuses` | array of strings | The status categories this plugin knows. Optional; see §3.5. |
 | `task_updates` | boolean | Whether this plugin answers the two narrow task writes and holds a task's `delivers` and `delivered_by`. Optional; see §3.6. |
+| `metadata_updates` | boolean | Whether this plugin answers the three narrow metadata writes. Optional; see §3.7. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -299,6 +300,17 @@ either method — the call is refused before anything is sent, naming the plugin
 handed a `write_task` whose task carries a non-empty `delivers` or `delivered_by`, which a
 plugin written before those lists would otherwise drop in silence under §2.1.
 
+### 3.7 `metadata_updates`
+
+A boolean: `true` when this plugin answers `set_task_metadata`, `set_project_metadata` and
+`set_document_metadata` (§4.18), and `false` when it does not.
+
+The member is **optional**, and an absent one means `false`. Such a plugin is never sent any
+of the three: the call is refused before anything is sent with `{"kind": "refused"}` and the
+message `the <kind> plugin cannot write a task's metadata on its own` — `a project's` or
+`a document's` for the other two — which is exactly what a plugin that declares the member and
+cannot make the write answers with, so a caller cannot tell the two apart and has no reason to.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -331,6 +343,9 @@ its `result`; the JSON shape of every contract type in them is what
 | `delete_comment` | `TaskSource::delete_comment` |
 | `set_task_status` | `TaskSource::set_task_status` |
 | `set_delivered_by` | `TaskSource::set_delivered_by` |
+| `set_task_metadata` | `TaskSource::set_task_metadata` |
+| `set_project_metadata` | `TaskSource::set_project_metadata` |
+| `set_document_metadata` | `TaskSource::set_document_metadata` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -928,6 +943,43 @@ the `class`, `kind`, `source`, `message` and `retry_after_seconds` a failure doc
 under its own `failure` member — not that whole document nested again. A dry run writes
 nothing, so it re-evaluates no task and its `delivered` list is empty.
 
+### 4.18 `set_task_metadata`, `set_project_metadata` and `set_document_metadata`
+
+Only a plugin that answered `"supported"` to §3.3 **and** `metadata_updates: true` to §3.7 is
+ever sent any of these, and `set_document_metadata` only to one that also declared `documents`
+`"native"` (§4.2). Each sets one key of one record's metadata and changes nothing else.
+
+```json
+{ "id": "18", "method": "set_task_metadata", "params": { "id": "ENG-1", "key": "myapp.review", "value": { "approved": true } } }
+{ "id": "18", "result": { "task": { "id": "ENG-1", "title": "…", "metadata": { "myapp.review": { "approved": true } }, "…": "…" } } }
+{ "id": "19", "method": "set_project_metadata", "params": { "id": "P-1", "key": "myapp.review", "value": 3 } }
+{ "id": "19", "result": { "project": null } }
+{ "id": "20", "method": "set_document_metadata", "params": { "id": "D-1", "key": "myapp.review", "value": null } }
+{ "id": "20", "result": { "document": { "id": "D-1", "title": "…", "metadata": { "myapp.review": null }, "…": "…" } } }
+```
+
+`id` is the `NativeId` of a task, a project or a document at **this** source. `key` is a
+`MetadataKey`: a string of two or more non-empty dot-separated segments whose first segment is
+not `onetaskgraph`, which the engine never sends otherwise and a plugin may refuse with
+`{"kind": "malformed"}` if it is ever handed one. `value` is any JSON value, `null` included.
+
+The plugin holds `value` under `key` — adding the key when the record does not hold it and
+replacing what it holds when it does — and changes **nothing else**: every other metadata key,
+the title, content, labels, status, dependencies, `delivers`, `delivered_by`, project and
+comments stay as they are. A `value` the record already holds under `key` owes no write at all.
+`result.task`, `result.project` or `result.document` is the record as the plugin reads it
+**after** the write — a `Task`, a `Project` or a `Document`, in the shape `get_task`,
+`get_project` or `get_document` answers with (§4.4, §4.11) — or `null` when this plugin holds
+no such record. The engine reports the value
+that record holds under `key`, not the one it sent, so a plugin that stores a value in another
+shape says so by reading it back.
+
+A plugin that cannot write one key on its own refuses with `{"kind": "refused"}` and the
+message §3.7 spells; one that cannot make this particular write without changing something
+else — a record whose stored form it cannot edit that narrowly — refuses with
+`{"kind": "refused"}`, naming the record and why. Metadata is not status: the engine keeps no
+delivered task in step after any of these.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every
@@ -1015,6 +1067,11 @@ without it, refused by name, or reported as `"unknown"` under its own name. The 
 the two lists reach only a plugin that answered `task_updates: true`, which a plugin written
 before them cannot have done, so such a plugin is refused by name before anything is sent
 rather than asked for a method it has never heard of or handed a list it would drop.
+
+The `metadata_updates` member of §3.7 and the three methods of §4.18 were added **without** a
+bump, for the reason the methods of §4.17 were: they reach only a plugin that answered
+`metadata_updates: true`, which a plugin written before them cannot have done, so such a plugin
+is refused by name before anything is sent.
 
 A version is bumped when a change is **not** safe under §2.1 — a member removed, a
 type narrowed, a meaning changed, a method removed or renamed. Adding an optional

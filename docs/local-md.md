@@ -119,6 +119,35 @@ with no word is refused in the words a copy of that status is refused with — `
 reads "queued" as unknown, not queued` — and a task with no `status:` line gains one as the
 last line of its front matter.
 
+## Setting one metadata key on its own
+
+`onetaskgraph task|project|document metadata set <source>:<id> <key> <value>` edits exactly
+one entry of the record's `metadata:` block and **no other byte of the file**. An entry
+already holding the key is replaced where it is; a missing one is added as the last entry of
+the block; a file with no `metadata:` block gains one as the last line of its front matter.
+The entry written is one line, `"<key>": <compact JSON>`, at the block's own indent — two
+spaces when the block is new — and a Windows file keeps its line endings. A key is matched by
+what it decodes to, so `myapp.note:`, `'myapp.note':` and `"myapp.note":` all name the same
+entry, and an entry is everything that belongs to it: a nested block mapping, a block scalar
+with blank lines inside it, and an indentless `- item` sequence under its key.
+
+Setting the value a key already holds writes nothing at all — the file's bytes, inode and
+modification time are unchanged, and no staging file is created.
+
+The edit is checked before anything is written: the edited front matter has to read back as
+the same record with that one key set to that value. Front matter that cannot be edited that
+narrowly is **refused naming the file and the reason**, and the file is left as it was — it
+is never reformatted to make room. That covers a `metadata:` written on one line as a flow
+mapping, a block indented with a tab or unevenly, an entry whose key this source cannot read,
+a key held twice, and a value whose JSON would not read back as itself; the refusal's next
+action is to write the block as one `key: value` entry to a line and set the key again.
+
+The file is replaced atomically: the new text is written to a staging file beside the record,
+named `.<file>.<pid>-<n>.onetaskgraph-staging`, and renamed over it, so a reader walking the
+folder at the same moment reads the old file or the new one and never a part of either. The
+staging name does not end in `.md`, and a walk of the folder skips it by name, so it is never
+listed as a record.
+
 ## Documents
 
 A document is one piece of information that lives in a project and is not work — a design,

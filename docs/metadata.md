@@ -183,6 +183,40 @@ do not: status goes to the board's `Status` single-select and the issue's own op
 closed state, `onetaskgraph.origin` goes to a source-owned `onetaskgraph.origin` text
 field, and dependencies go to `blockedBy` and to sub-issue links.
 
+## Setting one key on its own
+
+`onetaskgraph task|project|document metadata set <ID> <KEY> <VALUE>` sets one key of one
+record's metadata and changes nothing else about the record: the key is added when the record
+does not hold it and replaced when it does, every other key and every other field is left as
+it was, and a key already holding the value is a write that changes nothing. Metadata is not
+status, so no delivered task is re-evaluated after one.
+
+- **`ID`** is qualified, `<source>:<native-id>`.
+- **`KEY`** is `<namespace>.<name>`: two or more non-empty dot-separated segments whose first
+  segment is not `onetaskgraph`. The whole namespace is refused rather than the six keys above,
+  because every key this product reserves — now or later — lives under it and is the store's
+  to keep in step. `MetadataKey` in the contract crate is the one spelling of that rule, and it
+  is enforced wherever one is decoded, the plugin protocol included.
+- **`VALUE`** is exactly one JSON value, parsed strictly as JSON and never as YAML, so `yes`
+  and `2026-01-01` are refused rather than silently given a type.
+
+An unqualified id, a key or a value outside those shapes is refused **before any source is
+built or asked**. What the verb answers — the `MetadataSet` root of the schema bundle — is the
+id, the key, the value **as the source reads the record back after the write**, which is not
+always the value it was handed, and the record's location when the source reports one.
+
+| source | a metadata set |
+| --- | --- |
+| `local-md` | edits the one entry of the front matter's `metadata:` block and no other byte, atomically, and refuses by name a block it cannot edit that narrowly — `docs/local-md.md` has the whole rule |
+| `github-projects` | one update of the issue body that changes only its trailing metadata slot, for a task, a project and a document issue alike; no title, label, status or field request, and nothing at all when the key already holds the value |
+| `in-memory` | holds the value for the life of its process |
+| `linear` | refuses: `the linear plugin cannot write a task's metadata on its own`, with `a project's` or `a document's` for the other two verbs |
+| a stdio plugin | answers the three methods of `docs/plugin-protocol.md` §4.18 when its handshake declares `metadata_updates` (§3.7), and is refused in the words Linear uses, without being asked, when it does not |
+
+A source with no write side is refused naming its plugin, a record the source does not hold is
+refused naming the id, and a source declaring it has no documents is never asked for a document
+one. These are the same refusals `task status set` makes.
+
 ## Reading and writing are different obligations
 
 **On read, every source is faithful about what it holds.** It returns the metadata it can
