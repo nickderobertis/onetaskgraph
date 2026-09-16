@@ -24,7 +24,7 @@ use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SourceName,
     TextQuery,
 };
-use onetaskgraph_status_options::StatusOptionsReport;
+use onetaskgraph_status_options::{StatusOptionsMode, StatusOptionsReport};
 use serde::Serialize;
 
 use crate::cli::{
@@ -175,8 +175,14 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             // and malformed plugin configuration are the shared configuration boundary's
             // existing validation, while construction errors are exercised by this plugin's
             // configuration tests rather than duplicated for each CLI verb.
-            let report =
-                onetaskgraph_status_options::reconcile(loaded, &args.source, args.apply).await?;
+            let name = SourceName::try_from(args.source.clone())
+                .map_err(|message| Failure::decided("invalid-source", message.to_string()))?;
+            let mode = if args.apply {
+                StatusOptionsMode::Apply
+            } else {
+                StatusOptionsMode::Plan
+            };
+            let report = onetaskgraph_status_options::reconcile(loaded, &name, mode).await?;
             let rendered = match loaded.config.output() {
                 OutputFormat::Json => json(&report, "the status-options report")?,
                 OutputFormat::Text => render::status_options(&report),

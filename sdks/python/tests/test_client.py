@@ -7,8 +7,10 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import tomllib
 from collections.abc import Coroutine
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -187,6 +189,99 @@ def test_status_options_method_passes_source_and_apply_to_the_real_binary(
         run(client.sources_status_options(source=SourceName(root="memory"), apply=True))
     assert caught.value.exit_code == 1
     assert "source memory uses plugin in-memory" in str(caught.value)
+
+
+def test_status_options_method_decodes_a_real_binary_plan(binary: Path, tmp_path: Path) -> None:
+    """Decode the adapter's real GraphQL response through the generated SDK model."""
+
+    class BoardHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802  # stdlib handler API names the method.
+            length = int(self.headers["content-length"])
+            request = json.loads(self.rfile.read(length))
+            assert "optionId" in request["query"]
+            options = [
+                {
+                    "id": f"OPT-{index}",
+                    "name": name,
+                    "color": "GRAY",
+                    "description": "",
+                }
+                for index, name in enumerate(["Backlog", "Todo", "Queued", "In Progress"], start=1)
+            ]
+            response = json.dumps(
+                {
+                    "data": {
+                        "owner": {
+                            "projectV2": {
+                                "id": "PVT-board",
+                                "fields": {
+                                    "nodes": [
+                                        {
+                                            "id": "FIELD-status",
+                                            "name": "Status",
+                                            "options": options,
+                                        }
+                                    ],
+                                    "pageInfo": {"hasNextPage": False},
+                                },
+                                "items": {
+                                    "nodes": [],
+                                    "pageInfo": {
+                                        "hasNextPage": False,
+                                        "endCursor": None,
+                                    },
+                                },
+                            }
+                        }
+                    }
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), BoardHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        config = {
+            "sources": {
+                "board": {
+                    "plugin": "github-projects",
+                    "config": {
+                        "owner": "fixture-owner",
+                        "project_number": 7,
+                        "token_env": "TEST_GITHUB_TOKEN",
+                        "endpoint": f"http://127.0.0.1:{server.server_port}",
+                    },
+                }
+            }
+        }
+        (tmp_path / "onetaskgraph.yaml").write_text(json.dumps(config), encoding="utf-8")
+        client = Client(
+            binary,
+            cwd=tmp_path,
+            environment={**os.environ, "TEST_GITHUB_TOKEN": "fixture-token"},
+        )
+        report = run(client.sources_status_options(source=SourceName(root="board")))
+        assert report.source.root == "board"
+        assert report.missing == []
+        assert report.outcome.value == "planned"
+        assert [option.id.root for option in report.existing] == [
+            "OPT-1",
+            "OPT-2",
+            "OPT-3",
+            "OPT-4",
+        ]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def landed(outcome: CopyOutcome) -> str:
