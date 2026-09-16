@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.34](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.33...onetaskgraph-plugin-api-v0.2.34) - 2026-09-16
+
+### Added
+
+- *(metadata)* add task, document and project metadata set verbs ([#1314](https://github.com/nickderobertis/onetaskgraph/pull/1314))
+
 ## [0.2.33](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.32...onetaskgraph-plugin-api-v0.2.33) - 2026-09-16
 
 ### Fixed
