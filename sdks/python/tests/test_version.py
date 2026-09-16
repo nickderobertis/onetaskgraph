@@ -32,4 +32,7 @@ def test_the_supported_floor_is_the_interpreter_every_lane_runs() -> None:
     assert project["tool"]["ty"]["environment"]["python-version"] == floor
     assert (WORKSPACE / ".python-version").read_text(encoding="utf-8").strip() == floor
     major, minor = (int(part) for part in floor.split("."))
-    assert sys.version_info[:2] >= (major, minor)
+    running = sys.version_info[:2]
+    assert running == (major, minor), (
+        f"these tests run on Python {running[0]}.{running[1]}, not the declared floor {floor}"
+    )
