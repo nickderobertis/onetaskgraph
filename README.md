@@ -431,6 +431,36 @@ something you have to reason about: it prints every setting, its value, and the 
 came from — which file, which environment variable, or which flag — and `--json` renders
 the same thing for a script.
 
+### Relative paths in a configuration document
+
+**A relative filesystem path a configuration document supplies is resolved against the
+directory holding that document.** `onetaskgraph.yaml` is discovered by walking *upward*
+from the working directory, so the document is very often not in the directory you ran the
+command in — a `local-md` `root:` of `plans` in a checkout's own document means that
+checkout's `plans`, whether you run from the checkout, from a crate three levels inside it,
+or from a worktree beside it.
+
+**A relative path the environment layer or a flag supplies keeps resolving against the
+process working directory**, because there is no document to rebase it on:
+`ONETASKGRAPH_SOURCES__PLANS__CONFIG__ROOT=plans` and `--set
+sources.plans.config.root=plans` both mean `plans` under wherever the command is running.
+Naming the directory outright is still how a launcher points a run at a store that is
+neither beside its own document nor beside its working directory:
+
+```bash
+ONETASKGRAPH_SOURCES__PLANS__CONFIG__ROOT=/srv/plans onetaskgraph task list
+```
+
+`onetaskgraph config show` reports the resolved path beside the document that supplied it,
+so what a run will really read is something you can see rather than something you have to
+work out.
+
+Two limits are worth stating. The rule reaches only the configuration fields a plugin
+itself declares as paths, and each plugin's own page says which of its fields those are.
+And it stops at the `subprocess` seam: what a `settings:` block holds belongs to a plugin
+this binary may never have compiled, so a relative path in there is resolved by the child
+against its own working directory.
+
 ### Credentials
 
 A configuration document never holds a credential — it names the environment variable that
@@ -483,9 +513,19 @@ A source behind that seam is a source like any other: it declares its own capabi
 so a plan says `pushed down` for what it applies itself, and the engine compensates for
 the rest exactly as it does in process.
 
-`onetaskgraph-source` ships beside the main binary and is the reference implementation of
-the plugin side — it hosts any built-in plugin over the same protocol, so you can read a
-working peer beside the specification.
+`onetaskgraph-source` is the **reference implementation of that plugin side**, and the test
+host this repository drives its own journeys against: it hosts any built-in plugin over the
+same protocol, so every journey runs a second time over a real pipe to a real second
+process, and so you can read a working peer beside the specification.
+
+**It is not part of the command-line interface.** Nothing `onetaskgraph` does needs it at
+run time, and nothing may depend on finding it beside an installed CLI or resolve it off a
+search path — a downstream test chain that did picked up an unrelated stale build and
+treated a reference host as a runtime dependency. Read it, or build it, from a checkout:
+
+```bash
+cargo build -p onetaskgraph --bin onetaskgraph-source
+```
 
 ## Licence
 

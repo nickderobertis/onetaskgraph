@@ -13,9 +13,11 @@ name = "onetaskgraph"
 path = "src/main.rs"
 
 # The plugin side of the stdio protocol, hosting any plugin of this build in a child
-# process. It ships because it is the reference implementation a plugin author reads
-# beside `docs/plugin-protocol.md`, and it is what the journeys configure so that every
-# one of them runs a second time over a real pipe to a real second process.
+# process. It is a binary target because it is the reference implementation a plugin author
+# reads beside `docs/plugin-protocol.md`, and because it is what the journeys configure so
+# that every one of them runs a second time over a real pipe to a real second process. It is
+# not part of the command-line interface: nothing may depend on finding it beside an
+# installed `onetaskgraph`.
 [[bin]]
 name = "onetaskgraph-source"
 path = "src/bin/onetaskgraph-source.rs"

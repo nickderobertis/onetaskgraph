@@ -11,8 +11,11 @@ trait method with its request and response shapes, the error envelope, and what 
 peer does when the other side speaks a version it does not know. Both halves of it
 are implemented in `onetaskgraph-core`: `SubprocessSource` is the engine's side, and
 `serve` is a reference plugin side that hosts any plugin of this build — which is
-what the shipped `onetaskgraph-source` program runs, and what lets the shared
-journeys run every one of themselves a second time over a real pipe. Where this
+what the `onetaskgraph-source` reference host runs, and what lets the shared
+journeys run every one of themselves a second time over a real pipe. That host is a
+binary target of the `onetaskgraph` crate rather than part of its command-line
+interface: build it from a checkout to read a working peer, and do not depend on
+finding it beside an installed CLI. Where this
 document and the trait disagree, that is a defect in one of them and is worth
 reporting rather than reconciling by guesswork.
 

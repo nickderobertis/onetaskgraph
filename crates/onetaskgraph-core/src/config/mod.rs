@@ -9,12 +9,20 @@
 //!
 //! Reading is [`discovery`]'s and nothing else's; everything else here is a function
 //! of its arguments.
+//!
+//! One thing a leaf setting carries besides its value is load-bearing past this layer:
+//! **a relative filesystem path a configuration document supplies is resolved against the
+//! directory holding that document**, while one the environment or a flag supplies keeps
+//! resolving against the process working directory. [`relative`] is where that happens and
+//! why it cannot happen in the plugin that reads the path; `README.md`, under "Relative
+//! paths in a configuration document", states it for a user.
 
 mod discovery;
 mod effective;
 mod environment_layer;
 mod error;
 mod layer;
+mod relative;
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
@@ -36,6 +44,7 @@ pub use effective::EffectiveConfig;
 pub use environment_layer::{ENVIRONMENT_PREFIX, variable_for};
 pub use error::ConfigError;
 pub use layer::{Layer, Merged, Origin, Setting, SettingPath, merge, unflatten, value_from_text};
+pub use relative::resolve_document_relative_paths;
 
 /// The variable that moves the credentials file somewhere else.
 pub const SECRETS_FILE_VARIABLE: &str = "ONETASKGRAPH_SECRETS_FILE";
@@ -388,7 +397,11 @@ pub fn load(
     layers.push(environment_layer::layer(environment)?);
     layers.push(flags.clone());
 
-    let merged = merge(&layers);
+    let mut merged = merge(&layers);
+    // Before the block reaches a plugin, and before `config show` reports it: a plugin is
+    // handed values and no origins, so this is the only layer that can tell a path a
+    // document supplied from one the environment or a flag did. See [`relative`].
+    resolve_document_relative_paths(&mut merged)?;
     let config = Config::from_document(unflatten(&merged))?;
 
     // Before the sources are resolved, as the contract says: a plugin reads its

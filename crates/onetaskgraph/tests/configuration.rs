@@ -1462,3 +1462,246 @@ fn a_credentials_file_that_cannot_be_read_stops_the_run_rather_than_being_skippe
         );
     }
 }
+
+// Where a relative path in a configuration document is measured from: the directory
+// holding the document, not the directory the command was run in. The two runs below are
+// the shapes a launcher really produces — a command run deep inside a checkout, and one
+// run in a worktree beside it — and each carries a decoy store under its own working
+// directory, so a root resolved against that directory answers with the wrong plans rather
+// than merely failing to find any.
+
+fn store(sandbox: &Sandbox, relative: &str, native: &str) -> std::path::PathBuf {
+    let root = sandbox.subdirectory(&format!("{relative}/tasks"));
+    std::fs::write(
+        root.join(format!("{native}.md")),
+        format!("---\ntitle: {native}\nstatus: todo\n---\nthe plan\n"),
+    )
+    .expect("a task file");
+    sandbox.project().join(relative)
+}
+
+/// A checkout whose document names a relative root, a worktree beside it, and a decoy
+/// store under each of the two working directories a command is run from.
+fn checkout_and_worktree(sandbox: &Sandbox) -> std::path::PathBuf {
+    let shared = store(sandbox, "plans", "ship");
+    store(sandbox, "checkout/crates/plans", "decoy-in-the-checkout");
+    store(sandbox, "worktrees/feature/plans", "decoy-in-the-worktree");
+    sandbox.project_document(
+        "sources:\n  plans:\n    plugin: local-md\n    config:\n      root: plans\n",
+    );
+    shared
+}
+
+/// The name this source reports for one of `store`'s task files.
+///
+/// Resolved rather than merely joined, because that is what the plugin reports: it
+/// canonicalizes its root before joining anything onto it, and on Windows the resolved
+/// name is both `\\?\`-prefixed and spelled with the long form of every component the
+/// temporary tree abbreviates (`RUNNER~1`). Resolving here too makes the comparison two
+/// names for one file rather than two spellings of one name.
+fn task_file(store: &std::path::Path, native: &str) -> String {
+    store
+        .join("tasks")
+        .join(format!("{native}.md"))
+        .canonicalize()
+        .expect("the task file this store holds")
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn listed_from(sandbox: &Sandbox, directory: &std::path::Path) -> Vec<(String, String)> {
+    let output = sandbox
+        .command_in(directory)
+        .args(["task", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let response: Value =
+        serde_json::from_str(&stdout(&output)).expect("`task list --json` emits one document");
+    response["items"]
+        .as_array()
+        .expect("items is a list")
+        .iter()
+        .map(|entry| {
+            (
+                entry["id"].as_str().expect("a qualified id").to_owned(),
+                entry["item"]["location"]["path"]
+                    .as_str()
+                    .expect("this source reports the file behind each task")
+                    .to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_relative_root_a_document_supplies_is_read_from_the_documents_directory_deep_in_a_checkout() {
+    let sandbox = Sandbox::new();
+    let shared = checkout_and_worktree(&sandbox);
+
+    assert_eq!(
+        listed_from(&sandbox, &sandbox.project().join("checkout/crates")),
+        vec![("plans:ship".to_owned(), task_file(&shared, "ship"))],
+        "the store the document names, not the one beside the working directory"
+    );
+}
+
+#[test]
+fn a_relative_root_a_document_supplies_is_read_from_the_documents_directory_in_a_sibling_worktree()
+{
+    let sandbox = Sandbox::new();
+    let shared = checkout_and_worktree(&sandbox);
+
+    assert_eq!(
+        listed_from(&sandbox, &sandbox.project().join("worktrees/feature")),
+        vec![("plans:ship".to_owned(), task_file(&shared, "ship"))],
+        "a worktree beside the checkout reads the same configured store, not its own"
+    );
+}
+
+#[test]
+fn the_verb_that_names_the_layer_reports_the_resolved_root_and_still_names_the_document() {
+    let sandbox = Sandbox::new();
+    let shared = checkout_and_worktree(&sandbox);
+    let document = sandbox.project().join("onetaskgraph.yaml");
+
+    let output = sandbox
+        .command_in(&sandbox.project().join("worktrees/feature"))
+        .args(["config", "show", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let root = setting(&shown(&output), "sources.plans.config.root").clone();
+    assert_eq!(root["value"], shared.to_string_lossy().to_string());
+    assert_eq!(root["origin"]["layer"], "file");
+    assert_eq!(
+        root["origin"]["path"],
+        document.to_string_lossy().to_string(),
+        "resolving the path does not take the origin with it"
+    );
+}
+
+#[test]
+fn a_relative_root_the_environment_supplies_is_read_from_the_process_working_directory() {
+    let sandbox = Sandbox::new();
+    checkout_and_worktree(&sandbox);
+    let worktree = sandbox.project().join("worktrees/feature");
+
+    let output = sandbox
+        .command_in(&worktree)
+        .env("ONETASKGRAPH_SOURCES__PLANS__CONFIG__ROOT", "plans")
+        .args(["task", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let response: Value = serde_json::from_str(&stdout(&output)).expect("one document");
+    assert_eq!(
+        response["items"][0]["id"], "plans:decoy-in-the-worktree",
+        "there is no document behind an environment variable to rebase it on, so it goes \
+         on meaning what it has always meant: {response:#}"
+    );
+
+    let shown_root = sandbox
+        .command_in(&worktree)
+        .env("ONETASKGRAPH_SOURCES__PLANS__CONFIG__ROOT", "plans")
+        .args(["config", "show", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let root = setting(&shown(&shown_root), "sources.plans.config.root").clone();
+    assert_eq!(root["value"], "plans", "reported exactly as it was given");
+    assert_eq!(root["origin"]["layer"], "environment");
+}
+
+#[test]
+fn a_relative_root_a_flag_supplies_is_read_from_the_process_working_directory() {
+    let sandbox = Sandbox::new();
+    checkout_and_worktree(&sandbox);
+
+    let output = sandbox
+        .command_in(&sandbox.project().join("checkout/crates"))
+        .args([
+            "task",
+            "list",
+            "--json",
+            "--set",
+            "sources.plans.config.root=plans",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let response: Value = serde_json::from_str(&stdout(&output)).expect("one document");
+    assert_eq!(
+        response["items"][0]["id"], "plans:decoy-in-the-checkout",
+        "a flag has no document either: {response:#}"
+    );
+}
+
+#[test]
+fn an_absolute_root_a_launcher_exports_still_reaches_the_store_it_names() {
+    // The workaround every cross-directory launcher carries, and goes on carrying for a
+    // reason of its own: a dispatched worker whose worktree holds its own copy of the
+    // document needs the store named outright, not the one beside that copy.
+    let sandbox = Sandbox::new();
+    let shared = checkout_and_worktree(&sandbox);
+
+    let output = sandbox
+        .command_in(&sandbox.project().join("worktrees/feature"))
+        .env(
+            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ROOT",
+            shared.to_string_lossy().to_string(),
+        )
+        .args(["task", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let response: Value = serde_json::from_str(&stdout(&output)).expect("one document");
+    assert_eq!(response["items"][0]["id"], "plans:ship", "{response:#}");
+}
+
+#[test]
+fn an_empty_root_a_document_supplies_is_not_rebased_onto_the_documents_directory() {
+    // The one relative-looking value the rebasing leaves alone. `""` joined onto the
+    // document's directory *is* that directory, so rebasing it would quietly turn a
+    // setting that fails today into a working source rooted wherever the document
+    // happens to sit — a value that said nothing would start meaning something. The
+    // sentinel below is what that silent promotion would find: a task the run must not
+    // list, in the very directory `""` would have become.
+    let sandbox = Sandbox::new();
+    let beside_the_document = sandbox.subdirectory("tasks");
+    std::fs::write(
+        beside_the_document.join("would-be-rebased.md"),
+        "---\ntitle: would-be-rebased\nstatus: todo\n---\nthe plan\n",
+    )
+    .expect("a task file");
+    sandbox.project_document(
+        "sources:\n  plans:\n    plugin: local-md\n    config:\n      root: \"\"\n",
+    );
+    let working_directory = sandbox.subdirectory("checkout/crates");
+
+    let output = sandbox
+        .command_in(&working_directory)
+        .args(["task", "list", "--json"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    let listed = stdout(&output);
+    assert!(
+        !listed.contains("would-be-rebased"),
+        "an empty root stays empty rather than becoming the document's own directory: {listed}"
+    );
+    let message = stderr(&output);
+    assert!(
+        message.contains("plans"),
+        "the failure names the source that could not be read: {message}"
+    );
+}

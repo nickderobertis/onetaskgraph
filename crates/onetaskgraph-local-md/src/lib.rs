@@ -29,6 +29,15 @@
 //! | `project_dependencies` | **Supported and proven,** in both directions, the same way. |
 //! | `max_page_size` | **Supported and proven.** [`MAX_PAGE_SIZE`], the largest page one folder scan returns. |
 //!
+//! # Where this source's root is measured from
+//!
+//! [`LocalMdConfig::root`] may be relative, and which directory it is relative to is the
+//! configuration layer that supplied it rather than anything this source decides: a
+//! configuration document's relative root is resolved against the directory holding that
+//! document before this plugin is built, and one from the environment layer or a flag
+//! resolves against the process working directory. See [`DOCUMENT_RELATIVE_FIELDS`], and
+//! "Relative paths in a configuration document" in `README.md` for the whole rule.
+//!
 //! # Where this source says an entity is
 //!
 //! Every task, project and document this source reports carries a `Location::Path` naming
@@ -59,6 +68,28 @@ use serde::{Deserialize, Serialize};
 
 /// The registry name for this plugin.
 pub const KIND: &str = "local-md";
+
+/// The `config:` fields of this plugin whose value is a filesystem path, as dotted paths
+/// into the block.
+///
+/// A relative value at one of these, **supplied by a configuration document**, is resolved
+/// against the directory holding that document before this plugin is built; supplied
+/// through the environment or a flag it keeps resolving against the process working
+/// directory, because there is no document to rebase it on. The rule is stated once, for a
+/// reader of either side, under "Relative paths in a configuration document" in
+/// `README.md`.
+///
+/// Spelled here because a plugin's fields are the plugin's: this is what
+/// [`SourcePlugin::document_relative_paths`] answers with, and
+/// `document_relative_fields_are_fields_this_plugin_declares` in `tests/plugin.rs` holds
+/// every name here to the configuration schema this plugin publishes.
+// llmlint: ignore[invalid_states_unrepresentable] These are field names of this plugin's
+// own `config:` block, and the type that would make a wrong one unrepresentable does not
+// exist: every string is a syntactically valid field name, and what makes one *valid* is
+// being a property of the schema `config_schema` publishes, which is a fact about this
+// plugin rather than about a type. `document_relative_fields_are_fields_this_plugin_declares`
+// in `tests/plugin.rs` is the executable check that holds every name here to that schema.
+pub const DOCUMENT_RELATIVE_FIELDS: &[&str] = &["root"];
 /// The largest page returned by a folder scan.
 pub const MAX_PAGE_SIZE: u32 = 200;
 
@@ -73,6 +104,18 @@ pub struct LocalMdConfig {
     pub status_mapping: BTreeMap<String, StatusCategory>,
 }
 
+/// The mapping a source with no `status_mapping:` of its own reads statuses through.
+///
+/// **Every normalized category's own canonical word classifies as that category**, so a
+/// task that persists the word onetaskgraph itself prints — `in-progress` as readily as
+/// `queued` or `done` — reads back as what it says rather than as unknown. That is a rule
+/// about the whole vocabulary rather than a list somebody keeps in step:
+/// `every_normalized_category_word_reads_back_as_itself` in `tests/status_mapping.rs`
+/// drives it off [`StatusCategory`]'s own variants, so a category added later with no
+/// word here fails there.
+///
+/// The display aliases sit beside those words rather than instead of them: `in progress`
+/// and `doing` for `in-progress`, `canceled` for `cancelled`.
 fn default_statuses() -> BTreeMap<String, StatusCategory> {
     [
         ("draft", StatusCategory::Draft),
@@ -80,6 +123,7 @@ fn default_statuses() -> BTreeMap<String, StatusCategory> {
         ("todo", StatusCategory::Todo),
         ("queued", StatusCategory::Queued),
         ("in progress", StatusCategory::InProgress),
+        ("in-progress", StatusCategory::InProgress),
         ("doing", StatusCategory::InProgress),
         ("done", StatusCategory::Done),
         ("cancelled", StatusCategory::Cancelled),
@@ -100,6 +144,9 @@ impl SourcePlugin for Plugin {
     }
     fn config_schema(&self) -> Schema {
         schema_for!(LocalMdConfig)
+    }
+    fn document_relative_paths(&self) -> &'static [&'static str] {
+        DOCUMENT_RELATIVE_FIELDS
     }
     fn build(
         &self,
@@ -1969,6 +2016,12 @@ impl LocalMdSource {
     /// The category's own spelling when the mapping reads that word as it — `queued`, or
     /// `in progress` for `in-progress` — else the first word the mapping sends there, else the
     /// category's own spelling, which [`Self::representable_status`] then refuses by name.
+    ///
+    /// The spoken spelling is preferred over the hyphenated one where the mapping holds
+    /// both, which the default mapping now does: `in-progress` is there so a task that
+    /// persists the canonical word reads back as that category, and what a person reads in
+    /// a file this source writes stays `in progress`. Stating the preference is what keeps
+    /// that from resting on the order a `BTreeMap` happens to hold two words in.
     fn word_for(&self, category: StatusCategory) -> String {
         let spelled = category_name(category);
         let spoken = spelled.replace('-', " ");
@@ -1980,7 +2033,8 @@ impl LocalMdSource {
             .collect();
         words
             .iter()
-            .find(|word| word.as_str() == spelled || word.as_str() == spoken)
+            .find(|word| word.as_str() == spoken)
+            .or_else(|| words.iter().find(|word| word.as_str() == spelled))
             .or_else(|| words.first())
             .map_or_else(|| spelled.to_owned(), |word| (*word).clone())
     }

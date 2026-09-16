@@ -254,6 +254,21 @@ pub fn merge(layers: &[Layer]) -> Merged {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Merged(BTreeMap<SettingPath, Setting>);
 
+impl Merged {
+    /// Replace the value of one setting already in this map, leaving everything else.
+    ///
+    /// Values alone: the keys are what make a [`Merged`] prefix-free and the origins are
+    /// what `config show` reports, so a rewrite that could move either would take the two
+    /// properties this type exists to hold. A key this map does not carry is not inserted
+    /// — a rewrite addresses a setting somebody set, and inserting one would invent a
+    /// setting with somebody else's origin on it.
+    pub(super) fn set_value(&mut self, key: &SettingPath, value: Value) {
+        if let Some(setting) = self.0.get_mut(key) {
+            setting.value = value;
+        }
+    }
+}
+
 impl std::ops::Deref for Merged {
     type Target = BTreeMap<SettingPath, Setting>;
 
