@@ -46,9 +46,9 @@ pub use engine::{
     BudgetSpent, CommentList, ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyReport,
     CopyRequest, CopyScope, DeletedComment, Delivered, DeliveryOutcome, DependencyRequest,
     DocumentFilters, DocumentRequest, Engine, EngineError, Filters, LabelRequest, LeftBehind,
-    MatchBy, Paging, ProjectRequest, ProjectSelector, Qualified, QualifiedEdge, QualifiedEndpoint,
-    SearchHit, SearchKind, SearchRequest, SourceListing, SourceState, Spent, TaskDetail,
-    TaskRequest, TaskStatusSet, settled,
+    MatchBy, MetadataSet, Paging, ProjectRequest, ProjectSelector, Qualified, QualifiedEdge,
+    QualifiedEndpoint, SearchHit, SearchKind, SearchRequest, SourceListing, SourceState, Spent,
+    TaskDetail, TaskRequest, TaskStatusSet, settled,
 };
 pub use environment::Environment;
 pub use failure::{Failure, FailureClass, FailureDocument, classify};

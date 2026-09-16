@@ -114,10 +114,70 @@ const declarations: string[] = [
   "// Literal version keeps generated consumers pinned to this exact contract.",
   `export const SCHEMA_BUNDLE_VERSION = ${bundle.version} as const;`,
 ];
+const ANNOTATIONS = new Set(["description", "title", "default", "examples", "$comment"]);
+
+const SUBSCHEMA = [
+  "additionalProperties",
+  "items",
+  "contains",
+  "propertyNames",
+  "not",
+  "if",
+  "then",
+  "else",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+];
+
+const SUBSCHEMA_LISTS = ["anyOf", "oneOf", "allOf", "prefixItems"];
+
+const SUBSCHEMA_MAPS = ["properties", "patternProperties", "$defs", "definitions"];
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/// Type every schema that constrains nothing — the empty schema, or one holding annotations
+/// alone — as `unknown`. Such a schema accepts any JSON value at all, which is what the binary
+/// emits for a `serde_json::Value` such as `MetadataSet.value`.
+///
+/// `json-schema-to-typescript` otherwise renders one as an object with an index signature,
+/// which a `null`, a number or a string the value really holds does not satisfy. Only schema
+/// positions are walked, so a `properties` map, a `default` or an `enum` is never mistaken for
+/// a schema however its keys happen to be spelled.
+function anyJsonAsUnknown(schema: Record<string, unknown>): Record<string, unknown> {
+  if (Object.keys(schema).every((keyword) => ANNOTATIONS.has(keyword))) {
+    return { ...schema, tsType: "unknown" };
+  }
+  const walked: Record<string, unknown> = { ...schema };
+  for (const keyword of SUBSCHEMA) {
+    const value = walked[keyword];
+    if (isObject(value)) walked[keyword] = anyJsonAsUnknown(value);
+  }
+  for (const keyword of SUBSCHEMA_LISTS) {
+    const value = walked[keyword];
+    if (Array.isArray(value)) {
+      walked[keyword] = value.map((item) => (isObject(item) ? anyJsonAsUnknown(item) : item));
+    }
+  }
+  for (const keyword of SUBSCHEMA_MAPS) {
+    const value = walked[keyword];
+    if (isObject(value)) {
+      walked[keyword] = Object.fromEntries(
+        Object.entries(value).map(([name, item]) => [
+          name,
+          isObject(item) ? anyJsonAsUnknown(item) : item,
+        ]),
+      );
+    }
+  }
+  return walked;
+}
+
 for (const [name, schema] of Object.entries(bundle.roots)) {
   let generated: string;
   try {
-    generated = await compile({ ...schema, title: name }, name, {
+    generated = await compile({ ...anyJsonAsUnknown(schema), title: name }, name, {
       bannerComment: "",
       format: false,
       unknownAny: false,

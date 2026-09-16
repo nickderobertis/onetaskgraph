@@ -130,6 +130,54 @@ pub enum TaskCommand {
         #[command(subcommand)]
         command: StatusCommand,
     },
+    /// Set one key of one task's metadata, and nothing else about it.
+    ///
+    /// Metadata is not status: no task it delivers is re-evaluated.
+    Metadata {
+        #[command(subcommand)]
+        command: MetadataCommand,
+    },
+}
+
+/// What `onetaskgraph task metadata`, `project metadata` and `document metadata` can do.
+#[derive(Debug, Subcommand)]
+pub enum MetadataCommand {
+    /// Set one metadata key to one JSON value, adding the key or replacing what it holds.
+    ///
+    /// Every other key, and every other field of the record, is left as it was; a key already
+    /// holding the value is not written at all.
+    Set(MetadataSetArgs),
+}
+
+/// `onetaskgraph <task|project|document> metadata set`.
+#[derive(Debug, Args)]
+pub struct MetadataSetArgs {
+    /// The record's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `StatusSetArgs::id`: a `GlobalId`
+    /// here would refuse an unqualified id as a bad invocation under clap's wording, and
+    /// `qualified` in `main` converts it immediately with the next action a user needs.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// The key, `<namespace>.<name>`: two or more non-empty dot-separated segments, never in
+    /// the `onetaskgraph.` namespace.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `id` above: `metadata_key` in
+    /// `main` converts it through `MetadataKey::new` before anything is built, and a clap
+    /// value parser would report the same refusal as a bad invocation without its next action.
+    #[arg(value_name = "KEY")]
+    pub key: String,
+
+    /// The value, as exactly one JSON value: `null`, `true`, `3`, `"text"`, `[…]` or `{…}`.
+    ///
+    /// Parsed strictly as JSON and never as YAML, so a bare word such as `yes` or a date such
+    /// as `2026-01-01` is refused rather than silently given a type; quote a string.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `key` above: `metadata_value` in
+    /// `main` parses it before anything is built, naming the parse error and the next action.
+    #[arg(value_name = "VALUE", allow_hyphen_values = true)]
+    pub value: String,
 }
 
 /// What `onetaskgraph task status` can do.
@@ -257,6 +305,11 @@ pub enum ProjectCommand {
     Deps(DependencyArgs),
     /// Copy one project, and the tasks in it, into another configured source.
     Copy(ProjectCopyArgs),
+    /// Set one key of one project's metadata, and nothing else about it.
+    Metadata {
+        #[command(subcommand)]
+        command: MetadataCommand,
+    },
 }
 
 /// What `onetaskgraph document` can do.
@@ -271,6 +324,11 @@ pub enum DocumentCommand {
     Show(ShowArgs),
     /// Copy documents into another configured source, by qualified id.
     Copy(DocumentCopyArgs),
+    /// Set one key of one document's metadata, and nothing else about it.
+    Metadata {
+        #[command(subcommand)]
+        command: MetadataCommand,
+    },
 }
 
 /// What `onetaskgraph label` can do.

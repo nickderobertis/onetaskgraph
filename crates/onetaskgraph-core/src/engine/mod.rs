@@ -21,6 +21,7 @@ mod delivery;
 mod fetch;
 mod join;
 mod local;
+mod metadata;
 mod resume;
 
 use std::collections::BTreeMap;
@@ -29,8 +30,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, Direction, Document, DocumentQuery, Label, LabelFilter,
-    NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
-    SourceName, StatusCategory, Task, TaskQuery, TextFields, TextQuery,
+    MetadataRecord, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery,
+    SecretResolver, SourceError, SourceName, StatusCategory, Task, TaskQuery, TextFields,
+    TextQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -53,6 +55,7 @@ pub use copy::{
 };
 pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
 pub use local::ProjectSelector;
+pub use metadata::MetadataSet;
 
 /// One item, under the qualified id the engine addresses it by.
 ///
@@ -378,6 +381,44 @@ pub enum EngineError {
         name: String,
         /// The plugin behind it.
         kind: String,
+    },
+
+    /// A metadata verb named a record of a source whose plugin has no write side.
+    #[error(
+        "source {name} cannot write a {record}'s metadata: its plugin is {kind}, which has no \
+         write side\n\
+         next: set the key in that source itself, or name a {record} of a source whose plugin \
+         can be written — `onetaskgraph sources list` reports each one's plugin."
+    )]
+    MetadataNotWritable {
+        /// The configured name of the source.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+        /// Which kind of record was named.
+        record: MetadataRecord,
+    },
+
+    /// A metadata verb named a project its source does not hold.
+    #[error(
+        "no project with the id {id}\n\
+         next: check the id, or list what is there — `onetaskgraph project list` reports every \
+         project the configured sources hold."
+    )]
+    NoSuchProject {
+        /// The qualified id that named nothing.
+        id: String,
+    },
+
+    /// A metadata verb named a document its source does not hold.
+    #[error(
+        "no document with the id {id}\n\
+         next: check the id, or list what is there — `onetaskgraph document list` reports every \
+         document the configured sources hold."
+    )]
+    NoSuchDocument {
+        /// The qualified id that named nothing.
+        id: String,
     },
 
     /// A comment verb named a task its source does not hold.

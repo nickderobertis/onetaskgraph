@@ -52,13 +52,16 @@ onetaskgraph task comment list   <ID>
 onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH]
 onetaskgraph task comment delete <ID> <COMMENT-ID>
 onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|cancelled|unknown
+onetaskgraph task metadata set <ID> <KEY> <VALUE>
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
 onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks | --member TASK-ID...]
                                                  [--match-by KEY] [--recreate] [--dry-run]
+onetaskgraph project metadata set <ID> <KEY> <VALUE>
 
 onetaskgraph document list / show                # the same flags, minus --status
 onetaskgraph document copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dry-run]
+onetaskgraph document metadata set <ID> <KEY> <VALUE>
 
 onetaskgraph label list [--source S]...
 onetaskgraph search <TEXT> [--in ...] [--kind task|project|both]
@@ -100,6 +103,25 @@ claimed by something that will do it and not yet started, between `todo` (ready,
 has claimed it) and `in-progress`. A folder of Markdown reads the word `queued`; a GitHub
 Projects board sends it to its `Queued` column by default, `status_mapping.queued` naming
 another; Linear, which has no such state, refuses it by name.
+
+One **metadata** key of a task, a project or a document is set on its own with `task`,
+`project` or `document metadata set <ID> <KEY> <VALUE>`, which adds the key or replaces what
+it holds and changes nothing else about the record — every other key, and every other field,
+stays exactly as it was, and a key already holding the value is not written at all. `KEY` is
+your own dotted `<namespace>.<name>`: two or more non-empty segments, never in the
+`onetaskgraph.` namespace this product keeps in step itself. `VALUE` is exactly one JSON
+value, parsed as JSON and never as YAML, so a bare `yes` or `2026-01-01` is refused rather
+than given a type — quote a string as `'"text"'`. An unqualified id, a key or a value of
+those shapes is refused before any source is asked. The answer — `MetadataSet` under
+`--json` — carries the id, the key, the value as the source reads it back after the write,
+and the record's location. Metadata is not status, so no task it delivers is re-evaluated.
+A folder of Markdown edits the one entry of its `metadata:` block and no other byte, and
+refuses by name a block it cannot edit that narrowly; a GitHub Projects board sends one
+update of the issue body that changes only its metadata slot; the in-memory source holds the
+value for the life of its process; and Linear, which has nowhere to put one key on its own,
+refuses with `the linear plugin cannot write a task's metadata on its own`. A source with no
+write side, a record the source does not hold, and a stdio plugin whose handshake does not
+declare the write are each refused by name.
 
 A task can name the tasks it **delivers**: finishing it finishes them. In a folder of
 Markdown that is a `delivers:` list in the front matter — a bare id names a task of the same

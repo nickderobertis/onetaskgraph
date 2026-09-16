@@ -298,7 +298,7 @@ impl Engine {
     }
 
     /// The built source called `name`.
-    fn built(&self, name: &SourceName) -> Result<&ResolvedSource, EngineError> {
+    pub(super) fn built(&self, name: &SourceName) -> Result<&ResolvedSource, EngineError> {
         let name = self.known(name)?;
         match self.sources.iter().find(|source| source.name() == &name) {
             Some(ConfiguredSource::Ready(source)) => Ok(source),
@@ -401,7 +401,7 @@ pub(crate) fn qualified_task(id: GlobalId, task: Task) -> Qualified<Task> {
     }
 }
 
-fn source_failed(source: &ResolvedSource, error: SourceError) -> EngineError {
+pub(super) fn source_failed(source: &ResolvedSource, error: SourceError) -> EngineError {
     EngineError::SourceFailed {
         name: source.name().to_string(),
         error,

@@ -261,7 +261,11 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 14
+    assert emitted_bundle["version"] == 15
+    # Version 15 published what the three `metadata set` verbs answer with.
+    assert "MetadataSet" in bundle["roots"]
+    for verb in ("task_metadata_set", "project_metadata_set", "document_metadata_set"):
+        assert generate.RESPONSE_ROOTS[verb] == "MetadataSet", verb
     for root in ("Document", "DocumentQuery", "Location", "PageOfDocument"):
         assert root in bundle["roots"], root
         assert root in generate.CONTRACT_ROOTS, root

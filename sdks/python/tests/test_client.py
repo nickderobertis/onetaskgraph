@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 import tomllib
-from collections.abc import Awaitable
+from collections.abc import Coroutine
 from pathlib import Path
 
 import pytest
@@ -17,6 +17,7 @@ from onetaskgraph_sdk import (
     Client,
     Delivered,
     GlobalId,
+    MetadataSet,
     OnetaskgraphError,
     StatusCategory,
     TaskStatusSet,
@@ -29,9 +30,13 @@ from onetaskgraph_sdk._generated.task_status_set import DeliveredFailed
 WORKSPACE = Path(__file__).parents[3]
 
 
-def run[T](awaitable: Awaitable[T]) -> T:
-    """Drive one public async SDK call to completion in a script-shaped test."""
-    return asyncio.run(awaitable)
+def run[T](call: Coroutine[object, object, T]) -> T:
+    """Drive one public async SDK call to completion in a script-shaped test.
+
+    A coroutine rather than any awaitable: `asyncio.run` accepts other awaitables only from
+    Python 3.14, and this package supports 3.13.
+    """
+    return asyncio.run(call)
 
 
 def configured(tmp_path: Path, *, failing: bool = False) -> Path:
@@ -510,6 +515,84 @@ def test_task_status_set_answers_when_a_delivered_task_could_not_be_kept_in_step
     shown = run(client.task_show(id="work:P")).items[0].item
     assert shown.status.category == "queued"
     assert [reference.root for reference in shown.delivers or []] == ["nowhere:T-9"]
+
+
+def metadata_folder(tmp_path: Path) -> Path:
+    """Configure one real Markdown folder, `work`, holding a task, a project and a document.
+
+    Each record already carries a metadata key of its own, so a set that disturbed anything
+    beside the key it names would show in what a later invocation reads back.
+    """
+    root = tmp_path / "work"
+    for kind in ("tasks", "projects", "documents"):
+        (root / kind).mkdir(parents=True)
+    kept = 'metadata:\n  "myapp.kept": 1\n'
+    (root / "tasks" / "T-1.md").write_text(
+        f"---\ntitle: One\nstatus: todo\n{kept}---\nbody\n", encoding="utf-8"
+    )
+    (root / "projects" / "P-1.md").write_text(
+        f"---\ntitle: Plan\nstatus: todo\n{kept}---\n", encoding="utf-8"
+    )
+    (root / "documents" / "D-1.md").write_text(
+        f"---\ntitle: Design\n{kept}---\nprose\n", encoding="utf-8"
+    )
+    work = {"plugin": "local-md", "config": {"root": str(root)}}
+    (tmp_path / "onetaskgraph.yaml").write_text(
+        json.dumps({"sources": {"work": work}}), encoding="utf-8"
+    )
+    return tmp_path
+
+
+def test_metadata_set_methods_drive_the_binary(binary: Path, tmp_path: Path) -> None:
+    """Set one metadata key of a task, a project and a document through the real binary."""
+    cwd = metadata_folder(tmp_path)
+    client = Client(binary, cwd=cwd)
+
+    task = run(client.task_metadata_set("work:T-1", "myapp.review", '{"approved": true}'))
+    assert isinstance(task, MetadataSet)
+    assert (task.id.root, task.key.root, task.value) == (
+        "work:T-1",
+        "myapp.review",
+        {"approved": True},
+    )
+    # Compared by the file it names, as the document copy above explains: a canonical path is
+    # spelled differently on each platform.
+    assert task.location is not None
+    located = task.location.root.model_dump()
+    assert list(located) == ["path"]
+    assert Path(located["path"]).samefile(cwd / "work" / "tasks" / "T-1.md")
+
+    project = run(
+        client.project_metadata_set(id=GlobalId(root="work:P-1"), key="myapp.review", value="3")
+    )
+    assert isinstance(project, MetadataSet)
+    assert (project.id.root, project.value) == ("work:P-1", 3)
+
+    document = run(client.document_metadata_set("work:D-1", "myapp.review", "null"))
+    assert isinstance(document, MetadataSet)
+    assert (document.id.root, document.value) == ("work:D-1", None)
+
+    # The folder really holds each: a later invocation reads what these wrote, beside the key
+    # each record already had.
+    shown = run(client.task_show(id="work:T-1")).items[0].item
+    assert shown.metadata == {"myapp.kept": 1, "myapp.review": {"approved": True}}
+    assert run(client.project_show(id="work:P-1")).items[0].item.metadata == {
+        "myapp.kept": 1,
+        "myapp.review": 3,
+    }
+    assert run(client.document_show(id="work:D-1")).items[0].item.metadata == {
+        "myapp.kept": 1,
+        "myapp.review": None,
+    }
+
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.task_metadata_set("work:T-1", "onetaskgraph.origin", '"x"'))
+    assert refused.value.exit_code == 1
+    assert "which this product owns" in str(refused.value)
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.task_metadata_set("work:T-1", "myapp.review", "yes"))
+    assert "is not JSON" in str(refused.value)
+    assert shown.metadata == run(client.task_show(id="work:T-1")).items[0].item.metadata
 
 
 def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:

@@ -14,8 +14,8 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite, Metering,
-    NativeId, NewComment, Page, PageRequest, Project, ProjectQuery, SourceError, Status,
+    Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite, MetadataKey,
+    Metering, NativeId, NewComment, Page, PageRequest, Project, ProjectQuery, SourceError, Status,
     StatusCategory, Task, TaskQuery, TaskRef, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
@@ -221,6 +221,13 @@ pub(crate) struct InitializeResult {
     /// never handed a task carrying either list.
     #[serde(default)]
     pub(crate) task_updates: bool,
+    /// Whether this plugin answers `set_task_metadata`, `set_project_metadata` and
+    /// `set_document_metadata` (§3.7).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent any of the three,
+    /// and each is refused by name before anything is sent.
+    #[serde(default)]
+    pub(crate) metadata_updates: bool,
 }
 
 /// The `metering` result (§4.14).
@@ -469,6 +476,18 @@ pub(crate) struct DeliveredByResult {
     /// The list, or `null`.
     #[serde(default)]
     pub(crate) delivered_by: Option<Vec<TaskRef>>,
+}
+
+/// `set_task_metadata`, `set_project_metadata` and `set_document_metadata` parameters
+/// (§4.18).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct MetadataParams {
+    /// The record whose metadata key is set.
+    pub(crate) id: NativeId,
+    /// The key, a caller's own dotted key outside the `onetaskgraph.` namespace.
+    pub(crate) key: MetadataKey,
+    /// The value to hold under it: any JSON, `null` included.
+    pub(crate) value: Value,
 }
 
 /// The result of any write method (§4.9, §4.12): the id the destination holds the item

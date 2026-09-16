@@ -7,9 +7,10 @@ use chrono::Utc;
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    NativeId, NewComment, Page, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery, TaskRef,
-    TaskSource, TextFields, TextQuery, WriteSupport, commentless, documentless, unwritable,
+    MetadataKey, NativeId, NewComment, Page, PageRequest, Project, ProjectFilter, ProjectQuery,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery,
+    TaskRef, TaskSource, TextFields, TextQuery, WriteSupport, commentless, documentless,
+    unwritable,
 };
 use schemars::{Schema, schema_for};
 
@@ -597,6 +598,64 @@ impl TaskSource for InMemorySource {
         Ok(Some(()))
     }
 
+    /// Set one key of the held task's metadata, on the terms every write of this source keeps:
+    /// a source with no write side refuses, and so does a key its configuration says it cannot
+    /// carry. A value it already holds is left where it is.
+    async fn set_task_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &serde_json::Value,
+    ) -> Result<Option<Task>, SourceError> {
+        self.metadata_writable(key)?;
+        let mut held = self.held()?;
+        Ok(held
+            .tasks
+            .iter_mut()
+            .find(|task| &task.id == id)
+            .map(|task| {
+                set_key(&mut task.metadata, key, value);
+                task.clone()
+            }))
+    }
+
+    async fn set_project_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &serde_json::Value,
+    ) -> Result<Option<Project>, SourceError> {
+        self.metadata_writable(key)?;
+        let mut held = self.held()?;
+        Ok(held
+            .projects
+            .iter_mut()
+            .find(|project| &project.id == id)
+            .map(|project| {
+                set_key(&mut project.metadata, key, value);
+                project.clone()
+            }))
+    }
+
+    async fn set_document_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &serde_json::Value,
+    ) -> Result<Option<Document>, SourceError> {
+        self.documentary()?;
+        self.metadata_writable(key)?;
+        let mut held = self.held()?;
+        Ok(held
+            .documents
+            .iter_mut()
+            .find(|document| &document.id == id)
+            .map(|document| {
+                set_key(&mut document.metadata, key, value);
+                document.clone()
+            }))
+    }
+
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         self.deletable(id)?;
         let mut held = self.held()?;
@@ -775,6 +834,15 @@ impl InMemorySource {
         })
     }
 
+    /// Refuse a narrow metadata write of `key` for the reasons [`writable`](Self::writable)
+    /// refuses a whole write carrying it.
+    fn metadata_writable(&self, key: &MetadataKey) -> Result<(), SourceError> {
+        self.writable(&BTreeMap::from([(
+            key.as_str().to_owned(),
+            serde_json::Value::Null,
+        )]))
+    }
+
     /// Refuse a *create* this source's configuration says it will not take.
     ///
     /// A write naming a target is an update of an item that is already here, and an update
@@ -857,6 +925,16 @@ fn listed(field: &str, near: &NativeId, list: &[TaskRef]) -> Result<(), SourceEr
         .map_err(|message| SourceError::Refused {
             message: format!("cannot represent the field `{field}`: {message}"),
         })
+}
+
+fn set_key(
+    metadata: &mut BTreeMap<String, serde_json::Value>,
+    key: &MetadataKey,
+    value: &serde_json::Value,
+) {
+    if metadata.get(key.as_str()) != Some(value) {
+        metadata.insert(key.as_str().to_owned(), value.clone());
+    }
 }
 
 /// Where `id` sits among the ids given, or `None` when it sits nowhere.

@@ -96,7 +96,7 @@ fn shown(sandbox: &Sandbox, verb: &str, id: &str) -> Value {
 }
 
 /// The persistent peer, configured over `store`.
-fn store_at(store: &Path, log: Option<&Path>, documents: &str) -> Value {
+pub(crate) fn store_at(store: &Path, log: Option<&Path>, documents: &str) -> Value {
     let mut settings = json!({"store": store, "documents": documents});
     if let Some(log) = log {
         settings["log"] = json!(log);

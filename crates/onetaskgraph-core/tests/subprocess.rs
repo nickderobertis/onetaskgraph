@@ -16,9 +16,9 @@ use onetaskgraph_core::{
     MAX_LINE, RequestDeadline, SubprocessConfig, SubprocessSource, plugin_for, serve,
 };
 use onetaskgraph_plugin_api::{
-    Cursor, Direction, Document, DocumentQuery, ItemWrite, LabelFilter, Location, NativeId,
-    PageRequest, ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, WriteSupport,
+    Cursor, Direction, Document, DocumentQuery, ItemWrite, LabelFilter, Location, MetadataKey,
+    NativeId, PageRequest, ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -1818,4 +1818,163 @@ fn an_engine_that_lists_no_statuses_is_told_queued_as_unknown_under_its_own_name
         now[1]["result"]["task"]["status"],
         json!({"category": "queued", "name": "Queued"})
     );
+}
+
+#[tokio::test]
+async fn a_plugin_whose_handshake_does_not_declare_metadata_updates_is_refused_without_being_asked()
+{
+    let (source, heard) = recording(vec![json!({
+        "protocol_version": 2, "kind": "earlier",
+        "capabilities": capabilities(),
+        "writes": "supported", "task_updates": true
+    })]);
+    let source = source.expect("the handshake completes");
+    let id = NativeId::from("T-1");
+    let key = MetadataKey::new("myapp.review").expect("a caller key");
+    let value = json!({"approved": true});
+
+    let refusals = [
+        (
+            "task",
+            source
+                .set_task_metadata(&id, &key, &value)
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "project",
+            source
+                .set_project_metadata(&id, &key, &value)
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "document",
+            source
+                .set_document_metadata(&id, &key, &value)
+                .await
+                .map(|_| ()),
+        ),
+    ];
+    for (record, refusal) in refusals {
+        assert_eq!(
+            refusal.expect_err("never sent the method"),
+            SourceError::Refused {
+                message: format!(
+                    "the earlier plugin cannot write a {record}'s metadata on its own"
+                )
+            }
+        );
+    }
+    let heard = heard.lock().expect("the record").clone();
+    let methods: Vec<&str> = heard
+        .iter()
+        .map(|request| request["method"].as_str().unwrap())
+        .collect();
+    assert_eq!(methods, ["initialize"], "{heard:?}");
+}
+
+#[tokio::test]
+async fn a_plugin_declaring_metadata_updates_is_sent_the_key_and_value_as_json() {
+    let (source, heard) = recording(vec![
+        json!({"protocol_version": 2, "kind": "later", "capabilities": capabilities(),
+               "writes": "supported", "metadata_updates": true}),
+        json!({"task": null}),
+    ]);
+    let source = source.expect("the handshake completes");
+    let answered = source
+        .set_task_metadata(
+            &NativeId::from("T-9"),
+            &MetadataKey::new("myapp.review").expect("a caller key"),
+            &json!([1, "two", null]),
+        )
+        .await
+        .expect("answered");
+    assert_eq!(answered, None);
+    let heard = heard.lock().expect("the record").clone();
+    assert_eq!(
+        heard[1],
+        json!({"id": heard[1]["id"], "method": "set_task_metadata",
+               "params": {"id": "T-9", "key": "myapp.review", "value": [1, "two", null]}})
+    );
+}
+
+#[tokio::test]
+async fn the_narrow_metadata_writes_cross_the_wire_and_land_in_the_hosted_source() {
+    let mut settings = hosted_settings();
+    settings["config"]["capabilities"]["documents"] = json!("native");
+    settings["config"]["tasks"][0]["metadata"] = json!({"myapp.kept": 1});
+    settings["config"]["documents"] = json!([
+        {"id": "D-1", "title": "Design", "content": "text", "labels": [],
+         "metadata": {"myapp.kept": 1}}
+    ]);
+    let there = a_process_away(settings).expect("connects");
+    let key = MetadataKey::new("myapp.review").expect("a caller key");
+
+    let task = there
+        .set_task_metadata(&NativeId::from("T-1"), &key, &json!({"by": "nick"}))
+        .await
+        .expect("answered")
+        .expect("held");
+    assert_eq!(
+        serde_json::to_value(&task.metadata).expect("plain data"),
+        json!({"myapp.kept": 1, "myapp.review": {"by": "nick"}})
+    );
+    assert_eq!(
+        there
+            .get_task(&NativeId::from("T-1"))
+            .await
+            .expect("answered"),
+        Some(task)
+    );
+
+    let project = there
+        .set_project_metadata(&NativeId::from("P-1"), &key, &json!(false))
+        .await
+        .expect("answered")
+        .expect("held");
+    assert_eq!(project.metadata["myapp.review"], json!(false));
+    assert_eq!(
+        there
+            .get_project(&NativeId::from("P-1"))
+            .await
+            .expect("answered"),
+        Some(project)
+    );
+
+    let document = there
+        .set_document_metadata(&NativeId::from("D-1"), &key, &Value::Null)
+        .await
+        .expect("answered")
+        .expect("held");
+    assert_eq!(
+        serde_json::to_value(&document.metadata).expect("plain data"),
+        json!({"myapp.kept": 1, "myapp.review": null})
+    );
+    assert_eq!(
+        there
+            .get_document(&NativeId::from("D-1"))
+            .await
+            .expect("answered"),
+        Some(document)
+    );
+
+    for record in ["task", "project", "document"] {
+        let nothing = NativeId::from("X-9");
+        let answered = match record {
+            "task" => there
+                .set_task_metadata(&nothing, &key, &json!(1))
+                .await
+                .map(|held| held.is_none()),
+            "project" => there
+                .set_project_metadata(&nothing, &key, &json!(1))
+                .await
+                .map(|held| held.is_none()),
+            _ => there
+                .set_document_metadata(&nothing, &key, &json!(1))
+                .await
+                .map(|held| held.is_none()),
+        };
+        assert!(answered.expect("answered"), "{record} X-9 is not held");
+    }
 }

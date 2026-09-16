@@ -543,6 +543,95 @@ test(
   SUBPROCESS_SUITE_TIMEOUT_MS,
 );
 
+// One folder of Markdown, `work`, holding a task, a project and a document that each already
+// carry a metadata key, so a set that disturbed anything beside its own key would show in what a
+// later invocation reads back.
+function metadataFolder(): string {
+  const metadataRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-metadata-"));
+  const kept = 'metadata:\n  "myapp.kept": 1\n';
+  for (const kind of ["tasks", "projects", "documents"]) {
+    mkdirSync(resolve(metadataRoot, "work", kind), { recursive: true });
+  }
+  writeFileSync(
+    resolve(metadataRoot, "work/tasks/T-1.md"),
+    `---\ntitle: One\nstatus: todo\n${kept}---\nbody\n`,
+  );
+  writeFileSync(
+    resolve(metadataRoot, "work/projects/P-1.md"),
+    `---\ntitle: Plan\nstatus: todo\n${kept}---\n`,
+  );
+  writeFileSync(
+    resolve(metadataRoot, "work/documents/D-1.md"),
+    `---\ntitle: Design\n${kept}---\nprose\n`,
+  );
+  writeFileSync(
+    resolve(metadataRoot, "onetaskgraph.yaml"),
+    JSON.stringify({
+      sources: { work: { plugin: "local-md", config: { root: resolve(metadataRoot, "work") } } },
+    }),
+  );
+  return metadataRoot;
+}
+
+test(
+  "one metadata key of a task, a project and a document is set through the real binary",
+  async () => {
+    const metadataRoot = metadataFolder();
+    try {
+      const metadataClient = new OnetaskgraphClient({ binaryPath: binary, cwd: metadataRoot });
+
+      const task = await metadataClient.taskMetadataSet(
+        "work:T-1",
+        "myapp.review",
+        '{"approved": true}',
+      );
+      expect(task).toEqual({
+        id: "work:T-1",
+        key: "myapp.review",
+        value: { approved: true },
+        location: { path: expect.any(String) },
+      });
+      // Compared by the file it names, as the document copy above explains: a canonical path
+      // is spelled differently on each platform.
+      const location = task.location;
+      if (!location || !("path" in location)) {
+        throw new Error(`a local-md task reports a path, not ${JSON.stringify(location)}`);
+      }
+      const located = location.path.replace(/^\\\\\?\\(?=[A-Za-z]:\\)/, "");
+      expect(readFileSync(located, "utf8")).toBe(
+        readFileSync(resolve(metadataRoot, "work/tasks/T-1.md"), "utf8"),
+      );
+      const project = await metadataClient.projectMetadataSet("work:P-1", "myapp.review", "3");
+      expect([project.id, project.key, project.value]).toEqual(["work:P-1", "myapp.review", 3]);
+      const document = await metadataClient.documentMetadataSet("work:D-1", "myapp.review", "null");
+      expect([document.id, document.value]).toEqual(["work:D-1", null]);
+
+      // The folder really holds each: a later invocation reads what these wrote, beside the
+      // key each record already had.
+      const shown = await metadataClient.taskShow("work:T-1");
+      expect(shown.items[0]?.item.metadata).toEqual({
+        "myapp.kept": 1,
+        "myapp.review": { approved: true },
+      });
+      const projects = await metadataClient.projectShow("work:P-1");
+      expect(projects.items[0]?.item.metadata).toEqual({ "myapp.kept": 1, "myapp.review": 3 });
+      const documents = await metadataClient.documentShow("work:D-1");
+      expect(documents.items[0]?.item.metadata).toEqual({ "myapp.kept": 1, "myapp.review": null });
+
+      const reserved = metadataClient.taskMetadataSet("work:T-1", "onetaskgraph.origin", '"x"');
+      await expect(reserved).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+      await expect(reserved).rejects.toMatchObject({ exitCode: 1 });
+      await expect(reserved).rejects.toThrow("which this product owns");
+      await expect(
+        metadataClient.taskMetadataSet("work:T-1", "myapp.review", "yes"),
+      ).rejects.toThrow("is not JSON");
+    } finally {
+      rmSync(metadataRoot, { recursive: true, force: true });
+    }
+  },
+  SUBPROCESS_SUITE_TIMEOUT_MS,
+);
+
 // One folder of Markdown, `work`, which outlives the invocation so what one call writes the
 // next one reads back. `P` delivers a task of `nowhere`, which no configuration names, so every
 // write of its status re-evaluates a delivered task that cannot be read.

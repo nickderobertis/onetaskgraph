@@ -26,13 +26,16 @@ RESPONSE_ROOTS = {
     "task_comment_edit": "Comment",
     "task_comment_delete": "DeletedComment",
     "task_status_set": "TaskStatusSet",
+    "task_metadata_set": "MetadataSet",
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
     "project_deps": "QueryResponseOfQualifiedEdge",
     "project_copy": "CopyReport",
+    "project_metadata_set": "MetadataSet",
     "document_list": "QueryResponseOfQualifiedDocument",
     "document_show": "QueryResponseOfQualifiedDocument",
     "document_copy": "CopyReport",
+    "document_metadata_set": "MetadataSet",
     "label_list": "QueryResponseOfQualifiedLabel",
     "search": "QueryResponseOfSearchHit",
     "sources_list": "SourceListing",
@@ -283,7 +286,7 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
                     "--output-model-type",
                     "pydantic_v2.BaseModel",
                     "--target-python-version",
-                    "3.14",
+                    "3.13",
                     "--use-standard-collections",
                     "--use-union-operator",
                     "--use-annotated",
@@ -304,6 +307,12 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
                 )
                 for line in generated
             ]
+        if root == "MetadataSet":
+            generated = any_json_value(
+                generated,
+                "    # A metadata value is arbitrary JSON by the emitted wire contract: the key's\n"
+                "    # value as the source reads it back, of whatever JSON type the caller set.",
+            )
         if any("dict[str, Any]" in line for line in generated):
             generated = [
                 line.replace("from pydantic import ", "from pydantic import JsonValue, ").replace(
@@ -387,6 +396,24 @@ def rename_qualified_definitions(value: JsonValue) -> None:
     replace_references(value, renames)
 
 
+def any_json_value(lines: list[str], reason: str) -> list[str]:
+    """Put `reason` above a `value` field the code generator typed `Any`, saying why it is.
+
+    A schema that constrains nothing accepts any JSON value, and `Any` is the only annotation
+    that says so; the comment is what tells a reader the escape is the contract rather than a
+    gap in it.
+    """
+    annotated: list[str] = []
+    for index, line in enumerate(lines):
+        following = lines[index + 1].strip() if index + 1 < len(lines) else ""
+        if line.startswith("    value: Annotated[Any") or (
+            line == "    value: Annotated[" and following == "Any,"
+        ):
+            annotated.append(reason)
+        annotated.append(line)
+    return annotated
+
+
 def replace_references(value: JsonValue, renames: dict[str, str]) -> None:
     """Update local references after a generated-definition rename."""
     match value:
@@ -428,6 +455,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id", "comment_id")
         case ("task", "status", "set"):
             return ("id", "category")
+        case ("task" | "project" | "document", "metadata", "set"):
+            return ("id", "key", "value")
         case ("task" | "project" | "document", "show" | "deps" | "copy"):
             return ("id",)
         case _:
@@ -499,6 +528,11 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         # `task status set` takes the category it sets as its second operand, spelled as the
         # binary's status vocabulary spells it — which is exactly the generated enum's values.
         "category": "StatusCategory | str",
+        # `metadata set` takes its key as a string, and its value as the JSON text the binary
+        # parses strictly — exactly the word the command line takes, so what a caller writes
+        # is what the binary reads, and a value is never re-encoded on its way there.
+        "key": "str",
+        "value": "str",
     }
     for name, command in sorted(names.items()):
         root = RESPONSE_ROOTS[name]

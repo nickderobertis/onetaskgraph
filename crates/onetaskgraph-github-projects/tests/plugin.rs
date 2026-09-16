@@ -16,9 +16,9 @@ use std::{
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter,
-    Location, NativeId, NewComment, PageRequest, Project, ProjectFilter, ProjectQuery, Repository,
-    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
-    TaskQuery, TaskRef, TaskSource, TextFields, TextQuery, WriteSupport,
+    Location, MetadataKey, NativeId, NewComment, PageRequest, Project, ProjectFilter, ProjectQuery,
+    Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
+    Support, Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -5145,6 +5145,230 @@ async fn a_drafts_delivered_by_is_written_through_the_draft_update_with_its_body
             .unwrap()
             .delivered_by,
         refs(&["plans:P-1"])
+    );
+}
+
+fn key(name: &str) -> MetadataKey {
+    MetadataKey::new(name).expect("a caller's own key")
+}
+
+/// A task, a project and a design document, each holding a body a narrow metadata write
+/// has to keep byte for byte outside its slot.
+fn metadata_board() -> Fixture {
+    board(vec![
+        Item::issue("I_task", "a task")
+            .body(
+                "Prose with a `<!-- comment -->` in it.\n\n\n  and trailing spaces  \n\n\
+                 <!-- onetaskgraph.metadata\n{ \"caller.x\" : 1, \"onetaskgraph.delivers\": \
+                 [\"I_9\"], \"onetaskgraph.item_kind\":\"task\" }\n-->",
+            )
+            .labelled(&[("L_1", "bug")])
+            .status("Todo"),
+        Item::issue("I_plan", "a plan")
+            .body(
+                "Plan prose.\n\n<!-- onetaskgraph.metadata\n{\"myapp.stage\":\"draft\",\
+                 \"onetaskgraph.item_kind\":\"project\",\"other.kept\":[true]}\n-->",
+            )
+            .status("In Progress"),
+        design("I_doc", "notes").body("Design prose."),
+    ])
+}
+
+#[tokio::test]
+async fn a_metadata_key_is_set_by_one_body_update_that_changes_only_the_slot() {
+    let fixture = metadata_board();
+    let before = source_of(&fixture);
+    let task_before = before.get_task(&id("I_task")).await.unwrap().unwrap();
+    let project_before = before.get_project(&id("I_plan")).await.unwrap().unwrap();
+    let document_before = before.get_document(&id("I_doc")).await.unwrap().unwrap();
+    let source = source(&fixture);
+
+    let task = source
+        .set_task_metadata(&id("I_task"), &key("myapp.new"), &json!({"a":[1,"b"]}))
+        .await
+        .expect("a task's metadata is writable")
+        .expect("a task of this board");
+    let project = source
+        .set_project_metadata(&id("I_plan"), &key("myapp.stage"), &json!("shipped"))
+        .await
+        .expect("a project's metadata is writable")
+        .expect("a project of this board");
+    let document = source
+        .set_document_metadata(&id("I_doc"), &key("myapp.reviewed"), &json!(null))
+        .await
+        .expect("a document's metadata is writable")
+        .expect("a document of this board");
+
+    let task_body = "Prose with a `<!-- comment -->` in it.\n\n\n  and trailing spaces  \n\n\
+                     <!-- onetaskgraph.metadata\n{\"caller.x\":1,\"myapp.new\":{\"a\":[1,\"b\"]},\
+                     \"onetaskgraph.delivers\":[\"I_9\"],\"onetaskgraph.item_kind\":\"task\"}\n-->";
+    let project_body = "Plan prose.\n\n<!-- onetaskgraph.metadata\n{\"myapp.stage\":\"shipped\",\
+                        \"onetaskgraph.item_kind\":\"project\",\"other.kept\":[true]}\n-->";
+    let document_body =
+        "Design prose.\n\n<!-- onetaskgraph.metadata\n{\"myapp.reviewed\":null}\n-->";
+    assert_eq!(
+        fixture.seen(),
+        vec![
+            json!(["updateIssue", {"id":"I_task","body":task_body}]),
+            json!(["updateIssue", {"id":"I_plan","body":project_body}]),
+            json!(["updateIssue", {"id":"I_doc","body":document_body}]),
+        ],
+        "one body update per write, and no title, label, state or board field request"
+    );
+    for (held, body) in [
+        ("I_task", task_body),
+        ("I_plan", project_body),
+        ("I_doc", document_body),
+    ] {
+        assert_eq!(fixture.item(held).body.as_deref(), Some(body), "{held}");
+    }
+
+    let mut task_expected = task_before;
+    task_expected
+        .metadata
+        .insert("myapp.new".to_owned(), json!({"a":[1,"b"]}));
+    let mut project_expected = project_before;
+    project_expected
+        .metadata
+        .insert("myapp.stage".to_owned(), json!("shipped"));
+    let mut document_expected = document_before;
+    document_expected
+        .metadata
+        .insert("myapp.reviewed".to_owned(), json!(null));
+    assert_eq!(task, task_expected);
+    assert_eq!(project, project_expected);
+    assert_eq!(document, document_expected);
+    assert_eq!(task.delivers, refs(&["I_9"]), "a reserved slot key is kept");
+
+    let after = source_of(&fixture);
+    assert_eq!(
+        after.get_task(&id("I_task")).await.unwrap().unwrap(),
+        task_expected,
+        "the answer is what a fresh read of the task reports"
+    );
+    assert_eq!(
+        after.get_project(&id("I_plan")).await.unwrap().unwrap(),
+        project_expected
+    );
+    assert_eq!(
+        after.get_document(&id("I_doc")).await.unwrap().unwrap(),
+        document_expected
+    );
+    assert_eq!(
+        source.get_task(&id("I_task")).await.unwrap().unwrap(),
+        task_expected,
+        "this command's own next read agrees with the write"
+    );
+}
+
+#[tokio::test]
+async fn a_metadata_key_already_holding_the_value_sends_nothing() {
+    let fixture = metadata_board();
+    let source = source(&fixture);
+    let task = source
+        .set_task_metadata(&id("I_task"), &key("caller.x"), &json!(1))
+        .await
+        .unwrap()
+        .expect("a task of this board");
+    let project = source
+        .set_project_metadata(&id("I_plan"), &key("other.kept"), &json!([true]))
+        .await
+        .unwrap()
+        .expect("a project of this board");
+    assert_eq!(task.metadata.get("caller.x"), Some(&json!(1)));
+    assert_eq!(project.metadata.get("other.kept"), Some(&json!([true])));
+    assert!(fixture.seen().is_empty(), "{:?}", fixture.seen());
+}
+
+#[tokio::test]
+async fn a_metadata_write_naming_no_item_of_that_kind_answers_none_and_writes_nothing() {
+    let fixture = metadata_board();
+    let source = source(&fixture);
+    let value = json!("x");
+    let name = key("myapp.k");
+    for held in ["I_plan", "I_doc", "I_missing"] {
+        assert_eq!(
+            source
+                .set_task_metadata(&id(held), &name, &value)
+                .await
+                .unwrap(),
+            None,
+            "{held} is no task of this board"
+        );
+    }
+    for held in ["I_task", "I_doc", "I_missing"] {
+        assert_eq!(
+            source
+                .set_project_metadata(&id(held), &name, &value)
+                .await
+                .unwrap(),
+            None,
+            "{held} is no project of this board"
+        );
+    }
+    for held in ["I_task", "I_plan", "I_missing"] {
+        assert_eq!(
+            source
+                .set_document_metadata(&id(held), &name, &value)
+                .await
+                .unwrap(),
+            None,
+            "{held} is no document of this board"
+        );
+    }
+    assert!(fixture.seen().is_empty(), "nothing was written");
+}
+
+#[tokio::test]
+async fn a_drafts_metadata_key_is_written_through_the_draft_update_with_its_body_alone() {
+    let fixture = board(vec![
+        Item::draft("D_1", "a draft")
+            .body("Draft prose.")
+            .status("Todo"),
+    ]);
+    let source = source(&fixture);
+    let task = source
+        .set_task_metadata(&id("D_1"), &key("myapp.k"), &json!(2))
+        .await
+        .unwrap()
+        .expect("a draft is a task of this board");
+    let expected = "Draft prose.\n\n<!-- onetaskgraph.metadata\n{\"myapp.k\":2}\n-->";
+    assert_eq!(
+        fixture.seen(),
+        vec![json!(["updateProjectV2DraftIssue", {"draftIssueId":"D_1","body":expected}])]
+    );
+    assert_eq!(task.metadata.get("myapp.k"), Some(&json!(2)));
+    assert_eq!(task.title, "a draft");
+    assert_eq!(task.content.as_deref(), Some("Draft prose."));
+    assert_eq!(
+        source.get_task(&id("D_1")).await.unwrap().unwrap(),
+        task,
+        "this command's own view of the board, which is where a draft is read, is brought up to the write"
+    );
+}
+
+#[tokio::test]
+async fn a_metadata_write_to_a_task_this_command_created_is_what_the_command_reads_next() {
+    let fixture = board(vec![]);
+    let source = source(&fixture);
+    let mut item = task("T-1", "fresh", status(StatusCategory::Todo, "Todo"));
+    item.content = Some("prose".to_owned());
+    let written = source.write_task(&write(item)).await.unwrap();
+    let set = source
+        .set_task_metadata(&written, &key("myapp.k"), &json!("v"))
+        .await
+        .unwrap()
+        .expect("a task this command created");
+    assert_eq!(set.metadata.get("myapp.k"), Some(&json!("v")));
+    assert_eq!(source.get_task(&written).await.unwrap().unwrap(), set);
+    assert_eq!(
+        source_of(&fixture)
+            .get_task(&written)
+            .await
+            .unwrap()
+            .unwrap()
+            .metadata,
+        set.metadata
     );
 }
 

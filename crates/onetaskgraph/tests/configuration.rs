@@ -542,6 +542,65 @@ fn a_live_lane_variable_is_not_read_as_a_setting() {
     );
 }
 
+/// `ONETASKGRAPH_BIN` is how onepipeline names the plan-store binary it drives, and it passes
+/// its environment on to that binary. It says which binary to run, so no answer of the binary
+/// it names may depend on it: every output is compared byte for byte with the same command run
+/// without the variable.
+#[test]
+fn the_binary_path_variable_changes_no_answer() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(
+        &serde_json::to_string(&serde_json::json!({
+            "sources": {"work": {"plugin": "in-memory", "config": {"tasks": [
+                {"id": "T-1", "title": "Build", "content": null,
+                 "status": {"category": "todo", "name": "Todo"}, "labels": []}
+            ]}}}
+        }))
+        .expect("a document"),
+    );
+    let elsewhere = sandbox
+        .project()
+        .join("no")
+        .join("such")
+        .join("onetaskgraph");
+
+    for arguments in [
+        vec!["config", "show", "--json"],
+        vec!["config", "show"],
+        vec!["task", "list", "--json"],
+        vec!["task", "list"],
+    ] {
+        let without = sandbox
+            .command()
+            .env_remove("ONETASKGRAPH_BIN")
+            .args(&arguments)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let with = sandbox
+            .command()
+            .env("ONETASKGRAPH_BIN", &elsewhere)
+            .args(&arguments)
+            .output()
+            .expect("the binary runs");
+        assert_eq!(
+            with.status.code(),
+            Some(0),
+            "`{}` with ONETASKGRAPH_BIN set: {}",
+            arguments.join(" "),
+            stderr(&with)
+        );
+        assert_eq!(
+            stdout(&with),
+            stdout(&without),
+            "`{}` answers the same with ONETASKGRAPH_BIN set",
+            arguments.join(" ")
+        );
+        assert_eq!(stderr(&with), stderr(&without));
+    }
+}
+
 /// Every layer is validated on every verb, including the verbs that do not use it.
 ///
 /// `schema` renders a static bundle, so nothing it emits depends on the configuration —

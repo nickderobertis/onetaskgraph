@@ -13,7 +13,8 @@ use onetaskgraph_plugin_api::{
     TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use onetaskgraph_plugin_api::{
-    Comment, CommentBody, NewComment, TaskRef, commentless, unwritable, unwritable_field,
+    Comment, CommentBody, MetadataKey, MetadataRecord, NewComment, TaskRef, commentless,
+    unwritable, unwritable_field, unwritable_metadata,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -1441,6 +1442,87 @@ async fn a_source_that_implements_only_the_read_methods_declares_no_write_side()
         message,
         "the read-only plugin cannot write a task's delivered_by on its own"
     );
+
+    // The three narrow metadata writes are defaulted too, each refusal naming the record.
+    let key = MetadataKey::new("myapp.review").expect("a caller key");
+    let value = serde_json::json!({"approved": true});
+    let id = NativeId::from("T-1");
+    let refusals = [
+        (
+            MetadataRecord::Task,
+            source
+                .set_task_metadata(&id, &key, &value)
+                .await
+                .map(|_| ()),
+        ),
+        (
+            MetadataRecord::Project,
+            source
+                .set_project_metadata(&id, &key, &value)
+                .await
+                .map(|_| ()),
+        ),
+        (
+            MetadataRecord::Document,
+            source
+                .set_document_metadata(&id, &key, &value)
+                .await
+                .map(|_| ()),
+        ),
+    ];
+    for (record, refusal) in refusals {
+        let refusal = refusal.expect_err("no metadata write by default");
+        assert_eq!(refusal, unwritable_metadata("read-only", record));
+        let SourceError::Refused { message } = refusal else {
+            panic!("a narrow metadata write is refused by name");
+        };
+        assert_eq!(
+            message,
+            format!("the read-only plugin cannot write a {record}'s metadata on its own")
+        );
+    }
+}
+
+#[test]
+fn a_metadata_key_is_a_dotted_caller_key_outside_the_reserved_namespace() {
+    for accepted in [
+        "myapp.review",
+        "onepipeline.review.approved",
+        "a.b",
+        "Onetaskgraph.x",
+    ] {
+        let key = MetadataKey::new(accepted).expect("a caller key");
+        assert_eq!(key.as_str(), accepted);
+        assert_eq!(key.to_string(), accepted);
+    }
+    for (refused, why) in [
+        ("review", "has no namespace"),
+        ("", "has no namespace"),
+        (".review", "has an empty segment"),
+        ("myapp.", "has an empty segment"),
+        ("myapp..review", "has an empty segment"),
+        ("onetaskgraph.origin", "namespace, which this product owns"),
+        (
+            "onetaskgraph.anything.else",
+            "namespace, which this product owns",
+        ),
+    ] {
+        let message = MetadataKey::new(refused).expect_err("not a caller key");
+        assert!(message.contains(why), "{refused:?}: {message}");
+        assert!(message.contains("next:"), "{refused:?}: {message}");
+    }
+}
+
+#[test]
+fn a_metadata_key_is_validated_at_the_serde_boundary_too() {
+    let key: MetadataKey = serde_json::from_str("\"myapp.review\"").expect("a caller key");
+    assert_eq!(
+        serde_json::to_string(&key).expect("serializes"),
+        "\"myapp.review\""
+    );
+    let refused = serde_json::from_str::<MetadataKey>("\"onetaskgraph.delivers\"")
+        .expect_err("a reserved key is refused where it is decoded");
+    assert!(refused.to_string().contains("which this product owns"));
 }
 
 #[test]

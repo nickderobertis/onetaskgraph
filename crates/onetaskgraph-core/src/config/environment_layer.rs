@@ -18,7 +18,15 @@ pub const ENVIRONMENT_PREFIX: &str = "ONETASKGRAPH_";
 /// sources are resolved and is nowhere in the configuration document. Without this
 /// list it would decode to a setting called `secrets_file` and be refused as an
 /// unknown field — turning a documented variable into an error.
-const RESERVED: &[&str] = &[SECRETS_FILE_VARIABLE];
+///
+/// [`BIN_VARIABLE`] is the same case from outside: onepipeline names the plan-store binary
+/// it drives in `ONETASKGRAPH_BIN` and passes its environment on to that binary, where it
+/// would decode to a setting called `bin` and refuse every command. It says which binary
+/// to run — settled before this binary starts — so no command's answer depends on it.
+const RESERVED: &[&str] = &[SECRETS_FILE_VARIABLE, BIN_VARIABLE];
+
+/// The variable a caller names this binary's own path in, which is not a setting.
+const BIN_VARIABLE: &str = "ONETASKGRAPH_BIN";
 
 /// A whole namespace under [`ENVIRONMENT_PREFIX`] that holds no settings at all.
 ///

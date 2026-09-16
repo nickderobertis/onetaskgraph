@@ -3,12 +3,14 @@
 use schemars::{JsonSchema, Schema};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery,
-    ItemWrite, Label, Metering, NativeId, NewComment, Page, PageRequest, Project, ProjectQuery,
-    SourceError, SourceName, Status, StatusCategory, Task, TaskQuery, TaskRef, WriteSupport,
-    commentless, documentless, unwritable, unwritable_field,
+    ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
+    PageRequest, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory, Task,
+    TaskQuery, TaskRef, WriteSupport, commentless, documentless, unwritable, unwritable_field,
+    unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -239,6 +241,76 @@ pub trait TaskSource: Send + Sync {
     ) -> Result<Option<()>, SourceError> {
         let _ = (id, delivered_by);
         Err(unwritable_field(self.kind(), "delivered_by"))
+    }
+
+    /// Set one key of the metadata of one task this source holds, and change nothing else
+    /// about it, answering with the task as this source reads it back after the write — or
+    /// `None` when this source holds no such task.
+    ///
+    /// The key is added when the task does not hold it and replaced when it does; every other
+    /// metadata key, and every other field of the task, is left exactly as it was. A `value`
+    /// the task already holds under `key` is a write that changes nothing, and a source owes
+    /// it no write at all. The answer is a read, not an echo: what the engine reports as the
+    /// value is what the returned task holds under `key`.
+    ///
+    /// Nothing about the task's status or its [`Task::delivers`] moves, so the engine
+    /// re-evaluates no delivered task after this write.
+    ///
+    /// Defaulted to [`unwritable_metadata`] on exactly the terms of
+    /// [`set_task_status`](Self::set_task_status): a source that cannot write one key on its
+    /// own needs no edit and refuses by saying so. A source declaring
+    /// [`WriteSupport::Unsupported`] is never asked.
+    ///
+    /// [`Task::delivers`]: crate::Task::delivers
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source cannot write one key of a task's
+    /// metadata on its own, or cannot write this one without changing something else; and
+    /// whatever else the source could not do the write for.
+    async fn set_task_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Task>, SourceError> {
+        let _ = (id, key, value);
+        Err(unwritable_metadata(self.kind(), MetadataRecord::Task))
+    }
+
+    /// Set one key of the metadata of one project this source holds, on exactly the terms of
+    /// [`set_task_metadata`](Self::set_task_metadata).
+    ///
+    /// # Errors
+    ///
+    /// As [`set_task_metadata`](Self::set_task_metadata).
+    async fn set_project_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Project>, SourceError> {
+        let _ = (id, key, value);
+        Err(unwritable_metadata(self.kind(), MetadataRecord::Project))
+    }
+
+    /// Set one key of the metadata of one document this source holds, on exactly the terms of
+    /// [`set_task_metadata`](Self::set_task_metadata).
+    ///
+    /// A source declaring [`Capabilities::documents`] unsupported is never asked, exactly as
+    /// it is never asked for a document read.
+    ///
+    /// # Errors
+    ///
+    /// As [`set_task_metadata`](Self::set_task_metadata).
+    async fn set_document_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Document>, SourceError> {
+        let _ = (id, key, value);
+        Err(unwritable_metadata(self.kind(), MetadataRecord::Document))
     }
 
     /// Remove one task this destination holds, so a copy that could not finish can put

@@ -3,7 +3,7 @@ name = "onetaskgraph-sdk"
 version = "0.2.33"
 description = "The Python SDK for onetaskgraph, generated from the binary's own JSON Schema bundle."
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 license = "MIT"
 authors = [{ name = "Nick DeRobertis" }]
 dependencies = ["onetaskgraph-cli==0.2.33", "pydantic>=2.12"]
@@ -35,7 +35,7 @@ addopts = "--cov=onetaskgraph_sdk --cov-report=term-missing --cov-fail-under=95"
 testpaths = ["tests"]
 
 [tool.ty.environment]
-python-version = "3.14"
+python-version = "3.13"
 
 [tool.uv.sources]
 onetaskgraph-cli = { workspace = true }

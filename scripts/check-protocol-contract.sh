@@ -110,6 +110,15 @@ METHOD_SECTIONS = {
     "delete_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
     "set_task_status": "### 4.17 `set_task_status` and `set_delivered_by`",
     "set_delivered_by": "### 4.17 `set_task_status` and `set_delivered_by`",
+    "set_task_metadata": (
+        "### 4.18 `set_task_metadata`, `set_project_metadata` and `set_document_metadata`"
+    ),
+    "set_project_metadata": (
+        "### 4.18 `set_task_metadata`, `set_project_metadata` and `set_document_metadata`"
+    ),
+    "set_document_metadata": (
+        "### 4.18 `set_task_metadata`, `set_project_metadata` and `set_document_metadata`"
+    ),
 }
 
 ENUM_SECTIONS = {

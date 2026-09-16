@@ -154,6 +154,24 @@ fn every_verb() -> Vec<Vec<String>> {
         // A status write lands in the source's own store — an in-memory one here, which holds
         // it in the process that wrote it — and nowhere else.
         owned(&["task", "status", "set", &task, "todo"]),
+        // So does a metadata write, of each kind of record.
+        owned(&["task", "metadata", "set", &task, "myapp.review", "true"]),
+        owned(&[
+            "project",
+            "metadata",
+            "set",
+            &project,
+            "myapp.review",
+            "true",
+        ]),
+        owned(&[
+            "document",
+            "metadata",
+            "set",
+            &held_document,
+            "myapp.review",
+            "true",
+        ]),
         owned(&["task", "deps", &task]),
         vec![
             "task".to_owned(),
