@@ -487,6 +487,32 @@ impl LocalMdSource {
     }
 
     fn paths(&self, kind: Kind) -> Result<Vec<PathBuf>, SourceError> {
+        fn resolve_entry(root: &Path, path: &Path) -> Result<PathBuf, SourceError> {
+            // A metadata write replaces the record atomically. On Windows, resolving the
+            // directory entry while that replacement is in flight can briefly resolve the
+            // old handle under a path which does not compare beneath the root. Retry only
+            // that race; a stable symlink escape still reaches the error below.
+            for _ in 0..8 {
+                match fs::canonicalize(path) {
+                    Ok(canonical) if canonical.starts_with(root) => return Ok(canonical),
+                    Ok(_) | Err(_) => std::thread::yield_now(),
+                }
+            }
+            let canonical = fs::canonicalize(path).map_err(|e| SourceError::Malformed {
+                message: format!("{}: {e}", path.display()),
+            })?;
+            if !canonical.starts_with(root) {
+                return Err(SourceError::Config {
+                    message: format!(
+                        "{} escapes configured root {}",
+                        path.display(),
+                        root.display()
+                    ),
+                });
+            }
+            Ok(canonical)
+        }
+
         fn visit(
             root: &Path,
             dir: &Path,
@@ -520,18 +546,7 @@ impl LocalMdSource {
                 {
                     continue;
                 }
-                let canonical = fs::canonicalize(&path).map_err(|e| SourceError::Malformed {
-                    message: format!("{}: {e}", path.display()),
-                })?;
-                if !canonical.starts_with(root) {
-                    return Err(SourceError::Config {
-                        message: format!(
-                            "{} escapes configured root {}",
-                            path.display(),
-                            root.display()
-                        ),
-                    });
-                }
+                let canonical = resolve_entry(root, &path)?;
                 if canonical.is_dir() {
                     visit(root, &canonical, visited, out)?;
                 } else if canonical
