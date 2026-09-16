@@ -388,12 +388,14 @@ fn a_mistaken_id_key_or_value_is_refused_before_any_source_is_asked() {
         }
     }
 
-    // The peer really does record being asked, so its silence above is evidence.
+    // The peer really does record being asked, so its silence above is evidence. It is a
+    // Python peer writing in text mode, so on Windows each record ends `\r\n`: read lines.
     exits(&sandbox, &["document", "show", "store:D-1", "--json"], 0);
-    assert!(
-        std::fs::read_to_string(&log)
-            .expect("the peer was started")
-            .starts_with("initialize\n")
+    let asked = std::fs::read_to_string(&log).expect("the peer was started");
+    assert_eq!(
+        asked.lines().next(),
+        Some("initialize"),
+        "the peer's first record is its handshake: {asked:?}"
     );
 }
 
