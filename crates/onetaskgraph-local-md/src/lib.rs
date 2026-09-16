@@ -62,7 +62,10 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use chrono::{DateTime, Utc};
@@ -487,6 +490,10 @@ impl LocalMdSource {
     }
 
     fn paths(&self, kind: Kind) -> Result<Vec<PathBuf>, SourceError> {
+        let _replacement = REPLACEMENTS.read().map_err(|_| SourceError::Unavailable {
+            message: "local-md replacement lock is poisoned".to_owned(),
+        })?;
+
         fn resolve_entry(root: &Path, path: &Path) -> Result<PathBuf, SourceError> {
             // A metadata write replaces the record atomically. On Windows, resolving the
             // directory entry while that replacement is in flight can briefly resolve the
@@ -579,6 +586,9 @@ impl LocalMdSource {
 
     /// One file's whole text.
     fn read_text(path: &Path) -> Result<String, SourceError> {
+        let _replacement = REPLACEMENTS.read().map_err(|_| SourceError::Unavailable {
+            message: "local-md replacement lock is poisoned".to_owned(),
+        })?;
         fs::read_to_string(path).map_err(|e| SourceError::Malformed {
             message: format!("{}: {e}", path.display()),
         })
@@ -809,6 +819,9 @@ impl LocalMdSource {
 
     /// The confined canonical path `id` names under `kind`, when this source holds one.
     fn locate(&self, kind: Kind, id: &NativeId) -> Result<Option<PathBuf>, SourceError> {
+        let _replacement = REPLACEMENTS.read().map_err(|_| SourceError::Unavailable {
+            message: "local-md replacement lock is poisoned".to_owned(),
+        })?;
         let base = self.directory(kind)?;
         let candidate = base.join(&id.0).with_extension("md");
         if !candidate.exists() {
@@ -2272,6 +2285,7 @@ pub const STAGING_SUFFIX: &str = ".onetaskgraph-staging";
 
 /// How many staging files this process has named, so two writes in it never share one.
 static STAGED: AtomicU64 = AtomicU64::new(0);
+static REPLACEMENTS: RwLock<()> = RwLock::new(());
 
 /// Why a narrow metadata write could not be made, and what to do about it.
 struct Unnarrow {
@@ -2375,6 +2389,9 @@ fn replace_atomically(path: &Path, text: &str) -> Result<(), SourceError> {
     let unavailable = |e: std::io::Error| SourceError::Unavailable {
         message: format!("cannot write {}: {e}", path.display()),
     };
+    let _replacement = REPLACEMENTS.write().map_err(|_| SourceError::Unavailable {
+        message: "local-md replacement lock is poisoned".to_owned(),
+    })?;
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
