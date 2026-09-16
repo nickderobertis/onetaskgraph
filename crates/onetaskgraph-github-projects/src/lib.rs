@@ -1797,13 +1797,22 @@ pub enum StatusOptionsOutcome {
     Applied,
 }
 
+/// A GitHub single-select option's opaque GraphQL node identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct StatusOptionId(String);
+
+impl From<String> for StatusOptionId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+
 /// One existing or proposed option in a guarded Status-field update.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct StatusOption {
     /// GitHub's stable id.
-    // llmlint: ignore[invalid_states_unrepresentable] GitHub GraphQL node IDs are opaque
-    // wire values; this operation only preserves and compares them and never parses them.
-    pub id: String,
+    pub id: StatusOptionId,
     /// The visible option name.
     pub name: String,
     /// GitHub's single-select color token.
@@ -1828,9 +1837,7 @@ pub struct StatusAssignment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct AssignedStatusOption {
     /// GitHub's stable id.
-    // llmlint: ignore[invalid_states_unrepresentable] This opaque GraphQL ID is only
-    // compared and rendered; wrapping it would add no validation or impossible state.
-    pub id: String,
+    pub id: StatusOptionId,
     /// The visible name.
     pub name: String,
 }
@@ -2018,7 +2025,7 @@ impl GitHubProjectsSource {
                 .iter()
                 .map(|option| {
                     Ok(StatusOption {
-                        id: required_str(option, "id")?.to_owned(),
+                        id: required_str(option, "id")?.to_owned().into(),
                         name: required_str(option, "name")?.to_owned(),
                         color: serde_json::from_value(
                             option.get("color").cloned().unwrap_or(Value::Null),
@@ -2075,7 +2082,7 @@ impl GitHubProjectsSource {
                     option: status
                         .map(|value| {
                             Ok(AssignedStatusOption {
-                                id: required_str(value, "optionId")?.to_owned(),
+                                id: required_str(value, "optionId")?.to_owned().into(),
                                 name: required_str(value, "name")?.to_owned(),
                             })
                         })

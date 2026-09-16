@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
     DocumentQuery, Health, ItemKind, Label, Location, NewComment, Page, PageRequest, Project,
-    ProjectQuery, Repository, SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef,
-    TextFields,
+    ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory, Task, TaskQuery,
+    TaskRef, TextFields,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
@@ -38,7 +38,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 16;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 17;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -56,6 +56,7 @@ pub fn schema_bundle() -> Value {
     roots.insert("Label", schema_for!(Label));
     roots.insert("Status", schema_for!(Status));
     roots.insert("StatusCategory", schema_for!(StatusCategory));
+    roots.insert("SourceName", schema_for!(SourceName));
     roots.insert("DependencyEdge", schema_for!(DependencyEdge));
     roots.insert("DependencyEndpoint", schema_for!(DependencyEndpoint));
     roots.insert("QualifiedEndpoint", schema_for!(QualifiedEndpoint));

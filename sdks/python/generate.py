@@ -60,6 +60,7 @@ CONTRACT_ROOTS = {
     "QueryPlan",
     "GlobalId",
     "StatusCategory",
+    "SourceName",
     "Document",
     "DocumentQuery",
     "Location",
@@ -316,17 +317,6 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
                 "    # A metadata value is arbitrary JSON by the emitted wire contract: the key's\n"
                 "    # value as the source reads it back, of whatever JSON type the caller set.",
             )
-        if root == "StatusOptionsReport":
-            generated = [
-                (
-                    "    # llmlint: ignore[modern_domain_modeling] GitHub GraphQL node IDs are\n"
-                    "    # opaque wire values that this operation preserves and compares verbatim.\n"
-                    + line
-                )
-                if line.startswith("    id: Annotated[str")
-                else line
-                for line in generated
-            ]
         if any("dict[str, Any]" in line for line in generated):
             generated = [
                 line.replace("from pydantic import ", "from pydantic import JsonValue, ").replace(
@@ -504,7 +494,9 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "from .models import (",
         *[
             f"    {root},"
-            for root in sorted(set(RESPONSE_ROOTS.values()) | {"GlobalId", "StatusCategory"})
+            for root in sorted(
+                set(RESPONSE_ROOTS.values()) | {"GlobalId", "SourceName", "StatusCategory"}
+            )
         ],
         ")",
         "",
@@ -544,6 +536,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         # `task status set` takes the category it sets as its second operand, spelled as the
         # binary's status vocabulary spells it — which is exactly the generated enum's values.
         "category": "StatusCategory | str",
+        "source": "SourceName | str",
         # `metadata set` takes its key as a string, and its value as the JSON text the binary
         # parses strictly — exactly the word the command line takes, so what a caller writes
         # is what the binary reads, and a value is never re-encoded on its way there.

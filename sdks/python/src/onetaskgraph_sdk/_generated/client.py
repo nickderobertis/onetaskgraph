@@ -19,6 +19,7 @@ from .models import (
     QueryResponseOfQualifiedTask,
     QueryResponseOfSearchHit,
     SourceListing,
+    SourceName,
     StatusCategory,
     StatusOptionsReport,
     TaskDetail,
@@ -416,7 +417,7 @@ class GeneratedClient:
 
     async def sources_status_options(
         self,
-        source: str,
+        source: SourceName | str,
         *,
         apply: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,

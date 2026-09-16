@@ -15,10 +15,10 @@ use onetaskgraph_core::{
     CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, MetadataSet, Predicate,
     Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing, SourceState, TaskStatusSet,
 };
-use onetaskgraph_github_projects::StatusOptionsReport;
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, Document, Label, Location, Project, Support, Task, TaskRef,
 };
+use onetaskgraph_status_options::StatusOptionsReport;
 use serde::Serialize;
 
 /// One value as the wire spells it — `in-progress`, `search-title`, `blocks`.
@@ -43,11 +43,11 @@ pub fn status_options(report: &StatusOptionsReport) -> String {
         report.missing.join(", ")
     };
     match report.outcome {
-        onetaskgraph_github_projects::StatusOptionsOutcome::Applied => {
+        onetaskgraph_status_options::StatusOptionsOutcome::Applied => {
             format!("{}: added and verified: {missing}\n", report.source)
         }
-        onetaskgraph_github_projects::StatusOptionsOutcome::Planned
-        | onetaskgraph_github_projects::StatusOptionsOutcome::Unchanged => format!(
+        onetaskgraph_status_options::StatusOptionsOutcome::Planned
+        | onetaskgraph_status_options::StatusOptionsOutcome::Unchanged => format!(
             "{}: missing configured Status options: {missing}\n",
             report.source
         ),

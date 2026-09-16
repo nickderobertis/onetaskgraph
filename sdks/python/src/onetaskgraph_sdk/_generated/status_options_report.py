@@ -31,6 +31,13 @@ class StatusOptionColor(StrEnum):
     StatusOptionColorPink = "PINK"
 
 
+class StatusOptionId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(description="A GitHub single-select option's opaque GraphQL node identifier."),
+    ]
+
+
 class StatusOptionsOutcome(StrEnum):
     StatusOptionsOutcomePlanned = "planned"
     StatusOptionsOutcomeUnchanged = "unchanged"
@@ -42,9 +49,7 @@ class StatusOption(BaseModel):
     description: Annotated[
         str, Field(description="The option description, including an empty one.")
     ]
-    # llmlint: ignore[modern_domain_modeling] GitHub GraphQL node IDs are
-    # opaque wire values that this operation preserves and compares verbatim.
-    id: Annotated[str, Field(description="GitHub's stable id.")]
+    id: Annotated[StatusOptionId, Field(description="GitHub's stable id.")]
     name: Annotated[str, Field(description="The visible option name.")]
 
 

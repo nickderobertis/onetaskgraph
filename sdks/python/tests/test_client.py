@@ -19,6 +19,7 @@ from onetaskgraph_sdk import (
     GlobalId,
     MetadataSet,
     OnetaskgraphError,
+    SourceName,
     StatusCategory,
     TaskStatusSet,
     __version__,
@@ -175,6 +176,17 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
     assert run(client.search(text="Memory", kind="task")).items
     assert run(client.sources_list())
     assert run(client.config_show()).settings
+
+
+def test_status_options_method_passes_source_and_apply_to_the_real_binary(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Send the typed source operand and boolean flag through the subprocess boundary."""
+    client = Client(binary, cwd=configured(tmp_path))
+    with pytest.raises(OnetaskgraphError) as caught:
+        run(client.sources_status_options(source=SourceName(root="memory"), apply=True))
+    assert caught.value.exit_code == 1
+    assert "source memory uses plugin in-memory" in str(caught.value)
 
 
 def landed(outcome: CopyOutcome) -> str:
@@ -777,7 +789,7 @@ def test_generator_write_mode_uses_real_binary(tmp_path: Path) -> None:
     )
     generated_client = (destination / "client.py").read_text(encoding="utf-8")
     assert "async def sources_status_options(" in generated_client
-    assert "source: str" in generated_client
+    assert "source: SourceName | str" in generated_client
     assert "apply: bool | None = None" in generated_client
 
 

@@ -20,13 +20,11 @@ use onetaskgraph_core::{
     GlobalId, LabelRequest, Loaded, MatchBy, OutputFormat, PageToken, Paging, ProjectRequest,
     ProjectSelector, QueryResponse, SearchRequest, SourceFailure, TaskRequest,
 };
-use onetaskgraph_github_projects::{
-    GitHubProjectsConfig, GitHubProjectsSource, StatusOptionsMode, StatusOptionsReport,
-};
 use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SourceName,
     TextQuery,
 };
+use onetaskgraph_status_options::StatusOptionsReport;
 use serde::Serialize;
 
 use crate::cli::{
@@ -177,41 +175,8 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             // and malformed plugin configuration are the shared configuration boundary's
             // existing validation, while construction errors are exercised by this plugin's
             // configuration tests rather than duplicated for each CLI verb.
-            let name = SourceName::try_from(args.source.clone())
-                .map_err(|message| Failure::decided("invalid-source", message.to_string()))?;
-            let source = loaded.config.sources().get(&name).ok_or_else(|| {
-                Failure::decided(
-                    "status-options",
-                    format!("no configured source is named {name}"),
-                )
-            })?;
-            if source.plugin() != onetaskgraph_core::PluginKind::GithubProjects {
-                return Err(Failure::decided(
-                    "status-options",
-                    format!(
-                        "source {name} uses plugin {}, not github-projects; status-options is only available for github-projects sources",
-                        source.plugin()
-                    ),
-                ));
-            }
-            let config: GitHubProjectsConfig = serde_json::from_value(source.config().clone())
-                .map_err(|error| {
-                    Failure::decided("status-options", format!("source {name}: {error}"))
-                })?;
-            let mode = if args.apply {
-                StatusOptionsMode::Apply
-            } else {
-                StatusOptionsMode::Plan
-            };
-            let report = GitHubProjectsSource::new(&name, config, &loaded.secrets)
-                .map_err(|error| {
-                    Failure::decided("status-options", format!("source {name}: {error}"))
-                })?
-                .status_options(mode)
-                .await
-                .map_err(|error| {
-                    Failure::decided("status-options", format!("source {name}: {error}"))
-                })?;
+            let report =
+                onetaskgraph_status_options::reconcile(loaded, &args.source, args.apply).await?;
             let rendered = match loaded.config.output() {
                 OutputFormat::Json => json(&report, "the status-options report")?,
                 OutputFormat::Text => render::status_options(&report),
