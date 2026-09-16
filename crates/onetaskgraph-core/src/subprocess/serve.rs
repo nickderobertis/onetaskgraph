@@ -26,7 +26,7 @@ use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
     AddCommentParams, CommentsParams, DeleteCommentParams, DeleteParams, DeliveredByParams,
     DependencyParams, DocumentQueryParams, DocumentWriteParams, EditCommentParams,
-    HandshakePluginKind, IdParams, InitializeParams, InitializeResult, LabelParams,
+    HandshakePluginKind, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
     PROTOCOL_VERSION, ProjectQueryParams, ProjectWriteParams, Request, Response, StatusParams,
     TaskQueryParams, TaskWriteParams, after_the_first_vocabulary, knows_every_category, vocabulary,
 };
@@ -255,6 +255,9 @@ async fn initialize(
                 // narrow writes or refuses one by name — which is an answer, not a method the
                 // engine should not have sent.
                 task_updates: true,
+                // On the same terms: every plugin of this build sets one metadata key or
+                // refuses to in the contract's own words.
+                metadata_updates: true,
             };
             *source = Some(Hosted {
                 source: built,
@@ -392,6 +395,27 @@ async fn dispatch(
             let params: StatusParams = decode(method, params)?;
             let status = source.set_task_status(&params.id, params.category).await?;
             encode(json!({ "status": status.map(|status| told(status, known)) }))
+        }
+        "set_task_metadata" => {
+            let params: MetadataParams = decode(method, params)?;
+            let task = source
+                .set_task_metadata(&params.id, &params.key, &params.value)
+                .await?;
+            encode(json!({ "task": task.map(|task| told_task(task, known)) }))
+        }
+        "set_project_metadata" => {
+            let params: MetadataParams = decode(method, params)?;
+            let project = source
+                .set_project_metadata(&params.id, &params.key, &params.value)
+                .await?;
+            encode(json!({ "project": project.map(|project| told_project(project, known)) }))
+        }
+        "set_document_metadata" => {
+            let params: MetadataParams = decode(method, params)?;
+            let document = source
+                .set_document_metadata(&params.id, &params.key, &params.value)
+                .await?;
+            encode(json!({ "document": document }))
         }
         "set_delivered_by" => {
             let params: DeliveredByParams = decode(method, params)?;

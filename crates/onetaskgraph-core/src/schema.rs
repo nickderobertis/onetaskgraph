@@ -20,7 +20,7 @@ use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::{
     CommentList, CopyAction, CopyOutcome, CopyReport, DeletedComment, Delivered, DeliveryOutcome,
-    Failure, FailureClass, FailureDocument, GlobalId, PageToken, Predicate, Qualified,
+    Failure, FailureClass, FailureDocument, GlobalId, MetadataSet, PageToken, Predicate, Qualified,
     QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, SearchHit, SearchKind,
     SourceFailure, SourceListing, SourcePlan, TaskDetail, TaskStatusSet,
 };
@@ -38,7 +38,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 14;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 15;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -144,6 +144,9 @@ pub fn schema_bundle() -> Value {
     roots.insert("TaskStatusSet", schema_for!(TaskStatusSet));
     roots.insert("Delivered", schema_for!(Delivered));
     roots.insert("DeliveryOutcome", schema_for!(DeliveryOutcome));
+
+    // What `task`, `project` and `document metadata set` answer with.
+    roots.insert("MetadataSet", schema_for!(MetadataSet));
 
     roots.insert("CopyReport", schema_for!(CopyReport));
     roots.insert("CopyOutcome", schema_for!(CopyOutcome));

@@ -180,12 +180,14 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         }
         EngineError::NoComments { name, .. } => ("no-comments".to_owned(), configured(name), None),
         EngineError::CommentsNotWritable { name, .. }
-        | EngineError::StatusNotWritable { name, .. } => {
+        | EngineError::StatusNotWritable { name, .. }
+        | EngineError::MetadataNotWritable { name, .. } => {
             ("not-writable".to_owned(), configured(name), None)
         }
-        EngineError::NoSuchItem { .. } | EngineError::NoSuchTask { .. } => {
-            ("no-such-item".to_owned(), None, None)
-        }
+        EngineError::NoSuchItem { .. }
+        | EngineError::NoSuchTask { .. }
+        | EngineError::NoSuchProject { .. }
+        | EngineError::NoSuchDocument { .. } => ("no-such-item".to_owned(), None, None),
         EngineError::NoSuchComment { .. } => ("no-such-comment".to_owned(), None, None),
         EngineError::StaleOrigin { .. } => ("stale-origin".to_owned(), None, None),
         EngineError::NotAMember { .. } => ("not-a-member".to_owned(), None, None),

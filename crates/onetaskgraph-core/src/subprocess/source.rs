@@ -15,9 +15,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery, Health,
-    ItemWrite, Label, Metering, NativeId, NewComment, Page, PageRequest, Project, ProjectQuery,
-    SourceError, SourceName, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskSource,
-    WriteSupport,
+    ItemWrite, Label, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Project,
+    ProjectQuery, SourceError, SourceName, Status, StatusCategory, Task, TaskQuery, TaskRef,
+    TaskSource, WriteSupport, unwritable_metadata,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -27,10 +27,10 @@ use super::wire::{
     AddCommentParams, CommentResult, CommentsParams, CommentsResult, DeleteCommentParams,
     DeleteParams, DeletedCommentResult, DeliveredByParams, DeliveredByResult, DependencyParams,
     DocumentQueryParams, DocumentResult, DocumentWriteParams, EditCommentParams, EngineIdentity,
-    IdParams, InitializeParams, InitializeResult, LabelParams, MeteringResult, PROTOCOL_VERSION,
-    ProjectQueryParams, ProjectResult, ProjectWriteParams, Request, StatusParams, StatusResult,
-    TaskQueryParams, TaskResult, TaskWriteParams, WriteResult, after_the_first_vocabulary,
-    knows_every_category, spelled, vocabulary,
+    IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, MeteringResult,
+    PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request, StatusParams,
+    StatusResult, TaskQueryParams, TaskResult, TaskWriteParams, WriteResult,
+    after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -94,6 +94,9 @@ pub struct SubprocessSource {
     /// Whether the plugin said it answers the two narrow task writes and holds a task's two
     /// lists (§3.6), read at the same handshake.
     task_updates: bool,
+    /// Whether the plugin said it answers the three narrow metadata writes (§3.7), read at the
+    /// same handshake.
+    metadata_updates: bool,
     /// The live process.
     connection: Connection,
 }
@@ -219,6 +222,7 @@ impl SubprocessSource {
             meters,
             statuses,
             task_updates,
+            metadata_updates,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -247,6 +251,7 @@ impl SubprocessSource {
             meters,
             knows_every_category: knows_every_category(statuses.as_deref()),
             task_updates,
+            metadata_updates,
             connection: Connection::adopt(peer),
         })
     }
@@ -357,6 +362,15 @@ impl SubprocessSource {
                 self.kind
             ),
         })
+    }
+
+    /// Refuse a narrow metadata write of `record` to a plugin whose handshake did not declare
+    /// `metadata_updates`, before it is sent (§3.7), in the contract's own words.
+    fn metadata_updates(&self, record: &str) -> Result<(), SourceError> {
+        if self.metadata_updates {
+            return Ok(());
+        }
+        Err(unwritable_metadata(self.kind, record))
     }
 
     /// Refuse a task write this plugin could only drop part of in silence.
@@ -587,6 +601,45 @@ impl TaskSource for SubprocessSource {
         Ok(result.delivered_by.map(|_| ()))
     }
 
+    async fn set_task_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Task>, SourceError> {
+        self.metadata_updates("task")?;
+        let result: TaskResult = self
+            .ask("set_task_metadata", metadata_params(id, key, value))
+            .await?;
+        Ok(result.task)
+    }
+
+    async fn set_project_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Project>, SourceError> {
+        self.metadata_updates("project")?;
+        let result: ProjectResult = self
+            .ask("set_project_metadata", metadata_params(id, key, value))
+            .await?;
+        Ok(result.project)
+    }
+
+    async fn set_document_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Document>, SourceError> {
+        self.metadata_updates("document")?;
+        let result: DocumentResult = self
+            .ask("set_document_metadata", metadata_params(id, key, value))
+            .await?;
+        Ok(result.document)
+    }
+
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         let _: IgnoredResult = self
             .ask("delete_task", params(&DeleteParams { id: id.clone() }))
@@ -740,4 +793,13 @@ struct IgnoredResult {}
 /// this cannot fail for a reason a caller could act on.
 fn params<T: serde::Serialize>(value: &T) -> Value {
     serde_json::to_value(value).expect("method parameters are plain data")
+}
+
+/// The parameters of any of the three narrow metadata writes (§4.18).
+fn metadata_params(id: &NativeId, key: &MetadataKey, value: &Value) -> Value {
+    params(&MetadataParams {
+        id: id.clone(),
+        key: key.clone(),
+        value: value.clone(),
+    })
 }
