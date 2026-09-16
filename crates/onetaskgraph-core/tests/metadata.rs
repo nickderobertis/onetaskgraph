@@ -26,14 +26,29 @@ impl SecretResolver for NoSecrets {
     }
 }
 
-/// An `in-memory` source whose every call is recorded by name, and whose metadata writes can
-/// be told to read their value back as its JSON text — a source that stores what it is given
-/// in a different shape from the one it was handed.
+/// An `in-memory` source whose every call is recorded by name, and whose metadata writes read
+/// back as [`ReadBack`] says.
 struct Watched {
     inner: Box<dyn TaskSource>,
     calls: Arc<Mutex<Vec<&'static str>>>,
-    stringifies: bool,
+    read_back: ReadBack,
 }
+
+/// How a [`Watched`] source stores a metadata write.
+#[derive(Clone, Copy)]
+enum ReadBack {
+    /// The value it was given, under the key it was given.
+    AsGiven,
+    /// The value's JSON text — a source that stores what it is given in a different shape
+    /// from the one it was handed.
+    AsJsonText,
+    /// The value under [`MISFILED`] instead — a source that answers the write with a record
+    /// not holding the key it was asked to set.
+    Misfiled,
+}
+
+/// Where a [`ReadBack::Misfiled`] source puts every metadata write.
+const MISFILED: &str = "myapp.misfiled";
 
 impl Watched {
     fn called(&self, method: &'static str) {
@@ -41,10 +56,16 @@ impl Watched {
     }
 
     fn stored(&self, value: &Value) -> Value {
-        if self.stringifies {
-            Value::String(value.to_string())
-        } else {
-            value.clone()
+        match self.read_back {
+            ReadBack::AsJsonText => Value::String(value.to_string()),
+            ReadBack::AsGiven | ReadBack::Misfiled => value.clone(),
+        }
+    }
+
+    fn filed_under(&self, key: &MetadataKey) -> MetadataKey {
+        match self.read_back {
+            ReadBack::Misfiled => MetadataKey::new(MISFILED).expect("a caller key"),
+            ReadBack::AsGiven | ReadBack::AsJsonText => key.clone(),
         }
     }
 }
@@ -145,7 +166,7 @@ impl TaskSource for Watched {
     ) -> Result<Option<Task>, SourceError> {
         self.called("set_task_metadata");
         self.inner
-            .set_task_metadata(id, key, &self.stored(value))
+            .set_task_metadata(id, &self.filed_under(key), &self.stored(value))
             .await
     }
     async fn set_project_metadata(
@@ -156,7 +177,7 @@ impl TaskSource for Watched {
     ) -> Result<Option<Project>, SourceError> {
         self.called("set_project_metadata");
         self.inner
-            .set_project_metadata(id, key, &self.stored(value))
+            .set_project_metadata(id, &self.filed_under(key), &self.stored(value))
             .await
     }
     async fn set_document_metadata(
@@ -167,7 +188,7 @@ impl TaskSource for Watched {
     ) -> Result<Option<Document>, SourceError> {
         self.called("set_document_metadata");
         self.inner
-            .set_document_metadata(id, key, &self.stored(value))
+            .set_document_metadata(id, &self.filed_under(key), &self.stored(value))
             .await
     }
 }
@@ -199,7 +220,7 @@ fn config(capabilities: Value) -> Value {
 }
 
 /// An engine over one watched source named `work`, and the record of what it was asked.
-fn engine(capabilities: Value, stringifies: bool) -> (Engine, Arc<Mutex<Vec<&'static str>>>) {
+fn engine(capabilities: Value, read_back: ReadBack) -> (Engine, Arc<Mutex<Vec<&'static str>>>) {
     let name = SourceName::new("work").expect("a valid source name");
     let inner = onetaskgraph_in_memory::Plugin
         .build(&name, &config(capabilities), &NoSecrets)
@@ -210,7 +231,7 @@ fn engine(capabilities: Value, stringifies: bool) -> (Engine, Arc<Mutex<Vec<&'st
         Box::new(Watched {
             inner,
             calls: Arc::clone(&calls),
-            stringifies,
+            read_back,
         }),
     );
     (
@@ -241,7 +262,7 @@ fn key(value: &str) -> MetadataKey {
 
 #[tokio::test]
 async fn each_verb_sets_one_key_and_answers_with_what_the_source_holds() {
-    let (engine, calls) = engine(writable(), false);
+    let (engine, calls) = engine(writable(), ReadBack::AsGiven);
     let review = key("myapp.review");
 
     let task = engine
@@ -306,7 +327,7 @@ async fn each_verb_sets_one_key_and_answers_with_what_the_source_holds() {
 
 #[tokio::test]
 async fn the_answer_is_the_value_the_source_reads_back_not_the_value_it_was_given() {
-    let (engine, _) = engine(writable(), true);
+    let (engine, _) = engine(writable(), ReadBack::AsJsonText);
     let answered = engine
         .set_task_metadata(&id("work:T-1"), &key("myapp.review"), &json!({"n": 1}))
         .await
@@ -316,8 +337,56 @@ async fn the_answer_is_the_value_the_source_reads_back_not_the_value_it_was_give
 }
 
 #[tokio::test]
+async fn a_source_answering_without_the_key_it_set_is_refused_as_malformed() {
+    let (engine, _) = engine(writable(), ReadBack::Misfiled);
+    let review = key("myapp.review");
+    for (who, error) in [
+        (
+            "work:T-1",
+            engine
+                .set_task_metadata(&id("work:T-1"), &review, &json!(1))
+                .await
+                .expect_err("misfiled"),
+        ),
+        (
+            "work:P-1",
+            engine
+                .set_project_metadata(&id("work:P-1"), &review, &json!(1))
+                .await
+                .expect_err("misfiled"),
+        ),
+        (
+            "work:D-1",
+            engine
+                .set_document_metadata(&id("work:D-1"), &review, &json!(1))
+                .await
+                .expect_err("misfiled"),
+        ),
+    ] {
+        assert!(
+            matches!(
+                &error,
+                EngineError::SourceFailed {
+                    error: SourceError::Malformed { .. },
+                    ..
+                }
+            ),
+            "{who}: {error:?}"
+        );
+        let failure = Failure::from(&error);
+        assert!(
+            failure.message().contains(&format!(
+                "the record {who} it answered the write with does not hold the key myapp.review"
+            )),
+            "{}",
+            failure.message()
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_metadata_set_on_a_delivering_task_leaves_what_it_delivers_alone() {
-    let (engine, calls) = engine(writable(), false);
+    let (engine, calls) = engine(writable(), ReadBack::AsGiven);
     let before = engine
         .task(&id("work:T-2"))
         .await
@@ -351,7 +420,7 @@ async fn a_metadata_set_on_a_delivering_task_leaves_what_it_delivers_alone() {
 
 #[tokio::test]
 async fn every_refusal_names_its_cause() {
-    let (engine, calls) = engine(writable(), false);
+    let (engine, calls) = engine(writable(), ReadBack::AsGiven);
     let review = key("myapp.review");
 
     let unknown = engine
@@ -429,7 +498,7 @@ async fn every_refusal_names_its_cause() {
 fn read_only_engine() -> (Engine, Arc<Mutex<Vec<&'static str>>>) {
     engine(
         json!({"writes": "unsupported", "documents": "native"}),
-        false,
+        ReadBack::AsGiven,
     )
 }
 
@@ -450,7 +519,7 @@ async fn a_source_declaring_no_documents_is_never_asked_for_a_document_write() {
             Box::new(Watched {
                 inner,
                 calls: Arc::clone(&calls),
-                stringifies: false,
+                read_back: ReadBack::AsGiven,
             }),
         ))],
         vec![name],
