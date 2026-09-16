@@ -2238,6 +2238,82 @@ export const runtimeSchemas = {
     ],
     "title": "Location"
   },
+  "MetadataSet": {
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "Location": {
+        "description": "Where an entity is, in the one form a consumer can act on without knowing the backend.\n\nExternally tagged with exactly two variants, so the JSON is `{\"url\": \"https://…\"}` or\n`{\"path\": \"/home/…\"}` and a consumer tells them apart by which key is present. A reader\nhanded one of these knows what to *do* with it — open a link, or print a path and read\nthe file out — which is what a bare string could not have said.\n\nIt carries no third case on purpose. `None` on the field is the third case, and it\nmeans the source did not say where the entity is, which is not the same as saying it is\nnowhere.\n\nThis does **not** redefine, replace or derive from the `url` field of [`Task`],\n[`Project`] or [`Document`]: a source that reports a web URL there goes on reporting\nit, and every existing consumer sees exactly what it saw.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "The entity lives at an external website, and this is a link a reader can open.",
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "The entity is a file on the machine the source runs on, and this is that file's\nabsolute path, so a reader can print the path or read the contents out.",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MetadataKey": {
+        "description": "One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments\nseparated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].\n\nValidated wherever one is built, deserialized included, so a plugin handed one never has\nto ask whether it names a key this product owns.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task`, `project` and `document metadata set` answer with.",
+    "properties": {
+      "id": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The record whose metadata key was set."
+      },
+      "key": {
+        "$ref": "#/$defs/MetadataKey",
+        "description": "The key that was set."
+      },
+      "location": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Location"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Where the source reports the record to be, left out when it does not say."
+      },
+      "value": {
+        "description": "The value the source holds under `key` as it reads the record back after the write —\nwhich is not always the value it was handed."
+      }
+    },
+    "required": [
+      "id",
+      "key",
+      "value"
+    ],
+    "title": "MetadataSet",
+    "type": "object"
+  },
   "NewComment": {
     "$defs": {
       "CommentBody": {

@@ -136,6 +136,43 @@ test("a description in several paragraphs generates without trailing whitespace"
   }
 }, 30_000);
 
+test("a schema that accepts any JSON value generates as unknown", () => {
+  // The binary emits a `serde_json::Value` — `MetadataSet.value` — as a schema holding nothing
+  // but its description. `json-schema-to-typescript` renders that as an object with an index
+  // signature, which the `null`, number or string the value really holds does not satisfy.
+  const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generator-any-json-"));
+  const generated = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generated-"));
+  try {
+    const bundle = {
+      version: 1,
+      roots: {
+        Thing: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          required: ["value", "limit"],
+          properties: {
+            value: { description: "Any JSON value at all." },
+            // A default is data rather than a schema, so an object literal held there is left
+            // exactly as it is even when every key it has is an annotation keyword's name.
+            limit: { type: "object", default: { description: "data" } },
+          },
+        },
+      },
+      commands: ["thing list"],
+    };
+    const result = generateWith(emitter(fixtures, "any-json", JSON.stringify(bundle)), generated);
+    expectExited(result);
+    expect(result.status, result.stderr).toBe(0);
+    const models = readFileSync(resolve(generated, "models.ts"), "utf8");
+    expect(models).toContain("value: unknown");
+    expect(models).not.toContain("tsType");
+    expect(models).toMatch(/limit: \{/);
+  } finally {
+    rmSync(fixtures, { recursive: true, force: true });
+    rmSync(generated, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("generator rejects unsafe destinations and malformed executable output", () => {
   const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generator-boundary-"));
   try {

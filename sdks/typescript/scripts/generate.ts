@@ -114,10 +114,37 @@ const declarations: string[] = [
   "// Literal version keeps generated consumers pinned to this exact contract.",
   `export const SCHEMA_BUNDLE_VERSION = ${bundle.version} as const;`,
 ];
+/// Keywords that describe a schema without constraining what it accepts.
+const ANNOTATIONS = new Set(["description", "title", "default", "examples", "$comment"]);
+
+/// Type every schema that constrains nothing — any JSON value at all, which is what the binary
+/// emits for a `serde_json::Value` such as `MetadataSet.value` — as `unknown`.
+///
+/// `json-schema-to-typescript` otherwise renders one as an object with an index signature,
+/// which a `null`, a number or a string the value really holds does not satisfy.
+function anyJsonAsUnknown(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(anyJsonAsUnknown);
+  if (typeof schema !== "object" || schema === null) return schema;
+  const entries = Object.entries(schema);
+  if (entries.length > 0 && entries.every(([keyword]) => ANNOTATIONS.has(keyword))) {
+    return { ...schema, tsType: "unknown" };
+  }
+  return Object.fromEntries(
+    entries.map(([keyword, value]) => [
+      keyword,
+      // A literal JSON value is data, not a schema, whatever keys it happens to hold.
+      keyword === "default" || keyword === "const" || keyword === "examples"
+        ? value
+        : anyJsonAsUnknown(value),
+    ]),
+  );
+}
+
 for (const [name, schema] of Object.entries(bundle.roots)) {
   let generated: string;
   try {
-    generated = await compile({ ...schema, title: name }, name, {
+    const typed = anyJsonAsUnknown(schema) as Record<string, unknown>;
+    generated = await compile({ ...typed, title: name }, name, {
       bannerComment: "",
       format: false,
       unknownAny: false,

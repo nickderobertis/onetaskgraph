@@ -9,6 +9,7 @@ import type {
   CopyReport,
   DeletedComment,
   EffectiveConfig,
+  MetadataSet,
   QueryResponseOfQualifiedDocument,
   QueryResponseOfQualifiedEdge,
   QueryResponseOfQualifiedLabel,
@@ -93,13 +94,16 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   "task comment edit": "Comment",
   "task comment delete": "DeletedComment",
   "task status set": "TaskStatusSet",
+  "task metadata set": "MetadataSet",
   "project list": "QueryResponseOfQualifiedProject",
   "project show": "QueryResponseOfQualifiedProject",
   "project deps": "QueryResponseOfQualifiedEdge",
   "project copy": "CopyReport",
+  "project metadata set": "MetadataSet",
   "document list": "QueryResponseOfQualifiedDocument",
   "document show": "QueryResponseOfQualifiedDocument",
   "document copy": "CopyReport",
+  "document metadata set": "MetadataSet",
   "label list": "QueryResponseOfQualifiedLabel",
   search: "QueryResponseOfSearchHit",
 };
@@ -108,13 +112,15 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
 // write — a copy, or `task status set` — that landed and could not keep a task it delivers in
 // step, which its response names. A comment verb is one call to one source and neither reads
 // several nor keeps anything in step, so exit 4 is not a code it can produce and not one this
-// client accepts from it.
+// client accepts from it. A `metadata set` is the same: one write to one source, and metadata is
+// not status, so it keeps no delivered task in step.
 const partialResponseCommands = new Set(
   Object.keys(responseRoots).filter(
     (command) =>
       command !== "config show" &&
       command !== "sources list" &&
-      !command.startsWith("task comment "),
+      !command.startsWith("task comment ") &&
+      !command.endsWith(" metadata set"),
   ),
 );
 
@@ -228,6 +234,10 @@ export class OnetaskgraphClient {
   taskStatusSet(id: string, category: StatusCategory): Promise<TaskStatusSet> {
     return this.run("task status set", [id, category]);
   }
+  // `value` is the JSON text the binary parses strictly, exactly the word the command line takes.
+  taskMetadataSet(id: string, key: string, value: string): Promise<MetadataSet> {
+    return this.run("task metadata set", [id, key, value]);
+  }
   taskDeps(id: string, options: DependencyOptions = {}): Promise<QueryResponseOfQualifiedEdge> {
     const args = [id];
     addPage(args, options);
@@ -264,6 +274,9 @@ export class OnetaskgraphClient {
     for (const member of options.members ?? []) args.push("--member", member);
     return this.run("project copy", args);
   }
+  projectMetadataSet(id: string, key: string, value: string): Promise<MetadataSet> {
+    return this.run("project metadata set", [id, key, value]);
+  }
   documentList(
     options: DocumentFilterOptions & { project?: string; noProject?: boolean } = {},
   ): Promise<QueryResponseOfQualifiedDocument> {
@@ -281,6 +294,9 @@ export class OnetaskgraphClient {
   }
   documentCopy(ids: string[], to: string, options: CopyOptions = {}): Promise<CopyReport> {
     return this.run("document copy", [...ids, "--to", to, ...copyFlags(options)]);
+  }
+  documentMetadataSet(id: string, key: string, value: string): Promise<MetadataSet> {
+    return this.run("document metadata set", [id, key, value]);
   }
   labelList(options: QueryOptions = {}): Promise<QueryResponseOfQualifiedLabel> {
     const args: string[] = [];

@@ -13,13 +13,16 @@ export const binaryCommands = [
   "task comment edit",
   "task comment delete",
   "task status set",
+  "task metadata set",
   "project list",
   "project show",
   "project deps",
   "project copy",
+  "project metadata set",
   "document list",
   "document show",
   "document copy",
+  "document metadata set",
   "label list",
   "search"
 ] as const;
