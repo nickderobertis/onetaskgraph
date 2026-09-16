@@ -978,6 +978,52 @@ fn task_list_fails_and_names_a_malformed_local_markdown_file() {
 }
 
 #[test]
+fn malformed_local_markdown_is_a_partial_failure_across_two_sources() {
+    let sandbox = Sandbox::new();
+    let healthy_root = sandbox.subdirectory("healthy-local-md");
+    let healthy_tasks = healthy_root.join("tasks");
+    std::fs::create_dir_all(&healthy_tasks).expect("the healthy task directory");
+    std::fs::write(
+        healthy_tasks.join("available.md"),
+        "---\ntitle: Still available\nstatus: todo\n---\nA valid task.\n",
+    )
+    .expect("the healthy Markdown task");
+
+    let malformed_root = sandbox.subdirectory("malformed-local-md");
+    let malformed_tasks = malformed_root.join("tasks");
+    std::fs::create_dir_all(&malformed_tasks).expect("the malformed task directory");
+    let malformed = malformed_tasks.join("broken.md");
+    std::fs::write(&malformed, "title: missing front-matter delimiters\n")
+        .expect("the malformed Markdown task");
+    let malformed = malformed
+        .canonicalize()
+        .expect("the malformed Markdown path is canonicalizable");
+
+    sandbox.project_document(&document(&json!({
+        "healthy": {"plugin": "local-md", "config": {"root": healthy_root}},
+        "malformed": {"plugin": "local-md", "config": {"root": malformed_root}},
+    })));
+
+    let refused = run(&sandbox, &["task", "list"]);
+    assert_eq!(refused.status.code(), Some(4), "{}", stderr(&refused));
+    assert_eq!(listed(&stdout(&refused)), ["healthy:available"]);
+    assert!(
+        stderr(&refused).contains(&malformed.display().to_string()),
+        "the failed source's malformed file must be named:\n{}",
+        stderr(&refused)
+    );
+
+    let allowed = run(&sandbox, &["task", "list", "--allow-partial"]);
+    assert_eq!(allowed.status.code(), Some(0), "{}", stderr(&allowed));
+    assert_eq!(listed(&stdout(&allowed)), ["healthy:available"]);
+    assert!(
+        stderr(&allowed).contains(&malformed.display().to_string()),
+        "the accepted partial answer must still report the failed source:\n{}",
+        stderr(&allowed)
+    );
+}
+
+#[test]
 fn a_task_in_no_project_is_listed_by_default_and_can_be_selected_on_its_own() {
     for row in complete_dataset_rows() {
         let sandbox = host(row);
