@@ -1492,6 +1492,23 @@ fn checkout_and_worktree(sandbox: &Sandbox) -> std::path::PathBuf {
     shared
 }
 
+/// The name this source reports for one of `store`'s task files.
+///
+/// Resolved rather than merely joined, because that is what the plugin reports: it
+/// canonicalizes its root before joining anything onto it, and on Windows the resolved
+/// name is both `\\?\`-prefixed and spelled with the long form of every component the
+/// temporary tree abbreviates (`RUNNER~1`). Resolving here too makes the comparison two
+/// names for one file rather than two spellings of one name.
+fn task_file(store: &std::path::Path, native: &str) -> String {
+    store
+        .join("tasks")
+        .join(format!("{native}.md"))
+        .canonicalize()
+        .expect("the task file this store holds")
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn listed_from(sandbox: &Sandbox, directory: &std::path::Path) -> Vec<(String, String)> {
     let output = sandbox
         .command_in(directory)
@@ -1525,10 +1542,7 @@ fn a_relative_root_a_document_supplies_is_read_from_the_documents_directory_deep
 
     assert_eq!(
         listed_from(&sandbox, &sandbox.project().join("checkout/crates")),
-        vec![(
-            "plans:ship".to_owned(),
-            shared.join("tasks/ship.md").to_string_lossy().into_owned()
-        )],
+        vec![("plans:ship".to_owned(), task_file(&shared, "ship"))],
         "the store the document names, not the one beside the working directory"
     );
 }
@@ -1541,10 +1555,7 @@ fn a_relative_root_a_document_supplies_is_read_from_the_documents_directory_in_a
 
     assert_eq!(
         listed_from(&sandbox, &sandbox.project().join("worktrees/feature")),
-        vec![(
-            "plans:ship".to_owned(),
-            shared.join("tasks/ship.md").to_string_lossy().into_owned()
-        )],
+        vec![("plans:ship".to_owned(), task_file(&shared, "ship"))],
         "a worktree beside the checkout reads the same configured store, not its own"
     );
 }

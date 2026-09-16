@@ -217,8 +217,17 @@ impl Host {
         )])
     }
 
+    /// `relative` is spelled with `/` whatever the platform, and joined a component at a
+    /// time for that reason: `Path::join` on Windows appends such a literal verbatim, so
+    /// `home/onetaskgraph/config.yaml` would come back as `…\home/onetaskgraph\config.yaml`
+    /// — a second spelling of a path the layer under test names with `\` throughout, which
+    /// no assertion comparing the two can be about the layer.
     fn write(&self, relative: &str, text: &str) -> std::path::PathBuf {
-        let path = self.root.path().join(relative);
+        let path = relative
+            .split('/')
+            .fold(self.root.path().to_path_buf(), |path, component| {
+                path.join(component)
+            });
         std::fs::create_dir_all(path.parent().expect("a parent")).expect("the directory");
         std::fs::write(&path, text).expect("written");
         path
@@ -1305,10 +1314,16 @@ fn only_the_markdown_folder_declares_a_document_relative_field() {
 
 /// A document under a directory this layer cannot write down.
 ///
-/// Unix-only because it is the platform that has such a directory: a Windows path is
-/// already Unicode, so there is no name to give this one. The behaviour under test is not
-/// platform-specific — what is platform-specific is being able to *build* the input.
-#[cfg(unix)]
+/// Linux-only, because of the three platforms this repository's merge path runs it is the
+/// one that can *hold* such a directory. A Windows path is a sequence of UTF-16 code units
+/// rather than of bytes, so `std::os::unix::ffi` is not there to build the name and there
+/// is no such name to build; and macOS is the unix that refuses the name at the
+/// filesystem — `create_dir_all` fails there with `Illegal byte sequence` before this test
+/// reaches the layer at all, which is the same refusal `tests/plugin.rs` in
+/// `onetaskgraph-local-md` records beside its own non-UTF-8 filename. The behaviour under
+/// test is not platform-specific — what is platform-specific is being able to build the
+/// input.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_document_under_a_directory_that_is_not_valid_utf8_refuses_the_setting_it_cannot_resolve() {
     use std::ffi::{OsStr, OsString};
