@@ -83,11 +83,11 @@ write_journey '    let session = Session::open(SESSION_NAME, key, Exclusivity::O
 run_guard
 case "$OUTPUT" in
   *"does not say which Exclusivity"*)
-    fail "a journey opening Exclusivity::OneAtATime, followed by more text than a pipe holds, was read as naming no Exclusivity. Read how $GUARD matches the stripped journey. Output: $OUTPUT"
+    fail "a journey opening Exclusivity::OneAtATime, followed by more text than a pipe holds, was read as naming no Exclusivity. Match the stripped journey without a pipeline whose writer can take SIGPIPE, then rerun. Output: $OUTPUT"
     ;;
 esac
 if [ "$STATUS" -ne 0 ]; then
-  fail "$GUARD refused a journey opening Exclusivity::OneAtATime whose three outcomes the stand-in reported correctly (exit $STATUS). Output: $OUTPUT"
+  fail "$GUARD refused a journey opening Exclusivity::OneAtATime whose three outcomes the stand-in reported correctly (exit $STATUS). Read the guard's own diagnostic in the output and fix what it names in $GUARD, then rerun. Output: $OUTPUT"
 fi
 
 # The other half, so a guard that answers OneAtATime for everything cannot pass the case above.
@@ -95,17 +95,17 @@ write_journey '    // A note that mentions Exclusivity::OneAtATime without openi
 run_guard
 case "$OUTPUT" in
   *"does not say which Exclusivity"*) ;;
-  *) fail "a journey that names Exclusivity::OneAtATime only in a comment was not refused as naming none (exit $STATUS). Output: $OUTPUT" ;;
+  *) fail "a journey that names Exclusivity::OneAtATime only in a comment was not refused as naming none (exit $STATUS). Strip line comments in $GUARD before matching, then rerun. Output: $OUTPUT" ;;
 esac
 if [ "$STATUS" -eq 0 ]; then
-  fail "a journey that names no Exclusivity outside a comment passed $GUARD. Output: $OUTPUT"
+  fail "a journey that names no Exclusivity outside a comment passed $GUARD. Make the guard fail when no Exclusivity is named, then rerun. Output: $OUTPUT"
 fi
 
 write_journey '    let session = Session::open(SESSION_NAME, key, Exclusivity::OneAtATime); let other = Exclusivity::Shared;'
 run_guard
 case "$OUTPUT" in
   *"both Exclusivity::OneAtATime and Exclusivity::Shared"*) ;;
-  *) fail "a journey naming both variants was not refused as ambiguous (exit $STATUS). Output: $OUTPUT" ;;
+  *) fail "a journey naming both variants was not refused as ambiguous (exit $STATUS). Make $GUARD test every variant and refuse a second match, then rerun. Output: $OUTPUT" ;;
 esac
 
 if [ "$failures" -ne 0 ]; then
