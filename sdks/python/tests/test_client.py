@@ -775,7 +775,10 @@ def test_generator_write_mode_uses_real_binary(tmp_path: Path) -> None:
         cwd=WORKSPACE / "sdks" / "python",
         check=True,
     )
-    assert (destination / "client.py").is_file()
+    generated_client = (destination / "client.py").read_text(encoding="utf-8")
+    assert "async def sources_status_options(" in generated_client
+    assert "source: str" in generated_client
+    assert "apply: bool | None = None" in generated_client
 
 
 def test_distribution_version() -> None:

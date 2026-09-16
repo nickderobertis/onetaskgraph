@@ -38,7 +38,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 15;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 16;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]

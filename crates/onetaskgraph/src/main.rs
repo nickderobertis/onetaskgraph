@@ -20,7 +20,9 @@ use onetaskgraph_core::{
     GlobalId, LabelRequest, Loaded, MatchBy, OutputFormat, PageToken, Paging, ProjectRequest,
     ProjectSelector, QueryResponse, SearchRequest, SourceFailure, TaskRequest,
 };
-use onetaskgraph_github_projects::{GitHubProjectsConfig, GitHubProjectsSource, StatusOptionsMode};
+use onetaskgraph_github_projects::{
+    GitHubProjectsConfig, GitHubProjectsSource, StatusOptionsMode, StatusOptionsReport,
+};
 use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SourceName,
     TextQuery,
@@ -995,6 +997,13 @@ fn json(value: &impl Serialize, what: &str) -> Result<String, Failure> {
 /// The schema bundle as pretty-printed JSON.
 fn schema_bundle() -> Result<String, Failure> {
     let mut bundle = onetaskgraph_core::schema_bundle();
+    bundle["roots"]["StatusOptionsReport"] =
+        serde_json::to_value(schemars::schema_for!(StatusOptionsReport)).map_err(|error| {
+            Failure::decided(
+                "render",
+                format!("could not render the status-options schema: {error}"),
+            )
+        })?;
     bundle["commands"] = serde_json::to_value(public_commands()?).map_err(|error| {
         Failure::decided(
             "render",
@@ -1111,6 +1120,7 @@ mod tests {
         let bundle: serde_json::Value =
             serde_json::from_slice(&out).expect("the bundle is valid JSON");
         assert!(bundle["roots"]["Task"].is_object());
+        assert!(bundle["roots"]["StatusOptionsReport"].is_object());
         assert!(bundle["plugin_config"]["in-memory"].is_object());
         assert_eq!(
             bundle["commands"],

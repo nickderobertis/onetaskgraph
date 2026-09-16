@@ -20,6 +20,7 @@ from .models import (
     QueryResponseOfSearchHit,
     SourceListing,
     StatusCategory,
+    StatusOptionsReport,
     TaskDetail,
     TaskStatusSet,
 )
@@ -33,6 +34,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("project", "metadata", "set"): ("id", "key", "value"),
     ("project", "show"): ("id",),
     ("search",): ("text",),
+    ("sources", "status-options"): ("source",),
     ("task", "comment", "add"): ("id",),
     ("task", "comment", "delete"): ("id", "comment_id"),
     ("task", "comment", "edit"): ("id", "comment_id"),
@@ -407,6 +409,26 @@ class GeneratedClient:
         return await self._invoke(
             ["sources", "list"],
             list[SourceListing],
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
+
+    async def sources_status_options(
+        self,
+        source: str,
+        *,
+        apply: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> StatusOptionsReport:
+        """Run ``onetaskgraph sources status-options``."""
+        return await self._invoke(
+            ["sources", "status-options"],
+            StatusOptionsReport,
+            source=source,
+            apply=apply,
             default_sources=default_sources,
             page_size=page_size,
             set=set,

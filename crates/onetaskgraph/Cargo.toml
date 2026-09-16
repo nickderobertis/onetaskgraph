@@ -24,6 +24,7 @@ path = "src/bin/onetaskgraph-source.rs"
 
 # The one crate permitted to depend on the engine; deny.toml names it as such.
 [dependencies]
+schemars.workspace = true
 clap.workspace = true
 onetaskgraph-core.workspace = true
 # The contract crate directly, not through the engine: this binary renders the work types

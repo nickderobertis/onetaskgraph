@@ -1009,6 +1009,7 @@ dependencies = [
  "onetaskgraph-linear",
  "onetaskgraph-plugin-api",
  "predicates",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
