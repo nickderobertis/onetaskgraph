@@ -9,8 +9,5 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-onetaskgraph-core.workspace = true
 onetaskgraph-github-projects.workspace = true
 onetaskgraph-plugin-api.workspace = true
-serde_json.workspace = true
-

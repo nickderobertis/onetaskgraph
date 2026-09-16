@@ -5,7 +5,6 @@
   "tags": ["lang:rust", "layer:plugin-operation"],
   "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree.",
   "implicitDependencies": [
-    "onetaskgraph-core",
     "onetaskgraph-github-projects",
     "onetaskgraph-plugin-api"
   ],

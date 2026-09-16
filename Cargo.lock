@@ -1126,10 +1126,8 @@ dependencies = [
 name = "onetaskgraph-status-options"
 version = "0.2.33"
 dependencies = [
- "onetaskgraph-core",
  "onetaskgraph-github-projects",
  "onetaskgraph-plugin-api",
- "serde_json",
 ]
 
 [[package]]

@@ -1802,9 +1802,14 @@ pub enum StatusOptionsOutcome {
 #[serde(transparent)]
 pub struct StatusOptionId(String);
 
-impl From<String> for StatusOptionId {
-    fn from(id: String) -> Self {
-        Self(id)
+impl TryFrom<String> for StatusOptionId {
+    type Error = String;
+
+    fn try_from(id: String) -> Result<Self, Self::Error> {
+        if id.trim().is_empty() {
+            return Err("a GitHub Status option id cannot be blank".to_owned());
+        }
+        Ok(Self(id))
     }
 }
 
@@ -2025,7 +2030,8 @@ impl GitHubProjectsSource {
                 .iter()
                 .map(|option| {
                     Ok(StatusOption {
-                        id: required_str(option, "id")?.to_owned().into(),
+                        id: StatusOptionId::try_from(required_str(option, "id")?.to_owned())
+                            .map_err(|message| SourceError::Malformed { message })?,
                         name: ColumnName::try_from(required_str(option, "name")?.to_owned())
                             .map_err(|message| SourceError::Malformed {
                                 message: format!("GitHub Status option name is invalid: {message}"),
@@ -2085,7 +2091,10 @@ impl GitHubProjectsSource {
                     option: status
                         .map(|value| {
                             Ok(AssignedStatusOption {
-                                id: required_str(value, "optionId")?.to_owned().into(),
+                                id: StatusOptionId::try_from(
+                                    required_str(value, "optionId")?.to_owned(),
+                                )
+                                .map_err(|message| SourceError::Malformed { message })?,
                                 name: ColumnName::try_from(required_str(value, "name")?.to_owned())
                                     .map_err(|message| SourceError::Malformed {
                                         message: format!(
