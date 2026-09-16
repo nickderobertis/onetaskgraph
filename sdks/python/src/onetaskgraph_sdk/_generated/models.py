@@ -11,6 +11,7 @@ from .effective_config import EffectiveConfig as EffectiveConfig
 from .failure_document import FailureDocument as FailureDocument
 from .global_id import GlobalId as GlobalId
 from .location import Location as Location
+from .metadata_set import MetadataSet as MetadataSet
 from .page_of_document import Page as PageOfDocument
 from .query_plan import QueryPlan as QueryPlan
 from .query_response_of_qualified_document import QueryResponse as QueryResponseOfQualifiedDocument

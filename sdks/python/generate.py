@@ -26,13 +26,16 @@ RESPONSE_ROOTS = {
     "task_comment_edit": "Comment",
     "task_comment_delete": "DeletedComment",
     "task_status_set": "TaskStatusSet",
+    "task_metadata_set": "MetadataSet",
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
     "project_deps": "QueryResponseOfQualifiedEdge",
     "project_copy": "CopyReport",
+    "project_metadata_set": "MetadataSet",
     "document_list": "QueryResponseOfQualifiedDocument",
     "document_show": "QueryResponseOfQualifiedDocument",
     "document_copy": "CopyReport",
+    "document_metadata_set": "MetadataSet",
     "label_list": "QueryResponseOfQualifiedLabel",
     "search": "QueryResponseOfSearchHit",
     "sources_list": "SourceListing",
@@ -283,7 +286,7 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
                     "--output-model-type",
                     "pydantic_v2.BaseModel",
                     "--target-python-version",
-                    "3.14",
+                    "3.13",
                     "--use-standard-collections",
                     "--use-union-operator",
                     "--use-annotated",
@@ -428,6 +431,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id", "comment_id")
         case ("task", "status", "set"):
             return ("id", "category")
+        case ("task" | "project" | "document", "metadata", "set"):
+            return ("id", "key", "value")
         case ("task" | "project" | "document", "show" | "deps" | "copy"):
             return ("id",)
         case _:
@@ -499,6 +504,11 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         # `task status set` takes the category it sets as its second operand, spelled as the
         # binary's status vocabulary spells it — which is exactly the generated enum's values.
         "category": "StatusCategory | str",
+        # `metadata set` takes its key as a string, and its value as the JSON text the binary
+        # parses strictly — exactly the word the command line takes, so what a caller writes
+        # is what the binary reads, and a value is never re-encoded on its way there.
+        "key": "str",
+        "value": "str",
     }
     for name, command in sorted(names.items()):
         root = RESPONSE_ROOTS[name]

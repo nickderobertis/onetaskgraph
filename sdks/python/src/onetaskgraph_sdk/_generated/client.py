@@ -11,6 +11,7 @@ from .models import (
     DeletedComment,
     EffectiveConfig,
     GlobalId,
+    MetadataSet,
     QueryResponseOfQualifiedDocument,
     QueryResponseOfQualifiedEdge,
     QueryResponseOfQualifiedLabel,
@@ -25,9 +26,11 @@ from .models import (
 
 POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("document", "copy"): ("ids",),
+    ("document", "metadata", "set"): ("id", "key", "value"),
     ("document", "show"): ("id",),
     ("project", "copy"): ("id",),
     ("project", "deps"): ("id",),
+    ("project", "metadata", "set"): ("id", "key", "value"),
     ("project", "show"): ("id",),
     ("search",): ("text",),
     ("task", "comment", "add"): ("id",),
@@ -36,6 +39,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "comment", "list"): ("id",),
     ("task", "copy"): ("ids",),
     ("task", "deps"): ("id",),
+    ("task", "metadata", "set"): ("id", "key", "value"),
     ("task", "show"): ("id",),
     ("task", "status", "set"): ("id", "category"),
 }
@@ -139,6 +143,28 @@ class GeneratedClient:
             search=search,
             set=set,
             source=source,
+        )
+
+    async def document_metadata_set(
+        self,
+        id: GlobalId | str,
+        key: str,
+        value: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> MetadataSet:
+        """Run ``onetaskgraph document metadata set``."""
+        return await self._invoke(
+            ["document", "metadata", "set"],
+            MetadataSet,
+            id=id,
+            key=key,
+            value=value,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
         )
 
     async def document_show(
@@ -292,6 +318,28 @@ class GeneratedClient:
             set=set,
             source=source,
             status=status,
+        )
+
+    async def project_metadata_set(
+        self,
+        id: GlobalId | str,
+        key: str,
+        value: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> MetadataSet:
+        """Run ``onetaskgraph project metadata set``."""
+        return await self._invoke(
+            ["project", "metadata", "set"],
+            MetadataSet,
+            id=id,
+            key=key,
+            value=value,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
         )
 
     async def project_show(
@@ -553,6 +601,28 @@ class GeneratedClient:
             set=set,
             source=source,
             status=status,
+        )
+
+    async def task_metadata_set(
+        self,
+        id: GlobalId | str,
+        key: str,
+        value: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> MetadataSet:
+        """Run ``onetaskgraph task metadata set``."""
+        return await self._invoke(
+            ["task", "metadata", "set"],
+            MetadataSet,
+            id=id,
+            key=key,
+            value=value,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
         )
 
     async def task_show(
