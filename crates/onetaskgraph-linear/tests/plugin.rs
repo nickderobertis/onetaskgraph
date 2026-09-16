@@ -1205,6 +1205,55 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
     ]);
     let writable = writable_source(&endpoint);
     let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:NEAR","title":"visible task","content":"body","status":{"category":"todo","name":"Todo"},"labels":[{"id":"old","name":"bug","color":null}],"project":null,"repositories":["github.com/acme/work"],"metadata":{"object":{"n":1},"null":null}})).unwrap();
+
+    for (labels, expected) in [
+        (
+            serde_json::json!({"issueLabels":{"nodes":[]}}),
+            r#"source work cannot resolve label "bug": found 0 matches"#,
+        ),
+        (
+            serde_json::json!({"issueLabels":{"nodes":[{"id":"L-ONE"},{"id":"L-TWO"}]}}),
+            r#"source work cannot resolve label "bug": found 2 matches with ids ["L-ONE", "L-TWO"]"#,
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![
+            id_page("teams", "TEAM"),
+            id_page("workflowStates", "STATE"),
+            labels,
+        ]);
+        let refusal = writable_source(&endpoint)
+            .write_task(&ItemWrite {
+                target: None,
+                item: task.clone(),
+                depends_on: Vec::new(),
+            })
+            .await
+            .expect_err("a non-unique label is refused before the write");
+        assert!(
+            matches!(&refusal, SourceError::Refused { message } if message == expected),
+            "the refusal distinguishes this match count: {refusal:?}"
+        );
+    }
+
+    let (endpoint, _) = response_server(vec![
+        id_page("teams", "TEAM"),
+        id_page("workflowStates", "STATE"),
+        serde_json::json!({"issueLabels":{"nodes":[{"id":"L-ONE"},{}]}}),
+    ]);
+    let malformed_duplicate = writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task.clone(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect_err("a duplicate label with no usable id is malformed");
+    assert!(
+        matches!(&malformed_duplicate, SourceError::Malformed { message }
+            if message.contains("missing string field id")),
+        "a response whose duplicate ids cannot be reported is malformed: {malformed_duplicate:?}"
+    );
+
     let missing_team = source("http://127.0.0.1:1")
         .write_task(&ItemWrite {
             target: None,
@@ -1223,7 +1272,9 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         })
         .await
         .unwrap_err();
-    assert!(format!("{unresolved_team}").contains("cannot resolve configured team uniquely"));
+    assert!(
+        format!("{unresolved_team}").contains("cannot resolve configured team: found 0 matches")
+    );
     drop(unresolved_wire);
     let native_task = DependencyEdge {
         from: DependencyEndpoint::new("authored:NEAR".into(), ItemKind::Task).unwrap(),

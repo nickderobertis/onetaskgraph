@@ -6,7 +6,8 @@
 //! over real HTTP. What stands in for Linear is a local server that answers a filtered listing
 //! from an index that has not caught up with a write for a number of reads, or never does.
 //! `settle::settled_label` is driven the same way, sending the plugin's own label lookup to a
-//! workspace whose label filter holds a just-created label late, never, or twice.
+//! workspace whose label filter holds a just-created label late, never, or twice. A missing
+//! label is retried as index lag; duplicate data is refused immediately with its ids.
 //!
 //! No credential and no third-party API: every issue and document below is one this file
 //! answered with. A short bound stands in for [`settle::LINEAR_INDEX`], because what is proven
@@ -31,8 +32,8 @@ use serde_json::{Value, json};
 mod settle;
 
 use settle::{
-    Bound, LABEL_CONNECTION, LABEL_VARIABLE, MOST_DOCUMENT_PAGES, settled_documents, settled_label,
-    settled_tasks, settled_walk,
+    Bound, LABEL_CONNECTION, LABEL_VARIABLE, MOST_DOCUMENT_PAGES, settled_document_absent,
+    settled_documents, settled_label, settled_tasks, settled_walk,
 };
 
 /// Room for the late listings below, which agree on their third read, with reads to spare, so
@@ -417,6 +418,48 @@ async fn a_document_listing_that_never_catches_up_fails_within_the_bound_naming_
 }
 
 #[tokio::test]
+async fn a_deleted_document_that_stays_readable_for_some_reads_then_disappears_passes() {
+    let (source, answered) = workspace(|n, request| {
+        assert!(
+            request.contains("document(id:"),
+            "only one document is asked for: {request}"
+        );
+        json!({"document": (n <= 2).then(|| document("d1", "deleted", None))})
+    });
+    settled_document_absent(BOUND, source.as_ref(), &NativeId("d1".into()), "deleted")
+        .await
+        .unwrap();
+    assert_eq!(
+        answered.load(Ordering::SeqCst),
+        3,
+        "the wait reads until the deleted document disappears, and not once more"
+    );
+}
+
+#[tokio::test]
+async fn a_deleted_document_that_never_disappears_fails_at_the_bound_naming_it() {
+    let (source, answered) = workspace(|_, _| json!({"document": document("d1", "deleted", None)}));
+    let started = Instant::now();
+    let refusal =
+        settled_document_absent(BOUND, source.as_ref(), &NativeId("d1".into()), "deleted")
+            .await
+            .unwrap_err();
+    let waited = started.elapsed();
+    assert!(
+        refusal.starts_with(
+            r#"the deleted document "deleted" came back as ["deleted"] rather than [], still after 5 reads"#
+        ),
+        "the failure names the document that remained readable: {refusal}"
+    );
+    assert_eq!(answered.load(Ordering::SeqCst), BOUND.reads);
+    assert!(
+        waited >= BOUND.interval * (BOUND.reads - 1)
+            && waited < BOUND.interval * BOUND.reads + SLACK,
+        "a document that never disappears fails once the bound is spent, and waited {waited:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_document_listing_reads_past_a_first_page_full_of_other_documents() {
     // A workspace holding a whole page of documents that are not this run's before its own:
     // a listing that stopped at the first page would never see `filed`, however long it waited.
@@ -553,11 +596,20 @@ fn the_label_wait_names_the_root_field_and_the_variable_of_the_plugins_own_looku
         root.name, LABEL_CONNECTION,
         "the wait reads the root field the lookup answers under: {lookup}"
     );
+    let nodes = root
+        .selection_set
+        .items
+        .iter()
+        .find_map(|selected| match selected {
+            query::Selection::Field(field) if field.name == "nodes" => Some(field),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the lookup selects no nodes for the wait to count: {lookup}"));
     assert!(
-        root.selection_set.items.iter().any(
-            |selected| matches!(selected, query::Selection::Field(field) if field.name == "nodes")
+        nodes.selection_set.items.iter().any(
+            |selected| matches!(selected, query::Selection::Field(field) if field.name == "id")
         ),
-        "the wait counts the nodes the lookup selects: {lookup}"
+        "the lookup selects the ids a duplicate refusal reports: {lookup}"
     );
 }
 
@@ -595,7 +647,7 @@ async fn a_label_the_lookup_never_holds_fails_within_the_bound_naming_what_it_fo
     let waited = started.elapsed();
     assert!(
         refusal.starts_with(
-            r#"the labels named "otg-live-label" by the lookup a write resolves it through came back as [] rather than ["otg-live-label"], still after 5 reads"#
+            r#"the label named "otg-live-label" by the lookup a write resolves it through found 0 matches, still after 5 reads"#
         ),
         "the failure names what the lookup found: {refusal}"
     );
@@ -608,12 +660,13 @@ async fn a_label_the_lookup_never_holds_fails_within_the_bound_naming_what_it_fo
 }
 
 #[tokio::test]
-async fn a_label_two_labels_answer_to_fails_within_the_bound_naming_both() {
-    // The other answer a write is refused over: a wait for exactly one never accepts two.
+async fn a_label_two_labels_answer_to_is_refused_at_once_with_their_ids() {
+    // Duplicate data cannot settle, so waiting would only delay the actionable refusal.
     let (url, answered) = serve(|_, request| {
         assert_looks_up_label(request);
         labels(vec!["l1", "l2"])
     });
+    let started = Instant::now();
     let refusal = settled_label(BOUND, LABEL, |query, variables| {
         post(&url, query, variables)
     })
@@ -621,11 +674,12 @@ async fn a_label_two_labels_answer_to_fails_within_the_bound_naming_both() {
     .unwrap_err();
     assert!(
         refusal.starts_with(
-            r#"the labels named "otg-live-label" by the lookup a write resolves it through came back as ["otg-live-label", "otg-live-label"] rather than ["otg-live-label"], still after 5 reads"#
+            r#"the label named "otg-live-label" by the lookup a write resolves it through found 2 matches with ids ["l1", "l2"]"#
         ),
         "the failure names what the lookup found: {refusal}"
     );
-    assert_eq!(answered.load(Ordering::SeqCst), BOUND.reads);
+    assert_eq!(answered.load(Ordering::SeqCst), 1);
+    assert!(started.elapsed() < BOUND.interval + SLACK);
 }
 
 #[tokio::test]
@@ -639,10 +693,27 @@ async fn a_label_lookup_that_cannot_be_read_fails_at_once_rather_than_waiting() 
     .unwrap_err();
     assert!(
         refusal.starts_with(
-            r#"the labels named "otg-live-label" by the lookup a write resolves it through could not be read: "#
+            r#"the label named "otg-live-label" by the lookup a write resolves it through could not be read: "#
         ),
         "{refusal}"
     );
+    assert_eq!(answered.load(Ordering::SeqCst), 1);
+    assert!(started.elapsed() < BOUND.interval + SLACK);
+}
+
+#[tokio::test]
+async fn a_label_lookup_with_an_unusable_id_fails_at_once_rather_than_settling() {
+    let (url, answered) = serve(|_, request| {
+        assert_looks_up_label(request);
+        json!({LABEL_CONNECTION: {"nodes": [{}]}})
+    });
+    let started = Instant::now();
+    let refusal = settled_label(BOUND, LABEL, |query, variables| {
+        post(&url, query, variables)
+    })
+    .await
+    .unwrap_err();
+    assert!(refusal.contains("label node has no string id"), "{refusal}");
     assert_eq!(answered.load(Ordering::SeqCst), 1);
     assert!(started.elapsed() < BOUND.interval + SLACK);
 }
