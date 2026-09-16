@@ -21,14 +21,14 @@ use onetaskgraph_core::{
     ProjectSelector, QueryResponse, SearchRequest, SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
-    CommentBody, LabelFilter, NativeId, NewComment, SourceName, TextQuery,
+    CommentBody, LabelFilter, MetadataKey, NativeId, NewComment, SourceName, TextQuery,
 };
 use serde::Serialize;
 
 use crate::cli::{
     Cli, Command, CommentCommand, ConfigCommand, CopyArgs, DependencyArgs, DocumentCommand,
-    DocumentFilterArgs, FilterArgs, LabelCommand, PageArgs, ProjectCommand, SelectionArgs,
-    ShowArgs, SourcesCommand, StatusCommand, TaskCommand,
+    DocumentFilterArgs, FilterArgs, LabelCommand, MetadataCommand, MetadataSetArgs, PageArgs,
+    ProjectCommand, SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`.
@@ -222,6 +222,27 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             emit(out, rendered.trim_end(), "the status")?;
             Ok(delivery_exit(&set.delivered))
         }
+
+        Command::Task {
+            command:
+                TaskCommand::Metadata {
+                    command: MetadataCommand::Set(args),
+                },
+        } => metadata_set(out, loaded, Record::Task, args).await,
+
+        Command::Project {
+            command:
+                ProjectCommand::Metadata {
+                    command: MetadataCommand::Set(args),
+                },
+        } => metadata_set(out, loaded, Record::Project, args).await,
+
+        Command::Document {
+            command:
+                DocumentCommand::Metadata {
+                    command: MetadataCommand::Set(args),
+                },
+        } => metadata_set(out, loaded, Record::Document, args).await,
 
         Command::Task {
             command: TaskCommand::Deps(args),
@@ -656,6 +677,58 @@ async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> R
     Ok(delivery_exit(&report.delivered))
 }
 
+/// Which kind of record a `metadata set` verb names.
+#[derive(Debug, Clone, Copy)]
+enum Record {
+    Task,
+    Project,
+    Document,
+}
+
+/// Set one metadata key of one record.
+///
+/// The id, the key and the value are each refused, with the next action, before the engine is
+/// built — so a mistake in any of them reaches no source, a spawned plugin included.
+async fn metadata_set(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    record: Record,
+    args: &MetadataSetArgs,
+) -> Result<u8, Failure> {
+    let id = qualified(&args.id)?;
+    let key = metadata_key(&args.key)?;
+    let value = metadata_value(&args.value)?;
+    let engine = engine(loaded);
+    let set = match record {
+        Record::Task => engine.set_task_metadata(&id, &key, &value).await,
+        Record::Project => engine.set_project_metadata(&id, &key, &value).await,
+        Record::Document => engine.set_document_metadata(&id, &key, &value).await,
+    }
+    .map_err(|error| Failure::from(&error))?;
+    let rendered = rendering(loaded, &set, render::metadata_set, "the metadata key")?;
+    emit(out, rendered.trim_end(), "the metadata key")?;
+    Ok(EXIT_OK)
+}
+
+/// A `metadata set` key, refused by name when it is not a caller's own dotted key.
+fn metadata_key(key: &str) -> Result<MetadataKey, Failure> {
+    MetadataKey::new(key).map_err(|message| Failure::decided("invalid-metadata-key", message))
+}
+
+/// A `metadata set` value, parsed strictly as one JSON value.
+fn metadata_value(value: &str) -> Result<serde_json::Value, Failure> {
+    serde_json::from_str(value).map_err(|error| {
+        Failure::decided(
+            "invalid-metadata-value",
+            format!(
+                "the value {value:?} is not JSON: {error}\n\
+                 next: pass exactly one JSON value — quote a string as '\"text\"', and write \
+                 true, false, null, a number, an array or an object as JSON spells them."
+            ),
+        )
+    })
+}
+
 /// Name every delivered task a write could not keep in step, and say what the exit code will
 /// mean.
 ///
@@ -1009,13 +1082,16 @@ mod tests {
                 "task comment edit",
                 "task comment delete",
                 "task status set",
+                "task metadata set",
                 "project list",
                 "project show",
                 "project deps",
                 "project copy",
+                "project metadata set",
                 "document list",
                 "document show",
                 "document copy",
+                "document metadata set",
                 "label list",
                 "search"
             ])

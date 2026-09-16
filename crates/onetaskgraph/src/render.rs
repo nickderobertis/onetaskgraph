@@ -12,8 +12,8 @@
 //! to drift from the one a filter compares against.
 
 use onetaskgraph_core::{
-    CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, Predicate, Qualified,
-    QualifiedEdge, QueryPlan, SearchHit, SourceListing, SourceState, TaskStatusSet,
+    CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, MetadataSet, Predicate,
+    Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing, SourceState, TaskStatusSet,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, Document, Label, Location, Project, Support, Task, TaskRef,
@@ -131,6 +131,20 @@ pub fn status_set(set: &TaskStatusSet) -> String {
         rendered.push_str(&delivered(&set.delivered));
     }
     rendered
+}
+
+/// What a `metadata set` verb did: the record, the key, the value its source now holds there
+/// as compact JSON, and where the record is when its source says.
+pub fn metadata_set(set: &MetadataSet) -> String {
+    let mut rows = vec![
+        vec!["id:".to_owned(), set.id.to_string()],
+        vec!["key:".to_owned(), set.key.to_string()],
+        vec!["value:".to_owned(), set.value.to_string()],
+    ];
+    if let Some(location) = &set.location {
+        rows.push(vec!["location:".to_owned(), located(location)]);
+    }
+    columns(&rows)
 }
 
 /// One line per delivered task a write kept in step with a deliverer, saying in words what
