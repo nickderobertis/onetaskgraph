@@ -396,3 +396,79 @@ fn a_mistaken_id_key_or_value_is_refused_before_any_source_is_asked() {
             .starts_with("initialize\n")
     );
 }
+
+/// A write that fails after its staging file was created — here because the file-size limit
+/// the binary runs under stops the staging write partway — is a failure document, and leaves
+/// the record byte for byte and no staging file beside it.
+///
+/// The limit is set by the shell that `exec`s the binary, with the signal a file-size overrun
+/// raises ignored, so the write sees `EFBIG` and the binary reports it. Every record here is
+/// far below the limit and the value set is far above it, so only the staging write can meet
+/// it. Unix only: Windows has no per-process file-size limit to set.
+#[cfg(unix)]
+#[test]
+fn a_write_that_fails_after_staging_leaves_the_record_and_no_staging_file() {
+    let sandbox = Sandbox::new();
+    let root = folder(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "work": {"plugin": "local-md", "config": {"root": root}},
+    })));
+    let listed = |root: &Path| {
+        let mut names: Vec<PathBuf> = VERBS
+            .iter()
+            .flat_map(|(_, relative)| {
+                let folder = root.join(relative).parent().expect("a folder").to_owned();
+                std::fs::read_dir(&folder)
+                    .expect("the folder lists")
+                    .map(|entry| entry.expect("an entry").path())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        names.sort();
+        names
+    };
+    let before = listed(&root);
+    let oversized = serde_json::to_string(&"x".repeat(64 * 1024)).expect("a JSON string");
+
+    for (kind, relative) in VERBS {
+        let id = format!(
+            "work:{}",
+            relative
+                .rsplit('/')
+                .next()
+                .and_then(|name| name.strip_suffix(".md"))
+                .expect("a record name")
+        );
+        let output = std::process::Command::new("sh")
+            .args([
+                "-c",
+                r#"ulimit -f 16 && trap '' XFSZ && exec "$0" "$@""#,
+                env!("CARGO_BIN_EXE_onetaskgraph"),
+                kind,
+                "metadata",
+                "set",
+                &id,
+                "myapp.review",
+                &oversized,
+                "--json",
+            ])
+            .current_dir(sandbox.project())
+            .env("XDG_CONFIG_HOME", sandbox.config_home())
+            .env_remove("HOME")
+            .output()
+            .expect("the shell runs");
+        let who = format!("{kind} metadata set {id}");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{who}\nstdout:\n{}\nstderr:\n{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        let failed = parsed(&output);
+        let said = failed["failure"]["message"].as_str().expect("a message");
+        assert!(said.contains("cannot write "), "{who}: {said}");
+        assert_eq!(read(&root, relative), held(kind), "{who}");
+    }
+    assert_eq!(listed(&root), before, "a staging file was left behind");
+}
