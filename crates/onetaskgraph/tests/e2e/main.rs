@@ -46,6 +46,13 @@ mod failures;
 mod fixtures;
 mod journeys;
 mod machine;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against folders of Markdown and
+// the Python stdio peer, with no credential and no network, in about a second. The verbs are
+// the engine's and the binary's — the refusals it proves happen before any plugin is built —
+// so they cannot sit behind a plugin crate's edge, which AGENTS.md forbids depending on the
+// engine at any depth.
+mod metadata;
 mod multi_source;
 mod no_persistence;
 mod source_host;
