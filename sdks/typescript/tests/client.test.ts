@@ -593,10 +593,11 @@ test(
       });
       // Compared by the file it names, as the document copy above explains: a canonical path
       // is spelled differently on each platform.
-      const located = (task.location as { path: string }).path.replace(
-        /^\\\\\?\\(?=[A-Za-z]:\\)/,
-        "",
-      );
+      const location = task.location;
+      if (!location || !("path" in location)) {
+        throw new Error(`a local-md task reports a path, not ${JSON.stringify(location)}`);
+      }
+      const located = location.path.replace(/^\\\\\?\\(?=[A-Za-z]:\\)/, "");
       expect(readFileSync(located, "utf8")).toBe(
         readFileSync(resolve(metadataRoot, "work/tasks/T-1.md"), "utf8"),
       );
