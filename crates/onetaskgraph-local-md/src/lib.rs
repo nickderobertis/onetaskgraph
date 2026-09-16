@@ -803,14 +803,14 @@ impl LocalMdSource {
         })
     }
 
-    fn readable_work(&self, kind: WorkKind) -> Result<Vec<Entry>, SourceError> {
+    fn parse_work_records(&self, kind: WorkKind) -> Result<Vec<Entry>, SourceError> {
         self.paths(kind.kind())?
             .into_iter()
             .map(|p| self.parse(kind, &p))
             .collect()
     }
 
-    fn readable_documents(&self) -> Result<Vec<Document>, SourceError> {
+    fn parse_document_records(&self) -> Result<Vec<Document>, SourceError> {
         self.paths(Kind::Document)?
             .into_iter()
             .map(|p| self.parse_document(&p))
@@ -956,7 +956,7 @@ impl TaskSource for LocalMdSource {
     }
     async fn query_tasks(&self, q: &TaskQuery, p: &PageRequest) -> Result<Page<Task>, SourceError> {
         let items = self
-            .readable_work(WorkKind::Task)?
+            .parse_work_records(WorkKind::Task)?
             .into_iter()
             .map(task)
             .filter(|t| {
@@ -980,7 +980,7 @@ impl TaskSource for LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         let items = self
-            .readable_work(WorkKind::Project)?
+            .parse_work_records(WorkKind::Project)?
             .into_iter()
             .map(project)
             .filter(|x| {
@@ -1003,7 +1003,7 @@ impl TaskSource for LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<Document>, SourceError> {
         let items = self
-            .readable_documents()?
+            .parse_document_records()?
             .into_iter()
             .filter(|d| {
                 labels_match(&d.labels, &q.labels)
@@ -1029,12 +1029,12 @@ impl TaskSource for LocalMdSource {
         // Documents too: a label a document carries is a label of this source, and reading
         // one more folder that is already on disk is the same read as the other two.
         let mut items: Vec<Label> = self
-            .readable_work(WorkKind::Task)?
+            .parse_work_records(WorkKind::Task)?
             .into_iter()
-            .chain(self.readable_work(WorkKind::Project)?)
+            .chain(self.parse_work_records(WorkKind::Project)?)
             .flat_map(|d| d.common.labels)
             .chain(
-                self.readable_documents()?
+                self.parse_document_records()?
                     .into_iter()
                     .flat_map(|d| d.labels),
             )
@@ -1778,7 +1778,7 @@ impl LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         let edges = self
-            .readable_work(kind)?
+            .parse_work_records(kind)?
             .into_iter()
             .flat_map(|x| x.dependencies)
             .filter(|e| match d {
