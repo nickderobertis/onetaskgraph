@@ -6,7 +6,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -590,8 +589,17 @@ test(
         id: "work:T-1",
         key: "myapp.review",
         value: { approved: true },
-        location: { path: realpathSync(resolve(metadataRoot, "work/tasks/T-1.md")) },
+        location: { path: expect.any(String) },
       });
+      // Compared by the file it names, as the document copy above explains: a canonical path
+      // is spelled differently on each platform.
+      const located = (task.location as { path: string }).path.replace(
+        /^\\\\\?\\(?=[A-Za-z]:\\)/,
+        "",
+      );
+      expect(readFileSync(located, "utf8")).toBe(
+        readFileSync(resolve(metadataRoot, "work/tasks/T-1.md"), "utf8"),
+      );
       const project = await metadataClient.projectMetadataSet("work:P-1", "myapp.review", "3");
       expect([project.id, project.key, project.value]).toEqual(["work:P-1", "myapp.review", 3]);
       const document = await metadataClient.documentMetadataSet("work:D-1", "myapp.review", "null");

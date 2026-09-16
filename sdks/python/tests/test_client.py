@@ -555,10 +555,12 @@ def test_metadata_set_methods_drive_the_binary(binary: Path, tmp_path: Path) -> 
         "myapp.review",
         {"approved": True},
     )
+    # Compared by the file it names, as the document copy above explains: a canonical path is
+    # spelled differently on each platform.
     assert task.location is not None
-    assert task.location.root.model_dump() == {
-        "path": str((cwd / "work" / "tasks" / "T-1.md").resolve())
-    }
+    located = task.location.root.model_dump()
+    assert list(located) == ["path"]
+    assert Path(located["path"]).samefile(cwd / "work" / "tasks" / "T-1.md")
 
     project = run(
         client.project_metadata_set(id=GlobalId(root="work:P-1"), key="myapp.review", value="3")
