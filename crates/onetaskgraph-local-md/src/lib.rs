@@ -46,21 +46,32 @@
 //! and an identifier escaping the root is refused. That is what the location contract is
 //! for on this backend: a reader holding one of these entities can print the path or read
 //! the contents out for a person, knowing nothing about this plugin.
+//!
+//! # What this source writes in place
+//!
+//! Beside a copy's whole-file write, three narrow writes edit a file that is already there
+//! and leave every byte they do not own as it was: a task's `status:` line, its
+//! `delivered_by:` entry, and one entry of the `metadata:` block of a task, a project or a
+//! document. The last replaces the file through a staging file and a rename, is verified
+//! by reading the edited text back before anything is written, and refuses rather than
+//! reformats a block it cannot edit narrowly; [`STAGING_SUFFIX`] states its rules.
 #![deny(missing_docs)]
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    LabelFilter, Location, NativeId, NewComment, Page, PageRequest, Project, ProjectFilter,
-    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery,
+    LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest, Project,
+    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery,
     WriteSupport,
 };
 use schemars::{Schema, schema_for};
@@ -500,6 +511,15 @@ impl LocalMdSource {
                     message: format!("cannot read entry in {}: {e}", dir.display()),
                 })?;
                 let path = entry.path();
+                // A narrow metadata write's staging file is never an item, and is skipped
+                // before it is resolved: it may be renamed away between the listing and here.
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(STAGING_SUFFIX)
+                {
+                    continue;
+                }
                 let canonical = fs::canonicalize(&path).map_err(|e| SourceError::Malformed {
                     message: format!("{}: {e}", path.display()),
                 })?;
@@ -542,13 +562,18 @@ impl LocalMdSource {
         Ok(paths)
     }
 
-    /// One file's YAML front matter and its body, split apart.
-    fn read_split(path: &Path) -> Result<(String, String), SourceError> {
-        let text = fs::read_to_string(path).map_err(|e| SourceError::Malformed {
+    /// One file's whole text.
+    fn read_text(path: &Path) -> Result<String, SourceError> {
+        fs::read_to_string(path).map_err(|e| SourceError::Malformed {
             message: format!("{}: {e}", path.display()),
-        })?;
-        front_matter(&text)
-            .map(|(yaml, body_at)| (yaml.to_owned(), text[body_at..].to_owned()))
+        })
+    }
+
+    /// The YAML front matter and the body of `text`, the contents of the file at `path`, split
+    /// apart.
+    fn split_text<'t>(path: &Path, text: &'t str) -> Result<(&'t str, &'t str), SourceError> {
+        front_matter(text)
+            .map(|(yaml, body_at)| (yaml, &text[body_at..]))
             .ok_or_else(|| unfronted(path))
     }
 
@@ -613,13 +638,18 @@ impl LocalMdSource {
     }
 
     fn parse(&self, kind: WorkKind, path: &Path) -> Result<Entry, SourceError> {
-        // Both callers canonicalize and confine the path before parsing it. Keeping that
+        self.parse_text(kind, path, &Self::read_text(path)?)
+    }
+
+    /// The work item `text` reads as, were it the contents of the file at `path`.
+    fn parse_text(&self, kind: WorkKind, path: &Path, text: &str) -> Result<Entry, SourceError> {
+        // Every caller canonicalizes and confines the path before parsing it. Keeping that
         // invariant explicit here makes future internal callers notice if they skip the
         // boundary check without duplicating an unreachable user-facing branch.
         debug_assert!(path.starts_with(&self.root));
-        let (yaml, body) = Self::read_split(path)?;
+        let (yaml, body) = Self::split_text(path, text)?;
         let front: FrontMatter =
-            serde_norway::from_str(&yaml).map_err(|e| SourceError::Malformed {
+            serde_norway::from_str(yaml).map_err(|e| SourceError::Malformed {
                 message: format!("{}: {e}", path.display()),
             })?;
         let (shared, status, depends_on, delivery) = front.split();
@@ -627,8 +657,8 @@ impl LocalMdSource {
         // and `task show` prints as the body is everything above it. A project has no
         // comments, so a `## Comments` heading in one is ordinary content.
         let content = match kind {
-            WorkKind::Task => sectioned(&body).0,
-            WorkKind::Project => body.as_str(),
+            WorkKind::Task => sectioned(body).0,
+            WorkKind::Project => body,
         };
         let common = self.common(kind.kind(), path, content, shared)?;
         let status = Status {
@@ -721,13 +751,18 @@ impl LocalMdSource {
     /// document has no status and no edges, so what a work item's parse computes for those
     /// two has nothing here to compute it from.
     fn parse_document(&self, path: &Path) -> Result<Document, SourceError> {
+        self.parse_document_text(path, &Self::read_text(path)?)
+    }
+
+    /// The document `text` reads as, were it the contents of the file at `path`.
+    fn parse_document_text(&self, path: &Path, text: &str) -> Result<Document, SourceError> {
         debug_assert!(path.starts_with(&self.root));
-        let (yaml, body) = Self::read_split(path)?;
+        let (yaml, body) = Self::split_text(path, text)?;
         let front: DocumentFrontMatter =
-            serde_norway::from_str(&yaml).map_err(|e| SourceError::Malformed {
+            serde_norway::from_str(yaml).map_err(|e| SourceError::Malformed {
                 message: format!("{}: {e}", path.display()),
             })?;
-        let common = self.common(Kind::Document, path, &body, front.into())?;
+        let common = self.common(Kind::Document, path, body, front.into())?;
         Ok(Document {
             id: common.id,
             title: common.title,
@@ -1127,6 +1162,59 @@ impl TaskSource for LocalMdSource {
             .then(|| serde_json::to_string(delivered_by).expect("a list of task ids renders"));
         self.rewrite_front_entry(&path, "delivered_by", rendered.as_deref())?;
         Ok(Some(()))
+    }
+
+    /// Edit the one entry for `key` in the task's front-matter `metadata:` block, and nothing
+    /// else; see [`STAGING_SUFFIX`] for how the file is replaced and what is refused.
+    async fn set_task_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &serde_json::Value,
+    ) -> Result<Option<Task>, SourceError> {
+        self.set_metadata(
+            Kind::Task,
+            id,
+            key,
+            value,
+            |path, text| self.parse_text(WorkKind::Task, path, text).map(task),
+            |task| &mut task.metadata,
+        )
+    }
+
+    /// As [`set_task_metadata`](TaskSource::set_task_metadata), for a file under `projects/`.
+    async fn set_project_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &serde_json::Value,
+    ) -> Result<Option<Project>, SourceError> {
+        self.set_metadata(
+            Kind::Project,
+            id,
+            key,
+            value,
+            |path, text| self.parse_text(WorkKind::Project, path, text).map(project),
+            |project| &mut project.metadata,
+        )
+    }
+
+    /// As [`set_task_metadata`](TaskSource::set_task_metadata), for a file under `documents/`,
+    /// verified against a document's own front matter.
+    async fn set_document_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &serde_json::Value,
+    ) -> Result<Option<Document>, SourceError> {
+        self.set_metadata(
+            Kind::Document,
+            id,
+            key,
+            value,
+            |path, text| self.parse_document_text(path, text),
+            |document| &mut document.metadata,
+        )
     }
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         self.delete_entry(Kind::Task, id)
@@ -2145,4 +2233,380 @@ impl LocalMdSource {
         }
         Ok(format!("---\n{}\n---\n{body}\n", yaml.trim_end()))
     }
+}
+
+/// The suffix of the staging file a narrow metadata write replaces a record through.
+///
+/// # A narrow metadata write, rule by rule
+///
+/// [`set_task_metadata`](TaskSource::set_task_metadata), and its project and document
+/// siblings, edit **exactly one entry** of the record's front-matter `metadata:` block and
+/// leave every other byte of the file as it was, line endings included:
+///
+/// - The entry is written on one line as `"<key>": <compact JSON>` at the block's own entry
+///   indent. An entry already there for the key — whatever shape it was written in: a flow
+///   value, a plain `key: value`, a nested block mapping, a block scalar with blank lines in
+///   it, an indentless sequence — is replaced whole; a missing one is added after the block's
+///   last entry; a file with no `metadata:` block gains one, entries indented two spaces, as
+///   the last entry of its front matter. A key matches when its decoded spelling, quoted or
+///   plain, is the key's own.
+/// - A key already holding the value is no write at all: the file is not opened for writing
+///   and no staging file is made.
+/// - The edited text is read back before anything is written, through the reader a query of
+///   that kind uses, and must be the record as it was with that one key set. When it is not,
+///   or when the block cannot be edited narrowly — a one-line `metadata: {…}`, a tab, an entry
+///   this source cannot find the key of, a key written twice — the write is refused naming
+///   the file, and the file is left as it was. Nothing is ever reformatted.
+/// - The new bytes go to a staging file beside the record, named
+///   `.<file name>.<process id>-<counter>` followed by this suffix, which is then renamed over
+///   the record, so a reader sees the old file or the new one and never part of either. A
+///   file ending in this suffix is never listed as a task, a project or a document, and a
+///   staging file whose write or rename fails is removed.
+pub const STAGING_SUFFIX: &str = ".onetaskgraph-staging";
+
+/// How many staging files this process has named, so two writes in it never share one.
+static STAGED: AtomicU64 = AtomicU64::new(0);
+
+/// Why a narrow metadata write could not be made, and what to do about it.
+struct Unnarrow {
+    reason: String,
+    next: &'static str,
+}
+
+impl Unnarrow {
+    /// The refusal naming `path` and `key`.
+    fn refusal(self, path: &Path, key: &MetadataKey) -> SourceError {
+        SourceError::Refused {
+            message: format!(
+                "{}: cannot set the metadata key `{key}` without changing anything else: {}; \
+                 next: {}",
+                path.display(),
+                self.reason,
+                self.next
+            ),
+        }
+    }
+}
+
+/// The next action for a `metadata:` block this source cannot find its way around.
+const TIDY_BLOCK: &str = "write the file's `metadata:` as a block mapping indented with spaces, \
+                          one `key: value` entry to a line, and set the key again";
+
+impl LocalMdSource {
+    /// Set `key` to `value` in the metadata of the record `id` names under `kind`, by the rules
+    /// [`STAGING_SUFFIX`] states.
+    ///
+    /// `read` is the reader a query uses for that kind — which is what makes the verification
+    /// a read of the right front matter — and `metadata` reaches the map a record holds.
+    fn set_metadata<R: PartialEq>(
+        &self,
+        kind: Kind,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &serde_json::Value,
+        read: impl Fn(&Path, &str) -> Result<R, SourceError>,
+        metadata: impl Fn(&mut R) -> &mut BTreeMap<String, serde_json::Value>,
+    ) -> Result<Option<R>, SourceError> {
+        let Some(path) = self.locate(kind, id)? else {
+            return Ok(None);
+        };
+        let text = Self::read_text(&path)?;
+        let mut record = read(&path, &text)?;
+        if metadata(&mut record).get(key.as_str()) == Some(value) {
+            return Ok(Some(record));
+        }
+        let written = compact(value);
+        let alone = serde_norway::from_str::<BTreeMap<String, serde_json::Value>>(&format!(
+            "value: {written}"
+        ));
+        if alone
+            .ok()
+            .and_then(|mut read| read.remove("value"))
+            .as_ref()
+            != Some(value)
+        {
+            return Err(Unnarrow {
+                reason: format!(
+                    "the value {written}, written as JSON, does not read back through this \
+                     source's YAML as the same value"
+                ),
+                next: "set a value that reads back as itself, such as one without a control or \
+                       line-separator character in a string",
+            }
+            .refusal(&path, key));
+        }
+        let edited = with_metadata_entry(&text, key.as_str(), value)
+            .map_err(|unnarrow| unnarrow.refusal(&path, key))?;
+        metadata(&mut record).insert(key.as_str().to_owned(), value.clone());
+        let reread = read(&path, &edited).map_err(|error| {
+            Unnarrow {
+                reason: format!("the edited front matter would not read back: {error}"),
+                next: TIDY_BLOCK,
+            }
+            .refusal(&path, key)
+        })?;
+        if reread != record {
+            return Err(Unnarrow {
+                reason: "the edited file would read back as more than that one key changed"
+                    .to_owned(),
+                next: TIDY_BLOCK,
+            }
+            .refusal(&path, key));
+        }
+        replace_atomically(&path, &edited)?;
+        read(&path, &Self::read_text(&path)?).map(Some)
+    }
+}
+
+/// `value` as compact JSON.
+fn compact(value: &serde_json::Value) -> String {
+    // A `serde_json::Value` always serializes: its map keys are strings.
+    serde_json::to_string(value).expect("a JSON value renders")
+}
+
+/// Replace the file at `path` with `text` through a staging file beside it and a rename.
+fn replace_atomically(path: &Path, text: &str) -> Result<(), SourceError> {
+    let unavailable = |e: std::io::Error| SourceError::Unavailable {
+        message: format!("cannot write {}: {e}", path.display()),
+    };
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let directory = path.parent().unwrap_or(Path::new("."));
+    let staging = directory.join(format!(
+        ".{name}.{}-{}{STAGING_SUFFIX}",
+        std::process::id(),
+        STAGED.fetch_add(1, Ordering::Relaxed)
+    ));
+    let permissions = fs::metadata(path).map_err(unavailable)?.permissions();
+    let written = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)?;
+        file.write_all(text.as_bytes())?;
+        file.set_permissions(permissions)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&staging, path)
+    })();
+    written.map_err(|e| {
+        // The staging file may never have been created; either way none is left behind.
+        let _ = fs::remove_file(&staging);
+        unavailable(e)
+    })
+}
+
+/// One line of a front matter: where it starts and ends in the file, the end including its
+/// line ending when it has one.
+#[derive(Clone, Copy)]
+struct Line {
+    from: usize,
+    to: usize,
+}
+
+/// `text` with the entry for `key` in its front matter's `metadata:` block set to `value`,
+/// by the rules [`STAGING_SUFFIX`] states, or why that cannot be done narrowly.
+fn with_metadata_entry(
+    text: &str,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<String, Unnarrow> {
+    let (open, newline) = if text.starts_with("---\r\n") {
+        ("---\r\n", "\r\n")
+    } else {
+        ("---\n", "\n")
+    };
+    // The one caller has already read a record out of this very text, which needs front matter.
+    let (yaml, _) = front_matter(text).expect("a record was read from this text");
+    let start = open.len();
+    let end = start + yaml.len();
+    let mut lines = Vec::new();
+    let mut at = start;
+    while at < end {
+        let next = text[at..end].find('\n').map_or(end, |found| at + found + 1);
+        lines.push(Line { from: at, to: next });
+        at = next;
+    }
+    let content = |line: Line| text[line.from..line.to].trim_end_matches(['\r', '\n']);
+    let written_key = serde_json::to_string(key).expect("a string renders");
+    let entry = |indent: usize| format!("{}{written_key}: {}", " ".repeat(indent), compact(value));
+    // A new line after `line`: that line's own ending ends it, or — for the last line of the
+    // front matter, whose ending is the closing delimiter's — a new ending goes before it.
+    let after = |line: Line, written: &str| {
+        if text[..line.to].ends_with('\n') {
+            format!("{}{written}{newline}{}", &text[..line.to], &text[line.to..])
+        } else {
+            format!("{}{newline}{written}{}", &text[..line.to], &text[line.to..])
+        }
+    };
+    // Front matter holding `metadata` twice does not read at all, so the first is the one.
+    let Some(block) = lines.iter().position(|&line| {
+        !content(line).starts_with([' ', '\t'])
+            && entry_key(content(line)).is_some_and(|(found, _)| found == "metadata")
+    }) else {
+        let written = format!("metadata:{newline}{}", entry(2));
+        let separator = if end > start { newline } else { "" };
+        return Ok(format!(
+            "{}{separator}{written}{}",
+            &text[..end],
+            &text[end..]
+        ));
+    };
+    let heading = content(lines[block]);
+    let (_, colon) = entry_key(heading).expect("the block's own line has a key");
+    let inline = heading[colon..].trim();
+    if !inline.is_empty() && !inline.starts_with('#') {
+        return Err(Unnarrow {
+            reason: format!(
+                "its `metadata` is written on one line as `{inline}` rather than as a block of \
+                 entries"
+            ),
+            next: TIDY_BLOCK,
+        });
+    }
+    let body: Vec<(usize, Line)> = lines
+        .iter()
+        .copied()
+        .enumerate()
+        .skip(block + 1)
+        .take_while(|&(_, line)| {
+            let line = content(line);
+            line.trim().is_empty() || line.starts_with([' ', '\t'])
+        })
+        .collect();
+    let indent_of = |line: &str| line.len() - line.trim_start_matches(' ').len();
+    let entry_indent = body
+        .iter()
+        .map(|&(_, line)| content(line))
+        .find(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+        .map(indent_of)
+        .unwrap_or(2);
+    // Each entry of the block: its decoded key, and its first and last line.
+    let mut entries: Vec<(String, usize, usize)> = Vec::new();
+    for &(index, line) in &body {
+        let line = content(line);
+        if line.trim().is_empty() {
+            continue;
+        }
+        let indent = indent_of(line);
+        let rest = &line[indent..];
+        let number = index + 2;
+        if rest.starts_with('\t') && indent <= entry_indent {
+            return Err(Unnarrow {
+                reason: format!("line {number} of the file is indented with a tab"),
+                next: TIDY_BLOCK,
+            });
+        }
+        let continues = indent > entry_indent
+            || (indent == entry_indent && (rest == "-" || rest.starts_with("- ")));
+        if continues && let Some(last) = entries.last_mut() {
+            last.2 = index;
+        } else if rest.starts_with('#') {
+            // A comment belonging to no entry.
+        } else if indent != entry_indent {
+            return Err(Unnarrow {
+                reason: format!(
+                    "line {number} of the file is not indented as the other entries of its \
+                     `metadata:` block"
+                ),
+                next: TIDY_BLOCK,
+            });
+        } else if let Some((found, _)) = entry_key(rest) {
+            entries.push((found, index, index));
+        } else {
+            return Err(Unnarrow {
+                reason: format!(
+                    "line {number} of the file is not an entry this source can read the key of"
+                ),
+                next: TIDY_BLOCK,
+            });
+        }
+    }
+    let matching: Vec<&(String, usize, usize)> =
+        entries.iter().filter(|(found, ..)| found == key).collect();
+    match (matching.as_slice(), entries.last()) {
+        ([], None) => Ok(after(lines[block], &entry(entry_indent))),
+        ([], Some(&(_, _, last))) => Ok(after(lines[last], &entry(entry_indent))),
+        (&[&(_, first, last)], _) => {
+            let (from, to) = (lines[first].from, lines[last].to);
+            let ending = if text[..to].ends_with('\n') {
+                newline
+            } else {
+                ""
+            };
+            Ok(format!(
+                "{}{}{ending}{}",
+                &text[..from],
+                entry(entry_indent),
+                &text[to..]
+            ))
+        }
+        _ => Err(Unnarrow {
+            reason: format!("its `metadata:` block holds `{key}` more than once"),
+            next: "remove all but one of those entries",
+        }),
+    }
+}
+
+/// The decoded key a mapping entry `line` starts with — double-quoted, single-quoted or
+/// plain — and the byte just after the `:` that ends it, or `None` when `line` does not start
+/// with a key this source can decode.
+fn entry_key(line: &str) -> Option<(String, usize)> {
+    let (key, after) = if let Some(rest) = line.strip_prefix('"') {
+        let mut escaped = false;
+        let close = rest
+            .char_indices()
+            .find_map(|(at, character)| match (escaped, character) {
+                (true, _) => {
+                    escaped = false;
+                    None
+                }
+                (false, '\\') => {
+                    escaped = true;
+                    None
+                }
+                (false, '"') => Some(at),
+                (false, _) => None,
+            })?;
+        let end = 1 + close + 1;
+        (serde_json::from_str::<String>(&line[..end]).ok()?, end)
+    } else if let Some(rest) = line.strip_prefix('\'') {
+        let mut key = String::new();
+        let mut characters = rest.char_indices().peekable();
+        let close = loop {
+            match characters.next()? {
+                (_, '\'') if characters.peek().is_some_and(|&(_, next)| next == '\'') => {
+                    characters.next();
+                    key.push('\'');
+                }
+                (at, '\'') => break at,
+                (_, character) => key.push(character),
+            }
+        };
+        (key, 1 + close + 1)
+    } else {
+        if line.starts_with([
+            '[', '{', '&', '*', '!', '|', '>', '%', '@', '`', '?', '#', ',',
+        ]) || line == "-"
+            || line.starts_with("- ")
+        {
+            return None;
+        }
+        let colon = line.match_indices(':').map(|(at, _)| at).find(|&at| {
+            line[at + 1..]
+                .chars()
+                .next()
+                .is_none_or(|next| next == ' ' || next == '\t')
+        })?;
+        (line[..colon].trim_end().to_owned(), colon)
+    };
+    let rest = &line[after..];
+    let colon = after + (rest.len() - rest.trim_start_matches(' ').len());
+    let tail = line[colon..].strip_prefix(':')?;
+    tail.chars()
+        .next()
+        .is_none_or(|next| next == ' ' || next == '\t')
+        .then_some((key, colon + 1))
 }
