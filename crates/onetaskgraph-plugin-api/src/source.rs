@@ -466,6 +466,32 @@ pub trait SourcePlugin: Send + Sync + 'static {
         config: &serde_json::Value,
         secrets: &dyn SecretResolver,
     ) -> Result<Box<dyn TaskSource>, SourceError>;
+
+    /// The fields of this plugin's `config:` block that name a filesystem path, as dotted
+    /// paths into that block.
+    ///
+    /// A relative value at one of these, **supplied by a configuration document**, is
+    /// resolved against the directory holding that document before [`Self::build`] sees it;
+    /// supplied through the environment or a flag it keeps resolving against the process
+    /// working directory, because there is no document to rebase it on. A plugin is handed
+    /// values and no origins, so this declaration is the only way it can say which of its
+    /// own fields that rule reaches.
+    ///
+    /// Defaulted to none, which is what keeps this an addition rather than a break: a
+    /// plugin whose block holds no path needs no edit, and a caller asks every plugin
+    /// rather than keeping a table of which ones answer.
+    // llmlint: ignore[invalid_states_unrepresentable] The identity of a configuration field
+    // is a name, and no type can make a wrong one unrepresentable here: every string is a
+    // syntactically valid dotted path, so a newtype would validate nothing and would only
+    // move where a name that is not a field of *this* plugin is accepted. What decides that
+    // is whether the name is a property of the schema `config_schema` publishes — a
+    // per-plugin fact no shared type can hold — so the gate is per plugin and executable:
+    // `document_relative_fields_are_fields_this_plugin_declares` in
+    // `onetaskgraph-local-md/tests/plugin.rs`, which a plugin adding a declaration owes its
+    // own copy of.
+    fn document_relative_paths(&self) -> &'static [&'static str] {
+        &[]
+    }
 }
 
 /// How a plugin reads the credential its configuration names.

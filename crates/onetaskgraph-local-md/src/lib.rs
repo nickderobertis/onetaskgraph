@@ -29,6 +29,15 @@
 //! | `project_dependencies` | **Supported and proven,** in both directions, the same way. |
 //! | `max_page_size` | **Supported and proven.** [`MAX_PAGE_SIZE`], the largest page one folder scan returns. |
 //!
+//! # Where this source's root is measured from
+//!
+//! [`LocalMdConfig::root`] may be relative, and which directory it is relative to is the
+//! configuration layer that supplied it rather than anything this source decides: a
+//! configuration document's relative root is resolved against the directory holding that
+//! document before this plugin is built, and one from the environment layer or a flag
+//! resolves against the process working directory. See [`DOCUMENT_RELATIVE_FIELDS`], and
+//! "Relative paths in a configuration document" in `README.md` for the whole rule.
+//!
 //! # Where this source says an entity is
 //!
 //! Every task, project and document this source reports carries a `Location::Path` naming
@@ -59,6 +68,28 @@ use serde::{Deserialize, Serialize};
 
 /// The registry name for this plugin.
 pub const KIND: &str = "local-md";
+
+/// The `config:` fields of this plugin whose value is a filesystem path, as dotted paths
+/// into the block.
+///
+/// A relative value at one of these, **supplied by a configuration document**, is resolved
+/// against the directory holding that document before this plugin is built; supplied
+/// through the environment or a flag it keeps resolving against the process working
+/// directory, because there is no document to rebase it on. The rule is stated once, for a
+/// reader of either side, under "Relative paths in a configuration document" in
+/// `README.md`.
+///
+/// Spelled here because a plugin's fields are the plugin's: this is what
+/// [`SourcePlugin::document_relative_paths`] answers with, and
+/// `document_relative_fields_are_fields_this_plugin_declares` in `tests/plugin.rs` holds
+/// every name here to the configuration schema this plugin publishes.
+// llmlint: ignore[invalid_states_unrepresentable] These are field names of this plugin's
+// own `config:` block, and the type that would make a wrong one unrepresentable does not
+// exist: every string is a syntactically valid field name, and what makes one *valid* is
+// being a property of the schema `config_schema` publishes, which is a fact about this
+// plugin rather than about a type. `document_relative_fields_are_fields_this_plugin_declares`
+// in `tests/plugin.rs` is the executable check that holds every name here to that schema.
+pub const DOCUMENT_RELATIVE_FIELDS: &[&str] = &["root"];
 /// The largest page returned by a folder scan.
 pub const MAX_PAGE_SIZE: u32 = 200;
 
@@ -113,6 +144,9 @@ impl SourcePlugin for Plugin {
     }
     fn config_schema(&self) -> Schema {
         schema_for!(LocalMdConfig)
+    }
+    fn document_relative_paths(&self) -> &'static [&'static str] {
+        DOCUMENT_RELATIVE_FIELDS
     }
     fn build(
         &self,

@@ -2013,3 +2013,24 @@ async fn a_document_that_resolves_outside_the_root_is_refused_rather_than_read()
     };
     assert!(message.contains("escapes configured root"), "{message}");
 }
+
+#[test]
+fn document_relative_fields_are_fields_this_plugin_declares() {
+    let schema = onetaskgraph_local_md::Plugin.config_schema();
+    let properties = schema.as_value()["properties"]
+        .as_object()
+        .expect("this plugin declares its configuration fields");
+
+    assert!(
+        !onetaskgraph_local_md::DOCUMENT_RELATIVE_FIELDS.is_empty(),
+        "this plugin's `root` is a path a configuration document may give relatively"
+    );
+    for field in onetaskgraph_local_md::DOCUMENT_RELATIVE_FIELDS {
+        assert!(
+            properties.contains_key(*field),
+            "`{field}` is named as a document-relative path but is not a field of this \
+             plugin's configuration: {:?}",
+            properties.keys().collect::<Vec<_>>()
+        );
+    }
+}

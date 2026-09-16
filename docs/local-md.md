@@ -12,10 +12,18 @@
      same change. -->
 
 Configure `plugin: local-md` with a `root` directory. The plugin reads Markdown from
-`root/tasks/`, `root/projects/` and `root/documents/`, recursively. A file's native
+`root/tasks/`, `root/projects/` and `root/documents/`, recursively.
+
+A file's native
 identifier is its path relative to *its own* directory without `.md`; for example
 `tasks/team/release.md` is task `team/release` and `documents/design/engine.md` is document
 `design/engine`. This makes identifiers stable and permits human-organized subfolders.
+
+`root` may be relative, and where it is measured from is the layer that supplied it: a
+configuration document's relative `root` is resolved against **the directory holding that
+document**, while one from the environment layer or a flag resolves against the **process
+working directory**. The whole rule, for a reader of either side, is
+[Relative paths in a configuration document](../README.md#relative-paths-in-a-configuration-document).
 
 Each file starts with YAML front matter and continues with ordinary Markdown:
 

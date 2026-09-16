@@ -1159,3 +1159,183 @@ fn the_output_a_run_asked_for_is_read_from_every_layer_that_still_reads() {
         OutputFormat::Text
     );
 }
+
+fn loaded_root(host: &Host, working_directory: &Path) -> String {
+    let loaded = config::load(working_directory, &host.environment(), &Layer::default())
+        .expect("the configuration loads");
+    loaded.config.sources()[&SourceName::new("notes").unwrap()].config()["root"]
+        .as_str()
+        .expect("a root is a string")
+        .to_owned()
+}
+
+#[test]
+fn a_relative_root_a_project_document_supplies_is_rebased_on_that_documents_directory() {
+    let host = Host::new();
+    let document = host.write(
+        &format!("project/{PROJECT_DOCUMENT_NAME}"),
+        "sources:\n  notes:\n    plugin: local-md\n    config:\n      root: store\n",
+    );
+
+    assert_eq!(
+        loaded_root(&host, &host.root.path().join("project/deep/deeper")),
+        document
+            .parent()
+            .expect("a document has a directory")
+            .join("store")
+            .to_string_lossy()
+            .to_string(),
+        "the document's own directory, not the one two levels below it the run started in"
+    );
+}
+
+#[test]
+fn a_relative_root_the_user_level_document_supplies_is_rebased_on_the_configuration_home() {
+    let host = Host::new();
+    let document = host.write(
+        &format!("home/{USER_DOCUMENT_RELATIVE_PATH}"),
+        "sources:\n  notes:\n    plugin: local-md\n    config:\n      root: store\n",
+    );
+
+    assert_eq!(
+        loaded_root(&host, &host.root.path().join("project")),
+        document
+            .parent()
+            .expect("a document has a directory")
+            .join("store")
+            .to_string_lossy()
+            .to_string(),
+        "every document is rebased on its own directory, not only the project's"
+    );
+}
+
+#[test]
+fn an_absolute_root_a_document_supplies_reaches_its_plugin_exactly_as_written() {
+    let host = Host::new();
+    let absolute = host.root.path().join("elsewhere");
+    host.write(
+        &format!("project/{PROJECT_DOCUMENT_NAME}"),
+        &format!(
+            "sources:\n  notes:\n    plugin: local-md\n    config:\n      root: {}\n",
+            absolute.display()
+        ),
+    );
+
+    assert_eq!(
+        loaded_root(&host, &host.root.path().join("project")),
+        absolute.to_string_lossy().to_string()
+    );
+}
+
+#[test]
+fn a_relative_root_the_environment_supplies_reaches_its_plugin_exactly_as_written() {
+    let host = Host::new();
+    host.write(
+        &format!("project/{PROJECT_DOCUMENT_NAME}"),
+        "sources:\n  notes:\n    plugin: local-md\n    config:\n      root: store\n",
+    );
+    let environment = Environment::from_pairs([
+        (
+            "XDG_CONFIG_HOME",
+            host.root.path().join("home").to_string_lossy().to_string(),
+        ),
+        (
+            "ONETASKGRAPH_SOURCES__NOTES__CONFIG__ROOT",
+            "store".to_owned(),
+        ),
+    ]);
+
+    let loaded = config::load(
+        &host.root.path().join("project"),
+        &environment,
+        &Layer::default(),
+    )
+    .expect("the configuration loads");
+    assert_eq!(
+        loaded.config.sources()[&SourceName::new("notes").unwrap()].config()["root"],
+        json!("store"),
+        "there is no document behind a variable to rebase it on, so the process working \
+         directory goes on being what it means"
+    );
+}
+
+#[test]
+fn a_root_behind_the_subprocess_seam_is_left_to_the_child_that_hosts_the_plugin() {
+    let host = Host::new();
+    host.write(
+        &format!("project/{PROJECT_DOCUMENT_NAME}"),
+        "sources:\n  notes:\n    plugin: subprocess\n    config:\n      command: /bin/true\n      \
+         settings:\n        kind: local-md\n        config:\n          root: store\n",
+    );
+
+    let loaded = config::load(
+        &host.root.path().join("project"),
+        &host.environment(),
+        &Layer::default(),
+    )
+    .expect("the configuration loads");
+    assert_eq!(
+        loaded.config.sources()[&SourceName::new("notes").unwrap()].config()["settings"]["config"]
+            ["root"],
+        json!("store"),
+        "what a `settings:` block holds belongs to a plugin this build may never have \
+         compiled, so the engine does not claim to know which of its fields is a path"
+    );
+}
+
+#[test]
+fn only_the_markdown_folder_declares_a_document_relative_field() {
+    // Every plugin is asked rather than a table of which ones answer being kept here, so
+    // the assertion is over the whole registry: a plugin that starts declaring one without
+    // a journey for it fails here.
+    for plugin in onetaskgraph_core::registry() {
+        let expected: &[&str] = if plugin.kind() == onetaskgraph_local_md::KIND {
+            onetaskgraph_local_md::DOCUMENT_RELATIVE_FIELDS
+        } else {
+            &[]
+        };
+        assert_eq!(
+            plugin.document_relative_paths(),
+            expected,
+            "`{}` declares a document-relative field with no rule stated for it",
+            plugin.kind()
+        );
+    }
+}
+
+/// A document under a directory this layer cannot write down.
+///
+/// Unix-only because it is the platform that has such a directory: a Windows path is
+/// already Unicode, so there is no name to give this one. The behaviour under test is not
+/// platform-specific — what is platform-specific is being able to *build* the input.
+#[cfg(unix)]
+#[test]
+fn a_document_under_a_directory_that_is_not_valid_utf8_refuses_the_setting_it_cannot_resolve() {
+    use std::ffi::{OsStr, OsString};
+    use std::os::unix::ffi::OsStrExt;
+
+    let host = Host::new();
+    let mut name = OsString::from("project-");
+    name.push(OsStr::from_bytes(&[0xff]));
+    let directory = host.root.path().join(name);
+    std::fs::create_dir_all(&directory).expect("a directory whose name is not valid UTF-8");
+    std::fs::write(
+        directory.join(PROJECT_DOCUMENT_NAME),
+        "sources:\n  plans:\n    plugin: local-md\n    config:\n      root: plans\n",
+    )
+    .expect("a document under it");
+
+    let error = config::load(&directory, &host.environment(), &Layer::default())
+        .expect_err("a resolved path that cannot be written down is refused, never replaced");
+
+    match &error {
+        ConfigError::Setting { key, next, .. } => {
+            assert_eq!(
+                key, "sources.plans.config.root",
+                "the refusal names the one setting it could not resolve"
+            );
+            assert!(!next.is_empty(), "and says what to change: {error}");
+        }
+        other => panic!("the unresolvable setting is what is refused, not: {other}"),
+    }
+}
