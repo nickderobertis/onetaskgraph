@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.33](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.32...onetaskgraph-plugin-api-v0.2.33) - 2026-09-16
+
+### Fixed
+
+- *(local-md)* read the canonical in-progress word and resolve a file-relative root ([#1240](https://github.com/nickderobertis/onetaskgraph/pull/1240))
+
 ## [0.2.32](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.31...onetaskgraph-plugin-api-v0.2.32) - 2026-09-15
 
 ### Added
