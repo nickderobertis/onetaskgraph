@@ -31,8 +31,8 @@ use serde_json::{Value, json};
 mod settle;
 
 use settle::{
-    Bound, LABEL_CONNECTION, LABEL_VARIABLE, MOST_DOCUMENT_PAGES, settled_documents, settled_label,
-    settled_tasks, settled_walk,
+    Bound, LABEL_CONNECTION, LABEL_VARIABLE, MOST_DOCUMENT_PAGES, settled_document_absent,
+    settled_documents, settled_label, settled_tasks, settled_walk,
 };
 
 /// Room for the late listings below, which agree on their third read, with reads to spare, so
@@ -413,6 +413,48 @@ async fn a_document_listing_that_never_catches_up_fails_within_the_bound_naming_
         waited >= BOUND.interval * (BOUND.reads - 1)
             && waited < BOUND.interval * BOUND.reads + SLACK,
         "a listing that never catches up fails once the bound is spent, and waited {waited:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_deleted_document_that_stays_readable_for_some_reads_then_disappears_passes() {
+    let (source, answered) = workspace(|n, request| {
+        assert!(
+            request.contains("document(id:"),
+            "only one document is asked for: {request}"
+        );
+        json!({"document": (n <= 2).then(|| document("d1", "deleted", None))})
+    });
+    settled_document_absent(BOUND, source.as_ref(), &NativeId("d1".into()), "deleted")
+        .await
+        .unwrap();
+    assert_eq!(
+        answered.load(Ordering::SeqCst),
+        3,
+        "the wait reads until the deleted document disappears, and not once more"
+    );
+}
+
+#[tokio::test]
+async fn a_deleted_document_that_never_disappears_fails_at_the_bound_naming_it() {
+    let (source, answered) = workspace(|_, _| json!({"document": document("d1", "deleted", None)}));
+    let started = Instant::now();
+    let refusal =
+        settled_document_absent(BOUND, source.as_ref(), &NativeId("d1".into()), "deleted")
+            .await
+            .unwrap_err();
+    let waited = started.elapsed();
+    assert!(
+        refusal.starts_with(
+            r#"the deleted document "deleted" came back as ["deleted"] rather than [], still after 5 reads"#
+        ),
+        "the failure names the document that remained readable: {refusal}"
+    );
+    assert_eq!(answered.load(Ordering::SeqCst), BOUND.reads);
+    assert!(
+        waited >= BOUND.interval * (BOUND.reads - 1)
+            && waited < BOUND.interval * BOUND.reads + SLACK,
+        "a document that never disappears fails once the bound is spent, and waited {waited:?}"
     );
 }
 
