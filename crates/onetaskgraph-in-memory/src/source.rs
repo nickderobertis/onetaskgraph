@@ -927,8 +927,6 @@ fn listed(field: &str, near: &NativeId, list: &[TaskRef]) -> Result<(), SourceEr
         })
 }
 
-/// Where `id` sits among the ids given, or `None` when it sits nowhere.
-/// Hold `value` under `key`, touching nothing when it is already held there.
 fn set_key(
     metadata: &mut BTreeMap<String, serde_json::Value>,
     key: &MetadataKey,
@@ -939,6 +937,7 @@ fn set_key(
     }
 }
 
+/// Where `id` sits among the ids given, or `None` when it sits nowhere.
 fn position_of<'a>(ids: impl Iterator<Item = &'a NativeId>, id: &NativeId) -> Option<usize> {
     ids.enumerate()
         .find(|(_, held)| *held == id)

@@ -207,7 +207,7 @@ always the value it was handed, and the record's location when the source report
 
 | source | a metadata set |
 | --- | --- |
-| `local-md` | edits the one entry of the front matter's `metadata:` block and no other byte, atomically, and refuses by name a block it cannot edit that narrowly — `docs/local-md.md` has the whole rule |
+| `local-md` | edits the one entry of the front matter's `metadata:` block and no other byte, atomically, and refuses by name a block it cannot edit that narrowly |
 | `github-projects` | one update of the issue body that changes only its trailing metadata slot, for a task, a project and a document issue alike; no title, label, status or field request, and nothing at all when the key already holds the value |
 | `in-memory` | holds the value for the life of its process |
 | `linear` | refuses: `the linear plugin cannot write a task's metadata on its own`, with `a project's` or `a document's` for the other two verbs |

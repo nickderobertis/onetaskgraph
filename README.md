@@ -121,7 +121,7 @@ update of the issue body that changes only its metadata slot; the in-memory sour
 value for the life of its process; and Linear, which has nowhere to put one key on its own,
 refuses with `the linear plugin cannot write a task's metadata on its own`. A source with no
 write side, a record the source does not hold, and a stdio plugin whose handshake does not
-declare the write are each refused by name. `docs/metadata.md` has the whole of it.
+declare the write are each refused by name.
 
 A task can name the tasks it **delivers**: finishing it finishes them. In a folder of
 Markdown that is a `delivers:` list in the front matter — a bare id names a task of the same

@@ -114,10 +114,8 @@ const declarations: string[] = [
   "// Literal version keeps generated consumers pinned to this exact contract.",
   `export const SCHEMA_BUNDLE_VERSION = ${bundle.version} as const;`,
 ];
-/// Keywords that describe a schema without constraining what it accepts.
 const ANNOTATIONS = new Set(["description", "title", "default", "examples", "$comment"]);
 
-/// Keywords whose value is one subschema.
 const SUBSCHEMA = [
   "additionalProperties",
   "items",
@@ -131,10 +129,8 @@ const SUBSCHEMA = [
   "unevaluatedProperties",
 ];
 
-/// Keywords whose value is a list of subschemas.
 const SUBSCHEMA_LISTS = ["anyOf", "oneOf", "allOf", "prefixItems"];
 
-/// Keywords whose value maps names to subschemas.
 const SUBSCHEMA_MAPS = ["properties", "patternProperties", "$defs", "definitions"];
 
 function isObject(value: unknown): value is Record<string, unknown> {
