@@ -20,7 +20,7 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use onetaskgraph_plugin_api::{DocumentQuery, PageRequest, TaskQuery, TaskSource};
+use onetaskgraph_plugin_api::{DocumentQuery, NativeId, PageRequest, TaskQuery, TaskSource};
 use serde_json::{Value, json};
 
 /// How many times a listing is read, and how far apart, before its disagreement is the answer.
@@ -265,6 +265,29 @@ pub async fn settled_documents(
 ) -> Result<(), String> {
     settled(bound, what, expected, || {
         document_titles(source, query, keep, what)
+    })
+    .await
+}
+
+/// [`settled`] over the direct read of a deleted document, until it is absent.
+pub async fn settled_document_absent(
+    bound: Bound,
+    source: &dyn TaskSource,
+    id: &NativeId,
+    name: &str,
+) -> Result<(), String> {
+    let what = format!("the deleted document {name:?}");
+    settled(bound, &what, &[], || async {
+        source
+            .get_document(id)
+            .await
+            .map(|document| {
+                document
+                    .into_iter()
+                    .map(|document| document.title)
+                    .collect()
+            })
+            .map_err(|error| format!("{what} could not be read: {error}"))
     })
     .await
 }
