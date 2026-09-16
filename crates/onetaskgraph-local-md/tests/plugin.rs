@@ -1614,7 +1614,6 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
             panic!("a document carrying `{file}` must be refused");
         };
         assert!(message.contains(refused), "{message}");
-        // A listing surfaces the same malformed record instead of silently losing it.
         let Err(SourceError::Malformed { message }) = source
             .query_documents(&DocumentQuery::default(), &page(50))
             .await
