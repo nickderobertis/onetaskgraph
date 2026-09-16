@@ -73,6 +73,18 @@ pub struct LocalMdConfig {
     pub status_mapping: BTreeMap<String, StatusCategory>,
 }
 
+/// The mapping a source with no `status_mapping:` of its own reads statuses through.
+///
+/// **Every normalized category's own canonical word classifies as that category**, so a
+/// task that persists the word onetaskgraph itself prints — `in-progress` as readily as
+/// `queued` or `done` — reads back as what it says rather than as unknown. That is a rule
+/// about the whole vocabulary rather than a list somebody keeps in step:
+/// `every_normalized_category_word_reads_back_as_itself` in `tests/status_mapping.rs`
+/// drives it off [`StatusCategory`]'s own variants, so a category added later with no
+/// word here fails there.
+///
+/// The display aliases sit beside those words rather than instead of them: `in progress`
+/// and `doing` for `in-progress`, `canceled` for `cancelled`.
 fn default_statuses() -> BTreeMap<String, StatusCategory> {
     [
         ("draft", StatusCategory::Draft),
@@ -80,6 +92,7 @@ fn default_statuses() -> BTreeMap<String, StatusCategory> {
         ("todo", StatusCategory::Todo),
         ("queued", StatusCategory::Queued),
         ("in progress", StatusCategory::InProgress),
+        ("in-progress", StatusCategory::InProgress),
         ("doing", StatusCategory::InProgress),
         ("done", StatusCategory::Done),
         ("cancelled", StatusCategory::Cancelled),
@@ -1969,6 +1982,12 @@ impl LocalMdSource {
     /// The category's own spelling when the mapping reads that word as it — `queued`, or
     /// `in progress` for `in-progress` — else the first word the mapping sends there, else the
     /// category's own spelling, which [`Self::representable_status`] then refuses by name.
+    ///
+    /// The spoken spelling is preferred over the hyphenated one where the mapping holds
+    /// both, which the default mapping now does: `in-progress` is there so a task that
+    /// persists the canonical word reads back as that category, and what a person reads in
+    /// a file this source writes stays `in progress`. Stating the preference is what keeps
+    /// that from resting on the order a `BTreeMap` happens to hold two words in.
     fn word_for(&self, category: StatusCategory) -> String {
         let spelled = category_name(category);
         let spoken = spelled.replace('-', " ");
@@ -1980,7 +1999,8 @@ impl LocalMdSource {
             .collect();
         words
             .iter()
-            .find(|word| word.as_str() == spelled || word.as_str() == spoken)
+            .find(|word| word.as_str() == spoken)
+            .or_else(|| words.iter().find(|word| word.as_str() == spelled))
             .or_else(|| words.first())
             .map_or_else(|| spelled.to_owned(), |word| (*word).clone())
     }

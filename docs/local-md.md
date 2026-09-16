@@ -76,11 +76,14 @@ it reads `todo`, `queued` or `in-progress`, rewriting only its `status:` line as
 `task status set` does.
 
 Status names are preserved for display and mapped case-insensitively to normalized
-categories. The default mapping is `draft` → draft, `backlog` → backlog, `todo` → todo,
-`queued` → queued, `in progress` and `doing` → in-progress, `done` → done, and
-`cancelled`/`canceled` → cancelled. `queued` is work claimed by something that will do it and
-not yet started, where `todo` is work ready to be picked up that nothing has claimed. Other words map to unknown, and this source writes the original word into the
-Markdown so it round-trips by name. That differs from `github-projects`, which can only
+categories. **Every normalized category's own canonical spelling is accepted and reads back
+as that category** — the words onetaskgraph itself prints and `task status set` takes:
+`draft`, `backlog`, `todo`, `queued`, `in-progress`, `done` and `cancelled`. The default
+mapping is those seven words, each to the category it names, plus the display aliases
+`in progress` and `doing` → in-progress and `canceled` → cancelled. `queued` is work claimed
+by something that will do it and not yet started, where `todo` is work ready to be picked up
+that nothing has claimed. Other words map to unknown, and this source writes the original
+word into the Markdown so it round-trips by name. That differs from `github-projects`, which can only
 write an existing board option or a closed state: its unknown category is disabled by
 default, and mapping it to one option folds every unknown word into that option. Replace
 the mapping with `status_mapping` in the source configuration:
@@ -100,8 +103,9 @@ sources:
 the task's front matter and **no other byte of the file** — title, labels, metadata,
 `depends_on`, `delivers`, `delivered_by`, body and comments are left exactly as they were,
 and a Windows file keeps its line endings. The word written is one `status_mapping` reads
-back as that category: the category's own spelling when the mapping has it (`queued`, or
-`in progress` for `in-progress`), otherwise the first word the mapping sends there. A task
+back as that category: the category's own spelling when the mapping has it, preferring the
+spaced form where the mapping holds both, so the default mapping writes `queued` and
+`in progress`; otherwise the first word the mapping sends there. A task
 already in the category is left byte for byte, word and all. A category the mapping reaches
 with no word is refused in the words a copy of that status is refused with — `this source
 reads "queued" as unknown, not queued` — and a task with no `status:` line gains one as the
