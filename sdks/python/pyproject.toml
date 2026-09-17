@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
 authors = [{ name = "Nick DeRobertis" }]
+classifiers = ["Typing :: Typed"]
 dependencies = ["onetaskgraph-cli==0.2.36", "pydantic>=2.12"]
 
 [project.urls]
