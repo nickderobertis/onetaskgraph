@@ -271,6 +271,33 @@ one point. Every other row of the record is byte-for-byte what it was.
 The estimate in `tests/journey/budget.rs` moves with the record, as it is built to: **934
 points to 941** against the GraphQL budget, and the REST estimate unchanged at 5 requests.
 
+## Safely reconciling configured status options
+
+The guarded status-options operation snapshots the board's `Status` options and every
+item's assignment before it writes. The credentialed journey does not invoke that
+operator-only operation, but its read document is still reconciled against GitHub beside
+every other query document this source can send.
+
+In the two quantities this file measures offline, in the record's own frame:
+
+|                | before | after  |
+| -------------- | -----: | -----: |
+| **requests**   |    103 |    104 |
+| **node count** | 222616 | 227766 |
+
+**One request more, and 5,150 worst-case nodes.** Both belong to the one
+`node-count and point-cost reconciliation while snapshotting board Status options and
+assignments` row. The session makes no status-options snapshot itself, so every other row
+of the record is byte-for-byte what it was. The precondition's estimate includes every
+query document this source can send even when the journey does not call it, so the
+GraphQL estimate rises from **941 to 961 points**; the REST estimate stays at 5 requests.
+
+That change and the terminal-status consistency journey above landed independently of one
+another, each measured against the same 103-request record, and the record now carries
+both: **110 requests and 248,169 worst-case nodes** — the snapshot document's one request
+and 5,150 nodes beside the consistency journey's six requests and 20,403 nodes, with no row
+that the two changes both moved.
+
 ## The estimate the gate is sized from, and what it is not
 
 `tests/journey/budget.rs` derives what this session will cost each of GitHub's two budgets

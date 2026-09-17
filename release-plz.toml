@@ -34,6 +34,10 @@ name = "onetaskgraph-github-projects"
 git_tag_name = "onetaskgraph-github-projects-v{{ version }}"
 git_release_enable = false
 [[package]]
+name = "onetaskgraph-status-options"
+git_tag_name = "onetaskgraph-status-options-v{{ version }}"
+git_release_enable = false
+[[package]]
 name = "onetaskgraph-core"
 git_tag_name = "onetaskgraph-core-v{{ version }}"
 git_release_enable = false

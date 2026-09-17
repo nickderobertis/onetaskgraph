@@ -59,6 +59,8 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::ADD_COMMENT, 1),
     (graphql::UPDATE_COMMENT, 1),
     (graphql::DELETE_COMMENT, 1),
+    (graphql::STATUS_OPTIONS_SNAPSHOT, 1),
+    (graphql::STATUS_OPTIONS_UPDATE, 1),
 ];
 
 /// What this source's own text says `document` costs against what [`PRICES`] records, or

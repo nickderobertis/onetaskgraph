@@ -13,6 +13,7 @@
     "onetaskgraph-live",
     "onetaskgraph-local-md",
     "onetaskgraph-plugin-api",
+    "onetaskgraph-status-options",
     "sdk-python",
     "sdk-typescript",
     "scripts"

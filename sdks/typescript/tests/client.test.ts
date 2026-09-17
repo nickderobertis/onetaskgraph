@@ -27,16 +27,26 @@ const binary = resolve(import.meta.dir, "../../../target/debug/onetaskgraph");
 let root = "";
 let client: OnetaskgraphClient;
 
-function executableFixture(directory: string, name: string, stdout: string, stderr = "", code = 0) {
+function executableFixture(
+  directory: string,
+  name: string,
+  stdout: string,
+  stderr = "",
+  code = 0,
+  expectedArgs?: string[],
+) {
   const windows = process.platform === "win32";
   const program = resolve(directory, `${name}.js`);
   const path = windows ? resolve(directory, `${name}.cmd`) : program;
   const quote = (value: string) => JSON.stringify(value);
+  const guard = expectedArgs
+    ? `if (JSON.stringify(process.argv.slice(2)) !== ${quote(JSON.stringify(expectedArgs))}) { process.stderr.write("unexpected arguments: " + JSON.stringify(process.argv.slice(2))); process.exit(9); }\n`
+    : "";
   writeFileSync(
     program,
-    `#!/usr/bin/env node\nprocess.stdout.write(${quote(stdout)});\nprocess.stderr.write(${quote(stderr)});\nprocess.exit(${code});\n`,
+    `#!/usr/bin/env node\n${guard}process.stdout.write(${quote(stdout)});\nprocess.stderr.write(${quote(stderr)});\nprocess.exit(${code});\n`,
   );
-  if (windows) writeFileSync(path, `@echo off\r\nnode "%~dp0${name}.js"\r\n`);
+  if (windows) writeFileSync(path, `@echo off\r\nnode "%~dp0${name}.js" %*\r\n`);
   else chmodSync(path, 0o755);
   return path;
 }
@@ -128,6 +138,34 @@ test(
   },
   COLD_START_TIMEOUT_MS,
 );
+
+test("status options names a source that is not backed by GitHub Projects", async () => {
+  await expect(client.sourcesStatusOptions("work")).rejects.toThrow(
+    "source work uses plugin in-memory, not github-projects",
+  );
+});
+
+test("status options forwards apply through the executable boundary", async () => {
+  const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-status-options-"));
+  try {
+    const applyClient = new OnetaskgraphClient({
+      binaryPath: executableFixture(
+        fixtures,
+        "status-options-apply",
+        JSON.stringify({ source: "board", missing: [], outcome: "unchanged", existing: [] }),
+        "",
+        0,
+        ["sources", "status-options", "board", "--apply", "--json"],
+      ),
+    });
+
+    expect((await applyClient.sourcesStatusOptions("board", { apply: true })).outcome).toBe(
+      "unchanged",
+    );
+  } finally {
+    rmSync(fixtures, { recursive: true, force: true });
+  }
+});
 
 test("the prefix these tests remove is the one the binary reads its configuration under", async () => {
   const probe = `${CONFIGURATION_PREFIX}SOURCES__PREFIX_PROBE__PLUGIN`;

@@ -56,4 +56,9 @@ mod metadata;
 mod multi_source;
 mod no_persistence;
 mod source_host;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This offline module drives
+// the required real CLI boundary against a loopback board and completes nine journeys in
+// under one second. The binary project is the narrowest project that can own a binary
+// subprocess journey; the plugin-isolation contract forbids moving it into a plugin crate.
+mod status_options;
 mod surface;

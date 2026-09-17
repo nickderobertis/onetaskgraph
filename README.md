@@ -39,6 +39,10 @@ Two properties make it different from a lowest-common-denominator wrapper:
 
 ```bash
 onetaskgraph sources list
+onetaskgraph sources status-options <SOURCE> [--apply] [--json]
+# Without --apply this only reports configured GitHub Projects Status options the board
+# lacks. --apply sends the complete existing option list with ids, then verifies every
+# pre-existing option id and item assignment and prints recovery data if GitHub drifted.
 
 onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--status S]... [--project P | --no-project]
@@ -110,7 +114,9 @@ selects the mapped `Done` option and closes the issue as completed, while `cance
 selects the mapped `Cancelled` option and closes it as not planned. Those are the shipped
 option names. An open-category write reopens a closed issue before selecting its mapped
 option; a draft item has no issue state to reopen. If any mapped option is absent, the
-write is refused by that option's name before either representation changes. Reads keep
+write is refused by that option's name before either representation changes —
+`sources status-options` counts a terminal category's mapped option as configured, so it
+names a missing `Done` or `Cancelled` and `--apply` adds it. Reads keep
 GitHub's issue decision authoritative for closed issues—completed reads `done` and not
 planned reads `cancelled`, regardless of the displayed option—while the Status option
 decides an open issue's category.
