@@ -60,9 +60,8 @@ macro_rules! ensure {
 mod cleanup;
 
 use cleanup::{
-    ARTIFACT_PREFIX, ISSUE_PAGE_PROBE, LABEL_CREATE, PROJECT_STATUSES, SESSION_NAME, TEAM_STATES,
-    artifact_label, artifact_title, is_this_runs, linear, remove_artifacts, run_then_cleanup,
-    sweep_orphans,
+    ISSUE_PAGE_PROBE, LABEL_CREATE, PROJECT_STATUSES, SESSION_NAME, TEAM_STATES, artifact_label,
+    artifact_title, is_this_runs, linear, remove_artifacts, run_then_cleanup, sweep_orphans,
 };
 
 // `settle` is shared with `tests/settle_gate.rs`, which drives these reads against a loopback
@@ -70,8 +69,8 @@ use cleanup::{
 mod settle;
 
 use settle::{
-    LINEAR_INDEX, settled, settled_document_absent, settled_documents, settled_label,
-    settled_tasks, settled_walk, task_titles, walked_task_titles,
+    LINEAR_DOCUMENT_LISTING, LINEAR_INDEX, settled, settled_document_absent, settled_documents,
+    settled_label, settled_tasks, settled_walk, task_titles, walked_task_titles,
 };
 
 /// The two workflow states this fixture files its issues under.
@@ -702,42 +701,48 @@ async fn drive_documents(
     // predicate the other, and a label demanded of a document keeps neither. Each listing
     // waits out the index as the issue listings do: a document's project filter has come back
     // without the document filed there while the unfiltered listing already held it.
-    let this_runs = |title: &str| is_this_runs(run.id, ARTIFACT_PREFIX, title);
     settled_documents(
         LINEAR_INDEX,
+        LINEAR_DOCUMENT_LISTING,
         source,
         &DocumentQuery::default(),
-        &this_runs,
+        &[filed_id.clone(), loose_id.clone()],
         "the two documents this run created",
-        &[filed.to_owned(), loose.to_owned()],
+        &[
+            (filed_id.clone(), filed.to_owned()),
+            (loose_id.clone(), loose.to_owned()),
+        ],
     )
     .await?;
     settled_documents(
         LINEAR_INDEX,
+        LINEAR_DOCUMENT_LISTING,
         source,
         &DocumentQuery {
             project: ProjectFilter::Is(under.clone()),
             ..DocumentQuery::default()
         },
-        &this_runs,
+        &[filed_id.clone(), loose_id.clone()],
         "a document listing narrowed to this run's project",
-        &[filed.to_owned()],
+        &[(filed_id.clone(), filed.to_owned())],
     )
     .await?;
     settled_documents(
         LINEAR_INDEX,
+        LINEAR_DOCUMENT_LISTING,
         source,
         &DocumentQuery {
             project: ProjectFilter::Orphans,
             ..DocumentQuery::default()
         },
-        &this_runs,
+        &[filed_id.clone(), loose_id.clone()],
         "a document listing narrowed to the orphans",
-        &[loose.to_owned()],
+        &[(loose_id.clone(), loose.to_owned())],
     )
     .await?;
     settled_documents(
         LINEAR_INDEX,
+        LINEAR_DOCUMENT_LISTING,
         source,
         &DocumentQuery {
             labels: LabelFilter {
@@ -746,7 +751,7 @@ async fn drive_documents(
             },
             ..DocumentQuery::default()
         },
-        &this_runs,
+        &[filed_id.clone(), loose_id.clone()],
         "a document listing demanding a label, which no Linear document carries,",
         &[],
     )
