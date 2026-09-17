@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.36](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.35...v0.2.36) - 2026-09-17
+
+### Added
+
+- *(github-projects)* add missing board status options safely ([#1610](https://github.com/nickderobertis/onetaskgraph/pull/1610))
+
 ## [0.2.35](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.34...v0.2.35) - 2026-09-17
 
 ### Fixed
