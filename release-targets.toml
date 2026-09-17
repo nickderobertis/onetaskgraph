@@ -39,8 +39,8 @@ schema_version = 2
 probe = "scripts/release-probe.sh"
 
 # The engine, the plugin crates and the binary, as a Rust dependent takes them.
-# All seven publish together at the one `[workspace.package]` version, which is
-# why the six siblings are covered rather than declared.
+# All eight publish together at the one `[workspace.package]` version, which is
+# why the seven siblings are covered rather than declared.
 [[target]]
 id = "crate:onetaskgraph"
 name = "crate"
@@ -53,6 +53,7 @@ covers = [
     "crate:onetaskgraph-local-md",
     "crate:onetaskgraph-linear",
     "crate:onetaskgraph-github-projects",
+    "crate:onetaskgraph-status-options",
     "crate:onetaskgraph-core",
 ]
 

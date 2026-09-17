@@ -39,6 +39,10 @@ Two properties make it different from a lowest-common-denominator wrapper:
 
 ```bash
 onetaskgraph sources list
+onetaskgraph sources status-options <SOURCE> [--apply] [--json]
+# Without --apply this only reports configured GitHub Projects Status options the board
+# lacks. --apply sends the complete existing option list with ids, then verifies every
+# pre-existing option id and item assignment and prints recovery data if GitHub drifted.
 
 onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--status S]... [--project P | --no-project]

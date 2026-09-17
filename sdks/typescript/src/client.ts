@@ -18,6 +18,7 @@ import type {
   QueryResponseOfSearchHit,
   SourceListings,
   StatusCategory,
+  StatusOptionsReport,
   TaskDetail,
   TaskStatusSet,
 } from "./generated/models.ts";
@@ -85,6 +86,7 @@ export class OnetaskgraphValidationError extends Error {
 const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   "config show": "EffectiveConfig",
   "sources list": "SourceListings",
+  "sources status-options": "StatusOptionsReport",
   "task list": "QueryResponseOfQualifiedTask",
   "task show": "TaskDetail",
   "task deps": "QueryResponseOfQualifiedEdge",
@@ -203,6 +205,12 @@ export class OnetaskgraphClient {
   }
   sourcesList(): Promise<SourceListings> {
     return this.run("sources list", []);
+  }
+  sourcesStatusOptions(
+    source: string,
+    options: { apply?: boolean } = {},
+  ): Promise<StatusOptionsReport> {
+    return this.run("sources status-options", [source, ...(options.apply ? ["--apply"] : [])]);
   }
   taskList(
     options: FilterOptions & { project?: string; noProject?: boolean } = {},
@@ -403,7 +411,7 @@ export class OnetaskgraphClient {
 
 export function assertCompleteCommandSurface(): void {
   const missing = binaryCommands.filter((command) => {
-    const method = command.replace(/ ([a-z])/g, (_, letter: string) => letter.toUpperCase());
+    const method = command.replace(/[ -]([a-z])/g, (_, letter: string) => letter.toUpperCase());
     // The emitted runtime contract supplies a dynamic string, so the assertion is the
     // boundary that permits reflective lookup while this check verifies the method exists.
     return typeof OnetaskgraphClient.prototype[method as keyof OnetaskgraphClient] !== "function";

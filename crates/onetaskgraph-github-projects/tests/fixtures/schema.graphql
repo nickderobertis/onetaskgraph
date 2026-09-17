@@ -4,9 +4,9 @@
 #
 # `ProjectV2.shortDescription` and `ProjectV2.readme` are absent on purpose, and so is
 # `updateProjectV2`: a board is a container of projects here, never a project, and nothing
-# this source does writes the board's own fields. `updateProjectV2Field` is absent for a
-# different reason — its `singleSelectOptions` overwrites a field's option set, so no
-# addition is additive and a mistake destroys every item's status.
+# this source does writes the board's own fields. `updateProjectV2Field` is present only
+# for the guarded status-options document, whose caller sends all existing option ids and
+# verifies every id and item assignment after GitHub replaces the complete option set.
 schema {
   query: Query
   mutation: Mutation
@@ -44,6 +44,7 @@ type Mutation {
   updateProjectV2ItemFieldValue(
     input: UpdateProjectV2ItemFieldValueInput!
   ): UpdateProjectV2ItemFieldValuePayload
+  updateProjectV2Field(input: UpdateProjectV2FieldInput!): UpdateProjectV2FieldPayload
   addSubIssue(input: AddSubIssueInput!): AddSubIssuePayload
   removeSubIssue(input: RemoveSubIssueInput!): RemoveSubIssuePayload
   addBlockedBy(input: AddBlockedByInput!): AddBlockedByPayload
@@ -120,6 +121,27 @@ input ProjectV2FieldValue {
   text: String
   singleSelectOptionId: String
 }
+input UpdateProjectV2FieldInput {
+  projectId: ID!
+  fieldId: ID!
+  singleSelectOptions: [ProjectV2SingleSelectFieldOptionInput!]
+}
+input ProjectV2SingleSelectFieldOptionInput {
+  id: ID
+  name: String!
+  color: ProjectV2SingleSelectFieldOptionColor!
+  description: String!
+}
+enum ProjectV2SingleSelectFieldOptionColor {
+  GRAY
+  BLUE
+  GREEN
+  YELLOW
+  PURPLE
+  RED
+  ORANGE
+  PINK
+}
 input AddSubIssueInput {
   issueId: ID!
   subIssueId: ID
@@ -151,6 +173,9 @@ type UpdateProjectV2DraftIssuePayload {
 }
 type UpdateProjectV2ItemFieldValuePayload {
   projectV2Item: ProjectV2Item
+}
+type UpdateProjectV2FieldPayload {
+  projectV2Field: ProjectV2FieldConfiguration
 }
 type AddSubIssuePayload {
   issue: Issue
@@ -221,6 +246,7 @@ type ProjectV2ItemFieldValueConnection {
 }
 type ProjectV2ItemFieldSingleSelectValue {
   name: String
+  optionId: String
   field: ProjectV2FieldConfiguration!
 }
 type ProjectV2ItemFieldLabelValue {
@@ -242,6 +268,8 @@ type ProjectV2Field {
 type ProjectV2SingleSelectFieldOption {
   id: ID!
   name: String!
+  color: ProjectV2SingleSelectFieldOptionColor!
+  description: String
 }
 
 type Issue implements Node {

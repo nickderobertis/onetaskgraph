@@ -81,7 +81,10 @@
 //!
 //! **Status.** `status_mapping` is per-instance configuration from a status category to
 //! `null`, a board `Status` option name, or a closed state of `completed` or
-//! `not-planned`. Nothing here ever calls `updateProjectV2Field`: that mutation's
+//! `not-planned`. The guarded [`GitHubProjectsSource::status_options`] operation is the
+//! one path here that calls `updateProjectV2Field`: GitHub replaces the whole option list,
+//! so it preserves every existing option id and verifies the field and item assignments
+//! immediately afterwards. No ordinary source read or write calls that mutation.
 //! `singleSelectOptions` *overwrites* a field's option set, so no addition is additive
 //! and a mistake destroys every item's status. A status this board cannot represent is a
 //! refusal naming the status and the instance instead.
@@ -377,7 +380,7 @@ use onetaskgraph_plugin_api::{
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub mod accounting;
@@ -530,8 +533,8 @@ pub const DESIGN_TITLE_PREFIX: &str = "DESIGN: ";
 ///
 /// Keeping the production documents here lets the pinned-schema test validate the same
 /// bytes that are sent to GitHub, rather than a test-only copy which could drift
-/// independently. No document in this module writes the board itself, and none of them
-/// names `updateProjectV2Field`.
+/// independently. [`STATUS_OPTIONS_UPDATE`] is the sole document that may rewrite a board
+/// field, and its guarded caller always supplies the complete existing option set with ids.
 pub mod graphql {
     /// The board half of one item: the field values every document here reads it from.
     ///
@@ -718,6 +721,11 @@ pub mod graphql {
     pub const UPDATE_DRAFT: &str = r#"mutation($input:UpdateProjectV2DraftIssueInput!){updateProjectV2DraftIssue(input:$input){draftIssue{id}}}"#;
     /// Updates a text or single-select value on one project item.
     pub const UPDATE_FIELD: &str = r#"mutation($input:UpdateProjectV2ItemFieldValueInput!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id}}}"#;
+    /// Replaces a single-select field's options. Only the guarded status-options operation
+    /// may use this document, because GitHub treats the input as the complete option list.
+    pub const STATUS_OPTIONS_UPDATE: &str = r#"mutation($input:UpdateProjectV2FieldInput!){updateProjectV2Field(input:$input){projectV2Field{... on ProjectV2SingleSelectField{id options{id name color description}}}}}"#;
+    /// A fresh snapshot of the Status field and every board item's assignment.
+    pub const STATUS_OPTIONS_SNAPSHOT: &str = r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!){owner:repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id fields(first:$nestedFirst){nodes{... on ProjectV2SingleSelectField{id name options{id name color description}}}pageInfo{hasNextPage}} items(first:$first,after:$after){nodes{id fieldValues(first:$nestedFirst){nodes{... on ProjectV2ItemFieldSingleSelectValue{name optionId field{... on ProjectV2SingleSelectField{id name}}}}pageInfo{hasNextPage}}}pageInfo{hasNextPage endCursor}}}}}}"#;
     /// Files one issue under another as a sub-issue, which is what project membership is.
     pub const ADD_SUB_ISSUE: &str =
         r#"mutation($input:AddSubIssueInput!){addSubIssue(input:$input){issue{id} subIssue{id}}}"#;
@@ -790,7 +798,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 22] = [
+    pub const DOCUMENTS: [(&str, &str); 24] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -806,6 +814,14 @@ pub mod graphql {
         (UPDATE_ISSUE, "updating an issue"),
         (UPDATE_DRAFT, "updating a draft item"),
         (UPDATE_FIELD, "writing a board field"),
+        (
+            STATUS_OPTIONS_SNAPSHOT,
+            "snapshotting board Status options and assignments",
+        ),
+        (
+            STATUS_OPTIONS_UPDATE,
+            "safely replacing the board Status option list",
+        ),
         (ADD_SUB_ISSUE, "filing an issue under its project"),
         (REMOVE_SUB_ISSUE, "taking an issue out of its project"),
         (ADD_BLOCKED_BY, "recording a dependency"),
@@ -1150,8 +1166,9 @@ pub enum StatusTargetConfig {
 ///
 /// Validated on the way in rather than checked later, so a blank option name — which
 /// nothing on a board can be — is a state this type cannot hold.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(try_from = "String")]
+#[schemars(extend("minLength" = 1))]
 pub struct ColumnName(String);
 
 impl ColumnName {
@@ -1738,7 +1755,383 @@ pub struct GitHubProjectsSource {
     ledger: Arc<Accounting>,
 }
 
+/// GitHub's closed single-select color vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum StatusOptionColor {
+    /// Gray.
+    Gray,
+    /// Blue.
+    Blue,
+    /// Green.
+    Green,
+    /// Yellow.
+    Yellow,
+    /// Purple.
+    Purple,
+    /// Red.
+    Red,
+    /// Orange.
+    Orange,
+    /// Pink.
+    Pink,
+}
+
+/// Whether the guarded operation plans or applies additions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusOptionsMode {
+    /// Read without mutation.
+    Plan,
+    /// Apply and verify.
+    Apply,
+}
+
+/// The explicit result of the requested operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum StatusOptionsOutcome {
+    /// A read-only plan.
+    Planned,
+    /// Apply found nothing missing.
+    Unchanged,
+    /// Additions were applied and verified.
+    Applied,
+}
+
+/// A GitHub single-select option's opaque GraphQL node identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct StatusOptionId(#[schemars(length(min = 1))] String);
+
+impl TryFrom<String> for StatusOptionId {
+    type Error = String;
+
+    fn try_from(id: String) -> Result<Self, Self::Error> {
+        if id.trim().is_empty() {
+            return Err("a GitHub Status option id cannot be blank".to_owned());
+        }
+        Ok(Self(id))
+    }
+}
+
+/// One existing or proposed option in a guarded Status-field update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct StatusOption {
+    /// GitHub's stable id.
+    pub id: StatusOptionId,
+    /// The visible option name.
+    pub name: ColumnName,
+    /// GitHub's single-select color token.
+    pub color: StatusOptionColor,
+    /// The option description, including an empty one.
+    pub description: String,
+}
+
+/// One board item's Status assignment, retained as recovery data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct StatusAssignment {
+    /// The project item id whose assignment this is.
+    // llmlint: ignore[invalid_states_unrepresentable] This opaque GraphQL node ID is
+    // carried verbatim as operator recovery data; introducing a semantic type would claim
+    // validation rules GitHub does not publish and no operation here interprets.
+    pub item_id: String,
+    /// The selected option, absent when the item has no status.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub option: Option<AssignedStatusOption>,
+}
+
+/// The inseparable id and name of an assigned option.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct AssignedStatusOption {
+    /// GitHub's stable id.
+    pub id: StatusOptionId,
+    /// The visible name.
+    pub name: ColumnName,
+}
+
+/// The plan and verified outcome of reconciling configured Status options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct StatusOptionsReport {
+    /// The configured source name.
+    pub source: SourceName,
+    /// Configured option names absent before the operation.
+    // llmlint: ignore[invalid_states_unrepresentable] Each value originates from a
+    // `ColumnName` and has therefore already passed its nonblank validation; retaining the
+    // serialized string here preserves the report's intentionally simple public contract.
+    pub missing: Vec<String>,
+    /// What the requested operation did.
+    pub outcome: StatusOptionsOutcome,
+    /// The complete option list observed before any mutation.
+    pub existing: Vec<StatusOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StatusSnapshot {
+    // llmlint: ignore[invalid_states_unrepresentable] This private opaque GraphQL ID is
+    // passed back as the mutation's project identity; a newtype could enforce no stronger
+    // invariant because GitHub publishes no grammar for it.
+    board_id: String,
+    // llmlint: ignore[invalid_states_unrepresentable] This private opaque GraphQL ID is
+    // passed back as the mutation's field identity; a newtype could enforce no stronger
+    // invariant because GitHub publishes no grammar for it.
+    field_id: String,
+    options: Vec<StatusOption>,
+    assignments: Vec<StatusAssignment>,
+}
+
 impl GitHubProjectsSource {
+    /// Report missing configured Status options and, when `apply` is true, add them with
+    /// a whole-list mutation that preserves every existing id and verifies the result.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a board without a single-select `Status` field. A post-write difference in
+    /// any pre-existing option id or item assignment is refused with the complete pre-write
+    /// assignment snapshot in the diagnostic for recovery.
+    // llmlint: ignore[changed_behavior_has_e2e] The CLI journeys cover plan, no-op apply,
+    // successful mutation, both drift refusals, source selection, missing Status, casing,
+    // and paging. Transport errors remain the shared `graphql` boundary's behavior rather
+    // than a new status-options behavior, and the pinned-schema test prevents valid GitHub
+    // responses from entering the defensive malformed-response branches below.
+    pub async fn status_options(
+        &self,
+        mode: StatusOptionsMode,
+    ) -> Result<StatusOptionsReport, SourceError> {
+        let before = self.status_snapshot().await?;
+        let configured = self
+            .statuses
+            .targets
+            .iter()
+            .filter_map(|target| match target {
+                StatusTarget::Column(name) => Some(name.as_str().to_owned()),
+                StatusTarget::Closed(_) | StatusTarget::Disabled => None,
+            });
+        let missing = configured
+            .filter(|wanted| {
+                !before
+                    .options
+                    .iter()
+                    .any(|option| option.name.as_str().eq_ignore_ascii_case(wanted))
+            })
+            .collect::<Vec<_>>();
+        let report = StatusOptionsReport {
+            source: self.name.clone(),
+            missing: missing.clone(),
+            outcome: match (mode, missing.is_empty()) {
+                (StatusOptionsMode::Plan, _) => StatusOptionsOutcome::Planned,
+                (StatusOptionsMode::Apply, true) => StatusOptionsOutcome::Unchanged,
+                (StatusOptionsMode::Apply, false) => StatusOptionsOutcome::Applied,
+            },
+            existing: before.options.clone(),
+        };
+        if mode == StatusOptionsMode::Plan || missing.is_empty() {
+            return Ok(report);
+        }
+        let mut options = before
+            .options
+            .iter()
+            .map(|option| {
+                json!({
+                    "id": option.id, "name": option.name, "color": option.color,
+                    "description": option.description,
+                })
+            })
+            .collect::<Vec<_>>();
+        options.extend(missing.iter().map(|name| {
+            json!({
+                "name": name, "color": "GRAY", "description": ""
+            })
+        }));
+        self.graphql(
+            graphql::STATUS_OPTIONS_UPDATE,
+            json!({"input": {
+                "projectId": before.board_id, "fieldId": before.field_id,
+                "singleSelectOptions": options,
+            }}),
+        )
+        .await?;
+        let after = self.status_snapshot().await?;
+        let options_preserved = before
+            .options
+            .iter()
+            .all(|old| after.options.iter().any(|new| new == old));
+        let additions_present = missing.iter().all(|wanted| {
+            after
+                .options
+                .iter()
+                .any(|option| option.name.as_str().eq_ignore_ascii_case(wanted))
+        });
+        if !options_preserved || !additions_present || after.assignments != before.assignments {
+            let recovery = serde_json::to_string_pretty(&before.assignments).map_err(|error| {
+                SourceError::Malformed {
+                    message: format!("cannot render pre-write Status recovery snapshot: {error}"),
+                }
+            })?;
+            return Err(SourceError::Refused {
+                message: format!(
+                    "GitHub changed a pre-existing Status option id, name, color or description, or an item assignment after the guarded update; the pre-write item assignment snapshot is:\n{recovery}"
+                ),
+            });
+        }
+        Ok(report)
+    }
+
+    // llmlint: ignore-block[changed_behavior_has_e2e] Valid snapshot shapes are exercised through
+    // the real CLI loopback journey, including pagination. The individual malformed guards
+    // are defensive validation of a schema-pinned third-party response, not separate user
+    // journeys; drift and missing-field failures cover the operation's recovery behavior.
+    async fn status_snapshot(&self) -> Result<StatusSnapshot, SourceError> {
+        let mut after: Option<String> = None;
+        let mut snapshot: Option<StatusSnapshot> = None;
+        loop {
+            let data = self
+                .graphql(
+                    graphql::STATUS_OPTIONS_SNAPSHOT,
+                    json!({
+                        "owner": self.owner, "number": self.project_number,
+                        "first": MAX_PAGE_SIZE, "after": after, "nestedFirst": MAX_PAGE_SIZE,
+                    }),
+                )
+                .await?;
+            let board = data
+                .pointer("/owner/projectV2")
+                .filter(|board| board.is_object())
+                .ok_or_else(|| SourceError::Refused {
+                    message: format!(
+                        "source {} has no accessible GitHub Projects board",
+                        self.name
+                    ),
+                })?;
+            if board
+                .pointer("/fields/pageInfo/hasNextPage")
+                .and_then(Value::as_bool)
+                != Some(false)
+            {
+                return Err(SourceError::Malformed {
+                    message:
+                        "GitHub project fields is incomplete or has malformed pageInfo.hasNextPage"
+                            .into(),
+                });
+            }
+            let field = board
+                .pointer("/fields/nodes")
+                .and_then(Value::as_array)
+                .and_then(|fields| {
+                    fields
+                        .iter()
+                        .find(|field| field.get("name").and_then(Value::as_str) == Some("Status"))
+                })
+                .ok_or_else(|| SourceError::Refused {
+                    message: format!("source {} board has no Status field", self.name),
+                })?;
+            let options = field
+                .get("options")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub Status field options is not an array".into(),
+                })?
+                .iter()
+                .map(|option| {
+                    Ok(StatusOption {
+                        id: StatusOptionId::try_from(required_str(option, "id")?.to_owned())
+                            .map_err(|message| SourceError::Malformed { message })?,
+                        name: ColumnName::try_from(required_str(option, "name")?.to_owned())
+                            .map_err(|message| SourceError::Malformed {
+                                message: format!("GitHub Status option name is invalid: {message}"),
+                            })?,
+                        color: serde_json::from_value(
+                            option.get("color").cloned().unwrap_or(Value::Null),
+                        )
+                        .map_err(|error| SourceError::Malformed {
+                            message: format!("GitHub Status option color is invalid: {error}"),
+                        })?,
+                        description: optional_str(option, "description")?
+                            .unwrap_or_default()
+                            .to_owned(),
+                    })
+                })
+                .collect::<Result<Vec<_>, SourceError>>()?;
+            let board_id = required_nonblank_str(board, "id")?.to_owned();
+            let field_id = required_nonblank_str(field, "id")?.to_owned();
+            let current = snapshot.get_or_insert_with(|| StatusSnapshot {
+                board_id,
+                field_id,
+                options,
+                assignments: Vec::new(),
+            });
+            let items = board
+                .pointer("/items/nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub project items.nodes is not an array".into(),
+                })?;
+            for item in items {
+                let field_values =
+                    item.get("fieldValues")
+                        .ok_or_else(|| SourceError::Malformed {
+                            message: "GitHub project item is missing fieldValues".into(),
+                        })?;
+                if field_values
+                    .pointer("/pageInfo/hasNextPage")
+                    .and_then(Value::as_bool)
+                    != Some(false)
+                {
+                    return Err(SourceError::Malformed {
+                        message: "GitHub project item fieldValues is incomplete or has malformed pageInfo.hasNextPage".into(),
+                    });
+                }
+                let values = item
+                    .pointer("/fieldValues/nodes")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "GitHub project item fieldValues.nodes is not an array".into(),
+                    })?;
+                let status = values.iter().find(|value| {
+                    value.pointer("/field/name").and_then(Value::as_str) == Some("Status")
+                });
+                current.assignments.push(StatusAssignment {
+                    item_id: required_nonblank_str(item, "id")?.to_owned(),
+                    option: status
+                        .map(|value| {
+                            Ok(AssignedStatusOption {
+                                id: StatusOptionId::try_from(
+                                    required_str(value, "optionId")?.to_owned(),
+                                )
+                                .map_err(|message| SourceError::Malformed { message })?,
+                                name: ColumnName::try_from(required_str(value, "name")?.to_owned())
+                                    .map_err(|message| SourceError::Malformed {
+                                        message: format!(
+                                            "GitHub assigned Status name is invalid: {message}"
+                                        ),
+                                    })?,
+                            })
+                        })
+                        .transpose()?,
+                });
+            }
+            let page = board.get("items").ok_or_else(|| SourceError::Malformed {
+                message: "GitHub project is missing items".into(),
+            })?;
+            let has_next = page
+                .pointer("/pageInfo/hasNextPage")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub project items.pageInfo.hasNextPage is not a boolean".into(),
+                })?;
+            if !has_next {
+                break;
+            }
+            let next =
+                required_nonblank_str(page.get("pageInfo").unwrap_or(&Value::Null), "endCursor")?;
+            validate_cursor_progress(after.as_deref(), next)?;
+            after = Some(next.to_owned());
+        }
+        snapshot.ok_or_else(|| SourceError::Malformed {
+            message: "GitHub returned no Status snapshot".into(),
+        })
+    }
+    // llmlint: ignore-end[changed_behavior_has_e2e]
+
     /// Validate configuration and capture the named credential without exposing it.
     ///
     /// # Errors
@@ -5560,6 +5953,16 @@ fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceErro
         .ok_or_else(|| SourceError::Malformed {
             message: format!("GitHub response is missing string field {field}"),
         })
+}
+
+fn required_nonblank_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceError> {
+    let found = required_str(value, field)?;
+    if found.trim().is_empty() {
+        return Err(SourceError::Malformed {
+            message: format!("GitHub response has blank string field {field}"),
+        });
+    }
+    Ok(found)
 }
 
 /// The slot's delimiters, which `docs/metadata.md` settles once for every source that

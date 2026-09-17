@@ -8,7 +8,8 @@
     "onetaskgraph-core",
     "onetaskgraph-github-projects",
     "onetaskgraph-linear",
-    "onetaskgraph-plugin-api"
+    "onetaskgraph-plugin-api",
+    "onetaskgraph-status-options"
   ],
   "targets": {
     "bootstrap": {

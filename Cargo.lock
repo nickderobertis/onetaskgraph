@@ -1008,7 +1008,9 @@ dependencies = [
  "onetaskgraph-github-projects",
  "onetaskgraph-linear",
  "onetaskgraph-plugin-api",
+ "onetaskgraph-status-options",
  "predicates",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -1117,6 +1119,17 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
+name = "onetaskgraph-status-options"
+version = "0.2.35"
+dependencies = [
+ "onetaskgraph-github-projects",
+ "onetaskgraph-plugin-api",
+ "secrecy",
+ "serde_json",
  "tokio",
 ]
 

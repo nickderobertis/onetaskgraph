@@ -24,6 +24,7 @@ use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SourceName,
     TextQuery,
 };
+use onetaskgraph_status_options::{GitHubProjectsConfig, StatusOptionsMode, StatusOptionsReport};
 use serde::Serialize;
 
 use crate::cli::{
@@ -163,6 +164,55 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 OutputFormat::Json => json(&listings, "the sources")?,
             };
             emit(out, rendered.trim_end(), "the sources")?;
+            Ok(EXIT_OK)
+        }
+
+        Command::Sources {
+            command: SourcesCommand::StatusOptions(args),
+        } => {
+            // llmlint: ignore-block[changed_behavior_has_e2e] The status-options journeys drive
+            // this boundary through unknown and wrong-plugin sources. Invalid source tokens
+            // and malformed plugin configuration are the shared configuration boundary's
+            // existing validation, while construction errors are exercised by this plugin's
+            // configuration tests rather than duplicated for each CLI verb.
+            let name = SourceName::try_from(args.source.clone())
+                .map_err(|message| Failure::decided("invalid-source", message.to_string()))?;
+            let source = loaded.config.sources().get(&name).ok_or_else(|| {
+                Failure::decided(
+                    "status-options",
+                    format!("no configured source is named {name}"),
+                )
+            })?;
+            if source.plugin() != onetaskgraph_core::PluginKind::GithubProjects {
+                return Err(Failure::decided(
+                    "status-options",
+                    format!(
+                        "source {name} uses plugin {}, not github-projects; status-options is only available for github-projects sources",
+                        source.plugin()
+                    ),
+                ));
+            }
+            let config: GitHubProjectsConfig = serde_json::from_value(source.config().clone())
+                .map_err(|error| {
+                    Failure::decided("status-options", format!("source {name}: {error}"))
+                })?;
+            // llmlint: ignore-end[changed_behavior_has_e2e]
+            let mode = if args.apply {
+                StatusOptionsMode::Apply
+            } else {
+                StatusOptionsMode::Plan
+            };
+            let report =
+                onetaskgraph_status_options::reconcile(&name, config, &loaded.secrets, mode)
+                    .await
+                    .map_err(|error| {
+                        Failure::decided("status-options", format!("source {name}: {error}"))
+                    })?;
+            let rendered = match loaded.config.output() {
+                OutputFormat::Json => json(&report, "the status-options report")?,
+                OutputFormat::Text => render::status_options(&report),
+            };
+            emit(out, rendered.trim_end(), "the status-options report")?;
             Ok(EXIT_OK)
         }
 
@@ -940,15 +990,19 @@ fn json(value: &impl Serialize, what: &str) -> Result<String, Failure> {
         .map_err(|error| Failure::decided("render", format!("could not render {what}: {error}")))
 }
 
+fn json_value(value: impl Serialize, what: &str) -> Result<serde_json::Value, Failure> {
+    serde_json::to_value(value)
+        .map_err(|error| Failure::decided("render", format!("could not render {what}: {error}")))
+}
+
 /// The schema bundle as pretty-printed JSON.
 fn schema_bundle() -> Result<String, Failure> {
     let mut bundle = onetaskgraph_core::schema_bundle();
-    bundle["commands"] = serde_json::to_value(public_commands()?).map_err(|error| {
-        Failure::decided(
-            "render",
-            format!("could not render the command surface: {error}"),
-        )
-    })?;
+    bundle["roots"]["StatusOptionsReport"] = json_value(
+        schemars::schema_for!(StatusOptionsReport),
+        "the status-options schema",
+    )?;
+    bundle["commands"] = json_value(public_commands()?, "the command surface")?;
     json(&bundle, "the schema bundle")
 }
 
@@ -1039,6 +1093,28 @@ fn emit(out: &mut impl Write, rendered: &str, what: &str) -> Result<(), Failure>
 mod tests {
     use super::*;
 
+    struct RefusesSerialization;
+
+    impl Serialize for RefusesSerialization {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom("serialization refused"))
+        }
+    }
+
+    #[test]
+    fn a_json_value_reports_a_serialization_failure() {
+        let failure =
+            json_value(RefusesSerialization, "the test value").expect_err("serialization fails");
+
+        assert_eq!(
+            failure.message(),
+            "could not render the test value: serialization refused"
+        );
+    }
+
     /// Render and write the schema bundle exactly as [`run`] does for that verb.
     ///
     /// The two steps rather than `run` itself, because `run` first loads the
@@ -1059,6 +1135,7 @@ mod tests {
         let bundle: serde_json::Value =
             serde_json::from_slice(&out).expect("the bundle is valid JSON");
         assert!(bundle["roots"]["Task"].is_object());
+        assert!(bundle["roots"]["StatusOptionsReport"].is_object());
         assert!(bundle["plugin_config"]["in-memory"].is_object());
         assert_eq!(
             bundle["commands"],
@@ -1066,6 +1143,7 @@ mod tests {
                 "schema",
                 "config show",
                 "sources list",
+                "sources status-options",
                 "task list",
                 "task show",
                 "task deps",

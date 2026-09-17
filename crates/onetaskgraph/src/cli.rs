@@ -102,6 +102,25 @@ pub enum SourcesCommand {
     /// A source that could not be built is listed too, with the reason — one broken
     /// credential is a source you can see is broken, not a command that stops working.
     List,
+    /// Safely report or add configured GitHub Projects board Status options.
+    ///
+    /// The default is a read-only plan. `--apply` preserves every existing option id and
+    /// verifies every existing item assignment after GitHub replaces the option list.
+    StatusOptions(StatusOptionsArgs),
+}
+
+/// Which configured source to inspect, and whether to apply its plan.
+#[derive(Debug, Args)]
+pub struct StatusOptionsArgs {
+    /// The configured `github-projects` source name.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap collects this token as text;
+    // the command converts it to `SourceName` before the configuration lookup or I/O.
+    pub source: String,
+    /// Add missing configured options and verify existing ids and assignments afterwards.
+    #[arg(long)]
+    // llmlint: ignore[invalid_states_unrepresentable] A presence-only CLI flag is
+    // intrinsically boolean; the command immediately maps it to `StatusOptionsMode`.
+    pub apply: bool,
 }
 
 /// What `onetaskgraph task` can do.

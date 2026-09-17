@@ -22,7 +22,9 @@ from .query_response_of_qualified_task import QueryResponse as QueryResponseOfQu
 from .query_response_of_search_hit import QueryResponse as QueryResponseOfSearchHit
 from .source_failure import SourceFailure as SourceFailure
 from .source_listing import SourceListing as SourceListing
+from .source_name import SourceName as SourceName
 from .status_category import StatusCategory as StatusCategory
+from .status_options_report import StatusOptionsReport as StatusOptionsReport
 from .task_detail import TaskDetail as TaskDetail
 from .task_ref import TaskRef as TaskRef
 from .task_status_set import TaskStatusSet as TaskStatusSet

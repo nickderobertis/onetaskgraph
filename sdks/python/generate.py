@@ -39,6 +39,7 @@ RESPONSE_ROOTS = {
     "label_list": "QueryResponseOfQualifiedLabel",
     "search": "QueryResponseOfSearchHit",
     "sources_list": "SourceListing",
+    "sources_status_options": "StatusOptionsReport",
     "config_show": "EffectiveConfig",
 }
 # Roots no command returns directly, which the package generates and exports anyway.
@@ -59,6 +60,7 @@ CONTRACT_ROOTS = {
     "QueryPlan",
     "GlobalId",
     "StatusCategory",
+    "SourceName",
     "Document",
     "DocumentQuery",
     "Location",
@@ -69,6 +71,7 @@ CONTRACT_ROOTS = {
 }
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
+    "apply": "bool",
     "allow_partial": "bool",
     "author": "str",
     "body_file": "str",
@@ -96,6 +99,7 @@ OPTION_TYPES = {
     "to": "str",
 }
 OPTION_PLACEHOLDERS = {
+    "apply": None,
     "allow_partial": None,
     "author": "NAME",
     "body_file": "PATH",
@@ -447,6 +451,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
     match command:
         case ("search",):
             return ("text",)
+        case ("sources", "status-options"):
+            return ("source",)
         case ("task" | "document", "copy"):
             return ("ids",)
         case ("task", "comment", "add" | "list"):
@@ -471,7 +477,7 @@ BODY_COMMANDS = {("task", "comment", "add"), ("task", "comment", "edit")}
 
 def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     """Generate one typed method per discovered public command."""
-    names = {"_".join(command): command for command in commands}
+    names = {"_".join(command).replace("-", "_"): command for command in commands}
     missing = sorted(set(names) - set(RESPONSE_ROOTS))
     if missing:
         raise SystemExit(
@@ -488,7 +494,9 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "from .models import (",
         *[
             f"    {root},"
-            for root in sorted(set(RESPONSE_ROOTS.values()) | {"GlobalId", "StatusCategory"})
+            for root in sorted(
+                set(RESPONSE_ROOTS.values()) | {"GlobalId", "SourceName", "StatusCategory"}
+            )
         ],
         ")",
         "",
@@ -528,6 +536,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         # `task status set` takes the category it sets as its second operand, spelled as the
         # binary's status vocabulary spells it — which is exactly the generated enum's values.
         "category": "StatusCategory | str",
+        "source": "SourceName | str",
         # `metadata set` takes its key as a string, and its value as the JSON text the binary
         # parses strictly — exactly the word the command line takes, so what a caller writes
         # is what the binary reads, and a value is never re-encoded on its way there.

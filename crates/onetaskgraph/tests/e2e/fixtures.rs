@@ -811,12 +811,15 @@ struct GitHubBoard {
     documents: Vec<String>,
     /// The variables each of those documents was sent with, at the same index.
     variables: Vec<Value>,
-    /// `Status` options taken off this board, by name.
-    ///
-    /// Every journey reads the one shared option set, and a journey about a write naming an
-    /// option the board does not have needs one taken away — which is what this is, rather
-    /// than a second board with a second spelling of the rest.
-    lacking: Vec<String>,
+    /// The Status field's whole option set, replaced exactly as GitHub replaces it.
+    status_options: Vec<Value>,
+    /// Whether the next whole-list update deliberately changes an assignment.
+    drift_after_status_update: bool,
+    remint_after_status_update: bool,
+    omit_added_status_option: bool,
+    status_snapshot_page_size: Option<usize>,
+    status_field_present: bool,
+    status_board_accessible: bool,
     /// The board's **own** title, description and readme — a person's, not this
     /// product's. `updateProjectV2` is answered here rather than refused so that a
     /// journey asserting these are byte-identical after a copy fails when something
@@ -860,7 +863,52 @@ impl GitHubBoardFields {
 
     /// Take one `Status` option off this board, as a person deleting a column would.
     pub fn without_option(&self, name: &str) {
-        self.board.lock().unwrap().lacking.push(name.to_owned());
+        self.board
+            .lock()
+            .unwrap()
+            .status_options
+            .retain(|option| option["name"] != json!(name));
+    }
+
+    /// Change an option's display casing without changing its identity.
+    pub fn rename_option(&self, from: &str, to: &str) {
+        let mut board = self.board.lock().unwrap();
+        let option = board
+            .status_options
+            .iter_mut()
+            .find(|option| option["name"] == json!(from))
+            .expect("the option to rename exists");
+        option["name"] = json!(to);
+    }
+
+    /// Make the fixture report assignment drift after the next Status option update.
+    pub fn drift_after_status_update(&self) {
+        self.board.lock().unwrap().drift_after_status_update = true;
+    }
+
+    /// Make the fixture change one pre-existing option id after the next update.
+    pub fn remint_after_status_update(&self) {
+        self.board.lock().unwrap().remint_after_status_update = true;
+    }
+
+    /// Make the fixture omit the newly requested option from the post-write state.
+    pub fn omit_added_status_option(&self) {
+        self.board.lock().unwrap().omit_added_status_option = true;
+    }
+
+    /// Force Status snapshots to span pages even though the client requests 100 items.
+    pub fn paginate_status_snapshots(&self) {
+        self.board.lock().unwrap().status_snapshot_page_size = Some(2);
+    }
+
+    /// Remove the board's Status field entirely.
+    pub fn without_status_field(&self) {
+        self.board.lock().unwrap().status_field_present = false;
+    }
+
+    /// Make the configured board absent from GitHub's response, as an inaccessible board is.
+    pub fn without_accessible_status_board(&self) {
+        self.board.lock().unwrap().status_board_accessible = false;
     }
 
     /// The body this board holds for one issue, byte for byte.
@@ -935,31 +983,20 @@ fn graphql_over_http(endpoint: &str, query: &str, variables: &Value) -> Value {
 
 impl GitHubBoard {
     fn options(&self) -> Value {
-        let every = json!([{"id":"OPT-backlog","name":"Backlog"},{"id":"OPT-todo","name":"Todo"},
-               {"id":"OPT-queued","name":"Queued"},{"id":"OPT-doing","name":"Doing"},
-               {"id":"OPT-shipped","name":"Shipped"}]);
-        Value::Array(
-            every
-                .as_array()
-                .expect("the option set is a list")
-                .iter()
-                .filter(|option| {
-                    !self
-                        .lacking
-                        .iter()
-                        .any(|name| option["name"] == json!(name))
-                })
-                .cloned()
-                .collect(),
-        )
+        Value::Array(self.status_options.clone())
     }
 
     fn fields(&self) -> Value {
-        json!({"nodes":[
-            {"__typename":"ProjectV2SingleSelectField","id":"FIELD-status","name":"Status",
-             "options":self.options()},
-            {"__typename":"ProjectV2Field","id":"FIELD-origin","name":"onetaskgraph.origin"}
-        ],"pageInfo":{"hasNextPage":false}})
+        let mut nodes = vec![json!({"__typename":"ProjectV2Field","id":"FIELD-origin",
+            "name":"onetaskgraph.origin"})];
+        if self.status_field_present {
+            nodes.insert(
+                0,
+                json!({"__typename":"ProjectV2SingleSelectField",
+                "id":"FIELD-status","name":"Status","options":self.options()}),
+            );
+        }
+        json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}})
     }
 
     fn subs(&self, id: &str) -> usize {
@@ -1232,7 +1269,22 @@ fn github_projects_board_at(
         lagging_reads,
         documents: Vec::new(),
         variables: Vec::new(),
-        lacking: Vec::new(),
+        status_options: json!([
+            {"id":"OPT-backlog","name":"Backlog","color":"GRAY","description":""},
+            {"id":"OPT-todo","name":"Todo","color":"BLUE","description":"ready"},
+            {"id":"OPT-queued","name":"Queued","color":"YELLOW","description":""},
+            {"id":"OPT-doing","name":"Doing","color":"GREEN","description":"active"},
+            {"id":"OPT-shipped","name":"Shipped","color":"PURPLE","description":"custom"}
+        ])
+        .as_array()
+        .unwrap()
+        .clone(),
+        drift_after_status_update: false,
+        remint_after_status_update: false,
+        omit_added_status_option: false,
+        status_snapshot_page_size: None,
+        status_field_present: true,
+        status_board_accessible: true,
         own: json!({"title":"Fixture board",
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
@@ -1370,6 +1422,91 @@ pub fn github_projects_unreachable(sandbox: &Sandbox) -> Value {
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
     let mut board = board.lock().unwrap();
     let input = variables.get("input").cloned().unwrap_or(Value::Null);
+    if query.contains("updateProjectV2Field(input:$input)") {
+        assert_eq!(input["projectId"], "PVT-board");
+        assert_eq!(input["fieldId"], "FIELD-status");
+        let old = board.status_options.clone();
+        let sent = input["singleSelectOptions"]
+            .as_array()
+            .expect("the whole option list");
+        let mut next = Vec::new();
+        for (index, option) in sent.iter().enumerate() {
+            if board.omit_added_status_option && option["id"].is_null() {
+                continue;
+            }
+            let id = option["id"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("OPT-new-{index}"));
+            next.push(
+                json!({"id":id,"name":option["name"],"color":option["color"],
+                "description":option["description"]}),
+            );
+        }
+        // GitHub re-mints an option sent without its id; items assigned to the old id lose
+        // their status. This is the dangerous whole-list behavior the real mutation has.
+        for item in &mut board.items {
+            let Some(name) = item["status"].as_str() else {
+                continue;
+            };
+            let old_id = old
+                .iter()
+                .find(|option| option["name"] == name)
+                .map(|option| option["id"].clone());
+            if old_id.is_some_and(|id| !next.iter().any(|option| option["id"] == id)) {
+                item["status"] = Value::Null;
+            }
+        }
+        board.status_options = next;
+        board.omit_added_status_option = false;
+        if board.remint_after_status_update {
+            board.remint_after_status_update = false;
+            board.status_options[0]["id"] = json!("OPT-reminted");
+        }
+        if board.drift_after_status_update {
+            board.drift_after_status_update = false;
+            if let Some(item) = board
+                .items
+                .iter_mut()
+                .find(|item| item["status"].is_string())
+            {
+                item["status"] = Value::Null;
+            }
+        }
+        return json!({"updateProjectV2Field":{"projectV2Field":{"id":"FIELD-status",
+            "options":board.options()}}});
+    }
+    if query.contains("optionId field{") && query.contains("fields(first:$nestedFirst)") {
+        assert_eq!(variables["owner"], "fixture-owner");
+        assert_eq!(variables["number"], 7);
+        if !board.status_board_accessible {
+            return json!({"owner":{"projectV2":null}});
+        }
+        let offset = variables["after"]
+            .as_str()
+            .map_or(0, |cursor| cursor.parse().unwrap());
+        let page_size = board.status_snapshot_page_size.unwrap_or(board.items.len());
+        let end = (offset + page_size).min(board.items.len());
+        let nodes = board.items[offset..end]
+            .iter()
+            .map(|item| {
+                let values = item["status"].as_str().map_or_else(Vec::new, |name| {
+                    let option = board
+                        .status_options
+                        .iter()
+                        .find(|option| option["name"] == name)
+                        .expect("an assigned option exists");
+                    vec![json!({"name":name,"optionId":option["id"],
+                    "field":{"id":"FIELD-status","name":"Status"}})]
+                });
+                json!({"id":item["item"],"fieldValues":{"nodes":values,
+                "pageInfo":{"hasNextPage":false}}})
+            })
+            .collect::<Vec<_>>();
+        return json!({"owner":{"projectV2":{"id":"PVT-board","fields":board.fields(),
+            "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < board.items.len(),
+                "endCursor":end.to_string()}}}}});
+    }
     if query.contains("addComment(input:$input)") {
         let subject = input["subjectId"]
             .as_str()
