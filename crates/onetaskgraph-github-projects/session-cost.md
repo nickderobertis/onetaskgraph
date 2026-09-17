@@ -292,6 +292,7 @@ of the record is byte-for-byte what it was. The precondition's estimate includes
 query document this source can send even when the journey does not call it, so the
 GraphQL estimate rises from **941 to 961 points**; the REST estimate stays at 5 requests.
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The golden-cost test regenerates session-cost.txt from the identical loopback journey, and these totals are read off that record: the test fails whenever this explanation and its checked-in fixture need to move together. -->
 That change and the terminal-status consistency journey above landed independently of one
 another, each measured against the same 103-request record, and the record now carries
 both: **110 requests and 248,169 worst-case nodes** — the snapshot document's one request
