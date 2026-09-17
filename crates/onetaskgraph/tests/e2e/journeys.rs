@@ -936,7 +936,7 @@ fn a_colon_in_a_source_native_dependency_id_is_not_reinterpreted_as_a_source() {
 }
 
 #[test]
-fn malformed_local_markdown_names_its_path_without_hiding_valid_rows() {
+fn task_list_fails_and_names_a_malformed_local_markdown_file() {
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("malformed-local-md");
     let tasks = root.join("tasks");
@@ -965,12 +965,61 @@ fn malformed_local_markdown_names_its_path_without_hiding_valid_rows() {
     );
 
     let listing = run(&sandbox, &["task", "list"]);
-    assert_eq!(listing.status.code(), Some(0), "{}", stderr(&listing));
-    assert_eq!(listed(&stdout(&listing)), ours(&["valid"]));
+    assert_ne!(listing.status.code(), Some(0), "{}", stdout(&listing));
+    let complaint = stderr(&listing);
     assert!(
-        stderr(&listing).is_empty(),
-        "a usable listing stays quiet:\n{}",
-        stderr(&listing)
+        complaint.contains(&malformed.display().to_string()),
+        "the malformed file's exact path must reach the user:\n{complaint}"
+    );
+    assert!(
+        complaint.contains("front matter"),
+        "the parse diagnostic must reach the user:\n{complaint}"
+    );
+}
+
+#[test]
+fn malformed_local_markdown_is_a_partial_failure_across_two_sources() {
+    let sandbox = Sandbox::new();
+    let healthy_root = sandbox.subdirectory("healthy-local-md");
+    let healthy_tasks = healthy_root.join("tasks");
+    std::fs::create_dir_all(&healthy_tasks).expect("the healthy task directory");
+    std::fs::write(
+        healthy_tasks.join("available.md"),
+        "---\ntitle: Still available\nstatus: todo\n---\nA valid task.\n",
+    )
+    .expect("the healthy Markdown task");
+
+    let malformed_root = sandbox.subdirectory("malformed-local-md");
+    let malformed_tasks = malformed_root.join("tasks");
+    std::fs::create_dir_all(&malformed_tasks).expect("the malformed task directory");
+    let malformed = malformed_tasks.join("broken.md");
+    std::fs::write(&malformed, "title: missing front-matter delimiters\n")
+        .expect("the malformed Markdown task");
+    let malformed = malformed
+        .canonicalize()
+        .expect("the malformed Markdown path is canonicalizable");
+
+    sandbox.project_document(&document(&json!({
+        "healthy": {"plugin": "local-md", "config": {"root": healthy_root}},
+        "malformed": {"plugin": "local-md", "config": {"root": malformed_root}},
+    })));
+
+    let refused = run(&sandbox, &["task", "list"]);
+    assert_eq!(refused.status.code(), Some(4), "{}", stderr(&refused));
+    assert_eq!(listed(&stdout(&refused)), ["healthy:available"]);
+    assert!(
+        stderr(&refused).contains(&malformed.display().to_string()),
+        "the failed source's malformed file must be named:\n{}",
+        stderr(&refused)
+    );
+
+    let allowed = run(&sandbox, &["task", "list", "--allow-partial"]);
+    assert_eq!(allowed.status.code(), Some(0), "{}", stderr(&allowed));
+    assert_eq!(listed(&stdout(&allowed)), ["healthy:available"]);
+    assert!(
+        stderr(&allowed).contains(&malformed.display().to_string()),
+        "the accepted partial answer must still report the failed source:\n{}",
+        stderr(&allowed)
     );
 }
 
