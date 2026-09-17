@@ -108,6 +108,19 @@ has claimed it) and `in-progress`. A folder of Markdown reads the word `queued`;
 Projects board sends it to its `Queued` column by default, `status_mapping.queued` naming
 another; Linear, which has no such state, refuses it by name.
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This user-facing summary is required to describe the GitHub projection; the loopback plugin tests and shared live journey drive the resolved mapping, mutations, and observed read-back together. -->
+On GitHub Projects, terminal writes keep both GitHub representations aligned: `done`
+selects the mapped `Done` option and closes the issue as completed, while `cancelled`
+selects the mapped `Cancelled` option and closes it as not planned. Those are the shipped
+option names. An open-category write reopens a closed issue before selecting its mapped
+option; a draft item has no issue state to reopen. If any mapped option is absent, the
+write is refused by that option's name before either representation changes —
+`sources status-options` counts a terminal category's mapped option as configured, so it
+names a missing `Done` or `Cancelled` and `--apply` adds it. Reads keep
+GitHub's issue decision authoritative for closed issues—completed reads `done` and not
+planned reads `cancelled`, regardless of the displayed option—while the Status option
+decides an open issue's category.
+
 One **metadata** key of a task, a project or a document is set on its own with `task`,
 `project` or `document metadata set <ID> <KEY> <VALUE>`, which adds the key or replaces what
 it holds and changes nothing else about the record — every other key, and every other field,

@@ -206,7 +206,13 @@ def test_status_options_method_decodes_a_real_binary_plan(binary: Path, tmp_path
                     "color": "GRAY",
                     "description": "",
                 }
-                for index, name in enumerate(["Backlog", "Todo", "Queued", "In Progress"], start=1)
+                # Every option the shipped mapping names, terminal ones included: a
+                # terminal write refuses without its option, so the plan counts
+                # `Done` and `Cancelled` as configured and would report them missing.
+                for index, name in enumerate(
+                    ["Backlog", "Todo", "Queued", "In Progress", "Done", "Cancelled"],
+                    start=1,
+                )
             ]
             response = json.dumps(
                 {
@@ -277,6 +283,8 @@ def test_status_options_method_decodes_a_real_binary_plan(binary: Path, tmp_path
             "OPT-2",
             "OPT-3",
             "OPT-4",
+            "OPT-5",
+            "OPT-6",
         ]
     finally:
         server.shutdown()

@@ -80,6 +80,37 @@ async fn guarded_status_options_preserve_the_complete_existing_options_and_assig
 }
 
 #[tokio::test]
+async fn guarded_status_options_count_a_terminal_category_s_option_as_configured() {
+    // A terminal write selects its mapped option before it closes, and refuses when the
+    // board lacks it — so the guarded plan names that option exactly as it names an open
+    // category's, and a terminal category an operator disabled is not asked for.
+    let fixture = board(vec![Item::issue("I_task", "task").status("Todo")]);
+    fixture.status_options_missing_terminals();
+    let report = status_options_source(&fixture)
+        .status_options(StatusOptionsMode::Plan)
+        .await
+        .expect("a plan reads without writing");
+    assert_eq!(report.outcome, StatusOptionsOutcome::Planned);
+    assert_eq!(report.missing, ["Done", "Cancelled"]);
+    assert!(fixture.seen().is_empty(), "a plan sends no mutation");
+
+    let fixture = board(vec![Item::issue("I_task", "task").status("Todo")]);
+    fixture.status_options_missing_terminals();
+    let config: GitHubProjectsConfig = serde_json::from_value(fixture_config(
+        &fixture.endpoint,
+        &json!({"status_mapping": {"done": "Shipped", "cancelled": null}}),
+    ))
+    .unwrap();
+    let source =
+        GitHubProjectsSource::new(&SourceName::new("work").unwrap(), config, &Secrets).unwrap();
+    let report = source
+        .status_options(StatusOptionsMode::Plan)
+        .await
+        .expect("a plan reads without writing");
+    assert_eq!(report.missing, ["Shipped"]);
+}
+
+#[tokio::test]
 async fn guarded_status_options_refuse_existing_option_metadata_drift_with_recovery_data() {
     let fixture = board(vec![Item::issue("I_task", "task").status("Todo")]);
     fixture.status_options_missing_queued();
@@ -439,6 +470,8 @@ struct State {
     /// fails one call of the several a write is, and what the source does about the calls
     /// that already landed is only readable if one of them can be made to fail.
     refuses: BTreeSet<String>,
+    /// Mutations this board begins refusing after this many matching calls have landed.
+    refuse_after: BTreeMap<String, usize>,
     /// How many of the most recently filed items this board's own reads do not show yet.
     /// GitHub's `projectV2.items` is eventually consistent, so an item a run just created
     /// is answered out of the source's own record of what it created until the board
@@ -682,6 +715,14 @@ impl Fixture {
             .refuses
             .insert(operation.to_owned());
     }
+    /// Let `successful_calls` matching mutations land, then fail the next one.
+    fn refuse_after(&self, operation: &str, successful_calls: usize) {
+        self.state
+            .lock()
+            .unwrap()
+            .refuse_after
+            .insert(operation.to_owned(), successful_calls);
+    }
     /// Answer the next requests with these canned HTTP refusals, oldest first.
     fn script(&self, refusals: Vec<Refusal>) {
         self.state.lock().unwrap().limits.scripted = refusals;
@@ -835,7 +876,20 @@ impl Fixture {
             json!({"id":"OPT_backlog","name":"Backlog","color":"GRAY","description":"later"}),
             json!({"id":"OPT_todo","name":"Todo","color":"BLUE","description":"ready"}),
             json!({"id":"OPT_doing","name":"In Progress","color":"YELLOW","description":"active"}),
+            json!({"id":"OPT_done","name":"Done","color":"GREEN","description":""}),
+            json!({"id":"OPT_cancelled","name":"Cancelled","color":"RED","description":""}),
             json!({"id":"OPT_shipped","name":"Shipped","color":"PURPLE","description":"custom"}),
+        ]);
+    }
+
+    /// Give the guarded operation a Status field missing both shipped terminal options,
+    /// which a terminal write needs before it will close an issue.
+    fn status_options_missing_terminals(&self) {
+        self.state.lock().unwrap().guarded_status_options = Some(vec![
+            json!({"id":"OPT_backlog","name":"Backlog","color":"GRAY","description":"later"}),
+            json!({"id":"OPT_todo","name":"Todo","color":"BLUE","description":"ready"}),
+            json!({"id":"OPT_queued","name":"Queued","color":"YELLOW","description":""}),
+            json!({"id":"OPT_doing","name":"In Progress","color":"YELLOW","description":"active"}),
         ]);
     }
 
@@ -863,6 +917,8 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             ("OPT_backlog", "Backlog"),
             ("OPT_todo", "Todo"),
             ("OPT_doing", "In Progress"),
+            ("OPT_done", "Done"),
+            ("OPT_cancelled", "Cancelled"),
             ("OPT_shipped", "Shipped"),
         ],
         guarded_status_options: None,
@@ -872,6 +928,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         status_field,
         blocked_by: BTreeMap::new(),
         refuses: BTreeSet::new(),
+        refuse_after: BTreeMap::new(),
         lagging_reads: 0,
         stuck_membership_cursor: None,
         seen: Vec::new(),
@@ -984,7 +1041,18 @@ fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<
         }
     }
     let operation = operation_name(query);
-    if !state.refuses.contains(operation) {
+    let delayed_refusal = state
+        .refuse_after
+        .get_mut(operation)
+        .is_some_and(|remaining| {
+            if *remaining == 0 {
+                true
+            } else {
+                *remaining -= 1;
+                false
+            }
+        });
+    if !state.refuses.contains(operation) && !delayed_refusal {
         return None;
     }
     let input = variables.get("input").cloned().unwrap_or(Value::Null);
@@ -1443,6 +1511,17 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         }
         let page = membership_page(&item.memberships(&options), offset, first, asked);
         return json!({"node":{"projectItems":page}});
+    }
+    if query.contains("query TerminalStatus") {
+        let id = variables["id"].as_str().expect("an issue id");
+        let item = state
+            .items
+            .iter()
+            .find(|item| item.content_id == id)
+            .expect("terminal read-back names an issue this board holds");
+        return json!({"node":{"state":item.state,"stateReason":item.state_reason,
+            "projectItems":{"nodes":[{"project":{"id":"PVT_board"},
+                "fieldValues":item.field_values(&state.options())}]}}});
     }
     if query.contains("node(id:$id){__typename ...BoardIssue}") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
@@ -4271,8 +4350,13 @@ async fn the_shipped_mapping_puts_each_category_where_it_says_it_does() {
             Some("In Progress"),
             "OPEN",
         ),
-        (StatusCategory::Done, "Done", None, "CLOSED"),
-        (StatusCategory::Cancelled, "Cancelled", None, "CLOSED"),
+        (StatusCategory::Done, "Done", Some("Done"), "CLOSED"),
+        (
+            StatusCategory::Cancelled,
+            "Cancelled",
+            Some("Cancelled"),
+            "CLOSED",
+        ),
     ] {
         let id = source
             .write_task(&write(task("T", "one", status(category, name))))
@@ -4296,7 +4380,7 @@ async fn the_shipped_mapping_puts_each_category_where_it_says_it_does() {
 }
 
 #[tokio::test]
-async fn done_closes_by_default_and_an_override_puts_it_back_on_a_column() {
+async fn done_closes_by_default_and_an_override_names_its_terminal_column() {
     let fixture = board(vec![]);
     let source = configured(
         &fixture.endpoint,
@@ -4311,7 +4395,7 @@ async fn done_closes_by_default_and_an_override_puts_it_back_on_a_column() {
         .await
         .unwrap();
     let held = fixture.item(&id.0);
-    assert_eq!(held.state, "OPEN", "an overridden done stays a column");
+    assert_eq!(held.state, "CLOSED", "an overridden done remains terminal");
     assert_eq!(held.status.as_deref(), Some("Shipped"));
     assert_eq!(
         source.get_task(&id).await.unwrap().unwrap().status,
@@ -4383,6 +4467,121 @@ async fn a_status_the_board_cannot_represent_is_refused_naming_the_status_and_th
         assert!(message.contains("work"), "the instance is named: {message}");
         assert!(fixture.seen().is_empty(), "nothing is written first");
     }
+}
+
+#[tokio::test]
+async fn a_missing_terminal_option_refuses_before_either_representation_changes() {
+    let fixture = board(vec![
+        Item::issue("I_1", "addressed").status("Todo"),
+        Item::issue("I_2", "unrelated").status("In Progress"),
+    ]);
+    fixture
+        .state
+        .lock()
+        .unwrap()
+        .options
+        .retain(|(_, name)| *name != "Done");
+    let source = source(&fixture);
+    let message = refusal(
+        source
+            .set_task_status(&id("I_1"), StatusCategory::Done)
+            .await
+            .expect_err("done needs its mapped board option before it can close"),
+    );
+    assert!(message.contains("Done"), "{message}");
+    assert!(fixture.seen().is_empty(), "neither half was written first");
+    assert_eq!(
+        (fixture.item("I_1").state, fixture.item("I_1").status),
+        ("OPEN", Some("Todo".to_owned()))
+    );
+    assert_eq!(
+        (fixture.item("I_2").state, fixture.item("I_2").status),
+        ("OPEN", Some("In Progress".to_owned())),
+        "an unrelated item is untouched"
+    );
+}
+
+#[tokio::test]
+async fn a_general_write_missing_its_terminal_option_refuses_before_any_mutation() {
+    let fixture = board(vec![Item::issue("I_1", "addressed").status("Todo")]);
+    fixture
+        .state
+        .lock()
+        .unwrap()
+        .options
+        .retain(|(_, name)| *name != "Cancelled");
+    let source = source(&fixture);
+    let mut revised = task(
+        "T-1",
+        "addressed",
+        status(StatusCategory::Cancelled, "Cancelled"),
+    );
+    revised.repositories = vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
+    let message = refusal(
+        source
+            .write_task(&ItemWrite {
+                target: Some(id("I_1")),
+                item: revised,
+                depends_on: vec![],
+            })
+            .await
+            .expect_err("cancelled needs its mapped option before the general write starts"),
+    );
+    assert!(message.contains("Cancelled"), "{message}");
+    assert!(fixture.seen().is_empty(), "no mutation was sent first");
+    assert_eq!(
+        (fixture.item("I_1").state, fixture.item("I_1").status),
+        ("OPEN", Some("Todo".to_owned()))
+    );
+}
+
+#[tokio::test]
+async fn a_terminal_close_refusal_is_reported_after_the_option_write_on_both_write_paths() {
+    let narrow = board(vec![Item::issue("I_1", "addressed").status("Todo")]);
+    narrow.refuse("updateIssue");
+    let error = source(&narrow)
+        .set_task_status(&id("I_1"), StatusCategory::Done)
+        .await
+        .expect_err("GitHub refused the close after accepting the mapped option");
+    assert!(error.to_string().contains("updateIssue"), "{error}");
+    assert_eq!(narrow.item("I_1").state, "OPEN");
+    assert_eq!(narrow.item("I_1").status.as_deref(), Some("Done"));
+
+    let created = board(vec![]);
+    created.refuse("updateIssue");
+    let maker = source(&created);
+    let error = maker
+        .write_task(&write(task(
+            "T-1",
+            "new terminal task",
+            status(StatusCategory::Done, "Done"),
+        )))
+        .await
+        .expect_err("the general write's terminal close was refused");
+    assert!(error.to_string().contains("updateIssue"), "{error}");
+    let seen = created.seen();
+    let option = seen
+        .iter()
+        .position(|call| call[0] == "updateProjectV2ItemFieldValue")
+        .expect("the mapped option landed before the close");
+    let close = seen
+        .iter()
+        .position(|call| call[0] == "updateIssue")
+        .expect("the close was attempted");
+    let cleanup = seen
+        .iter()
+        .position(|call| call[0] == "deleteIssue")
+        .expect("the failed newly-created item was taken back");
+    assert!(option < close && close < cleanup, "{seen:?}");
+    assert!(
+        maker
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .unwrap()
+            .items
+            .is_empty(),
+        "the failed general write left no artifact"
+    );
 }
 
 #[tokio::test]
@@ -4485,15 +4684,11 @@ async fn an_unknown_status_category_key_names_the_instance() {
 }
 
 #[tokio::test]
-async fn unknown_cannot_target_a_closed_state_that_reads_back_as_another_category() {
-    for (closed, read_back) in [("completed", "done"), ("not-planned", "cancelled")] {
-        let message = build_refusal(json!({"owner":"octo-org","project_number":7,
-            "endpoint":"https://api.github.com/graphql",
-            "status_mapping":{"unknown":{"closed":closed}}}));
-        assert!(message.contains("status_mapping.unknown"), "{message}");
-        assert!(message.contains(read_back), "{message}");
-        assert!(message.contains("board Status option"), "{message}");
-    }
+async fn a_status_mapping_accepts_only_board_option_names_or_null() {
+    let message = build_refusal(json!({"owner":"octo-org","project_number":7,
+        "endpoint":"https://api.github.com/graphql",
+        "status_mapping":{"unknown":{"closed":"completed"}}}));
+    assert!(message.contains("data did not match"), "{message}");
 }
 
 #[tokio::test]
@@ -4987,12 +5182,13 @@ async fn a_status_set_to_a_column_on_an_open_issue_or_a_draft_moves_only_its_opt
 }
 
 #[tokio::test]
-async fn a_status_set_to_a_closed_state_closes_with_the_mappings_reason_and_leaves_the_option() {
+async fn a_terminal_status_set_selects_its_mapped_option_then_closes_with_its_reason() {
     let fixture = board(vec![
         Item::issue("I_1", "one")
             .status("Shipped")
             .body("kept prose"),
         Item::issue("I_2", "two"),
+        Item::issue("I_3", "unrelated").status("In Progress"),
     ]);
     let source = source(&fixture);
     let done = source
@@ -5005,19 +5201,30 @@ async fn a_status_set_to_a_closed_state_closes_with_the_mappings_reason_and_leav
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(done, status(StatusCategory::Done, "Shipped"));
+    assert_eq!(done, status(StatusCategory::Done, "Done"));
     assert_eq!(cancelled, status(StatusCategory::Cancelled, "Cancelled"));
     assert_eq!(
         fixture.seen(),
         vec![
+            json!(["updateProjectV2ItemFieldValue", {"projectId":"PVT_board",
+                "itemId":"PVTI_I_1","fieldId":"FIELD_status",
+                "value":{"singleSelectOptionId":"OPT_done"}}]),
             json!(["updateIssue", {"id":"I_1",
                 "stateInput":{"value":"CLOSED","stateReason":"COMPLETED"}}]),
+            json!(["updateProjectV2ItemFieldValue", {"projectId":"PVT_board",
+                "itemId":"PVTI_I_2","fieldId":"FIELD_status",
+                "value":{"singleSelectOptionId":"OPT_cancelled"}}]),
             json!(["updateIssue", {"id":"I_2",
                 "stateInput":{"value":"CLOSED","stateReason":"NOT_PLANNED"}}]),
         ]
     );
-    assert_eq!(fixture.item("I_1").status.as_deref(), Some("Shipped"));
+    assert_eq!(fixture.item("I_1").status.as_deref(), Some("Done"));
     assert_eq!(fixture.item("I_1").body.as_deref(), Some("kept prose"));
+    assert_eq!(
+        (fixture.item("I_3").state, fixture.item("I_3").status),
+        ("OPEN", Some("In Progress".to_owned())),
+        "the write changes only the addressed items"
+    );
     let fresh = source_of(&fixture);
     for (held, answered) in [("I_1", done), ("I_2", cancelled)] {
         assert_eq!(
@@ -5584,7 +5791,7 @@ async fn a_narrow_write_to_an_item_this_command_created_is_what_the_command_read
         assert_eq!(read.content.as_deref(), Some("prose"));
         assert_eq!(read.status, done);
     }
-    assert_eq!(done, status(StatusCategory::Done, "Todo"));
+    assert_eq!(done, status(StatusCategory::Done, "Done"));
 }
 
 #[tokio::test]
@@ -6841,17 +7048,17 @@ async fn a_status_or_origin_field_of_the_wrong_shape_is_refused_by_name() {
 }
 
 #[tokio::test]
-async fn a_category_configured_closed_closes_the_issue_it_is_written_to() {
+async fn a_terminal_category_uses_its_configured_option_and_fixed_close_reason() {
     let fixture = board(vec![]);
     let source = configured(
         &fixture.endpoint,
-        json!({"status_mapping":{"in-progress":{"closed":"not-planned"}}}),
+        json!({"status_mapping":{"cancelled":"Shipped"}}),
     );
     let id = source
         .write_task(&write(task(
             "T-1",
             "one",
-            status(StatusCategory::InProgress, "In Progress"),
+            status(StatusCategory::Cancelled, "Cancelled"),
         )))
         .await
         .unwrap();
@@ -6860,6 +7067,27 @@ async fn a_category_configured_closed_closes_the_issue_it_is_written_to() {
         fixture.item(&id.0).state_reason.as_deref(),
         Some("NOT_PLANNED")
     );
+}
+
+#[tokio::test]
+async fn a_terminal_update_whose_close_fails_leaves_the_option_that_landed_visible() {
+    let fixture = board(vec![Item::issue("I_1", "one").status("Todo")]);
+    // An existing write sends its content update, its Status option, and then the distinct
+    // updateIssue that closes it. Refuse that final call.
+    fixture.refuse_after("updateIssue", 1);
+    let error = source(&fixture)
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_1".to_owned())),
+            item: task("I_1", "one", status(StatusCategory::Done, "Done")),
+            depends_on: vec![],
+        })
+        .await
+        .expect_err("the close is refused");
+    assert!(refusal(error).contains("updateIssue is refused"));
+    let held = fixture.item("I_1");
+    assert_eq!(held.status.as_deref(), Some("Done"));
+    assert_eq!(held.state, "OPEN");
+    assert_eq!(held.state_reason, None);
 }
 
 #[tokio::test]
@@ -7267,10 +7495,10 @@ fn the_plugin_names_the_kind_the_registry_knows_it_by() {
 }
 
 #[tokio::test]
-async fn a_closed_status_still_selects_the_column_that_spells_it_so_a_copy_settles() {
-    // The closed state carries the category and the option carries the name, so a write
-    // that closed the issue and left the option alone would read back under whatever
-    // column the item happened to sit in — and a copy would report a change forever.
+async fn a_terminal_write_selects_the_mapped_column_so_a_copy_settles() {
+    // The close reason carries the category and the mapped option carries the name. The
+    // caller's display name therefore cannot leave the issue in some other column and
+    // make a copy report a change forever.
     let fixture = board(vec![]);
     let source = source(&fixture);
     let id = source
@@ -7282,10 +7510,10 @@ async fn a_closed_status_still_selects_the_column_that_spells_it_so_a_copy_settl
         .await
         .unwrap();
     assert_eq!(fixture.item(&id.0).state, "CLOSED");
-    assert_eq!(fixture.item(&id.0).status.as_deref(), Some("Shipped"));
+    assert_eq!(fixture.item(&id.0).status.as_deref(), Some("Done"));
     assert_eq!(
         source.get_task(&id).await.unwrap().unwrap().status,
-        status(StatusCategory::Done, "Shipped")
+        status(StatusCategory::Done, "Done")
     );
 }
 

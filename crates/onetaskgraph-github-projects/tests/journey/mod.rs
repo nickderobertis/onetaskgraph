@@ -519,12 +519,24 @@ async fn ensure_origin_field(
 }
 
 fn live_write_status(fields: &[Value]) -> Result<String, String> {
-    fields
+    let options = fields
         .iter()
         .find(|field| field.get("name").and_then(Value::as_str) == Some("Status"))
         .and_then(|field| field.get("options"))
         .and_then(Value::as_array)
-        .and_then(|options| options.first())
+        .ok_or_else(|| "live project has no selectable Status option".to_owned())?;
+    for required in ["Done", "Cancelled"] {
+        if !options
+            .iter()
+            .any(|option| option.get("name").and_then(Value::as_str) == Some(required))
+        {
+            return Err(format!(
+                "live project has no {required:?} Status option required by the shipped mapping"
+            ));
+        }
+    }
+    options
+        .first()
         .and_then(|option| option.get("name"))
         .and_then(Value::as_str)
         .map(str::to_owned)
@@ -1650,6 +1662,56 @@ async fn board_items_page(token: &str, project_id: &str, first: u32) -> Result<V
     .await
 }
 
+/// Read the two GitHub representations a terminal status write must keep aligned.
+async fn terminal_status_parts(
+    token: &str,
+    project_id: &str,
+    issue_id: &NativeId,
+) -> Result<(String, String, String), String> {
+    let data = graphql_variables(
+        token,
+        "query TerminalStatus($id:ID!){node(id:$id){... on Issue{state stateReason projectItems(first:100){nodes{project{id} fieldValues(first:100){nodes{... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{name}}}}}}}}}}",
+        "terminal status read-back",
+        json!({"id":issue_id.0}),
+    )
+    .await?;
+    let issue = data
+        .pointer("/data/node")
+        .ok_or_else(|| format!("terminal status read-back found no issue {}", issue_id.0))?;
+    let option = issue
+        .pointer("/projectItems/nodes")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.pointer("/project/id").and_then(Value::as_str) == Some(project_id)
+            })
+        })
+        .and_then(|item| item.pointer("/fieldValues/nodes"))
+        .and_then(Value::as_array)
+        .and_then(|values| {
+            values.iter().find(|value| {
+                value.pointer("/field/name").and_then(Value::as_str) == Some("Status")
+            })
+        })
+        .and_then(|value| value.get("name"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            format!(
+                "issue {} has no Status option on the nominated board",
+                issue_id.0
+            )
+        })?;
+    let state = issue
+        .get("state")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("issue {} has no state", issue_id.0))?;
+    let reason = issue
+        .get("stateReason")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("issue {} has no close reason", issue_id.0))?;
+    Ok((option.to_owned(), state.to_owned(), reason.to_owned()))
+}
+
 /// Waits until the board itself reports an item this run just created.
 ///
 /// `addProjectV2ItemById` returns before GitHub's own `ProjectV2.items` connection lists
@@ -2329,6 +2391,37 @@ async fn drive_every_declared_capability(
         closed_back.status.category == StatusCategory::Done,
         "the live write filed under done read back as {:?}",
         closed_back.status.category
+    );
+    ensure!(
+        terminal_status_parts(&run.token, &run.project_id, &orphan_id).await?
+            == (
+                "Done".to_owned(),
+                "CLOSED".to_owned(),
+                "COMPLETED".to_owned()
+            ),
+        "done did not read back as Status=Done, state=CLOSED, reason=COMPLETED"
+    );
+    let cancelled = writer
+        .set_task_status(&orphan_id, StatusCategory::Cancelled)
+        .await
+        .map_err(|error| format!("live cancelled write failed: {error}"))?
+        .ok_or_else(|| "the done task disappeared before the cancelled write".to_owned())?;
+    ensure!(
+        cancelled
+            == Status {
+                category: StatusCategory::Cancelled,
+                name: "Cancelled".into()
+            },
+        "cancelled write answered {cancelled:?}"
+    );
+    ensure!(
+        terminal_status_parts(&run.token, &run.project_id, &orphan_id).await?
+            == (
+                "Cancelled".to_owned(),
+                "CLOSED".to_owned(),
+                "NOT_PLANNED".to_owned()
+            ),
+        "cancelled did not read back as Status=Cancelled, state=CLOSED, reason=NOT_PLANNED"
     );
     Ok(())
 }

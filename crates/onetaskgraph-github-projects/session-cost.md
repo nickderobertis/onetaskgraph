@@ -4,6 +4,13 @@ The GitHub Projects live journey reaches a rate-limited account that everything 
 repository does draws on too, and until this branch nobody had ever measured what it spends.
 This is the measurement, and the before and after of the reduction taken against it.
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The golden-cost test derives these figures from the identical loopback journey and fails whenever this explanation and its checked-in fixture need to move together. -->
+The terminal-status consistency journey adds two direct read-backs (20,200 worst-case
+nodes), one narrow `cancelled` write, and the board-field halves of both terminal writes.
+Those calls are deliberate: the shared real-GitHub and loopback journey now observes the
+exact `Done`/`COMPLETED` and `Cancelled`/`NOT_PLANNED` pairs rather than inferring them from
+the plugin's normalized status alone.
+
 ## What these numbers are, and what they are not
 
 Two quantities, both taken offline:
@@ -284,6 +291,13 @@ assignments` row. The session makes no status-options snapshot itself, so every 
 of the record is byte-for-byte what it was. The precondition's estimate includes every
 query document this source can send even when the journey does not call it, so the
 GraphQL estimate rises from **941 to 961 points**; the REST estimate stays at 5 requests.
+
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The golden-cost test regenerates session-cost.txt from the identical loopback journey, and these totals are read off that record: the test fails whenever this explanation and its checked-in fixture need to move together. -->
+That change and the terminal-status consistency journey above landed independently of one
+another, each measured against the same 103-request record, and the record now carries
+both: **110 requests and 248,169 worst-case nodes** — the snapshot document's one request
+and 5,150 nodes beside the consistency journey's six requests and 20,403 nodes, with no row
+that the two changes both moved.
 
 ## The estimate the gate is sized from, and what it is not
 

@@ -1274,7 +1274,9 @@ fn github_projects_board_at(
             {"id":"OPT-todo","name":"Todo","color":"BLUE","description":"ready"},
             {"id":"OPT-queued","name":"Queued","color":"YELLOW","description":""},
             {"id":"OPT-doing","name":"Doing","color":"GREEN","description":"active"},
-            {"id":"OPT-shipped","name":"Shipped","color":"PURPLE","description":"custom"}
+            {"id":"OPT-shipped","name":"Shipped","color":"PURPLE","description":"custom"},
+            {"id":"OPT-done","name":"Done","color":"GREEN","description":""},
+            {"id":"OPT-cancelled","name":"Cancelled","color":"RED","description":""}
         ])
         .as_array()
         .unwrap()
@@ -1355,7 +1357,8 @@ fn github_projects_block_at(endpoint: &str) -> Value {
         "repository": "nickderobertis/onetaskgraph",
         "token_env": "GITHUB_PROJECTS_FIXTURE_TOKEN",
         "endpoint": endpoint,
-        // `done` and `cancelled` keep their shipped defaults, which close the issue:
+        // `done` and `cancelled` keep their shipped defaults, which select the board's
+        // `Done` and `Cancelled` options as well as closing the issue:
         // GitHub derives a project's `Sub-issues progress` from closed sub-issues, so a
         // plan whose finished tasks were only moved to a column reads 0% complete forever.
         "status_mapping": {"todo":"Todo","in-progress":"Doing"},

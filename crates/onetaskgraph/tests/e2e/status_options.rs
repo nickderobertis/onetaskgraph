@@ -174,6 +174,100 @@ fn apply_adds_only_the_missing_option_with_every_existing_id_and_assignment_pres
     assert_eq!(stdout(&applied), "board: added and verified: Queued\n");
 }
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This must drive the compiled CLI's `sources status-options` and `task status set` verbs in sequence, which the application crate owns; the plugin crate's own suite separately proves that a terminal option counts as configured over loopback HTTP.
+#[test]
+fn a_missing_terminal_option_is_planned_added_and_then_written_with_its_close_reason() {
+    // A terminal write needs its mapped option before it closes, so a board lacking one
+    // refuses the write, the guarded plan names that option as missing, and once it is
+    // applied the same write selects it and closes with the category's reason.
+    let (sandbox, board) = configured();
+    board.without_option("Cancelled");
+    let refused = sandbox
+        .command()
+        .args(["task", "status", "set", "board:T-3", "cancelled"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(
+        stderr(&refused).contains("\"Cancelled\""),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(
+        !board
+            .documents()
+            .iter()
+            .any(|document| document.trim_start().starts_with("mutation")),
+        "a refused terminal write changes neither representation"
+    );
+
+    let plan = sandbox
+        .command()
+        .args(["sources", "status-options", "board"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(
+        stdout(&plan),
+        "board: missing configured Status options: Cancelled\n"
+    );
+    let applied = sandbox
+        .command()
+        .args(["sources", "status-options", "board", "--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(stdout(&applied), "board: added and verified: Cancelled\n");
+
+    let from = board.served().len();
+    let written = sandbox
+        .command()
+        .args(["--json", "task", "status", "set", "board:T-3", "cancelled"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let answer: Value = serde_json::from_str(&stdout(&written)).expect("a JSON answer");
+    assert_eq!(
+        answer["status"],
+        json!({"category": "cancelled", "name": "Cancelled"})
+    );
+    let mutations = board
+        .served()
+        .into_iter()
+        .skip(from)
+        .filter(|(document, _)| document.trim_start().starts_with("mutation"))
+        .collect::<Vec<_>>();
+    assert_eq!(mutations.len(), 2, "{mutations:#?}");
+    assert!(
+        mutations[0]
+            .0
+            .contains("updateProjectV2ItemFieldValue(input:$input)")
+    );
+    assert!(mutations[1].0.contains("updateIssue(input:$input)"));
+    assert_eq!(
+        mutations[1].1["input"]["stateInput"],
+        json!({"value": "CLOSED", "stateReason": "NOT_PLANNED"})
+    );
+    let shown = sandbox
+        .command()
+        .args(["--json", "task", "show", "board:T-3"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let shown: Value = serde_json::from_str(&stdout(&shown)).expect("a JSON task");
+    assert_eq!(
+        shown["items"][0]["item"]["status"],
+        json!({"category": "cancelled", "name": "Cancelled"}),
+        "the closed issue reads back by its close reason under the option's name"
+    );
+}
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
 #[test]
 fn assignment_drift_is_refused_with_the_pre_write_recovery_snapshot() {
     let (sandbox, board) = configured();
