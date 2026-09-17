@@ -129,6 +129,12 @@ test(
   COLD_START_TIMEOUT_MS,
 );
 
+test("status options names a source that is not backed by GitHub Projects", async () => {
+  await expect(client.sourcesStatusOptions("work")).rejects.toThrow(
+    "source work uses plugin in-memory, not github-projects",
+  );
+});
+
 test("the prefix these tests remove is the one the binary reads its configuration under", async () => {
   const probe = `${CONFIGURATION_PREFIX}SOURCES__PREFIX_PROBE__PLUGIN`;
   const empty = mkdtempSync(resolve(tmpdir(), "onetaskgraph-prefix-"));

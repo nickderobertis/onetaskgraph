@@ -4,6 +4,7 @@ export const binaryCommands = [
   "schema",
   "config show",
   "sources list",
+  "sources status-options",
   "task list",
   "task show",
   "task deps",

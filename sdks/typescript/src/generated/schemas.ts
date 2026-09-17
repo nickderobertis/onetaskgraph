@@ -9547,6 +9547,13 @@ export const runtimeSchemas = {
     "title": "Array_of_SourceListing",
     "type": "array"
   },
+  "SourceName": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The name a configuration document gives one configured source.",
+    "pattern": "^[a-z0-9][a-z0-9-]*$",
+    "title": "SourceName",
+    "type": "string"
+  },
   "SourcePlan": {
     "$defs": {
       "Predicate": {
@@ -9766,6 +9773,152 @@ export const runtimeSchemas = {
       }
     ],
     "title": "StatusCategory"
+  },
+  "StatusOptionsReport": {
+    "$defs": {
+      "ColumnName": {
+        "description": "The name of a `Status` single-select option on the board.\n\nValidated on the way in rather than checked later, so a blank option name — which\nnothing on a board can be — is a state this type cannot hold.",
+        "minLength": 1,
+        "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "StatusOption": {
+        "description": "One existing or proposed option in a guarded Status-field update.",
+        "properties": {
+          "color": {
+            "$ref": "#/$defs/StatusOptionColor",
+            "description": "GitHub's single-select color token."
+          },
+          "description": {
+            "description": "The option description, including an empty one.",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/$defs/StatusOptionId",
+            "description": "GitHub's stable id."
+          },
+          "name": {
+            "$ref": "#/$defs/ColumnName",
+            "description": "The visible option name."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "color",
+          "description"
+        ],
+        "type": "object"
+      },
+      "StatusOptionColor": {
+        "description": "GitHub's closed single-select color vocabulary.",
+        "oneOf": [
+          {
+            "const": "GRAY",
+            "description": "Gray.",
+            "type": "string"
+          },
+          {
+            "const": "BLUE",
+            "description": "Blue.",
+            "type": "string"
+          },
+          {
+            "const": "GREEN",
+            "description": "Green.",
+            "type": "string"
+          },
+          {
+            "const": "YELLOW",
+            "description": "Yellow.",
+            "type": "string"
+          },
+          {
+            "const": "PURPLE",
+            "description": "Purple.",
+            "type": "string"
+          },
+          {
+            "const": "RED",
+            "description": "Red.",
+            "type": "string"
+          },
+          {
+            "const": "ORANGE",
+            "description": "Orange.",
+            "type": "string"
+          },
+          {
+            "const": "PINK",
+            "description": "Pink.",
+            "type": "string"
+          }
+        ]
+      },
+      "StatusOptionId": {
+        "description": "A GitHub single-select option's opaque GraphQL node identifier.",
+        "minLength": 1,
+        "type": "string"
+      },
+      "StatusOptionsOutcome": {
+        "description": "The explicit result of the requested operation.",
+        "oneOf": [
+          {
+            "const": "planned",
+            "description": "A read-only plan.",
+            "type": "string"
+          },
+          {
+            "const": "unchanged",
+            "description": "Apply found nothing missing.",
+            "type": "string"
+          },
+          {
+            "const": "applied",
+            "description": "Additions were applied and verified.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The plan and verified outcome of reconciling configured Status options.",
+    "properties": {
+      "existing": {
+        "description": "The complete option list observed before any mutation.",
+        "items": {
+          "$ref": "#/$defs/StatusOption"
+        },
+        "type": "array"
+      },
+      "missing": {
+        "description": "Configured option names absent before the operation.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "outcome": {
+        "$ref": "#/$defs/StatusOptionsOutcome",
+        "description": "What the requested operation did."
+      },
+      "source": {
+        "$ref": "#/$defs/SourceName",
+        "description": "The configured source name."
+      }
+    },
+    "required": [
+      "source",
+      "missing",
+      "outcome",
+      "existing"
+    ],
+    "title": "StatusOptionsReport",
+    "type": "object"
   },
   "Task": {
     "$defs": {
