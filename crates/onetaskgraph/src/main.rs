@@ -170,7 +170,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Sources {
             command: SourcesCommand::StatusOptions(args),
         } => {
-            // llmlint: ignore[changed_behavior_has_e2e] The status-options journeys drive
+            // llmlint: ignore-block[changed_behavior_has_e2e] The status-options journeys drive
             // this boundary through unknown and wrong-plugin sources. Invalid source tokens
             // and malformed plugin configuration are the shared configuration boundary's
             // existing validation, while construction errors are exercised by this plugin's
@@ -196,6 +196,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 .map_err(|error| {
                     Failure::decided("status-options", format!("source {name}: {error}"))
                 })?;
+            // llmlint: ignore-end[changed_behavior_has_e2e]
             let mode = if args.apply {
                 StatusOptionsMode::Apply
             } else {

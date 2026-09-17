@@ -14,7 +14,8 @@ class ColumnName(RootModel[str]):
     root: Annotated[
         str,
         Field(
-            description="The name of a `Status` single-select option on the board.\n\nValidated on the way in rather than checked later, so a blank option name — which\nnothing on a board can be — is a state this type cannot hold."
+            description="The name of a `Status` single-select option on the board.\n\nValidated on the way in rather than checked later, so a blank option name — which\nnothing on a board can be — is a state this type cannot hold.",
+            min_length=1,
         ),
     ]
 
@@ -43,7 +44,10 @@ class StatusOptionColor(StrEnum):
 class StatusOptionId(RootModel[str]):
     root: Annotated[
         str,
-        Field(description="A GitHub single-select option's opaque GraphQL node identifier."),
+        Field(
+            description="A GitHub single-select option's opaque GraphQL node identifier.",
+            min_length=1,
+        ),
     ]
 
 

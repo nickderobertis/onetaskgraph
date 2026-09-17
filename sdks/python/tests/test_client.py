@@ -883,9 +883,11 @@ def test_generator_write_mode_uses_real_binary(tmp_path: Path) -> None:
         check=True,
     )
     generated_client = (destination / "client.py").read_text(encoding="utf-8")
+    generated_report = (destination / "status_options_report.py").read_text(encoding="utf-8")
     assert "async def sources_status_options(" in generated_client
     assert "source: SourceName | str" in generated_client
     assert "apply: bool | None = None" in generated_client
+    assert generated_report.count("min_length=1") == 2
 
 
 def test_distribution_version() -> None:

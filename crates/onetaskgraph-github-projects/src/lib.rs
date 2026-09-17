@@ -1168,6 +1168,7 @@ pub enum StatusTargetConfig {
 /// nothing on a board can be — is a state this type cannot hold.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(try_from = "String")]
+#[schemars(extend("minLength" = 1))]
 pub struct ColumnName(String);
 
 impl ColumnName {
@@ -1800,7 +1801,7 @@ pub enum StatusOptionsOutcome {
 /// A GitHub single-select option's opaque GraphQL node identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(transparent)]
-pub struct StatusOptionId(String);
+pub struct StatusOptionId(#[schemars(length(min = 1))] String);
 
 impl TryFrom<String> for StatusOptionId {
     type Error = String;
@@ -1830,8 +1831,9 @@ pub struct StatusOption {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct StatusAssignment {
     /// The project item id whose assignment this is.
-    // llmlint: ignore[invalid_states_unrepresentable] This is an opaque GraphQL node ID
-    // carried verbatim as operator recovery data; no operation interprets its grammar.
+    // llmlint: ignore[invalid_states_unrepresentable] This opaque GraphQL node ID is
+    // carried verbatim as operator recovery data; introducing a semantic type would claim
+    // validation rules GitHub does not publish and no operation here interprets.
     pub item_id: String,
     /// The selected option, absent when the item has no status.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1853,8 +1855,9 @@ pub struct StatusOptionsReport {
     /// The configured source name.
     pub source: SourceName,
     /// Configured option names absent before the operation.
-    // llmlint: ignore[invalid_states_unrepresentable] These names have already passed
-    // `ColumnName` validation; the report exposes their stable serialized string contract.
+    // llmlint: ignore[invalid_states_unrepresentable] Each value originates from a
+    // `ColumnName` and has therefore already passed its nonblank validation; retaining the
+    // serialized string here preserves the report's intentionally simple public contract.
     pub missing: Vec<String>,
     /// What the requested operation did.
     pub outcome: StatusOptionsOutcome,
@@ -1865,10 +1868,12 @@ pub struct StatusOptionsReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StatusSnapshot {
     // llmlint: ignore[invalid_states_unrepresentable] This private opaque GraphQL ID is
-    // passed back as the mutation's project identity and is never parsed by this crate.
+    // passed back as the mutation's project identity; a newtype could enforce no stronger
+    // invariant because GitHub publishes no grammar for it.
     board_id: String,
     // llmlint: ignore[invalid_states_unrepresentable] This private opaque GraphQL ID is
-    // passed back as the mutation's field identity and is never parsed by this crate.
+    // passed back as the mutation's field identity; a newtype could enforce no stronger
+    // invariant because GitHub publishes no grammar for it.
     field_id: String,
     options: Vec<StatusOption>,
     assignments: Vec<StatusAssignment>,
@@ -1973,7 +1978,7 @@ impl GitHubProjectsSource {
         Ok(report)
     }
 
-    // llmlint: ignore[changed_behavior_has_e2e] Valid snapshot shapes are exercised through
+    // llmlint: ignore-block[changed_behavior_has_e2e] Valid snapshot shapes are exercised through
     // the real CLI loopback journey, including pagination. The individual malformed guards
     // are defensive validation of a schema-pinned third-party response, not separate user
     // journeys; drift and missing-field failures cover the operation's recovery behavior.
@@ -2126,6 +2131,7 @@ impl GitHubProjectsSource {
             message: "GitHub returned no Status snapshot".into(),
         })
     }
+    // llmlint: ignore-end[changed_behavior_has_e2e]
 
     /// Validate configuration and capture the named credential without exposing it.
     ///
