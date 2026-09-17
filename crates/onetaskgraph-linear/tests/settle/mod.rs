@@ -299,7 +299,7 @@ where
     }
 }
 
-/// Wait until a complete listing contains this run's expected documents.
+/// Wait until a complete listing has exactly this run's expected documents.
 pub async fn settled_documents(
     bound: Bound,
     listing_budget: DocumentListingBudget,

@@ -397,7 +397,7 @@ async fn a_document_listing_the_index_catches_up_with_late_passes_without_readin
 }
 
 #[tokio::test]
-async fn a_document_listing_that_never_catches_up_fails_within_the_bound_naming_what_it_returned() {
+async fn a_document_listing_that_never_catches_up_fails_within_the_bound_naming_the_missing_id() {
     // Everything but this run's document, for ever, and one document the caller does not keep.
     let (source, answered) = workspace(|_, _| {
         documents(vec![
@@ -422,7 +422,7 @@ async fn a_document_listing_that_never_catches_up_fails_within_the_bound_naming_
         refusal.starts_with(
             r#"a document listing narrowed to this run's project completed its listing but the document ids ["d1"] were missing, still after 5 reads"#
         ),
-        "the failure names what the listing returned: {refusal}"
+        "the failure names the missing id: {refusal}"
     );
     assert_eq!(answered.load(Ordering::SeqCst), BOUND.reads);
     assert!(
