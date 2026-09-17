@@ -990,22 +990,20 @@ fn json(value: &impl Serialize, what: &str) -> Result<String, Failure> {
         .map_err(|error| Failure::decided("render", format!("could not render {what}: {error}")))
 }
 
+/// One serializable value as a JSON value.
+fn json_value(value: impl Serialize, what: &str) -> Result<serde_json::Value, Failure> {
+    serde_json::to_value(value)
+        .map_err(|error| Failure::decided("render", format!("could not render {what}: {error}")))
+}
+
 /// The schema bundle as pretty-printed JSON.
 fn schema_bundle() -> Result<String, Failure> {
     let mut bundle = onetaskgraph_core::schema_bundle();
-    bundle["roots"]["StatusOptionsReport"] =
-        serde_json::to_value(schemars::schema_for!(StatusOptionsReport)).map_err(|error| {
-            Failure::decided(
-                "render",
-                format!("could not render the status-options schema: {error}"),
-            )
-        })?;
-    bundle["commands"] = serde_json::to_value(public_commands()?).map_err(|error| {
-        Failure::decided(
-            "render",
-            format!("could not render the command surface: {error}"),
-        )
-    })?;
+    bundle["roots"]["StatusOptionsReport"] = json_value(
+        schemars::schema_for!(StatusOptionsReport),
+        "the status-options schema",
+    )?;
+    bundle["commands"] = json_value(public_commands()?, "the command surface")?;
     json(&bundle, "the schema bundle")
 }
 
@@ -1095,6 +1093,28 @@ fn emit(out: &mut impl Write, rendered: &str, what: &str) -> Result<(), Failure>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct RefusesSerialization;
+
+    impl Serialize for RefusesSerialization {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom("serialization refused"))
+        }
+    }
+
+    #[test]
+    fn a_json_value_reports_a_serialization_failure() {
+        let failure =
+            json_value(RefusesSerialization, "the test value").expect_err("serialization fails");
+
+        assert_eq!(
+            failure.message(),
+            "could not render the test value: serialization refused"
+        );
+    }
 
     /// Render and write the schema bundle exactly as [`run`] does for that verb.
     ///
