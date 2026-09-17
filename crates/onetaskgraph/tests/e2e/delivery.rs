@@ -317,10 +317,8 @@ fn a_status_set_with_no_deliveries_says_so_in_text() {
     assert!(stdout(&output).contains("delivered: none"));
 }
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This must drive the compiled CLI's status-set boundary, which the application crate owns; plugin-local tests separately exercise the GitHub mutations over loopback HTTP.
 #[test]
-// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This must drive the compiled
-// CLI's status-set boundary, which the application crate owns; plugin-local tests separately
-// exercise the GitHub mutations over loopback HTTP.
 fn a_status_set_on_a_github_board_sends_only_status_and_issue_state_mutations() {
     for boundary in SOURCE_BOUNDARIES {
         let who = format!("{boundary:?}");
@@ -456,6 +454,7 @@ fn a_status_set_on_a_github_board_sends_only_status_and_issue_state_mutations() 
         );
     }
 }
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 #[test]
 fn every_status_set_refusal_names_the_problem_and_the_next_action() {
@@ -1105,10 +1104,8 @@ fn a_dropped_ticket_is_released_over_whatever_deliverers_remain() {
     }
 }
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Cross-source delivery is application behavior and must be driven through the compiled CLI; plugin-local tests separately exercise the GitHub mutation protocol.
 #[test]
-// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Cross-source delivery is
-// application behavior and must be driven through the compiled CLI; plugin-local tests
-// separately exercise the GitHub mutation protocol.
 fn a_markdown_task_keeps_a_github_ticket_in_step_through_a_copy_and_status_sets() {
     let sandbox = Sandbox::new();
     let plan = folder(
@@ -1210,6 +1207,7 @@ fn a_markdown_task_keeps_a_github_ticket_in_step_through_a_copy_and_status_sets(
     assert_eq!(item(&sandbox, "gh:T-3")["status"]["name"], "Done");
     assert_eq!(category(&sandbox, "gh:T-3"), "done");
 }
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 #[test]
 fn a_ticket_the_destination_refuses_is_failed_while_the_deliverers_write_lands() {

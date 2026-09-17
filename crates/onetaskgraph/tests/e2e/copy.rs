@@ -1401,10 +1401,8 @@ fn an_unknown_status_cannot_be_configured_as_a_closed_state() {
 }
 // llmlint: ignore-end[e2e_not_mocked, expensive_tests_stay_behind_their_own_edge]
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This must drive the compiled CLI's copy boundary, which the application crate owns; plugin-local tests separately exercise the GitHub mutations over loopback HTTP.
 #[test]
-// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This must drive the compiled
-// CLI's copy boundary, which the application crate owns; plugin-local tests separately
-// exercise the GitHub mutations over loopback HTTP.
 fn a_copy_into_a_board_settles_instead_of_reporting_a_change_on_every_run() {
     // Writing `done` closes the issue, and writing a non-terminal status over a closed one
     // has to reopen it. Without that the item reads back `Unknown` and this loop never
@@ -1457,6 +1455,7 @@ fn a_copy_into_a_board_settles_instead_of_reporting_a_change_on_every_run() {
     );
     assert_eq!(copy(&sandbox)[0].2, "unchanged");
 }
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 #[test]
 fn github_projects_is_a_permanent_destination_whose_created_items_are_issues() {

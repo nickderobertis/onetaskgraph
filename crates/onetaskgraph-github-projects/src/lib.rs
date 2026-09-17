@@ -1416,12 +1416,7 @@ enum StatusTarget {
     /// The board's `Status` option of this name.
     Column(ColumnName),
     /// A closed issue, with both its board option and the reason that says which closed it means.
-    // llmlint: ignore[invalid_states_unrepresentable] The reason is fixed by the category —
-    // `done` closes as completed, `cancelled` as not planned — and this private enum is
-    // built in one place, `StatusMapping::new`, which pairs each from the category's own
-    // slot. Carrying the reason on the target is what lets every write site that holds only
-    // a target derive its `stateInput` from that one resolved model rather than re-deriving
-    // it from a category and risking a disagreement with the mapping.
+    // llmlint: ignore[invalid_states_unrepresentable] The reason is fixed by the category — `done` closes as completed, `cancelled` as not planned — and this private enum is built in one place, `StatusMapping::new`, which pairs each from the category's own slot. Carrying the reason on the target is what lets every write site that holds only a target derive its `stateInput` from that one resolved model rather than re-deriving it from a category and risking a disagreement with the mapping.
     Terminal(ColumnName, ClosedState),
 }
 
