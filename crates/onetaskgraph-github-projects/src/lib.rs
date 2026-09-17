@@ -2051,8 +2051,8 @@ impl GitHubProjectsSource {
                     })
                 })
                 .collect::<Result<Vec<_>, SourceError>>()?;
-            let board_id = required_str(board, "id")?.to_owned();
-            let field_id = required_str(field, "id")?.to_owned();
+            let board_id = required_nonblank_str(board, "id")?.to_owned();
+            let field_id = required_nonblank_str(field, "id")?.to_owned();
             let current = snapshot.get_or_insert_with(|| StatusSnapshot {
                 board_id,
                 field_id,
@@ -2090,7 +2090,7 @@ impl GitHubProjectsSource {
                     value.pointer("/field/name").and_then(Value::as_str) == Some("Status")
                 });
                 current.assignments.push(StatusAssignment {
-                    item_id: required_str(item, "id")?.to_owned(),
+                    item_id: required_nonblank_str(item, "id")?.to_owned(),
                     option: status
                         .map(|value| {
                             Ok(AssignedStatusOption {
@@ -5952,6 +5952,16 @@ fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceErro
         .ok_or_else(|| SourceError::Malformed {
             message: format!("GitHub response is missing string field {field}"),
         })
+}
+
+fn required_nonblank_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceError> {
+    let found = required_str(value, field)?;
+    if found.trim().is_empty() {
+        return Err(SourceError::Malformed {
+            message: format!("GitHub response has blank string field {field}"),
+        });
+    }
+    Ok(found)
 }
 
 /// The slot's delimiters, which `docs/metadata.md` settles once for every source that

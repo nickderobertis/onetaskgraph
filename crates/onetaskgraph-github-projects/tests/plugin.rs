@@ -94,6 +94,28 @@ async fn guarded_status_options_refuse_existing_option_metadata_drift_with_recov
     assert!(complaint.contains("OPT_todo"), "{complaint}");
 }
 
+#[tokio::test]
+async fn guarded_status_options_refuse_blank_external_snapshot_ids() {
+    for (target, expected) in [
+        ("board", "board id"),
+        ("field", "Status field id"),
+        ("item", "item id"),
+    ] {
+        let fixture = board(vec![Item::issue("I_task", "task").status("Todo")]);
+        fixture.blank_status_snapshot_id(target);
+        let error = status_options_source(&fixture)
+            .status_options(StatusOptionsMode::Plan)
+            .await
+            .expect_err("a blank external identifier is refused");
+        let complaint = error.to_string();
+        assert!(
+            complaint.contains("blank string field id"),
+            "{expected}: {complaint}"
+        );
+        assert!(fixture.seen().is_empty(), "{expected}: nothing is written");
+    }
+}
+
 fn page(limit: u32) -> PageRequest {
     PageRequest {
         cursor: None,
@@ -403,6 +425,8 @@ struct State {
     guarded_status_options: Option<Vec<Value>>,
     /// Whether the first post-update read changes existing option metadata.
     drift_guarded_status_description: bool,
+    /// Which identifier the next guarded snapshot returns blank, for boundary validation.
+    blank_status_snapshot_id: Option<&'static str>,
     origin_field: bool,
     status_field: bool,
     blocked_by: BTreeMap<String, Vec<String>>,
@@ -814,6 +838,10 @@ impl Fixture {
     fn drift_guarded_status_description(&self) {
         self.state.lock().unwrap().drift_guarded_status_description = true;
     }
+
+    fn blank_status_snapshot_id(&self, target: &'static str) {
+        self.state.lock().unwrap().blank_status_snapshot_id = Some(target);
+    }
 }
 
 fn board(items: Vec<Item>) -> Fixture {
@@ -834,6 +862,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         ],
         guarded_status_options: None,
         drift_guarded_status_description: false,
+        blank_status_snapshot_id: None,
         origin_field,
         status_field,
         blocked_by: BTreeMap::new(),
@@ -1035,12 +1064,27 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                     vec![json!({"name":name,"optionId":id,
                         "field":{"id":"FIELD_status","name":"Status"}})]
                 });
-                json!({"id":item.item_id,"fieldValues":{"nodes":values,
+                let item_id = if state.blank_status_snapshot_id == Some("item") {
+                    ""
+                } else {
+                    item.item_id.as_str()
+                };
+                json!({"id":item_id,"fieldValues":{"nodes":values,
                     "pageInfo":{"hasNextPage":false}}})
             })
             .collect::<Vec<_>>();
-        return json!({"owner":{"projectV2":{"id":"PVT_board",
-            "fields":{"nodes":[{"id":"FIELD_status","name":"Status","options":options}],
+        let board_id = if state.blank_status_snapshot_id == Some("board") {
+            ""
+        } else {
+            "PVT_board"
+        };
+        let field_id = if state.blank_status_snapshot_id == Some("field") {
+            ""
+        } else {
+            "FIELD_status"
+        };
+        return json!({"owner":{"projectV2":{"id":board_id,
+            "fields":{"nodes":[{"id":field_id,"name":"Status","options":options}],
                 "pageInfo":{"hasNextPage":false}},
             "items":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}
         }}});
