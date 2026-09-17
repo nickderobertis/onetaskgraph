@@ -990,7 +990,6 @@ fn json(value: &impl Serialize, what: &str) -> Result<String, Failure> {
         .map_err(|error| Failure::decided("render", format!("could not render {what}: {error}")))
 }
 
-/// One serializable value as a JSON value.
 fn json_value(value: impl Serialize, what: &str) -> Result<serde_json::Value, Failure> {
     serde_json::to_value(value)
         .map_err(|error| Failure::decided("render", format!("could not render {what}: {error}")))

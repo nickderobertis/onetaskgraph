@@ -100,6 +100,7 @@ async fn guarded_status_options_refuse_blank_external_snapshot_ids() {
         ("board", "board id"),
         ("field", "Status field id"),
         ("item", "item id"),
+        ("cursor", "pagination cursor"),
     ] {
         let fixture = board(vec![Item::issue("I_task", "task").status("Todo")]);
         fixture.blank_status_snapshot_id(target);
@@ -109,7 +110,11 @@ async fn guarded_status_options_refuse_blank_external_snapshot_ids() {
             .expect_err("a blank external identifier is refused");
         let complaint = error.to_string();
         assert!(
-            complaint.contains("blank string field id"),
+            complaint.contains(if target == "cursor" {
+                "blank string field endCursor"
+            } else {
+                "blank string field id"
+            }),
             "{expected}: {complaint}"
         );
         assert!(fixture.seen().is_empty(), "{expected}: nothing is written");
@@ -1086,7 +1091,9 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         return json!({"owner":{"projectV2":{"id":board_id,
             "fields":{"nodes":[{"id":field_id,"name":"Status","options":options}],
                 "pageInfo":{"hasNextPage":false}},
-            "items":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}
+            "items":{"nodes":nodes,"pageInfo":{
+                "hasNextPage":state.blank_status_snapshot_id == Some("cursor"),
+                "endCursor":(state.blank_status_snapshot_id == Some("cursor")).then_some("")}}
         }}});
     }
     if let Some(answered) = answer_a_session_call(&mut state, query, variables, &input) {

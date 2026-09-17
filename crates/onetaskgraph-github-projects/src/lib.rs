@@ -2121,9 +2121,10 @@ impl GitHubProjectsSource {
             if !has_next {
                 break;
             }
-            after = Some(
-                required_str(page.get("pageInfo").unwrap_or(&Value::Null), "endCursor")?.to_owned(),
-            );
+            let next =
+                required_nonblank_str(page.get("pageInfo").unwrap_or(&Value::Null), "endCursor")?;
+            validate_cursor_progress(after.as_deref(), next)?;
+            after = Some(next.to_owned());
         }
         snapshot.ok_or_else(|| SourceError::Malformed {
             message: "GitHub returned no Status snapshot".into(),
