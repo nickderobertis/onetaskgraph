@@ -79,24 +79,29 @@
 //! and not one byte outside it, and it is not sent at all when the key already holds the
 //! value.
 //!
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This public module documentation is a required user-facing description; the loopback plugin tests and shared live journey drive StatusMapping resolution, both mutations, and observed read-back together.
 //! **Status.** `status_mapping` is per-instance configuration from a status category to
-//! `null`, a board `Status` option name, or a closed state of `completed` or
-//! `not-planned`. Nothing here ever calls `updateProjectV2Field`: that mutation's
+//! `null` or a board `Status` option name. `done` selects its mapped option and closes the
+//! issue as `COMPLETED`; `cancelled` selects its mapped option and closes it as
+//! `NOT_PLANNED`. Every open category reopens a closed issue before selecting its option.
+//! A missing mapped option refuses the write before either representation changes. Reads
+//! give a closed issue's reason precedence over its option, while an open issue's option
+//! decides its category. Nothing here ever calls `updateProjectV2Field`: that mutation's
 //! `singleSelectOptions` *overwrites* a field's option set, so no addition is additive
 //! and a mistake destroys every item's status. A status this board cannot represent is a
 //! refusal naming the status and the instance instead.
 //!
 //! `unknown` is disabled by default because this source cannot preserve an open-ended
-//! status word: it writes an existing board option or the issue's closed state and never
+//! status word: it writes an existing board option and never
 //! creates an option. An operator may map `unknown` to one existing option, in which case
 //! every unknown word lands on that option and reads back as `unknown` under the option's
-//! name. Mapping it to a closed state is refused because GitHub reads that state back as
-//! `done` or `cancelled`, changing the category on every copy. This differs from
-//! `local-md`, which writes and reads the original word itself.
+//! name. This differs from `local-md`, which writes and reads the original word itself.
 //!
-//! `done` closes the issue by default because GitHub derives `subIssuesSummary.completed`
+//! The shipped terminal options are exactly `done: Done` and `cancelled: Cancelled`.
+//! `done` also closes the issue because GitHub derives `subIssuesSummary.completed`
 //! and the board's own `Sub-issues progress` field from closed sub-issues: a plan whose
 //! finished tasks were only moved to a "Done" column would read 0% complete forever.
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 //!
 //! # What this source declares, field by field
 //!
@@ -1139,11 +1144,6 @@ fn default_endpoint() -> String {
 pub enum StatusTargetConfig {
     /// The name of a `Status` single-select option already on the board.
     Column(ColumnName),
-    /// A closed issue state, whose reason is what tells done from cancelled.
-    Closed {
-        /// The `IssueClosedStateReason` to close with.
-        closed: ClosedState,
-    },
 }
 
 /// The name of a `Status` single-select option on the board.
@@ -1225,12 +1225,11 @@ pub struct GitHubProjectsConfig {
     ///
     /// A category this does not mention keeps its shipped default: `backlog` to
     /// "Backlog", `todo` to "Todo", `queued` to "Queued", `in-progress` to "In Progress",
-    /// `done` to closed as
-    /// completed, `cancelled` to closed as not planned, and `draft` and `unknown`
-    /// disabled. `unknown` may name one existing board option; every unknown word then
-    /// lands on that option and reads back as `unknown` under its name. It cannot name a
-    /// closed state because that reads back as `done` or `cancelled`. Unlike `local-md`,
-    /// this source cannot keep each unknown word because it never creates board options.
+    /// `done` to "Done" plus closed as completed, `cancelled` to "Cancelled" plus closed
+    /// as not planned, and `draft` and `unknown` disabled. `unknown` may name one existing
+    /// board option; every unknown word then lands on that option and reads back as
+    /// `unknown` under its name. Unlike `local-md`, this source cannot keep each unknown
+    /// word because it never creates board options.
     #[serde(default)]
     pub status_mapping: BTreeMap<String, Option<StatusTargetConfig>>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` parses each key into a `StatusCategory` and reports an unknown one against this instance.
     /// How fast this source writes, and how long it waits out a rate-limit refusal.
@@ -1397,8 +1396,8 @@ enum StatusTarget {
     Disabled,
     /// The board's `Status` option of this name.
     Column(ColumnName),
-    /// A closed issue, with the reason that says which closed it means.
-    Closed(ClosedState),
+    /// A closed issue, with both its board option and the reason that says which closed it means.
+    Terminal(ColumnName, ClosedState),
 }
 
 /// Every status category, in the order the vocabulary declares them.
@@ -1465,8 +1464,12 @@ fn shipped_default(category: StatusCategory) -> StatusTarget {
         StatusCategory::Todo => StatusTarget::Column(shipped_column("Todo")),
         StatusCategory::Queued => StatusTarget::Column(shipped_column("Queued")),
         StatusCategory::InProgress => StatusTarget::Column(shipped_column("In Progress")),
-        StatusCategory::Done => StatusTarget::Closed(ClosedState::Completed),
-        StatusCategory::Cancelled => StatusTarget::Closed(ClosedState::NotPlanned),
+        StatusCategory::Done => {
+            StatusTarget::Terminal(shipped_column("Done"), ClosedState::Completed)
+        }
+        StatusCategory::Cancelled => {
+            StatusTarget::Terminal(shipped_column("Cancelled"), ClosedState::NotPlanned)
+        }
         StatusCategory::Draft | StatusCategory::Unknown => StatusTarget::Disabled,
     }
 }
@@ -1504,38 +1507,27 @@ impl StatusMapping {
                 })?;
             overrides.insert(category_name(*category), value);
         }
-        if let Some(Some(StatusTargetConfig::Closed { closed })) =
-            overrides.get(category_name(StatusCategory::Unknown))
-        {
-            let read_back = match closed {
-                ClosedState::Completed => StatusCategory::Done,
-                ClosedState::NotPlanned => StatusCategory::Cancelled,
-            };
-            return Err(SourceError::Config {
-                message: format!(
-                    "status_mapping.unknown of source {instance} cannot target the closed state \
-                     {} because a copy reads that item back as {}; map unknown to one existing \
-                     board Status option instead",
-                    closed.reason().to_ascii_lowercase().replace('_', "-"),
-                    category_name(read_back)
-                ),
-            });
-        }
         // `CATEGORIES[position] == category` for every category — the crate's suite
         // asserts it — so mapping the list in order fills each category's own slot.
         let targets = CATEGORIES.map(|category| match overrides.remove(category_name(category)) {
             None => shipped_default(category),
             Some(None) => StatusTarget::Disabled,
-            Some(Some(StatusTargetConfig::Column(option))) => StatusTarget::Column(option),
-            Some(Some(StatusTargetConfig::Closed { closed })) => StatusTarget::Closed(closed),
+            Some(Some(StatusTargetConfig::Column(option))) => match category {
+                StatusCategory::Done => StatusTarget::Terminal(option, ClosedState::Completed),
+                StatusCategory::Cancelled => {
+                    StatusTarget::Terminal(option, ClosedState::NotPlanned)
+                }
+                _ => StatusTarget::Column(option),
+            },
         });
         let mapping = Self { targets };
         for (index, category) in CATEGORIES.into_iter().enumerate() {
-            let StatusTarget::Column(option) = mapping.target(category) else {
-                continue;
+            let option = match mapping.target(category) {
+                StatusTarget::Column(option) | StatusTarget::Terminal(option, _) => option,
+                StatusTarget::Disabled => continue,
             };
             if let Some(other) = CATEGORIES[..index].iter().find(|earlier| {
-                matches!(mapping.target(**earlier), StatusTarget::Column(name)
+                matches!(mapping.target(**earlier), StatusTarget::Column(name) | StatusTarget::Terminal(name, _)
                     if name.as_str().eq_ignore_ascii_case(option.as_str()))
             }) {
                 return Err(SourceError::Config {
@@ -1559,7 +1551,7 @@ impl StatusMapping {
     /// The category a board option name reports, or `None` when nothing maps to it.
     fn category_of(&self, option: &str) -> Option<StatusCategory> {
         CATEGORIES.into_iter().find(|category| {
-            matches!(self.target(*category), StatusTarget::Column(name)
+            matches!(self.target(*category), StatusTarget::Column(name) | StatusTarget::Terminal(name, _)
                 if name.as_str().eq_ignore_ascii_case(option))
         })
     }
@@ -2843,11 +2835,9 @@ impl GitHubProjectsSource {
 
     /// The board Status option this write selects, or the refusal that says why not.
     ///
-    /// For a column target the option is what the status *is*, so a board that has no such
-    /// option is a refusal naming the status and the instance. For a closed target the
-    /// issue's own state carries the category, and the option carries only the name a
-    /// reader reports — so an option spelled the way this status is spelled is selected
-    /// when the board has one, and nothing is refused when it does not.
+    /// The mapped option is required for both open and terminal targets. A terminal write
+    /// validates it before changing either representation, so it can never fall back to
+    /// closing an issue whose board cannot display the matching status.
     ///
     /// Answers the field's id, the option's id, and the option's name as the board spells
     /// it — which is the name a read of the item reports once it sits there.
@@ -2857,9 +2847,8 @@ impl GitHubProjectsSource {
         status: &Status,
         target: &StatusTarget,
     ) -> Result<Option<(String, String, String)>, SourceError> {
-        let (wanted, required) = match target {
-            StatusTarget::Column(wanted) => (wanted.as_str(), true),
-            StatusTarget::Closed(_) => (status.name.as_str(), false),
+        let wanted = match target {
+            StatusTarget::Column(wanted) | StatusTarget::Terminal(wanted, _) => wanted.as_str(),
             StatusTarget::Disabled => return Ok(None),
         };
         let missing = |detail: &str| SourceError::Refused {
@@ -2871,20 +2860,12 @@ impl GitHubProjectsSource {
             ),
         };
         let Some(field) = Board::field(&board.fields, "Status")? else {
-            return if required {
-                Err(missing("this board has no Status field"))
-            } else {
-                Ok(None)
-            };
+            return Err(missing("this board has no Status field"));
         };
         if required_str(field, "__typename")? != "ProjectV2SingleSelectField" {
-            return if required {
-                Err(missing(
-                    "this board's Status field is not a single-select field",
-                ))
-            } else {
-                Ok(None)
-            };
+            return Err(missing(
+                "this board's Status field is not a single-select field",
+            ));
         }
         let option = field
             .get("options")
@@ -2898,8 +2879,7 @@ impl GitHubProjectsSource {
                 })
             });
         match option {
-            None if required => Err(missing("this board does not have it")),
-            None => Ok(None),
+            None => Err(missing("this board does not have it")),
             Some(option) => Ok(Some((
                 required_str(field, "id")?.to_owned(),
                 required_str(option, "id")?.to_owned(),
@@ -2960,59 +2940,68 @@ impl GitHubProjectsSource {
         else {
             return Ok(None);
         };
-        if let StatusTarget::Closed(reason) = &target {
-            // The issue's own state carries a closed category, so the board option is left
-            // exactly where it is and goes on naming the status.
-            if item.content_kind == ContentKind::DraftIssue {
-                return Err(self.closes_a_draft(category));
-            }
-            self.update_content(
-                ContentKind::Issue,
-                &item.id,
-                json!({"stateInput": state_input(Some(&target))}),
-            )
-            .await?;
-            item.closed = true;
-            item.status = self
-                .statuses
-                .status(item.option.as_deref(), true, Some(reason.reason()));
-        } else {
-            let board = self.status_board(&item).await?;
-            let wanted = Status {
-                category,
-                name: category_name(category).to_owned(),
-            };
-            let (field, option, name) =
-                self.column_for(&board, &wanted, &target)?.ok_or_else(|| {
-                    SourceError::Malformed {
-                        message: format!(
-                            "status {} of source {} names no board Status option",
-                            category_name(category),
-                            self.name
-                        ),
-                    }
+        let board = self.status_board(&item).await?;
+        let wanted = Status {
+            category,
+            name: category_name(category).to_owned(),
+        };
+        let (field, option, name) =
+            self.column_for(&board, &wanted, &target)?
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!(
+                        "status {} of source {} names no board Status option",
+                        category_name(category),
+                        self.name
+                    ),
                 })?;
-            // An option is what an open item's status is, so a closed issue is reopened
-            // first — sitting closed in the column, it would read back as closed. A draft has
-            // no state to reopen.
-            if item.content_kind == ContentKind::Issue && item.closed {
+        match &target {
+            StatusTarget::Terminal(_, reason) => {
+                if item.content_kind == ContentKind::DraftIssue {
+                    return Err(self.closes_a_draft(category));
+                }
+                self.set_item_field(
+                    &board.id,
+                    &item.item_id,
+                    &field,
+                    json!({"singleSelectOptionId": option}),
+                )
+                .await?;
                 self.update_content(
                     ContentKind::Issue,
                     &item.id,
                     json!({"stateInput": state_input(Some(&target))}),
                 )
                 .await?;
-                item.closed = false;
+                item.closed = true;
+                item.status = self
+                    .statuses
+                    .status(Some(&name), true, Some(reason.reason()));
+                item.option = Some(name);
             }
-            self.set_item_field(
-                &board.id,
-                &item.item_id,
-                &field,
-                json!({"singleSelectOptionId": option}),
-            )
-            .await?;
-            item.status = self.statuses.status(Some(&name), false, None);
-            item.option = Some(name);
+            StatusTarget::Column(_) => {
+                // An option is what an open item's status is, so a closed issue is reopened
+                // first — sitting closed in the column, it would read back as closed. A draft has
+                // no state to reopen.
+                if item.content_kind == ContentKind::Issue && item.closed {
+                    self.update_content(
+                        ContentKind::Issue,
+                        &item.id,
+                        json!({"stateInput": state_input(Some(&target))}),
+                    )
+                    .await?;
+                    item.closed = false;
+                }
+                self.set_item_field(
+                    &board.id,
+                    &item.item_id,
+                    &field,
+                    json!({"singleSelectOptionId": option}),
+                )
+                .await?;
+                item.status = self.statuses.status(Some(&name), false, None);
+                item.option = Some(name);
+            }
+            StatusTarget::Disabled => unreachable!("resolved_target refused a disabled status"),
         }
         let status = item.status.clone();
         self.remember_written(item, false)?;
@@ -3137,7 +3126,7 @@ impl GitHubProjectsSource {
             } else {
                 format!(
                     "status {} is disabled for source {}; set status_mapping.{} of this source \
-                     to a board Status option name or to a closed state",
+                     to a board Status option name",
                     category_name(category),
                     self.name,
                     category_name(category)
@@ -3602,7 +3591,7 @@ impl GitHubProjectsSource {
             .transpose()?;
         let content_kind = existing.map_or(ContentKind::Issue, |item| item.content_kind);
         if content_kind == ContentKind::DraftIssue {
-            if let (Some(StatusTarget::Closed(_)), Some(status)) =
+            if let (Some(StatusTarget::Terminal(_, _)), Some(status)) =
                 (status_target.as_ref(), incoming.written.status())
             {
                 return Err(self.closes_a_draft(status.category));
@@ -3705,7 +3694,7 @@ impl GitHubProjectsSource {
                         message: "a new item was decided without a repository to create it in"
                             .into(),
                     })?;
-                self.create_and_file_issue(&board, target, incoming, &body, status_target.as_ref())
+                self.create_and_file_issue(&board, target, incoming, &body)
                     .await?
             }
         };
@@ -3730,6 +3719,7 @@ impl GitHubProjectsSource {
                 origin_field.as_deref(),
                 origin,
                 column,
+                status_target.as_ref(),
                 &native,
             )
             .await;
@@ -3741,6 +3731,21 @@ impl GitHubProjectsSource {
             }
             return Err(error);
         }
+
+        let written_status = match (incoming.written.status(), status_target.as_ref()) {
+            (Some(_), Some(StatusTarget::Terminal(_, reason))) => {
+                self.statuses
+                    .status(written_option.as_deref(), true, Some(reason.reason()))
+            }
+            (Some(_), Some(StatusTarget::Column(_))) => {
+                self.statuses.status(written_option.as_deref(), false, None)
+            }
+            (Some(status), _) => status.clone(),
+            (None, _) => Status {
+                category: StatusCategory::Unknown,
+                name: "Open".to_owned(),
+            },
+        };
 
         // So the rest of this command reads what it just did rather than what the board
         // said before it. See `remember_written` for which half takes it.
@@ -3758,20 +3763,13 @@ impl GitHubProjectsSource {
             raw_body: body.clone(),
             // A document has no status of its own; what it reads back as is whatever
             // the issue's own state says, which is what a re-read reports.
-            status: incoming
-                .written
-                .status()
-                .cloned()
-                .unwrap_or_else(|| Status {
-                    category: StatusCategory::Unknown,
-                    name: "Open".to_owned(),
-                }),
+            status: written_status,
             option: written_option.or_else(|| existing.and_then(|item| item.option.clone())),
-            // What `state_input` asked for: closed for a closed target, open for any other
+            // What `state_input` asked for: closed for a terminal target, open for any other
             // status, and the issue's own state left as it was by a document write.
             closed: content_kind == ContentKind::Issue
                 && match status_target.as_ref() {
-                    Some(StatusTarget::Closed(_)) => true,
+                    Some(StatusTarget::Terminal(_, _)) => true,
                     Some(_) => false,
                     None => existing.is_some_and(|item| item.closed),
                 },
@@ -3900,6 +3898,7 @@ impl GitHubProjectsSource {
         origin_field: Option<&str>,
         origin: &str,
         column: Option<(String, String)>,
+        status_target: Option<&StatusTarget>,
         native: &[String],
     ) -> Result<(), SourceError> {
         if let Some(field_id) = origin_field {
@@ -3913,6 +3912,17 @@ impl GitHubProjectsSource {
                 item_id,
                 &field_id,
                 json!({"singleSelectOptionId":option_id}),
+            )
+            .await?;
+        }
+
+        if content_kind == ContentKind::Issue
+            && matches!(status_target, Some(StatusTarget::Terminal(_, _)))
+        {
+            self.update_content(
+                ContentKind::Issue,
+                content_id,
+                json!({"stateInput":state_input(status_target)}),
             )
             .await?;
         }
@@ -4131,11 +4141,17 @@ impl GitHubProjectsSource {
         status_target: Option<&StatusTarget>,
     ) -> Result<(), SourceError> {
         let title = incoming.written_title();
-        let fields = match item.content_kind {
+        let mut fields = match item.content_kind {
             ContentKind::DraftIssue => json!({"title":title,"body":body}),
             ContentKind::Issue => json!({"title":title,"body":body,
                                          "stateInput":state_input(status_target)}),
         };
+        if matches!(status_target, Some(StatusTarget::Terminal(_, _))) {
+            fields
+                .as_object_mut()
+                .expect("update fields are an object")
+                .remove("stateInput");
+        }
         self.update_content(item.content_kind, &item.id, fields)
             .await
     }
@@ -4194,7 +4210,6 @@ impl GitHubProjectsSource {
         repository: &RepositoryTarget,
         incoming: &Incoming<'_>,
         body: &Option<String>,
-        status_target: Option<&StatusTarget>,
     ) -> Result<(NativeId, String, Option<String>), SourceError> {
         let repository_id = self.repository_id(repository, incoming).await?;
         let data = self
@@ -4238,14 +4253,6 @@ impl GitHubProjectsSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub board addition returned no project item".into(),
             })?;
-        if let Some(StatusTarget::Closed(_)) = status_target {
-            self.update_content(
-                ContentKind::Issue,
-                &content_id,
-                json!({"stateInput":state_input(status_target)}),
-            )
-            .await?;
-        }
         Ok((content_id, required_str(item, "id")?.to_owned(), url))
     }
 
@@ -5003,10 +5010,10 @@ impl TaskSource for GitHubProjectsSource {
 
     /// Set one task's status alone.
     ///
-    /// A column target reopens a closed issue with an `updateIssue` carrying only its
+    /// An open target reopens a closed issue with an `updateIssue` carrying only its
     /// `stateInput`, then selects the board option with `updateProjectV2ItemFieldValue`; a
-    /// closed target sends only that `updateIssue`, with the mapping's reason, and leaves
-    /// the option where it is. No request carries a title, a body or a label. The status
+    /// terminal target selects its mapped option, then closes with its fixed reason. No
+    /// request carries a title, a body or a label. The status
     /// answered is what [`StatusMapping::status`] reads off the state just written, which is
     /// what a re-read reports.
     async fn set_task_status(
@@ -5370,7 +5377,7 @@ fn related_kind(value: &Value) -> Result<ItemKind, SourceError> {
 /// would report a change forever. A document has no status at all, and asks for neither.
 fn state_input(target: Option<&StatusTarget>) -> Value {
     match target {
-        Some(StatusTarget::Closed(reason)) => {
+        Some(StatusTarget::Terminal(_, reason)) => {
             json!({"value":"CLOSED","stateReason":reason.reason()})
         }
         Some(StatusTarget::Column(_) | StatusTarget::Disabled) => json!({"value":"OPEN"}),

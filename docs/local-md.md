@@ -91,9 +91,11 @@ mapping is those seven words, each to the category it names, plus the display al
 `in progress` and `doing` → in-progress and `canceled` → cancelled. `queued` is work claimed
 by something that will do it and not yet started, where `todo` is work ready to be picked up
 that nothing has claimed. Other words map to unknown, and this source writes the original
-word into the Markdown so it round-trips by name. That differs from `github-projects`, which can only
-write an existing board option or a closed state: its unknown category is disabled by
-default, and mapping it to one option folds every unknown word into that option. Replace
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This comparison must distinguish the two plugins; github-projects' loopback tests and shared live journey are the drift gate for its terminal projection. -->
+word into the Markdown so it round-trips by name. That differs from `github-projects`, which
+can only write an existing board option: its terminal categories also close the issue with
+their fixed reasons, and its unknown category is disabled by default. Mapping unknown to
+one option folds every unknown word into that option. Replace
 the mapping with `status_mapping` in the source configuration:
 
 ```yaml

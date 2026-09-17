@@ -183,6 +183,14 @@ do not: status goes to the board's `Status` single-select and the issue's own op
 closed state, `onetaskgraph.origin` goes to a source-owned `onetaskgraph.origin` text
 field, and dependencies go to `blockedBy` and to sub-issue links.
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This metadata guide must explain the two fields status occupies; the github-projects loopback tests and shared live journey reconcile the mapping, mutation order, and read-back at the real interface. -->
+For terminal status, those two GitHub fields move together: `done` selects the mapped
+`Done` option and closes as completed; `cancelled` selects the mapped `Cancelled` option
+and closes as not planned. An open-category write reopens a closed issue before selecting
+its mapped option. A missing option refuses the write before either half changes. On read,
+the close reason decides `done` versus `cancelled` for a closed issue regardless of its
+displayed Status, while the Status option decides an open issue's category.
+
 ## Setting one key on its own
 
 `onetaskgraph task|project|document metadata set <ID> <KEY> <VALUE>` sets one key of one

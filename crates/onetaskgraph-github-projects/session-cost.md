@@ -4,6 +4,13 @@ The GitHub Projects live journey reaches a rate-limited account that everything 
 repository does draws on too, and until this branch nobody had ever measured what it spends.
 This is the measurement, and the before and after of the reduction taken against it.
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The golden-cost test derives these figures from the identical loopback journey and fails whenever this explanation and its checked-in fixture need to move together. -->
+The terminal-status consistency journey adds two direct read-backs (20,200 worst-case
+nodes), one narrow `cancelled` write, and the board-field halves of both terminal writes.
+Those calls are deliberate: the shared real-GitHub and loopback journey now observes the
+exact `Done`/`COMPLETED` and `Cancelled`/`NOT_PLANNED` pairs rather than inferring them from
+the plugin's normalized status alone.
+
 ## What these numbers are, and what they are not
 
 Two quantities, both taken offline:

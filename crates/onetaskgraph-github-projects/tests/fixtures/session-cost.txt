@@ -1,5 +1,5 @@
-requests 103
-node count 222616
+requests 109
+node count 243019
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -31,11 +31,12 @@ requests per call
     1       0  nominated board lookup
     2   40800  reading a project's tasks
     9    1400  reading an issue's dependencies
-    4     812  reading one issue
+    5    1015  reading one issue
     5   40751  reading the board
     2       0  reading the destination repository
     2       0  recording a dependency
     4   81600  searching this board's issues
-    1       0  updating an issue
+    2   20200  terminal status read-back
+    2       0  updating an issue
     3     300  writable field discovery
-   10       0  writing a board field
+   12       0  writing a board field
