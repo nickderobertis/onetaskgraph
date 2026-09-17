@@ -4597,13 +4597,13 @@ impl GitHubProjectsSource {
         Ok(())
     }
 
-    /// Creates one issue, files it on the board, and closes it when the status says so.
-    ///
-    /// Three calls rather than one: `createIssue` needs a repository and answers with an
-    /// issue that is on no board, `addProjectV2ItemById` is what puts it there, and a
-    /// closed status is a state of the issue rather than a field of the board item.
-    /// Creates the issue, files it on the board, and reports what a read of it would say:
+    /// Creates one issue, files it on the board, and reports what a read of it would say:
     /// its content id, its board item id, and the web address GitHub gave it.
+    ///
+    /// Two calls rather than one: `createIssue` needs a repository and answers with an
+    /// issue that is on no board, and `addProjectV2ItemById` is what puts it there. A
+    /// terminal status is not written here: `finish_write` selects its option first and
+    /// closes the issue after, so a close never lands on an item whose board cannot show it.
     ///
     /// The address comes back here because this is the only place it is known before
     /// GitHub's own board read catches up — an item this run created answers the reads
