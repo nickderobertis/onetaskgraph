@@ -175,6 +175,10 @@ fn apply_adds_only_the_missing_option_with_every_existing_id_and_assignment_pres
 }
 
 #[test]
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This must drive the compiled
+// CLI's `sources status-options` and `task status set` verbs in sequence, which the
+// application crate owns; the plugin crate's own suite separately proves that a terminal
+// option counts as configured over loopback HTTP.
 fn a_missing_terminal_option_is_planned_added_and_then_written_with_its_close_reason() {
     // A terminal write needs its mapped option before it closes, so a board lacking one
     // refuses the write, the guarded plan names that option as missing, and once it is
