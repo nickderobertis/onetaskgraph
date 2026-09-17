@@ -132,52 +132,77 @@ pub async fn walked_task_titles(
     ))
 }
 
-/// The most pages of documents one listing walks before it is refused as not ending.
-///
-/// Ten thousand documents at Linear's page size, which is far past what a scratch workspace
-/// holds; a workspace past it fails naming this bound rather than walking without end.
-pub const MOST_DOCUMENT_PAGES: usize = 100;
+/// The request and elapsed-time budget for one complete document listing.
+#[derive(Clone, Copy, Debug)]
+pub struct DocumentListingBudget {
+    pub pages: usize,
+    pub elapsed: Duration,
+}
 
-/// The sorted titles `keep` accepts of every document `query` answers, to its last page.
+/// Ten thousand documents at Linear's page size and thirty seconds for their responses, both
+/// far past what the scratch workspace ordinarily needs. A listing past either bound is refused
+/// explicitly as budget exhaustion rather than being mistaken for a missing document.
+pub const LINEAR_DOCUMENT_LISTING: DocumentListingBudget = DocumentListingBudget {
+    pages: 100,
+    elapsed: Duration::from_secs(30),
+};
+
+/// The sorted `(id, title)` pairs belonging to this run that `query` answers, to its last page.
 ///
-/// `keep` is there because Linear's `documents` connection is the whole workspace: the live
-/// journey compares only its own run's documents, never another run's in flight beside it.
-/// Every page rather than the first for that same reason — a workspace holding a page of other
-/// documents would leave this run's off the first one, and no wait could ever settle that.
-pub async fn document_titles(
+/// `run_ids` is there because Linear's `documents` connection is the whole workspace: the live
+/// journey retains only ids it created, never another run's in-flight documents. Every page is
+/// read because a workspace holding a page of older documents can put this run's ids later.
+pub async fn documents_from_run(
     source: &dyn TaskSource,
     query: &DocumentQuery,
-    keep: &dyn Fn(&str) -> bool,
+    run_ids: &[NativeId],
+    budget: DocumentListingBudget,
     what: &str,
-) -> Result<Vec<String>, String> {
-    let mut titles = Vec::new();
+) -> Result<Vec<(NativeId, String)>, String> {
+    let started = Instant::now();
+    let mut found = Vec::new();
     let mut cursor = None;
-    for _ in 0..MOST_DOCUMENT_PAGES {
-        let step = source
-            .query_documents(
-                query,
-                &PageRequest {
-                    cursor,
-                    limit: onetaskgraph_linear::MAX_PAGE_SIZE,
-                },
-            )
+    for page in 1..=budget.pages {
+        let request = PageRequest {
+            cursor,
+            limit: onetaskgraph_linear::MAX_PAGE_SIZE,
+        };
+        let read = source.query_documents(query, &request);
+        let Some(remaining) = budget.elapsed.checked_sub(started.elapsed()) else {
+            return Err(format!(
+                "{what} exhausted its document listing budget after {} pages over {:?}, before the listing ended",
+                page - 1,
+                started.elapsed()
+            ));
+        };
+        let step = tokio::time::timeout(remaining, read)
             .await
+            .map_err(|_| {
+                format!(
+                    "{what} exhausted its document listing budget after {} pages over {:?}, before the listing ended",
+                    page - 1,
+                    started.elapsed()
+                )
+            })?
             .map_err(|error| format!("{what} could not be read: {error}"))?;
-        titles.extend(
-            step.items
-                .into_iter()
-                .map(|document| document.title)
-                .filter(|title| keep(title)),
-        );
+        found.extend(step.items.into_iter().filter_map(|document| {
+            run_ids
+                .contains(&document.id)
+                .then_some((document.id, document.title))
+        }));
         cursor = step.next;
         if cursor.is_none() {
-            titles.sort();
-            return Ok(titles);
+            found.sort_by(|left, right| left.0.cmp(&right.0));
+            return Ok(found);
+        }
+        if page == budget.pages || started.elapsed() >= budget.elapsed {
+            return Err(format!(
+                "{what} exhausted its document listing budget after {page} pages over {:?}, before the listing ended",
+                started.elapsed()
+            ));
         }
     }
-    Err(format!(
-        "{what} had not ended after {MOST_DOCUMENT_PAGES} pages"
-    ))
+    unreachable!("a positive document page budget returns inside the loop")
 }
 
 /// [`settled`] over a page of fifty tasks.
@@ -274,19 +299,50 @@ where
     }
 }
 
-/// [`settled`] over the documents `keep` accepts.
+/// Wait until a complete listing has exactly this run's expected documents.
 pub async fn settled_documents(
     bound: Bound,
+    listing_budget: DocumentListingBudget,
     source: &dyn TaskSource,
     query: &DocumentQuery,
-    keep: &dyn Fn(&str) -> bool,
+    run_ids: &[NativeId],
     what: &str,
-    expected: &[String],
+    expected: &[(NativeId, String)],
 ) -> Result<(), String> {
-    settled(bound, what, expected, || {
-        document_titles(source, query, keep, what)
-    })
-    .await
+    assert!(
+        listing_budget.pages > 0,
+        "a document listing budget needs a page"
+    );
+    let started = Instant::now();
+    let mut reads = 0;
+    loop {
+        let mut listed = documents_from_run(source, query, run_ids, listing_budget, what).await?;
+        listed.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut expected = expected.to_vec();
+        expected.sort_by(|left, right| left.0.cmp(&right.0));
+        reads += 1;
+        if listed == expected {
+            return Ok(());
+        }
+        if reads == bound.reads {
+            let missing = expected
+                .iter()
+                .filter(|(id, _)| !listed.iter().any(|(listed_id, _)| listed_id == id))
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                return Err(format!(
+                    "{what} completed its listing but the document ids {missing:?} were missing, still after {reads} reads over {:?}",
+                    started.elapsed()
+                ));
+            }
+            return Err(format!(
+                "{what} completed its listing with {listed:?} rather than {expected:?}, still after {reads} reads over {:?}",
+                started.elapsed()
+            ));
+        }
+        tokio::time::sleep(bound.interval).await;
+    }
 }
 
 /// [`settled`] over the direct read of a deleted document, until it is absent.
