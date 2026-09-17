@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.35](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.34...v0.2.35) - 2026-09-17
+
+### Fixed
+
+- *(local-md)* fail a listing that meets a malformed record ([#1472](https://github.com/nickderobertis/onetaskgraph/pull/1472))
+
 ## [0.2.34](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.33...v0.2.34) - 2026-09-16
 
 ### Added
