@@ -1670,7 +1670,7 @@ async fn terminal_status_parts(
 ) -> Result<(String, String, String), String> {
     let data = graphql_variables(
         token,
-        "query TerminalStatus($id:ID!){node(id:$id){... on Issue{state stateReason projectItems(first:100){nodes{project{id} fieldValues(first:100){nodes{... on ProjectV2ItemFieldSingleSelectValue{name field{name}}}}}}}}}",
+        "query TerminalStatus($id:ID!){node(id:$id){... on Issue{state stateReason projectItems(first:100){nodes{project{id} fieldValues(first:100){nodes{... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{name}}}}}}}}}}",
         "terminal status read-back",
         json!({"id":issue_id.0}),
     )
