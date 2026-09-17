@@ -20,7 +20,7 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use onetaskgraph_plugin_api::{DocumentQuery, PageRequest, TaskQuery, TaskSource};
+use onetaskgraph_plugin_api::{DocumentQuery, NativeId, PageRequest, TaskQuery, TaskSource};
 use serde_json::{Value, json};
 
 /// How many times a listing is read, and how far apart, before its disagreement is the answer.
@@ -220,38 +220,58 @@ pub const LABEL_CONNECTION: &str = "issueLabels";
 /// The one variable `graphql::ISSUE_LABEL` takes: the label's name.
 pub const LABEL_VARIABLE: &str = "name";
 
-/// [`settled`] over the lookup a write resolves the label `name` through, until exactly one
-/// label answers it.
+/// The lookup a write resolves the label `name` through, until exactly one label answers it.
 ///
 /// The lookup is the plugin's own `graphql::ISSUE_LABEL`, sent by `send`, which answers with the
-/// request's `data`. Each label it answers with is listed as `name`, so a lookup that never finds
-/// the label and one finding two both fail naming how many it found — which are the two answers
-/// the plugin refuses a write over.
+/// request's `data`. No match is the index-lag answer this wait can settle. Multiple matches are
+/// duplicate data, so they are refused immediately with the ids the plugin would report rather
+/// than pointlessly waiting out the bound.
 pub async fn settled_label<F, Fut>(bound: Bound, name: &str, send: F) -> Result<(), String>
 where
     F: Fn(&'static str, Value) -> Fut,
     Fut: Future<Output = Result<Value, String>>,
 {
-    let what = format!("the labels named {name:?} by the lookup a write resolves it through");
+    let what = format!("the label named {name:?} by the lookup a write resolves it through");
     let (what, send) = (what.as_str(), &send);
-    settled(bound, what, &[name.to_owned()], || async move {
+    let started = Instant::now();
+    let mut reads = 0;
+    loop {
         let data = send(
             onetaskgraph_linear::graphql::ISSUE_LABEL,
             json!({ LABEL_VARIABLE: name }),
         )
         .await
         .map_err(|error| format!("{what} could not be read: {error}"))?;
-        let found = data
+        let nodes = data
             .get(LABEL_CONNECTION)
             .and_then(|connection| connection.get("nodes"))
             .and_then(Value::as_array)
             .ok_or_else(|| {
                 format!("{what} could not be read: no {LABEL_CONNECTION}.nodes in {data}")
-            })?
-            .len();
-        Ok(vec![name.to_owned(); found])
-    })
-    .await
+            })?;
+        reads += 1;
+        let ids = nodes
+            .iter()
+            .map(|node| {
+                node.get("id").and_then(Value::as_str).ok_or_else(|| {
+                    format!("{what} could not be read: label node has no string id: {node}")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        match nodes.len() {
+            1 => return Ok(()),
+            0 if reads < bound.reads => tokio::time::sleep(bound.interval).await,
+            0 => {
+                return Err(format!(
+                    "{what} found 0 matches, still after {reads} reads over {:?}",
+                    started.elapsed()
+                ));
+            }
+            found => {
+                return Err(format!("{what} found {} matches with ids {ids:?}", found));
+            }
+        }
+    }
 }
 
 /// [`settled`] over the documents `keep` accepts.
@@ -265,6 +285,29 @@ pub async fn settled_documents(
 ) -> Result<(), String> {
     settled(bound, what, expected, || {
         document_titles(source, query, keep, what)
+    })
+    .await
+}
+
+/// [`settled`] over the direct read of a deleted document, until it is absent.
+pub async fn settled_document_absent(
+    bound: Bound,
+    source: &dyn TaskSource,
+    id: &NativeId,
+    name: &str,
+) -> Result<(), String> {
+    let what = format!("the deleted document {name:?}");
+    settled(bound, &what, &[], || async {
+        source
+            .get_document(id)
+            .await
+            .map(|document| {
+                document
+                    .into_iter()
+                    .map(|document| document.title)
+                    .collect()
+            })
+            .map_err(|error| format!("{what} could not be read: {error}"))
     })
     .await
 }

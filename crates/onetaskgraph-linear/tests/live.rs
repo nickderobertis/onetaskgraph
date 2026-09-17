@@ -70,8 +70,8 @@ use cleanup::{
 mod settle;
 
 use settle::{
-    LINEAR_INDEX, settled, settled_documents, settled_label, settled_tasks, settled_walk,
-    task_titles, walked_task_titles,
+    LINEAR_INDEX, settled, settled_document_absent, settled_documents, settled_label,
+    settled_tasks, settled_walk, task_titles, walked_task_titles,
 };
 
 /// The two workflow states this fixture files its issues under.
@@ -754,19 +754,13 @@ async fn drive_documents(
 
     // And removed again, which is what lets a copy that could not finish take one back.
     // The sweep would clear them anyway; driving the verb is what proves it works.
-    for id in [&filed_id, &loose_id] {
+    for (id, title) in [(&filed_id, filed), (&loose_id, loose)] {
         source
             .delete_document(id)
             .await
             .map_err(|error| format!("live document removal failed: {error}"))?;
+        settled_document_absent(LINEAR_INDEX, source, id, title).await?;
     }
-    ensure!(
-        source
-            .get_document(&loose_id)
-            .await
-            .is_ok_and(|held| held.is_none()),
-        "a document this run removed is still readable"
-    );
     Ok(())
 }
 
