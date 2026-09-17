@@ -46,7 +46,7 @@ function executableFixture(
     program,
     `#!/usr/bin/env node\n${guard}process.stdout.write(${quote(stdout)});\nprocess.stderr.write(${quote(stderr)});\nprocess.exit(${code});\n`,
   );
-  if (windows) writeFileSync(path, `@echo off\r\nnode "%~dp0${name}.js"\r\n`);
+  if (windows) writeFileSync(path, `@echo off\r\nnode "%~dp0${name}.js" %*\r\n`);
   else chmodSync(path, 0o755);
   return path;
 }
