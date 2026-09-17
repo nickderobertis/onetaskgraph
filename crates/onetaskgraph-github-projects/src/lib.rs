@@ -1951,12 +1951,10 @@ impl GitHubProjectsSource {
         )
         .await?;
         let after = self.status_snapshot().await?;
-        let options_preserved = before.options.iter().all(|old| {
-            after
-                .options
-                .iter()
-                .any(|new| new.id == old.id && new.name == old.name)
-        });
+        let options_preserved = before
+            .options
+            .iter()
+            .all(|old| after.options.iter().any(|new| new == old));
         let additions_present = missing.iter().all(|wanted| {
             after
                 .options
@@ -1971,7 +1969,7 @@ impl GitHubProjectsSource {
             })?;
             return Err(SourceError::Refused {
                 message: format!(
-                    "GitHub changed a pre-existing Status option id or item assignment after the guarded update; the pre-write item assignment snapshot is:\n{recovery}"
+                    "GitHub changed a pre-existing Status option id, name, color or description, or an item assignment after the guarded update; the pre-write item assignment snapshot is:\n{recovery}"
                 ),
             });
         }

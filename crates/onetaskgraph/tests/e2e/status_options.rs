@@ -218,6 +218,15 @@ fn option_id_drift_and_an_omitted_addition_are_each_refused() {
 #[test]
 fn unknown_and_non_github_sources_are_refused_by_name() {
     let (sandbox, _) = configured();
+    let invalid = sandbox
+        .command()
+        .args(["sources", "status-options", "bad/name"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(stderr(&invalid).contains("bad/name"));
+
     let unknown = sandbox
         .command()
         .args(["sources", "status-options", "missing"])
@@ -242,6 +251,24 @@ fn unknown_and_non_github_sources_are_refused_by_name() {
         complaint.contains("notes") && complaint.contains("not github-projects"),
         "{complaint}"
     );
+}
+
+#[test]
+fn malformed_github_projects_configuration_is_refused_by_source_name() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&document(&json!({"board": {
+        "plugin": "github-projects", "config": {}
+    }})));
+    let output = sandbox
+        .command()
+        .args(["sources", "status-options", "board"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let complaint = stderr(&output);
+    assert!(complaint.contains("board"), "{complaint}");
+    assert!(complaint.contains("owner"), "{complaint}");
 }
 
 #[test]

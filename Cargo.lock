@@ -1128,6 +1128,9 @@ version = "0.2.34"
 dependencies = [
  "onetaskgraph-github-projects",
  "onetaskgraph-plugin-api",
+ "secrecy",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

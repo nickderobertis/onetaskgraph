@@ -49,6 +49,51 @@ impl SecretResolver for Secrets {
     }
 }
 
+#[tokio::test]
+async fn guarded_status_options_preserve_the_complete_existing_options_and_assignments() {
+    let fixture = board(vec![Item::issue("I_task", "task").status("Todo")]);
+    fixture.status_options_missing_queued();
+    let report = status_options_source(&fixture)
+        .status_options(StatusOptionsMode::Apply)
+        .await
+        .expect("the guarded addition is verified");
+    assert_eq!(report.outcome, StatusOptionsOutcome::Applied);
+    assert_eq!(report.missing, ["Queued"]);
+    assert!(report.existing.iter().any(|option| {
+        serde_json::to_value(option).unwrap()
+            == json!({"id":"OPT_todo","name":"Todo","color":"BLUE","description":"ready"})
+    }));
+    let update = fixture
+        .seen()
+        .into_iter()
+        .find(|entry| entry[0] == "updateProjectV2Field")
+        .expect("the fixture received the guarded mutation");
+    assert!(
+        update[1]["singleSelectOptions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|option| option["id"] == "OPT_shipped"
+                && option["color"] == "PURPLE"
+                && option["description"] == "custom")
+    );
+}
+
+#[tokio::test]
+async fn guarded_status_options_refuse_existing_option_metadata_drift_with_recovery_data() {
+    let fixture = board(vec![Item::issue("I_task", "task").status("Todo")]);
+    fixture.status_options_missing_queued();
+    fixture.drift_guarded_status_description();
+    let error = status_options_source(&fixture)
+        .status_options(StatusOptionsMode::Apply)
+        .await
+        .expect_err("changed option metadata is drift");
+    let complaint = error.to_string();
+    assert!(complaint.contains("color or description"), "{complaint}");
+    assert!(complaint.contains("I_task"), "{complaint}");
+    assert!(complaint.contains("OPT_todo"), "{complaint}");
+}
+
 fn page(limit: u32) -> PageRequest {
     PageRequest {
         cursor: None,
@@ -354,6 +399,10 @@ struct State {
     /// Issues created but not yet added to the board.
     pending: Vec<Item>,
     options: Vec<(&'static str, &'static str)>,
+    /// Complete option records used by the guarded Status-option fixture cases.
+    guarded_status_options: Option<Vec<Value>>,
+    /// Whether the first post-update read changes existing option metadata.
+    drift_guarded_status_description: bool,
     origin_field: bool,
     status_field: bool,
     blocked_by: BTreeMap<String, Vec<String>>,
@@ -750,6 +799,21 @@ impl Fixture {
     fn offer_option(&self, id: &'static str, name: &'static str) {
         self.state.lock().unwrap().options.push((id, name));
     }
+
+    /// Give the guarded operation a Status field missing the configured `Queued` option.
+    fn status_options_missing_queued(&self) {
+        self.state.lock().unwrap().guarded_status_options = Some(vec![
+            json!({"id":"OPT_backlog","name":"Backlog","color":"GRAY","description":"later"}),
+            json!({"id":"OPT_todo","name":"Todo","color":"BLUE","description":"ready"}),
+            json!({"id":"OPT_doing","name":"In Progress","color":"YELLOW","description":"active"}),
+            json!({"id":"OPT_shipped","name":"Shipped","color":"PURPLE","description":"custom"}),
+        ]);
+    }
+
+    /// Make the verification snapshot disagree on existing option metadata.
+    fn drift_guarded_status_description(&self) {
+        self.state.lock().unwrap().drift_guarded_status_description = true;
+    }
 }
 
 fn board(items: Vec<Item>) -> Fixture {
@@ -768,6 +832,8 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             ("OPT_doing", "In Progress"),
             ("OPT_shipped", "Shipped"),
         ],
+        guarded_status_options: None,
+        drift_guarded_status_description: false,
         origin_field,
         status_field,
         blocked_by: BTreeMap::new(),
@@ -920,6 +986,64 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         state
             .seen
             .push(json!([operation_name(query), input.clone()]));
+    }
+    if query.contains("updateProjectV2Field(input:$input)") && board::strip_probe(query).is_none() {
+        let supplied = input["singleSelectOptions"]
+            .as_array()
+            .expect("a complete Status option list");
+        assert!(
+            supplied
+                .iter()
+                .filter(|option| option["name"] != "Queued")
+                .all(|option| option["id"].is_string()),
+            "every existing option keeps its id"
+        );
+        let mut next = supplied.clone();
+        for (index, option) in next.iter_mut().enumerate() {
+            if option.get("id").is_none() {
+                option["id"] = json!(format!("OPT_added_{index}"));
+            }
+        }
+        if state.drift_guarded_status_description {
+            next[0]["description"] = json!("changed elsewhere");
+            state.drift_guarded_status_description = false;
+        }
+        state.guarded_status_options = Some(next.clone());
+        return json!({"updateProjectV2Field":{"projectV2Field":{
+            "id":"FIELD_status","options":next
+        }}});
+    }
+    if query.contains("optionId field{") && board::strip_probe(query).is_none() {
+        let options = state.guarded_status_options.clone().unwrap_or_else(|| {
+            state
+                .options
+                .iter()
+                .map(|(id, name)| json!({"id":id,"name":name,"color":"BLUE","description":""}))
+                .collect()
+        });
+        let nodes = state
+            .items
+            .iter()
+            .map(|item| {
+                let values = item.status.as_ref().map_or_else(Vec::new, |name| {
+                    let id = options
+                        .iter()
+                        .find(|option| option["name"] == name.as_str())
+                        .and_then(|option| option["id"].as_str())
+                        .expect("an assigned option")
+                        .to_owned();
+                    vec![json!({"name":name,"optionId":id,
+                        "field":{"id":"FIELD_status","name":"Status"}})]
+                });
+                json!({"id":item.item_id,"fieldValues":{"nodes":values,
+                    "pageInfo":{"hasNextPage":false}}})
+            })
+            .collect::<Vec<_>>();
+        return json!({"owner":{"projectV2":{"id":"PVT_board",
+            "fields":{"nodes":[{"id":"FIELD_status","name":"Status","options":options}],
+                "pageInfo":{"hasNextPage":false}},
+            "items":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}
+        }}});
     }
     if let Some(answered) = answer_a_session_call(&mut state, query, variables, &input) {
         return answered;
@@ -1629,10 +1753,19 @@ use onetaskgraph_github_projects::accounting::{
     Accounting, Basis, Budget, BudgetReport, Endpoint, Method, Mode, Outcome, RateLimit, Request,
     Session, StatusCode,
 };
-use onetaskgraph_github_projects::{DESIGN_TITLE_PREFIX, Plugin, graphql};
+use onetaskgraph_github_projects::{
+    DESIGN_TITLE_PREFIX, GitHubProjectsConfig, GitHubProjectsSource, Plugin, StatusOptionsMode,
+    StatusOptionsOutcome, graphql,
+};
 
 fn source(fixture: &Fixture) -> Box<dyn TaskSource> {
     configured(&fixture.endpoint, json!({}))
+}
+
+fn status_options_source(fixture: &Fixture) -> GitHubProjectsSource {
+    let config: GitHubProjectsConfig =
+        serde_json::from_value(fixture_config(&fixture.endpoint, &json!({}))).unwrap();
+    GitHubProjectsSource::new(&SourceName::new("work").unwrap(), config, &Secrets).unwrap()
 }
 
 fn refusal(error: SourceError) -> String {

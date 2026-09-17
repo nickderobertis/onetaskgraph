@@ -298,6 +298,26 @@ fn a_status_set_on_local_markdown_rewrites_the_status_and_nothing_else() {
 }
 
 #[test]
+fn a_status_set_with_no_deliveries_says_so_in_text() {
+    let sandbox = Sandbox::new();
+    let root = folder(
+        &sandbox,
+        "work",
+        &[("tasks/T-1.md", "---\ntitle: One\nstatus: todo\n---\n")],
+    );
+    sandbox.project_document(&document(&json!({
+        "work": {"plugin":"local-md", "config":{"root":root}}
+    })));
+    let output = exits(
+        "a task with no deliveries",
+        &sandbox,
+        &["task", "status", "set", "work:T-1", "queued"],
+        0,
+    );
+    assert!(stdout(&output).contains("delivered: none"));
+}
+
+#[test]
 fn a_status_set_on_a_github_board_sends_only_the_option_update_or_the_close_or_reopen() {
     for boundary in SOURCE_BOUNDARIES {
         let who = format!("{boundary:?}");
