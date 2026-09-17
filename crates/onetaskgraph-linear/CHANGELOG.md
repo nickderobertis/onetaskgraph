@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.35](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.2.34...onetaskgraph-linear-v0.2.35) - 2026-09-17
+
+### Fixed
+
+- *(linear)* page the live journey's document reads to exhaustion ([#1508](https://github.com/nickderobertis/onetaskgraph/pull/1508))
+
 ## [0.2.34](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.2.33...onetaskgraph-linear-v0.2.34) - 2026-09-16
 
 ### Added
