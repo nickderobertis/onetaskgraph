@@ -884,14 +884,16 @@ async fn a_document_listing_that_does_not_end_fails_at_its_page_bound() {
 #[tokio::test]
 async fn a_document_listing_that_outlasts_its_time_budget_is_budget_exhaustion() {
     let (source, answered) = workspace(|_, _| {
-        thread::sleep(Duration::from_millis(50));
+        // Leave enough time for even a loaded Windows runner to deliver and parse the
+        // loopback request before delaying the response past the listing's deadline.
+        thread::sleep(Duration::from_secs(2));
         documents(vec![document("d1", "filed", None)])
     });
     let refusal = settled_documents(
         BOUND,
         DocumentListingBudget {
             pages: 10,
-            elapsed: Duration::from_millis(10),
+            elapsed: Duration::from_secs(1),
         },
         source.as_ref(),
         &DocumentQuery::default(),
