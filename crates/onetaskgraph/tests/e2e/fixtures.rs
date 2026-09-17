@@ -937,7 +937,8 @@ impl GitHubBoard {
     fn options(&self) -> Value {
         let every = json!([{"id":"OPT-backlog","name":"Backlog"},{"id":"OPT-todo","name":"Todo"},
                {"id":"OPT-queued","name":"Queued"},{"id":"OPT-doing","name":"Doing"},
-               {"id":"OPT-shipped","name":"Shipped"}]);
+               {"id":"OPT-shipped","name":"Shipped"},{"id":"OPT-done","name":"Done"},
+               {"id":"OPT-cancelled","name":"Cancelled"}]);
         Value::Array(
             every
                 .as_array()
@@ -1303,7 +1304,8 @@ fn github_projects_block_at(endpoint: &str) -> Value {
         "repository": "nickderobertis/onetaskgraph",
         "token_env": "GITHUB_PROJECTS_FIXTURE_TOKEN",
         "endpoint": endpoint,
-        // `done` and `cancelled` keep their shipped defaults, which close the issue:
+        // `done` and `cancelled` keep their shipped defaults, which select the board's
+        // `Done` and `Cancelled` options as well as closing the issue:
         // GitHub derives a project's `Sub-issues progress` from closed sub-issues, so a
         // plan whose finished tasks were only moved to a column reads 0% complete forever.
         "status_mapping": {"todo":"Todo","in-progress":"Doing"},

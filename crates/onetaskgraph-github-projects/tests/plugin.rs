@@ -361,6 +361,8 @@ struct State {
     /// fails one call of the several a write is, and what the source does about the calls
     /// that already landed is only readable if one of them can be made to fail.
     refuses: BTreeSet<String>,
+    /// Mutations this board begins refusing after this many matching calls have landed.
+    refuse_after: BTreeMap<String, usize>,
     /// How many of the most recently filed items this board's own reads do not show yet.
     /// GitHub's `projectV2.items` is eventually consistent, so an item a run just created
     /// is answered out of the source's own record of what it created until the board
@@ -604,6 +606,14 @@ impl Fixture {
             .refuses
             .insert(operation.to_owned());
     }
+    /// Let `successful_calls` matching mutations land, then fail the next one.
+    fn refuse_after(&self, operation: &str, successful_calls: usize) {
+        self.state
+            .lock()
+            .unwrap()
+            .refuse_after
+            .insert(operation.to_owned(), successful_calls);
+    }
     /// Answer the next requests with these canned HTTP refusals, oldest first.
     fn script(&self, refusals: Vec<Refusal>) {
         self.state.lock().unwrap().limits.scripted = refusals;
@@ -774,6 +784,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         status_field,
         blocked_by: BTreeMap::new(),
         refuses: BTreeSet::new(),
+        refuse_after: BTreeMap::new(),
         lagging_reads: 0,
         stuck_membership_cursor: None,
         seen: Vec::new(),
@@ -886,7 +897,18 @@ fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<
         }
     }
     let operation = operation_name(query);
-    if !state.refuses.contains(operation) {
+    let delayed_refusal = state
+        .refuse_after
+        .get_mut(operation)
+        .is_some_and(|remaining| {
+            if *remaining == 0 {
+                true
+            } else {
+                *remaining -= 1;
+                false
+            }
+        });
+    if !state.refuses.contains(operation) && !delayed_refusal {
         return None;
     }
     let input = variables.get("input").cloned().unwrap_or(Value::Null);
@@ -6817,6 +6839,27 @@ async fn a_terminal_category_uses_its_configured_option_and_fixed_close_reason()
         fixture.item(&id.0).state_reason.as_deref(),
         Some("NOT_PLANNED")
     );
+}
+
+#[tokio::test]
+async fn a_terminal_update_whose_close_fails_leaves_the_option_that_landed_visible() {
+    let fixture = board(vec![Item::issue("I_1", "one").status("Todo")]);
+    // An existing write sends its content update, its Status option, and then the distinct
+    // updateIssue that closes it. Refuse that final call.
+    fixture.refuse_after("updateIssue", 1);
+    let error = source(&fixture)
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_1".to_owned())),
+            item: task("I_1", "one", status(StatusCategory::Done, "Done")),
+            depends_on: vec![],
+        })
+        .await
+        .expect_err("the close is refused");
+    assert!(refusal(error).contains("updateIssue is refused"));
+    let held = fixture.item("I_1");
+    assert_eq!(held.status.as_deref(), Some("Done"));
+    assert_eq!(held.state, "OPEN");
+    assert_eq!(held.state_reason, None);
 }
 
 #[tokio::test]

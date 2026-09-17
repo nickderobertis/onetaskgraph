@@ -1386,7 +1386,7 @@ fn an_unknown_status_disabled_by_default_names_its_only_settling_remedy() {
 
 #[test]
 fn an_unknown_status_cannot_be_configured_as_a_closed_state() {
-    for (closed, read_back) in [("completed", "done"), ("not-planned", "cancelled")] {
+    for closed in ["completed", "not-planned"] {
         let sandbox = Sandbox::new();
         let (mut config, _) = github_projects_with_board(&sandbox);
         config["status_mapping"]["unknown"] = json!({"closed":closed});
@@ -1394,14 +1394,17 @@ fn an_unknown_status_cannot_be_configured_as_a_closed_state() {
             "board": {"plugin":"github-projects","config":config}
         })));
 
-        let complaint = refused(&sandbox, &["task", "list", "--source", "board"], 4);
+        let complaint = refused(&sandbox, &["task", "list", "--source", "board"], 1);
         assert!(complaint.contains("status_mapping.unknown"), "{complaint}");
-        assert!(complaint.contains(read_back), "{complaint}");
+        assert!(complaint.contains("not valid"), "{complaint}");
     }
 }
 // llmlint: ignore-end[e2e_not_mocked, expensive_tests_stay_behind_their_own_edge]
 
 #[test]
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This must drive the compiled
+// CLI's copy boundary, which the application crate owns; plugin-local tests separately
+// exercise the GitHub mutations over loopback HTTP.
 fn a_copy_into_a_board_settles_instead_of_reporting_a_change_on_every_run() {
     // Writing `done` closes the issue, and writing a non-terminal status over a closed one
     // has to reopen it. Without that the item reads back `Unknown` and this loop never
@@ -1417,7 +1420,12 @@ fn a_copy_into_a_board_settles_instead_of_reporting_a_change_on_every_run() {
         .unwrap();
     };
     write_status("Todo");
-    board_with_plans(&sandbox, "plans");
+    let (config, _) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"local-md","config":{
+            "root":root,"status_mapping":{"Todo":"todo","Done":"done"}}},
+        "board": {"plugin":"github-projects","config":config}
+    })));
 
     let copy = |sandbox: &Sandbox| {
         reported(&ok(
@@ -1430,7 +1438,7 @@ fn a_copy_into_a_board_settles_instead_of_reporting_a_change_on_every_run() {
     let id = created[0].1.as_str().expect("an id").to_owned();
     assert_eq!(copy(&sandbox)[0].2, "unchanged");
 
-    write_status("Shipped");
+    write_status("Done");
     assert_eq!(copy(&sandbox)[0].2, "updated");
     assert_eq!(shown(&sandbox, "task", &id)["status"]["category"], "done");
     assert_eq!(

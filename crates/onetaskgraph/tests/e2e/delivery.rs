@@ -298,7 +298,10 @@ fn a_status_set_on_local_markdown_rewrites_the_status_and_nothing_else() {
 }
 
 #[test]
-fn a_status_set_on_a_github_board_sends_only_the_option_update_or_the_close_or_reopen() {
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This must drive the compiled
+// CLI's status-set boundary, which the application crate owns; plugin-local tests separately
+// exercise the GitHub mutations over loopback HTTP.
+fn a_status_set_on_a_github_board_sends_only_status_and_issue_state_mutations() {
     for boundary in SOURCE_BOUNDARIES {
         let who = format!("{boundary:?}");
         let sandbox = Sandbox::new();
@@ -340,14 +343,14 @@ fn a_status_set_on_a_github_board_sends_only_the_option_update_or_the_close_or_r
             (
                 "work:T-3",
                 "done",
-                json!({"category": "done", "name": "Queued"}),
-                vec!["updateIssue"],
+                json!({"category": "done", "name": "Done"}),
+                vec!["updateProjectV2ItemFieldValue", "updateIssue"],
             ),
             (
                 "work:T-3",
                 "cancelled",
-                json!({"category": "cancelled", "name": "Queued"}),
-                vec!["updateIssue"],
+                json!({"category": "cancelled", "name": "Cancelled"}),
+                vec!["updateProjectV2ItemFieldValue", "updateIssue"],
             ),
             (
                 "work:T-2",
@@ -1083,6 +1086,9 @@ fn a_dropped_ticket_is_released_over_whatever_deliverers_remain() {
 }
 
 #[test]
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Cross-source delivery is
+// application behavior and must be driven through the compiled CLI; plugin-local tests
+// separately exercise the GitHub mutation protocol.
 fn a_markdown_task_keeps_a_github_ticket_in_step_through_a_copy_and_status_sets() {
     let sandbox = Sandbox::new();
     let plan = folder(
@@ -1176,11 +1182,12 @@ fn a_markdown_task_keeps_a_github_ticket_in_step_through_a_copy_and_status_sets(
         ["gh:T-3 notes:A written in-progress->done"]
     );
     let closed = mutations(&board, from);
-    assert_eq!(closed.len(), 1, "{closed:#?}");
+    assert_eq!(closed.len(), 2, "{closed:#?}");
     assert_eq!(
-        closed[0].1["input"]["stateInput"],
+        closed[1].1["input"]["stateInput"],
         json!({"value": "CLOSED", "stateReason": "COMPLETED"})
     );
+    assert_eq!(item(&sandbox, "gh:T-3")["status"]["name"], "Done");
     assert_eq!(category(&sandbox, "gh:T-3"), "done");
 }
 
