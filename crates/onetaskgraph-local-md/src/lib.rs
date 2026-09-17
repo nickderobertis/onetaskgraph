@@ -62,7 +62,10 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        RwLock, RwLockReadGuard, RwLockWriteGuard,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use chrono::{DateTime, Utc};
@@ -487,6 +490,8 @@ impl LocalMdSource {
     }
 
     fn paths(&self, kind: Kind) -> Result<Vec<PathBuf>, SourceError> {
+        let _replacement = replacement_reader();
+
         fn visit(
             root: &Path,
             dir: &Path,
@@ -564,6 +569,7 @@ impl LocalMdSource {
 
     /// One file's whole text.
     fn read_text(path: &Path) -> Result<String, SourceError> {
+        let _replacement = replacement_reader();
         fs::read_to_string(path).map_err(|e| SourceError::Malformed {
             message: format!("{}: {e}", path.display()),
         })
@@ -778,24 +784,23 @@ impl LocalMdSource {
         })
     }
 
-    fn readable_work(&self, kind: WorkKind) -> Result<Vec<Entry>, SourceError> {
+    fn parse_work_records(&self, kind: WorkKind) -> Result<Vec<Entry>, SourceError> {
         self.paths(kind.kind())?
             .into_iter()
-            .filter_map(|p| self.parse(kind, &p).ok())
-            .collect::<Vec<_>>()
-            .pipe(Ok)
+            .map(|p| self.parse(kind, &p))
+            .collect()
     }
 
-    fn readable_documents(&self) -> Result<Vec<Document>, SourceError> {
+    fn parse_document_records(&self) -> Result<Vec<Document>, SourceError> {
         self.paths(Kind::Document)?
             .into_iter()
-            .filter_map(|p| self.parse_document(&p).ok())
-            .collect::<Vec<_>>()
-            .pipe(Ok)
+            .map(|p| self.parse_document(&p))
+            .collect()
     }
 
     /// The confined canonical path `id` names under `kind`, when this source holds one.
     fn locate(&self, kind: Kind, id: &NativeId) -> Result<Option<PathBuf>, SourceError> {
+        let _replacement = replacement_reader();
         let base = self.directory(kind)?;
         let candidate = base.join(&id.0).with_extension("md");
         if !candidate.exists() {
@@ -851,13 +856,6 @@ impl LocalMdSource {
         })
     }
 }
-
-trait Pipe: Sized {
-    fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {
-        f(self)
-    }
-}
-impl<T> Pipe for T {}
 
 /// The labels one file's `labels:` key names, in the order it names them.
 fn labels_of(inputs: Vec<LabelInput>) -> Vec<Label> {
@@ -937,7 +935,7 @@ impl TaskSource for LocalMdSource {
     }
     async fn query_tasks(&self, q: &TaskQuery, p: &PageRequest) -> Result<Page<Task>, SourceError> {
         let items = self
-            .readable_work(WorkKind::Task)?
+            .parse_work_records(WorkKind::Task)?
             .into_iter()
             .map(task)
             .filter(|t| {
@@ -961,7 +959,7 @@ impl TaskSource for LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         let items = self
-            .readable_work(WorkKind::Project)?
+            .parse_work_records(WorkKind::Project)?
             .into_iter()
             .map(project)
             .filter(|x| {
@@ -984,7 +982,7 @@ impl TaskSource for LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<Document>, SourceError> {
         let items = self
-            .readable_documents()?
+            .parse_document_records()?
             .into_iter()
             .filter(|d| {
                 labels_match(&d.labels, &q.labels)
@@ -1010,12 +1008,12 @@ impl TaskSource for LocalMdSource {
         // Documents too: a label a document carries is a label of this source, and reading
         // one more folder that is already on disk is the same read as the other two.
         let mut items: Vec<Label> = self
-            .readable_work(WorkKind::Task)?
+            .parse_work_records(WorkKind::Task)?
             .into_iter()
-            .chain(self.readable_work(WorkKind::Project)?)
+            .chain(self.parse_work_records(WorkKind::Project)?)
             .flat_map(|d| d.common.labels)
             .chain(
-                self.readable_documents()?
+                self.parse_document_records()?
                     .into_iter()
                     .flat_map(|d| d.labels),
             )
@@ -1759,7 +1757,7 @@ impl LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         let edges = self
-            .readable_work(kind)?
+            .parse_work_records(kind)?
             .into_iter()
             .flat_map(|x| x.dependencies)
             .filter(|e| match d {
@@ -2266,6 +2264,22 @@ pub const STAGING_SUFFIX: &str = ".onetaskgraph-staging";
 
 /// How many staging files this process has named, so two writes in it never share one.
 static STAGED: AtomicU64 = AtomicU64::new(0);
+static REPLACEMENTS: RwLock<()> = RwLock::new(());
+
+// This lock carries no data that a panic could leave inconsistent: its only purpose is to
+// keep readers outside the Windows interval in which an atomic replacement changes handles.
+// Keep synchronizing after a panic instead of turning every later read and write into an error.
+fn replacement_reader() -> RwLockReadGuard<'static, ()> {
+    REPLACEMENTS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn replacement_writer() -> RwLockWriteGuard<'static, ()> {
+    REPLACEMENTS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// Why a narrow metadata write could not be made, and what to do about it.
 struct Unnarrow {
@@ -2369,6 +2383,7 @@ fn replace_atomically(path: &Path, text: &str) -> Result<(), SourceError> {
     let unavailable = |e: std::io::Error| SourceError::Unavailable {
         message: format!("cannot write {}: {e}", path.display()),
     };
+    let _replacement = replacement_writer();
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
