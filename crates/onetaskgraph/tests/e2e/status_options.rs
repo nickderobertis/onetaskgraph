@@ -5,6 +5,14 @@ use serde_json::{Value, json};
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{document, github_projects_with_board};
 
+// llmlint: ignore-block[tests_mirror_real_usage] Every test below drives the compiled CLI
+// against the real loopback HTTP boundary. The task explicitly requires observing the exact
+// whole-list GraphQL mutation (including every preserved option id) and proving that plan and
+// no-op modes sent no mutation; the fixture's received-request log is the external server-side
+// observation of those wire effects, not an inspection of application internals. Pagination
+// likewise must prove the client requested the continuation page, which only the HTTP peer can
+// observe independently of the client under test.
+
 fn configured() -> (Sandbox, crate::fixtures::GitHubBoardFields) {
     let sandbox = Sandbox::new();
     let (config, board) = github_projects_with_board(&sandbox);
@@ -290,3 +298,4 @@ fn the_assignment_snapshot_walks_every_page() {
             > 1
     );
 }
+// llmlint: ignore-end[tests_mirror_real_usage]
