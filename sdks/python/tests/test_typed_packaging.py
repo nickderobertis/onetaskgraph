@@ -45,7 +45,10 @@ def test_regeneration_keeps_the_typed_marker(tmp_path: Path) -> None:
 
     The real generator runs against the bundle the built binary emits, into a copy of the
     package rather than the tree, so a generator that ever reached past `_generated` would
-    fail here without dirtying the checkout.
+    fail here without dirtying the checkout. What it wrote *inside* `_generated` is not
+    compared with the committed package: that is `generate-check`'s claim, and the justfile
+    runs it on Linux alone because the regenerate step is not byte-stable on the Windows
+    runner, where this test does run.
     """
     sys.path.insert(0, str(PACKAGE))
     import generate
@@ -62,6 +65,3 @@ def test_regeneration_keeps_the_typed_marker(tmp_path: Path) -> None:
     assert not (package_copy / "_generated" / MARKER).exists(), (
         f"the generator emitted {MARKER} inside _generated, which it does not own"
     )
-    # What it regenerated is byte-for-byte the committed package, so the copy proves the
-    # generator that ships and not a variant of it.
-    generate.check_generated(package_copy / "_generated", SOURCE / "_generated")
