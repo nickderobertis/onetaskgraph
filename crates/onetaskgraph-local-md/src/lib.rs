@@ -63,7 +63,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{
-        RwLock,
+        RwLock, RwLockReadGuard, RwLockWriteGuard,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -490,9 +490,7 @@ impl LocalMdSource {
     }
 
     fn paths(&self, kind: Kind) -> Result<Vec<PathBuf>, SourceError> {
-        let _replacement = REPLACEMENTS.read().map_err(|_| SourceError::Unavailable {
-            message: "local-md replacement lock is poisoned".to_owned(),
-        })?;
+        let _replacement = replacement_reader();
 
         fn visit(
             root: &Path,
@@ -571,9 +569,7 @@ impl LocalMdSource {
 
     /// One file's whole text.
     fn read_text(path: &Path) -> Result<String, SourceError> {
-        let _replacement = REPLACEMENTS.read().map_err(|_| SourceError::Unavailable {
-            message: "local-md replacement lock is poisoned".to_owned(),
-        })?;
+        let _replacement = replacement_reader();
         fs::read_to_string(path).map_err(|e| SourceError::Malformed {
             message: format!("{}: {e}", path.display()),
         })
@@ -804,9 +800,7 @@ impl LocalMdSource {
 
     /// The confined canonical path `id` names under `kind`, when this source holds one.
     fn locate(&self, kind: Kind, id: &NativeId) -> Result<Option<PathBuf>, SourceError> {
-        let _replacement = REPLACEMENTS.read().map_err(|_| SourceError::Unavailable {
-            message: "local-md replacement lock is poisoned".to_owned(),
-        })?;
+        let _replacement = replacement_reader();
         let base = self.directory(kind)?;
         let candidate = base.join(&id.0).with_extension("md");
         if !candidate.exists() {
@@ -2272,6 +2266,21 @@ pub const STAGING_SUFFIX: &str = ".onetaskgraph-staging";
 static STAGED: AtomicU64 = AtomicU64::new(0);
 static REPLACEMENTS: RwLock<()> = RwLock::new(());
 
+// This lock carries no data that a panic could leave inconsistent: its only purpose is to
+// keep readers outside the Windows interval in which an atomic replacement changes handles.
+// Keep synchronizing after a panic instead of turning every later read and write into an error.
+fn replacement_reader() -> RwLockReadGuard<'static, ()> {
+    REPLACEMENTS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn replacement_writer() -> RwLockWriteGuard<'static, ()> {
+    REPLACEMENTS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Why a narrow metadata write could not be made, and what to do about it.
 struct Unnarrow {
     reason: String,
@@ -2374,9 +2383,7 @@ fn replace_atomically(path: &Path, text: &str) -> Result<(), SourceError> {
     let unavailable = |e: std::io::Error| SourceError::Unavailable {
         message: format!("cannot write {}: {e}", path.display()),
     };
-    let _replacement = REPLACEMENTS.write().map_err(|_| SourceError::Unavailable {
-        message: "local-md replacement lock is poisoned".to_owned(),
-    })?;
+    let _replacement = replacement_writer();
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
