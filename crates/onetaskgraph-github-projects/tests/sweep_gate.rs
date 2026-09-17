@@ -110,13 +110,36 @@ static RUNS: LazyLock<Runs> = LazyLock::new(|| {
 /// A run of this machine that has ENDED: really registered, and its registration really
 /// given up, which is the state the kernel leaves behind when a process dies.
 fn ended_run(offset: u32) -> Run {
-    let registration = Registration::take(&RUNS.registry, process(40_000 + offset))
-        .expect("a run that this check then ends");
-    let run = registration.run();
-    // Given up here, so the lock is free — the same thing the kernel does for a process that
-    // has died, and the only state that authorises a removal.
-    drop(registration);
-    run
+    with_no_drive_going(|| {
+        let registration = Registration::take(&RUNS.registry, process(40_000 + offset))
+            .expect("a run that this check then ends");
+        let run = registration.run();
+        // Given up here, so the lock is free — the same thing the kernel does for a process
+        // that has died, and the only state that authorises a removal.
+        drop(registration);
+        run
+    })
+}
+
+/// Run `take` while no drive is going and no other registration is being taken or given up.
+///
+/// Every registration a test takes outside its drive goes through this, and so does the
+/// spawn of the second process, because a registration is a lock on an open file and the
+/// tests here run on threads of one process at the same time. Two things went wrong across
+/// those threads before this existed, each about one run in ten. A fork copies the file
+/// table, so a child spawned while [`ended_run`] had its registration open inherited that
+/// exclusive lock and kept it until `execve` closed it — and a sweep in that window read
+/// the ended run as live and never attempted the deletes it was being proven on. And
+/// [`Registry::finished_runs`] holds a shared lock on every registration for an instant
+/// while it asks, so a `Registration::take` racing another drive's sweep was refused, which
+/// is that test's `expect` failing on a run nobody held. Both are one shape: a registration
+/// touched while a drive or a spawn could be looking at it. Holding [`ONE_AT_A_TIME`] over
+/// each is what a real second process gets for free, since it has a file table of its own.
+fn with_no_drive_going<T>(take: impl FnOnce() -> T) -> T {
+    let _exclusive = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    take()
 }
 
 /// A run's process id, which no operating system numbers zero.
@@ -143,6 +166,14 @@ struct LiveRunBeside {
 
 impl LiveRunBeside {
     fn start() -> Self {
+        // Spawned and waited for under the one guard the drives hold, so no test is taking
+        // or giving up a registration while the fork copies this process's file table, and
+        // the child has closed every copy it inherited — by registering, which is after its
+        // `execve` — before any of them can go on; see `with_no_drive_going`.
+        with_no_drive_going(Self::spawn)
+    }
+
+    fn spawn() -> Self {
         let child = Command::new(
             std::env::current_exe().expect("the path of the test binary being re-executed"),
         )
@@ -545,7 +576,7 @@ async fn a_process_id_reissued_to_a_new_run_costs_a_delay_and_never_a_deletion()
     let in_flight_label = artifact_label(reused, NOW);
     // The number is registered again, which is exactly what the operating system handing it
     // to a new process looks like from here.
-    let taken_over = Registration::take(&RUNS.registry, reused.process())
+    let taken_over = with_no_drive_going(|| Registration::take(&RUNS.registry, reused.process()))
         .expect("the run that was issued that number next");
     let drive = Drive::plant(
         vec![
