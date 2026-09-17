@@ -4,10 +4,7 @@
   "projectType": "library",
   "tags": ["lang:rust", "layer:plugin-operation"],
   "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree.",
-  "implicitDependencies": [
-    "onetaskgraph-github-projects",
-    "onetaskgraph-plugin-api"
-  ],
+  "implicitDependencies": ["onetaskgraph-github-projects", "onetaskgraph-plugin-api"],
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",
@@ -26,15 +23,21 @@
     },
     "lint": {
       "executor": "nx:run-commands",
-      "options": { "command": "cargo clippy --quiet -p onetaskgraph-status-options --all-targets --all-features --locked -- -D warnings" }
+      "options": {
+        "command": "cargo clippy --quiet -p onetaskgraph-status-options --all-targets --all-features --locked -- -D warnings"
+      }
     },
     "typecheck": {
       "executor": "nx:run-commands",
-      "options": { "command": "cargo check --quiet -p onetaskgraph-status-options --all-targets --all-features --locked" }
+      "options": {
+        "command": "cargo check --quiet -p onetaskgraph-status-options --all-targets --all-features --locked"
+      }
     },
     "test": {
       "executor": "nx:run-commands",
-      "options": { "command": "cargo test --quiet -p onetaskgraph-status-options --all-features --locked" }
+      "options": {
+        "command": "cargo test --quiet -p onetaskgraph-status-options --all-features --locked"
+      }
     },
     "coverage": {
       "executor": "nx:run-commands",
