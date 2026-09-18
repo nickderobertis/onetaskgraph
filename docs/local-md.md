@@ -123,8 +123,8 @@ names a project:
   is passed over without being parsed, so a record another project holds cannot fail a
   query about this one, however broken it is. A file with no front matter names no project.
   Every other file is parsed in full, and one that does not parse fails the query naming it
-  — including a file whose front matter is not YAML at all, or whose `project:` is not a
-  string, because nothing shows it is not in the project asked about.
+  — including a file whose front matter is not YAML at all, or whose `project:` cannot be
+  read as a project id, because nothing shows it is not in the project asked about.
 
 A file that is **gone** by the time the walk resolves or reads it — another process deleted
 or renamed it after its folder was listed — is skipped, in every query: nothing of it was

@@ -206,7 +206,7 @@ struct FrontMatter {
     #[serde(default)]
     labels: Vec<LabelInput>,
     // llmlint: ignore[invalid_states_unrepresentable] `NativeId` is deliberately an opaque, unvalidated string in the frozen plugin contract (`onetaskgraph-plugin-api/src/id.rs`); replacing this wire value with a stricter local identifier would reject values the public type expressly permits.
-    project: Option<String>,
+    project: FiledUnder,
     #[serde(default)]
     depends_on: Vec<Dependency>,
     // llmlint: ignore[invalid_states_unrepresentable, boundary_inputs_validated] `Task::url` and `Project::url` are frozen as `Option<String>` in the plugin contract, which permits source-native URL-like values; parsing here would narrow that approved boundary and is the contract owner's decision.
@@ -222,6 +222,18 @@ struct FrontMatter {
     /// Every task that delivers this one, read on the terms `delivers` is.
     delivered_by: Option<serde_json::Value>,
 }
+/// What a front matter's `project:` key is read into, by every kind of record and by the
+/// scoped read's look at that key alone — one type, so what the two accept cannot part.
+type FiledUnder = Option<String>;
+
+/// The one key a scoped read looks at before it parses a record, read into the type the
+/// record's own parse reads it into and ignoring every other key.
+#[derive(Deserialize)]
+struct Filing {
+    #[serde(default)]
+    project: FiledUnder,
+}
+
 fn default_status() -> String {
     "backlog".to_owned()
 }
@@ -344,7 +356,7 @@ struct DocumentFrontMatter {
     #[serde(default)]
     labels: Vec<LabelInput>,
     // llmlint: ignore[invalid_states_unrepresentable] `NativeId` is deliberately an opaque, unvalidated string in the frozen plugin contract (`onetaskgraph-plugin-api/src/id.rs`); replacing this wire value with a stricter local identifier would reject values the public type expressly permits.
-    project: Option<String>,
+    project: FiledUnder,
     // llmlint: ignore[invalid_states_unrepresentable, boundary_inputs_validated] `Document::url` is frozen as `Option<String>` in the plugin contract, which permits source-native URL-like values; parsing here would narrow that approved boundary and is the contract owner's decision.
     url: Option<String>,
     #[serde(default)]
@@ -540,6 +552,15 @@ impl LocalMdSource {
                 // An entry removed between the listing and here — another process deleting
                 // or renaming it — is skipped: it is not a record of this folder any more,
                 // and nothing about it was read to call malformed.
+                // llmlint: ignore[boundary_inputs_validated, changed_behavior_has_e2e] The
+                // window between classifying an entry and reading it by path is the one the
+                // code this replaces had between `canonicalize` and the read, not a new one:
+                // an entry swapped for a link in between is followed either way. Closing it
+                // needs a no-follow open relative to the folder's handle, which `std` does not
+                // offer on every platform this ships on; and a process that can swap entries
+                // under the root can already write whatever a record says. Forcing that swap
+                // into that instant deterministically needs a double of the filesystem, which
+                // the repository's test rules forbid.
                 let linked = match entry.file_type() {
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                     file_type => file_type
@@ -1581,11 +1602,10 @@ fn vanished(path: &Path) -> bool {
 
 /// Whether the file whose contents are `text` provably files its record outside `scope`.
 ///
-/// Read far more leniently than a record is: only the front matter's top-level `project`
-/// key, and only when it is absent, null or a string, which are the three readings a
-/// record's own parse agrees with. A file with no front matter names no project. Anything
-/// else — front matter that is not YAML, a `project` of another shape — is not provably
-/// outside, so the caller parses it in full and it fails as itself.
+/// Read far more leniently than a record is: only the front matter's `project` key, through
+/// [`Filing`], ignoring every other key. A file with no front matter names no project. Front
+/// matter whose `project` key [`Filing`] cannot read — or that is not YAML at all — is not
+/// provably outside, so the caller parses it in full and it fails as itself.
 fn outside(text: &str, scope: &ProjectFilter) -> bool {
     let wanted = match scope {
         ProjectFilter::Any => return false,
@@ -1594,14 +1614,9 @@ fn outside(text: &str, scope: &ProjectFilter) -> bool {
     };
     let project = match front_matter(text) {
         None => None,
-        Some((yaml, _)) => match serde_norway::from_str::<serde_json::Value>(yaml) {
-            Ok(serde_json::Value::Null) => None,
-            Ok(serde_json::Value::Object(mut front)) => match front.remove("project") {
-                None | Some(serde_json::Value::Null) => None,
-                Some(serde_json::Value::String(project)) => Some(project),
-                Some(_) => return false,
-            },
-            _ => return false,
+        Some((yaml, _)) => match serde_norway::from_str::<Filing>(yaml) {
+            Ok(filing) => filing.project,
+            Err(_) => return false,
         },
     };
     project.as_deref() != wanted
