@@ -92,7 +92,7 @@ jobs:
             publication=$(scripts/crate-publication-status.sh "$crate" "$version") || exit $?
             case "$publication" in
               published) ;;
-              absent) RUSTFLAGS='-D warnings' cargo publish -p "$crate" --locked ;;
+              absent) scripts/crate-sibling-resolution.sh "$crate" || exit $?; RUSTFLAGS='-D warnings' cargo publish -p "$crate" --locked ;;
               *) echo "unusable crates.io answer for $crate $version: $publication" >&2; exit 69 ;;
             esac
           done

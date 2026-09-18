@@ -48,7 +48,7 @@ crate_job=$(sed -n '/^  publish-crates:/,/^  publish-python:/p' .github/workflow
 grep -Fq 'publication=$(scripts/crate-publication-status.sh "$crate" "$version") || exit $?' <<< "$crate_job" || fail "crate publication must decide from scripts/crate-publication-status.sh, which identifies the caller to crates.io"
 ! grep -Eq 'curl|wget' <<< "$crate_job" || fail "the crates.io existence query must stay in scripts/crate-publication-status.sh, where the caller is identified to the registry"
 grep -Fq 'published) ;;' <<< "$crate_job" || fail "a crate already on crates.io must be left alone"
-grep -Fq 'absent) RUSTFLAGS=' <<< "$crate_job" || fail "a crate absent from crates.io must be published"
+grep -Fq 'absent) scripts/crate-sibling-resolution.sh "$crate" || exit $?; RUSTFLAGS=' <<< "$crate_job" || fail "a crate absent from crates.io must be published, and only after scripts/crate-sibling-resolution.sh finds every sibling it requires resolving to the version released with it"
 grep -Fq -- '--user-agent "$agent"' scripts/crate-publication-status.sh || fail "the crates.io existence query must send an explicit user agent; the registry answers curl's default with 403"
 grep -Fq 'agent="onetaskgraph-release (https://github.com/nickderobertis/onetaskgraph)"' scripts/crate-publication-status.sh || fail "the crates.io user agent must name this release and a contact URL for it"
 grep -Fq 'NPM_TOKEN is required (received ${#token} characters)' scripts/publish-npm.sh || fail "the npm token guard must report only the received token length"
@@ -177,3 +177,27 @@ for crate in "${crates[@]}"; do
   grep -q "name = \"$crate\"" release-plz.toml || [[ $crate == onetaskgraph ]] || fail "$crate missing from release-plz package inventory"
   grep -q "for crate in .*$crate" .github/workflows/release.yml || fail "$crate missing from publish order"
 done
+# Every edge between two crates this workspace publishes is an exact requirement on the
+# version the other is released at. These pre-1.0 crates are lock-step, and a caret lets a
+# consumer resolve one against another's newer, incompatible patch with no lockfile error.
+# Last, after the inventory above: this is the one read that asks cargo to load the whole
+# workspace, and a crate directory cargo cannot load is named by the inventory's own
+# diagnostic rather than by cargo's manifest error — scripts/check-line-reads.sh plants
+# exactly such a directory and reads the inventory's answer.
+if ! inexact="$(cargo metadata --no-deps --format-version 1 | python3 -c '
+import json, sys
+packages = {package["name"]: package for package in json.load(sys.stdin)["packages"]}
+for package in packages.values():
+    if package.get("publish") == []:
+        continue
+    for dependency in package["dependencies"]:
+        sibling = packages.get(dependency["name"])
+        if sibling is None or sibling.get("publish") == []:
+            continue
+        wanted = "=" + sibling["version"]
+        if dependency["req"] != wanted:
+            print(package["name"], "requires", dependency["name"], "as", dependency["req"], "rather than", wanted)
+' | tr -d '\r')"; then
+  fail "could not read the workspace's sibling requirements from cargo metadata"
+fi
+[[ -z $inexact ]] || fail "sibling requirements must be exact, '=<workspace version>', in the root Cargo.toml's [workspace.dependencies]: ${inexact//$'\n'/; }"

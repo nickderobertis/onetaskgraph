@@ -55,7 +55,11 @@ if [[ ${1:-} == --check ]]; then
     value=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$manifest" | head -n1)
     check_value "$value" "$manifest"
   done
-  while IFS= read -r value; do check_value "$value" 'Cargo.toml path dependency'; done < <(sed -n 's/.*path = "crates\/[^" ]*", version = "\([^"]*\)".*/\1/p' Cargo.toml)
+  # Each sibling is pinned exactly, `=X.Y.Z`: these crates are released in lock step, and a
+  # caret lets a consumer resolve one of them against another's newer, incompatible patch.
+  while IFS= read -r value; do
+    [[ $value == "=$expected" ]] || { echo "Cargo.toml path dependency has '$value'; expected the exact requirement '=$expected'" >&2; fail=1; }
+  done < <(sed -n 's/.*path = "crates\/[^" ]*", version = "\([^"]*\)".*/\1/p' Cargo.toml)
   check_value "$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n1)" pyproject.toml
   check_value "$(sed -n 's/.*onetaskgraph-cli==\([^" ]*\).*/\1/p' sdks/python/pyproject.toml)" 'Python SDK CLI pin'
   node -e 'const fs=require("fs"); const v=process.argv[1]; for (const f of ["npm/cli/package.json",...fs.readdirSync("npm/platforms").map(x=>`npm/platforms/${x}/package.json`)]) { const p=JSON.parse(fs.readFileSync(f)); if(p.version!==v) throw Error(`${f} has ${p.version}; expected ${v}`); for(const [n,x] of Object.entries(p.optionalDependencies||{})) if(x!==v) throw Error(`${f} ${n} pin has ${x}; expected ${v}`) }' "$expected" || fail=1
