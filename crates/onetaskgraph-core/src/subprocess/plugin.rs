@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
+use std::path::Path;
 
 use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName, SourcePlugin, TaskSource};
 use schemars::{JsonSchema, Schema, schema_for};
@@ -14,6 +15,12 @@ use crate::secrets::CredentialName;
 
 /// The name a configuration document's `plugin:` field names this kind by.
 pub(crate) const KIND: &str = "subprocess";
+
+/// The field of [`SubprocessConfig`] handed to the child as its `config:` block.
+///
+/// Named once because the configuration layer reads it too: it is the block whose
+/// supplying document the handshake reports as `document_dir`.
+pub(crate) const SETTINGS_FIELD: &str = "settings";
 
 /// How to run a plugin that speaks `docs/plugin-protocol.md`.
 ///
@@ -106,18 +113,41 @@ impl SourcePlugin for Plugin {
         config: &Value,
         secrets: &dyn SecretResolver,
     ) -> Result<Box<dyn TaskSource>, SourceError> {
+        self.build_from_document(name, config, secrets, None)
+    }
+}
+
+impl Plugin {
+    /// [`SourcePlugin::build`], telling the child which document supplied its settings.
+    ///
+    /// `document_dir` is [`SourceConfig::document_dir`](crate::SourceConfig::document_dir):
+    /// the engine reaches this rather than the trait method because the trait hands a
+    /// plugin values and no origins, and this plugin alone passes an origin on — as
+    /// `document_dir` in the handshake (`docs/plugin-protocol.md` §3).
+    ///
+    /// # Errors
+    ///
+    /// What [`SourcePlugin::build`] returns.
+    pub fn build_from_document(
+        &self,
+        name: &SourceName,
+        config: &Value,
+        secrets: &dyn SecretResolver,
+        document_dir: Option<&Path>,
+    ) -> Result<Box<dyn TaskSource>, SourceError> {
         let config: SubprocessConfig =
             serde_json::from_value(config.clone()).map_err(|error| SourceError::Config {
                 message: format!("source {name}: {error}"),
             })?;
         let forwarded = resolve_named(name, &config.secrets, secrets)?;
-        SubprocessSource::connect_with_deadline(
+        SubprocessSource::connect_from_document(
             config.command.as_str(),
             &config.args,
             name,
             &config.settings,
             forwarded,
             RequestDeadline::from_millis(config.deadline_ms),
+            document_dir,
         )
         .map(|source| Box::new(source) as Box<dyn TaskSource>)
     }

@@ -16,8 +16,10 @@ use jsonschema::error::ValidationErrorKind;
 use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName, SourcePlugin, TaskSource};
 use serde_json::Value;
 
+use crate::PluginKind;
 use crate::config::{Config, ConfigError, SourceConfig};
 use crate::plan::SourceFailure;
+use crate::subprocess::SubprocessPlugin;
 
 /// One configured source, built and ready to answer.
 ///
@@ -200,7 +202,20 @@ pub fn resolve_available(
     let mut unavailable = Vec::new();
     for (name, source) in config.sources() {
         let plugin = source.plugin().plugin();
-        match plugin.build(name, source.config(), secrets) {
+        // The one plugin that passes an origin on: the trait hands a plugin values and no
+        // origins, so a `subprocess` source is built with the directory of the document
+        // its settings came from, which its child measures declared paths from.
+        let outcome = if source.plugin() == PluginKind::Subprocess {
+            SubprocessPlugin.build_from_document(
+                name,
+                source.config(),
+                secrets,
+                source.document_dir(),
+            )
+        } else {
+            plugin.build(name, source.config(), secrets)
+        };
+        match outcome {
             Ok(source) => built.push(ResolvedSource::adopt(name.clone(), source)),
             Err(error) => unavailable.push(UnavailableSource {
                 name: name.clone(),
