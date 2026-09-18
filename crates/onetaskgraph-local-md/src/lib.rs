@@ -205,7 +205,6 @@ struct FrontMatter {
     status: String,
     #[serde(default)]
     labels: Vec<LabelInput>,
-    // llmlint: ignore[invalid_states_unrepresentable] `NativeId` is deliberately an opaque, unvalidated string in the frozen plugin contract (`onetaskgraph-plugin-api/src/id.rs`); replacing this wire value with a stricter local identifier would reject values the public type expressly permits.
     project: FiledUnder,
     #[serde(default)]
     depends_on: Vec<Dependency>,
@@ -223,8 +222,9 @@ struct FrontMatter {
     delivered_by: Option<serde_json::Value>,
 }
 /// What a front matter's `project:` key is read into, by every kind of record and by the
-/// scoped read's look at that key alone — one type, so what the two accept cannot part.
-type FiledUnder = Option<String>;
+/// scoped read's look at that key alone — one type, so what the two accept cannot part. It is
+/// the contract's own project id, which a record carries through unchanged.
+type FiledUnder = Option<NativeId>;
 
 /// The one key a scoped read looks at before it parses a record, read into the type the
 /// record's own parse reads it into and ignoring every other key.
@@ -247,7 +247,7 @@ fn default_status() -> String {
 struct SharedFront {
     title: Option<String>,
     labels: Vec<LabelInput>,
-    project: Option<String>,
+    project: FiledUnder,
     url: Option<String>,
     metadata: BTreeMap<String, serde_json::Value>,
     repositories: Vec<Repository>,
@@ -355,7 +355,6 @@ struct DocumentFrontMatter {
     title: Option<String>,
     #[serde(default)]
     labels: Vec<LabelInput>,
-    // llmlint: ignore[invalid_states_unrepresentable] `NativeId` is deliberately an opaque, unvalidated string in the frozen plugin contract (`onetaskgraph-plugin-api/src/id.rs`); replacing this wire value with a stricter local identifier would reject values the public type expressly permits.
     project: FiledUnder,
     // llmlint: ignore[invalid_states_unrepresentable, boundary_inputs_validated] `Document::url` is frozen as `Option<String>` in the plugin contract, which permits source-native URL-like values; parsing here would narrow that approved boundary and is the contract owner's decision.
     url: Option<String>,
@@ -626,6 +625,11 @@ impl LocalMdSource {
     /// One listed file's whole text, or `None` when it has been removed since it was listed.
     fn read_listed(path: &Path) -> Result<Option<String>, SourceError> {
         let _replacement = replacement_reader();
+        // llmlint: ignore[boundary_inputs_validated] This read by path is the other end of the
+        // window `paths` states where it classifies the entry: the code this replaces read by
+        // path after `canonicalize` and followed a swapped-in link just the same. Closing it
+        // needs a no-follow open relative to the folder's handle, which `std` does not offer
+        // on every platform this ships on.
         match fs::read_to_string(path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             text => text.map(Some).map_err(|e| SourceError::Malformed {
@@ -697,8 +701,7 @@ impl LocalMdSource {
             title: front.title.unwrap_or(fallback),
             body: (!body.is_empty()).then(|| body.to_owned()),
             labels: labels_of(front.labels),
-            // llmlint: ignore[boundary_inputs_validated] Project references use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
-            project: front.project.map(NativeId),
+            project: front.project,
             url: front.url,
             location: Location::Path(path.to_str().ok_or_else(not_utf8)?.to_owned()),
             metadata: front.metadata,
@@ -1610,7 +1613,7 @@ fn outside(text: &str, scope: &ProjectFilter) -> bool {
     let wanted = match scope {
         ProjectFilter::Any => return false,
         ProjectFilter::Orphans => None,
-        ProjectFilter::Is(id) => Some(id.0.as_str()),
+        ProjectFilter::Is(id) => Some(id),
     };
     let project = match front_matter(text) {
         None => None,
@@ -1619,7 +1622,7 @@ fn outside(text: &str, scope: &ProjectFilter) -> bool {
             Err(_) => return false,
         },
     };
-    project.as_deref() != wanted
+    project.as_ref() != wanted
 }
 
 /// The refusal for a file with no front matter this source can find.
