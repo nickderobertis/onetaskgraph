@@ -496,15 +496,11 @@ work out.
 
 The rule reaches only the configuration fields a plugin itself declares as paths, and each
 plugin's own page says which of its fields those are. It holds across the `subprocess` seam
-too: what a `settings:` block holds belongs to a plugin this binary may never have compiled,
-so the engine rewrites nothing in it, and instead tells the child the directory of the
-document the block came from — `document_dir` in
-[`docs/plugin-protocol.md`](./docs/plugin-protocol.md) §3.8. The reference host resolves the
-fields its hosted plugin declares against it, so a `local-md` root relative to its document
-names the same directory in process and behind the seam. A block the environment or a flag
-reaches into carries no document directory, and a relative path in it keeps meaning the
-working directory on both sides. A plugin written before that member ignores it and
-resolves its paths as it always has.
+too, so a `local-md` root relative to its document names the same directory in process and
+behind the seam: the engine rewrites nothing in a `settings:` block, and the child learns
+which document's directory to measure its declared fields from through the handshake.
+[`docs/plugin-protocol.md`](./docs/plugin-protocol.md) §3.8 is the one statement of that
+member, including when it is absent and what a plugin written before it does.
 
 ### Credentials
 
