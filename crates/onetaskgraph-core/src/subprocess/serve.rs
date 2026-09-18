@@ -13,7 +13,6 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
-use std::path::Path;
 
 use onetaskgraph_plugin_api::{
     Page, Project, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
@@ -26,7 +25,7 @@ use serde_json::{Value, json};
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
     AddCommentParams, CommentsParams, DeleteCommentParams, DeleteParams, DeliveredByParams,
-    DependencyParams, DocumentQueryParams, DocumentWriteParams, EditCommentParams,
+    DependencyParams, DocumentDir, DocumentQueryParams, DocumentWriteParams, EditCommentParams,
     HandshakePluginKind, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
     PROTOCOL_VERSION, ProjectQueryParams, ProjectWriteParams, Request, Response, StatusParams,
     TaskQueryParams, TaskWriteParams, after_the_first_vocabulary, knows_every_category, vocabulary,
@@ -304,10 +303,10 @@ fn build_plugin(
     let name = SourceName::new(params.source_name.clone())?;
     let plugin = kind.plugin();
     let config = measured_from_document(
-        params.document_dir.as_deref(),
+        params.document_dir.as_ref(),
         plugin.document_relative_paths(),
         config,
-    )?;
+    );
     plugin.build(&name, &config, &Handshake(&params.secrets))
 }
 
@@ -321,24 +320,15 @@ fn build_plugin(
 /// directory — which is what the engine sends when the block came from the environment
 /// or a flag rather than from a document.
 fn measured_from_document(
-    document_dir: Option<&str>,
+    document_dir: Option<&DocumentDir>,
     fields: &[&str],
     config: &Value,
-) -> Result<Value, SourceError> {
+) -> Value {
     let mut config = config.clone();
-    let Some(directory) = document_dir else {
-        return Ok(config);
+    // Absolute by construction: a relative one was refused as the handshake was read.
+    let Some(directory) = document_dir.map(DocumentDir::as_path) else {
+        return config;
     };
-    let directory = Path::new(directory);
-    // §3 promises an absolute directory; measuring from a relative one would measure from
-    // this process's working directory, which is exactly what the member exists to avoid.
-    if !directory.is_absolute() {
-        return Err(SourceError::Config {
-            message: format!(
-                "the handshake's document_dir {directory:?} is not an absolute path, so there                  is no one directory to measure this source's relative paths from"
-            ),
-        });
-    }
     for field in fields {
         let Some(value) = field
             .split('.')
@@ -356,7 +346,7 @@ fn measured_from_document(
             .expect("a path joined from two strings is a string");
         *value = Value::String(rebased);
     }
-    Ok(config)
+    config
 }
 
 /// The credentials the handshake forwarded, and nothing else.

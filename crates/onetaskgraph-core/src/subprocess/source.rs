@@ -27,10 +27,10 @@ use super::connection::{Connection, Peer};
 use super::wire::{
     AddCommentParams, CommentResult, CommentsParams, CommentsResult, DeleteCommentParams,
     DeleteParams, DeletedCommentResult, DeliveredByParams, DeliveredByResult, DependencyParams,
-    DocumentQueryParams, DocumentResult, DocumentWriteParams, EditCommentParams, EngineIdentity,
-    IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, MeteringResult,
-    PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request, StatusParams,
-    StatusResult, TaskQueryParams, TaskResult, TaskWriteParams, WriteResult,
+    DocumentDir, DocumentQueryParams, DocumentResult, DocumentWriteParams, EditCommentParams,
+    EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
+    MeteringResult, PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams,
+    Request, StatusParams, StatusResult, TaskQueryParams, TaskResult, TaskWriteParams, WriteResult,
     after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
 };
 
@@ -156,9 +156,9 @@ impl SubprocessSource {
     /// # Errors
     ///
     /// What [`connect`](Self::connect) returns, and [`SourceError::Config`] when
-    /// `document_dir` is not valid UTF-8 and so cannot be written into the handshake —
-    /// refused rather than dropped, because dropping it would silently measure the
-    /// child's paths from its working directory instead.
+    /// `document_dir` is not an absolute directory whose name is valid UTF-8, and so
+    /// cannot be written into the handshake — refused rather than dropped, because dropping
+    /// it would silently measure the child's paths from its working directory instead.
     pub fn connect_from_document(
         program: &str,
         args: &[String],
@@ -170,15 +170,14 @@ impl SubprocessSource {
     ) -> Result<Self, SourceError> {
         let document_dir = document_dir
             .map(|directory| {
-                directory
-                    .to_str()
-                    .map(str::to_owned)
-                    .ok_or_else(|| SourceError::Config {
-                        message: format!(
-                            "source {name}: its settings are measured from {}, the directory                              holding the configuration document that set them, and that                              directory's name is not valid UTF-8, so it cannot be sent to the                              plugin; give the settings absolute paths, or move the document                              under a directory whose name is valid UTF-8",
-                            directory.display()
-                        ),
-                    })
+                DocumentDir::new(directory).map_err(|problem| SourceError::Config {
+                    message: format!(
+                        "source {name}: its settings are measured from the directory holding \
+                         the configuration document that set them, and {problem}; give the \
+                         settings absolute paths, or move the document under a directory \
+                         whose name is valid UTF-8"
+                    ),
+                })
             })
             .transpose()?;
         Self::adopt(
@@ -249,7 +248,7 @@ impl SubprocessSource {
         name: &SourceName,
         config: &Value,
         secrets: BTreeMap<String, String>,
-        document_dir: Option<String>,
+        document_dir: Option<DocumentDir>,
     ) -> Result<Self, SourceError> {
         let result = Self::handshake(&mut peer, name, config, secrets, document_dir);
         let InitializeResult {
@@ -300,7 +299,7 @@ impl SubprocessSource {
         name: &SourceName,
         config: &Value,
         secrets: BTreeMap<String, String>,
-        document_dir: Option<String>,
+        document_dir: Option<DocumentDir>,
     ) -> Result<InitializeResult, SourceError> {
         let params = InitializeParams {
             protocol_version: PROTOCOL_VERSION,

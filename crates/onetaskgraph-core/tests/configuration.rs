@@ -1331,6 +1331,82 @@ fn a_subprocess_block_the_environment_reaches_into_carries_no_documents_director
 }
 
 #[test]
+fn a_subprocess_block_two_documents_each_supply_part_of_carries_no_documents_directory() {
+    // One directory cannot answer for paths two documents wrote, and choosing either would
+    // measure the other's from a place nobody wrote them in.
+    let host = Host::new();
+    host.write(
+        &format!("home/{USER_DOCUMENT_RELATIVE_PATH}"),
+        "sources:\n  notes:\n    plugin: subprocess\n    config:\n      command: /bin/true\n      \
+         settings:\n        kind: local-md\n",
+    );
+    host.write(
+        &format!("project/{PROJECT_DOCUMENT_NAME}"),
+        "sources:\n  notes:\n    config:\n      settings:\n        config:\n          \
+         root: store\n",
+    );
+
+    let loaded = config::load(
+        &host.root.path().join("project"),
+        &host.environment(),
+        &Layer::default(),
+    )
+    .expect("the configuration loads");
+    let notes = &loaded.config.sources()[&SourceName::new("notes").unwrap()];
+    assert_eq!(
+        notes.config()["settings"],
+        json!({"kind": "local-md", "config": {"root": "store"}}),
+        "both documents reached the block"
+    );
+    assert_eq!(notes.document_dir(), None);
+}
+
+/// A document under a directory whose name is not valid UTF-8, configuring one source.
+#[cfg(target_os = "linux")]
+fn under_a_directory_that_is_not_valid_utf8(host: &Host, document: &str) -> std::path::PathBuf {
+    use std::ffi::{OsStr, OsString};
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut name = OsString::from("project-");
+    name.push(OsStr::from_bytes(&[0xff]));
+    let directory = host.root.path().join(name);
+    std::fs::create_dir_all(&directory).expect("a directory whose name is not valid UTF-8");
+    std::fs::write(directory.join(PROJECT_DOCUMENT_NAME), document).expect("a document under it");
+    directory
+}
+
+/// Linux-only for the reason
+/// `a_document_under_a_directory_that_is_not_valid_utf8_refuses_the_setting_it_cannot_resolve`
+/// gives: it is the one platform of the three that can hold such a directory.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_subprocess_source_under_a_directory_that_is_not_valid_utf8_is_refused_before_it_is_spawned() {
+    let host = Host::new();
+    // A program that does not exist: the refusal has to come before anything is spawned,
+    // or this would fail as an unrunnable program instead.
+    let directory = under_a_directory_that_is_not_valid_utf8(
+        &host,
+        "sources:\n  notes:\n    plugin: subprocess\n    config:\n      \
+         command: onetaskgraph-no-such-plugin-program\n      settings:\n        \
+         kind: local-md\n        config:\n          root: store\n",
+    );
+    let loaded = config::load(&directory, &host.environment(), &Layer::default())
+        .expect("the engine rewrites nothing in the block, so there is nothing to refuse yet");
+
+    let error = resolve(&loaded.config, &loaded.secrets)
+        .expect_err("a document directory that cannot be sent is refused, never dropped");
+
+    let ConfigError::Setting { key, message, .. } = &error else {
+        panic!("the source that cannot be told its directory is refused: {error}");
+    };
+    assert_eq!(key, "sources.notes");
+    assert!(
+        message.contains("not valid UTF-8") && !message.contains("could not run"),
+        "{message}"
+    );
+}
+
+#[test]
 fn only_the_markdown_folder_declares_a_document_relative_field() {
     // Every plugin is asked rather than a table of which ones answer being kept here, so
     // the assertion is over the whole registry: a plugin that starts declaring one without
@@ -1364,19 +1440,11 @@ fn only_the_markdown_folder_declares_a_document_relative_field() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_document_under_a_directory_that_is_not_valid_utf8_refuses_the_setting_it_cannot_resolve() {
-    use std::ffi::{OsStr, OsString};
-    use std::os::unix::ffi::OsStrExt;
-
     let host = Host::new();
-    let mut name = OsString::from("project-");
-    name.push(OsStr::from_bytes(&[0xff]));
-    let directory = host.root.path().join(name);
-    std::fs::create_dir_all(&directory).expect("a directory whose name is not valid UTF-8");
-    std::fs::write(
-        directory.join(PROJECT_DOCUMENT_NAME),
+    let directory = under_a_directory_that_is_not_valid_utf8(
+        &host,
         "sources:\n  plans:\n    plugin: local-md\n    config:\n      root: plans\n",
-    )
-    .expect("a document under it");
+    );
 
     let error = config::load(&directory, &host.environment(), &Layer::default())
         .expect_err("a resolved path that cannot be written down is refused, never replaced");

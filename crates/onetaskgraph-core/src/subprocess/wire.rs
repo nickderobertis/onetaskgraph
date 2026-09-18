@@ -12,6 +12,7 @@
 //! version add an optional field without a version bump.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite, MetadataKey,
@@ -175,7 +176,56 @@ pub(crate) struct InitializeParams {
     /// against the working directory. A plugin written before the member ignores it (§2.1)
     /// and behaves exactly as it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) document_dir: Option<String>,
+    pub(crate) document_dir: Option<DocumentDir>,
+}
+
+/// `document_dir` (§3.8): an absolute directory whose name is a string.
+///
+/// Checked wherever one is made — by the engine from the configuration layer, and by the
+/// reference host from the wire — so a relative one cannot be sent or measured from. A
+/// relative directory would be measured from the child's working directory, which is the
+/// very answer the member exists to replace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+pub(crate) struct DocumentDir(String);
+
+impl DocumentDir {
+    /// `directory`, or why it cannot be sent as one.
+    pub(crate) fn new(directory: &Path) -> Result<Self, String> {
+        let spelled = directory.to_str().ok_or_else(|| {
+            format!(
+                "the document directory {} is not valid UTF-8, so it cannot be written into \
+                 the handshake",
+                directory.display()
+            )
+        })?;
+        if !directory.is_absolute() {
+            return Err(format!(
+                "the document directory {spelled:?} is not an absolute path, so there is no \
+                 one directory to measure this source's relative paths from"
+            ));
+        }
+        Ok(Self(spelled.to_owned()))
+    }
+
+    /// The directory itself.
+    pub(crate) fn as_path(&self) -> &Path {
+        Path::new(&self.0)
+    }
+}
+
+impl TryFrom<String> for DocumentDir {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(Path::new(&value))
+    }
+}
+
+impl From<DocumentDir> for String {
+    fn from(value: DocumentDir) -> Self {
+        value.0
+    }
 }
 
 /// Who is asking, for the plugin's diagnostics (§3).

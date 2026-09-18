@@ -1960,3 +1960,74 @@ fn a_hosted_plugin_that_declares_no_path_has_nothing_in_its_settings_resolved() 
     assert_eq!(task["title"], "plans", "{shown:#}");
     assert_eq!(task["content"], "plans", "{shown:#}");
 }
+
+#[test]
+fn an_absolute_root_a_document_supplies_behind_the_seam_is_read_where_it_names() {
+    // A document directory reaching the host moves nothing that is already absolute: the
+    // store named outright is read on both sides, not one joined onto the document's own
+    // directory.
+    let sandbox = Sandbox::new();
+    checkout_and_worktree_on_both_sides(&sandbox);
+    let named = store(&sandbox, "elsewhere/named/outright/plans", "named-outright");
+    sandbox.project_document(&both_sides_of_the_seam(&named.to_string_lossy()));
+    let file = task_file(&named, "named-outright");
+
+    assert_eq!(
+        listed_with(
+            &sandbox,
+            &sandbox.project().join("worktrees/feature"),
+            &[],
+            &[]
+        ),
+        vec![
+            ("hosted:named-outright".to_owned(), file.clone()),
+            ("plans:named-outright".to_owned(), file),
+        ]
+    );
+}
+
+#[test]
+fn an_empty_root_a_document_supplies_behind_the_seam_is_not_rebased_onto_the_documents_directory() {
+    // The seam's half of the in-process journey above: `""` joined onto the document's
+    // directory *is* that directory, and the sentinel sits exactly there.
+    let sandbox = Sandbox::new();
+    let beside_the_document = sandbox.subdirectory("tasks");
+    std::fs::write(
+        beside_the_document.join("would-be-rebased.md"),
+        "---\ntitle: would-be-rebased\nstatus: todo\n---\nthe plan\n",
+    )
+    .expect("a task file");
+    sandbox.project_document(
+        &serde_json::to_string_pretty(&json!({
+            "sources": {
+                "hosted": {
+                    "plugin": "subprocess",
+                    "config": {
+                        "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                        "settings": {"kind": "local-md", "config": {"root": ""}},
+                    },
+                },
+            },
+        }))
+        .expect("a document is plain data"),
+    );
+
+    let output = sandbox
+        .command_in(&sandbox.subdirectory("checkout/crates"))
+        .args(["task", "list", "--json"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    let listed = stdout(&output);
+    assert!(
+        !listed.contains("would-be-rebased"),
+        "an empty root stays empty behind the seam too: {listed}"
+    );
+    let message = stderr(&output);
+    assert!(
+        message.contains("hosted"),
+        "the failure names the source that could not be read: {message}"
+    );
+}
