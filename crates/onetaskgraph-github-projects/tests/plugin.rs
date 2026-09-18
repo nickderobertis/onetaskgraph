@@ -5652,6 +5652,73 @@ async fn a_metadata_key_is_set_by_one_body_update_that_changes_only_the_slot() {
     );
 }
 
+/// A metadata write onto an issue whose prose ends in whitespace keeps that whitespace in
+/// the content the board reads back. The read used to `trim_end` everything before the
+/// slot, so an issue body `"Design prose.\n"` gained a slot without those bytes changing
+/// and read back as `"Design prose."` — which every follow-up copy and every settlement
+/// write-back did to every ticket whose prose ended in a newline.
+///
+/// The composer and the parser share one separator; this is the test that fails when
+/// the two disagree, because the write here is the composer's and the reads are the
+/// parser's.
+#[tokio::test]
+async fn a_metadata_write_keeps_the_visible_bodys_trailing_whitespace_byte_for_byte() {
+    for prose in [
+        "Design prose.\n",
+        "Design prose.\n\n\n",
+        "Design prose.  ",
+        "Design prose.\t",
+        "Design prose. \t\n \n\t\n",
+        "Design prose.\n\n",
+    ] {
+        let fixture = board(vec![
+            Item::issue("I_1", "a task").body(prose).status("Todo"),
+        ]);
+        let before = source_of(&fixture)
+            .get_task(&id("I_1"))
+            .await
+            .unwrap()
+            .expect("a task of this board");
+        assert_eq!(
+            before.content.as_deref(),
+            Some(prose),
+            "an issue carrying no slot reads as its whole body: {prose:?}"
+        );
+
+        let source = source(&fixture);
+        let written = source
+            .set_task_metadata(&id("I_1"), &key("myapp.k"), &json!(1))
+            .await
+            .expect("a task's metadata is writable")
+            .expect("a task of this board");
+        let body = format!("{prose}\n\n<!-- onetaskgraph.metadata\n{{\"myapp.k\":1}}\n-->");
+        assert_eq!(
+            fixture.seen(),
+            vec![json!(["updateIssue", {"id":"I_1","body":body}])],
+            "the slot is added after the prose as it was, and nothing of it is trimmed: {prose:?}"
+        );
+        assert_eq!(fixture.item("I_1").body.as_deref(), Some(body.as_str()));
+
+        let mut expected = before;
+        expected.metadata.insert("myapp.k".to_owned(), json!(1));
+        assert_eq!(written, expected, "{prose:?}");
+        assert_eq!(
+            source_of(&fixture)
+                .get_task(&id("I_1"))
+                .await
+                .unwrap()
+                .unwrap(),
+            expected,
+            "a fresh read of the board carries the prose byte for byte: {prose:?}"
+        );
+        assert_eq!(
+            source.get_task(&id("I_1")).await.unwrap().unwrap(),
+            expected,
+            "and so does this command's own next read: {prose:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_metadata_key_already_holding_the_value_sends_nothing() {
     let fixture = metadata_board();
