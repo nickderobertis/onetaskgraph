@@ -1139,8 +1139,13 @@ fn a_silent_handshake_is_stopped_at_its_configured_deadline() {
         message.contains("initialize") && message.contains("20 milliseconds"),
         "{message}"
     );
+    // Unlike the request-deadline probes above, this span includes spawning the child, which
+    // on a saturated host — the pre-push gate runs every affected suite at once — has taken
+    // over a second on its own. A deadline that was never armed hangs rather than failing
+    // this, so what the bound catches is one armed at the wrong scale: twenty milliseconds
+    // read as twenty seconds is still well past it.
     assert!(
-        started.elapsed() < Duration::from_secs(1),
+        started.elapsed() < Duration::from_secs(10),
         "the handshake hung"
     );
 }
