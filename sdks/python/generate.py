@@ -148,8 +148,16 @@ def run_workspace_binary(*args: str) -> str:
     """
     command = ["cargo", "run", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph", "--"]
     command.extend(args)
+    # The binary writes UTF-8 whatever the platform, and its schema descriptions carry
+    # characters outside ASCII: decoding in the platform's code page, which `text=True` alone
+    # does on the Windows runner, would hand every later step a mangled description.
     result = subprocess.run(
-        command, cwd=ROOT.parent.parent, check=False, text=True, capture_output=True
+        command,
+        cwd=ROOT.parent.parent,
+        check=False,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
     )
     if result.returncode != 0:
         rendered = " ".join(command)
@@ -296,6 +304,10 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
                     "--use-annotated",
                     "--use-title-as-name",
                     "--disable-timestamp",
+                    # Named rather than left to the tool's default, because this module is
+                    # read back below as UTF-8 and compared byte for byte by `--check`.
+                    "--encoding",
+                    "utf-8",
                 ],
                 check=True,
             )
@@ -339,6 +351,7 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
         "# ruff: noqa: F401, I001  # Generated public re-exports are used by consumers.\n"
         + "\n".join(exports)
         + "\n",
+        encoding="utf-8",
     )
 
 
