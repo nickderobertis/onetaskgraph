@@ -507,9 +507,14 @@ impl LocalMdSource {
                     message: format!("directory cycle reaches {}", dir.display()),
                 });
             }
-            for entry in fs::read_dir(dir).map_err(|e| SourceError::Unavailable {
-                message: format!("cannot read {}: {e}", dir.display()),
-            })? {
+            let entries = match fs::read_dir(dir) {
+                // A folder removed since it was listed holds nothing to list.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                entries => entries.map_err(|e| SourceError::Unavailable {
+                    message: format!("cannot read {}: {e}", dir.display()),
+                })?,
+            };
+            for entry in entries {
                 // llmlint: ignore[changed_behavior_has_e2e] An iterator failing after
                 // `read_dir` succeeds is an OS/filesystem race that cannot be induced
                 // deterministically without mocking the layer under test.
@@ -531,17 +536,29 @@ impl LocalMdSource {
                 // is its resolved path already. Resolving a plain file instead would ask the
                 // filesystem to spell a path while a replacement is renamed over it, and
                 // Windows can answer that instant with a spelling that is not under the root.
-                let linked = entry
-                    .file_type()
-                    .map_err(|e| SourceError::Unavailable {
-                        message: format!("cannot read {}: {e}", path.display()),
-                    })?
-                    .is_symlink();
+                //
+                // An entry removed between the listing and here — another process deleting
+                // or renaming it — is skipped: it is not a record of this folder any more,
+                // and nothing about it was read to call malformed.
+                let linked = match entry.file_type() {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    file_type => file_type
+                        .map_err(|e| SourceError::Unavailable {
+                            message: format!("cannot read {}: {e}", path.display()),
+                        })?
+                        .is_symlink(),
+                };
                 let canonical = if linked {
-                    let canonical =
-                        fs::canonicalize(&path).map_err(|e| SourceError::Malformed {
+                    let canonical = match fs::canonicalize(&path) {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound && vanished(&path) => {
+                            continue;
+                        }
+                        // A link that is still there and leads nowhere is the author's to
+                        // mend, so it is reported rather than skipped.
+                        canonical => canonical.map_err(|e| SourceError::Malformed {
                             message: format!("{}: {e}", path.display()),
-                        })?;
+                        })?,
+                    };
                     if !canonical.starts_with(root) {
                         return Err(SourceError::Config {
                             message: format!(
@@ -583,6 +600,17 @@ impl LocalMdSource {
         paths.sort();
         paths.dedup();
         Ok(paths)
+    }
+
+    /// One listed file's whole text, or `None` when it has been removed since it was listed.
+    fn read_listed(path: &Path) -> Result<Option<String>, SourceError> {
+        let _replacement = replacement_reader();
+        match fs::read_to_string(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            text => text.map(Some).map_err(|e| SourceError::Malformed {
+                message: format!("{}: {e}", path.display()),
+            }),
+        }
     }
 
     /// One file's whole text.
@@ -802,17 +830,39 @@ impl LocalMdSource {
         })
     }
 
-    fn parse_work_records(&self, kind: WorkKind) -> Result<Vec<Entry>, SourceError> {
+    /// Every record of `kind` that `scope` could admit, read in full.
+    ///
+    /// A file removed since the folder was listed is skipped. A file whose front matter
+    /// files it outside `scope` is skipped before it is parsed, so a record another project
+    /// holds cannot fail a query about this one; a file that cannot be shown to be outside it
+    /// is parsed, and fails the read when it does not parse. `scope` is only ever a
+    /// narrowing, and the caller still applies it to what comes back.
+    fn parse_work_records(
+        &self,
+        kind: WorkKind,
+        scope: &ProjectFilter,
+    ) -> Result<Vec<Entry>, SourceError> {
         self.paths(kind.kind())?
             .into_iter()
-            .map(|p| self.parse(kind, &p))
+            .filter_map(|path| match Self::read_listed(&path) {
+                Ok(Some(text)) if outside(&text, scope) => None,
+                Ok(Some(text)) => Some(self.parse_text(kind, &path, &text)),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            })
             .collect()
     }
 
-    fn parse_document_records(&self) -> Result<Vec<Document>, SourceError> {
+    /// As [`Self::parse_work_records`], for the files under `documents/`.
+    fn parse_document_records(&self, scope: &ProjectFilter) -> Result<Vec<Document>, SourceError> {
         self.paths(Kind::Document)?
             .into_iter()
-            .map(|p| self.parse_document(&p))
+            .filter_map(|path| match Self::read_listed(&path) {
+                Ok(Some(text)) if outside(&text, scope) => None,
+                Ok(Some(text)) => Some(self.parse_document_text(&path, &text)),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            })
             .collect()
     }
 
@@ -953,7 +1003,7 @@ impl TaskSource for LocalMdSource {
     }
     async fn query_tasks(&self, q: &TaskQuery, p: &PageRequest) -> Result<Page<Task>, SourceError> {
         let items = self
-            .parse_work_records(WorkKind::Task)?
+            .parse_work_records(WorkKind::Task, &q.project)?
             .into_iter()
             .map(task)
             .filter(|t| {
@@ -977,7 +1027,7 @@ impl TaskSource for LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         let items = self
-            .parse_work_records(WorkKind::Project)?
+            .parse_work_records(WorkKind::Project, &ProjectFilter::Any)?
             .into_iter()
             .map(project)
             .filter(|x| {
@@ -1000,7 +1050,7 @@ impl TaskSource for LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<Document>, SourceError> {
         let items = self
-            .parse_document_records()?
+            .parse_document_records(&q.project)?
             .into_iter()
             .filter(|d| {
                 labels_match(&d.labels, &q.labels)
@@ -1026,12 +1076,12 @@ impl TaskSource for LocalMdSource {
         // Documents too: a label a document carries is a label of this source, and reading
         // one more folder that is already on disk is the same read as the other two.
         let mut items: Vec<Label> = self
-            .parse_work_records(WorkKind::Task)?
+            .parse_work_records(WorkKind::Task, &ProjectFilter::Any)?
             .into_iter()
-            .chain(self.parse_work_records(WorkKind::Project)?)
+            .chain(self.parse_work_records(WorkKind::Project, &ProjectFilter::Any)?)
             .flat_map(|d| d.common.labels)
             .chain(
-                self.parse_document_records()?
+                self.parse_document_records(&ProjectFilter::Any)?
                     .into_iter()
                     .flat_map(|d| d.labels),
             )
@@ -1523,6 +1573,40 @@ fn with_front_entry(text: &str, key: &str, value: Option<&str>) -> Option<String
     })
 }
 
+/// Whether the entry at `path`, which could not be resolved, is gone from its folder rather
+/// than a link that leads nowhere.
+fn vanished(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// Whether the file whose contents are `text` provably files its record outside `scope`.
+///
+/// Read far more leniently than a record is: only the front matter's top-level `project`
+/// key, and only when it is absent, null or a string, which are the three readings a
+/// record's own parse agrees with. A file with no front matter names no project. Anything
+/// else — front matter that is not YAML, a `project` of another shape — is not provably
+/// outside, so the caller parses it in full and it fails as itself.
+fn outside(text: &str, scope: &ProjectFilter) -> bool {
+    let wanted = match scope {
+        ProjectFilter::Any => return false,
+        ProjectFilter::Orphans => None,
+        ProjectFilter::Is(id) => Some(id.0.as_str()),
+    };
+    let project = match front_matter(text) {
+        None => None,
+        Some((yaml, _)) => match serde_norway::from_str::<serde_json::Value>(yaml) {
+            Ok(serde_json::Value::Null) => None,
+            Ok(serde_json::Value::Object(mut front)) => match front.remove("project") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(project)) => Some(project),
+                Some(_) => return false,
+            },
+            _ => return false,
+        },
+    };
+    project.as_deref() != wanted
+}
+
 /// The refusal for a file with no front matter this source can find.
 fn unfronted(path: &Path) -> SourceError {
     SourceError::Malformed {
@@ -1775,7 +1859,7 @@ impl LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         let edges = self
-            .parse_work_records(kind)?
+            .parse_work_records(kind, &ProjectFilter::Any)?
             .into_iter()
             .flat_map(|x| x.dependencies)
             .filter(|e| match d {
