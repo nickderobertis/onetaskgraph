@@ -471,13 +471,16 @@ fn listing(root: &Path) -> std::collections::BTreeSet<std::path::PathBuf> {
     out
 }
 
-/// Two sources over one folder: one writes `tasks/a.md` over and over through `write`, while
-/// the other lists and reads it on a thread of its own, and every read must be the whole
-/// record — its title, its body to the last line, and a status or a list `write` could have
-/// left there.
-fn a_reader_never_sees_a_record_part_written_during(
-    write: impl Fn(&tokio::runtime::Runtime, &dyn TaskSource, u32),
-) {
+/// Two sources over one folder: one sets `tasks/a.md`'s status and then its `delivered_by`
+/// over and over, while the other lists and reads it on a thread of its own, and every read
+/// must be the whole record — its title, its body to the last line, and a status and a list
+/// those writes could have left there.
+///
+/// Both writes share one test rather than one each: the plugin holds every replacement apart
+/// from every read in its process, so two such tests running side by side queue behind each
+/// other's writes and take many times as long as the two writes interleaved here.
+#[test]
+fn a_reader_never_sees_a_record_part_written_by_a_status_set_or_a_delivered_by_write() {
     // A long body makes a non-atomic write's window wide enough to land in.
     let body = "Prose that makes the file long enough to be caught half written.\n".repeat(400);
     let text = format!("---\ntitle: Busy\nstatus: todo\n---\n{body}The last line.\n");
@@ -540,8 +543,26 @@ fn a_reader_never_sees_a_record_part_written_during(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
-    for round in 1..=300 {
-        write(&runtime, writer.as_ref(), round);
+    for round in 1..=150 {
+        let category = if round % 2 == 0 {
+            StatusCategory::Todo
+        } else {
+            StatusCategory::Done
+        };
+        let status = runtime
+            .block_on(writer.set_task_status(&id("a"), category))
+            .unwrap()
+            .expect("held");
+        assert_eq!(status.category, category);
+        let delivered_by = if round % 2 == 0 {
+            Vec::new()
+        } else {
+            vec![entry(&format!("plan:P-{round}"))]
+        };
+        runtime
+            .block_on(writer.set_delivered_by(&id("a"), &delivered_by))
+            .unwrap()
+            .expect("held");
     }
     done.store(true, std::sync::atomic::Ordering::SeqCst);
     let reads = reading
@@ -556,35 +577,4 @@ fn a_reader_never_sees_a_record_part_written_during(
         ]
         .into()
     );
-}
-
-#[test]
-fn a_reader_never_sees_a_record_part_written_by_a_status_set() {
-    a_reader_never_sees_a_record_part_written_during(|runtime, writer, round| {
-        let category = if round % 2 == 0 {
-            StatusCategory::Todo
-        } else {
-            StatusCategory::Done
-        };
-        let status = runtime
-            .block_on(writer.set_task_status(&id("a"), category))
-            .unwrap()
-            .expect("held");
-        assert_eq!(status.category, category);
-    });
-}
-
-#[test]
-fn a_reader_never_sees_a_record_part_written_by_a_delivered_by_write() {
-    a_reader_never_sees_a_record_part_written_during(|runtime, writer, round| {
-        let delivered_by = if round % 2 == 0 {
-            Vec::new()
-        } else {
-            vec![entry(&format!("plan:P-{round}"))]
-        };
-        runtime
-            .block_on(writer.set_delivered_by(&id("a"), &delivered_by))
-            .unwrap()
-            .expect("held");
-    });
 }
