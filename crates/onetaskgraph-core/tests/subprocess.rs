@@ -534,6 +534,37 @@ fn a_request_before_the_handshake_is_refused_rather_than_answered() {
 }
 
 #[test]
+fn a_plugin_declaring_no_path_accepts_a_document_directory_and_answers_as_it_did() {
+    let mut located = handshake(2, hosted_settings());
+    located["params"]["document_dir"] = json!(std::env::temp_dir());
+    let answers = served(&[
+        located,
+        json!({"id": "1", "method": "get_task", "params": {"id": "T-1"}}),
+    ]);
+
+    assert!(answers[0]["result"].is_object(), "{answers:?}");
+    assert_eq!(
+        answers[1]["result"]["task"]["title"], "Alpha",
+        "{answers:?}"
+    );
+}
+
+#[test]
+fn a_document_directory_that_is_not_absolute_is_refused_at_the_handshake() {
+    let mut located = handshake(2, hosted_settings());
+    located["params"]["document_dir"] = json!("relative/to/nothing");
+    let answers = served(&[located]);
+
+    assert_eq!(refusal(&answers[0]), "config", "{answers:?}");
+    assert!(
+        because(&answers[0]).contains("relative/to/nothing")
+            && because(&answers[0]).contains("not an absolute path"),
+        "{}",
+        because(&answers[0])
+    );
+}
+
+#[test]
 fn a_second_handshake_on_one_connection_is_refused() {
     let answers = served(&[
         handshake(2, hosted_settings()),

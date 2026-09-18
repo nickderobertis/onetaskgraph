@@ -22,7 +22,9 @@ identifier is its path relative to *its own* directory without `.md`; for exampl
 `root` may be relative, and where it is measured from is the layer that supplied it: a
 configuration document's relative `root` is resolved against **the directory holding that
 document**, while one from the environment layer or a flag resolves against the **process
-working directory**. The whole rule, for a reader of either side, is
+working directory**. That holds whether the source runs in process or behind the
+`subprocess` seam through the reference host, which measures a hosted `root` from the
+`document_dir` the handshake carries. The whole rule, for a reader of either side, is
 [Relative paths in a configuration document](../README.md#relative-paths-in-a-configuration-document).
 
 Each file starts with YAML front matter and continues with ordinary Markdown:

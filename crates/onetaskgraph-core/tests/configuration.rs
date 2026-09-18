@@ -1269,7 +1269,7 @@ fn a_relative_root_the_environment_supplies_reaches_its_plugin_exactly_as_writte
 }
 
 #[test]
-fn a_root_behind_the_subprocess_seam_is_left_to_the_child_that_hosts_the_plugin() {
+fn a_root_behind_the_subprocess_seam_is_left_to_the_child_with_the_documents_directory() {
     let host = Host::new();
     host.write(
         &format!("project/{PROJECT_DOCUMENT_NAME}"),
@@ -1289,6 +1289,44 @@ fn a_root_behind_the_subprocess_seam_is_left_to_the_child_that_hosts_the_plugin(
         json!("store"),
         "what a `settings:` block holds belongs to a plugin this build may never have \
          compiled, so the engine does not claim to know which of its fields is a path"
+    );
+    assert_eq!(
+        loaded.config.sources()[&SourceName::new("notes").unwrap()].document_dir(),
+        Some(host.root.path().join("project").as_path()),
+        "the child is told instead which document's directory the block is measured from"
+    );
+}
+
+#[test]
+fn a_subprocess_block_the_environment_reaches_into_carries_no_documents_directory() {
+    let host = Host::new();
+    host.write(
+        &format!("project/{PROJECT_DOCUMENT_NAME}"),
+        "sources:\n  notes:\n    plugin: subprocess\n    config:\n      command: /bin/true\n      \
+         settings:\n        kind: local-md\n        config:\n          root: store\n",
+    );
+    let environment = Environment::from_pairs([
+        (
+            "XDG_CONFIG_HOME",
+            host.root.path().join("home").to_string_lossy().to_string(),
+        ),
+        (
+            "ONETASKGRAPH_SOURCES__NOTES__CONFIG__SETTINGS__CONFIG__ROOT",
+            "store".to_owned(),
+        ),
+    ]);
+
+    let loaded = config::load(
+        &host.root.path().join("project"),
+        &environment,
+        &Layer::default(),
+    )
+    .expect("the configuration loads");
+    assert_eq!(
+        loaded.config.sources()[&SourceName::new("notes").unwrap()].document_dir(),
+        None,
+        "a relative path from a variable is measured from the working directory, so no \
+         document's directory may be sent to be measured from instead"
     );
 }
 

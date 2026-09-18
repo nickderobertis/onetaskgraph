@@ -14,7 +14,7 @@ mod common;
 use std::process::Output;
 
 use common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, one_source, stderr, stdout};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// The whole `config show --json` document.
 fn shown(output: &Output) -> Value {
@@ -1763,4 +1763,200 @@ fn an_empty_root_a_document_supplies_is_not_rebased_onto_the_documents_directory
         message.contains("plans"),
         "the failure names the source that could not be read: {message}"
     );
+}
+
+// The same rule across the `subprocess` seam. A hosted plugin's `settings:` block is opaque
+// to the engine, so the engine rebases nothing inside it and instead tells the child which
+// document's directory the block came from (`document_dir`, `docs/plugin-protocol.md` §3);
+// the reference host then resolves the fields its hosted plugin declares against it. Each
+// journey below configures one store twice — `plans` built in process, `hosted` built by
+// `onetaskgraph-source` over a real pipe — so the two sides are held to one answer.
+
+/// One `local-md` source in process and the same source behind the reference host.
+fn both_sides_of_the_seam(root: &str) -> String {
+    serde_json::to_string_pretty(&json!({
+        "sources": {
+            "plans": {"plugin": "local-md", "config": {"root": root}},
+            "hosted": {
+                "plugin": "subprocess",
+                "config": {
+                    "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                    "settings": {"kind": "local-md", "config": {"root": root}},
+                },
+            },
+        },
+    }))
+    .expect("a document is plain data")
+}
+
+/// A checkout whose document names one relative root on both sides of the seam, with a
+/// decoy store under each working directory a command is run from.
+fn checkout_and_worktree_on_both_sides(sandbox: &Sandbox) -> std::path::PathBuf {
+    let shared = store(sandbox, "plans", "ship");
+    store(sandbox, "checkout/crates/plans", "decoy-in-the-checkout");
+    store(sandbox, "worktrees/feature/plans", "decoy-in-the-worktree");
+    sandbox.project_document(&both_sides_of_the_seam("plans"));
+    shared
+}
+
+/// What `task list --json` answers from `directory`, with `extra` arguments and variables.
+fn listed_with(
+    sandbox: &Sandbox,
+    directory: &std::path::Path,
+    variables: &[(&str, &str)],
+    arguments: &[&str],
+) -> Vec<(String, String)> {
+    let mut command = sandbox.command_in(directory);
+    for (name, value) in variables {
+        command.env(name, value);
+    }
+    let output = command
+        .args(["task", "list", "--json"])
+        .args(arguments)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let response: Value =
+        serde_json::from_str(&stdout(&output)).expect("`task list --json` emits one document");
+    let mut listed: Vec<(String, String)> = response["items"]
+        .as_array()
+        .expect("items is a list")
+        .iter()
+        .map(|entry| {
+            (
+                entry["id"].as_str().expect("a qualified id").to_owned(),
+                entry["item"]["location"]["path"]
+                    .as_str()
+                    .expect("this source reports the file behind each task")
+                    .to_owned(),
+            )
+        })
+        .collect();
+    listed.sort();
+    listed
+}
+
+#[test]
+fn a_relative_root_a_document_supplies_is_read_from_the_documents_directory_behind_the_subprocess_seam()
+ {
+    let sandbox = Sandbox::new();
+    let shared = checkout_and_worktree_on_both_sides(&sandbox);
+    let ship = task_file(&shared, "ship");
+
+    for directory in ["checkout/crates", "worktrees/feature"] {
+        assert_eq!(
+            listed_with(&sandbox, &sandbox.project().join(directory), &[], &[]),
+            vec![
+                ("hosted:ship".to_owned(), ship.clone()),
+                ("plans:ship".to_owned(), ship.clone()),
+            ],
+            "run from {directory}: the hosted source reads the store the document names, \
+             the same file the in-process source reads, not the decoy beside the working \
+             directory"
+        );
+    }
+}
+
+#[test]
+fn a_relative_root_the_environment_supplies_is_read_from_the_working_directory_on_both_sides_of_the_seam()
+ {
+    let sandbox = Sandbox::new();
+    checkout_and_worktree_on_both_sides(&sandbox);
+    let worktree = sandbox.project().join("worktrees/feature");
+    let decoy = task_file(&worktree.join("plans"), "decoy-in-the-worktree");
+
+    assert_eq!(
+        listed_with(
+            &sandbox,
+            &worktree,
+            &[
+                ("ONETASKGRAPH_SOURCES__PLANS__CONFIG__ROOT", "plans"),
+                (
+                    "ONETASKGRAPH_SOURCES__HOSTED__CONFIG__SETTINGS__CONFIG__ROOT",
+                    "plans"
+                ),
+            ],
+            &[],
+        ),
+        vec![
+            ("hosted:decoy-in-the-worktree".to_owned(), decoy.clone()),
+            ("plans:decoy-in-the-worktree".to_owned(), decoy),
+        ],
+        "a root from the environment has no document behind it, so the handshake carries no \
+         document directory and the child measures it from the working directory, exactly \
+         as the in-process source does"
+    );
+}
+
+#[test]
+fn a_relative_root_a_flag_supplies_is_read_from_the_working_directory_on_both_sides_of_the_seam() {
+    let sandbox = Sandbox::new();
+    checkout_and_worktree_on_both_sides(&sandbox);
+    let checkout = sandbox.project().join("checkout/crates");
+    let decoy = task_file(&checkout.join("plans"), "decoy-in-the-checkout");
+
+    assert_eq!(
+        listed_with(
+            &sandbox,
+            &checkout,
+            &[],
+            &[
+                "--set",
+                "sources.plans.config.root=plans",
+                "--set",
+                "sources.hosted.config.settings.config.root=plans",
+            ],
+        ),
+        vec![
+            ("hosted:decoy-in-the-checkout".to_owned(), decoy.clone()),
+            ("plans:decoy-in-the-checkout".to_owned(), decoy),
+        ],
+        "a flag has no document either, on either side of the seam"
+    );
+}
+
+#[test]
+fn a_hosted_plugin_that_declares_no_path_has_nothing_in_its_settings_resolved() {
+    // The in-memory plugin declares no document-relative field, so a document directory
+    // reaching its host changes nothing: a string that looks exactly like a relative path
+    // comes back as it was written, rather than being joined onto the document's directory.
+    let sandbox = Sandbox::new();
+    sandbox.project_document(
+        &serde_json::to_string_pretty(&json!({
+            "sources": {
+                "hosted": {
+                    "plugin": "subprocess",
+                    "config": {
+                        "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                        "settings": {
+                            "kind": "in-memory",
+                            "config": {
+                                "tasks": [{
+                                    "id": "plans",
+                                    "title": "plans",
+                                    "content": "plans",
+                                    "status": {"category": "todo", "name": "Todo"},
+                                    "labels": [],
+                                }],
+                            },
+                        },
+                    },
+                },
+            },
+        }))
+        .expect("a document is plain data"),
+    );
+
+    let output = sandbox
+        .command_in(&sandbox.subdirectory("checkout/crates"))
+        .args(["task", "show", "hosted:plans", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let shown: Value = serde_json::from_str(&stdout(&output)).expect("one document");
+    let task = &shown["items"][0]["item"];
+    assert_eq!(task["title"], "plans", "{shown:#}");
+    assert_eq!(task["content"], "plans", "{shown:#}");
 }

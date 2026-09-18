@@ -167,6 +167,15 @@ pub(crate) struct InitializeParams {
     /// `unknown`, keeping its name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) statuses: Option<Vec<String>>,
+    /// The absolute directory holding the configuration document that supplied this
+    /// source's block (§3).
+    ///
+    /// Optional, and absent when the block came from no one document — the environment
+    /// layer or a flag — in which case a relative path the plugin declares keeps resolving
+    /// against the working directory. A plugin written before the member ignores it (§2.1)
+    /// and behaves exactly as it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) document_dir: Option<String>,
 }
 
 /// Who is asking, for the plugin's diagnostics (§3).

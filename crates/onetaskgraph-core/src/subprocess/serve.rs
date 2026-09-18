@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
+use std::path::Path;
 
 use onetaskgraph_plugin_api::{
     Page, Project, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
@@ -30,6 +31,7 @@ use super::wire::{
     PROTOCOL_VERSION, ProjectQueryParams, ProjectWriteParams, Request, Response, StatusParams,
     TaskQueryParams, TaskWriteParams, after_the_first_vocabulary, knows_every_category, vocabulary,
 };
+use crate::config::rebased;
 use crate::registry::PluginKind;
 
 /// What this reference host needs in the `config` the handshake hands it.
@@ -300,8 +302,61 @@ fn build_plugin(
     config: &Value,
 ) -> Result<Box<dyn TaskSource>, SourceError> {
     let name = SourceName::new(params.source_name.clone())?;
-    kind.plugin()
-        .build(&name, config, &Handshake(&params.secrets))
+    let plugin = kind.plugin();
+    let config = measured_from_document(
+        params.document_dir.as_deref(),
+        plugin.document_relative_paths(),
+        config,
+    )?;
+    plugin.build(&name, &config, &Handshake(&params.secrets))
+}
+
+/// `config` with every relative path at one of `fields` measured from `document_dir`.
+///
+/// This is the in-process rule of `crate::config`'s `relative` module carried across the
+/// seam (§3): the engine keeps a `subprocess` source's settings opaque and rebases
+/// nothing inside them, so the hosted plugin's own declaration decides which fields are
+/// paths, and a plugin declaring none has nothing resolved. With no `document_dir` the
+/// block is handed over untouched, and a relative path goes on meaning the working
+/// directory — which is what the engine sends when the block came from the environment
+/// or a flag rather than from a document.
+fn measured_from_document(
+    document_dir: Option<&str>,
+    fields: &[&str],
+    config: &Value,
+) -> Result<Value, SourceError> {
+    let mut config = config.clone();
+    let Some(directory) = document_dir else {
+        return Ok(config);
+    };
+    let directory = Path::new(directory);
+    // §3 promises an absolute directory; measuring from a relative one would measure from
+    // this process's working directory, which is exactly what the member exists to avoid.
+    if !directory.is_absolute() {
+        return Err(SourceError::Config {
+            message: format!(
+                "the handshake's document_dir {directory:?} is not an absolute path, so there                  is no one directory to measure this source's relative paths from"
+            ),
+        });
+    }
+    for field in fields {
+        let Some(value) = field
+            .split('.')
+            .try_fold(&mut config, |cursor, segment| cursor.get_mut(segment))
+        else {
+            continue;
+        };
+        let Some(rebased) = value.as_str().and_then(|raw| rebased(directory, raw)) else {
+            continue;
+        };
+        // Both halves arrived as JSON strings, so the path they join into is one too.
+        let rebased = rebased
+            .into_os_string()
+            .into_string()
+            .expect("a path joined from two strings is a string");
+        *value = Value::String(rebased);
+    }
+    Ok(config)
 }
 
 /// The credentials the handshake forwarded, and nothing else.
