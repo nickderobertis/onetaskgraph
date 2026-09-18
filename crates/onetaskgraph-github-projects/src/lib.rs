@@ -5990,15 +5990,9 @@ const METADATA_OPEN: &str = "<!-- onetaskgraph.metadata\n";
 const METADATA_CLOSE: &str = "\n-->";
 
 /// What the composer puts between a non-empty visible body and the slot, and the one thing
-/// the parser takes off the visible body when it takes the slot off.
-///
-/// One statement rather than two, because the read used to `trim_end` everything before
-/// the slot: a body `"Design prose.\n"` gained a slot without those bytes changing and read
-/// back as `"Design prose."`, which is the narrow-write preservation this source promises
-/// broken by its own reader. The read now removes exactly this separator, once, so every
-/// other byte of the visible body — trailing newlines, spaces and tabs included — comes
-/// back as it was written. The round trip in `tests/plugin.rs` is what holds the two
-/// halves to one another.
+/// the parser takes off the visible body when it takes the slot off — exactly once, so every
+/// other trailing byte of the body comes back as it was written.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] `docs/metadata.md` settles the slot's delimiters for every source and `scripts/check-metadata-slot-encoding.sh` reconciles those; how a composer lays the slot after prose is each source's own, and Linear declares no separator constant that gate could reconcile this against. Extending it belongs with the Linear reader's own trailing-whitespace fix.
 const METADATA_SEPARATOR: &str = "\n\n";
 
 /// The visible body and the metadata slot at the end of it.

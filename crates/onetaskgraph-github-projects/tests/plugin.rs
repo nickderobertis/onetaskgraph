@@ -5652,15 +5652,8 @@ async fn a_metadata_key_is_set_by_one_body_update_that_changes_only_the_slot() {
     );
 }
 
-/// A metadata write onto an issue whose prose ends in whitespace keeps that whitespace in
-/// the content the board reads back. The read used to `trim_end` everything before the
-/// slot, so an issue body `"Design prose.\n"` gained a slot without those bytes changing
-/// and read back as `"Design prose."` — which every follow-up copy and every settlement
-/// write-back did to every ticket whose prose ended in a newline.
-///
-/// The composer and the parser share one separator; this is the test that fails when
-/// the two disagree, because the write here is the composer's and the reads are the
-/// parser's.
+/// The write here is the composer's and the reads are the parser's, so this is what fails
+/// when the two disagree about the separator between prose and slot.
 #[tokio::test]
 async fn a_metadata_write_keeps_the_visible_bodys_trailing_whitespace_byte_for_byte() {
     for prose in [
@@ -5715,6 +5708,57 @@ async fn a_metadata_write_keeps_the_visible_bodys_trailing_whitespace_byte_for_b
             source.get_task(&id("I_1")).await.unwrap().unwrap(),
             expected,
             "and so does this command's own next read: {prose:?}"
+        );
+    }
+}
+
+/// A slot a person spelled by hand, with one newline or none before it, is read off the
+/// body without the separator the composer would have put there: the bytes before the slot
+/// are the content, and a metadata write replaces the JSON in place and leaves them alone.
+#[tokio::test]
+async fn a_slot_not_after_the_canonical_separator_leaves_the_bytes_before_it_intact() {
+    for (prose, gap) in [
+        ("Hand-spelled.\n", ""),
+        ("Hand-spelled.", ""),
+        ("Hand-spelled.  ", "\n"),
+    ] {
+        let held = format!("{prose}{gap}<!-- onetaskgraph.metadata\n{{\"caller.x\":1}}\n-->");
+        let fixture = board(vec![
+            Item::issue("I_1", "a task").body(&held).status("Todo"),
+        ]);
+        let before = source_of(&fixture)
+            .get_task(&id("I_1"))
+            .await
+            .unwrap()
+            .expect("a task of this board");
+        assert_eq!(before.content.as_deref(), Some(prose), "{held:?}");
+        assert_eq!(before.metadata.get("caller.x"), Some(&json!(1)));
+
+        let source = source(&fixture);
+        let written = source
+            .set_task_metadata(&id("I_1"), &key("myapp.k"), &json!(2))
+            .await
+            .unwrap()
+            .expect("a task of this board");
+        let body = format!(
+            "{prose}{gap}<!-- onetaskgraph.metadata\n{{\"caller.x\":1,\"myapp.k\":2}}\n-->"
+        );
+        assert_eq!(
+            fixture.seen(),
+            vec![json!(["updateIssue", {"id":"I_1","body":body}])],
+            "the JSON is replaced in place and the bytes before the slot are as they were: {held:?}"
+        );
+        assert_eq!(written.content.as_deref(), Some(prose), "{held:?}");
+        assert_eq!(
+            source_of(&fixture)
+                .get_task(&id("I_1"))
+                .await
+                .unwrap()
+                .unwrap()
+                .content
+                .as_deref(),
+            Some(prose),
+            "{held:?}"
         );
     }
 }
