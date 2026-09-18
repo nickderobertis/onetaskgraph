@@ -5992,7 +5992,7 @@ const METADATA_CLOSE: &str = "\n-->";
 /// What the composer puts between a non-empty visible body and the slot, and the one thing
 /// the parser takes off the visible body when it takes the slot off — exactly once, so every
 /// other trailing byte of the body comes back as it was written.
-// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] `docs/metadata.md` settles the slot's delimiters for every source and `scripts/check-metadata-slot-encoding.sh` reconciles those; how a composer lays the slot after prose is each source's own, and Linear declares no separator constant that gate could reconcile this against. Extending it belongs with the Linear reader's own trailing-whitespace fix.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] How a composer lays the slot after prose is this source's own; `docs/metadata.md` and its gate settle only the delimiters, and no other source declares a separator to reconcile against.
 const METADATA_SEPARATOR: &str = "\n\n";
 
 /// The visible body and the metadata slot at the end of it.

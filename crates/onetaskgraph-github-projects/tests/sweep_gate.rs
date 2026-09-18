@@ -108,23 +108,13 @@ static RUNS: LazyLock<Runs> = LazyLock::new(|| {
     }
 });
 
-/// The next process number [`ended_run`] hands out, and the one place they come from.
-///
-/// Every ended run this file registers takes the next number from here, so no two tests
-/// hold one registration however the threads schedule them and whatever a later test copies
-/// from an earlier one. The fixed offsets this replaces — `ended_run(5)` and its siblings —
-/// were distinct only while somebody kept them so, and shared the registry with the real
-/// second process [`LiveRunBeside`] spawns, whose pid the kernel chooses. It starts past any
-/// pid Linux issues (`pid_max` is at most 2^22) so a number here is never that child's.
+/// The next process number [`ended_run`] hands out, so no two parallel tests hold one
+/// registration. It starts past any pid Linux issues (`pid_max` is at most 2^22), so it is
+/// never the real child [`LiveRunBeside`] spawns.
 static NEXT_ENDED_PROCESS: AtomicU32 = AtomicU32::new(1 << 31);
 
 /// A run of this machine that has ENDED: really registered, and its registration really
 /// given up, which is the state the kernel leaves behind when a process dies.
-///
-/// Its number is one nobody has registered in this registry before — asserted rather than
-/// assumed, because a sibling holding it is exactly what the fixed numbers let happen — and
-/// nothing hands it out again. The one test whose subject is a process id being reissued
-/// registers the number it was given a second time itself.
 fn ended_run() -> Run {
     let process = process(NEXT_ENDED_PROCESS.fetch_add(1, Ordering::Relaxed));
     with_no_drive_going(|| {
