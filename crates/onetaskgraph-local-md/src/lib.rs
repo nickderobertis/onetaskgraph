@@ -526,18 +526,35 @@ impl LocalMdSource {
                 {
                     continue;
                 }
-                let canonical = fs::canonicalize(&path).map_err(|e| SourceError::Malformed {
-                    message: format!("{}: {e}", path.display()),
-                })?;
-                if !canonical.starts_with(root) {
-                    return Err(SourceError::Config {
-                        message: format!(
-                            "{} escapes configured root {}",
-                            path.display(),
-                            root.display()
-                        ),
-                    });
-                }
+                // Only a link is resolved to confine it. Anything else is named by the folder
+                // it was listed in — already resolved and confined — and its own name, which
+                // is its resolved path already. Resolving a plain file instead would ask the
+                // filesystem to spell a path while a replacement is renamed over it, and
+                // Windows can answer that instant with a spelling that is not under the root.
+                let linked = entry
+                    .file_type()
+                    .map_err(|e| SourceError::Unavailable {
+                        message: format!("cannot read {}: {e}", path.display()),
+                    })?
+                    .is_symlink();
+                let canonical = if linked {
+                    let canonical =
+                        fs::canonicalize(&path).map_err(|e| SourceError::Malformed {
+                            message: format!("{}: {e}", path.display()),
+                        })?;
+                    if !canonical.starts_with(root) {
+                        return Err(SourceError::Config {
+                            message: format!(
+                                "{} escapes configured root {}",
+                                path.display(),
+                                root.display()
+                            ),
+                        });
+                    }
+                    canonical
+                } else {
+                    dir.join(entry.file_name())
+                };
                 if canonical.is_dir() {
                     visit(root, &canonical, visited, out)?;
                 } else if canonical
