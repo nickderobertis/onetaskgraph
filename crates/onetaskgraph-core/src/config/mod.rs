@@ -26,7 +26,7 @@ mod relative;
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use onetaskgraph_plugin_api::SourceName;
 use schemars::JsonSchema;
@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::secrets::Secrets;
+use crate::subprocess::DocumentDir;
 use crate::{Environment, PluginKind, plugin_kinds};
 
 pub use discovery::{
@@ -73,7 +74,7 @@ pub enum OutputFormat {
 pub struct SourceConfig {
     plugin: PluginKind,
     config: Value,
-    document_dir: Option<PathBuf>,
+    document_dir: Option<DocumentDir>,
 }
 
 impl SourceConfig {
@@ -106,7 +107,7 @@ impl SourceConfig {
     /// read from the merge's origins rather than being a setting anybody can write.
     #[must_use]
     pub fn document_dir(&self) -> Option<&Path> {
-        self.document_dir.as_deref()
+        self.document_dir.as_ref().map(DocumentDir::as_path)
     }
 }
 
@@ -422,7 +423,7 @@ pub fn load(
     let mut config = Config::from_document(unflatten(&merged))?;
     for (name, source) in &mut config.sources {
         if source.plugin == PluginKind::Subprocess {
-            source.document_dir = relative::supplying_document_dir(&merged, name.as_str());
+            source.document_dir = relative::supplying_document_dir(&merged, name.as_str())?;
         }
     }
 

@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::PluginKind;
+use crate::subprocess::DocumentDir;
 
 use super::{ConfigError, Merged, Origin, SettingPath};
 
@@ -115,29 +116,38 @@ pub(crate) fn rebased(directory: &Path, raw: &str) -> Option<PathBuf> {
 /// in process — and when two documents each supplied part of the block, because one
 /// directory cannot answer for both and choosing one would measure the other's paths from
 /// a place nobody wrote. Also `None` for a block nobody set, which holds no path.
-pub(super) fn supplying_document_dir(settings: &Merged, name: &str) -> Option<PathBuf> {
+///
+/// # Errors
+///
+/// [`ConfigError::Setting`] naming the block when its document's directory is not valid
+/// UTF-8, for the reason [`resolve_document_relative_paths`] refuses one: the handshake is
+/// JSON, and dropping the directory instead would silently measure the child's paths from
+/// its working directory.
+pub(super) fn supplying_document_dir(
+    settings: &Merged,
+    name: &str,
+) -> Result<Option<DocumentDir>, ConfigError> {
+    let block = ["sources", name, "config", crate::subprocess::SETTINGS_FIELD];
     let mut supplying: Option<&Path> = None;
     for setting in settings.values() {
-        let within = matches!(
-            setting.key.segments(),
-            [sources, source, config, block, ..]
-                if sources == "sources"
-                    && source == name
-                    && config == "config"
-                    && block == crate::subprocess::SETTINGS_FIELD
-        );
-        if !within {
+        if !setting
+            .key
+            .segments()
+            .starts_with(&block.map(str::to_owned))
+        {
             continue;
         }
         let Origin::File { path: document } = &setting.origin else {
-            return None;
+            return Ok(None);
         };
         match supplying {
-            Some(earlier) if earlier != document.as_path() => return None,
+            Some(earlier) if earlier != document.as_path() => return Ok(None),
             _ => supplying = Some(document),
         }
     }
-    let directory = supplying?.parent()?;
+    let Some(directory) = supplying.and_then(Path::parent) else {
+        return Ok(None);
+    };
     // A document named without a directory is in the working directory, and the child is
     // told an absolute path because its working directory is not the engine's to promise.
     let directory = if directory.as_os_str().is_empty() {
@@ -145,7 +155,20 @@ pub(super) fn supplying_document_dir(settings: &Merged, name: &str) -> Option<Pa
     } else {
         directory
     };
-    std::path::absolute(directory).ok()
+    // Only a working directory that cannot be read stops this, and then the directory is
+    // passed on as it is so the check below refuses it by name rather than dropping it.
+    let directory = std::path::absolute(directory).unwrap_or_else(|_| directory.to_path_buf());
+    DocumentDir::new(&directory).map(Some).map_err(|problem| {
+        ConfigError::setting(
+            block.join("."),
+            format!(
+                "the paths in this block are measured from the directory holding the \
+                 configuration document that set it, and {problem}"
+            ),
+            "give this block's paths absolute values, or move the configuration document \
+             under a directory whose name is valid UTF-8.",
+        )
+    })
 }
 
 /// `("work", "root")` for `sources.work.config.root`, and nothing for any other key.

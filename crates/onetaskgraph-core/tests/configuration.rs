@@ -1390,20 +1390,19 @@ fn a_subprocess_source_under_a_directory_that_is_not_valid_utf8_is_refused_befor
          command: onetaskgraph-no-such-plugin-program\n      settings:\n        \
          kind: local-md\n        config:\n          root: store\n",
     );
-    let loaded = config::load(&directory, &host.environment(), &Layer::default())
-        .expect("the engine rewrites nothing in the block, so there is nothing to refuse yet");
 
-    let error = resolve(&loaded.config, &loaded.secrets)
+    let error = config::load(&directory, &host.environment(), &Layer::default())
         .expect_err("a document directory that cannot be sent is refused, never dropped");
 
-    let ConfigError::Setting { key, message, .. } = &error else {
-        panic!("the source that cannot be told its directory is refused: {error}");
+    let ConfigError::Setting { key, message, next } = &error else {
+        panic!("the block that cannot be told its directory is refused: {error}");
     };
-    assert_eq!(key, "sources.notes");
-    assert!(
-        message.contains("not valid UTF-8") && !message.contains("could not run"),
-        "{message}"
+    assert_eq!(
+        key, "sources.notes.config.settings",
+        "the refusal names the block whose paths it could not place"
     );
+    assert!(message.contains("not valid UTF-8"), "{message}");
+    assert!(!next.is_empty(), "and says what to change: {error}");
 }
 
 #[test]
