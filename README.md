@@ -359,6 +359,13 @@ uv add onetaskgraph-sdk               # Python
 bun add @onetaskgraph/sdk             # TypeScript
 ```
 
+The engine links its local sources — `in-memory`, `local-md` and `subprocess` — in every
+build. The two that reach a network are features no default enables, so an application that
+wants only a local store does not compile an HTTP and TLS stack it never runs: add
+`--features github-projects,linear` (or either one) to the first line for GitHub Projects or
+Linear. A configuration naming one a build left out is refused with the feature that
+enables it.
+
 This complete example constructs an engine over two in-memory sources, copies a task through
 `Engine::copy`, inspects the outcome, and reads the destination back through the engine:
 

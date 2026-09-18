@@ -15,6 +15,12 @@ A plugin's factory is registered in `onetaskgraph-core`'s registry even while it
 still refuses. A configuration naming a plugin nobody has implemented yet must get that
 plugin's own message, never "unknown plugin".
 
+A plugin that reaches a network is an optional dependency of the engine behind a feature of
+its own that no default enables, and the registry names it among the omitted kinds so a
+build without it refuses it with that feature's name. Every consumer in this workspace
+enables exactly the features it uses — the binary crate enables them all — and a test suite
+that configures one declares it in `required-features`.
+
 ## Test layout
 
 - Tests live in `tests/`, never in a `#[cfg(test)]` module under `src/`: coverage counts a
