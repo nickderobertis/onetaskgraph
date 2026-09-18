@@ -52,9 +52,10 @@
 //! Beside a copy's whole-file write, three narrow writes edit a file that is already there
 //! and leave every byte they do not own as it was: a task's `status:` line, its
 //! `delivered_by:` entry, and one entry of the `metadata:` block of a task, a project or a
-//! document. The last replaces the file through a staging file and a rename, is verified
-//! by reading the edited text back before anything is written, and refuses rather than
-//! reformats a block it cannot edit narrowly; [`STAGING_SUFFIX`] states its rules.
+//! document. All three replace the file through a staging file and a rename, so a reader
+//! sees the record before the write or after it and never part of either. The last is also
+//! verified by reading the edited text back before anything is written, and refuses rather
+//! than reformats a block it cannot edit narrowly; [`STAGING_SUFFIX`] states its rules.
 #![deny(missing_docs)]
 
 use std::{
@@ -2127,6 +2128,10 @@ impl LocalMdSource {
 
     /// Replace one top-level entry of a task file's front matter, leaving every other byte
     /// of the file as it was, and refuse a result this source could not read back.
+    ///
+    /// The file is replaced the way a metadata write replaces one — a staging file and a
+    /// rename, by the rules [`STAGING_SUFFIX`] states — so a reader sees the task as it was
+    /// or as it is now, and never part of either.
     fn rewrite_front_entry(
         &self,
         path: &Path,
@@ -2147,9 +2152,7 @@ impl LocalMdSource {
                 path.display()
             ),
         })?;
-        fs::write(path, rewritten).map_err(|e| SourceError::Unavailable {
-            message: format!("cannot write {}: {e}", path.display()),
-        })
+        replace_atomically(path, &rewritten)
     }
 
     /// One file's whole text, or a refusal naming the field this source cannot hold.

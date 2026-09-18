@@ -121,6 +121,11 @@ with no word is refused in the words a copy of that status is refused with — `
 reads "queued" as unknown, not queued` — and a task with no `status:` line gains one as the
 last line of its front matter.
 
+A status write, and the `delivered_by:` write a copy makes, replace the file the way a
+metadata write does — through a staging file beside it and a rename, described under the next
+heading — so a reader listing or reading the folder while either lands sees the task as it was
+or as it is now, never part of it.
+
 ## Setting one metadata key on its own
 
 `onetaskgraph task|project|document metadata set <source>:<id> <key> <value>` edits exactly
