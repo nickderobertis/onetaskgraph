@@ -5717,12 +5717,8 @@ async fn a_metadata_write_keeps_the_visible_bodys_trailing_whitespace_byte_for_b
 /// are the content, and a metadata write replaces the JSON in place and leaves them alone.
 #[tokio::test]
 async fn a_slot_not_after_the_canonical_separator_leaves_the_bytes_before_it_intact() {
-    for (prose, gap) in [
-        ("Hand-spelled.\n", ""),
-        ("Hand-spelled.", ""),
-        ("Hand-spelled.  ", "\n"),
-    ] {
-        let held = format!("{prose}{gap}<!-- onetaskgraph.metadata\n{{\"caller.x\":1}}\n-->");
+    for prose in ["Hand-spelled.\n", "Hand-spelled.", "Hand-spelled.  \n"] {
+        let held = format!("{prose}<!-- onetaskgraph.metadata\n{{\"caller.x\":1}}\n-->");
         let fixture = board(vec![
             Item::issue("I_1", "a task").body(&held).status("Todo"),
         ]);
@@ -5740,9 +5736,8 @@ async fn a_slot_not_after_the_canonical_separator_leaves_the_bytes_before_it_int
             .await
             .unwrap()
             .expect("a task of this board");
-        let body = format!(
-            "{prose}{gap}<!-- onetaskgraph.metadata\n{{\"caller.x\":1,\"myapp.k\":2}}\n-->"
-        );
+        let body =
+            format!("{prose}<!-- onetaskgraph.metadata\n{{\"caller.x\":1,\"myapp.k\":2}}\n-->");
         assert_eq!(
             fixture.seen(),
             vec![json!(["updateIssue", {"id":"I_1","body":body}])],
