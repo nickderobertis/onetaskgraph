@@ -5652,6 +5652,112 @@ async fn a_metadata_key_is_set_by_one_body_update_that_changes_only_the_slot() {
     );
 }
 
+/// The write here is the composer's and the reads are the parser's, so this is what fails
+/// when the two disagree about the separator between prose and slot.
+#[tokio::test]
+async fn a_metadata_write_keeps_the_visible_bodys_trailing_whitespace_byte_for_byte() {
+    for prose in [
+        "Design prose.\n",
+        "Design prose.\n\n\n",
+        "Design prose.  ",
+        "Design prose.\t",
+        "Design prose. \t\n \n\t\n",
+        "Design prose.\n\n",
+    ] {
+        let fixture = board(vec![
+            Item::issue("I_1", "a task").body(prose).status("Todo"),
+        ]);
+        let before = source_of(&fixture)
+            .get_task(&id("I_1"))
+            .await
+            .unwrap()
+            .expect("a task of this board");
+        assert_eq!(
+            before.content.as_deref(),
+            Some(prose),
+            "an issue carrying no slot reads as its whole body: {prose:?}"
+        );
+
+        let source = source(&fixture);
+        let written = source
+            .set_task_metadata(&id("I_1"), &key("myapp.k"), &json!(1))
+            .await
+            .expect("a task's metadata is writable")
+            .expect("a task of this board");
+        let body = format!("{prose}\n\n<!-- onetaskgraph.metadata\n{{\"myapp.k\":1}}\n-->");
+        assert_eq!(
+            fixture.seen(),
+            vec![json!(["updateIssue", {"id":"I_1","body":body}])],
+            "the slot is added after the prose as it was, and nothing of it is trimmed: {prose:?}"
+        );
+        assert_eq!(fixture.item("I_1").body.as_deref(), Some(body.as_str()));
+
+        let mut expected = before;
+        expected.metadata.insert("myapp.k".to_owned(), json!(1));
+        assert_eq!(written, expected, "{prose:?}");
+        assert_eq!(
+            source_of(&fixture)
+                .get_task(&id("I_1"))
+                .await
+                .unwrap()
+                .unwrap(),
+            expected,
+            "a fresh read of the board carries the prose byte for byte: {prose:?}"
+        );
+        assert_eq!(
+            source.get_task(&id("I_1")).await.unwrap().unwrap(),
+            expected,
+            "and so does this command's own next read: {prose:?}"
+        );
+    }
+}
+
+/// A slot a person spelled by hand, with one newline or none before it, is read off the
+/// body without the separator the composer would have put there: the bytes before the slot
+/// are the content, and a metadata write replaces the JSON in place and leaves them alone.
+#[tokio::test]
+async fn a_slot_not_after_the_canonical_separator_leaves_the_bytes_before_it_intact() {
+    for prose in ["Hand-spelled.\n", "Hand-spelled.", "Hand-spelled.  \n"] {
+        let held = format!("{prose}<!-- onetaskgraph.metadata\n{{\"caller.x\":1}}\n-->");
+        let fixture = board(vec![
+            Item::issue("I_1", "a task").body(&held).status("Todo"),
+        ]);
+        let before = source_of(&fixture)
+            .get_task(&id("I_1"))
+            .await
+            .unwrap()
+            .expect("a task of this board");
+        assert_eq!(before.content.as_deref(), Some(prose), "{held:?}");
+        assert_eq!(before.metadata.get("caller.x"), Some(&json!(1)));
+
+        let source = source(&fixture);
+        let written = source
+            .set_task_metadata(&id("I_1"), &key("myapp.k"), &json!(2))
+            .await
+            .unwrap()
+            .expect("a task of this board");
+        let body =
+            format!("{prose}<!-- onetaskgraph.metadata\n{{\"caller.x\":1,\"myapp.k\":2}}\n-->");
+        assert_eq!(
+            fixture.seen(),
+            vec![json!(["updateIssue", {"id":"I_1","body":body}])],
+            "the JSON is replaced in place and the bytes before the slot are as they were: {held:?}"
+        );
+        assert_eq!(written.content.as_deref(), Some(prose), "{held:?}");
+        assert_eq!(
+            source_of(&fixture)
+                .get_task(&id("I_1"))
+                .await
+                .unwrap()
+                .unwrap()
+                .content
+                .as_deref(),
+            Some(prose),
+            "{held:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_metadata_key_already_holding_the_value_sends_nothing() {
     let fixture = metadata_board();

@@ -327,6 +327,41 @@ fn a_document_copy_creates_at_a_persistent_destination_and_a_second_copy_updates
 }
 
 #[test]
+fn a_peer_written_before_document_dir_ignores_it_and_measures_its_store_as_it_always_has() {
+    // This peer predates `document_dir` (`docs/plugin-protocol.md` §3) and declares no
+    // document-relative field, so the member the engine now sends from a document is one it
+    // skips under §2.1: its relative `store` goes on meaning its working directory — which
+    // is the engine's, because the child inherits it — rather than the document's.
+    let sandbox = Sandbox::new();
+    let working = sandbox.subdirectory("checkout/crates");
+    let relative = Path::new("store").join("documents.json");
+    sandbox.project_document(&planted(source_document(json!({})), &relative));
+
+    let output = sandbox
+        .command_in(&working)
+        .args([
+            "document",
+            "copy",
+            &qualified(SOURCE, "D-1"),
+            "--to",
+            STORE,
+            "--json",
+        ])
+        .assert()
+        .get_output()
+        .clone();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        working.join(&relative).is_file(),
+        "the peer wrote under the working directory, as it did before the member existed"
+    );
+    assert!(
+        !sandbox.project().join(&relative).exists(),
+        "and nothing measured its store from the document's directory on its behalf"
+    );
+}
+
+#[test]
 fn a_peer_that_cannot_parse_what_it_was_handed_refuses_in_its_own_words() {
     // The recovery path of the seam, driven the way a user meets it: a peer answers a
     // request it cannot parse with `malformed` (§5) rather than dying, so the engine

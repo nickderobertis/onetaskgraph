@@ -501,11 +501,13 @@ ONETASKGRAPH_SOURCES__PLANS__CONFIG__ROOT=/srv/plans onetaskgraph task list
 so what a run will really read is something you can see rather than something you have to
 work out.
 
-Two limits are worth stating. The rule reaches only the configuration fields a plugin
-itself declares as paths, and each plugin's own page says which of its fields those are.
-And it stops at the `subprocess` seam: what a `settings:` block holds belongs to a plugin
-this binary may never have compiled, so a relative path in there is resolved by the child
-against its own working directory.
+The rule reaches only the configuration fields a plugin itself declares as paths, and each
+plugin's own page says which of its fields those are. It holds across the `subprocess` seam
+too, so a `local-md` root relative to its document names the same directory in process and
+behind the seam: the engine rewrites nothing in a `settings:` block, and the child learns
+which document's directory to measure its declared fields from through the handshake.
+[`docs/plugin-protocol.md`](./docs/plugin-protocol.md) §3.8 is the one statement of that
+member, including when it is absent and what a plugin written before it does.
 
 ### Credentials
 

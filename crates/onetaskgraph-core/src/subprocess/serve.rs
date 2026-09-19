@@ -25,11 +25,12 @@ use serde_json::{Value, json};
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
     AddCommentParams, CommentsParams, DeleteCommentParams, DeleteParams, DeliveredByParams,
-    DependencyParams, DocumentQueryParams, DocumentWriteParams, EditCommentParams,
+    DependencyParams, DocumentDir, DocumentQueryParams, DocumentWriteParams, EditCommentParams,
     HandshakePluginKind, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
     PROTOCOL_VERSION, ProjectQueryParams, ProjectWriteParams, Request, Response, StatusParams,
     TaskQueryParams, TaskWriteParams, after_the_first_vocabulary, knows_every_category, vocabulary,
 };
+use crate::config::rebased;
 use crate::registry::PluginKind;
 
 /// What this reference host needs in the `config` the handshake hands it.
@@ -300,8 +301,52 @@ fn build_plugin(
     config: &Value,
 ) -> Result<Box<dyn TaskSource>, SourceError> {
     let name = SourceName::new(params.source_name.clone())?;
-    kind.plugin()
-        .build(&name, config, &Handshake(&params.secrets))
+    let plugin = kind.plugin();
+    let config = measured_from_document(
+        params.document_dir.as_ref(),
+        plugin.document_relative_paths(),
+        config,
+    );
+    plugin.build(&name, &config, &Handshake(&params.secrets))
+}
+
+/// `config` with every relative path at one of `fields` measured from `document_dir`.
+///
+/// This is the in-process rule of `crate::config`'s `relative` module carried across the
+/// seam (§3): the engine keeps a `subprocess` source's settings opaque and rebases
+/// nothing inside them, so the hosted plugin's own declaration decides which fields are
+/// paths, and a plugin declaring none has nothing resolved. With no `document_dir` the
+/// block is handed over untouched, and a relative path goes on meaning the working
+/// directory — which is what the engine sends when the block came from the environment
+/// or a flag rather than from a document.
+fn measured_from_document(
+    document_dir: Option<&DocumentDir>,
+    fields: &[&str],
+    config: &Value,
+) -> Value {
+    let mut config = config.clone();
+    // Absolute by construction: a relative one was refused as the handshake was read.
+    let Some(directory) = document_dir.map(DocumentDir::as_path) else {
+        return config;
+    };
+    for field in fields {
+        let Some(value) = field
+            .split('.')
+            .try_fold(&mut config, |cursor, segment| cursor.get_mut(segment))
+        else {
+            continue;
+        };
+        let Some(rebased) = value.as_str().and_then(|raw| rebased(directory, raw)) else {
+            continue;
+        };
+        // Both halves arrived as JSON strings, so the path they join into is one too.
+        let rebased = rebased
+            .into_os_string()
+            .into_string()
+            .expect("a path joined from two strings is a string");
+        *value = Value::String(rebased);
+    }
+    config
 }
 
 /// The credentials the handshake forwarded, and nothing else.

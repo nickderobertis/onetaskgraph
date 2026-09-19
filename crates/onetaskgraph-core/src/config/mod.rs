@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::secrets::Secrets;
+use crate::subprocess::DocumentDir;
 use crate::{Environment, PluginKind, plugin_kinds, registry::omitted_feature};
 
 pub use discovery::{
@@ -44,6 +45,7 @@ pub use effective::EffectiveConfig;
 pub use environment_layer::{ENVIRONMENT_PREFIX, variable_for};
 pub use error::ConfigError;
 pub use layer::{Layer, Merged, Origin, Setting, SettingPath, merge, unflatten, value_from_text};
+pub(crate) use relative::rebased;
 pub use relative::resolve_document_relative_paths;
 
 /// The variable that moves the credentials file somewhere else.
@@ -72,6 +74,7 @@ pub enum OutputFormat {
 pub struct SourceConfig {
     plugin: PluginKind,
     config: Value,
+    document_dir: Option<DocumentDir>,
 }
 
 impl SourceConfig {
@@ -91,6 +94,20 @@ impl SourceConfig {
     #[must_use]
     pub fn config(&self) -> &Value {
         &self.config
+    }
+
+    /// The absolute directory holding the configuration document that supplied the
+    /// block this source hands a child process, or `None` when no one document did.
+    ///
+    /// Only a `subprocess` source ever carries one: its `settings:` block is opaque here,
+    /// so nothing inside it is rebased in this process, and this is what the child is
+    /// told instead — `document_dir` in `docs/plugin-protocol.md` §3 — so the hosted
+    /// plugin can resolve its own declared paths exactly as the in-process rule does.
+    /// It is an engine-owned fact about where the block came from, which is why it is
+    /// read from the merge's origins rather than being a setting anybody can write.
+    #[must_use]
+    pub fn document_dir(&self) -> Option<&Path> {
+        self.document_dir.as_ref().map(DocumentDir::as_path)
     }
 }
 
@@ -219,6 +236,7 @@ impl Config {
                 SourceConfig {
                     plugin,
                     config: source.config,
+                    document_dir: None,
                 },
             );
         }
@@ -394,7 +412,12 @@ pub fn load(
     // handed values and no origins, so this is the only layer that can tell a path a
     // document supplied from one the environment or a flag did. See [`relative`].
     resolve_document_relative_paths(&mut merged)?;
-    let config = Config::from_document(unflatten(&merged))?;
+    let mut config = Config::from_document(unflatten(&merged))?;
+    for (name, source) in &mut config.sources {
+        if source.plugin == PluginKind::Subprocess {
+            source.document_dir = relative::supplying_document_dir(&merged, name.as_str())?;
+        }
+    }
 
     // Before the sources are resolved, as the contract says: a plugin reads its
     // credential through this resolver, so it has to exist by the time one is built.

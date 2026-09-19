@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
+use std::path::Path;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -26,10 +27,10 @@ use super::connection::{Connection, Peer};
 use super::wire::{
     AddCommentParams, CommentResult, CommentsParams, CommentsResult, DeleteCommentParams,
     DeleteParams, DeletedCommentResult, DeliveredByParams, DeliveredByResult, DependencyParams,
-    DocumentQueryParams, DocumentResult, DocumentWriteParams, EditCommentParams, EngineIdentity,
-    IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, MeteringResult,
-    PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request, StatusParams,
-    StatusResult, TaskQueryParams, TaskResult, TaskWriteParams, WriteResult,
+    DocumentDir, DocumentQueryParams, DocumentResult, DocumentWriteParams, EditCommentParams,
+    EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
+    MeteringResult, PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams,
+    Request, StatusParams, StatusResult, TaskQueryParams, TaskResult, TaskWriteParams, WriteResult,
     after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
 };
 
@@ -146,11 +147,45 @@ impl SubprocessSource {
         secrets: BTreeMap<String, String>,
         deadline: RequestDeadline,
     ) -> Result<Self, SourceError> {
+        Self::connect_from_document(program, args, name, config, secrets, deadline, None)
+    }
+
+    /// Spawn a plugin, telling it which document's directory its settings are measured
+    /// from — `document_dir` in `docs/plugin-protocol.md` §3, sent only when there is one.
+    ///
+    /// # Errors
+    ///
+    /// What [`connect`](Self::connect) returns, and [`SourceError::Config`] when
+    /// `document_dir` is not an absolute directory whose name is valid UTF-8, and so
+    /// cannot be written into the handshake — refused rather than dropped, because dropping
+    /// it would silently measure the child's paths from its working directory instead.
+    pub fn connect_from_document(
+        program: &str,
+        args: &[String],
+        name: &SourceName,
+        config: &Value,
+        secrets: BTreeMap<String, String>,
+        deadline: RequestDeadline,
+        document_dir: Option<&Path>,
+    ) -> Result<Self, SourceError> {
+        let document_dir = document_dir
+            .map(|directory| {
+                DocumentDir::new(directory).map_err(|problem| SourceError::Config {
+                    message: format!(
+                        "source {name}: its settings are measured from the directory holding \
+                         the configuration document that set them, and {problem}; give the \
+                         settings absolute paths, or move the document under a directory \
+                         whose name is valid UTF-8"
+                    ),
+                })
+            })
+            .transpose()?;
         Self::adopt(
             Peer::spawn(program, args, deadline.duration())?,
             name,
             config,
             secrets,
+            document_dir,
         )
     }
 
@@ -203,6 +238,7 @@ impl SubprocessSource {
             name,
             config,
             secrets,
+            None,
         )
     }
 
@@ -212,8 +248,9 @@ impl SubprocessSource {
         name: &SourceName,
         config: &Value,
         secrets: BTreeMap<String, String>,
+        document_dir: Option<DocumentDir>,
     ) -> Result<Self, SourceError> {
-        let result = Self::handshake(&mut peer, name, config, secrets);
+        let result = Self::handshake(&mut peer, name, config, secrets, document_dir);
         let InitializeResult {
             protocol_version,
             kind,
@@ -262,6 +299,7 @@ impl SubprocessSource {
         name: &SourceName,
         config: &Value,
         secrets: BTreeMap<String, String>,
+        document_dir: Option<DocumentDir>,
     ) -> Result<InitializeResult, SourceError> {
         let params = InitializeParams {
             protocol_version: PROTOCOL_VERSION,
@@ -273,6 +311,7 @@ impl SubprocessSource {
             config: config.clone(),
             secrets,
             statuses: Some(vocabulary()),
+            document_dir,
         };
         let request = Request {
             id: HANDSHAKE_ID.to_owned(),

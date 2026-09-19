@@ -1269,7 +1269,7 @@ fn a_relative_root_the_environment_supplies_reaches_its_plugin_exactly_as_writte
 }
 
 #[test]
-fn a_root_behind_the_subprocess_seam_is_left_to_the_child_that_hosts_the_plugin() {
+fn a_root_behind_the_subprocess_seam_is_left_to_the_child_with_the_documents_directory() {
     let host = Host::new();
     host.write(
         &format!("project/{PROJECT_DOCUMENT_NAME}"),
@@ -1290,6 +1290,119 @@ fn a_root_behind_the_subprocess_seam_is_left_to_the_child_that_hosts_the_plugin(
         "what a `settings:` block holds belongs to a plugin this build may never have \
          compiled, so the engine does not claim to know which of its fields is a path"
     );
+    assert_eq!(
+        loaded.config.sources()[&SourceName::new("notes").unwrap()].document_dir(),
+        Some(host.root.path().join("project").as_path()),
+        "the child is told instead which document's directory the block is measured from"
+    );
+}
+
+#[test]
+fn a_subprocess_block_the_environment_reaches_into_carries_no_documents_directory() {
+    let host = Host::new();
+    host.write(
+        &format!("project/{PROJECT_DOCUMENT_NAME}"),
+        "sources:\n  notes:\n    plugin: subprocess\n    config:\n      command: /bin/true\n      \
+         settings:\n        kind: local-md\n        config:\n          root: store\n",
+    );
+    let environment = Environment::from_pairs([
+        (
+            "XDG_CONFIG_HOME",
+            host.root.path().join("home").to_string_lossy().to_string(),
+        ),
+        (
+            "ONETASKGRAPH_SOURCES__NOTES__CONFIG__SETTINGS__CONFIG__ROOT",
+            "store".to_owned(),
+        ),
+    ]);
+
+    let loaded = config::load(
+        &host.root.path().join("project"),
+        &environment,
+        &Layer::default(),
+    )
+    .expect("the configuration loads");
+    assert_eq!(
+        loaded.config.sources()[&SourceName::new("notes").unwrap()].document_dir(),
+        None,
+        "a relative path from a variable is measured from the working directory, so no \
+         document's directory may be sent to be measured from instead"
+    );
+}
+
+#[test]
+fn a_subprocess_block_two_documents_each_supply_part_of_carries_no_documents_directory() {
+    // One directory cannot answer for paths two documents wrote, and choosing either would
+    // measure the other's from a place nobody wrote them in.
+    let host = Host::new();
+    host.write(
+        &format!("home/{USER_DOCUMENT_RELATIVE_PATH}"),
+        "sources:\n  notes:\n    plugin: subprocess\n    config:\n      command: /bin/true\n      \
+         settings:\n        kind: local-md\n",
+    );
+    host.write(
+        &format!("project/{PROJECT_DOCUMENT_NAME}"),
+        "sources:\n  notes:\n    config:\n      settings:\n        config:\n          \
+         root: store\n",
+    );
+
+    let loaded = config::load(
+        &host.root.path().join("project"),
+        &host.environment(),
+        &Layer::default(),
+    )
+    .expect("the configuration loads");
+    let notes = &loaded.config.sources()[&SourceName::new("notes").unwrap()];
+    assert_eq!(
+        notes.config()["settings"],
+        json!({"kind": "local-md", "config": {"root": "store"}}),
+        "both documents reached the block"
+    );
+    assert_eq!(notes.document_dir(), None);
+}
+
+/// A document under a directory whose name is not valid UTF-8, configuring one source.
+#[cfg(target_os = "linux")]
+fn under_a_directory_that_is_not_valid_utf8(host: &Host, document: &str) -> std::path::PathBuf {
+    use std::ffi::{OsStr, OsString};
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut name = OsString::from("project-");
+    name.push(OsStr::from_bytes(&[0xff]));
+    let directory = host.root.path().join(name);
+    std::fs::create_dir_all(&directory).expect("a directory whose name is not valid UTF-8");
+    std::fs::write(directory.join(PROJECT_DOCUMENT_NAME), document).expect("a document under it");
+    directory
+}
+
+/// Linux-only for the reason
+/// `a_document_under_a_directory_that_is_not_valid_utf8_refuses_the_setting_it_cannot_resolve`
+/// gives: it is the one platform of the three that can hold such a directory.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_subprocess_source_under_a_directory_that_is_not_valid_utf8_is_refused_before_it_is_spawned() {
+    let host = Host::new();
+    // A program that does not exist: the refusal has to come before anything is spawned,
+    // or this would fail as an unrunnable program instead.
+    let directory = under_a_directory_that_is_not_valid_utf8(
+        &host,
+        "sources:\n  notes:\n    plugin: subprocess\n    config:\n      \
+         command: onetaskgraph-no-such-plugin-program\n      settings:\n        \
+         kind: local-md\n        config:\n          root: store\n",
+    );
+
+    let error = config::load(&directory, &host.environment(), &Layer::default())
+        .expect_err("a document directory that cannot be sent is refused, never dropped");
+
+    let ConfigError::Setting { key, message, next } = &error else {
+        panic!("the block that cannot be told its directory is refused: {error}");
+    };
+    assert_eq!(
+        key, "sources.notes.config.settings",
+        "the refusal names the block whose paths it could not place"
+    );
+    assert!(message.contains("not valid UTF-8"), "{message}");
+    assert!(!next.is_empty(), "and says what to change: {error}");
 }
 
 #[test]
@@ -1326,19 +1439,11 @@ fn only_the_markdown_folder_declares_a_document_relative_field() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_document_under_a_directory_that_is_not_valid_utf8_refuses_the_setting_it_cannot_resolve() {
-    use std::ffi::{OsStr, OsString};
-    use std::os::unix::ffi::OsStrExt;
-
     let host = Host::new();
-    let mut name = OsString::from("project-");
-    name.push(OsStr::from_bytes(&[0xff]));
-    let directory = host.root.path().join(name);
-    std::fs::create_dir_all(&directory).expect("a directory whose name is not valid UTF-8");
-    std::fs::write(
-        directory.join(PROJECT_DOCUMENT_NAME),
+    let directory = under_a_directory_that_is_not_valid_utf8(
+        &host,
         "sources:\n  plans:\n    plugin: local-md\n    config:\n      root: plans\n",
-    )
-    .expect("a document under it");
+    );
 
     let error = config::load(&directory, &host.environment(), &Layer::default())
         .expect_err("a resolved path that cannot be written down is refused, never replaced");

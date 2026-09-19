@@ -16,14 +16,21 @@
 //!
 //! Which fields are paths is each plugin's to say and no part of this module's: every
 //! plugin is asked, through [`SourcePlugin::document_relative_paths`](onetaskgraph_plugin_api::SourcePlugin::document_relative_paths), and one that names
-//! none — `subprocess` among them, whose `settings:` block belongs to a plugin this build
-//! may never have compiled — is simply never rebased.
+//! none is simply never rebased.
+//!
+//! `subprocess` names none, and the rule does not stop there. Its `settings:` block
+//! belongs to a plugin this build may never have compiled, so nothing inside it is
+//! rebased here; instead [`supplying_document_dir`] finds the document that supplied the
+//! block, and the handshake hands its directory to the child as `document_dir`
+//! (`docs/plugin-protocol.md` §3), where the hosted plugin resolves the fields *it*
+//! declares against it — through [`rebased`], the same arithmetic as here.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use crate::PluginKind;
+use crate::subprocess::DocumentDir;
 
 use super::{ConfigError, Merged, Origin, SettingPath};
 
@@ -61,37 +68,107 @@ pub fn resolve_document_relative_paths(settings: &mut Merged) -> Result<(), Conf
         let Some(raw) = setting.value.as_str() else {
             continue;
         };
-        // A value that said nothing goes on saying nothing: rebasing `""` would turn
-        // a setting that fails today into a silent "the document's own directory".
-        if raw.is_empty() || Path::new(raw).is_absolute() {
-            continue;
-        }
         let Some(directory) = document.parent() else {
             continue;
         };
-        let rebased = directory
-            .join(raw)
-            .into_os_string()
-            .into_string()
-            .map_err(|_| {
-                ConfigError::setting(
-                    setting.key.to_string(),
-                    format!(
-                        "this path is measured from {}, the directory holding the configuration \
+        let Some(rebased) = rebased(directory, raw) else {
+            continue;
+        };
+        let rebased = rebased.into_os_string().into_string().map_err(|_| {
+            ConfigError::setting(
+                setting.key.to_string(),
+                format!(
+                    "this path is measured from {}, the directory holding the configuration \
                      document that set it, and that directory's name is not valid UTF-8, so \
                      the path it resolves to cannot be written down",
-                        directory.display()
-                    ),
-                    "give this setting an absolute path, or move the configuration document \
+                    directory.display()
+                ),
+                "give this setting an absolute path, or move the configuration document \
                  under a directory whose name is valid UTF-8.",
-                )
-            })?;
+            )
+        })?;
         rewrites.push((setting.key.clone(), Value::String(rebased)));
     }
     for (key, value) in rewrites {
         settings.set_value(&key, value);
     }
     Ok(())
+}
+
+/// `raw` measured from `directory`, or `None` when it is to be left exactly as it is.
+///
+/// An absolute path is left alone, and so is an empty one: a value that said nothing goes
+/// on saying nothing, because rebasing `""` would turn a setting that fails today into a
+/// silent "the document's own directory". One definition for both sides of the
+/// `subprocess` seam, so a root cannot resolve one way in process and another behind it.
+pub(crate) fn rebased(directory: &Path, raw: &str) -> Option<PathBuf> {
+    if raw.is_empty() || Path::new(raw).is_absolute() {
+        return None;
+    }
+    Some(directory.join(raw))
+}
+
+/// The absolute directory of the one document that supplied every setting of the
+/// `subprocess` source `name`'s `settings:` block, or `None` when no single document did.
+///
+/// `None` when any of those settings came from the environment layer or a flag — a
+/// relative path there keeps resolving against the process working directory, as it does
+/// in process — and when two documents each supplied part of the block, because one
+/// directory cannot answer for both and choosing one would measure the other's paths from
+/// a place nobody wrote. Also `None` for a block nobody set, which holds no path.
+///
+/// # Errors
+///
+/// [`ConfigError::Setting`] naming the block when its document's directory is not valid
+/// UTF-8, for the reason [`resolve_document_relative_paths`] refuses one: the handshake is
+/// JSON, and dropping the directory instead would silently measure the child's paths from
+/// its working directory.
+pub(super) fn supplying_document_dir(
+    settings: &Merged,
+    name: &str,
+) -> Result<Option<DocumentDir>, ConfigError> {
+    let block = ["sources", name, "config", crate::subprocess::SETTINGS_FIELD];
+    let mut supplying: Option<&Path> = None;
+    for setting in settings.values() {
+        if !setting
+            .key
+            .segments()
+            .starts_with(&block.map(str::to_owned))
+        {
+            continue;
+        }
+        let Origin::File { path: document } = &setting.origin else {
+            return Ok(None);
+        };
+        match supplying {
+            Some(earlier) if earlier != document.as_path() => return Ok(None),
+            _ => supplying = Some(document),
+        }
+    }
+    let Some(directory) = supplying.and_then(Path::parent) else {
+        return Ok(None);
+    };
+    // A document named without a directory is in the working directory, and the child is
+    // told an absolute path because its working directory is not the engine's to promise.
+    let directory = if directory.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        directory
+    };
+    // Only a working directory that cannot be read stops this, and then the directory is
+    // passed on as it is so the check below refuses it by name rather than dropping it.
+    let directory = std::path::absolute(directory).unwrap_or_else(|_| directory.to_path_buf());
+    DocumentDir::new(&directory).map(Some).map_err(|problem| {
+        ConfigError::setting(
+            block.join("."),
+            format!(
+                "the paths in this block are measured from the directory holding the \
+                 configuration document that set it, and {problem}"
+            ),
+            "give this block's paths absolute values, or move the configuration document \
+             under a directory whose name is valid UTF-8.",
+        )
+    })
 }
 
 /// `("work", "root")` for `sources.work.config.root`, and nothing for any other key.
