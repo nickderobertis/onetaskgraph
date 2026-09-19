@@ -13,8 +13,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use onetaskgraph_plugin_api::{
-    MetadataKey, NativeId, PageRequest, SecretResolver, SourceError, SourceName, SourcePlugin,
-    StatusCategory, TaskQuery, TaskSource,
+    MetadataKey, NativeId, PageRequest, SecretResolver, SourceName, SourcePlugin, StatusCategory,
+    TaskQuery, TaskSource,
 };
 use secrecy::SecretString;
 use serde_json::json;
@@ -140,6 +140,8 @@ fn a_folder_lists_while_another_process_replaces_a_record_in_place() {
 #[tokio::test]
 async fn a_linked_folder_is_named_where_it_really_is_and_one_outside_the_root_is_refused() {
     use std::os::unix::fs::symlink;
+
+    use onetaskgraph_plugin_api::SourceError;
 
     let root = tempfile::tempdir().expect("temporary notes");
     fs::create_dir_all(root.path().join("tasks")).unwrap();
