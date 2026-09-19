@@ -85,19 +85,79 @@ version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/onetaskgraph/Cargo.toml
   "crates/onetaskgraph/Cargo.toml has no plain X.Y.Z version ('$version')" "restore that manifest's version and rerun"
 newer="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
 
-# Served over loopback on a port the kernel picks. This is the one process this check
-# starts, so it is the one it stops.
-python3 -u -m http.server 0 --bind 127.0.0.1 --directory "$scratch/registry" > "$scratch/server.log" 2>&1 &
+# Served over loopback on a port the kernel picks, by a server of this check's own rather
+# than `python3 -m http.server`. That one binds through `HTTPServer.server_bind`, which
+# names itself with `socket.getfqdn(host)` BEFORE printing the banner this used to read the
+# port out of — and on the macOS runner that reverse lookup of 127.0.0.1 outlasted the whole
+# wait, so a registry that had in fact bound was reported as one that never reported a
+# port, with an empty log where the reason belonged. So the registry below binds without
+# the lookup, as scripts/check-npm-publish.sh does for the same reason, and writes its port
+# to a file of its own the moment it has one: the same report on every platform, read from
+# nothing a platform's resolver can delay. This is the one process this check starts, so it
+# is the one it stops.
+cat > "$scratch/registry.py" <<'PY'
+import functools
+import http.server
+import socketserver
+import sys
+
+port_file, root = sys.argv[1:]
+
+
+class Loopback(http.server.ThreadingHTTPServer):
+    """Bound without the reverse DNS lookup `HTTPServer.server_bind` does on its own account."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
+
+
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=root)
+server = Loopback(("127.0.0.1", 0), handler)
+with open(port_file, "w", encoding="utf-8") as handle:
+    handle.write(str(server.server_address[1]))
+server.serve_forever()
+PY
+port_file="$scratch/port"
+python3 "$scratch/registry.py" "$port_file" "$scratch/registry" > "$scratch/server.log" 2>&1 &
 server_pid=$!
-port=
-for _ in $(seq 1 100); do
-  port="$(sed -n 's/.* port \([0-9][0-9]*\).*/\1/p' "$scratch/server.log" | head -n1)"
-  [ -n "$port" ] && break
-  kill -0 "$server_pid" 2>/dev/null || break
+# Thirty seconds, which is what check-npm-publish.sh and test-distribution.sh give the
+# servers they stand up the same way. The liveness break keeps that generosity off the one
+# case it would only make slower: a registry that has already exited will never write.
+server_exit=
+for _ in $(seq 1 300); do
+  [ -s "$port_file" ] && break
+  if ! kill -0 "$server_pid" 2>/dev/null; then
+    if wait "$server_pid"; then server_exit=0; else server_exit=$?; fi
+    server_pid=
+    break
+  fi
   sleep 0.1
 done
-[ -n "$port" ] || fatal "the loopback registry never reported its port: $(cat "$scratch/server.log")" \
-  "check that python3 can bind 127.0.0.1, then rerun"
+if [ ! -s "$port_file" ]; then
+  if [ -s "$scratch/server.log" ]; then
+    sed 's/^/check-crate-sibling-resolution:   /' "$scratch/server.log" >&2
+    fatal "the loopback registry never reported a port, and said above why it could not" \
+      "fix what it reported there, then rerun"
+  fi
+  [ -z "$server_exit" ] || fatal \
+    "the loopback registry exited with status $server_exit before reporting a port, printing nothing on its way out" \
+    "run 'python3 -V' — nothing was captured from the registry, so start with whether this interpreter runs at all — then rerun"
+  fatal "the loopback registry bound no port within 30s and printed nothing about why" \
+    "run: python3 -c 'import socket; s = socket.socket(); s.bind((\"127.0.0.1\", 0)); print(s.getsockname())' — which is all this registry does before it writes the file — then rerun"
+fi
+port="$(cat "$port_file")"
+# What the file holds is a port only because the registry above put it there, and reading
+# it as one without saying so is how a half-written file becomes a URL that fails later as
+# cargo being unable to reach the index.
+case $port in
+  '' | *[!0-9]*) port="" ;;
+esac
+if [ -z "$port" ] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+  fatal "the loopback registry reported '$(cat "$port_file")' where a port number belongs" \
+    "report this — $port_file is written by this check's own registry and nothing else"
+fi
 export ONETASKGRAPH_CRATES_INDEX_URL="sparse+http://127.0.0.1:$port/"
 export CARGO_HOME="$scratch/cargo-home"
 export CARGO_NET_OFFLINE=false
