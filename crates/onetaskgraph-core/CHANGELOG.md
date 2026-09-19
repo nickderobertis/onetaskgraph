@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.39](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.38...onetaskgraph-core-v0.2.39) - 2026-09-18
+
+### Fixed
+
+- *(subprocess)* hand a hosted plugin the directory of the configuration document that named it ([#2023](https://github.com/nickderobertis/onetaskgraph/pull/2023))
+
 ## [0.2.37](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.36...onetaskgraph-core-v0.2.37) - 2026-09-18
 
 ### Fixed
