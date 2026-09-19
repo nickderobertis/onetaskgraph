@@ -36,8 +36,10 @@ RECONCILED_VERSION_FILES: Tuple[VersionFile, ...] = (
         Path("Cargo.toml"),
         (
             re.compile(r'(?m)^(\[workspace\.package\]\nversion\s*=\s*")([^"]+)(")'),
+            # A sibling is required exactly: these pre-1.0 crates are lock-step, so a caret
+            # would let one resolve against another's newer patch and fail to compile.
             re.compile(
-                r'(?m)^(onetaskgraph[^= ]*\s*=\s*\{[^\n]*version\s*=\s*")([^"]+)(")'
+                r'(?m)^(onetaskgraph[^= ]*\s*=\s*\{[^\n]*version\s*=\s*"=)([^"]+)(")'
             ),
         ),
     ),

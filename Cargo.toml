@@ -11,13 +11,19 @@ repository = "https://github.com/nickderobertis/onetaskgraph"
 authors = ["Nick DeRobertis"]
 
 [workspace.dependencies]
-onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "0.2.39" }
-onetaskgraph-core = { path = "crates/onetaskgraph-core", version = "0.2.39" }
-onetaskgraph-in-memory = { path = "crates/onetaskgraph-in-memory", version = "0.2.39" }
-onetaskgraph-local-md = { path = "crates/onetaskgraph-local-md", version = "0.2.39" }
-onetaskgraph-linear = { path = "crates/onetaskgraph-linear", version = "0.2.39" }
-onetaskgraph-github-projects = { path = "crates/onetaskgraph-github-projects", version = "0.2.39" }
-onetaskgraph-status-options = { path = "crates/onetaskgraph-status-options", version = "0.2.39" }
+# Every sibling is required exactly. These pre-1.0 crates are released in lock step and are
+# not compatible across patches — an exhaustive match or a struct literal in one is written
+# against the others' exact release — so a caret would let a consumer resolve one against
+# another's newer patch and compile nothing. release-plz rewrites these in step, keeping the
+# `=`; scripts/set-version.sh --check refuses one without it, and the release job refuses to
+# publish a crate whose siblings resolve elsewhere (scripts/crate-sibling-resolution.sh).
+onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "=0.2.39" }
+onetaskgraph-core = { path = "crates/onetaskgraph-core", version = "=0.2.39" }
+onetaskgraph-in-memory = { path = "crates/onetaskgraph-in-memory", version = "=0.2.39" }
+onetaskgraph-local-md = { path = "crates/onetaskgraph-local-md", version = "=0.2.39" }
+onetaskgraph-linear = { path = "crates/onetaskgraph-linear", version = "=0.2.39" }
+onetaskgraph-github-projects = { path = "crates/onetaskgraph-github-projects", version = "=0.2.39" }
+onetaskgraph-status-options = { path = "crates/onetaskgraph-status-options", version = "=0.2.39" }
 # The workspace's own test-support crate: the gate every live session opens. Path-only
 # and unpublished on purpose — cargo strips a path-only dev-dependency when it packages
 # the crates that name it, so nothing a consumer installs can reach it.

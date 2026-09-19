@@ -256,6 +256,26 @@ expect_refused "the release workflow choosing a registry of its own" \
   "must not set NPM_REGISTRY"
 restore .github/workflows/release.yml
 
+# 9. A crate published without first asking whether its siblings resolve to the release it
+#    was built with: the lock-step split then surfaces in a consumer's build, not here.
+substitute .github/workflows/release.yml \
+  'absent) scripts/crate-sibling-resolution.sh "$crate" || exit $?; RUSTFLAGS=' \
+  'absent) RUSTFLAGS='
+run_guard
+expect_refused "a crate published without the sibling-resolution step" \
+  "only after scripts/crate-sibling-resolution.sh"
+restore .github/workflows/release.yml
+
+# 10. The defect the step exists for, restored at its source: one sibling required with a
+#     caret, which resolves against any newer patch of it on the registry.
+substitute Cargo.toml \
+  'onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "=' \
+  'onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "'
+run_guard
+expect_refused "a caret requirement between two published crates" \
+  "sibling requirements must be exact" "onetaskgraph-local-md requires onetaskgraph-plugin-api as ^"
+restore Cargo.toml
+
 if [ "$failures" -ne 0 ]; then
   echo "check-distribution-contract-enforced: $failures case(s) failed." >&2
   echo "check-distribution-contract-enforced: a release with an invalid registry query or package" >&2

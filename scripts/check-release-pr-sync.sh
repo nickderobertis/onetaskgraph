@@ -143,7 +143,7 @@ mkdir -p "$state/seen" || fatal \
 # observed from the pinned release-plz against this workspace:
 #
 #   `update` rewrites crates/*/Cargo.toml and the [workspace.dependencies] path pins, and
-#   refreshes Cargo.lock. It leaves every manifest in `carriers` above untouched — the real
+#   refreshes Cargo.lock. A pin keeps its operator, so an exact `=` pin stays exact. It leaves every manifest in `carriers` above untouched — the real
 #   run left all ten at 0.1.0 while every crate went to 0.2.0.
 #
 #   `update` bumps each package on its own, so one crate's next version is not another's:
@@ -219,11 +219,11 @@ case "$subcommand" in
   update)
     refuse_dirty
     perl -pi -e "s/^version = \"[^\"]+\"/version = \"$version\"/" crates/*/Cargo.toml
-    perl -pi -e "s|(path = \"crates/[^\" ]+\", version = \")[^\"]+|\${1}$version|g" Cargo.toml
+    perl -pi -e "s|(path = \"crates/[^\" ]+\", version = \"=?)[^\"]+|\${1}$version|g" Cargo.toml
     # The package that takes a bump of its own, manifest and path pin together — cargo
     # refuses a path dependency whose pin cannot match the crate beside it.
     perl -pi -e "s/^version = \"[^\"]+\"/version = \"$divergent_version\"/" "crates/$divergent_crate/Cargo.toml"
-    perl -pi -e "s|(path = \"crates/$divergent_crate\", version = \")[^\"]+|\${1}$divergent_version|g" Cargo.toml
+    perl -pi -e "s|(path = \"crates/$divergent_crate\", version = \"=?)[^\"]+|\${1}$divergent_version|g" Cargo.toml
     # One case asks for a bump that leaves no version to read: cargo accepts an inherited
     # one, so this is a refactor the workspace could really take, and the reader of the
     # release's version would silently get an empty string.
