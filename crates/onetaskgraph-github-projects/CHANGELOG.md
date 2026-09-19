@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.40](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.39...onetaskgraph-github-projects-v0.2.40) - 2026-09-19
+
+### Fixed
+
+- *(github-projects)* preserve visible body bytes around the metadata slot and give sweep tests unique registrations ([#2078](https://github.com/nickderobertis/onetaskgraph/pull/2078))
+
 ## [0.2.37](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.36...onetaskgraph-github-projects-v0.2.37) - 2026-09-18
 
 ### Fixed
