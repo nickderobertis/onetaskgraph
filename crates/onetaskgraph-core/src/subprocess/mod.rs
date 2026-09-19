@@ -46,6 +46,8 @@ mod source;
 mod wire;
 
 pub use connection::MAX_LINE;
+pub(crate) use plugin::SETTINGS_FIELD;
 pub use plugin::{Plugin as SubprocessPlugin, Program, SubprocessConfig};
 pub use serve::{serve, serve_plugin};
 pub use source::{RequestDeadline, SubprocessSource};
+pub(crate) use wire::DocumentDir;

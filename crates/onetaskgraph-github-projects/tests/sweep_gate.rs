@@ -24,6 +24,7 @@ use std::net::TcpListener;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -107,12 +108,23 @@ static RUNS: LazyLock<Runs> = LazyLock::new(|| {
     }
 });
 
+/// The next process number [`ended_run`] hands out, so no two parallel tests hold one
+/// registration. It starts past any pid Linux issues (`pid_max` is at most 2^22), so it is
+/// never the real child [`LiveRunBeside`] spawns.
+static NEXT_ENDED_PROCESS: AtomicU32 = AtomicU32::new(1 << 31);
+
 /// A run of this machine that has ENDED: really registered, and its registration really
 /// given up, which is the state the kernel leaves behind when a process dies.
-fn ended_run(offset: u32) -> Run {
+fn ended_run() -> Run {
+    let process = process(NEXT_ENDED_PROCESS.fetch_add(1, Ordering::Relaxed));
     with_no_drive_going(|| {
-        let registration = Registration::take(&RUNS.registry, process(40_000 + offset))
-            .expect("a run that this check then ends");
+        assert!(
+            !RUNS.registry.registration_path(process).exists(),
+            "process {process} was already registered here by another test, so its \
+             registration is not this test's alone"
+        );
+        let registration =
+            Registration::take(&RUNS.registry, process).expect("a run that this check then ends");
         let run = registration.run();
         // Given up here, so the lock is free — the same thing the kernel does for a process
         // that has died, and the only state that authorises a removal.
@@ -491,10 +503,10 @@ async fn a_sweep_leaves_a_concurrent_live_runs_artifacts_however_old_they_are() 
     let their_label = artifact_label(beside.run, aged(10));
     let mine = artifact_title(RUNS.mine, aged(10));
     let my_label = artifact_label(RUNS.mine, aged(10));
-    let ended = ended_run(1);
+    let ended = ended_run();
     let stale = artifact_title(ended, aged(2));
     let stale_label = artifact_label(ended, aged(2));
-    let fresh_ended = ended_run(2);
+    let fresh_ended = ended_run();
     let fresh = artifact_title(fresh_ended, NOW);
     let fresh_label = artifact_label(fresh_ended, NOW);
     let drive = Drive::plant(
@@ -569,7 +581,7 @@ async fn a_process_id_reissued_to_a_new_run_costs_a_delay_and_never_a_deletion()
     // one run to the stamp they both carry, and this is what that costs: the second run's
     // work is safe because it is new, and the first run's residue waits rather than being
     // taken while the second is going.
-    let reused = ended_run(5);
+    let reused = ended_run();
     let residue = artifact_title(reused, aged(2));
     let residue_label = artifact_label(reused, aged(2));
     let in_flight = artifact_title(reused, NOW);
@@ -623,7 +635,7 @@ async fn an_artifact_another_deleter_took_first_leaves_the_cleanup_successful() 
     // The board answers the listing and then the item is gone — swept by another run,
     // removed by hand, whatever. GitHub refuses the delete that follows, and treating that
     // refusal as a failure once killed a whole journey over an item that had already gone.
-    let ended = ended_run(3);
+    let ended = ended_run();
     let stale = artifact_title(ended, aged(2));
     let stale_label = artifact_label(ended, aged(2));
     let drive = Drive::plant(
@@ -659,7 +671,7 @@ async fn residue_a_delete_never_takes_fails_the_cleanup_rather_than_passing_quie
     // for something that has already GONE is the outcome the delete was asking for; a delete
     // refused for something still there is residue left on somebody's real board, and a
     // cleanup that reported success would leave it there with nothing said.
-    let ended = ended_run(6);
+    let ended = ended_run();
     let stuck = artifact_title(ended, aged(2));
     let stuck_label = artifact_label(ended, aged(2));
     let drive = Drive::plant(
@@ -693,7 +705,7 @@ async fn this_runs_own_cleanup_removes_everything_it_wrote_and_nothing_else() {
     let mine = artifact_title(RUNS.mine, NOW);
     let also_mine = artifact_title(RUNS.mine, NOW + 1);
     let my_label = artifact_label(RUNS.mine, NOW);
-    let ended = ended_run(4);
+    let ended = ended_run();
     let theirs = artifact_title(ended, NOW);
     let their_label = artifact_label(ended, NOW);
     let drive = Drive::plant(

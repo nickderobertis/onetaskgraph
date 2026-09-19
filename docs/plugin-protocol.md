@@ -167,6 +167,7 @@ the source can do natively, and what configuration it is being built with.
 | `config` | object | This source's `config:` block, verbatim. |
 | `secrets` | object | String to string. Only the variables this plugin asked for; see §3.1. |
 | `statuses` | array of strings | The status categories this engine knows. Optional; see §3.5. |
+| `document_dir` | string | The absolute directory holding the configuration document that supplied `config`. Optional; see §3.8. |
 
 **Response.**
 
@@ -310,6 +311,34 @@ of the three: the call is refused before anything is sent with `{"kind": "refuse
 message `the <kind> plugin cannot write a task's metadata on its own` — `a project's` or
 `a document's` for the other two — which is exactly what a plugin that declares the member and
 cannot make the write answers with, so a caller cannot tell the two apart and has no reason to.
+
+### 3.8 `document_dir`
+
+The absolute directory holding the configuration document that supplied this source's
+`config` block — the directory a relative path written in that document is measured from.
+
+The member is **optional**, and it is absent when the block came from no one document: when
+any of its settings came from the environment layer or a command-line flag, where there is
+no document to measure from, and when two documents each supplied part of it. Absent, a
+relative path keeps resolving against the plugin's working directory, which is the
+engine's: the engine does not set the child's working directory, so the child inherits it.
+That is the same rule the engine applies in process, stated for a user under "Relative
+paths in a configuration document" in `README.md`.
+
+The engine resolves nothing inside `config` itself — the block is this plugin's, so which of
+its fields are paths is this plugin's to say. A plugin that has path fields resolves each
+relative one it holds against `document_dir` when the member is present, leaves an absolute
+one and an empty one as they are, and resolves nothing else; a plugin with no path fields
+receives the member and does nothing with it. The reference host `onetaskgraph-source`
+resolves exactly the fields its hosted plugin declares through
+`SourcePlugin::document_relative_paths`, which is what the engine resolves against the
+document for that plugin when it runs in process — so one relative root names one directory
+on either side of this seam.
+
+A plugin written before this member ignores it (§2.1) and behaves exactly as it did, so it
+was added without a protocol version bump. The directory is always absolute; a plugin that
+receives one that is not answers `initialize` with `{"kind": "config"}` rather than
+measuring from its own working directory.
 
 ## 4. The methods
 

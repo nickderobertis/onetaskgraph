@@ -294,6 +294,35 @@ compare(
     "`InitializeResult`",
 )
 
+# The handshake request's members, both ways, on the same terms. `InitializeParams` is what the
+# engine sends and what the reference host reads, so a member it carries that the table omits
+# — `document_dir` — is one no plugin written from the document knows to read, and a member
+# the table names that it does not carry is one such a plugin waits for in vain.
+requested = re.search(r"pub\(crate\) struct InitializeParams \{(.*?)\n\}", wire, re.DOTALL)
+if requested is None:
+    refuse(
+        "could not read `InitializeParams` from "
+        "crates/onetaskgraph-core/src/subprocess/wire.rs.",
+        "restore it, or teach this script the shape it has now.",
+    )
+sent = set(re.findall(r"^    pub\(crate\) (\w+):", requested.group(1), re.MULTILINE))
+if not sent:
+    refuse(
+        "read no members from `InitializeParams`.",
+        "restore its fields, or teach this script the shape they have now.",
+    )
+compare(
+    "handshake request member",
+    sent,
+    first_column("| Field | Type | Meaning |", after=("## 3. The handshake", "**Request.**")),
+    {
+        # The table specifies this object by its two members, `engine.name` and
+        # `engine.version`, rather than by a row of its own.
+        "engine": "specified as `engine.name` and `engine.version`",
+    },
+    "`InitializeParams`",
+)
+
 trait = re.search(r"pub trait TaskSource: Send \+ Sync \{(.*?)\n\}", source_rs, re.DOTALL)
 if trait is None:
     refuse(
