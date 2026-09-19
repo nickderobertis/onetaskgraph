@@ -35,7 +35,7 @@ use serde_json::{Map, Value};
 
 use crate::secrets::Secrets;
 use crate::subprocess::DocumentDir;
-use crate::{Environment, PluginKind, plugin_kinds};
+use crate::{Environment, PluginKind, plugin_kinds, registry::omitted_feature};
 
 pub use discovery::{
     Document, PROJECT_DOCUMENT_NAME, SECRETS_RELATIVE_PATH, USER_DOCUMENT_RELATIVE_PATH, documents,
@@ -220,16 +220,8 @@ impl Config {
         let mut sources = BTreeMap::new();
         for (name, source) in shape.sources {
             let key = format!("sources.{name}");
-            let plugin = PluginKind::parse(&source.plugin).ok_or_else(|| {
-                ConfigError::setting(
-                    format!("{key}.plugin"),
-                    format!(
-                        "no plugin named {:?} is built into this binary",
-                        source.plugin
-                    ),
-                    format!("use one of: {}.", plugin_kinds().join(", ")),
-                )
-            })?;
+            let plugin = PluginKind::parse(&source.plugin)
+                .ok_or_else(|| unknown_plugin(&key, &source.plugin))?;
             let name = SourceName::new(name).map_err(|error| {
                 ConfigError::setting(
                     &key,
@@ -436,4 +428,28 @@ pub fn load(
         config,
         secrets,
     })
+}
+
+/// The refusal of a source whose `plugin:` names no kind this build compiled.
+///
+/// A kind this crate could register but this build's features left out is named with the
+/// feature that compiles it, because "no such plugin" would send the reader looking for a
+/// typo in a name that is spelled correctly.
+fn unknown_plugin(key: &str, plugin: &str) -> ConfigError {
+    let kinds = plugin_kinds().join(", ");
+    match omitted_feature(plugin) {
+        Some(feature) => ConfigError::setting(
+            format!("{key}.plugin"),
+            format!("the {plugin:?} plugin is not compiled into this binary"),
+            format!(
+                "use a build of onetaskgraph-core with its `{feature}` feature enabled, or \
+                 one of: {kinds}."
+            ),
+        ),
+        None => ConfigError::setting(
+            format!("{key}.plugin"),
+            format!("no plugin named {plugin:?} is built into this binary"),
+            format!("use one of: {kinds}."),
+        ),
+    }
 }

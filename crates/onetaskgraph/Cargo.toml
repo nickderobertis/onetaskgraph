@@ -26,7 +26,9 @@ path = "src/bin/onetaskgraph-source.rs"
 [dependencies]
 schemars.workspace = true
 clap.workspace = true
-onetaskgraph-core.workspace = true
+# Both network destinations: the binary this repository ships registers every plugin kind,
+# and so does `onetaskgraph-source`, the reference host the journeys drive them through.
+onetaskgraph-core = { workspace = true, features = ["github-projects", "linear"] }
 # The contract crate directly, not through the engine: this binary renders the work types
 # a source returns, and re-exporting them from the engine would make the engine's public
 # surface a second place the contract is spelled.
