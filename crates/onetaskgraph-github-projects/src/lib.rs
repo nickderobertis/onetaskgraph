@@ -5989,11 +5989,18 @@ fn required_nonblank_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, S
 const METADATA_OPEN: &str = "<!-- onetaskgraph.metadata\n";
 const METADATA_CLOSE: &str = "\n-->";
 
+/// What the composer puts between a non-empty visible body and the slot, and the one thing
+/// the parser takes off the visible body when it takes the slot off — exactly once, so every
+/// other trailing byte of the body comes back as it was written.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] How a composer lays the slot after prose is this source's own; `docs/metadata.md` and its gate settle only the delimiters, and no other source declares a separator to reconcile against.
+const METADATA_SEPARATOR: &str = "\n\n";
+
 /// The visible body and the metadata slot at the end of it.
 ///
 /// The encoding is the one `docs/metadata.md` settles for Linear, which is where its
 /// reasons are. Only a comment at the very end is a slot; one in the middle is a person's
-/// own content and is left alone.
+/// own content and is left alone. The visible body is everything before the slot less the
+/// one [`METADATA_SEPARATOR`] the composer put there, byte for byte.
 fn metadata_body(
     body: Option<String>,
 ) -> Result<(Option<String>, BTreeMap<String, Value>), SourceError> {
@@ -6011,7 +6018,8 @@ fn metadata_body(
                 ),
             }
         })?;
-    let visible = body[..slot.start].trim_end();
+    let before = &body[..slot.start];
+    let visible = before.strip_suffix(METADATA_SEPARATOR).unwrap_or(before);
     Ok(((!visible.is_empty()).then(|| visible.to_owned()), metadata))
 }
 
@@ -6059,9 +6067,10 @@ fn slot_span(body: &str) -> Result<Option<SlotSpan>, SourceError> {
 /// slot as it was.
 ///
 /// A slot that is there has its JSON replaced in place; one that becomes empty is removed
-/// together with the one `"\n\n"` separating it from the prose before it. A body with no
-/// slot gains one the way [`compose_body`] writes it — after a `"\n\n"`, or alone in an empty
-/// body — and a body with no slot that is given no metadata is returned as it is.
+/// together with the one [`METADATA_SEPARATOR`] separating it from the prose before it. A
+/// body with no slot gains one the way [`compose_body`] writes it — after that separator,
+/// or alone in an empty body — and a body with no slot that is given no metadata is
+/// returned as it is.
 fn with_slot(body: &str, metadata: &BTreeMap<String, Value>) -> Result<String, SourceError> {
     let encoded = if metadata.is_empty() {
         None
@@ -6082,7 +6091,7 @@ fn with_slot(body: &str, metadata: &BTreeMap<String, Value>) -> Result<String, S
             let before = &body[..slot.start];
             format!(
                 "{}{}",
-                before.strip_suffix("\n\n").unwrap_or(before),
+                before.strip_suffix(METADATA_SEPARATOR).unwrap_or(before),
                 &body[slot.end..]
             )
         }
@@ -6090,7 +6099,9 @@ fn with_slot(body: &str, metadata: &BTreeMap<String, Value>) -> Result<String, S
         (None, Some(encoded)) if body.is_empty() => {
             format!("{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
         }
-        (None, Some(encoded)) => format!("{body}\n\n{METADATA_OPEN}{encoded}{METADATA_CLOSE}"),
+        (None, Some(encoded)) => {
+            format!("{body}{METADATA_SEPARATOR}{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
+        }
     })
 }
 
@@ -6125,7 +6136,7 @@ fn compose_body(
     Ok(Some(if visible.is_empty() {
         format!("{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
     } else {
-        format!("{visible}\n\n{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
+        format!("{visible}{METADATA_SEPARATOR}{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
     }))
 }
 
