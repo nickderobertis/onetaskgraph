@@ -184,6 +184,9 @@ done
 # workspace, and a crate directory cargo cannot load is named by the inventory's own
 # diagnostic rather than by cargo's manifest error — scripts/check-line-reads.sh plants
 # exactly such a directory and reads the inventory's answer.
+# Neither failure is repaired in the matrices and manifests the generic next action names,
+# so each reports its own.
+fail_siblings() { echo "distribution contract drift: $1" >&2; echo "next: $2" >&2; exit 1; }
 if ! inexact="$(cargo metadata --no-deps --format-version 1 | python3 -c '
 import json, sys
 packages = {package["name"]: package for package in json.load(sys.stdin)["packages"]}
@@ -198,6 +201,8 @@ for package in packages.values():
         if dependency["req"] != wanted:
             print(package["name"], "requires", dependency["name"], "as", dependency["req"], "rather than", wanted)
 ' | tr -d '\r')"; then
-  fail "could not read the workspace's sibling requirements from cargo metadata"
+  fail_siblings "could not read the workspace's sibling requirements from cargo metadata" \
+    "fix the manifest error cargo printed above, then rerun"
 fi
-[[ -z $inexact ]] || fail "sibling requirements must be exact, '=<workspace version>', in the root Cargo.toml's [workspace.dependencies]: ${inexact//$'\n'/; }"
+[[ -z $inexact ]] || fail_siblings "sibling requirements must be exact, '=<workspace version>', in the root Cargo.toml's [workspace.dependencies]: ${inexact//$'\n'/; }" \
+  "run scripts/set-version.sh <workspace version>, which writes every sibling pin, then rerun"

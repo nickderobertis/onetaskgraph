@@ -137,8 +137,8 @@ impl FromStr for PluginKind {
     }
 }
 
-/// How many kinds this build compiled: the three every build has, and each network plugin
-/// whose feature is on.
+/// Sizes [`PluginKind::ALL`] from the same `cfg`s that gate its entries, so that table
+/// compiles under every feature combination rather than the one a literal length would fit.
 const KIND_COUNT: usize =
     3 + cfg!(feature = "github-projects") as usize + cfg!(feature = "linear") as usize;
 

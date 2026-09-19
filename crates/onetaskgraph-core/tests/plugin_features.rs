@@ -98,7 +98,7 @@ fn packages_reached_with(features: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn a_dependent_taking_the_default_features_links_no_network_plugin_or_http_stack() {
+fn a_dependent_taking_the_default_features_links_none_of_the_network_markers() {
     let packages = packages_reached_with(&[]);
     assert!(
         packages
@@ -118,7 +118,7 @@ fn a_dependent_taking_the_default_features_links_no_network_plugin_or_http_stack
 }
 
 #[test]
-fn a_dependent_enabling_both_network_features_links_both_plugins_and_their_stack() {
+fn a_dependent_enabling_both_network_features_links_every_network_marker() {
     let packages = packages_reached_with(&["github-projects", "linear"]);
     let missing: Vec<&str> = NETWORK_MARKERS
         .into_iter()
@@ -135,7 +135,6 @@ fn naming(plugin: &str) -> Value {
     json!({"sources": {"work": {"plugin": plugin, "config": {}}}})
 }
 
-/// What the subprocess serve loop answers a handshake asking it to host `kind`.
 fn served_handshake(kind: &str) -> Value {
     let request = json!({
         "id": "0",
