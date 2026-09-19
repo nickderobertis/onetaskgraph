@@ -221,7 +221,7 @@ impl Config {
         for (name, source) in shape.sources {
             let key = format!("sources.{name}");
             let plugin = PluginKind::parse(&source.plugin)
-                .ok_or_else(|| unknown_plugin(&key, &source.plugin))?;
+                .ok_or_else(|| plugin_not_in_this_build(&key, &source.plugin))?;
             let name = SourceName::new(name).map_err(|error| {
                 ConfigError::setting(
                     &key,
@@ -435,7 +435,7 @@ pub fn load(
 /// A kind this crate could register but this build's features left out is named with the
 /// feature that compiles it, because "no such plugin" would send the reader looking for a
 /// typo in a name that is spelled correctly.
-fn unknown_plugin(key: &str, plugin: &str) -> ConfigError {
+fn plugin_not_in_this_build(key: &str, plugin: &str) -> ConfigError {
     let kinds = plugin_kinds().join(", ");
     match omitted_feature(plugin) {
         Some(feature) => ConfigError::setting(
