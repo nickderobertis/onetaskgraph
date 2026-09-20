@@ -303,3 +303,38 @@ fn a_file_that_vanishes_during_the_walk_is_skipped_rather_than_reported() {
         }
     });
 }
+
+/// A file the walk may not read but that is still there is the author's to mend: only a
+/// file that is gone — which on Windows also answers "access is denied" while its deletion
+/// is pending — is skipped, so a denied read of a file whose metadata still answers is
+/// reported under its path rather than passed over as if it had vanished.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_file_that_is_still_there_but_unreadable_is_reported_rather_than_skipped() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (root, source) = folder(&[
+        ("tasks/mine/a.md", "---\ntitle: A\nproject: mine\n---\n"),
+        (
+            "tasks/mine/sealed.md",
+            "---\ntitle: Sealed\nproject: mine\n---\n",
+        ),
+    ]);
+    let sealed = root.path().join("tasks/mine/sealed.md");
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_to_string(&sealed).is_ok() {
+        // A user the permission bits do not bind (root) cannot pose the case.
+        return;
+    }
+    let message = malformed(
+        source
+            .query_tasks(&TaskQuery::default(), &page())
+            .await
+            .expect_err("an unreadable record that is still there is reported"),
+    );
+    assert!(message.contains("sealed.md"), "{message}");
+    assert!(
+        sealed.exists(),
+        "the record was not removed by being reported"
+    );
+}
