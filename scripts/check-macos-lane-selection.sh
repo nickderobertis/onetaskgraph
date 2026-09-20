@@ -151,6 +151,11 @@ fixture "$SQUASH" "$(pull null "$SQUASH" "$HEAD_SHA")" "$HEAD_SHA" "$(runs "$BOT
 decide "$SQUASH" "${NAMES[@]}"
 expect run "an unmerged pull request" "no pull request was merged as"
 
+# 4b. A merged pull request whose document names no usable head.
+fixture "$SQUASH" "$(printf '[{"number": 7, "merged_at": "2026-09-19T00:00:00Z", "merge_commit_sha": "%s", "head": "not an object"}]' "$SQUASH")"
+decide "$SQUASH" "${NAMES[@]}"
+expect run "a pull request document with no usable head" "names no usable number and head"
+
 # 5. The squash's tree is not the head's — the branch was merged behind the base.
 fixture "$DIVERGENT" "$(pull '"2026-09-19T00:00:00Z"' "$DIVERGENT" "$HEAD_SHA")" "$HEAD_SHA" "$(runs "$BOTH_PASSED")"
 decide "$DIVERGENT" "${NAMES[@]}"

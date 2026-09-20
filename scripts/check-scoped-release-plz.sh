@@ -16,8 +16,11 @@
 #      nowhere else, and proves the result by asking it;
 #   4. a provisioned location is found again without installing — from the same checkout,
 #      and from a fresh one on the same host;
-#   5. residue of another version there is replaced, and an installer that lands the wrong
-#      version is refused rather than trusted;
+#   5. residue of another version there is replaced, an installer that lands the wrong
+#      version or a binary that cannot answer is refused rather than trusted, a failed
+#      installation says which installers failed, a host with no cargo is told what to
+#      install, a location that cannot be cleared or created is named, the Windows `.exe`
+#      layout resolves, and a host with no cache home at all is refused naming the variables;
 #   6. a release-plz on PATH is neither consulted nor touched, whatever its version;
 #   7. nothing in scripts/, the justfile, the hooks or the workflows invokes release-plz
 #      except through that script, so a caller cannot quietly reach for the global one;
@@ -93,6 +96,10 @@ case "${1:-}" in
     done
     ;;
   install)
+    if [ "${STANDIN_INSTALL_FAILS:-}" = yes ]; then
+      echo "cargo stand-in: the source build failed" >&2
+      exit 101
+    fi
     shift
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -112,7 +119,11 @@ esac
   exit 2
 }
 mkdir -p "$destination"
-printf '#!/usr/bin/env bash\necho "release-plz %s"\n' "${STANDIN_ANSWERS:-$version}" > "$destination/release-plz"
+if [ "${STANDIN_BROKEN_BINARY:-}" = yes ]; then
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$destination/release-plz"
+else
+  printf '#!/usr/bin/env bash\necho "release-plz %s"\n' "${STANDIN_ANSWERS:-$version}" > "$destination/release-plz"
+fi
 chmod +x "$destination/release-plz"
 CARGO
 printf '#!/usr/bin/env bash\nexit 0\n' > "$WITH_BINSTALL/cargo-binstall"
@@ -306,6 +317,95 @@ if grep -v -- "$home/" "$INSTALL_LOG" | grep -q .; then
 fi
 OUTPUT="$(cd "$ROOT" && PATH="$GLOBAL_BIN:$PATH" ONETASKGRAPH_TOOLS_HOME="$home" bash "$RESOLVER" resolve 2>&1)" || true
 [ "$OUTPUT" = "$home/release-plz/$pin/bin/release-plz" ] || report "resolve answered '$OUTPUT' rather than the scoped copy, with the pinned version on PATH"
+
+# 5c. An installer that lands a binary which cannot answer at all is refused the same way,
+#     and so is such a binary found at the scoped path.
+home="$scratch/home-3b"
+OUTPUT="$(cd "$ROOT" && PATH="$WITH_BINSTALL:$STANDIN_BIN:$PATH" ONETASKGRAPH_TOOLS_HOME="$home" STANDIN_BROKEN_BINARY=yes \
+  bash "$RESOLVER" ensure 2>&1)" && STATUS=0 || STATUS=$?
+if [ "$STATUS" -eq 0 ] || ! grep -qF -- "answers 'nothing'" <<<"$OUTPUT"; then
+  report "an installer that landed a binary which cannot start was not refused naming that it answers nothing (status $STATUS). It said:"
+  quote "$OUTPUT"
+fi
+resolver "$ROOT" "$home" "" resolve
+[ "$STATUS" -eq 69 ] && grep -qF -- "found: nothing" <<<"$OUTPUT" || report "a scoped binary that cannot start was not refused as 'found: nothing' (status $STATUS): $OUTPUT"
+
+# 5d. The source build fails: refused naming the failure, and — when binstall failed first —
+#     binstall's own diagnostic is kept beside it, so a reader sees both causes.
+home="$scratch/home-3c"
+OUTPUT="$(cd "$ROOT" && PATH="$WITH_BINSTALL:$STANDIN_BIN:$PATH" ONETASKGRAPH_TOOLS_HOME="$home" STANDIN_BINSTALL_FAILS=yes STANDIN_INSTALL_FAILS=yes \
+  bash "$RESOLVER" ensure 2>&1)" && STATUS=0 || STATUS=$?
+for term in "installation into $home/release-plz/$pin failed" "binstall could not fetch the published binary" "the source build failed"; do
+  [ "$STATUS" -ne 0 ] && grep -qF -- "$term" <<<"$OUTPUT" || {
+    report "a source build failing after binstall failed was not refused naming '$term' (status $STATUS). It said:"
+    quote "$OUTPUT"
+  }
+done
+[ ! -e "$home/release-plz/$pin/bin/release-plz" ] || report "a failed installation left a binary at the scoped path"
+
+# 5e. No cargo at all, and no cargo-binstall: nothing can install, and the refusal names
+#     the toolchain to install. The stand-in cargo is left off PATH for this one case.
+home="$scratch/home-3d"
+PATH_WITHOUT_CARGO="$(path_without_tool cargo)"
+if ( PATH="$PATH_WITHOUT_CARGO"; hash -r 2>/dev/null; command -v cargo >/dev/null 2>&1 || command -v cargo-binstall >/dev/null 2>&1 ); then
+  report "cargo or cargo-binstall is still reachable after dropping every directory that carries cargo, so the no-toolchain case cannot pose its question"
+else
+  OUTPUT="$(cd "$ROOT" && PATH="$PATH_WITHOUT_CARGO" ONETASKGRAPH_TOOLS_HOME="$home" bash "$RESOLVER" ensure 2>&1)" && STATUS=0 || STATUS=$?
+  [ "$STATUS" -eq 1 ] && grep -qF -- "cargo is not on PATH" <<<"$OUTPUT" && grep -qF -- "rustup.rs" <<<"$OUTPUT" || {
+    report "ensure with no cargo on PATH exited $STATUS without naming the toolchain to install. It said:"
+    quote "$OUTPUT"
+  }
+fi
+
+# 5f. A location that cannot be cleared or created is refused naming it. Posed by taking
+#     write permission away from the tool's directory, which a root user and a Windows
+#     filesystem do not honour — so the case says when it could not be posed rather than
+#     passing quietly.
+home="$scratch/home-3e"
+mkdir -p "$home/release-plz/$pin/bin"
+printf '#!/usr/bin/env bash\necho "release-plz 0.0.0"\n' > "$home/release-plz/$pin/bin/release-plz"
+chmod +x "$home/release-plz/$pin/bin/release-plz"
+chmod a-w "$home/release-plz"
+if rm -rf "$home/release-plz/$pin" 2>/dev/null; then
+  echo "check-scoped-release-plz: note: this filesystem or user ignores a read-only directory, so the unclearable-residue and uncreatable-directory cases were not posed here" >&2
+  chmod u+w "$home/release-plz"
+else
+  resolver "$ROOT" "$home" "$WITH_BINSTALL" ensure
+  [ "$STATUS" -eq 1 ] && grep -qF -- "could not clear $home/release-plz/$pin" <<<"$OUTPUT" || {
+    report "residue that cannot be cleared was not refused naming it (status $STATUS). It said:"
+    quote "$OUTPUT"
+  }
+  chmod u+w "$home/release-plz"
+  rm -rf "$home/release-plz/$pin"
+  chmod a-w "$home/release-plz"
+  resolver "$ROOT" "$home" "$WITH_BINSTALL" ensure
+  [ "$STATUS" -eq 1 ] && grep -qF -- "could not create $home/release-plz/$pin/bin" <<<"$OUTPUT" || {
+    report "a scoped directory that cannot be created was not refused naming it (status $STATUS). It said:"
+    quote "$OUTPUT"
+  }
+  chmod u+w "$home/release-plz"
+fi
+
+# 5g. The Windows layout: `cargo install` writes release-plz.exe there, and `[ -x ]` does
+#     not add the suffix, so the resolver has to. Posed with a file of that name, which is
+#     the whole of what the resolution reads.
+home="$scratch/home-3f"
+mkdir -p "$home/release-plz/$pin/bin"
+printf '#!/usr/bin/env bash\necho "release-plz %s"\n' "$pin" > "$home/release-plz/$pin/bin/release-plz.exe"
+chmod +x "$home/release-plz/$pin/bin/release-plz.exe"
+resolver "$ROOT" "$home" "" resolve
+[ "$STATUS" -eq 0 ] && [ "$OUTPUT" = "$home/release-plz/$pin/bin/release-plz.exe" ] || report "a release-plz.exe at the scoped path resolved to '$OUTPUT' (status $STATUS) rather than itself"
+rm -f "$INSTALL_LOG"
+resolver "$ROOT" "$home" "$WITH_BINSTALL" ensure
+[ "$STATUS" -eq 0 ] && [ "$(installer_calls)" = 0 ] || report "ensure reinstalled over a provisioned release-plz.exe (status $STATUS, $(installer_calls) installer call(s))"
+
+# 5h. No cache home at all: nothing to scope under, and the refusal says which variables
+#     would supply one.
+OUTPUT="$(cd "$ROOT" && env -u ONETASKGRAPH_TOOLS_HOME -u XDG_CACHE_HOME -u HOME bash "$RESOLVER" path 2>&1)" && STATUS=0 || STATUS=$?
+[ "$STATUS" -eq 69 ] && grep -qF -- "none of ONETASKGRAPH_TOOLS_HOME, XDG_CACHE_HOME and HOME is set" <<<"$OUTPUT" || {
+  report "with no cache-home variable set, the resolver exited $STATUS without naming them. It said:"
+  quote "$OUTPUT"
+}
 
 # A tool home that is not an absolute path names nothing this may create or clear under.
 resolver "$ROOT" "relative/tools" "" path

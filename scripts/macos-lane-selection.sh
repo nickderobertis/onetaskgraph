@@ -68,10 +68,19 @@ try:
 except ValueError as problem:
     print(f"the pull-request answer is not JSON: {problem}")
     raise SystemExit(1)
+import re
 for pull in pulls if isinstance(pulls, list) else []:
-    if pull.get("merged_at") and pull.get("merge_commit_sha") == commit:
-        print(pull["number"], pull["head"]["sha"])
+    if not isinstance(pull, dict) or not pull.get("merged_at") or pull.get("merge_commit_sha") != commit:
+        continue
+    # A third party wrote this document, so its shape is checked before it is read: the
+    # number and the head are what the rest of the decision fetches and compares.
+    number, head = pull.get("number"), pull.get("head")
+    sha = head.get("sha") if isinstance(head, dict) else None
+    if isinstance(number, int) and number > 0 and isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha):
+        print(number, sha)
         raise SystemExit(0)
+    print(f"the pull request merged as {commit} names no usable number and head")
+    raise SystemExit(1)
 print(f"no pull request was merged as {commit}")
 raise SystemExit(1)
 ' 2>&1)" || run_because "$merged"
