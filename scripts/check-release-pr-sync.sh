@@ -15,9 +15,12 @@
 # thing from a finding and reads differently in a gate log.
 set -euo pipefail
 
-# The release-plz the stand-in below was recorded from. The workflow installs exactly this
-# version, and case 12 fails when the two part: a stand-in models one version's behaviour.
+# The release-plz the stand-in below was recorded from. scripts/scoped-release-plz.sh
+# provisions exactly this version — for the workflow, for bootstrap and for the scoped
+# location every script resolves it from — and case 12 fails when the two part: a stand-in
+# models one version's behaviour.
 readonly RECORDED_RELEASE_PLZ=0.3.160
+export RECORDED_RELEASE_PLZ
 
 # The journey could not be run. Distinct from a case failing, which is a finding about the
 # tree and exits 1 at the end.
@@ -168,9 +171,20 @@ mkdir -p "$state/seen" || fatal \
 #   beside any entry already in the tree rather than replacing it. That is what put two
 #   entries for one set of changes into #55, and it reaches the release commit alone: the
 #   checkout it was run from keeps whatever it had.
-cat > "$scratch/release-plz" <<'STUB'
+# It stands where the scripts under test resolve the tool — the scoped location, relocated
+# into this fixture through ONETASKGRAPH_TOOLS_HOME — and answers `--version` with the pin,
+# because the resolution under test refuses any other answer.
+stand_in_dir="$scratch/tools/release-plz/$RECORDED_RELEASE_PLZ/bin"
+mkdir -p "$stand_in_dir" "$scratch/no-tools" || fatal \
+  "could not create the stand-in directory at $stand_in_dir" \
+  "check the permissions of \$TMPDIR, then rerun"
+cat > "$stand_in_dir/release-plz" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${1:-}" = --version ]; then
+  echo "release-plz $RECORDED_RELEASE_PLZ"
+  exit 0
+fi
 version="$RELEASE_PLZ_STUB_VERSION"
 divergent_crate="$RELEASE_PLZ_STUB_DIVERGENT_CRATE"
 divergent_version="$RELEASE_PLZ_STUB_DIVERGENT_VERSION"
@@ -270,14 +284,12 @@ case "$subcommand" in
     ;;
 esac
 STUB
-chmod +x "$scratch/release-plz" || fatal \
+chmod +x "$stand_in_dir/release-plz" || fatal \
   "could not make the release-plz stand-in executable" \
   "check the permissions of \$TMPDIR, then rerun"
+export ONETASKGRAPH_TOOLS_HOME="$scratch/tools"
 
-# The PATH the "no release-plz installed" case runs under. The ambient PATH will not do:
-# a machine with release-plz installed would run the real tool against the scratch tree and
-# the case would prove the opposite of what it says. So every directory carrying one is
-# dropped, and the result is put to the question it is about to be trusted for.
+# Subtract only the entries that expose a tool, keeping every other PATH entry.
 path_without_tool() {
   local tool="$1" entry result=""
   local IFS=:
@@ -288,19 +300,11 @@ path_without_tool() {
   done
   printf '%s' "$result"
 }
-PATH_WITHOUT_RELEASE_PLZ="$(path_without_tool release-plz)"
-readonly PATH_WITHOUT_RELEASE_PLZ
-if ( PATH="$PATH_WITHOUT_RELEASE_PLZ"; hash -r 2>/dev/null; command -v release-plz >/dev/null 2>&1 ); then
-  fatal \
-    "release-plz is still reachable after dropping every directory that carries one, so the case for a machine without it would drive the real tool against the scratch tree" \
-    "run 'command -v release-plz' and take it off PATH — a shell function or an alias reaches past the directory scan above"
-fi
-
-# Subtract only the entries that expose python3. Keeping every other PATH entry is
-# load-bearing on Windows, where Git Bash needs DLLs beside its own installation and a
-# whitelist of executable symlinks leaves bash itself unable to start. The links retain
-# commands that share Python's directory on Unix; the remaining PATH retains their runtime
-# libraries on Windows.
+# The entries that expose python3. Keeping every other PATH entry is load-bearing on
+# Windows, where Git Bash needs DLLs beside its own installation and a whitelist of
+# executable symlinks leaves bash itself unable to start. The links retain commands that
+# share Python's directory on Unix; the remaining PATH retains their runtime libraries on
+# Windows.
 PATH_WITHOUT_PYTHON="$(path_without_tool python3)"
 readonly PATH_WITHOUT_PYTHON
 if ( PATH="$PATH_WITHOUT_PYTHON"; hash -r 2>/dev/null; command -v python3 >/dev/null 2>&1 ); then
@@ -316,7 +320,6 @@ for tool in bash dirname git head sed; do
     "could not link $tool into the missing-python fixture" "check scratch-directory permissions and rerun"
 done
 readonly path_without_python
-export PATH="$scratch:$PATH"
 export RELEASE_PLZ_STUB_VERSION="$new_version"
 export RELEASE_PLZ_STUB_DIVERGENT_CRATE="$divergent_crate"
 export RELEASE_PLZ_STUB_DIVERGENT_VERSION="$divergent_version"
@@ -360,7 +363,7 @@ expect_refusal() {
 # 1. The regression itself, watched failing. A release pull request carrying only what
 #    release-plz writes is the tree that failed #26, and this repository's own version check
 #    has to be the thing that says so — if it ever stops, every case below proves nothing.
-if ! (cd "$repo" && release-plz update) > "$case_log" 2>&1; then
+if ! (cd "$repo" && "$stand_in_dir/release-plz" update) > "$case_log" 2>&1; then
   quote_case_log
   fatal \
     "the release-plz stand-in could not bump the scratch tree, so this journey never reached the sync" \
@@ -495,9 +498,11 @@ restore_scratch
 
 # 7. Every way the preparation can fail is a way a release stalls, so each one has to say
 #    which phase stopped and what to do — and none may end with a pull request opened.
-expect_refusal "release-plz missing from PATH" \
-  "release-plz is not on PATH" 2 \
-  env PATH="$PATH_WITHOUT_RELEASE_PLZ" scripts/prepare-release-pr.sh
+# PATH is left as it is here, deliberately: a release-plz on it, whatever its version, is
+# not what the preparation resolves, and a refusal with one on PATH is the proof of that.
+expect_refusal "release-plz not provisioned in the scoped tool location" \
+  "not provisioned in this repository's scoped tool location" 2 \
+  env ONETASKGRAPH_TOOLS_HOME="$scratch/no-tools" scripts/prepare-release-pr.sh
 expect_refusal "no git token in the environment" \
   "GIT_TOKEN is empty" 2 \
   env GIT_TOKEN= scripts/prepare-release-pr.sh
@@ -512,7 +517,7 @@ expect_refusal "release-plz returning an undefined phase status" \
   env RELEASE_PLZ_STUB_FAIL=update RELEASE_PLZ_STUB_FAIL_STATUS=7 scripts/prepare-release-pr.sh
 expect_refusal "the selector missing its required Python toolchain" \
   "python3 is not on PATH" 2 \
-  env PATH="$path_without_python:$scratch:$PATH_WITHOUT_PYTHON" scripts/prepare-release-pr.sh
+  env PATH="$path_without_python:$PATH_WITHOUT_PYTHON" scripts/prepare-release-pr.sh
 expect_refusal "an update that leaves no version to read in the binary's manifest" \
   "no valid semantic version" 1 \
   env RELEASE_PLZ_STUB_INHERIT_VERSION=yes scripts/prepare-release-pr.sh
@@ -686,11 +691,16 @@ if workflow_opens_pr_through_the_script "$beside" > "$case_log" 2>&1; then
   report "the pin ACCEPTS a workflow that opens the pull request with 'release-plz release-pr' beside the sync, so the manifests it carries are whatever that call wrote"
 fi
 
-# 12. The stand-in models one release-plz, so the workflow has to install that one. Without
-#     this the gate would keep passing against behaviour the real tool no longer has.
-installed_release_plz="$(sed -n 's/.*[ ,]release-plz@\([^ ,]*\).*/\1/p' "$workflow" | head -n1)"
+# 12. The stand-in models one release-plz, so the one provisioned — by the workflow through
+#     scripts/scoped-release-plz.sh, and by bootstrap through the same script — has to be
+#     that one. Without this the gate would keep passing against behaviour the real tool no
+#     longer has.
+installed_release_plz="$(bash "$ROOT/scripts/scoped-release-plz.sh" pin 2>/dev/null || true)"
 if [ "$installed_release_plz" != "$RECORDED_RELEASE_PLZ" ]; then
-  report "the workflow installs release-plz '${installed_release_plz:-<unpinned>}' but the stand-in above was recorded from $RECORDED_RELEASE_PLZ, so this journey proves nothing about the tool that will actually prepare the release. Re-observe the real tool — what its update writes, what its release-pr refuses, and what the release commit carries — then move RECORDED_RELEASE_PLZ with the pin"
+  report "scripts/scoped-release-plz.sh provisions release-plz '${installed_release_plz:-<unpinned>}' but the stand-in above was recorded from $RECORDED_RELEASE_PLZ, so this journey proves nothing about the tool that will actually prepare the release. Re-observe the real tool — what its update writes, what its release-pr refuses, and what the release commit carries — then move RECORDED_RELEASE_PLZ with the pin"
+fi
+if ! grep -q 'run:[[:space:]]*scripts/scoped-release-plz\.sh ensure' "$workflow"; then
+  report "the release workflow never runs 'scripts/scoped-release-plz.sh ensure', so the release-plz it prepares the release with is whatever else it installed rather than the one the stand-in above models"
 fi
 
 if [ "$failures" -ne 0 ]; then

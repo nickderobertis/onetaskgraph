@@ -14,8 +14,6 @@ jobs:
         include:
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, ext: tar.gz, npm: linux-x64 }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, ext: tar.gz, npm: linux-arm64 }
-          - { os: macos-latest, target: x86_64-apple-darwin, ext: tar.gz, npm: darwin-x64 }
-          - { os: macos-latest, target: aarch64-apple-darwin, ext: tar.gz, npm: darwin-arm64 }
           - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: zip, npm: win32-x64 }
     runs-on: ${{ matrix.os }}
     steps:
@@ -24,28 +22,89 @@ jobs:
         with: { target: "${{ matrix.target }}" }
       - run: cargo build --release --locked --target "${{ matrix.target }}" -p onetaskgraph
         env: { RUSTFLAGS: "-D warnings" }
+      # One packaging body, shared byte for byte with the macOS job below over `TARGETS`
+      # pairs of <rust target>=<npm platform>; scripts/check-distribution-contract.sh holds
+      # the two copies identical, so a fix to one cannot leave the other behind.
       - name: Archive, checksum, and attach
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
-          TARGET: ${{ matrix.target }}
+          TARGETS: ${{ matrix.target }}=${{ matrix.npm }}
           EXT: ${{ matrix.ext }}
-          NPM_PLATFORM: ${{ matrix.npm }}
         run: |
           printf '%s\n' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || { echo "invalid release tag: $TAG" >&2; exit 64; }
-          name="onetaskgraph-${TAG}-${TARGET}"; bin="target/${TARGET}/release/onetaskgraph"
-          [ "$EXT" != zip ] || bin="${bin}.exe"
-          if [ "$EXT" = zip ]; then 7z a "${name}.zip" "$bin"; else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
-          asset="${name}.${EXT}"
-          if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"; else shasum -a 256 "$asset" > "$asset.sha256"; fi
-          gh release upload "$TAG" "$asset" "$asset.sha256" --clobber
-          mkdir -p "carrier/bin" "dist/carriers"
-          cp "npm/platforms/${NPM_PLATFORM}/package.json" carrier/package.json
-          cp "$bin" "carrier/bin/$(basename "$bin")"
-          npm pack ./carrier --pack-destination dist/carriers
+          for pair in $TARGETS; do
+            target="${pair%%=*}"; npm_platform="${pair#*=}"
+            name="onetaskgraph-${TAG}-${target}"; bin="target/${target}/release/onetaskgraph"
+            [ "$EXT" != zip ] || bin="${bin}.exe"
+            if [ "$EXT" = zip ]; then 7z a "${name}.zip" "$bin"; else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
+            asset="${name}.${EXT}"
+            if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"; else shasum -a 256 "$asset" > "$asset.sha256"; fi
+            gh release upload "$TAG" "$asset" "$asset.sha256" --clobber
+            mkdir -p "carrier/${npm_platform}/bin" "dist/carriers/${npm_platform}"
+            cp "npm/platforms/${npm_platform}/package.json" "carrier/${npm_platform}/package.json"
+            cp "$bin" "carrier/${npm_platform}/bin/$(basename "$bin")"
+            npm pack ./carrier/"${npm_platform}" --pack-destination "dist/carriers/${npm_platform}"
+          done
       - uses: actions/upload-artifact@v4
-        with: { name: "carrier-${{ matrix.npm }}", path: dist/carriers/*.tgz }
+        with: { name: "carrier-${{ matrix.npm }}", path: "dist/carriers/${{ matrix.npm }}/*.tgz" }
+  # Both macOS architectures in ONE job, native assets and wheels alike, rather than two
+  # rows of the matrix above and two more of build-wheels below that could only start once
+  # that whole matrix had finished. The account has one small macOS runner pool, shared with
+  # every push to main, and four sequential macOS jobs queued a merge-to-PyPI behind itself
+  # for hours (#1991). The runner is arm64 and cross-compiles the x86_64 target, which cargo
+  # and maturin both do from one host once the target is installed; the artifact names are
+  # the ones build-wheels and the carrier download below expect, so nothing downstream can
+  # tell which job built them. The archives are uploaded before the wheels are built, which
+  # is the order release-targets.toml relies on: a consumer of the archives waits on `pypi`.
+  macos-assets-carriers-and-wheels:
+    permissions:
+      contents: write
+    runs-on: macos-latest
+    env:
+      TARGETS: x86_64-apple-darwin=darwin-x64 aarch64-apple-darwin=darwin-arm64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: { target: "x86_64-apple-darwin,aarch64-apple-darwin" }
+      - run: cargo build --release --locked --target x86_64-apple-darwin --target aarch64-apple-darwin -p onetaskgraph
+        env: { RUSTFLAGS: "-D warnings" }
+      - name: Archive, checksum, and attach
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          EXT: tar.gz
+        run: |
+          printf '%s\n' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || { echo "invalid release tag: $TAG" >&2; exit 64; }
+          for pair in $TARGETS; do
+            target="${pair%%=*}"; npm_platform="${pair#*=}"
+            name="onetaskgraph-${TAG}-${target}"; bin="target/${target}/release/onetaskgraph"
+            [ "$EXT" != zip ] || bin="${bin}.exe"
+            if [ "$EXT" = zip ]; then 7z a "${name}.zip" "$bin"; else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
+            asset="${name}.${EXT}"
+            if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"; else shasum -a 256 "$asset" > "$asset.sha256"; fi
+            gh release upload "$TAG" "$asset" "$asset.sha256" --clobber
+            mkdir -p "carrier/${npm_platform}/bin" "dist/carriers/${npm_platform}"
+            cp "npm/platforms/${npm_platform}/package.json" "carrier/${npm_platform}/package.json"
+            cp "$bin" "carrier/${npm_platform}/bin/$(basename "$bin")"
+            npm pack ./carrier/"${npm_platform}" --pack-destination "dist/carriers/${npm_platform}"
+          done
+      - uses: actions/upload-artifact@v4
+        with: { name: "carrier-darwin-x64", path: "dist/carriers/darwin-x64/*.tgz" }
+      - uses: actions/upload-artifact@v4
+        with: { name: "carrier-darwin-arm64", path: "dist/carriers/darwin-arm64/*.tgz" }
+      - uses: PyO3/maturin-action@v1
+        env: { RUSTFLAGS: "-D warnings" }
+        with: { target: "x86_64-apple-darwin", args: "--release --locked --out dist/wheels/x86_64-apple-darwin" }
+      - uses: PyO3/maturin-action@v1
+        env: { RUSTFLAGS: "-D warnings" }
+        with: { target: "aarch64-apple-darwin", args: "--release --locked --out dist/wheels/aarch64-apple-darwin" }
+      - uses: actions/upload-artifact@v4
+        with: { name: "wheels-x86_64-apple-darwin", path: dist/wheels/x86_64-apple-darwin }
+      - uses: actions/upload-artifact@v4
+        with: { name: "wheels-aarch64-apple-darwin", path: dist/wheels/aarch64-apple-darwin }
   build-wheels:
     needs: native-assets-and-carriers
     strategy:
@@ -53,8 +112,6 @@ jobs:
         include:
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
-          - { os: macos-latest, target: x86_64-apple-darwin }
-          - { os: macos-latest, target: aarch64-apple-darwin }
           - { os: windows-latest, target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     steps:
@@ -97,7 +154,7 @@ jobs:
             esac
           done
   publish-python:
-    needs: [build-wheels, build-distributions]
+    needs: [build-wheels, macos-assets-carriers-and-wheels, build-distributions]
     if: ${{ vars.PYPI_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -112,7 +169,7 @@ jobs:
           uv publish --check-url https://pypi.org/simple/onetaskgraph-cli/ dist/cli/*
           uv publish --check-url https://pypi.org/simple/onetaskgraph-sdk/ dist/all/python-sdk/*
   publish-npm:
-    needs: [native-assets-and-carriers, build-distributions]
+    needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels, build-distributions]
     if: ${{ vars.NPM_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     steps:

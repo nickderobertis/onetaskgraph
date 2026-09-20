@@ -12,32 +12,17 @@ cd "$ROOT"
 # Point git at the tracked hooks. Without this the pre-push gate is a file nobody runs.
 git config core.hooksPath .githooks
 
-release_plz_pin="$(sed -n 's/.*release-plz@\([^ ,]*\).*/\1/p' .github/workflows/release-plz.yml | head -n1)"
-# llmlint: ignore[changed_behavior_has_e2e] Reaching this bootstrap refusal requires replacing the authoritative workflow pin; the release checks mutate and reject pin drift without making session setup install an invented version.
-[[ $release_plz_pin =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-  echo "bootstrap-workspace: the release workflow has no exact X.Y.Z release-plz pin ('$release_plz_pin')" >&2
-  echo "bootstrap-workspace: next: restore the exact release-plz pin in .github/workflows/release-plz.yml" >&2
+# The pinned release-plz, into the repository-scoped tool location every script of this
+# repository resolves it from — never into the global cargo bin directory, which other
+# repositories on this host pin other versions of the same command into (#1990). The
+# version, the location and the installer are all scripts/scoped-release-plz.sh's; this
+# only asks for it. A binary already there at the pinned version is left alone, so a fresh
+# worktree on a host that has bootstrapped once installs nothing.
+# llmlint: ignore-block[changed_behavior_has_e2e] The provisioning itself is driven by scripts/check-scoped-release-plz.sh against a stand-in tool location and installer; reaching this refusal from here means an installer failing on the host, which the real preparation check then reports where the binary is used.
+if ! bash scripts/scoped-release-plz.sh ensure; then
+  echo "bootstrap-workspace: the pinned release-plz did not install into the repository-scoped tool location (see above)" >&2
+  echo "bootstrap-workspace: next: fix the installer diagnostic above and rerun 'just bootstrap'" >&2
   exit 1
-}
-release_plz_version="$(release-plz --version 2>/dev/null || true)"
-# llmlint: ignore-block[changed_behavior_has_e2e] Exercising either installer branch requires removing or replacing a host tool outside the repository; the real preparation check verifies the installed result and the workflow-pin drift gate verifies its source.
-if [ "$release_plz_version" != "release-plz $release_plz_pin" ]; then
-  install_output=""
-  if command -v cargo-binstall >/dev/null 2>&1; then
-    install_output="$(cargo binstall release-plz --version "$release_plz_pin" --no-confirm 2>&1)" || {
-      printf '%s\n' "$install_output" >&2
-      echo "bootstrap-workspace: release-plz $release_plz_pin installation failed" >&2
-      echo "bootstrap-workspace: next: fix the installer diagnostic above and rerun 'just bootstrap'" >&2
-      exit 1
-    }
-  else
-    install_output="$(cargo install release-plz --version "$release_plz_pin" --locked 2>&1)" || {
-      printf '%s\n' "$install_output" >&2
-      echo "bootstrap-workspace: release-plz $release_plz_pin installation failed" >&2
-      echo "bootstrap-workspace: next: fix the installer diagnostic above and rerun 'just bootstrap'" >&2
-      exit 1
-    }
-  fi
 fi
 # llmlint: ignore-end[changed_behavior_has_e2e]
 
@@ -45,7 +30,7 @@ fi
 # scripts/check-release-targets.sh pins. That check runs it with `--offline`, because a
 # required check does not reach the network — so somebody has to have fetched it once,
 # and this is that once. The pin is READ from the check rather than restated, the way the
-# release-plz pin above is read from the workflow that owns it.
+# release-plz pin is read from the script that owns it.
 reader_package="$(sed -n 's/^readonly READER_PACKAGE="\([^"]*\)"$/\1/p' scripts/check-release-targets.sh | head -n1)"
 reader_version="$(sed -n 's/^readonly READER_VERSION="\([^"]*\)"$/\1/p' scripts/check-release-targets.sh | head -n1)"
 if [ -z "$reader_package" ] || [ -z "$reader_version" ]; then

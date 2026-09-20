@@ -31,13 +31,61 @@ permissions:
   contents: read
 
 jobs:
+  # Which platforms the two matrices below schedule. On a pull request every one of them,
+  # unconditionally: this job is skipped there, its output is empty, and the matrices fall
+  # back to the full list — so the three required `check (<os>)` names a pull request
+  # reports are exactly what they were. On a push to main it asks
+  # scripts/macos-lane-selection.sh, the one implementation of the question, whether this
+  # commit is the squash of a pull request whose macOS lanes already passed over the very
+  # same tree; if so the macOS lanes are not scheduled again. The account has one small
+  # macOS runner pool, and every merge queued a second copy of a proven run on it, ahead of
+  # the release that merge was for (#1991). Any question the decision cannot answer is
+  # `run`, and the matrices carry `!cancelled()` so a failure here schedules everything
+  # rather than nothing.
+  macos-lanes:
+    name: macOS lanes
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+      pull-requests: read
+    outputs:
+      os: ${{ steps.select.outputs.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The decision compares this commit's tree with the pull request head's, which
+          # it fetches; a shallow checkout cannot resolve either.
+          fetch-depth: 0
+      - name: Decide whether this commit's macOS lanes already passed on its pull request
+        id: select
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          full='["ubuntu-latest","macos-latest","windows-latest"]'
+          without_macos='["ubuntu-latest","windows-latest"]'
+          answer="$(bash scripts/macos-lane-selection.sh "$REPOSITORY" "$COMMIT" "check (macos-latest)" "install path (macos-latest)")" || answer=run
+          if [ "$answer" = proven ]; then
+            echo "os=$without_macos" >> "$GITHUB_OUTPUT"
+            echo "The macOS lanes already passed on this commit's pull request over this same tree; not scheduling them again."
+          else
+            echo "os=$full" >> "$GITHUB_OUTPUT"
+            echo "Scheduling the macOS lanes."
+          fi
+
   install-path:
     name: install path (${{ matrix.os }})
+    needs: [macos-lanes]
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJson(needs.macos-lanes.outputs.os || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     steps:
       - uses: actions/checkout@v7
       - uses: extractions/setup-just@v4
@@ -58,11 +106,14 @@ jobs:
   # matrix; affected selection is what keeps that affordable.
   check:
     name: check (${{ matrix.os }})
+    needs: [macos-lanes]
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] Only the macOS lane is withheld from a proven push, on purpose: it is the one lane on the account's contended runner pool, which is the whole of what #1991 accepted. The Linux and Windows copies on main are the default branch's own record of green, and whether they are worth their (uncontended) minutes is a separate decision for the workflow's owner, drafted as a follow-up rather than taken here.
+        os: ${{ fromJson(needs.macos-lanes.outputs.os || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
