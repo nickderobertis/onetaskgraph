@@ -632,6 +632,9 @@ impl LocalMdSource {
         // on every platform this ships on.
         match fs::read_to_string(path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && vanished(path) => {
+                Ok(None)
+            }
             text => text.map(Some).map_err(|e| SourceError::Malformed {
                 message: format!("{}: {e}", path.display()),
             }),
@@ -1598,9 +1601,14 @@ fn with_front_entry(text: &str, key: &str, value: Option<&str>) -> Option<String
 }
 
 /// Whether the entry at `path`, which could not be resolved, is gone from its folder rather
-/// than a link that leads nowhere.
+/// than a link that leads nowhere. On Windows a file whose deletion is pending — unlinked by
+/// a peer whose handle is still open — answers "access is denied" to an open and to a
+/// metadata read alike until that handle closes, so there that answer is read as gone too.
 fn vanished(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+    fs::symlink_metadata(path).is_err_and(|e| {
+        e.kind() == std::io::ErrorKind::NotFound
+            || (cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied)
+    })
 }
 
 /// Whether the file whose contents are `text` provably files its record outside `scope`.
