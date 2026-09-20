@@ -126,8 +126,19 @@
         "{workspaceRoot}/workspace/project.json",
         "{workspaceRoot}/scripts/project.json",
         "{workspaceRoot}/.github/workflows/*.yml",
-        "{workspaceRoot}/scripts/check-workspace-config.sh"
-      ]
+        "{workspaceRoot}/scripts/check-workspace-config.sh",
+        "{workspaceRoot}/sdks/**/*.py",
+        "{workspaceRoot}/sdks/**/*.ts",
+        "{workspaceRoot}/sdks/**/*.sh",
+        "{workspaceRoot}/sdks/**/*.js",
+        "{workspaceRoot}/sdks/**/*.mjs",
+        "{workspaceRoot}/scripts/**/*.py",
+        "{workspaceRoot}/scripts/**/*.ts",
+        "{workspaceRoot}/scripts/**/*.sh",
+        "{workspaceRoot}/scripts/**/*.js",
+        "{workspaceRoot}/scripts/**/*.mjs"
+      ],
+      "//": "The SDK and script sources are inputs because check-workspace-config.sh scans them for the files that resolve target/debug/onetaskgraph and for a cargo invocation inside one; without them a spawner added to a test would not re-run this check."
     },
     "test": {
       "executor": "nx:run-commands",
