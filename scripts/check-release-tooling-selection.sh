@@ -56,28 +56,39 @@ version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Car
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fatal "the binary manifest has no plain X.Y.Z version ('$version')" "restore its version and rerun"
 git -C "$repo" tag "v$version" || fatal "could not tag the scratch baseline" "check that git works and rerun"
 
+# The pin is scripts/scoped-release-plz.sh's, which every caller — the release workflow,
+# bootstrap and the scripts under test — reads through that script's `pin` subcommand.
 check_release_plz_pin() {
-  workflow="$1"
-  installed="$(sed -n 's/.*[ ,]release-plz@\([^ ,]*\).*/\1/p' "$workflow" | head -n1)" || return 2
+  resolver="$1"
+  installed="$(bash "$resolver" pin)" || return 2
   [ "$installed" = "$RECORDED_RELEASE_PLZ" ]
 }
-check_release_plz_pin "$repo/.github/workflows/release-plz.yml" || finding \
-  "the release workflow's release-plz pin differs from the selector fixture recorded at $RECORDED_RELEASE_PLZ" \
-  "re-observe the real tool's Conventional Commit version choices, then move RECORDED_RELEASE_PLZ with the workflow pin"
-pin_fixture="$scratch/release-plz-pin-drift.yml"
-cp "$repo/.github/workflows/release-plz.yml" "$pin_fixture" || fatal "could not copy the release-plz pin fixture" "check scratch-directory permissions and rerun"
-perl -pi -e 's/release-plz\@\Q$ENV{RECORDED_RELEASE_PLZ}\E/release-plz\@0.0.0/' "$pin_fixture" || fatal \
+check_release_plz_pin "$repo/scripts/scoped-release-plz.sh" || finding \
+  "the release-plz pin in scripts/scoped-release-plz.sh differs from the selector fixture recorded at $RECORDED_RELEASE_PLZ" \
+  "re-observe the real tool's Conventional Commit version choices, then move RECORDED_RELEASE_PLZ with the pin"
+pin_fixture="$scratch/release-plz-pin-drift.sh"
+cp "$repo/scripts/scoped-release-plz.sh" "$pin_fixture" || fatal "could not copy the release-plz pin fixture" "check scratch-directory permissions and rerun"
+perl -pi -e 's/^readonly RELEASE_PLZ_VERSION=\Q$ENV{RECORDED_RELEASE_PLZ}\E$/readonly RELEASE_PLZ_VERSION=0.0.0/' "$pin_fixture" || fatal \
   "could not mutate the release-plz pin fixture" "check that Perl works and rerun"
 if check_release_plz_pin "$pin_fixture"; then
   finding "the release-plz drift guard accepted a changed tool pin" \
-    "keep the recorded version comparison tied to the workflow's installed release-plz"
+    "keep the recorded version comparison tied to the pin scripts/scoped-release-plz.sh provisions"
 fi
 
 # The real selector invokes release-plz first. This deterministic stand-in models its
-# observed result for a tooling-only commit: success without changing a Cargo manifest.
-mkdir -p "$scratch/bin" || fatal "could not create the stand-in directory" "check scratch-directory permissions and rerun"
-cat > "$scratch/bin/release-plz" <<'STUB'
+# observed result for a tooling-only commit: success without changing a Cargo manifest. It
+# stands where the selector resolves the tool — the scoped location, relocated into this
+# fixture through ONETASKGRAPH_TOOLS_HOME — and answers `--version` with the pin, because
+# the resolution under test refuses any other answer.
+stand_in_dir="$scratch/tools/release-plz/$RECORDED_RELEASE_PLZ/bin"
+mkdir -p "$stand_in_dir" "$scratch/no-tools" || fatal "could not create the stand-in directory" "check scratch-directory permissions and rerun"
+export ONETASKGRAPH_TOOLS_HOME="$scratch/tools"
+cat > "$stand_in_dir/release-plz" <<'STUB'
 #!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  echo "release-plz $RECORDED_RELEASE_PLZ"
+  exit 0
+fi
 if [ "${RELEASE_PLZ_STUB_FAIL:-}" = yes ]; then
   echo "release-plz stand-in: selection failed as requested" >&2
   exit 1
@@ -107,7 +118,7 @@ if [ "${RELEASE_PLZ_STUB_REGISTRY_LAG:-}" = yes ]; then
 fi
 exit 0
 STUB
-chmod +x "$scratch/bin/release-plz" || fatal "could not make the stand-in executable" "check scratch-directory permissions and rerun"
+chmod +x "$stand_in_dir/release-plz" || fatal "could not make the stand-in executable" "check scratch-directory permissions and rerun"
 
 read_version() {
   value="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" || fatal \
@@ -132,7 +143,7 @@ run_case() {
   git -C "$repo" add "$path" || fatal "could not stage fixture $path" "check that git works and rerun"
   git -C "$repo" -c user.name=check -c user.email=check@example.invalid \
     commit --quiet --no-verify -m "$subject" || fatal "could not commit fixture $path" "check that git works and rerun"
-  (cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_SELECTED="$selected" scripts/select-release-version.sh >/dev/null) || finding \
+  (cd "$repo" && RELEASE_PLZ_STUB_SELECTED="$selected" scripts/select-release-version.sh >/dev/null) || finding \
     "the selector failed for '$subject' changing $path" "run that case directly and fix its diagnostic"
   actual="$(read_version)"
   [ "$actual" = "$expected" ] || finding \
@@ -145,7 +156,7 @@ run_case() {
 # rather than a non-releasable commit.
 git -C "$repo" switch --quiet --detach "v$version" || fatal \
   "could not detach the release-boundary fixture" "check that git works and rerun"
-boundary_decision="$(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh)" || finding \
+boundary_decision="$(cd "$repo" && scripts/select-release-version.sh)" || finding \
   "the selector failed with HEAD exactly at the release tag" \
   "repair the no-post-tag-commit path and rerun"
 [ "$(read_version)" = "$version" ] || finding \
@@ -164,7 +175,7 @@ git -C "$repo" push --quiet origin "refs/tags/v$version" || fatal \
   "could not publish the boundary tag to the fixture origin" "check that git works and rerun"
 git -C "$repo" tag -d "v$version" >/dev/null || fatal \
   "could not remove the local boundary tag" "check that git works and rerun"
-remote_boundary_decision="$(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh)" || finding \
+remote_boundary_decision="$(cd "$repo" && scripts/select-release-version.sh)" || finding \
   "the selector refused a boundary the origin holds, which is every run after a release cuts its tag" \
   "resolve the release boundary from the origin before refusing it as unknown"
 [ "$remote_boundary_decision" = "$boundary_decision" ] || finding \
@@ -189,7 +200,7 @@ git -C "$repo" add crates/onetaskgraph-core/src/lib.rs || fatal \
 git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
   -m "fix(core): recover a partly published release" || fatal \
   "could not commit the partial-publish fixture" "check that git works and rerun"
-partial_output="$(cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_REGISTRY_LAG=yes scripts/select-release-version.sh)" || finding \
+partial_output="$(cd "$repo" && RELEASE_PLZ_STUB_REGISTRY_LAG=yes scripts/select-release-version.sh)" || finding \
   "the selector failed to recover a registry-lagged release" "run the partial-publish case directly and fix its diagnostic"
 grep -qF "registry recovery selected $version -> $major.$minor.$((patch + 1))" <<<"$partial_output" || finding \
   "the selector did not identify registry recovery as its decision" "select the next workspace version before consulting release tags"
@@ -203,7 +214,7 @@ grep -qF "registry recovery selected $version -> $major.$minor.$((patch + 1))" <
 # two apart is what has landed since the boundary.
 expect_declined() {
   what="$1"
-  declined_output="$(cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_REGISTRY_LAG=yes scripts/select-release-version.sh)" || finding \
+  declined_output="$(cd "$repo" && RELEASE_PLZ_STUB_REGISTRY_LAG=yes scripts/select-release-version.sh)" || finding \
     "the selector failed for $what with the registry behind the manifest" \
     "run that case directly and fix its diagnostic"
   grep -qF "registry is behind $version with no eligible commit since v$version" <<<"$declined_output" || finding \
@@ -236,7 +247,7 @@ printf '\n' >> "$repo/npm/cli/package.json" || fatal "could not modify the burie
 git -C "$repo" add npm/cli/package.json || fatal "could not stage the buried-recovery fixture" "check that git works and rerun"
 git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
   -m "chore: release v$major.$minor.$((patch + 1))" || fatal "could not commit the buried-recovery fixture" "check that git works and rerun"
-buried_output="$(cd "$repo" && PATH="$scratch/bin:$PATH" RELEASE_PLZ_STUB_REGISTRY_LAG=yes scripts/select-release-version.sh)" || finding \
+buried_output="$(cd "$repo" && RELEASE_PLZ_STUB_REGISTRY_LAG=yes scripts/select-release-version.sh)" || finding \
   "the selector failed to recover an eligible commit sitting under a release commit" "run the buried-recovery case directly and fix its diagnostic"
 grep -qF "registry recovery selected $version -> $major.$minor.$((patch + 1))" <<<"$buried_output" || finding \
   "the selector missed the eligible commit under this pipeline's own release commit; it said: $buried_output" \
@@ -281,7 +292,7 @@ for entry in "fix: first tooling change|release-plz.toml" "feat: second tooling 
   git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
     -m "$subject" || fatal "could not commit aggregation fixture $path" "check that git works and rerun"
 done
-(cd "$repo" && PATH="$scratch/bin:$PATH" scripts/select-release-version.sh >/dev/null) || finding \
+(cd "$repo" && scripts/select-release-version.sh >/dev/null) || finding \
   "the selector failed to aggregate real commits" "run the aggregation case directly and fix its diagnostic"
 [ "$(read_version)" = "$major.$((minor + 1)).0" ] || finding \
   "the selector did not give a feature precedence over a patch" "repair bump aggregation and rerun"
@@ -290,34 +301,17 @@ expect_refusal() {
   phrase="$1" expected_status="$2"
   shift 2
   output="" status=0
-  output="$(cd "$repo" && PATH="$scratch/bin:$PATH" "$@" 2>&1)" || status=$?
+  output="$(cd "$repo" && "$@" 2>&1)" || status=$?
   [ "$status" -eq "$expected_status" ] || finding "the selector refusal exited $status, expected $expected_status" "repair its exit contract and rerun"
   grep -qF "$phrase" <<<"$output" || finding "the selector refusal did not name '$phrase'" "repair its diagnostic and rerun"
 }
 
 expect_refusal "takes no arguments" 2 scripts/select-release-version.sh unexpected
-mv "$scratch/bin/release-plz" "$scratch/release-plz-away" || fatal "could not hide the scratch stand-in" "check scratch-directory permissions and rerun"
-# Keep the ambient runtime directories and subtract only entries that carry release-plz.
-# This is load-bearing on Windows, where Git Bash needs DLLs from its installation and a
-# whitelist of executable symlinks leaves bash itself unable to start.
-path_without_tool() {
-  local tool="$1" entry result=""
-  local IFS=:
-  for entry in $PATH; do
-    [ -n "$entry" ] || continue
-    ( PATH="$entry"; hash -r 2>/dev/null; command -v "$tool" >/dev/null 2>&1 ) && continue
-    result="${result:+$result:}$entry"
-  done
-  printf '%s' "$result"
-}
-PATH_WITHOUT_RELEASE_PLZ="$(path_without_tool release-plz)"
-readonly PATH_WITHOUT_RELEASE_PLZ
-if ( PATH="$PATH_WITHOUT_RELEASE_PLZ"; hash -r 2>/dev/null; command -v release-plz >/dev/null 2>&1 ); then
-  fatal "release-plz is still reachable after dropping every directory that carries one" \
-    "run 'command -v release-plz' and remove any shell function or alias that reaches past the PATH scan"
-fi
-expect_refusal "release-plz is not on PATH" 2 env PATH="$PATH_WITHOUT_RELEASE_PLZ" scripts/select-release-version.sh
-mv "$scratch/release-plz-away" "$scratch/bin/release-plz" || fatal "could not restore the scratch stand-in" "check scratch-directory permissions and rerun"
+# A host with nothing in the scoped location. PATH is left as it is, deliberately: a
+# release-plz on it, whatever its version, is not what the selector resolves, and a refusal
+# here with one on PATH is the proof of that.
+expect_refusal "not provisioned in this repository's scoped tool location" 2 \
+  env ONETASKGRAPH_TOOLS_HOME="$scratch/no-tools" scripts/select-release-version.sh
 expect_refusal "release-plz could not decide the next version" 1 env RELEASE_PLZ_STUB_FAIL=yes scripts/select-release-version.sh
 git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the refusal fixture" "check that git works and rerun"
 expect_refusal "no valid semantic version after release-plz update" 1 env RELEASE_PLZ_STUB_INVALID=yes scripts/select-release-version.sh

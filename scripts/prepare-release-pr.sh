@@ -99,9 +99,14 @@ if [ -z "$current_branch" ]; then
 fi
 # llmlint: ignore-end[changed_behavior_has_e2e]
 
-command -v release-plz >/dev/null 2>&1 || fail \
-  "release-plz is not on PATH, so no version can be decided" \
-  "install it — the release workflow does, with taiki-e/install-action — then rerun" 2
+# The pinned release-plz, from the repository-scoped location scripts/scoped-release-plz.sh
+# owns and never from PATH: the global command is what other repositories on the same host
+# pin other versions of. On success it prints the path alone; on refusal, the diagnostic.
+release_plz="$(bash scripts/scoped-release-plz.sh resolve 2>&1)" || {
+  printf '%s\n' "$release_plz" >&2
+  fail "the pinned release-plz is not provisioned in this repository's scoped tool location, so no version can be decided" \
+    "run 'bash scripts/scoped-release-plz.sh ensure' — the release workflow does — then rerun" 2
+}
 
 selection_output="$(scripts/select-release-version.sh 2>&1)" || {
   status=$?
@@ -151,7 +156,7 @@ run_phase \
 if [ "$manual_proposal" = no ]; then
   run_phase "release-plz could not open or update the release pull request" \
     "check that GIT_TOKEN is still authorised to open pull requests, then rerun" \
-    release-plz release-pr --allow-dirty
+    "$release_plz" release-pr --allow-dirty
   echo "prepare-release-pr: release-plz proposed the package release pull request for $version" >&2
   exit 0
 fi

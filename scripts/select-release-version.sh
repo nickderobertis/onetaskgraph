@@ -21,8 +21,15 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fail \
 cd "$root" || fail "could not enter $root" "check that the checkout is still present" 2
 # llmlint: ignore-end[changed_behavior_has_e2e]
 
-command -v release-plz >/dev/null 2>&1 || fail "release-plz is not on PATH" \
-  "install the version pinned in .github/workflows/release-plz.yml and rerun" 2
+# The pinned release-plz, from the repository-scoped location scripts/scoped-release-plz.sh
+# owns — never from PATH, where other repositories on the same host pin other versions of
+# the same command. Its refusal names the version, the location and the install command.
+# On success it prints the path alone; on refusal, the diagnostic alone.
+release_plz="$(bash scripts/scoped-release-plz.sh resolve 2>&1)" || {
+  printf '%s\n' "$release_plz" >&2
+  fail "the pinned release-plz is not provisioned in this repository's scoped tool location" \
+    "run 'bash scripts/scoped-release-plz.sh ensure' (or 'just bootstrap') and rerun" 2
+}
 # llmlint: ignore-block[changed_behavior_has_e2e] Removing either host tool cannot be arranged inside a real repository fixture without replacing the boundary under test; both refusals are direct command-availability guards.
 command -v git >/dev/null 2>&1 || fail "git is not on PATH" "install git and rerun" 2
 command -v python3 >/dev/null 2>&1 || fail "python3 is not on PATH" "install Python 3.11 or newer and rerun" 2
@@ -50,7 +57,7 @@ patch="${BASH_REMATCH[3]}"
 # `release-plz release-pr` prepends its own entry beside it rather than replacing it — two
 # entries for one set of changes, which is what jammed #55.
 update_output=""
-if ! update_output="$(release-plz update --no-changelog 2>&1)"; then
+if ! update_output="$("$release_plz" update --no-changelog 2>&1)"; then
   printf '%s\n' "$update_output" >&2
   fail "release-plz could not decide the next version" \
     "fix what it reports above; a registry it cannot reach and a manifest it cannot parse both land here"

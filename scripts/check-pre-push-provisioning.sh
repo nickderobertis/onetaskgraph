@@ -17,6 +17,16 @@
 # account: `just` itself absent, which no provisioner it could call would be reached to
 # report.
 #
+# Then the pinned release-plz, which is the machine's to supply and which the provisioner
+# resolves from the repository-scoped location scripts/scoped-release-plz.sh owns. Its
+# refusal is spelled for a reader that is not a person: `onevcs: host-prerequisite: <what
+# is missing and how to install it>` is the marker onevcs's docs/contract.md states for a
+# merge-path hook refusing on a missing host tool, which is how the engine on this host
+# settles it without spending a worker's retries
+# (https://github.com/nickderobertis/onepipeline/issues/360). Cases 4 to 6 hold the hook to
+# exactly one such line when that tool is missing or at the wrong version, naming the tool,
+# the version and the install command, and to none at all when it is there.
+#
 # `just` is stubbed where it is present. What is under test is the hook's provisioning decision,
 # and a real `just gate` here would be this repository's whole gate run twice — from inside
 # itself, since this check is one of the things that gate runs.
@@ -103,17 +113,54 @@ shim() {
     && chmod +x "$1/$2"
 }
 
+# The scoped tool location each case runs the hook under. The provisioner resolves
+# release-plz from it and never from PATH, so what a case says about that tool is said by
+# what it puts here: a stand-in answering the pin, one answering another version, or
+# nothing. Relocated through ONETASKGRAPH_TOOLS_HOME so the machine's own state, which
+# `just bootstrap` may or may not have provisioned, is not what these cases read.
+readonly PIN="$(bash "$ROOT/scripts/scoped-release-plz.sh" pin)"
+[[ $PIN =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fatal \
+  "scripts/scoped-release-plz.sh pins '$PIN', which is not an exact X.Y.Z version" \
+  "restore its RELEASE_PLZ_VERSION and rerun"
+readonly TOOLS_PROVISIONED="$scratch/tools-provisioned"
+readonly TOOLS_WRONG_VERSION="$scratch/tools-wrong-version"
+readonly TOOLS_EMPTY="$scratch/tools-empty"
+plant_release_plz() {
+  local home="$1" answers="$2" dir
+  dir="$home/release-plz/$PIN/bin"
+  mkdir -p "$dir" \
+    && printf '#!%s\necho "release-plz %s"\n' "$BASH_BIN" "$answers" > "$dir/release-plz" \
+    && chmod +x "$dir/release-plz"
+}
+plant_release_plz "$TOOLS_PROVISIONED" "$PIN" || fatal \
+  "could not plant the pinned release-plz stand-in under $TOOLS_PROVISIONED" \
+  "check the permissions of \$TMPDIR, then rerun"
+plant_release_plz "$TOOLS_WRONG_VERSION" "0.0.0" || fatal \
+  "could not plant the wrong-version release-plz stand-in under $TOOLS_WRONG_VERSION" \
+  "check the permissions of \$TMPDIR, then rerun"
+mkdir -p "$TOOLS_EMPTY" || fatal \
+  "could not create the empty tool location at $TOOLS_EMPTY" \
+  "check the permissions of \$TMPDIR, then rerun"
+readonly HOST_PREREQUISITE="onevcs: host-prerequisite: "
+
 failures=0
 HOOK_OUTPUT=""
 HOOK_STATUS=0
 
-# Run the real hook out of the scratch clone, under a PATH this case chose.
+# Run the real hook out of the scratch clone, under a PATH this case chose and a scoped tool
+# location — the provisioned one unless the case names another.
 run_hook() {
   rm -f "$GATE_MARKER"
   # By absolute path: what each case varies is what the hook can *find*, and a hook that
-  # could not be started at all would report that as the same silence.
-  HOOK_OUTPUT="$(PATH="$1" "$BASH_BIN" "$CLONE/.githooks/pre-push" 2>&1)" \
+  # could not be started at all would report that as the same silence. Its stdin is empty:
+  # git feeds the hook its ref records there, and a hook that provisions goes on to read
+  # them, so an inherited stdin left open would hold that case until it was interrupted.
+  HOOK_OUTPUT="$(PATH="$1" ONETASKGRAPH_TOOLS_HOME="${2:-$TOOLS_PROVISIONED}" "$BASH_BIN" "$CLONE/.githooks/pre-push" 2>&1 </dev/null)" \
     && HOOK_STATUS=0 || HOOK_STATUS=$?
+}
+
+marker_lines() {
+  grep -c -- "^$HOST_PREREQUISITE" <<<"$HOOK_OUTPUT" || true
 }
 
 report_hook_output() {
@@ -242,6 +289,82 @@ else
       failures=$((failures + 1))
     fi
   done
+fi
+
+# 4. The pinned release-plz is not in the scoped location. It is the machine's to supply,
+#    like bun, and the refusal carries the marker: exactly one line, naming the tool, the
+#    version and the install command, before the hook says nothing has been checked — and
+#    the gate is not reached.
+expect_host_prerequisite() {
+  local case_name="$1"
+  if [ "$HOOK_STATUS" -eq 0 ]; then
+    echo "check-pre-push-provisioning: the hook accepted a worktree with $case_name, so the gate it" >&2
+    echo "check-pre-push-provisioning: reports as green would have run the real release preparation on nothing." >&2
+    report_hook_output
+    failures=$((failures + 1))
+    return
+  fi
+  if [ "$(marker_lines)" -ne 1 ]; then
+    echo "check-pre-push-provisioning: with $case_name the hook printed $(marker_lines) line(s) starting" >&2
+    echo "check-pre-push-provisioning: '$HOST_PREREQUISITE', where the contract is exactly one. It said:" >&2
+    report_hook_output
+    failures=$((failures + 1))
+  else
+    local marker
+    marker="$(grep -- "^$HOST_PREREQUISITE" <<<"$HOOK_OUTPUT")"
+    for term in "release-plz" "$PIN" "scripts/scoped-release-plz.sh ensure"; do
+      if ! grep -qF -- "$term" <<<"$marker"; then
+        echo "check-pre-push-provisioning: with $case_name the marker line never names '$term', so the" >&2
+        echo "check-pre-push-provisioning: engine reading it is not told what to install. It said:" >&2
+        printf '    %s\n' "$marker" >&2
+        failures=$((failures + 1))
+      fi
+    done
+  fi
+  for term in "provisioned" "has been checked"; do
+    if ! names "$term"; then
+      echo "check-pre-push-provisioning: with $case_name the hook refused without saying '$term', so" >&2
+      echo "check-pre-push-provisioning: its refusal reads as a rejection of the push. It said:" >&2
+      report_hook_output
+      failures=$((failures + 1))
+    fi
+  done
+  if [ -f "$GATE_MARKER" ]; then
+    echo "check-pre-push-provisioning: with $case_name the hook ran the gate regardless, so what the" >&2
+    echo "check-pre-push-provisioning: person sees is the release preparation failing rather than the tool missing." >&2
+    report_hook_output
+    failures=$((failures + 1))
+  fi
+}
+
+run_hook "$STUB_BIN:$PATH" "$TOOLS_EMPTY"
+expect_host_prerequisite "no release-plz in the scoped location"
+
+# 5. A release-plz is there but answers another version — the residue a moved pin leaves,
+#    or a hand-placed binary. The same one line, because a wrong version is as much the
+#    machine's to fix as an absent one.
+run_hook "$STUB_BIN:$PATH" "$TOOLS_WRONG_VERSION"
+expect_host_prerequisite "release-plz 0.0.0 in the scoped location"
+
+# 6. The tool is there at the pinned version. Whatever else the machine lacks, the marker
+#    is not printed: it claims a host problem to an engine that will stop retrying on it,
+#    so it is owed only when that tool is what is missing.
+run_hook "$STUB_BIN:$PATH" "$TOOLS_PROVISIONED"
+if [ "$(marker_lines)" -ne 0 ]; then
+  echo "check-pre-push-provisioning: the pinned release-plz is in the scoped location and the hook" >&2
+  echo "check-pre-push-provisioning: still printed the host-prerequisite marker. It said:" >&2
+  report_hook_output
+  failures=$((failures + 1))
+fi
+# The marker is also not what bun's absence gets: that refusal already names what to
+# install, and the marker is one tool's.
+run_hook "$CLEAN_BIN" "$TOOLS_EMPTY"
+if [ "$(marker_lines)" -ne 0 ]; then
+  echo "check-pre-push-provisioning: with bun absent and release-plz absent the hook printed the" >&2
+  echo "check-pre-push-provisioning: host-prerequisite marker, where bun's refusal comes first and is" >&2
+  echo "check-pre-push-provisioning: not what the marker is for. It said:" >&2
+  report_hook_output
+  failures=$((failures + 1))
 fi
 
 if [ "$failures" -ne 0 ]; then
